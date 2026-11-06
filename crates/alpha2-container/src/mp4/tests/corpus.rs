@@ -41,7 +41,7 @@ const KEYFRAME_EXCEPTIONS: &[(&str, u32, usize, bool, &str)] = &[(
      stss box still lists it as a sync sample",
 )];
 
-fn packet_line(packet: &Packet) -> String {
+pub(crate) fn packet_line(packet: &Packet) -> String {
     let digest = Sha256::digest(&packet.data);
     let mut hex = String::with_capacity(64);
     for byte in digest {
@@ -60,7 +60,7 @@ fn packet_line(packet: &Packet) -> String {
     )
 }
 
-fn expected_line(value: &Value) -> String {
+pub(crate) fn expected_line(value: &Value) -> String {
     value
         .as_array()
         .expect("packet")
@@ -73,7 +73,7 @@ fn expected_line(value: &Value) -> String {
         .join(",")
 }
 
-fn kind_name(kind: TrackKind) -> &'static str {
+pub(crate) fn kind_name(kind: TrackKind) -> &'static str {
     match kind {
         TrackKind::Video => "video",
         TrackKind::Audio => "audio",
@@ -82,7 +82,7 @@ fn kind_name(kind: TrackKind) -> &'static str {
 }
 
 /// `FFmpeg`'s colour names mapped the way alpha2's `FFmpeg` host maps codec parameters.
-fn expected_color(color: &Value) -> Option<ColorMetadata> {
+pub(crate) fn expected_color(color: &Value) -> Option<ColorMetadata> {
     if color.is_null() {
         return None;
     }
@@ -131,7 +131,7 @@ fn expected_color(color: &Value) -> Option<ColorMetadata> {
     })
 }
 
-fn expected_orientation(value: &Value) -> Orientation {
+pub(crate) fn expected_orientation(value: &Value) -> Orientation {
     let turns = value["rotation"].as_i64().unwrap_or(0) / 90;
     Orientation {
         rotation: Rotation::from_quarter_turns(i32::try_from(turns).unwrap_or(0)),

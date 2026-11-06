@@ -40,21 +40,21 @@ const BITRATES: [[[u32; 15]; 3]; 2] = [
 
 /// One decoded MPEG audio frame header.
 #[derive(Clone, Copy, Debug)]
-struct Header {
+pub(crate) struct Header {
     /// MPEG-2 or 2.5 (low sampling frequency).
     lsf: bool,
     layer: u32,
-    sample_rate: u32,
+    pub(crate) sample_rate: u32,
     channels: u32,
     /// Frame size in bytes.
     size: u64,
     /// Samples per frame.
-    samples: i64,
+    pub(crate) samples: i64,
     bit_rate: u32,
 }
 
 /// Decodes `header` as `avpriv_mpegaudio_decode_header` does; `None` if invalid or free-format.
-fn decode(header: u32) -> Option<Header> {
+pub(crate) fn decode(header: u32) -> Option<Header> {
     if header & 0xffe0_0000 != 0xffe0_0000
         || header & (3 << 19) == 1 << 19
         || header & (3 << 17) == 0

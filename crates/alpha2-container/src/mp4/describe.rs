@@ -521,7 +521,7 @@ fn flac_bits(blocks: &[u8]) -> Option<u16> {
 }
 
 /// The output sample rate and channel count of an AAC `AudioSpecificConfig`.
-fn audio_specific_config(config: &[u8]) -> Option<(u32, u32)> {
+pub(crate) fn audio_specific_config(config: &[u8]) -> Option<(u32, u32)> {
     const RATES: [u32; 13] = [
         96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025,
         8_000, 7_350,

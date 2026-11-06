@@ -1,4 +1,4 @@
-mod corpus;
+pub(crate) mod corpus;
 mod demux;
 mod mux;
 mod write;
@@ -9,11 +9,11 @@ use std::sync::{Arc, Mutex};
 
 use crate::{ContainerReader, Packet, TrackId};
 
-pub(super) fn corpus_dir() -> PathBuf {
+pub(crate) fn corpus_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus")
 }
 
-pub(super) fn cases_dir() -> PathBuf {
+pub(crate) fn cases_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/cases")
 }
 
@@ -24,7 +24,7 @@ pub(super) fn expected() -> serde_json::Value {
 }
 
 /// Every packet of `track`, in decode order.
-pub(super) fn packets(reader: &mut dyn ContainerReader, track: TrackId) -> Vec<Packet> {
+pub(crate) fn packets(reader: &mut dyn ContainerReader, track: TrackId) -> Vec<Packet> {
     let mut packets = Vec::new();
     while let Some(packet) = reader.next_packet(track).expect("packet") {
         packets.push(packet);
@@ -34,10 +34,10 @@ pub(super) fn packets(reader: &mut dyn ContainerReader, track: TrackId) -> Vec<P
 
 /// An in-memory file the test keeps a handle to after the writer is done with it.
 #[derive(Clone, Default)]
-pub(super) struct Shared(Arc<Mutex<Cursor<Vec<u8>>>>);
+pub(crate) struct Shared(Arc<Mutex<Cursor<Vec<u8>>>>);
 
 impl Shared {
-    pub(super) fn contents(&self) -> Vec<u8> {
+    pub(crate) fn contents(&self) -> Vec<u8> {
         self.0.lock().expect("buffer").get_ref().clone()
     }
 }

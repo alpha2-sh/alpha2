@@ -1,16 +1,16 @@
 //! MP4, MOV and M4A (ISO base media and `QuickTime` files).
 
 mod boxes;
-mod describe;
+pub(crate) mod describe;
 mod fragment;
-mod index;
-mod movie;
-mod nal;
+pub(crate) mod index;
+pub(crate) mod movie;
+pub(crate) mod nal;
 mod read;
-mod write;
+pub(crate) mod write;
 
 pub use read::Mp4Reader;
 pub use write::{Mp4Flavor, Mp4Writer};
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

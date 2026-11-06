@@ -15,9 +15,9 @@ use crate::{
 
 mod adts;
 mod crc;
-mod flac;
-mod mpeg;
-mod ogg;
+pub(crate) mod flac;
+pub(crate) mod mpeg;
+pub(crate) mod ogg;
 mod wav;
 
 #[cfg(test)]

@@ -24,23 +24,23 @@ const SAMPLE_RATES: [u32; 12] = [
 const SAMPLE_SIZES: [u32; 8] = [0, 8, 12, 0, 16, 20, 24, 32];
 
 /// The WAVE channel masks of FLAC's channel orders for 1 to 8 channels.
-pub(super) const CHANNEL_MASKS: [u64; 8] = [0x4, 0x3, 0x7, 0x33, 0x37, 0x3f, 0x70f, 0x63f];
+pub(crate) const CHANNEL_MASKS: [u64; 8] = [0x4, 0x3, 0x7, 0x33, 0x37, 0x3f, 0x70f, 0x63f];
 
 /// A frame header, as `ff_flac_decode_frame_header` reads it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct FrameHeader {
+pub(crate) struct FrameHeader {
     pub(super) variable: bool,
-    pub(super) blocksize: u32,
-    pub(super) sample_rate: u32,
-    pub(super) channels: u32,
-    pub(super) bits: u32,
+    pub(crate) blocksize: u32,
+    pub(crate) sample_rate: u32,
+    pub(crate) channels: u32,
+    pub(crate) bits: u32,
     /// The sample number (variable block size) or frame number (fixed).
     pub(super) number: i64,
 }
 
 /// Decodes the frame header opening `bytes` and checks its CRC-8 and first subframe header, as
 /// the flac parser's `frame_header_is_valid` does.
-pub(super) fn frame_header(bytes: &[u8]) -> Option<FrameHeader> {
+pub(crate) fn frame_header(bytes: &[u8]) -> Option<FrameHeader> {
     if bytes.len() < 6 || bytes[0] != 0xff || bytes[1] & 0xfe != 0xf8 {
         return None;
     }
@@ -140,16 +140,16 @@ impl FrameHeader {
 }
 
 /// The `STREAMINFO` facts a reader needs.
-pub(super) struct StreamInfo {
-    pub(super) sample_rate: u32,
-    pub(super) channels: u32,
-    pub(super) bits: u32,
+pub(crate) struct StreamInfo {
+    pub(crate) sample_rate: u32,
+    pub(crate) channels: u32,
+    pub(crate) bits: u32,
     pub(super) samples: u64,
     pub(super) max_blocksize: u32,
     pub(super) max_frame: u32,
 }
 
-pub(super) fn stream_info(block: &[u8]) -> Result<StreamInfo, DemuxError> {
+pub(crate) fn stream_info(block: &[u8]) -> Result<StreamInfo, DemuxError> {
     if block.len() != 34 {
         return Err(DemuxError::Invalid(
             "FLAC STREAMINFO is not 34 bytes".into(),
@@ -174,7 +174,7 @@ pub(super) fn stream_info(block: &[u8]) -> Result<StreamInfo, DemuxError> {
 
 /// The channel mask a `WAVEFORMATEXTENSIBLE_CHANNEL_MASK` Vorbis comment sets, as `FFmpeg` reads
 /// it (`strtol` with base 0, at most 18 speakers).
-pub(super) fn comment_channel_mask(block: &[u8]) -> Option<u64> {
+pub(crate) fn comment_channel_mask(block: &[u8]) -> Option<u64> {
     let mut mask = None;
     for comment in vorbis_comments(block) {
         let Some((key, value)) = comment.split_once('=') else {

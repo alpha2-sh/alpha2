@@ -375,6 +375,10 @@ done
   -frames:v 150 -an -c:v mpeg2video -q:v 1 -g 1 -output_ts_offset 100 -fflags +bitexact \
   -flags:v +bitexact ts-offset-100.ts
 
+# Matroska block layouts FFmpeg's muxer never writes: lacing, BlockGroups, unknown sizes.
+python3 "$here/matroska-blocks.py" audio-seek-opus.webm subtitle-first.mkv matroska-laced.mkv \
+  matroska-groups.mkv
+
 # These need encoders the LGPL SDK does not ship: point FFMPEG_ENCODERS at an FFmpeg with libx264
 # and libvpx.
 if [[ -n "${FFMPEG_ENCODERS:-}" ]]; then

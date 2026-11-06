@@ -57,6 +57,13 @@ seed() {
         -exec cp {} "$dir"/ \;
       cp tests/cases/container-mp4-fragmented.mp4 "$dir"/
       ;;
+    container_matroska)
+      # Header: the seek target (i64), then the file.
+      find tests/corpus tests/cases -maxdepth 1 \( -name '*.mkv' -o -name '*.webm' \) -size -64k \
+        -print0 | while IFS= read -r -d '' file; do
+        { head -c 8 /dev/zero; cat "$file"; } >"$dir/$(basename "$file")"
+      done
+      ;;
     container_audio)
       # Header: the prefix selector (0, none) and the seek target (i64), then the file.
       for file in tests/corpus/*.wav tests/corpus/*.mp3 tests/corpus/*.aac tests/corpus/*.flac \
