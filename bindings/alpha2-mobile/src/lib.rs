@@ -26,7 +26,9 @@ mod error;
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 mod export;
 mod platform;
+mod player;
 mod session;
+mod surface;
 
 #[cfg(target_os = "android")]
 pub mod android;
@@ -35,6 +37,7 @@ pub mod android;
 mod device_tests;
 
 pub use error::{Alpha2Error, EncoderRefusalRecord};
+pub use player::{Player, PlayerRequest};
 pub use session::{
     Alpha2, ConformRequest, EngineConfig, ExportHandle, ExportOutcome, ExportProgress,
     ExportProgressEvent, ExportRequest, FontFile, RendererMode, VideoDecodeMode,

@@ -8,7 +8,7 @@ use std::sync::OnceLock;
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject};
-use jni::sys::{JNI_VERSION_1_6, jint};
+use jni::sys::{JNI_VERSION_1_6, jint, jlong};
 
 static VM: OnceLock<jni::JavaVM> = OnceLock::new();
 
@@ -67,4 +67,20 @@ pub extern "system" fn Java_sh_alpha2_Alpha2Android_init(
 #[must_use]
 pub fn java_vm() -> Option<&'static jni::JavaVM> {
     VM.get()
+}
+
+/// `sh.alpha2.Alpha2Android.windowFromSurface(Surface)`: the `ANativeWindow` of a `Surface`, as
+/// the handle `Player.attachWindow` takes over; 0 for a surface without one.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_sh_alpha2_Alpha2Android_windowFromSurface(
+    env: JNIEnv,
+    _class: JClass,
+    surface: JObject,
+) -> jlong {
+    // SAFETY: the environment and surface come from the JVM for this call; the returned window
+    // holds its own reference.
+    let window = unsafe {
+        ndk_sys::ANativeWindow_fromSurface(env.get_raw().cast(), surface.as_raw().cast())
+    };
+    window as jlong
 }

@@ -34,6 +34,11 @@ pub(crate) trait Platform: Send + Sync {
 
     /// Runs `job` to its end on the calling thread.
     fn export(&self, job: ExportJob) -> Result<ExportOutcome, Alpha2Error>;
+
+    /// The video decoders a preview reads sources with, when the platform has any.
+    fn video_decoders(&self) -> Option<Arc<dyn alpha2_host_core::video_stream::VideoBackends>> {
+        None
+    }
 }
 
 /// The backend of the platform this library runs on.
@@ -93,6 +98,10 @@ impl Platform for MediaPlatform {
 
     fn export(&self, job: ExportJob) -> Result<ExportOutcome, Alpha2Error> {
         crate::export::export(&job, &self.media)
+    }
+
+    fn video_decoders(&self) -> Option<Arc<dyn alpha2_host_core::video_stream::VideoBackends>> {
+        Some(Arc::clone(&self.media.video_decoders))
     }
 }
 

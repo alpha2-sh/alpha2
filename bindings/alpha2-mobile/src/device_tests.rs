@@ -288,3 +288,168 @@ fn latex_and_pdf_sources_export_to_mp4() {
     let _ = std::fs::remove_file(output);
     let _ = std::fs::remove_file(path);
 }
+
+/// An image reader whose window stands in for an app's surface, so a test can read back what was
+/// presented.
+struct WindowReader(std::ptr::NonNull<ndk_sys::AImageReader>);
+
+impl WindowReader {
+    fn new(width: i32, height: i32) -> Self {
+        /// `AIMAGE_FORMAT_RGBA_8888`, and GPU color output plus frequent CPU reads.
+        const RGBA_8888: i32 = 1;
+        const USAGE: u64 = 0x200 | 0x3;
+        let mut reader = std::ptr::null_mut();
+        // SAFETY: the out-pointer is valid; the reader is deleted on drop.
+        let status = unsafe {
+            ndk_sys::AImageReader_newWithUsage(width, height, RGBA_8888, USAGE, 4, &raw mut reader)
+        };
+        assert_eq!(status.0, 0, "AImageReader_newWithUsage");
+        Self(std::ptr::NonNull::new(reader).expect("reader"))
+    }
+
+    /// The window, with a reference of its own for the player to take over.
+    fn window(&self) -> u64 {
+        let mut window = std::ptr::null_mut();
+        // SAFETY: the reader is live; the window it returns belongs to it.
+        let status = unsafe { ndk_sys::AImageReader_getWindow(self.0.as_ptr(), &raw mut window) };
+        assert_eq!(status.0, 0, "AImageReader_getWindow");
+        // SAFETY: the window is live; the player releases this reference.
+        unsafe { ndk_sys::ANativeWindow_acquire(window) };
+        window as u64
+    }
+
+    /// The mean of the red, green and blue samples of the newest presented image.
+    fn latest_mean(&self) -> Option<[f64; 3]> {
+        let mut image = std::ptr::null_mut();
+        // SAFETY: the reader is live and the image is deleted below.
+        let status =
+            unsafe { ndk_sys::AImageReader_acquireLatestImage(self.0.as_ptr(), &raw mut image) };
+        if status.0 != 0 || image.is_null() {
+            return None;
+        }
+        let (mut data, mut length, mut stride) = (std::ptr::null_mut(), 0, 0);
+        // SAFETY: the image is live; the plane stays mapped until the image is deleted.
+        let mean = unsafe {
+            let read = ndk_sys::AImage_getPlaneData(image, 0, &raw mut data, &raw mut length);
+            ndk_sys::AImage_getPlaneRowStride(image, 0, &raw mut stride);
+            (read.0 == 0 && !data.is_null()).then(|| {
+                let bytes = std::slice::from_raw_parts(data, usize::try_from(length).unwrap_or(0));
+                let mut sums = [0.0; 3];
+                let pixels = bytes.len() / 4;
+                for pixel in bytes.as_chunks::<4>().0 {
+                    for (sum, value) in sums.iter_mut().zip(pixel) {
+                        *sum += f64::from(*value);
+                    }
+                }
+                let _ = stride;
+                #[allow(clippy::cast_precision_loss)]
+                sums.map(|sum| sum / pixels.max(1) as f64)
+            })
+        };
+        // SAFETY: the image came from this reader and is not used after.
+        unsafe { ndk_sys::AImage_delete(image) };
+        mean
+    }
+}
+
+impl Drop for WindowReader {
+    fn drop(&mut self) {
+        // SAFETY: the reader is owned and not used after.
+        unsafe { ndk_sys::AImageReader_delete(self.0.as_ptr()) };
+    }
+}
+
+/// Waits up to `seconds` for `done`, consuming what `reader` was shown as a compositor would, so
+/// its window always has a buffer free (none to keep the newest image for a check).
+fn wait_for(reader: Option<&WindowReader>, seconds: u64, done: impl Fn() -> bool) -> bool {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    while std::time::Instant::now() < until {
+        if done() {
+            return true;
+        }
+        if let Some(reader) = reader {
+            let _ = reader.latest_mean();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    done()
+}
+
+#[test]
+fn preview_presents_frames_into_a_window_and_survives_a_rebuild() {
+    use crate::{Player, PlayerRequest};
+
+    let tests = tests_dir();
+    let engine = Alpha2::new(EngineConfig::default());
+    let player = Player::new(
+        engine,
+        PlayerRequest {
+            project_json: std::fs::read_to_string(
+                tests.join("cases/host-video-export-project.json"),
+            )
+            .expect("project"),
+            assets: HashMap::from([(
+                "video-source".to_owned(),
+                tests
+                    .join("corpus/h264-bt709-copy.mp4")
+                    .to_string_lossy()
+                    .into_owned(),
+            )]),
+            ..PlayerRequest::default()
+        },
+    )
+    .expect("player");
+    let reader = WindowReader::new(64, 48);
+    player
+        .attach_window(reader.window(), 64, 48)
+        .expect("attach");
+    assert!(
+        wait_for(None, 10, || player.frames_presented() >= 1),
+        "{:?}",
+        player.last_error()
+    );
+    let shown = reader.latest_mean();
+    eprintln!("first frame mean {shown:?}");
+    assert!(
+        shown.is_some_and(|mean| mean.iter().any(|value| *value > 1.0)),
+        "{shown:?}"
+    );
+
+    // One second of playing at 30 fps presents about 30 frames and stops at the end.
+    let before = player.frames_presented();
+    player.play();
+    assert!(wait_for(Some(&reader), 5, || player.is_playing()));
+    assert!(
+        wait_for(Some(&reader), 10, || !player.is_playing()),
+        "{:?}",
+        player.last_error()
+    );
+    let frames_played = player.frames_presented() - before;
+    eprintln!(
+        "played {frames_played} frames, position {}",
+        player.position_ticks()
+    );
+    assert!((20..=40).contains(&frames_played), "{frames_played} frames");
+
+    // A seek shows its frame; a new window (the app's surface rebuilt) shows it again.
+    player.seek(0);
+    assert!(
+        wait_for(Some(&reader), 10, || player.position_ticks() == 0),
+        "{:?}",
+        player.last_error()
+    );
+    player.detach_window();
+    let rebuilt = WindowReader::new(64, 48);
+    let before = player.frames_presented();
+    player
+        .attach_window(rebuilt.window(), 64, 48)
+        .expect("reattach");
+    assert!(
+        wait_for(None, 10, || player.frames_presented() > before),
+        "{:?}",
+        player.last_error()
+    );
+    assert!(rebuilt.latest_mean().is_some());
+    assert_eq!(player.last_error(), None);
+    player.close();
+}

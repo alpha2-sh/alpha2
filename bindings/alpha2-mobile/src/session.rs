@@ -129,6 +129,39 @@ pub struct ExportOutcome {
     pub report_json: String,
 }
 
+impl Alpha2 {
+    /// The fonts set last.
+    pub(crate) fn fonts(&self) -> Vec<LoadedFont> {
+        self.fonts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The platform's video decoders, when it has any.
+    pub(crate) fn video_backends(
+        &self,
+    ) -> Option<Arc<dyn alpha2_host_core::video_stream::VideoBackends>> {
+        self.platform.video_decoders()
+    }
+
+    /// Which decoders the session's configuration allows.
+    pub(crate) const fn decode_preference(
+        &self,
+    ) -> alpha2_host_core::video_stream::DecodePreference {
+        match self.config.video_decode {
+            VideoDecodeMode::Auto => alpha2_host_core::video_stream::DecodePreference::Auto,
+            VideoDecodeMode::Hardware => alpha2_host_core::video_stream::DecodePreference::Hardware,
+            VideoDecodeMode::Software => alpha2_host_core::video_stream::DecodePreference::Software,
+        }
+    }
+
+    /// The gate [`Alpha2::pause`] closes.
+    pub(crate) fn pause_gate(&self) -> Arc<PauseGate> {
+        Arc::clone(&self.paused)
+    }
+}
+
 /// An app's alpha2 session: its renderer, fonts and media backend.
 #[derive(uniffi::Object)]
 pub struct Alpha2 {

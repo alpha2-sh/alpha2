@@ -354,7 +354,7 @@ fn attempt(
         .collect::<HashMap<_, _>>();
     let providers = Arc::new(ProviderMedia::new(
         &project,
-        provider_files(job, &assets),
+        provider_files(job),
         (size.width, size.height),
         PROVIDER_SOURCE_BYTES,
     ));
@@ -431,12 +431,30 @@ fn attempt(
 }
 
 /// The files the request names for the extension sources.
-fn provider_files(job: &ExportJob, assets: &HashMap<String, PathBuf>) -> ProviderFiles {
+fn provider_files(job: &ExportJob) -> ProviderFiles {
     let request = &job.request;
+    files_of(
+        &request.assets,
+        &request.frames,
+        &request.resources,
+        &job.fonts,
+    )
+}
+
+/// The provider files of a request's assets, sequence frames and resources, with the session's
+/// fonts.
+pub(crate) fn files_of(
+    assets: &HashMap<String, String>,
+    frames: &HashMap<String, Vec<String>>,
+    resources: &HashMap<String, HashMap<String, String>>,
+    fonts: &[crate::session::LoadedFont],
+) -> ProviderFiles {
     ProviderFiles {
-        originals: assets.clone(),
-        frames: request
-            .frames
+        originals: assets
+            .iter()
+            .map(|(id, path)| (id.clone(), PathBuf::from(path)))
+            .collect(),
+        frames: frames
             .iter()
             .map(|(id, paths)| {
                 let paths = paths
@@ -446,13 +464,8 @@ fn provider_files(job: &ExportJob, assets: &HashMap<String, PathBuf>) -> Provide
                 (id.clone(), paths)
             })
             .collect(),
-        fonts: job
-            .fonts
-            .iter()
-            .map(|font| Arc::clone(&font.bytes))
-            .collect(),
-        resources: request
-            .resources
+        fonts: fonts.iter().map(|font| Arc::clone(&font.bytes)).collect(),
+        resources: resources
             .iter()
             .map(|(id, files)| {
                 let files = files
@@ -497,8 +510,23 @@ fn export_range(
         .map_err(|error| Alpha2Error::invalid(format!("export range: {error}")))
 }
 
+/// A still picture's file as a source, `None` for a file that is no still.
+pub(crate) fn open_still(path: &Path) -> Option<Result<SourceStream, String>> {
+    let mut head = [0; 12];
+    let read = std::fs::File::open(path)
+        .and_then(|mut file| std::io::Read::read(&mut file, &mut head))
+        .ok()?;
+    still_format(&head[..read])?;
+    Some(
+        std::fs::read(path)
+            .map_err(|error| format!("{}: {error}", path.display()))
+            .and_then(|bytes| decode_still(&bytes).map_err(|error| error.to_string()))
+            .map(|still| SourceStream::Still(Arc::new(still.into_video_frame()))),
+    )
+}
+
 /// A source file as frames: a still picture, or the default video track of a container.
-fn open_source(
+pub(crate) fn open_source(
     path: &Path,
     decoders: Arc<dyn VideoBackends>,
     options: StreamOptions,

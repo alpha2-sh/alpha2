@@ -38,13 +38,14 @@ alpha2-time.workspace = true
 pollster.workspace = true
 serde_json.workspace = true
 thiserror = "2.0.20"
+wgpu.workspace = true
 uniffi = "=0.32.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 alpha2-android-media.workspace = true
 jni = "0.21"
 ndk-context = "0.1"
-ndk-sys = { version = "=0.6.0", features = ["nativewindow"] }
+ndk-sys = { version = "=0.6.0", features = ["media", "nativewindow"] }
 
 # Workspace lints, but `unsafe_code` is deny (not forbid): the uniffi scaffolding and the Android
 # JNI exports allow it where they need it.
