@@ -824,6 +824,78 @@ jobs:
             echo "::endgroup::"
           done
 
+  mobile-test:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',mobile-test,')) &&
+      needs.changes.outputs.native == 'true' }}
+    name: Mobile tests (Android ${{ matrix.api }} emulator)
+    needs: changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest supported release, whose emulator image has GL only, and a current one.
+        api: [29, 36]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provenance
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc --version
+      - name: Install the pinned Rust toolchain and the emulator target
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: mobile-test
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - name: Point Cargo at the NDK toolchain (API 29)
+        run: |
+          ndk="${ANDROID_NDK_LATEST_HOME:?}"
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            echo "CC_x86_64_linux_android=$bin/x86_64-linux-android29-clang"
+            echo "CXX_x86_64_linux_android=$bin/x86_64-linux-android29-clang++"
+            echo "AR_x86_64_linux_android=$bin/llvm-ar"
+            echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$bin/x86_64-linux-android29-clang"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android=--sysroot=$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          } >> "$GITHUB_ENV"
+      - name: Build the test binaries
+        run: |
+          mkdir -p target/mobile-tests
+          cargo test --locked --no-run --target x86_64-linux-android \
+            -p alpha2-android-media -p alpha2-mobile --lib --message-format=json |
+            jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
+            xargs -I{} cp {} target/mobile-tests/
+          ls -la target/mobile-tests
+      - name: Let the emulator use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # The suites test the backends' logic on the emulator's software codecs and GPU; hardware
+      # codecs are covered on devices. Debug builds name GPU objects, which the emulator's Vulkan
+      # driver crashes on, so the tests run without wgpu's debug flag.
+      - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            adb shell mkdir -p /data/local/tmp/alpha2-test/tests
+            adb push tests/corpus tests/cases tests/fonts /data/local/tmp/alpha2-test/tests/ > /dev/null
+            adb push target/mobile-tests/. /data/local/tmp/alpha2-test/ > /dev/null
+            for binary in target/mobile-tests/*; do name=$(basename "$binary"); adb shell "cd /data/local/tmp/alpha2-test && chmod 755 $name && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test WGPU_DEBUG=0 ./$name --test-threads 1" || exit 1; done
+
   platform-js:
     if: >-
       ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-js,')) &&
