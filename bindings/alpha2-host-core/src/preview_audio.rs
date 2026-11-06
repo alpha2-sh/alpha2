@@ -4,8 +4,8 @@
 //! The callback only copies from the ring, so it never allocates or waits; when the mix falls
 //! behind it plays silence and counts the shortfall.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -20,6 +20,21 @@ const RING_FRAMES: usize = 1 << 13;
 
 /// Frames mixed at a time.
 const MIX_BLOCK: usize = 1024;
+
+/// Failures of one block in a row, 5 ms apart, after which the mix stops and the output plays
+/// silence.
+const MAX_CONSECUTIVE_MIX_FAILURES: u32 = 10;
+
+/// Why the mix failed last.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MixFailure {
+    /// The renderer's error.
+    pub message: String,
+    /// Failures in a row up to now; 0 once a later block mixed.
+    pub consecutive: u32,
+    /// Whether the mix gave up after [`MAX_CONSECUTIVE_MIX_FAILURES`] failures in a row.
+    pub stopped: bool,
+}
 
 /// The ring between the mix thread and the output callback: interleaved stereo samples as bits,
 /// with monotonic counts of frames written and read. A frame is written before the count that
@@ -90,6 +105,7 @@ pub struct PreviewAudio {
     host: CpalOutputHost,
     ring: Arc<Ring>,
     stop: Arc<AtomicBool>,
+    failure: Arc<Mutex<Option<MixFailure>>>,
     mixer: Option<JoinHandle<()>>,
     start_sample: i64,
 }
@@ -118,21 +134,14 @@ impl PreviewAudio {
         let rate = snapshot.project().settings.sample_rate;
         let ring = Arc::new(Ring::new());
         let source = RingSource(Arc::clone(&ring));
-        // cpal panics where the platform gives this process no audio (Android without the app's
-        // context); that is an output that cannot open, not a failed preview.
-        let host = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            CpalOutputHost::open(source, rate, MIX_BLOCK)
-        }))
-        .unwrap_or_else(|_| {
-            Err(CpalHostError::Device(
-                "this process has no audio output".into(),
-            ))
-        })?;
+        let host = open_output(source, rate)?;
         let mut renderer = AudioRenderer::new(&snapshot, 2, MIX_BLOCK)
             .map_err(|error| CpalHostError::Device(error.to_string()))?;
         let stop = Arc::new(AtomicBool::new(false));
+        let failure = Arc::new(Mutex::new(None));
         let mixer_ring = Arc::clone(&ring);
         let mixer_stop = Arc::clone(&stop);
+        let mixer_failure = Arc::clone(&failure);
         let mixer = std::thread::Builder::new()
             .name("alpha2-preview-audio".into())
             .spawn(move || {
@@ -142,6 +151,7 @@ impl PreviewAudio {
                     &mut renderer,
                     &mixer_ring,
                     &mixer_stop,
+                    &mixer_failure,
                     start_sample,
                 );
             })
@@ -158,6 +168,7 @@ impl PreviewAudio {
             host,
             ring,
             stop,
+            failure,
             mixer: Some(mixer),
             start_sample,
         })
@@ -176,6 +187,42 @@ impl PreviewAudio {
     pub fn shortfall(&self) -> u64 {
         self.ring.short.load(Ordering::Relaxed) + self.host.underruns()
     }
+
+    /// The mix's last failure, `None` while every block mixed.
+    #[must_use]
+    pub fn last_error(&self) -> Option<MixFailure> {
+        self.failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+/// Opens the default output playing `source` at `rate`.
+#[cfg(not(target_os = "android"))]
+fn open_output(source: RingSource, rate: u32) -> Result<CpalOutputHost, CpalHostError> {
+    CpalOutputHost::open(source, rate, MIX_BLOCK)
+}
+
+/// Opens the default output playing `source` at `rate`.
+///
+/// cpal panics on Android before the app hands its context to `ndk_context`, which offers no way
+/// to ask first; that panic is an output that cannot open, reported with its message.
+#[cfg(target_os = "android")]
+fn open_output(source: RingSource, rate: u32) -> Result<CpalOutputHost, CpalHostError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        CpalOutputHost::open(source, rate, MIX_BLOCK)
+    }))
+    .unwrap_or_else(|payload| {
+        let message = payload
+            .downcast_ref::<&str>()
+            .map(|message| (*message).to_owned())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "a panic without a message".into());
+        Err(CpalHostError::Device(format!(
+            "this process has no audio output: {message}"
+        )))
+    })
 }
 
 impl Drop for PreviewAudio {
@@ -187,16 +234,19 @@ impl Drop for PreviewAudio {
     }
 }
 
-/// Mixes ahead of the callback until stopped.
+/// Mixes ahead of the callback until stopped, or until one block fails
+/// [`MAX_CONSECUTIVE_MIX_FAILURES`] times in a row.
 fn mix(
     snapshot: &EngineProject,
     sources: &DecodedAudioSources,
     renderer: &mut AudioRenderer,
     ring: &Ring,
     stop: &AtomicBool,
+    failure: &Mutex<Option<MixFailure>>,
     start_sample: i64,
 ) {
     let mut next = start_sample;
+    let mut consecutive = 0_u32;
     while !stop.load(Ordering::Acquire) {
         let written = ring.written.load(Ordering::Acquire);
         let free = RING_FRAMES as u64 - (written - ring.read.load(Ordering::Acquire));
@@ -204,13 +254,32 @@ fn mix(
             std::thread::sleep(Duration::from_millis(5));
             continue;
         }
-        let Ok(status) =
-            renderer.render(snapshot, next, MIX_BLOCK, sources, TransportState::Playing)
-        else {
-            // A mix that fails plays silence rather than stopping the preview.
-            std::thread::sleep(Duration::from_millis(5));
-            continue;
-        };
+        let status =
+            match renderer.render(snapshot, next, MIX_BLOCK, sources, TransportState::Playing) {
+                Ok(status) => status,
+                Err(error) => {
+                    consecutive += 1;
+                    let stopped = consecutive >= MAX_CONSECUTIVE_MIX_FAILURES;
+                    *failure.lock().unwrap_or_else(PoisonError::into_inner) = Some(MixFailure {
+                        message: error.to_string(),
+                        consecutive,
+                        stopped,
+                    });
+                    if stopped {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                }
+            };
+        if std::mem::take(&mut consecutive) > 0
+            && let Some(last) = failure
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_mut()
+        {
+            last.consecutive = 0;
+        }
         let block = renderer.block(&status);
         let frames = block.channels.first().map_or(0, Vec::len);
         for index in 0..frames {
