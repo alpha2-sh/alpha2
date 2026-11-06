@@ -437,6 +437,43 @@ fn an_export_holds_in_the_background_and_finishes_after_a_memory_warning() {
     let _ = std::fs::remove_file(output);
 }
 
+/// Plays `player` through its timeline of `frames` frames lasting `seconds` and checks it kept
+/// time: each frame is drawn or, where it came due before the previous one was drawn, counted as
+/// dropped, the first and the last are always drawn, and playing by the clock takes no less than
+/// the timeline's length. `wait(seconds, done)` waits as the platform's test window needs.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn play_through(
+    player: &crate::Player,
+    wait: &dyn Fn(u64, &dyn Fn() -> bool) -> bool,
+    frames: u64,
+    seconds: f64,
+) {
+    let (presented, dropped) = (player.frames_presented(), player.frames_dropped());
+    let started = std::time::Instant::now();
+    player.play();
+    assert!(wait(5, &|| player.is_playing()));
+    assert!(
+        wait(10, &|| !player.is_playing()),
+        "{:?}",
+        player.last_error()
+    );
+    let elapsed = started.elapsed().as_secs_f64();
+    let drawn = player.frames_presented() - presented;
+    let skipped = player.frames_dropped() - dropped;
+    eprintln!("played {frames} frames in {elapsed:.3} s: {drawn} drawn, {skipped} dropped");
+    assert_eq!(
+        drawn + skipped,
+        frames,
+        "{drawn} drawn and {skipped} dropped"
+    );
+    assert!(drawn >= 2, "only {drawn} frames drawn");
+    let frame = seconds / f64::from(u32::try_from(frames).unwrap_or(u32::MAX));
+    assert!(
+        elapsed >= seconds - frame,
+        "played {seconds} s in {elapsed:.3} s"
+    );
+}
+
 /// Previews into an image reader's window, which only Android has.
 #[cfg(target_os = "android")]
 mod reader_window {
@@ -599,20 +636,12 @@ mod reader_window {
         );
 
         // One second of playing at 30 fps presents about 30 frames and stops at the end.
-        let before = player.frames_presented();
-        player.play();
-        assert!(wait_for(Some(&reader), 5, || player.is_playing()));
-        assert!(
-            wait_for(Some(&reader), 10, || !player.is_playing()),
-            "{:?}",
-            player.last_error()
+        play_through(
+            &player,
+            &|seconds, done| wait_for(Some(&reader), seconds, done),
+            30,
+            1.0,
         );
-        let frames_played = player.frames_presented() - before;
-        eprintln!(
-            "played {frames_played} frames, position {}",
-            player.position_ticks()
-        );
-        assert!((20..=40).contains(&frames_played), "{frames_played} frames");
 
         // A seek shows its frame; a new window (the app's surface rebuilt) shows it again.
         player.seek(0);
@@ -675,18 +704,11 @@ mod reader_window {
         if !attached(&player, &reader, 64, 48) {
             return;
         }
-        player.play();
-        assert!(wait_for(Some(&reader), 5, || player.is_playing()));
-        assert!(
-            wait_for(Some(&reader), 10, || !player.is_playing()),
-            "{:?}",
-            player.last_error()
-        );
-        eprintln!("presented {}", player.frames_presented());
-        assert!(
-            player.frames_presented() >= 6,
-            "{}",
-            player.frames_presented()
+        play_through(
+            &player,
+            &|seconds, done| wait_for(Some(&reader), seconds, done),
+            12,
+            0.4,
         );
         assert_eq!(player.last_error(), None);
         player.end();
@@ -716,22 +738,12 @@ mod reader_window {
         if !attached(&player, &reader, 320, 180) {
             return;
         }
-        // Playing draws each of the clip's 15 frames as it comes due, or counts it as dropped
-        // when it came due before the previous one was drawn (a device too slow for the rate).
-        let (presented, dropped) = (player.frames_presented(), player.frames_dropped());
-        player.play();
-        assert!(wait_for(Some(&reader), 5, || player.is_playing()));
-        assert!(
-            wait_for(Some(&reader), 10, || !player.is_playing()),
-            "{:?}",
-            player.last_error()
+        play_through(
+            &player,
+            &|seconds, done| wait_for(Some(&reader), seconds, done),
+            15,
+            0.5,
         );
-        let drawn = player.frames_presented() - presented;
-        let skipped = player.frames_dropped() - dropped;
-        eprintln!("played 15 frames: {drawn} drawn, {skipped} dropped");
-        assert_eq!(drawn + skipped, 15, "{drawn} drawn and {skipped} dropped");
-        // The first frame and the last are always drawn.
-        assert!(drawn >= 2, "only {drawn} frames drawn");
         let before = player.frames_presented();
         player.seek(alpha2_time::TICKS_PER_SECOND / 5);
         assert!(wait_for(Some(&reader), 5, || player.position_ticks()
@@ -794,17 +806,7 @@ mod metal_layer {
             "{:?}",
             player.last_error()
         );
-        let before = player.frames_presented();
-        player.play();
-        assert!(wait_for(5, || player.is_playing()));
-        assert!(
-            wait_for(10, || !player.is_playing()),
-            "{:?}",
-            player.last_error()
-        );
-        let frames_played = player.frames_presented() - before;
-        eprintln!("played {frames_played} frames into a Metal layer");
-        assert!((20..=40).contains(&frames_played), "{frames_played} frames");
+        super::play_through(&player, &|seconds, done| wait_for(seconds, done), 30, 1.0);
         player.detach_window();
         let rebuilt = objc2_quartz_core::CAMetalLayer::new();
         let before = player.frames_presented();

@@ -12,6 +12,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -107,17 +108,35 @@ class Alpha2Test {
                 val window = Alpha2Android.windowFromSurface(reader.surface)
                 assertTrue(window != 0L)
                 player.attachWindow(window.toULong(), 64u, 48u)
+                // A GPU that refuses the window (GL-only emulator images) skips, as the Rust
+                // preview tests do; any other failure fails.
+                val until = System.currentTimeMillis() + 10_000
+                while (player.framesPresented() == 0uL && player.lastError() == null &&
+                    System.currentTimeMillis() < until) {
+                    Thread.sleep(5)
+                }
+                val refused = player.lastError()
+                assumeFalse(
+                    "skipped: $refused",
+                    refused?.startsWith("the GPU cannot present to this window") == true,
+                )
+                assertNull(refused)
+                val (presented, dropped) = player.framesPresented() to player.framesDropped()
                 player.play()
                 var sounding = false
-                val until = System.currentTimeMillis() + 10_000
-                while (System.currentTimeMillis() < until) {
+                val playing = System.currentTimeMillis() + 10_000
+                while (System.currentTimeMillis() < playing) {
                     sounding = sounding || player.isSounding()
                     if (sounding && !player.isPlaying()) break
                     Thread.sleep(5)
                 }
                 assertTrue("the project's audio played", sounding)
                 assertTrue(!player.isPlaying())
-                assertTrue("${player.framesPresented()} frames", player.framesPresented() >= 6uL)
+                // Each of the project's 12 frames is drawn or, on a device too slow for the
+                // rate, counted as dropped.
+                val drawn = player.framesPresented() - presented
+                val skipped = player.framesDropped() - dropped
+                assertEquals("$drawn drawn, $skipped dropped", 12uL, drawn + skipped)
                 assertNull(player.lastError())
                 player.detachWindow()
             }
