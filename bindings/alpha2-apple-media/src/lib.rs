@@ -8,16 +8,26 @@
 #[cfg(target_vendor = "apple")]
 mod audio;
 #[cfg(target_vendor = "apple")]
+mod audio_encode;
+#[cfg(target_vendor = "apple")]
 mod config;
 #[cfg(target_vendor = "apple")]
 mod sys;
 #[cfg(target_vendor = "apple")]
 mod video;
+#[cfg(target_vendor = "apple")]
+mod video_encode;
 
 #[cfg(target_vendor = "apple")]
 pub use audio::{AppleAudio, AudioToolboxAudio, VorbisAudio};
 #[cfg(target_vendor = "apple")]
+pub use audio_encode::{AppleAudioEncoders, AudioToolboxEncoder};
+#[cfg(target_vendor = "apple")]
 pub use video::{AppleVideo, VideoToolboxVideo};
+#[cfg(target_vendor = "apple")]
+pub use video_encode::{AppleVideoEncoders, VideoToolboxEncoder};
 
+#[cfg(all(test, target_vendor = "apple"))]
+mod encode_tests;
 #[cfg(all(test, target_vendor = "apple"))]
 mod tests;

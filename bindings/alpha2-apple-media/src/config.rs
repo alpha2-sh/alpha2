@@ -133,6 +133,49 @@ pub(crate) fn aac_channel_configuration(config: &[u8]) -> Option<u32> {
     read(4)
 }
 
+/// The decoder-specific info (`DecoderSpecificInfo`, tag 5) inside an `ES_Descriptor`, which may
+/// follow an `esds` box's version and flags.
+pub(crate) fn es_specific_info(descriptor: &[u8]) -> Option<&[u8]> {
+    // A descriptor: tag, a size in 7-bit groups, then the body.
+    fn split(bytes: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+        let (&tag, mut rest) = bytes.split_first()?;
+        let mut size = 0_usize;
+        for _ in 0..4 {
+            let (&byte, tail) = rest.split_first()?;
+            rest = tail;
+            size = size << 7 | usize::from(byte & 0x7f);
+            if byte & 0x80 == 0 {
+                break;
+            }
+        }
+        let (body, after) = rest.split_at_checked(size)?;
+        Some((tag, body, after))
+    }
+    let start = if descriptor.first() == Some(&3) { 0 } else { 4 };
+    let (tag, es, _) = split(descriptor.get(start..)?)?;
+    if tag != 3 {
+        return None;
+    }
+    // ES_ID, then flags naming optional fields: a dependency (2 bytes), a URL, an OCR id (2).
+    let flags = *es.get(2)?;
+    let mut at = 3;
+    if flags & 0x80 != 0 {
+        at += 2;
+    }
+    if flags & 0x40 != 0 {
+        at += 1 + usize::from(*es.get(at)?);
+    }
+    if flags & 0x20 != 0 {
+        at += 2;
+    }
+    let (tag, config, _) = split(es.get(at..)?)?;
+    if tag != 4 {
+        return None;
+    }
+    let (tag, specific, _) = split(config.get(13..)?)?;
+    (tag == 5).then_some(specific)
+}
+
 /// Samples at 48 kHz an Opus packet decodes to, from its TOC byte (RFC 6716 3.1).
 pub(crate) fn opus_packet_frames(packet: &[u8]) -> Option<usize> {
     let toc = *packet.first()?;
@@ -231,6 +274,10 @@ mod tests {
     #[test]
     fn es_descriptor_sizes_nest() {
         let es = es_descriptor(0x40, 5, &[0x12, 0x10]);
+        assert_eq!(es_specific_info(&es), Some(&[0x12, 0x10][..]));
+        let mut boxed = vec![0; 4];
+        boxed.extend_from_slice(&es);
+        assert_eq!(es_specific_info(&boxed), Some(&[0x12, 0x10][..]));
         assert_eq!(es[0], 3);
         assert_eq!(usize::from(es[4]), es.len() - 5);
         assert_eq!(

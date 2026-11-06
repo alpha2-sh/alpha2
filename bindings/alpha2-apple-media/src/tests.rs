@@ -65,7 +65,7 @@ conformance_tests!(apple());
 /// Samples by which a decoded tone of `frequency` Hz lags a sine starting at sample 0, measured
 /// over 0.1 s to 0.3 s.
 #[allow(clippy::cast_precision_loss)]
-fn tone_offset(samples: &[f32], frequency: f64, rate: u32) -> f64 {
+pub(crate) fn tone_offset(samples: &[f32], frequency: f64, rate: u32) -> f64 {
     let step = std::f64::consts::TAU * frequency / f64::from(rate);
     let window = rate as usize / 10..rate as usize * 3 / 10;
     let (mut sine, mut cosine) = (0.0, 0.0);

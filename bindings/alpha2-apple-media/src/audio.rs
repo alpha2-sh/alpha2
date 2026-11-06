@@ -37,7 +37,7 @@ use crate::sys::{self, code};
 
 /// What the input callback returns when it has no packet now: the converter stops and keeps its
 /// state for the next call.
-const NO_INPUT_NOW: i32 = code(*b"wait").cast_signed();
+pub(crate) const NO_INPUT_NOW: i32 = code(*b"wait").cast_signed();
 
 /// `kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked`.
 const FLOAT_PACKED: u32 = 1 | 8;
@@ -96,7 +96,7 @@ unsafe extern "C-unwind" fn feed(
 }
 
 /// An `AudioToolbox` converter, disposed when dropped.
-struct Converter(AudioConverterRef);
+pub(crate) struct Converter(pub(crate) AudioConverterRef);
 
 // SAFETY: a converter may be called from any thread; the session owning it is used from one
 // thread at a time.
@@ -173,7 +173,7 @@ fn descriptions(bytes: &[u8]) -> Option<Vec<u32>> {
 }
 
 /// An `AudioFormatGetProperty` result of any size.
-fn format_property(property: u32, specifier: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn format_property(property: u32, specifier: &[u8]) -> Option<Vec<u8>> {
     let specifier_size = u32::try_from(specifier.len()).ok()?;
     let mut size = 0_u32;
     // SAFETY: `specifier` holds `specifier_size` bytes; `size` is a valid out pointer.
