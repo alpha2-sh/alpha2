@@ -1,19 +1,27 @@
 use super::*;
 
 #[test]
-fn levels_follow_the_frame_size_and_bitrate() {
-    assert_eq!(avc_level(176, 144, 64_000), 10);
-    assert_eq!(avc_level(1280, 720, 8_000_000), 31);
-    assert_eq!(avc_level(1920, 1080, 12_000_000), 40);
-    assert_eq!(avc_level(1920, 1080, 30_000_000), 41);
-    assert_eq!(avc_level(3840, 2160, 40_000_000), 51);
-    assert_eq!(avc_level(16_384, 16_384, 1_000_000_000), 62);
+fn levels_follow_the_frame_size_frame_rate_and_bitrate() {
+    let fps = |num| FrameRate::new(num, 1).expect("rate");
+    assert_eq!(avc_level(176, 144, fps(15), 64_000), 10);
+    assert_eq!(avc_level(1280, 720, fps(30), 8_000_000), 31);
+    assert_eq!(avc_level(1920, 1080, fps(30), 12_000_000), 40);
+    assert_eq!(avc_level(1920, 1080, fps(30), 30_000_000), 41);
+    assert_eq!(avc_level(3840, 2160, fps(30), 40_000_000), 51);
+    assert_eq!(avc_level(16_384, 16_384, fps(30), 1_000_000_000), 62);
+    // Macroblocks per second: 1080p60 needs 4.2, 2160p60 needs 5.2 rather than 5.1.
+    assert_eq!(avc_level(1920, 1080, fps(60), 12_000_000), 42);
+    assert_eq!(avc_level(3840, 2160, fps(60), 40_000_000), 52);
+    let ntsc = FrameRate::new(30_000, 1_001).expect("rate");
+    assert_eq!(avc_level(1280, 720, ntsc, 8_000_000), 31);
 }
 
 #[test]
 fn codec_strings_carry_profile_constraints_and_level() {
-    let strings = AvcProfile::LADDER
-        .map(|profile| avc_codec_string(profile, avc_level(1920, 1080, 12_000_000)));
+    let strings = AvcProfile::LADDER.map(|profile| {
+        let level = avc_level(1920, 1080, FrameRate::new(30, 1).expect("rate"), 12_000_000);
+        avc_codec_string(profile, level)
+    });
     assert_eq!(strings, ["avc1.640028", "avc1.4d0028", "avc1.42e028"]);
 }
 

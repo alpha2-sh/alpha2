@@ -1805,52 +1805,155 @@ const AVC_PROFILES: readonly {
   { profile: "Constrained Baseline", prefix: "42e0" },
 ];
 
-/** H.264 levels by frame size in macroblocks and bitrate, as mediabunny picks them. */
+/**
+ * H.264 levels by macroblocks per frame (MaxFS), macroblocks per second (MaxMBPS) and bitrate
+ * (MaxBR), ITU-T H.264 Table A-1. Mirrors `avc_level` in alpha2-host-core.
+ */
 const AVC_LEVELS: readonly {
   readonly macroblocks: number;
+  readonly macroblocksPerSecond: number;
   readonly bitrate: number;
   readonly level: number;
 }[] = [
-  { macroblocks: 99, bitrate: 64_000, level: 0x0a },
-  { macroblocks: 396, bitrate: 192_000, level: 0x0b },
-  { macroblocks: 396, bitrate: 384_000, level: 0x0c },
-  { macroblocks: 396, bitrate: 768_000, level: 0x0d },
-  { macroblocks: 396, bitrate: 2_000_000, level: 0x14 },
-  { macroblocks: 792, bitrate: 4_000_000, level: 0x15 },
-  { macroblocks: 1_620, bitrate: 4_000_000, level: 0x16 },
-  { macroblocks: 1_620, bitrate: 10_000_000, level: 0x1e },
-  { macroblocks: 3_600, bitrate: 14_000_000, level: 0x1f },
-  { macroblocks: 5_120, bitrate: 20_000_000, level: 0x20 },
-  { macroblocks: 8_192, bitrate: 20_000_000, level: 0x28 },
-  { macroblocks: 8_192, bitrate: 50_000_000, level: 0x29 },
-  { macroblocks: 8_704, bitrate: 50_000_000, level: 0x2a },
-  { macroblocks: 22_080, bitrate: 135_000_000, level: 0x32 },
-  { macroblocks: 36_864, bitrate: 240_000_000, level: 0x33 },
-  { macroblocks: 36_864, bitrate: 240_000_000, level: 0x34 },
-  { macroblocks: 139_264, bitrate: 240_000_000, level: 0x3c },
-  { macroblocks: 139_264, bitrate: 480_000_000, level: 0x3d },
-  { macroblocks: 139_264, bitrate: 800_000_000, level: 0x3e },
+  {
+    macroblocks: 99,
+    macroblocksPerSecond: 1_485,
+    bitrate: 64_000,
+    level: 0x0a,
+  },
+  {
+    macroblocks: 396,
+    macroblocksPerSecond: 3_000,
+    bitrate: 192_000,
+    level: 0x0b,
+  },
+  {
+    macroblocks: 396,
+    macroblocksPerSecond: 6_000,
+    bitrate: 384_000,
+    level: 0x0c,
+  },
+  {
+    macroblocks: 396,
+    macroblocksPerSecond: 11_880,
+    bitrate: 768_000,
+    level: 0x0d,
+  },
+  {
+    macroblocks: 396,
+    macroblocksPerSecond: 11_880,
+    bitrate: 2_000_000,
+    level: 0x14,
+  },
+  {
+    macroblocks: 792,
+    macroblocksPerSecond: 19_800,
+    bitrate: 4_000_000,
+    level: 0x15,
+  },
+  {
+    macroblocks: 1_620,
+    macroblocksPerSecond: 20_250,
+    bitrate: 4_000_000,
+    level: 0x16,
+  },
+  {
+    macroblocks: 1_620,
+    macroblocksPerSecond: 40_500,
+    bitrate: 10_000_000,
+    level: 0x1e,
+  },
+  {
+    macroblocks: 3_600,
+    macroblocksPerSecond: 108_000,
+    bitrate: 14_000_000,
+    level: 0x1f,
+  },
+  {
+    macroblocks: 5_120,
+    macroblocksPerSecond: 216_000,
+    bitrate: 20_000_000,
+    level: 0x20,
+  },
+  {
+    macroblocks: 8_192,
+    macroblocksPerSecond: 245_760,
+    bitrate: 20_000_000,
+    level: 0x28,
+  },
+  {
+    macroblocks: 8_192,
+    macroblocksPerSecond: 245_760,
+    bitrate: 50_000_000,
+    level: 0x29,
+  },
+  {
+    macroblocks: 8_704,
+    macroblocksPerSecond: 522_240,
+    bitrate: 50_000_000,
+    level: 0x2a,
+  },
+  {
+    macroblocks: 22_080,
+    macroblocksPerSecond: 589_824,
+    bitrate: 135_000_000,
+    level: 0x32,
+  },
+  {
+    macroblocks: 36_864,
+    macroblocksPerSecond: 983_040,
+    bitrate: 240_000_000,
+    level: 0x33,
+  },
+  {
+    macroblocks: 36_864,
+    macroblocksPerSecond: 2_073_600,
+    bitrate: 240_000_000,
+    level: 0x34,
+  },
+  {
+    macroblocks: 139_264,
+    macroblocksPerSecond: 4_177_920,
+    bitrate: 240_000_000,
+    level: 0x3c,
+  },
+  {
+    macroblocks: 139_264,
+    macroblocksPerSecond: 8_355_840,
+    bitrate: 480_000_000,
+    level: 0x3d,
+  },
+  {
+    macroblocks: 139_264,
+    macroblocksPerSecond: 16_711_680,
+    bitrate: 800_000_000,
+    level: 0x3e,
+  },
 ];
 
 /**
  * The H.264 profiles {@link canEncodeVideoTrack} tries, in order (High, Main, Constrained
- * Baseline), at the needed level. Empty for other codecs.
+ * Baseline), at the lowest level that holds the frame size at `frameRate` and the bitrate. Empty
+ * for other codecs.
  */
 export function videoEncoderProfiles(
   codec: "avc" | "hevc" | "vp9" | "av1",
   options: {
     readonly width: number;
     readonly height: number;
+    readonly frameRate: { readonly num: number; readonly den: number };
     readonly rate: VideoRateControl;
   },
 ): readonly VideoEncoderProfile[] {
   if (codec !== "avc") return [];
   const macroblocks =
     Math.ceil(options.width / 16) * Math.ceil(options.height / 16);
+  const { num, den } = options.frameRate;
   const level = (
     AVC_LEVELS.find(
       (entry) =>
         macroblocks <= entry.macroblocks &&
+        macroblocks * num <= entry.macroblocksPerSecond * den &&
         options.rate.bitrate <= entry.bitrate,
     ) ?? AVC_LEVELS[AVC_LEVELS.length - 1]
   ).level
@@ -1872,6 +1975,7 @@ export async function canEncodeVideoTrack(
   options: {
     readonly width: number;
     readonly height: number;
+    readonly frameRate: { readonly num: number; readonly den: number };
     readonly rate: VideoRateControl;
   },
 ): Promise<VideoTrackEncoding | null> {

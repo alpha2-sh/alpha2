@@ -26,15 +26,21 @@ const {
 } = await import("../dist/mediabunny.js");
 
 const rate = (bitrate) => ({ bitrate, bitrateMode: "variable" });
+const frameRate = { num: 30, den: 1 };
 
 /** Each case uses its own size because mediabunny caches answers by configuration. */
 async function probe(codec, width, height, bitrate, accepted) {
   accepts = accepted;
   asked.length = 0;
-  return canEncodeVideoTrack(codec, { width, height, rate: rate(bitrate) });
+  return canEncodeVideoTrack(codec, {
+    width,
+    height,
+    frameRate,
+    rate: rate(bitrate),
+  });
 }
 
-test("the High profile string is the one mediabunny builds for the same size and bitrate", async () => {
+test("at 30 fps the High profile string is the one mediabunny builds for the same size and bitrate", async () => {
   accepts = () => true;
   for (const [width, height, bitrate] of [
     [64, 36, 50_000],
@@ -55,6 +61,7 @@ test("the High profile string is the one mediabunny builds for the same size and
     const profiles = videoEncoderProfiles("avc", {
       width,
       height,
+      frameRate,
       rate: rate(bitrate),
     });
     assert.equal(asked.length, 1);
@@ -69,6 +76,21 @@ test("the High profile string is the one mediabunny builds for the same size and
       ],
     );
   }
+});
+
+test("the level holds the frame rate's macroblocks per second", () => {
+  const level = (width, height, num, den, bitrate) =>
+    videoEncoderProfiles("avc", {
+      width,
+      height,
+      frameRate: { num, den },
+      rate: rate(bitrate),
+    })[0].codecString.slice(-2);
+  assert.equal(level(1920, 1080, 30, 1, 12_000_000), "28");
+  assert.equal(level(1920, 1080, 60, 1, 12_000_000), "2a");
+  assert.equal(level(3840, 2160, 30, 1, 40_000_000), "33");
+  assert.equal(level(3840, 2160, 60, 1, 40_000_000), "34");
+  assert.equal(level(1280, 720, 30_000, 1_001, 8_000_000), "1f");
 });
 
 test("a browser that encodes High opens High and reports no fallback", async () => {
@@ -103,13 +125,13 @@ test("a browser that encodes only Constrained Baseline opens it after High and M
   const encoding = await probe("avc", 640, 360, 1_000_000, (codec) =>
     codec.startsWith("avc1.42e0"),
   );
-  assert.equal(encoding.codecString, "avc1.42e016");
+  assert.equal(encoding.codecString, "avc1.42e01e");
   assert.equal(encoding.profile, "Constrained Baseline");
   assert.deepEqual(
     encoding.fallbacks.map((f) => [f.profile, f.encoder]),
     [
-      ["High", "avc1.640016"],
-      ["Main", "avc1.4d0016"],
+      ["High", "avc1.64001e"],
+      ["Main", "avc1.4d001e"],
     ],
   );
 });
@@ -120,6 +142,7 @@ test("a quantizer with a bitrate fallback is asked for in each profile before th
   const encoding = await canEncodeVideoTrack("avc", {
     width: 1280,
     height: 544,
+    frameRate,
     rate: { bitrate: 4_000_000, bitrateMode: "variable", quantizer: 23 },
   });
   assert.equal(encoding.profile, "Main");
@@ -128,7 +151,7 @@ test("a quantizer with a bitrate fallback is asked for in each profile before th
 
 test("a browser that encodes no H.264 profile is refused after asking for all three", async () => {
   assert.equal(await probe("avc", 854, 480, 2_000_000, () => false), null);
-  assert.deepEqual(asked, ["avc1.640016", "avc1.4d0016", "avc1.42e016"]);
+  assert.deepEqual(asked, ["avc1.64001f", "avc1.4d001f", "avc1.42e01f"]);
 });
 
 test("odd frame sizes are refused in every profile without asking the browser", async () => {
@@ -141,6 +164,7 @@ test("other codecs open with mediabunny's own codec string and have no profile l
     videoEncoderProfiles("vp9", {
       width: 1280,
       height: 720,
+      frameRate,
       rate: rate(5_000_000),
     }),
     [],

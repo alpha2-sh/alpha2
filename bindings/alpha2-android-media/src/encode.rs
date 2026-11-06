@@ -442,8 +442,12 @@ fn video_candidates(
 fn video_profiles(config: &VideoEncodeConfig) -> Vec<Option<(i32, Option<i32>)>> {
     let mut profiles = match config.codec {
         VideoCodec::H264 => {
-            let level =
-                avc_level_constant(avc_level(config.width, config.height, config.rate.bitrate));
+            let level = avc_level_constant(avc_level(
+                config.width,
+                config.height,
+                config.frame_rate,
+                config.rate.bitrate,
+            ));
             AvcProfile::LADDER
                 .iter()
                 .map(|profile| {

@@ -1,6 +1,8 @@
 //! Export policy every native host applies: the H.264 profile ladder platform encoders are tried
 //! with, and whether and how a failed export is retried.
 
+use alpha2_time::FrameRate;
+
 /// An H.264 profile a platform encoder is asked for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AvcProfile {
@@ -38,37 +40,66 @@ impl AvcProfile {
     }
 }
 
-/// H.264 levels by frame size in macroblocks and bitrate (ITU-T H.264 Table A-1, `level_idc`).
-const AVC_LEVELS: [(u32, u64, u8); 19] = [
-    (99, 64_000, 10),
-    (396, 192_000, 11),
-    (396, 384_000, 12),
-    (396, 768_000, 13),
-    (396, 2_000_000, 20),
-    (792, 4_000_000, 21),
-    (1_620, 4_000_000, 22),
-    (1_620, 10_000_000, 30),
-    (3_600, 14_000_000, 31),
-    (5_120, 20_000_000, 32),
-    (8_192, 20_000_000, 40),
-    (8_192, 50_000_000, 41),
-    (8_704, 50_000_000, 42),
-    (22_080, 135_000_000, 50),
-    (36_864, 240_000_000, 51),
-    (36_864, 240_000_000, 52),
-    (139_264, 240_000_000, 60),
-    (139_264, 480_000_000, 61),
-    (139_264, 800_000_000, 62),
+/// One row of ITU-T H.264 Table A-1.
+struct AvcLevel {
+    /// `MaxFS`: macroblocks per frame.
+    frame: u64,
+    /// `MaxMBPS`: macroblocks per second.
+    rate: u64,
+    /// `MaxBR` in bits per second.
+    bitrate: u64,
+    level_idc: u8,
+}
+
+const fn row(frame: u64, rate: u64, bitrate: u64, level_idc: u8) -> AvcLevel {
+    AvcLevel {
+        frame,
+        rate,
+        bitrate,
+        level_idc,
+    }
+}
+
+/// H.264 levels (ITU-T H.264 Table A-1), lowest first.
+const AVC_LEVELS: [AvcLevel; 19] = [
+    row(99, 1_485, 64_000, 10),
+    row(396, 3_000, 192_000, 11),
+    row(396, 6_000, 384_000, 12),
+    row(396, 11_880, 768_000, 13),
+    row(396, 11_880, 2_000_000, 20),
+    row(792, 19_800, 4_000_000, 21),
+    row(1_620, 20_250, 4_000_000, 22),
+    row(1_620, 40_500, 10_000_000, 30),
+    row(3_600, 108_000, 14_000_000, 31),
+    row(5_120, 216_000, 20_000_000, 32),
+    row(8_192, 245_760, 20_000_000, 40),
+    row(8_192, 245_760, 50_000_000, 41),
+    row(8_704, 522_240, 50_000_000, 42),
+    row(22_080, 589_824, 135_000_000, 50),
+    row(36_864, 983_040, 240_000_000, 51),
+    row(36_864, 2_073_600, 240_000_000, 52),
+    row(139_264, 4_177_920, 240_000_000, 60),
+    row(139_264, 8_355_840, 480_000_000, 61),
+    row(139_264, 16_711_680, 800_000_000, 62),
 ];
 
-/// The lowest `level_idc` that holds `width` x `height` at `bitrate`, else the highest level.
+/// The lowest `level_idc` that holds `width` x `height` at `frame_rate` and `bitrate`, else the
+/// highest level.
 #[must_use]
-pub fn avc_level(width: u32, height: u32, bitrate: u64) -> u8 {
-    let macroblocks = width.div_ceil(16).saturating_mul(height.div_ceil(16));
+pub fn avc_level(width: u32, height: u32, frame_rate: FrameRate, bitrate: u64) -> u8 {
+    let frame = u64::from(width.div_ceil(16)) * u64::from(height.div_ceil(16));
+    let (num, den) = (
+        u64::from(frame_rate.numerator()),
+        u64::from(frame_rate.denominator()),
+    );
     AVC_LEVELS
         .iter()
-        .find(|(most, rate, _)| macroblocks <= *most && bitrate <= *rate)
-        .map_or(62, |(_, _, level)| *level)
+        .find(|level| {
+            frame <= level.frame
+                && frame.saturating_mul(num) <= level.rate.saturating_mul(den)
+                && bitrate <= level.bitrate
+        })
+        .map_or(62, |level| level.level_idc)
 }
 
 /// The `avc1.PPCCLL` codec string of `profile` at `level`.
