@@ -35,6 +35,7 @@ fn video_info(codec: VideoCodec) -> TrackInfo {
             clean_aperture: None,
             frame_rate: alpha2_time::FrameRate::new(30, 1).ok(),
             alpha: false,
+            reorder_depth: None,
         }),
         audio: None,
     }
@@ -59,6 +60,7 @@ fn audio_info(codec: AudioCodec, priming: u32) -> TrackInfo {
             speakers: None,
             bits_per_sample: None,
             priming,
+            seek_preroll: None,
         }),
     }
 }

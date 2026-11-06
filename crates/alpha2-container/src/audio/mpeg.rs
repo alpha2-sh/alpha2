@@ -259,6 +259,7 @@ pub(super) fn open(mut input: Input, start: u64) -> Result<Box<dyn ContainerRead
         speakers: None,
         bits_per_sample: None,
         priming: u32::try_from(start_skip).unwrap_or(0),
+        seek_preroll: None,
     };
     let framer = MpegFramer {
         sample_rate: rate,

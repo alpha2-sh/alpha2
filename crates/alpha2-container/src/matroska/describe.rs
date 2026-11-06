@@ -24,6 +24,7 @@ pub(crate) struct Entry {
     pub codec_id: String,
     pub private: Bytes,
     pub codec_delay: u64,
+    pub seek_preroll: u64,
     pub language: String,
     pub name: Option<String>,
     pub default_duration: u64,
@@ -114,6 +115,7 @@ pub(crate) fn entry(payload: &[u8]) -> Entry {
         codec_id: String::new(),
         private: Bytes::new(),
         codec_delay: 0,
+        seek_preroll: 0,
         language: "eng".into(),
         name: None,
         default_duration: 0,
@@ -135,6 +137,7 @@ pub(crate) fn entry(payload: &[u8]) -> Entry {
             id::CODEC_ID => entry.codec_id = string(body),
             id::CODEC_PRIVATE => entry.private = Bytes::copy_from_slice(body),
             id::CODEC_DELAY => entry.codec_delay = number(),
+            id::SEEK_PRE_ROLL => entry.seek_preroll = number(),
             id::LANGUAGE => entry.language = string(body),
             id::NAME => entry.name = Some(string(body)),
             id::DEFAULT_DURATION => entry.default_duration = number(),
@@ -566,6 +569,7 @@ fn video_track(entry: &Entry) -> Result<VideoParts, DemuxError> {
     let frame = (entry.default_duration > 0 || fields.frame_rate > 0.0)
         .then(|| frame_rate(entry))
         .flatten();
+    let reorder_depth = crate::mp4::nal::declared_reorder_depth(codec, &private);
     let video = VideoTrack {
         codec,
         codec_private: private,
@@ -580,6 +584,7 @@ fn video_track(entry: &Entry) -> Result<VideoParts, DemuxError> {
             FrameRate::new(u32::try_from(num).ok()?, u32::try_from(den).ok()?).ok()
         }),
         alpha: fields.alpha_mode != 0 || entry.alpha_addition && codec == VideoCodec::Vp9,
+        reorder_depth,
     };
     let fps = frame.filter(|(num, den)| *num < den * 1000 && *num > den * 5);
     Ok((
@@ -913,6 +918,14 @@ fn audio_track(entry: &Entry) -> AudioParts {
         1_000_000_000,
     )
     .clamp(0, i64::from(u32::MAX)) as u32;
+    let seek_preroll = (entry.seek_preroll > 0).then(|| {
+        let samples = rescale(
+            i64::try_from(entry.seek_preroll).unwrap_or(i64::MAX),
+            i64::from(rate),
+            1_000_000_000,
+        );
+        u32::try_from(samples.max(0)).unwrap_or(u32::MAX)
+    });
     let timing = match codec {
         AudioCodec::Aac => Timing::Aac {
             frame: if aac_doubles(&private) { 2048 } else { 1024 },
@@ -962,6 +975,7 @@ fn audio_track(entry: &Entry) -> AudioParts {
                 .filter(|layout: &SpeakerLayout| u32::try_from(layout.channels()) == Ok(channels)),
             bits_per_sample,
             priming,
+            seek_preroll,
         },
         timing,
         intra,

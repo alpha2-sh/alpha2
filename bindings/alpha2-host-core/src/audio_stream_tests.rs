@@ -36,6 +36,7 @@ fn pcm(packets: &[(i64, usize, (u32, u32))]) -> Box<dyn ContainerReader> {
                 speakers: None,
                 bits_per_sample: Some(16),
                 priming: 0,
+                seek_preroll: None,
             }),
         }],
         packets: packets.to_vec(),

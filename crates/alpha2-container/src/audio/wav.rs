@@ -208,6 +208,7 @@ pub(super) fn open(mut input: Input) -> Result<Box<dyn ContainerReader>, DemuxEr
             .and_then(|mask| speakers_from_mask(u64::from(mask), channels)),
         bits_per_sample: u16::try_from(codec_bits).ok(),
         priming: 0,
+        seek_preroll: None,
     };
     let framer = WavFramer {
         first: data,

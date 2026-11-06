@@ -310,6 +310,7 @@ pub(super) fn open(mut input: Input, start: u64) -> Result<Box<dyn ContainerRead
         speakers,
         bits_per_sample: u16::try_from(info.bits).ok(),
         priming: 0,
+        seek_preroll: None,
     };
     let framer = FlacFramer {
         first: pos,

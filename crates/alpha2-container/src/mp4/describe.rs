@@ -64,9 +64,11 @@ pub(crate) fn describe(trak: &Trak) -> Result<Described, DemuxError> {
                 )));
             }
             described.family = family;
+            let private = video_private(entry, codec);
+            let reorder_depth = crate::mp4::nal::declared_reorder_depth(codec, &private);
             described.video = Some(VideoTrack {
                 codec,
-                codec_private: video_private(entry, codec),
+                codec_private: private,
                 in_band_parameter_sets: matches!(&entry.format.0, b"hev1" | b"avc3"),
                 width,
                 height,
@@ -78,6 +80,7 @@ pub(crate) fn describe(trak: &Trak) -> Result<Described, DemuxError> {
                 alpha: codec == VideoCodec::Hevc
                     && find(&entry.children, b"hvcC")
                         .is_some_and(|hvcc| hevc_alpha_layer(hvcc.payload())),
+                reorder_depth,
             });
         }
         EntryFields::Audio(fields) if kind == TrackKind::Audio => {
@@ -492,6 +495,7 @@ fn audio_track(entry: &SampleEntry, fields: &AudioFields, timescale: u32) -> Aud
         speakers: speakers(entry, channels),
         bits_per_sample,
         priming: 0,
+        seek_preroll: None,
     }
 }
 

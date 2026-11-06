@@ -145,6 +145,14 @@ pub struct VideoTrack {
     /// Whether the track carries alpha the way alpha2 reads it (HEVC alpha layer, VP9 block
     /// additions).
     pub alpha: bool,
+    /// The most pictures that precede any picture in decode order and follow it in presentation
+    /// order, as the bitstream declares or implies it; `None` when unknown.
+    ///
+    /// H.264 takes `max_num_reorder_frames` (inferred per ITU-T H.264 E.2.1 when the VUI has no
+    /// bitstream restriction), HEVC `sps_max_num_reorder_pics` of the highest sub-layer, MPEG-4
+    /// Part 2 1 when B-VOPs may follow. VP8, VP9, AV1 and `ProRes` are 0: each packet yields at
+    /// most one shown picture, in packet order.
+    pub reorder_depth: Option<usize>,
 }
 
 /// An audio track's sound facts.
@@ -166,6 +174,9 @@ pub struct AudioTrack {
     /// Decoder output samples to drop at the start: AAC priming from the edit list or
     /// `iTunSMPB`, Matroska `CodecDelay`, Opus pre-skip.
     pub priming: u32,
+    /// Samples a decoder needs to decode before a seek target to converge, in the units of
+    /// [`Self::priming`] (Matroska `SeekPreRoll`), when the container declares it.
+    pub seek_preroll: Option<u32>,
 }
 
 /// One track of a container.

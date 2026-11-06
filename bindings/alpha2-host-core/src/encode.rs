@@ -322,6 +322,7 @@ impl EncodeSink {
                 clean_aperture: None,
                 frame_rate: Some(config.frame_rate),
                 alpha: config.layout.alpha,
+                reorder_depth: None,
             }),
             audio: None,
         })
@@ -348,6 +349,7 @@ impl EncodeSink {
                 speakers: Some(config.speakers),
                 bits_per_sample: None,
                 priming: encoder.priming(),
+                seek_preroll: None,
             }),
         })
     }

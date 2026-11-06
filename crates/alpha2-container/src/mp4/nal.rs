@@ -169,6 +169,58 @@ impl Bits<'_> {
 /// The reorder depth `FFmpeg`'s H.264 decoder starts from (`has_b_frames`): the first SPS's
 /// `max_num_reorder_frames` when its VUI has bitstream restrictions, else 0.
 pub(crate) fn avc_reorder_depth(avcc: &[u8]) -> Option<usize> {
+    avc_sequence(avcc).map(|sequence| sequence.declared.unwrap_or(0))
+}
+
+/// The first SPS's `max_num_reorder_frames`, declared or inferred as ITU-T H.264 E.2.1 infers
+/// it: 0 for the intra profiles with `constraint_set3_flag`, else `MaxDpbFrames` (A.3.1).
+fn avc_declared_reorder_depth(avcc: &[u8]) -> Option<usize> {
+    let sequence = avc_sequence(avcc)?;
+    if let Some(declared) = sequence.declared {
+        return Some(declared);
+    }
+    if matches!(sequence.profile, 44 | 86 | 100 | 110 | 122 | 244) && sequence.constraint_set3 {
+        return Some(0);
+    }
+    // Level 1b is `level_idc` 9, or 11 with `constraint_set3_flag` in the Baseline, Main and
+    // Extended profiles.
+    let level_1b = sequence.level == 9
+        || sequence.level == 11
+            && sequence.constraint_set3
+            && matches!(sequence.profile, 66 | 77 | 88);
+    // MaxDpbMbs of Table A-1.
+    let dpb_macroblocks: u64 = match sequence.level {
+        _ if level_1b => 396,
+        10 => 396,
+        11 => 900,
+        12 | 13 | 20 => 2_376,
+        21 => 4_752,
+        22 | 30 => 8_100,
+        31 => 18_000,
+        32 => 20_480,
+        40 | 41 => 32_768,
+        42 => 34_816,
+        50 => 110_400,
+        51 | 52 => 184_320,
+        60..=62 => 696_320,
+        _ => return None,
+    };
+    let frame = sequence.frame_macroblocks.max(1);
+    Some(usize::try_from((dpb_macroblocks / frame).min(16)).unwrap_or(16))
+}
+
+/// What the first SPS of an `avcC` record says about reordering.
+struct AvcSequence {
+    profile: u32,
+    constraint_set3: bool,
+    level: u32,
+    /// `PicWidthInMbs * FrameHeightInMbs`.
+    frame_macroblocks: u64,
+    /// `max_num_reorder_frames`, when the VUI has bitstream restrictions.
+    declared: Option<usize>,
+}
+
+fn avc_sequence(avcc: &[u8]) -> Option<AvcSequence> {
     let parameter_sets = avcc.get(5).map_or(0, |byte| byte & 0x1f);
     if avcc.len() < 8 || avcc[0] != 1 || parameter_sets == 0 {
         return None;
@@ -177,7 +229,8 @@ pub(crate) fn avc_reorder_depth(avcc: &[u8]) -> Option<usize> {
     let sps = unescape(avcc.get(9..8 + length)?);
     let mut bits = Bits::new(&sps);
     let profile = bits.read(8)?;
-    bits.skip(16)?;
+    let constraint_set3 = bits.read(8)? & 0x10 != 0;
+    let level = bits.read(8)?;
     bits.ue()?;
     if matches!(
         profile,
@@ -215,9 +268,10 @@ pub(crate) fn avc_reorder_depth(avcc: &[u8]) -> Option<usize> {
     }
     bits.ue()?;
     bits.skip(1)?;
-    bits.ue()?;
-    bits.ue()?;
-    if !bits.flag()? {
+    let width = u64::from(bits.ue()?) + 1;
+    let height = u64::from(bits.ue()?) + 1;
+    let frame_mbs_only = bits.flag()?;
+    if !frame_mbs_only {
         bits.skip(1)?;
     }
     bits.skip(1)?;
@@ -226,10 +280,19 @@ pub(crate) fn avc_reorder_depth(avcc: &[u8]) -> Option<usize> {
             bits.ue()?;
         }
     }
-    if !bits.flag()? {
-        return Some(0);
-    }
-    vui_reorder_depth(&mut bits)
+    let declared = if bits.flag()? {
+        let (restricted, depth) = vui_reorder_depth(&mut bits)?;
+        restricted.then_some(depth)
+    } else {
+        None
+    };
+    Some(AvcSequence {
+        profile,
+        constraint_set3,
+        level,
+        frame_macroblocks: width * height * if frame_mbs_only { 1 } else { 2 },
+        declared,
+    })
 }
 
 /// Skips a `scaling_list()` of `size` entries (ITU-T H.264 7.3.2.1.1.1).
@@ -246,8 +309,9 @@ fn skip_scaling_list(bits: &mut Bits<'_>, size: usize) -> Option<()> {
     Some(())
 }
 
-/// `max_num_reorder_frames` of `vui_parameters()` (ITU-T H.264 E.1.1), 0 without restrictions.
-fn vui_reorder_depth(bits: &mut Bits<'_>) -> Option<usize> {
+/// Whether `vui_parameters()` (ITU-T H.264 E.1.1) has bitstream restrictions, and its
+/// `max_num_reorder_frames` (0 without).
+fn vui_reorder_depth(bits: &mut Bits<'_>) -> Option<(bool, usize)> {
     if bits.flag()? && bits.read(8)? == 255 {
         bits.skip(32)?;
     }
@@ -280,7 +344,7 @@ fn vui_reorder_depth(bits: &mut Bits<'_>) -> Option<usize> {
     }
     bits.skip(1)?;
     if !bits.flag()? {
-        return Some(0);
+        return Some((false, 0));
     }
     bits.skip(1)?;
     for _ in 0..4 {
@@ -288,7 +352,7 @@ fn vui_reorder_depth(bits: &mut Bits<'_>) -> Option<usize> {
     }
     let reorder = bits.ue()?;
     bits.ue()?;
-    Some(usize::try_from(reorder.min(16)).unwrap_or(16))
+    Some((true, usize::try_from(reorder.min(16)).unwrap_or(16)))
 }
 
 /// Skips `hrd_parameters()` (ITU-T H.264 E.1.2).
@@ -342,12 +406,15 @@ pub(crate) fn hevc_reorder_depth(hvcc: &[u8]) -> Option<usize> {
 /// Whether an MPEG-4 Part 2 video object layer header lets B-VOPs follow (`FFmpeg`'s
 /// `has_b_frames = !low_delay` after reading it).
 pub(crate) fn mpeg4_has_b_frames(config: &[u8]) -> bool {
-    let Some(start) = config
+    mpeg4_low_delay(config) == Some(false)
+}
+
+/// The `low_delay` of an MPEG-4 Part 2 video object layer header (ISO/IEC 14496-2 6.3.3), when
+/// the header is found.
+fn mpeg4_low_delay(config: &[u8]) -> Option<bool> {
+    let start = config
         .windows(4)
-        .position(|code| code[..3] == [0, 0, 1] && (0x20..=0x2f).contains(&code[3]))
-    else {
-        return false;
-    };
+        .position(|code| code[..3] == [0, 0, 1] && (0x20..=0x2f).contains(&code[3]))?;
     let mut bits = Bits::new(&config[start + 4..]);
     let mut low_delay = || -> Option<bool> {
         bits.skip(1)?;
@@ -365,5 +432,17 @@ pub(crate) fn mpeg4_has_b_frames(config: &[u8]) -> bool {
         // Simple and Advanced Simple objects without control parameters have no B-VOPs.
         Some(matches!(object_type, 1 | 17))
     };
-    low_delay() == Some(false)
+    low_delay()
+}
+
+/// The reorder depth a track of `codec` declares in `private` ([`crate::VideoTrack::reorder_depth`]).
+pub(crate) fn declared_reorder_depth(codec: crate::VideoCodec, private: &[u8]) -> Option<usize> {
+    use crate::VideoCodec;
+    match codec {
+        VideoCodec::H264 => avc_declared_reorder_depth(private),
+        VideoCodec::Hevc => hevc_reorder_depth(private),
+        VideoCodec::Mpeg4Part2 => mpeg4_low_delay(private).map(|low_delay| usize::from(!low_delay)),
+        VideoCodec::Vp8 | VideoCodec::Vp9 | VideoCodec::Av1 | VideoCodec::ProRes(_) => Some(0),
+        VideoCodec::Other(_) => None,
+    }
 }

@@ -149,6 +149,9 @@ fn only_the_first_packet_carries_the_codec_delay_however_it_is_reached() {
     let path = corpus_dir().join("audio-seek-libopus.webm");
     let mut reader = MatroskaReader::open(&path).expect("open");
     let track = reader.tracks()[0].id;
+    let audio = reader.tracks()[0].audio.clone().expect("audio");
+    // `SeekPreRoll` of 80 ms in 48 kHz samples, as the priming is counted.
+    assert_eq!(audio.seek_preroll, Some(3_840));
     // A seek first: the reader has not read the track's start yet.
     reader.seek(track, 1_000).expect("seek");
     let later = reader.next_packet(track).expect("packet").expect("some");

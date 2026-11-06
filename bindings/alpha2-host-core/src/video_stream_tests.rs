@@ -67,6 +67,7 @@ fn track() -> TrackInfo {
             clean_aperture: None,
             frame_rate: None,
             alpha: false,
+            reorder_depth: None,
         }),
         audio: None,
     }

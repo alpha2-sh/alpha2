@@ -105,6 +105,10 @@ fn corpus_files_round_trip_through_the_muxer() {
                     // The muxer writes the frame rate back only as a millisecond-rounded duration.
                     video.frame_rate = None;
                 }
+                if let Some(audio) = &mut facts.audio {
+                    // The muxer writes `FFmpeg`'s Opus `SeekPreRoll` whatever the source declared.
+                    audio.seek_preroll = None;
+                }
             }
             if facts_before != facts_after {
                 failures.push(format!(

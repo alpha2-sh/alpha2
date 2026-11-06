@@ -152,6 +152,7 @@ fn video_track(width: u32, height: u32) -> TrackInfo {
             clean_aperture: None,
             frame_rate: None,
             alpha: false,
+            reorder_depth: None,
         }),
         audio: None,
     }
@@ -253,4 +254,25 @@ fn files_open_by_their_sniffed_format() {
     assert_eq!(reader.tracks().len(), 2);
     assert_eq!(reader.default_audio(), Some(0));
     assert_eq!(reader.tracks()[1].language.as_deref(), Some("eng"));
+}
+
+#[test]
+fn video_tracks_carry_the_reorder_depth_their_bitstream_declares() {
+    let depth = |name: &str| {
+        let reader = crate::open(&corpus_dir().join(name)).expect("open");
+        let index = reader.default_video().expect("video");
+        reader.tracks()[index]
+            .video
+            .as_ref()
+            .and_then(|video| video.reorder_depth)
+    };
+    // Declared in the VUI, as `FFmpeg`'s `has_b_frames` reports them.
+    assert_eq!(depth("h264-1080p.mp4"), Some(2));
+    assert_eq!(depth("h264-bt709-copy.mkv"), Some(2));
+    assert_eq!(depth("hevc-hvc1.mp4"), Some(2));
+    // Without bitstream restrictions: MaxDpbFrames of level 1.0 (396) over 8x6 macroblocks.
+    assert_eq!(depth("h264-bt709-no-vui.mp4"), Some(8));
+    assert_eq!(depth("recovery-mpeg4.mp4"), Some(0));
+    assert_eq!(depth("av1.mp4"), Some(0));
+    assert_eq!(depth("vp9.webm"), Some(0));
 }

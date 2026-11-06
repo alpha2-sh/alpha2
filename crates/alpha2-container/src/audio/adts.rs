@@ -159,6 +159,7 @@ pub(super) fn open(mut input: Input, start: u64) -> Result<Box<dyn ContainerRead
         speakers: None,
         bits_per_sample: None,
         priming: 0,
+        seek_preroll: None,
     };
     let facts = Facts {
         timescale: TIMESCALE,
