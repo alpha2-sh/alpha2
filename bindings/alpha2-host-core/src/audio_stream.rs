@@ -9,10 +9,12 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use alpha2_container::{AudioCodec, ContainerReader, Packet, PcmFormat, TrackInfo};
+use alpha2_container::{
+    AudioCodec, AudioTrack, ContainerReader, Packet, PcmFormat, TrackInfo, TrackKind,
+};
 use alpha2_media::{
     AudioBlock, CancelToken, DecodeError, DecodeEvent, DecodeRequest, DecodeResult, Decoder,
-    Orientation, SampleAspectRatio, SpeakerLayout, StreamInfo, StreamKind,
+    Orientation, SampleAspectRatio, Speaker, SpeakerLayout, StreamInfo, StreamKind,
 };
 use alpha2_time::{MediaTime, TICKS_PER_SECOND};
 
@@ -29,7 +31,10 @@ pub struct PcmChunk {
     pub sample_rate: u32,
     /// One plane per channel.
     pub planes: Vec<Vec<f32>>,
-    /// The speaker order of the planes, when the decoder reports it.
+    /// The speakers of the planes, when not the stream's: the stream takes its own speakers from
+    /// them in its order, a back pair standing in for a side pair it lacks, and drops the rest
+    /// (a decoder's silent LFE). `None` means the stream's speakers, in `FFmpeg`'s native channel
+    /// order for compressed codecs.
     pub speakers: Option<SpeakerLayout>,
 }
 
@@ -256,7 +261,314 @@ impl std::fmt::Debug for AudioStream {
     }
 }
 
+/// The planes of `to`'s speakers, in its order, from `planes` of `from`'s; `planes` unchanged
+/// unless every speaker of `to` has its own plane. A back speaker stands in for the side speaker
+/// on its side that `from` lacks, and the other way round, since layouts name the surround pair
+/// of a 5.1 either way.
+fn select(mut planes: Vec<Vec<f32>>, from: SpeakerLayout, to: SpeakerLayout) -> Vec<Vec<f32>> {
+    let from = from.speakers();
+    if from.len() != planes.len() {
+        return planes;
+    }
+    let counterpart = |speaker: Speaker| match speaker {
+        Speaker::SideLeft => Some(Speaker::BackLeft),
+        Speaker::SideRight => Some(Speaker::BackRight),
+        Speaker::BackLeft => Some(Speaker::SideLeft),
+        Speaker::BackRight => Some(Speaker::SideRight),
+        _ => None,
+    };
+    let find = |speaker: Speaker| from.iter().position(|named| *named == speaker);
+    let positions = to
+        .speakers()
+        .iter()
+        .map(|&speaker| {
+            find(speaker).or_else(|| {
+                counterpart(speaker)
+                    .filter(|other| !to.speakers().contains(other))
+                    .and_then(find)
+            })
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(positions) = positions.filter(|positions| {
+        positions
+            .iter()
+            .enumerate()
+            .all(|(index, position)| !positions[..index].contains(position))
+    }) else {
+        return planes;
+    };
+    let mut taken = planes.iter_mut().map(std::mem::take).collect::<Vec<_>>();
+    positions
+        .into_iter()
+        .map(|position| std::mem::take(&mut taken[position]))
+        .collect()
+}
+
+/// What [`Decoder::streams`] tells of audio track `index`.
+fn audio_stream_info(index: usize, track: &TrackInfo) -> Option<StreamInfo> {
+    let audio = track.audio.as_ref()?;
+    Some(StreamInfo {
+        index,
+        kind: StreamKind::Audio,
+        codec: format!("{:?}", audio.codec).to_lowercase(),
+        duration: track
+            .duration
+            .map(|duration| crate::video_stream::to_media_time(duration, track.timescale)),
+        dimensions: None,
+        frame_rate: None,
+        sample_rate: Some(audio.sample_rate),
+        channels: Some(audio.channels),
+        orientation: Orientation::default(),
+        sample_aspect_ratio: SampleAspectRatio { num: 1, den: 1 },
+        color: None,
+        frame_bytes: None,
+        alpha: None,
+        language: track.language.clone(),
+        title: track.title.clone(),
+    })
+}
+
+/// The speakers of a track's decoded planes.
+///
+/// PCM planes keep the container's order. Decoders of compressed audio deliver `FFmpeg`'s native
+/// channel order (the WAVE mask order), so a declared layout is put in that order, and a track
+/// that declares none takes its codec's layout for the channel count.
+fn decoded_speakers(audio: &AudioTrack, channels: usize) -> Option<SpeakerLayout> {
+    if matches!(audio.codec, AudioCodec::Pcm(_)) {
+        return audio
+            .speakers
+            .or_else(|| SpeakerLayout::default_for(channels));
+    }
+    if let Some(declared) = audio.speakers {
+        let mut speakers = declared.speakers().to_vec();
+        speakers.sort_by_key(|speaker| speaker.ffmpeg_channel());
+        return SpeakerLayout::new(&speakers);
+    }
+    let codec_layout = match audio.codec {
+        AudioCodec::Aac => aac_layout(&audio.codec_private, channels),
+        AudioCodec::Opus | AudioCodec::Vorbis | AudioCodec::Flac => vorbis_family_layout(channels),
+        _ => None,
+    };
+    codec_layout.or_else(|| SpeakerLayout::default_for(channels))
+}
+
+/// The layout an `AudioSpecificConfig` declares, as `FFmpeg`'s decoder reports it: its channel
+/// configuration's, or for configuration 0 its program config element's.
+fn aac_layout(config: &[u8], channels: usize) -> Option<SpeakerLayout> {
+    use Speaker::{
+        BackCenter, BackLeft, BackRight, FrontCenter, FrontLeft, FrontRight, LowFrequency,
+        SideLeft, SideRight,
+    };
+    let mut bits = config
+        .iter()
+        .flat_map(|byte| (0..8).rev().map(move |bit| u32::from(byte >> bit & 1)));
+    let mut read = |count: u32| -> Option<u32> {
+        (0..count).try_fold(0, |value, _| Some(value << 1 | bits.next()?))
+    };
+    let object_type = |read: &mut dyn FnMut(u32) -> Option<u32>| -> Option<u32> {
+        match read(5)? {
+            31 => Some(32 + read(6)?),
+            object => Some(object),
+        }
+    };
+    let mut object = object_type(&mut read)?;
+    if read(4)? == 15 {
+        read(24)?;
+    }
+    let configuration = read(4)?;
+    let speakers: Vec<Speaker> = match configuration {
+        0 => {
+            // Explicit SBR or PS signaling names the core object type after the extension rate.
+            if matches!(object, 5 | 29) {
+                if read(4)? == 15 {
+                    read(24)?;
+                }
+                object = object_type(&mut read)?;
+            }
+            if !matches!(object, 1..=4 | 6 | 7 | 17 | 19..=23) {
+                return None;
+            }
+            // GASpecificConfig: frameLengthFlag, dependsOnCoreCoder (and its delay),
+            // extensionFlag; then the program config element.
+            read(1)?;
+            if read(1)? == 1 {
+                read(14)?;
+            }
+            read(1)?;
+            program_config_layout(&mut read)?
+        }
+        1 => vec![FrontCenter],
+        2 => vec![FrontLeft, FrontRight],
+        3 => vec![FrontLeft, FrontRight, FrontCenter],
+        4 => vec![FrontLeft, FrontRight, FrontCenter, BackCenter],
+        5 => vec![FrontLeft, FrontRight, FrontCenter, BackLeft, BackRight],
+        6 => vec![
+            FrontLeft,
+            FrontRight,
+            FrontCenter,
+            LowFrequency,
+            BackLeft,
+            BackRight,
+        ],
+        7 | 12 => vec![
+            FrontLeft,
+            FrontRight,
+            FrontCenter,
+            LowFrequency,
+            BackLeft,
+            BackRight,
+            SideLeft,
+            SideRight,
+        ],
+        11 => vec![
+            FrontLeft,
+            FrontRight,
+            FrontCenter,
+            LowFrequency,
+            BackLeft,
+            BackRight,
+            BackCenter,
+        ],
+        _ => return None,
+    };
+    (speakers.len() == channels)
+        .then(|| SpeakerLayout::new(&speakers))
+        .flatten()
+}
+
+/// The speakers of an AAC `program_config_element()` (ISO/IEC 14496-3 4.4.1.1) in native order:
+/// front channels center first then left-right pairs, side pairs, back pairs then a back center,
+/// and the LFE.
+fn program_config_layout(read: &mut dyn FnMut(u32) -> Option<u32>) -> Option<Vec<Speaker>> {
+    use Speaker::{
+        BackCenter, BackLeft, BackRight, FrontCenter, FrontLeft, FrontLeftOfCenter, FrontRight,
+        FrontRightOfCenter, LowFrequency, SideLeft, SideRight,
+    };
+    read(4 + 2 + 4)?; // element_instance_tag, object_type, sampling_frequency_index
+    let (front, side, back, lfe) = (read(4)?, read(4)?, read(4)?, read(2)?);
+    read(3 + 4)?; // num_assoc_data_elements, num_valid_cc_elements
+    for _ in 0..2 {
+        if read(1)? == 1 {
+            read(4)?; // mono and stereo mixdown element numbers
+        }
+    }
+    if read(1)? == 1 {
+        read(3)?; // matrix_mixdown_idx, pseudo_surround_enable
+    }
+    let mut channels = |elements: u32| -> Option<u32> {
+        (0..elements).try_fold(0, |total, _| {
+            let pair = read(1)?;
+            read(4)?; // element tag
+            Some(total + 1 + pair)
+        })
+    };
+    let (front, side, back) = (channels(front)?, channels(side)?, channels(back)?);
+    let mut speakers = Vec::new();
+    if front % 2 == 1 {
+        speakers.push(FrontCenter);
+    }
+    let front_pairs = [
+        (FrontLeft, FrontRight),
+        (FrontLeftOfCenter, FrontRightOfCenter),
+    ];
+    for pair in front_pairs.iter().take(front as usize / 2) {
+        speakers.extend([pair.0, pair.1]);
+    }
+    if side / 2 > 0 {
+        speakers.extend([SideLeft, SideRight]);
+    }
+    if back / 2 > 0 {
+        speakers.extend([BackLeft, BackRight]);
+    }
+    if back % 2 == 1 {
+        speakers.push(BackCenter);
+    }
+    if lfe > 0 {
+        speakers.push(LowFrequency);
+    }
+    speakers.sort_by_key(|speaker| speaker.ffmpeg_channel());
+    Some(speakers)
+}
+
+/// The layouts Vorbis defines by channel count (Opus mapping family 1 and FLAC share them), in
+/// native order.
+fn vorbis_family_layout(channels: usize) -> Option<SpeakerLayout> {
+    use Speaker::{
+        BackCenter, BackLeft, BackRight, FrontCenter, FrontLeft, FrontRight, LowFrequency,
+        SideLeft, SideRight,
+    };
+    let speakers: &[Speaker] = match channels {
+        1 => &[FrontCenter],
+        2 => &[FrontLeft, FrontRight],
+        3 => &[FrontLeft, FrontRight, FrontCenter],
+        4 => &[FrontLeft, FrontRight, BackLeft, BackRight],
+        5 => &[FrontLeft, FrontRight, FrontCenter, BackLeft, BackRight],
+        6 => &[
+            FrontLeft,
+            FrontRight,
+            FrontCenter,
+            LowFrequency,
+            BackLeft,
+            BackRight,
+        ],
+        7 => &[
+            FrontLeft,
+            FrontRight,
+            FrontCenter,
+            LowFrequency,
+            BackCenter,
+            SideLeft,
+            SideRight,
+        ],
+        8 => &[
+            FrontLeft,
+            FrontRight,
+            FrontCenter,
+            LowFrequency,
+            BackLeft,
+            BackRight,
+            SideLeft,
+            SideRight,
+        ],
+        _ => return None,
+    };
+    SpeakerLayout::new(speakers)
+}
+
 impl AudioStream {
+    /// Opens audio track `stream` (an ordinal over the file's audio tracks in container order;
+    /// `None` is the default track) of the file at `path`, delivered at `project_rate`.
+    ///
+    /// # Errors
+    /// [`DecodeError::Unsupported`] for a container this layer does not read, a missing track,
+    /// or a track no session reads; read failures.
+    pub fn open_file(
+        path: &std::path::Path,
+        backends: &dyn AudioBackends,
+        project_rate: u32,
+        stream: Option<u32>,
+        policy: DecodePolicy,
+    ) -> Result<Self, DecodeError> {
+        let reader = alpha2_container::open(path)?;
+        let tracks = reader.tracks();
+        let index = match stream {
+            None => alpha2_container::default_track(tracks, TrackKind::Audio),
+            Some(ordinal) => tracks
+                .iter()
+                .enumerate()
+                .filter(|(_, track)| track.kind == TrackKind::Audio)
+                .nth(usize::try_from(ordinal).unwrap_or(usize::MAX))
+                .map(|(index, _)| index),
+        }
+        .ok_or_else(|| {
+            DecodeError::Unsupported(match stream {
+                Some(ordinal) => format!("the file has no audio stream {ordinal}"),
+                None => "the file has no audio stream".into(),
+            })
+        })?;
+        Self::open(reader, index, backends, project_rate, policy)
+    }
+
     /// Opens track `index` of `reader`, delivered at `project_rate`.
     ///
     /// # Errors
@@ -289,34 +601,19 @@ impl AudioStream {
                 "audio with {channels} channels"
             )));
         }
-        let speakers = audio
-            .speakers
-            .or_else(|| SpeakerLayout::default_for(channels))
-            .ok_or_else(|| {
-                DecodeError::Unsupported(format!("no layout for {channels} channels"))
-            })?;
+        let speakers = decoded_speakers(&audio, channels).ok_or_else(|| {
+            DecodeError::Unsupported(format!("no layout for {channels} channels"))
+        })?;
         reader.seek(track.id, i64::MIN)?;
         let mut recovery = Recovery::new((1, i32::try_from(track.timescale).unwrap_or(i32::MAX)));
         recovery.policy = policy;
-        let info = vec![StreamInfo {
-            index,
-            kind: StreamKind::Audio,
-            codec: format!("{:?}", audio.codec).to_lowercase(),
-            duration: track
-                .duration
-                .map(|duration| crate::video_stream::to_media_time(duration, track.timescale)),
-            dimensions: None,
-            frame_rate: None,
-            sample_rate: Some(audio.sample_rate),
-            channels: Some(audio.channels),
-            orientation: Orientation::default(),
-            sample_aspect_ratio: SampleAspectRatio { num: 1, den: 1 },
-            color: None,
-            frame_bytes: None,
-            alpha: None,
-            language: track.language.clone(),
-            title: track.title.clone(),
-        }];
+        // Every audio stream of the file, as the desktop decoder lists them.
+        let info = reader
+            .tracks()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, track)| audio_stream_info(index, track))
+            .collect();
         Ok(Self {
             reader,
             backend,
@@ -488,6 +785,9 @@ impl AudioStream {
 
     /// Drops a chunk's skip-samples and places it by its timestamp.
     fn place(&mut self, mut chunk: PcmChunk) -> Result<(), DecodeError> {
+        if let Some(order) = chunk.speakers.filter(|order| *order != self.speakers) {
+            chunk.planes = select(chunk.planes, order, self.speakers);
+        }
         if chunk.planes.len() != self.channels {
             return Err(DecodeError::Adapter(format!(
                 "the decoder gave {} channels of a {}-channel track",

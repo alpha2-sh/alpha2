@@ -1,5 +1,8 @@
-//! Leading-edge SPS cropping (H.264/HEVC) and HEVC VPS layer declarations, read from a
-//! stream's sample description.
+//! What H.264 and HEVC sequence parameter sets declare (coded size, cropping, the VUI's aspect
+//! ratio, color and chroma siting) and HEVC VPS layer declarations, read from a stream's sample
+//! description.
+
+use alpha2_media::{ChromaLocation, ColorMetadata, SampleAspectRatio};
 
 /// The codecs whose parameter sets this module reads.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,13 +51,55 @@ impl CropWindow {
     }
 }
 
+/// What an SPS's video usability information declares.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Vui {
+    /// The pixel aspect ratio, when declared and not 0:0.
+    pub sample_aspect_ratio: Option<SampleAspectRatio>,
+    /// The color the video signal type declares.
+    pub color: Option<ColorMetadata>,
+    /// The chroma siting of a 4:2:0 stream, when declared.
+    pub chroma_location: Option<ChromaLocation>,
+}
+
+/// What one SPS declares.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SequenceFacts {
+    /// The coded size and crop.
+    pub crop: CropWindow,
+    /// `chroma_format_idc`: 0 monochrome, 1 4:2:0, 2 4:2:2, 3 4:4:4.
+    pub chroma_format: u32,
+    /// The VUI; empty when absent or unreadable.
+    pub vui: Vui,
+}
+
+impl SequenceFacts {
+    /// The chroma siting frames have: the VUI's, else the 4:2:0 default both codecs infer
+    /// (type 0, left).
+    #[must_use]
+    pub fn chroma_location(&self) -> Option<ChromaLocation> {
+        self.vui
+            .chroma_location
+            .or((self.chroma_format == 1).then_some(ChromaLocation::Left))
+    }
+}
+
+/// What the first SPS in `extradata` (`avcC`, `hvcC` or Annex B) declares; `None` when there is
+/// none or its fields up to the crop do not parse.
+#[must_use]
+pub fn sequence_facts(codec: ParameterSetCodec, extradata: &[u8]) -> Option<SequenceFacts> {
+    let hevc = codec == ParameterSetCodec::Hevc;
+    let nal = *sequence_parameter_sets(hevc, extradata).first()?;
+    if hevc { hevc_sps(nal) } else { h264_sps(nal) }
+}
+
 /// The crop windows of every SPS in `extradata` (`avcC`, `hvcC` or Annex B); `None` when one does
 /// not parse.
 fn crop_windows(codec: ParameterSetCodec, extradata: &[u8]) -> Option<Vec<CropWindow>> {
     let hevc = codec == ParameterSetCodec::Hevc;
     sequence_parameter_sets(hevc, extradata)
         .into_iter()
-        .map(|nal| if hevc { hevc_crop(nal) } else { h264_crop(nal) })
+        .map(|nal| if hevc { hevc_sps(nal) } else { h264_sps(nal) }.map(|facts| facts.crop))
         .collect()
 }
 
@@ -263,8 +308,8 @@ fn annex_b_units(data: &[u8]) -> Vec<&[u8]> {
         .collect()
 }
 
-/// An H.264 SPS's crop offsets in luma samples (ITU-T H.264 7.3.2.1.1).
-fn h264_crop(nal: &[u8]) -> Option<CropWindow> {
+/// An H.264 SPS's coded size, crop offsets in luma samples and VUI (ITU-T H.264 7.3.2.1.1).
+fn h264_sps(nal: &[u8]) -> Option<SequenceFacts> {
     let payload = unescape(nal.get(1..)?);
     let mut bits = Bits::new(&payload);
     let profile = bits.read(8)?;
@@ -318,29 +363,105 @@ fn h264_crop(nal: &[u8]) -> Option<CropWindow> {
         bits.skip(1)?; // mb_adaptive_frame_field_flag
     }
     bits.skip(1)?; // direct_8x8_inference_flag
-    if !bits.flag()? {
-        return Some(CropWindow {
-            coded_width,
-            coded_height,
-            ..CropWindow::default()
-        });
+    let mut crop = CropWindow {
+        coded_width,
+        coded_height,
+        ..CropWindow::default()
+    };
+    if bits.flag()? {
+        let (left, right, top, bottom) = (bits.ue()?, bits.ue()?, bits.ue()?, bits.ue()?);
+        // Crop units (7-19, 7-20): chroma samples, and field pairs in a stream that may code
+        // fields.
+        let (unit_x, unit_y) = crop_units(chroma_format);
+        let unit_y = unit_y * if frame_mbs_only { 1 } else { 2 };
+        crop.left = left.saturating_mul(unit_x);
+        crop.right = right.saturating_mul(unit_x);
+        crop.top = top.saturating_mul(unit_y);
+        crop.bottom = bottom.saturating_mul(unit_y);
     }
-    let (left, right, top, bottom) = (bits.ue()?, bits.ue()?, bits.ue()?, bits.ue()?);
-    // Crop units (7-19, 7-20): chroma samples, and field pairs in a stream that may code fields.
-    let (unit_x, unit_y) = match chroma_format {
+    let vui = bits
+        .flag()
+        .filter(|present| *present)
+        .and_then(|_| vui(&mut bits, chroma_format))
+        .unwrap_or_default();
+    Some(SequenceFacts {
+        crop,
+        chroma_format,
+        vui,
+    })
+}
+
+/// `SubWidthC` and `SubHeightC` (H.264 Table 6-1, H.265 Table 6-1).
+const fn crop_units(chroma_format: u32) -> (u32, u32) {
+    match chroma_format {
         1 => (2, 2),
         2 => (2, 1),
         _ => (1, 1),
-    };
-    let unit_y = unit_y * if frame_mbs_only { 1 } else { 2 };
-    Some(CropWindow {
-        coded_width,
-        coded_height,
-        left: left.saturating_mul(unit_x),
-        right: right.saturating_mul(unit_x),
-        top: top.saturating_mul(unit_y),
-        bottom: bottom.saturating_mul(unit_y),
-    })
+    }
+}
+
+/// The leading fields of `vui_parameters()`, which H.264 (E.1.1) and HEVC (E.2.1) share: aspect
+/// ratio, overscan, video signal type and chroma location.
+fn vui(bits: &mut Bits<'_>, chroma_format: u32) -> Option<Vui> {
+    /// Table E-1: `aspect_ratio_idc` 1 to 16.
+    const RATIOS: [(u32, u32); 16] = [
+        (1, 1),
+        (12, 11),
+        (10, 11),
+        (16, 11),
+        (40, 33),
+        (24, 11),
+        (20, 11),
+        (32, 11),
+        (80, 33),
+        (18, 11),
+        (15, 11),
+        (64, 33),
+        (160, 99),
+        (4, 3),
+        (3, 2),
+        (2, 1),
+    ];
+    let mut vui = Vui::default();
+    if bits.flag()? {
+        let ratio = match bits.read(8)? {
+            255 => Some((bits.read(16)?, bits.read(16)?)),
+            idc @ 1..=16 => RATIOS.get(idc as usize - 1).copied(),
+            _ => None,
+        };
+        vui.sample_aspect_ratio = ratio
+            .filter(|(num, den)| *num > 0 && *den > 0)
+            .map(|(num, den)| SampleAspectRatio { num, den });
+    }
+    if bits.flag()? {
+        bits.skip(1)?; // overscan_appropriate_flag
+    }
+    if bits.flag()? {
+        bits.skip(3)?; // video_format
+        let full = bits.flag()?;
+        let (mut primaries, mut transfer, mut matrix) = (2, 2, 2);
+        if bits.flag()? {
+            primaries = bits.read(8)?;
+            transfer = bits.read(8)?;
+            matrix = bits.read(8)?;
+        }
+        let code = |value: u32| u8::try_from(value).unwrap_or(2);
+        vui.color =
+            ColorMetadata::from_h273(code(primaries), code(transfer), code(matrix), Some(full));
+    }
+    if bits.flag()? {
+        let top = bits.ue()?;
+        bits.ue()?; // chroma_sample_loc_type_bottom_field
+        if chroma_format == 1 {
+            vui.chroma_location = Some(match top {
+                0 => ChromaLocation::Left,
+                1 => ChromaLocation::Center,
+                2 => ChromaLocation::TopLeft,
+                _ => ChromaLocation::Unspecified,
+            });
+        }
+    }
+    Some(vui)
 }
 
 /// Skips one `scaling_list()` of `size` coefficients.
@@ -357,8 +478,9 @@ fn skip_scaling_list(bits: &mut Bits<'_>, size: usize) -> Option<()> {
     Some(())
 }
 
-/// An HEVC SPS's conformance window offsets in luma samples (ITU-T H.265 7.3.2.2.1).
-fn hevc_crop(nal: &[u8]) -> Option<CropWindow> {
+/// An HEVC SPS's coded size, conformance window offsets in luma samples and VUI (ITU-T H.265
+/// 7.3.2.2.1).
+fn hevc_sps(nal: &[u8]) -> Option<SequenceFacts> {
     let payload = unescape(nal.get(2..)?);
     let mut bits = Bits::new(&payload);
     bits.skip(4)?; // sps_video_parameter_set_id
@@ -383,28 +505,123 @@ fn hevc_crop(nal: &[u8]) -> Option<CropWindow> {
     }
     let coded_width = bits.ue()?;
     let coded_height = bits.ue()?;
-    if !bits.flag()? {
-        return Some(CropWindow {
-            coded_width,
-            coded_height,
-            ..CropWindow::default()
-        });
-    }
-    let (left, right, top, bottom) = (bits.ue()?, bits.ue()?, bits.ue()?, bits.ue()?);
-    // SubWidthC and SubHeightC (Table 6-1).
-    let (unit_x, unit_y) = match chroma_format {
-        1 => (2, 2),
-        2 => (2, 1),
-        _ => (1, 1),
-    };
-    Some(CropWindow {
+    let mut crop = CropWindow {
         coded_width,
         coded_height,
-        left: left.saturating_mul(unit_x),
-        right: right.saturating_mul(unit_x),
-        top: top.saturating_mul(unit_y),
-        bottom: bottom.saturating_mul(unit_y),
+        ..CropWindow::default()
+    };
+    if bits.flag()? {
+        let (left, right, top, bottom) = (bits.ue()?, bits.ue()?, bits.ue()?, bits.ue()?);
+        let (unit_x, unit_y) = crop_units(chroma_format);
+        crop.left = left.saturating_mul(unit_x);
+        crop.right = right.saturating_mul(unit_x);
+        crop.top = top.saturating_mul(unit_y);
+        crop.bottom = bottom.saturating_mul(unit_y);
+    }
+    let vui = hevc_vui(&mut bits, sub_layers, chroma_format).unwrap_or_default();
+    Some(SequenceFacts {
+        crop,
+        chroma_format,
+        vui,
     })
+}
+
+/// The HEVC SPS fields from `bit_depth_luma_minus8` to the VUI, then the VUI.
+fn hevc_vui(bits: &mut Bits<'_>, sub_layers: u32, chroma_format: u32) -> Option<Vui> {
+    bits.ue()?; // bit_depth_luma_minus8
+    bits.ue()?; // bit_depth_chroma_minus8
+    let poc_lsb_bits = bits.ue()?.checked_add(4)?;
+    let first = if bits.flag()? { 0 } else { sub_layers };
+    for _ in first..=sub_layers {
+        bits.ue()?; // sps_max_dec_pic_buffering_minus1
+        bits.ue()?; // sps_max_num_reorder_pics
+        bits.ue()?; // sps_max_latency_increase_plus1
+    }
+    for _ in 0..6 {
+        // Coding and transform block sizes, transform hierarchy depths.
+        bits.ue()?;
+    }
+    if bits.flag()? && bits.flag()? {
+        skip_hevc_scaling_lists(bits)?;
+    }
+    bits.skip(2)?; // amp_enabled_flag, sample_adaptive_offset_enabled_flag
+    if bits.flag()? {
+        bits.skip(8)?; // PCM sample bit depths
+        bits.ue()?; // log2_min_pcm_luma_coding_block_size_minus3
+        bits.ue()?; // log2_diff_max_min_pcm_luma_coding_block_size
+        bits.skip(1)?; // pcm_loop_filter_disabled_flag
+    }
+    skip_short_term_ref_pic_sets(bits)?;
+    if bits.flag()? {
+        for _ in 0..bits.ue()?.min(32) {
+            bits.skip(poc_lsb_bits as usize)?; // lt_ref_pic_poc_lsb_sps
+            bits.skip(1)?; // used_by_curr_pic_lt_sps_flag
+        }
+    }
+    bits.skip(2)?; // sps_temporal_mvp_enabled_flag, strong_intra_smoothing_enabled_flag
+    if !bits.flag()? {
+        return Some(Vui::default());
+    }
+    vui(bits, chroma_format)
+}
+
+/// Skips `scaling_list_data()` (H.265 7.3.4).
+fn skip_hevc_scaling_lists(bits: &mut Bits<'_>) -> Option<()> {
+    for size in 0..4_u32 {
+        let step = if size == 3 { 3 } else { 1 };
+        for _ in (0..6).step_by(step) {
+            if bits.flag()? {
+                let coefficients = 64.min(1 << (4 + (size << 1)));
+                if size > 1 {
+                    bits.se()?; // scaling_list_dc_coef_minus8
+                }
+                for _ in 0..coefficients {
+                    bits.se()?; // scaling_list_delta_coef
+                }
+            } else {
+                bits.ue()?; // scaling_list_pred_matrix_id_delta
+            }
+        }
+    }
+    Some(())
+}
+
+/// Skips the SPS's `st_ref_pic_set()` list (H.265 7.3.7), which predicts sets from earlier ones.
+fn skip_short_term_ref_pic_sets(bits: &mut Bits<'_>) -> Option<()> {
+    let count = bits.ue()?;
+    if count > 64 {
+        return None;
+    }
+    let mut delta_pocs: Vec<u32> = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let predicted = index != 0 && bits.flag()?;
+        let pictures = if predicted {
+            bits.skip(1)?; // delta_rps_sign
+            bits.ue()?; // abs_delta_rps_minus1
+            let reference = *delta_pocs.last()?;
+            let mut pictures = 0;
+            for _ in 0..=reference {
+                let used = bits.flag()?;
+                if used || bits.flag()? {
+                    pictures += 1;
+                }
+            }
+            pictures
+        } else {
+            let negative = bits.ue()?;
+            let positive = bits.ue()?;
+            let pictures = negative
+                .checked_add(positive)
+                .filter(|total| *total <= 32)?;
+            for _ in 0..pictures {
+                bits.ue()?; // delta_poc_s0/s1_minus1
+                bits.skip(1)?; // used_by_curr_pic_s0/s1_flag
+            }
+            pictures
+        };
+        delta_pocs.push(pictures);
+    }
+    Some(())
 }
 
 fn unescape(escaped: &[u8]) -> Vec<u8> {
@@ -473,7 +690,9 @@ impl<'a> Bits<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HevcLayers, ParameterSetCodec, crop_window, hevc_layers, leading_crop};
+    use super::{
+        HevcLayers, ParameterSetCodec, crop_window, hevc_layers, leading_crop, sequence_facts,
+    };
 
     /// The VPS of `tests/corpus/hevc-alpha.mov` (`hevc_videotoolbox` with `-alpha_quality`): two
     /// layers, the second auxiliary.
@@ -635,6 +854,61 @@ mod tests {
                 _ => (320, 180),
             };
             assert_eq!((visible.width, visible.height), probed, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_vui_aspect_color_and_chroma_siting_are_read_from_the_corpus() {
+        use alpha2_media::{ChromaLocation, ColorMetadata, SampleAspectRatio};
+
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
+        let hlg = ColorMetadata::from_h273(9, 18, 9, Some(false));
+        let bt709 = ColorMetadata::from_h273(1, 1, 1, Some(false));
+        let range_only = ColorMetadata::from_h273(2, 2, 2, Some(false));
+        // As ffprobe reports them.
+        for (name, ratio, color, chroma) in [
+            (
+                "h264-bt709-vui-sar.mp4",
+                (4, 3),
+                bt709,
+                ChromaLocation::Left,
+            ),
+            (
+                "hevc-topleft.mp4",
+                (1, 1),
+                range_only,
+                ChromaLocation::TopLeft,
+            ),
+            ("hevc-hvc1.mp4", (1, 1), range_only, ChromaLocation::TopLeft),
+            ("hdr-hlg.mp4", (1, 1), hlg, ChromaLocation::Left),
+            ("hevc-padded.mp4", (1, 1), bt709, ChromaLocation::Left),
+            ("h264-high10.mp4", (1, 1), None, ChromaLocation::Left),
+        ] {
+            let file = std::fs::read(corpus.join(name)).expect(name);
+            let hevc = name.starts_with("hevc");
+            let tag: &[u8] = if hevc { b"hvcC" } else { b"avcC" };
+            let at = file
+                .windows(4)
+                .position(|window| window == tag)
+                .expect("decoder configuration");
+            let size = u32::from_be_bytes(file[at - 4..at].try_into().expect("size")) as usize;
+            let codec = if hevc {
+                ParameterSetCodec::Hevc
+            } else {
+                ParameterSetCodec::H264
+            };
+            let facts = sequence_facts(codec, &file[at + 4..at - 4 + size]).expect(name);
+            let (num, den) = ratio;
+            assert_eq!(
+                facts
+                    .vui
+                    .sample_aspect_ratio
+                    .unwrap_or(SampleAspectRatio { num: 1, den: 1 }),
+                SampleAspectRatio { num, den },
+                "{name}"
+            );
+            assert_eq!(facts.vui.color, color, "{name}");
+            assert_eq!(facts.chroma_location(), Some(chroma), "{name}");
         }
     }
 

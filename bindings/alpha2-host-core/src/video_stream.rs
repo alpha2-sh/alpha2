@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use alpha2_container::{ContainerReader, Packet, TrackInfo, VideoCodec};
+use alpha2_container::{ContainerReader, Packet, TrackInfo, TrackKind, VideoCodec};
 use alpha2_media::{
     CancelToken, ChromaLocation, ColorMetadata, DecodeError, DecodeEvent, DecodeRequest,
     DecodeResult, DecodedVideoFrame, Decoder, Orientation, PixelFormat, Plane, Rect,
@@ -17,7 +17,7 @@ use alpha2_media::{
 };
 use alpha2_time::{MediaTime, TICKS_PER_SECOND};
 
-use crate::parameter_sets::{CropWindow, ParameterSetCodec, crop_window};
+use crate::parameter_sets::{CropWindow, ParameterSetCodec, Vui, sequence_facts};
 use crate::recovery::{DecodeFailure, DecodePolicy, Recovery, WorkBudget};
 
 /// Whether a decoder session runs on dedicated hardware.
@@ -170,6 +170,23 @@ pub trait VideoBackends: Send + Sync {
         track: &TrackInfo,
         kind: BackendKind,
     ) -> Result<Box<dyn VideoDecodeBackend>, BackendError>;
+}
+
+/// What the bitstream's configuration declares beyond the container, which hardware sessions
+/// do not report reliably.
+#[derive(Clone, Copy, Debug, Default)]
+struct Bitstream {
+    vui: Vui,
+    chroma_location: Option<ChromaLocation>,
+}
+
+/// The chroma siting an `av1C` record's `chroma_sample_position` declares.
+fn av1_chroma_location(record: &[u8]) -> Option<ChromaLocation> {
+    match record.get(2)? & 3 {
+        1 => Some(ChromaLocation::Left),
+        2 => Some(ChromaLocation::TopLeft),
+        _ => None,
+    }
 }
 
 /// Which sessions a stream may use.
@@ -343,7 +360,6 @@ impl From<alpha2_container::DemuxError> for Interrupt {
 pub struct VideoStream {
     reader: Box<dyn ContainerReader>,
     track: TrackInfo,
-    codec: VideoCodec,
     backends: Arc<dyn VideoBackends>,
     backend: Box<dyn VideoDecodeBackend>,
     options: StreamOptions,
@@ -362,6 +378,7 @@ pub struct VideoStream {
     first_keyframe: Option<i64>,
     slack: MediaTime,
     crop: Option<CropWindow>,
+    bitstream: Bitstream,
     info: Vec<StreamInfo>,
 }
 
@@ -397,10 +414,18 @@ impl VideoStream {
                 track.id.0
             )));
         };
-        let crop = match video.codec {
-            VideoCodec::H264 => crop_window(ParameterSetCodec::H264, &video.codec_private),
-            VideoCodec::Hevc => crop_window(ParameterSetCodec::Hevc, &video.codec_private),
+        let sequence = match video.codec {
+            VideoCodec::H264 => sequence_facts(ParameterSetCodec::H264, &video.codec_private),
+            VideoCodec::Hevc => sequence_facts(ParameterSetCodec::Hevc, &video.codec_private),
             _ => None,
+        };
+        let crop = sequence.map(|facts| facts.crop);
+        let bitstream = Bitstream {
+            vui: sequence.map(|facts| facts.vui).unwrap_or_default(),
+            chroma_location: match video.codec {
+                VideoCodec::Av1 => av1_chroma_location(&video.codec_private),
+                _ => sequence.and_then(|facts| facts.chroma_location()),
+            },
         };
         let first = match options.preference {
             DecodePreference::Software => BackendKind::Software,
@@ -441,8 +466,12 @@ impl VideoStream {
             orientation: video.orientation,
             sample_aspect_ratio: video
                 .sample_aspect_ratio
+                .or(bitstream.vui.sample_aspect_ratio)
                 .unwrap_or(SampleAspectRatio { num: 1, den: 1 }),
-            color: options.declared_color.or(video.color),
+            color: options
+                .declared_color
+                .or(video.color)
+                .or(bitstream.vui.color),
             frame_bytes: None,
             alpha: None,
             language: track.language.clone(),
@@ -450,7 +479,6 @@ impl VideoStream {
         }];
         Ok(Self {
             reader,
-            codec: video.codec,
             backends,
             backend,
             options,
@@ -466,9 +494,26 @@ impl VideoStream {
             first_keyframe,
             slack: alpha2_time::presentation_slack(1, timescale, -1),
             crop,
+            bitstream,
             info,
             track,
         })
+    }
+
+    /// Opens the default video track of the file at `path`.
+    ///
+    /// # Errors
+    /// [`DecodeError::Unsupported`] for a container this layer does not read, a file without
+    /// video, or a track no allowed session reads; read failures.
+    pub fn open_file(
+        path: &std::path::Path,
+        backends: Arc<dyn VideoBackends>,
+        options: StreamOptions,
+    ) -> Result<Self, DecodeError> {
+        let reader = alpha2_container::open(path)?;
+        let index = alpha2_container::default_track(reader.tracks(), TrackKind::Video)
+            .ok_or_else(|| DecodeError::Unsupported("the file has no video track".into()))?;
+        Self::open(reader, index, backends, options)
     }
 
     /// The track decoded.
@@ -736,8 +781,14 @@ impl VideoStream {
 
     fn facts(&self, picture: BackendFrame) -> StreamFrame {
         let video = self.track.video.as_ref();
-        let visible = picture
-            .visible
+        // A buffer of the SPS's coded size shows the SPS's window: some sessions report the whole
+        // buffer as visible, and some apply no crop at all.
+        let window = self
+            .crop
+            .filter(|crop| picture.coded == (crop.coded_width, crop.coded_height))
+            .and_then(|crop| crop.visible());
+        let visible = window
+            .or(picture.visible)
             .or_else(|| self.crop.and_then(|crop| crop.visible()))
             .unwrap_or(Rect {
                 x: 0,
@@ -745,11 +796,10 @@ impl VideoStream {
                 width: picture.coded.0,
                 height: picture.coded.1,
             });
-        // H.264 without VUI infers chroma location type 0 (left).
-        let chroma_location = picture.chroma_location.unwrap_or(match self.codec {
-            VideoCodec::H264 => ChromaLocation::Left,
-            _ => ChromaLocation::Unspecified,
-        });
+        let chroma_location = picture
+            .chroma_location
+            .or(self.bitstream.chroma_location)
+            .unwrap_or(ChromaLocation::Unspecified);
         StreamFrame {
             facts: FrameFacts {
                 pts: to_media_time(picture.pts, self.track.timescale),
@@ -757,6 +807,7 @@ impl VideoStream {
                 orientation: video.map(|video| video.orientation).unwrap_or_default(),
                 sample_aspect_ratio: video
                     .and_then(|video| video.sample_aspect_ratio)
+                    .or(self.bitstream.vui.sample_aspect_ratio)
                     .or(picture.sample_aspect_ratio)
                     .unwrap_or(SampleAspectRatio { num: 1, den: 1 }),
                 chroma_location,
@@ -764,6 +815,7 @@ impl VideoStream {
                     .options
                     .declared_color
                     .or_else(|| video.and_then(|video| video.color))
+                    .or(self.bitstream.vui.color)
                     .or(picture.color),
             },
             image: picture.image,

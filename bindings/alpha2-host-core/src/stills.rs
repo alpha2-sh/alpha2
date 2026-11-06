@@ -6,8 +6,9 @@
 use std::io::Cursor;
 
 use alpha2_media::{
-    ChromaLocation, DecodeError, DecodedVideoFrame, Orientation, PixelFormat, Plane, Rect,
-    SampleAspectRatio, frame_size_supported,
+    CancelToken, ChromaLocation, DecodeError, DecodeEvent, DecodeRequest, DecodeResult,
+    DecodedVideoFrame, Decoder, Orientation, PixelFormat, Plane, Rect, SampleAspectRatio,
+    StreamInfo, StreamKind, frame_size_supported,
 };
 use alpha2_time::MediaTime;
 
@@ -512,6 +513,84 @@ fn exif_orientation(tiff: &[u8]) -> Option<u16> {
             _ => None,
         }
     })
+}
+
+/// A still as a one-frame video stream at time zero, for hosts that open every visual source as
+/// a [`Decoder`].
+#[derive(Debug)]
+pub struct StillStream {
+    frame: DecodedVideoFrame,
+    info: [StreamInfo; 1],
+    given: bool,
+}
+
+impl StillStream {
+    /// Decodes the still at `path`.
+    ///
+    /// # Errors
+    /// What [`decode_still`] refuses; read failures.
+    pub fn open(path: &std::path::Path) -> Result<Self, DecodeError> {
+        let bytes = std::fs::read(path).map_err(|error| DecodeError::Adapter(error.to_string()))?;
+        let still = decode_still(&bytes)?;
+        let info = StreamInfo {
+            index: 0,
+            kind: StreamKind::Video,
+            codec: still.info.format.as_str().to_lowercase(),
+            duration: None,
+            dimensions: Some((still.info.width, still.info.height)),
+            frame_rate: None,
+            sample_rate: None,
+            channels: None,
+            orientation: still.info.orientation,
+            sample_aspect_ratio: SampleAspectRatio::default(),
+            color: None,
+            frame_bytes: None,
+            alpha: None,
+            language: None,
+            title: None,
+        };
+        Ok(Self {
+            frame: still.into_video_frame(),
+            info: [info],
+            given: false,
+        })
+    }
+}
+
+impl Decoder for StillStream {
+    fn streams(&self) -> &[StreamInfo] {
+        &self.info
+    }
+
+    fn flush(&mut self) -> Result<(), DecodeError> {
+        self.given = false;
+        Ok(())
+    }
+
+    fn seek(
+        &mut self,
+        request: DecodeRequest,
+        cancel: &CancelToken,
+    ) -> Result<DecodeResult, DecodeError> {
+        if cancel.is_cancelled() {
+            return Err(DecodeError::Cancelled);
+        }
+        self.given = true;
+        Ok(DecodeResult {
+            request,
+            event: DecodeEvent::Video(self.frame.clone()),
+        })
+    }
+
+    fn decode_next(&mut self, cancel: &CancelToken) -> Result<DecodeEvent, DecodeError> {
+        if cancel.is_cancelled() {
+            return Err(DecodeError::Cancelled);
+        }
+        if std::mem::replace(&mut self.given, true) {
+            return Ok(DecodeEvent::EndOfStream);
+        }
+        Ok(DecodeEvent::Video(self.frame.clone()))
+    }
 }
 
 #[cfg(test)]

@@ -204,3 +204,67 @@ fn codecs_without_a_session_are_refused() {
     });
     assert!(matches!(error, Err(BackendError::Unsupported(_))));
 }
+
+#[test]
+fn aac_layouts_come_from_the_channel_configuration_or_the_program_config_element() {
+    let names = |config: &[u8], channels| {
+        aac_layout(config, channels).map(|layout| {
+            layout
+                .speakers()
+                .iter()
+                .map(|speaker| speaker.name())
+                .collect::<Vec<_>>()
+        })
+    };
+    // The corpus's AAC 3.0, 5.1 and 7.1 configurations, and its quad's program config element.
+    assert_eq!(
+        names(&[0x11, 0x98, 0x56, 0xe5, 0x00], 3).expect("3.0"),
+        ["FL", "FR", "FC"]
+    );
+    assert_eq!(
+        names(&[0x11, 0xb0, 0x56, 0xe5, 0x00], 6).expect("5.1"),
+        ["FL", "FR", "FC", "LFE", "BL", "BR"]
+    );
+    assert_eq!(
+        names(&[0x11, 0xb8, 0x56, 0xe5, 0x00], 8).expect("7.1"),
+        ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"]
+    );
+    let quad = [
+        0x11, 0x80, 0x04, 0xc4, 0x04, 0x00, 0x21, 0x10, 0x04, 0x4c, 0x61, 0x76, 0x63, 0x56, 0xe5,
+        0x00,
+    ];
+    assert_eq!(names(&quad, 4).expect("quad"), ["FL", "FR", "BL", "BR"]);
+    // A count other than the configuration's is left to the default.
+    assert_eq!(names(&[0x11, 0x98], 2), None);
+}
+
+#[test]
+fn the_stream_takes_its_speakers_from_planes_in_another_layout() {
+    let vorbis = alpha2_container::vorbis_order(6).expect("5.1");
+    let native = SpeakerLayout::default_for(6).expect("5.1");
+    let values = |planes: &[Vec<f32>]| planes.iter().map(|plane| plane[0]).collect::<Vec<_>>();
+    // Vorbis 5.1 is FL FC FR BL BR LFE; native is FL FR FC LFE BL BR.
+    let planes = (0_u8..6)
+        .map(|plane| vec![f32::from(plane)])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        values(&select(planes.clone(), vorbis, native)),
+        [0.0, 2.0, 1.0, 5.0, 3.0, 4.0]
+    );
+    // A 5.0 with side speakers from a decoder's 5.1 with back ones: the LFE goes.
+    let side = SpeakerLayout::new(&[
+        Speaker::FrontLeft,
+        Speaker::FrontRight,
+        Speaker::FrontCenter,
+        Speaker::SideLeft,
+        Speaker::SideRight,
+    ])
+    .expect("5.0");
+    assert_eq!(
+        values(&select(planes.clone(), native, side)),
+        [0.0, 1.0, 2.0, 4.0, 5.0]
+    );
+    // Layouts without the stream's speakers leave the planes alone.
+    let quad = SpeakerLayout::default_for(4).expect("4.0");
+    assert_eq!(select(planes[..4].to_vec(), quad, native), planes[..4]);
+}
