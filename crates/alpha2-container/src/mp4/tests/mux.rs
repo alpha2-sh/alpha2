@@ -223,69 +223,39 @@ fn ffprobe_packets(path: &Path) -> Option<Vec<(u64, usize, String)>> {
     )
 }
 
-/// `FFmpeg`'s stream copy of `source` into `target`, made as the expectations' generator makes it.
-fn ffmpeg_copy(source: &Path, target: &Path) -> bool {
-    Command::new("ffmpeg")
-        .args(["-v", "fatal", "-y", "-i"])
-        .arg(source)
-        .args(["-map", "0", "-c", "copy", "-movflags", "+faststart"])
-        .arg(target)
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-/// Reads each written file and `FFmpeg`'s stream copy of the same source with the same `ffprobe`,
-/// so the comparison holds for whichever `FFmpeg` is installed: `FFmpeg` 9 reports the end trim
-/// of an AAC track as discard padding where 8 does not, which no recorded hash could cover.
 #[test]
 fn ffprobe_reads_written_files_as_it_reads_ffmpeg_stream_copies() {
-    for tool in ["ffprobe", "ffmpeg"] {
-        if Command::new(tool).arg("-version").output().is_err() {
-            eprintln!("skipped: {tool} is not on PATH");
-            return;
-        }
+    if Command::new("ffprobe").arg("-version").output().is_err() {
+        eprintln!("skipped: ffprobe is not on PATH");
+        return;
     }
     let expected = expected();
     let scratch = std::env::temp_dir().join(format!("alpha2-container-mux-{}", std::process::id()));
     std::fs::create_dir_all(&scratch).expect("scratch directory");
     let mut failures = Vec::new();
-    for (name, _) in remuxable(&expected) {
-        let source = corpus_dir().join(&name);
-        let (tracks, read) = demux(&source);
+    for (name, remux) in remuxable(&expected) {
+        let (tracks, read) = demux(&corpus_dir().join(&name));
         let target = scratch.join(format!("written-{name}"));
         std::fs::write(&target, mux(&tracks, &read, flavor_of(&name))).expect("write file");
-        let extension = if flavor_of(&name) == Mp4Flavor::Mov {
-            "mov"
-        } else {
-            "mp4"
-        };
-        let copy = scratch.join(format!("copy-{name}.{extension}"));
-        if !ffmpeg_copy(&source, &copy) {
-            failures.push(format!("{name}: FFmpeg cannot stream-copy the source"));
+        let Some(streams) = ffprobe_packets(&target) else {
+            failures.push(format!("{name}: ffprobe cannot read the written file"));
             continue;
-        }
-        match (ffprobe_packets(&target), ffprobe_packets(&copy)) {
-            (Some(ours), Some(theirs)) => {
-                for (id, count, hash) in &theirs {
-                    match ours.iter().find(|(stream, _, _)| stream == id) {
-                        None => failures.push(format!("{name}: ffprobe sees no track {id}")),
-                        Some((_, our_count, our_hash))
-                            if our_count != count || our_hash != hash =>
-                        {
-                            failures.push(format!(
-                                "{name} track {id}: ffprobe reads other packets than from \
-                                 FFmpeg's copy"
-                            ));
-                        }
-                        Some(_) => {}
-                    }
-                }
+        };
+        for theirs in remux["tracks"].as_array().into_iter().flatten() {
+            let id = theirs["id"].as_u64().unwrap_or(0);
+            let Some((_, count, hash)) = streams.iter().find(|(stream, _, _)| *stream == id) else {
+                failures.push(format!("{name}: ffprobe sees no track {id}"));
+                continue;
+            };
+            if Some(*count as u64) != theirs["packet_count"].as_u64()
+                || Some(hash.as_str()) != theirs["packets_sha256"].as_str()
+            {
+                failures.push(format!(
+                    "{name} track {id}: ffprobe reads other packets than from FFmpeg's copy"
+                ));
             }
-            (None, _) => failures.push(format!("{name}: ffprobe cannot read the written file")),
-            (_, None) => failures.push(format!("{name}: ffprobe cannot read FFmpeg's copy")),
         }
         let _ = std::fs::remove_file(&target);
-        let _ = std::fs::remove_file(&copy);
     }
     let _ = std::fs::remove_dir_all(&scratch);
     assert!(
