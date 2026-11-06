@@ -52,6 +52,18 @@ seed() {
     extension_animated) cp "$corpus"/*.gif "$corpus"/*.webp "$corpus"/*.png "$dir"/ ;;
     extension_exr) cp "$corpus"/*.exr "$dir"/ ;;
     still_decode) cp tests/corpus/*.jpg tests/corpus/*.png "$corpus"/*.webp "$dir"/ ;;
+    container_mp4)
+      find tests/corpus -maxdepth 1 \( -name '*.mp4' -o -name '*.mov' -o -name '*.m4a' \) -size -64k \
+        -exec cp {} "$dir"/ \;
+      cp tests/cases/container-mp4-fragmented.mp4 "$dir"/
+      ;;
+    container_audio)
+      # Header: the prefix selector (0, none) and the seek target (i64), then the file.
+      for file in tests/corpus/*.wav tests/corpus/*.mp3 tests/corpus/*.aac tests/corpus/*.flac \
+        tests/corpus/*.ogg; do
+        { head -c 9 /dev/zero; cat "$file"; } >"$dir/$(basename "$file")"
+      done
+      ;;
     extension_pdf) cp "$corpus"/*.pdf "$dir"/ ;;
     extension_latex)
       # A style byte, then the formula.

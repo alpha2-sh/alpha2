@@ -169,9 +169,11 @@ name = "alpha2-host-core"
 version = "0.6.0"
 dependencies = [
  "alpha2-audio",
+ "alpha2-container",
  "alpha2-media",
  "alpha2-os",
  "alpha2-time",
+ "bytes",
  "image-webp",
  "png",
  "zune-core",
