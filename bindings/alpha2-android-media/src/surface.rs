@@ -12,9 +12,11 @@ use alpha2_host_core::video_stream::{BackendError, SurfaceLease};
 use alpha2_media::Rect;
 use ndk_sys as sys;
 
-/// Images a reader lends at once. A stream holds a few (the reorder buffer's, the lookahead, the
-/// frame a source last answered), and the importer up to its conversions in flight
-/// (`MAX_CONVERSIONS_IN_FLIGHT` in `alpha2-native-gpu`, three) until the GPU has read them.
+/// Images a reader lends at once besides the reorder buffer's: the stream holds the lookahead and
+/// the frame a source last answered, the importer up to its conversions in flight
+/// (`MAX_CONVERSIONS_IN_FLIGHT` in `alpha2-native-gpu`, three) until the GPU has read them, and
+/// the decoder needs some to keep decoding. Some decoders release pictures in decode order, so
+/// the stream holds up to the stream's reorder depth more.
 pub(crate) const MAX_IMAGES: i32 = 8;
 
 /// An `AImageReader` of `AIMAGE_FORMAT_PRIVATE` buffers the GPU samples. Every image holds it,
@@ -23,6 +25,7 @@ pub(crate) const MAX_IMAGES: i32 = 8;
 pub(crate) struct ImageReader {
     raw: NonNull<sys::AImageReader>,
     window: NonNull<sys::ANativeWindow>,
+    images: i32,
 }
 
 // SAFETY: the NDK reader locks internally; it is acquired from by its session's thread only and
@@ -32,8 +35,14 @@ unsafe impl Send for ImageReader {}
 unsafe impl Sync for ImageReader {}
 
 impl ImageReader {
-    /// A reader whose buffers default to `width` x `height`; a decoder sizes them itself.
-    pub(crate) fn new(width: u32, height: u32) -> Result<Arc<Self>, BackendError> {
+    /// A reader whose buffers default to `width` x `height` (a decoder sizes them itself), with
+    /// room for `reorder_depth` pictures the stream holds back to reorder.
+    pub(crate) fn new(
+        width: u32,
+        height: u32,
+        reorder_depth: usize,
+    ) -> Result<Arc<Self>, BackendError> {
+        let images = MAX_IMAGES.saturating_add(i32::try_from(reorder_depth).unwrap_or(i32::MAX));
         let dimension = |value: u32| i32::try_from(value.max(1)).unwrap_or(i32::MAX);
         let mut reader = null_mut();
         // SAFETY: the out-pointer outlives the call.
@@ -43,7 +52,7 @@ impl ImageReader {
                 dimension(height),
                 sys::AIMAGE_FORMATS::AIMAGE_FORMAT_PRIVATE.0.cast_signed(),
                 sys::AHardwareBuffer_UsageFlags::AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE.0,
-                MAX_IMAGES,
+                images,
                 &raw mut reader,
             )
         };
@@ -66,7 +75,11 @@ impl ImageReader {
                 status.0
             )));
         };
-        Ok(Arc::new(Self { raw, window }))
+        Ok(Arc::new(Self {
+            raw,
+            window,
+            images,
+        }))
     }
 
     /// The window a decoder renders into, valid while the reader lives.
@@ -88,7 +101,8 @@ impl ImageReader {
         }
         if status == sys::media_status_t::AMEDIA_IMGREADER_MAX_IMAGES_ACQUIRED {
             return Err(BackendError::Failed(format!(
-                "all {MAX_IMAGES} decoder images are still held"
+                "all {} decoder images are still held",
+                self.images
             )));
         }
         let image = NonNull::new(image)

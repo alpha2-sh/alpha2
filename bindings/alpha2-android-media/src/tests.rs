@@ -21,9 +21,10 @@ fn refuses(name: &str) -> Option<&'static str> {
         "ts" | "avi" => return Some("the container layer reads no MPEG-TS or AVI"),
         _ => {}
     }
-    // H.264 High 4:4:4 Predictive, which sessions refuse where no decoder takes it.
+    // H.264 High 4:4:4 Predictive: some decoders refuse it when configured, others take it and
+    // refuse its first picture, so only decoding that picture tells.
     if matches!(name, "hdr-pq.mp4" | "hdr-pq-topleft.mp4") {
-        return (!some_session_opens(name)).then_some("no decoder here takes its profile");
+        return (!first_picture_decodes(name)).then_some("no decoder here decodes its profile");
     }
     // What a device decodes depends on it: the API 29 emulator has no AV1 or AC-3 decoder and
     // only the software MPEG-4 decoder, which reads Simple Profile.
@@ -38,19 +39,18 @@ fn refuses(name: &str) -> Option<&'static str> {
     (!decodes).then_some("this device has no decoder for it")
 }
 
-/// Whether a hardware or software session of the suite opens on the video of fixture `name`.
-fn some_session_opens(name: &str) -> bool {
-    let Ok(reader) = alpha2_container::open(&alpha2_backend_conformance::corpus(name)) else {
-        return false;
-    };
-    reader
-        .tracks()
-        .iter()
-        .find(|track| track.video.is_some())
-        .is_some_and(|track| {
-            [BackendKind::Hardware, BackendKind::Software]
-                .into_iter()
-                .any(|kind| SuiteVideo.open(track, kind).is_ok())
+/// Whether the suite's sessions decode the first picture of fixture `name`.
+fn first_picture_decodes(name: &str) -> bool {
+    use alpha2_backend_conformance::Backend as _;
+    use alpha2_media::{CancelToken, DecodeEvent};
+
+    mediacodec()
+        .open_video(&alpha2_backend_conformance::corpus(name))
+        .is_ok_and(|mut decoder| {
+            matches!(
+                decoder.decode_next(&CancelToken::default()),
+                Ok(DecodeEvent::Video(_))
+            )
         })
 }
 

@@ -2,7 +2,8 @@
 //!
 //! A backend implements [`Backend`] and instantiates the suite with [`conformance_tests!`], which
 //! writes one test per case. A fixture whose container or codec the backend does not read must be
-//! refused with [`DecodeError::Unsupported`]; the suite checks that refusal instead of skipping.
+//! refused with [`DecodeError::Unsupported`], when it opens or, for video, at its first picture;
+//! the suite checks that refusal instead of skipping.
 //!
 //! The corpus is `tests/` of the repository, or `ALPHA2_TESTS_DIR` where a device runs the tests
 //! from a copy.
@@ -116,10 +117,19 @@ pub fn video_or_refusal(
             "{}: {name} must be refused as unsupported ({why}), not {error}",
             backend.name()
         )),
-        (Some(why), Ok(_)) => Err(format!(
-            "{}: {name} opened though the backend says it refuses it ({why})",
-            backend.name()
-        )),
+        // Some platform decoders take a stream they cannot decode and refuse it at its first
+        // picture; that refusal counts as well.
+        (Some(why), Ok(mut decoder)) => match decoder.decode_next(&CancelToken::default()) {
+            Err(DecodeError::Unsupported(_)) => Ok(None),
+            Err(error) => Err(format!(
+                "{}: {name} must be refused as unsupported ({why}), not {error}",
+                backend.name()
+            )),
+            Ok(_) => Err(format!(
+                "{}: {name} decoded though the backend says it refuses it ({why})",
+                backend.name()
+            )),
+        },
     }
 }
 

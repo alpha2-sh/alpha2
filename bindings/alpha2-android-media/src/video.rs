@@ -742,7 +742,11 @@ impl MediaCodecVideo {
                 if kind == BackendKind::Hardware && (surface_ten_bit || !ten_bit) =>
             {
                 Some(SurfaceOutput {
-                    reader: ImageReader::new(video.width, video.height)?,
+                    reader: ImageReader::new(
+                        video.width,
+                        video.height,
+                        video.reorder_depth.unwrap_or(1),
+                    )?,
                     ten_bit,
                     awaiting: None,
                     stale: 0,
@@ -1076,12 +1080,6 @@ impl MediaCodecVideo {
 impl VideoDecodeBackend for MediaCodecVideo {
     fn kind(&self) -> BackendKind {
         self.kind
-    }
-
-    /// `MediaCodec` releases output buffers in presentation order, so nothing is held back to
-    /// reorder: holding them would also keep image reader images out of the decoder's reach.
-    fn presentation_order(&self) -> bool {
-        true
     }
 
     fn submit(&mut self, packet: &Packet) -> Result<Submit, BackendError> {
