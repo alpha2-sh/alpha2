@@ -8,6 +8,16 @@
 /node_modules/
 /packages/*/dist/
 /packages/*/wasm/
+/packages/alpha2-android/.gradle/
+/packages/alpha2-android/build/
+/packages/alpha2-android/lib/build/
+/packages/alpha2-android/local.properties
+/packages/alpha2-swift/.build/
+/packages/alpha2-swift/.build-native/
+/packages/alpha2-swift/.swiftpm/
+/packages/alpha2-swift/Alpha2FFI.xcframework/
+/packages/alpha2-swift/Sources/Alpha2/
+/packages/alpha2-swift/Tests/Alpha2Tests/Fixtures/
 *.wasm
 *.wasm.map
 .DS_Store

@@ -9,10 +9,12 @@ cargo-fuzz = true
 
 [dependencies]
 alpha2-audio = { path = "../crates/alpha2-audio" }
+alpha2-container = { path = "../crates/alpha2-container" }
 alpha2-engine = { path = "../crates/alpha2-engine" }
 alpha2-eval = { path = "../crates/alpha2-eval" }
 alpha2-extensions = { path = "../extensions" }
 alpha2-geometry = { path = "../crates/alpha2-geometry" }
+alpha2-host-core = { path = "../bindings/alpha2-host-core", default-features = false }
 alpha2-media = { path = "../crates/alpha2-media" }
 alpha2-model = { path = "../crates/alpha2-model" }
 alpha2-text = { path = "../bindings/alpha2-text" }
@@ -126,6 +128,34 @@ bench = false
 [[bin]]
 name = "layout_values"
 path = "fuzz_targets/layout_values.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "container_mp4"
+path = "fuzz_targets/container_mp4.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "container_audio"
+path = "fuzz_targets/container_audio.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "container_matroska"
+path = "fuzz_targets/container_matroska.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "still_decode"
+path = "fuzz_targets/still_decode.rs"
 test = false
 doc = false
 bench = false

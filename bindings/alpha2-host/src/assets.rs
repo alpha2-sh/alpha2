@@ -290,7 +290,7 @@ fn provider_original(
     if !path.is_file() {
         return Some(offline(path));
     }
-    let bytes = match crate::providers::read_source(path, provider) {
+    let bytes = match alpha2_host_core::providers::read_source(path, provider) {
         Ok(bytes) => bytes,
         Err(error) => {
             return Some(OriginalState::Unsupported {
@@ -383,7 +383,7 @@ fn sequence_original(
     hardware: &HardwareVideoDecode,
 ) -> Option<OriginalState> {
     let paths = resolver.sequence_frames(source)?;
-    if let Err(reason) = crate::providers::frame_files(locators, paths) {
+    if let Err(reason) = alpha2_host_core::providers::frame_files(locators, paths) {
         return Some(OriginalState::Unsupported { reason });
     }
     let frames = locators.len();

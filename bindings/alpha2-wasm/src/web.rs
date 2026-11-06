@@ -1,6 +1,7 @@
 //! `WebEffectRegistry`, the browser GPU renderer (device, effects, uploaded frames and audio,
 //! preview, export), plus free functions that publish engine decisions to the page.
 
+use alpha2_engine::frame_store::{FrameStore, WorkingSetOverBudget};
 use alpha2_engine::{
     EngineProject, ExportStep, Exporter, FramesWithText, GpuFrameRenderer, Player, QualityProfile,
     TextTextures,
@@ -20,15 +21,13 @@ use wasm_bindgen::prelude::*;
 
 use crate::effect::EffectRequest;
 use crate::error::{BindingError, Code, EngineTyped};
-use crate::frame_store::{FrameStore, WorkingSetOverBudget};
 use crate::interop::{
     DeviceHealth, diagnostics_to_js, export_readback_promise, export_status, frame_upload_receipt,
     gpu_diagnostics_json, js_safe_integer, renderer_with_builtins, resolved, set, texture_byte_len,
     validate_texture_extent, watch_device,
 };
 use crate::present::{
-    Presenter, UploadedTexture, UploadedTextureBacking, WebMissingFrame, WebPlaybackResult,
-    present_texture,
+    UploadedTexture, UploadedTextureBacking, WebMissingFrame, WebPlaybackResult, present_texture,
 };
 use crate::project_audio::ProjectAudio;
 use crate::project_cache::StalePresentations;
@@ -237,7 +236,7 @@ pub struct WebEffectRegistry {
     health: DeviceHealth,
     surface: Option<wgpu::Surface<'static>>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
-    presenter: Option<Presenter>,
+    presenter: Option<alpha2_render::SurfacePresenter>,
     browser_webgpu: bool,
     adapter_info: BrowserAdapterInfo,
     video_frame_copy: crate::interop::VideoFrameCopy,
@@ -626,7 +625,7 @@ impl WebEffectRegistry {
             gpu: context,
             frames: FrameStore::sized(
                 UploadedTexture::retained_bytes,
-                crate::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
+                alpha2_engine::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
             ),
             project: None,
             player: Player::default(),
@@ -816,7 +815,7 @@ impl WebEffectRegistry {
                 health.clone(),
             )?)
         };
-        let presenter = Presenter::new(&device, config.format);
+        let presenter = alpha2_render::SurfacePresenter::new(&device, config.format);
         let renderer = renderer_with_builtins(gpu, &health)?;
         Ok(Self {
             renderer,
@@ -824,7 +823,7 @@ impl WebEffectRegistry {
             gpu: context,
             frames: FrameStore::sized(
                 UploadedTexture::retained_bytes,
-                crate::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
+                alpha2_engine::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
             ),
             project: None,
             player: Player::default(),

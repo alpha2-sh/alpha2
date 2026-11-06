@@ -14,6 +14,7 @@ mod error;
 mod error_code;
 mod exporter;
 mod frame;
+pub mod frame_store;
 mod generated;
 mod layout;
 mod passthrough;

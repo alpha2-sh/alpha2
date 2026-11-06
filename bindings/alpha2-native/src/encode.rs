@@ -77,50 +77,7 @@ impl EncodeStageTimings {
     }
 }
 
-thread_local! {
-    /// What this thread calls before each encoder and muxer call ([`watch_encode_calls`]).
-    static ENCODE_CALL_WATCH: std::cell::RefCell<Option<Box<dyn Fn()>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Calls `beat` on this thread before every encoder and muxer call a sink
-/// makes, until the guard drops.
-///
-/// Some calls wait forever (`h264_vulkan` waits on fences with `UINT64_MAX`; `write(2)` to a stuck
-/// hard-mounted share retries forever) and cannot be interrupted, so the driving thread reports
-/// where it is and its owner decides when a call is stuck. The audio encoder's thread is covered by
-/// the call that waits on it.
-#[must_use = "the watch ends when the guard drops"]
-pub fn watch_encode_calls(beat: impl Fn() + 'static) -> EncodeCallWatch {
-    let previous = ENCODE_CALL_WATCH.with(|watch| watch.replace(Some(Box::new(beat))));
-    EncodeCallWatch {
-        previous,
-        thread: std::marker::PhantomData,
-    }
-}
-
-/// Ends a [`watch_encode_calls`] watch, restoring the one before it.
-pub struct EncodeCallWatch {
-    previous: Option<Box<dyn Fn()>>,
-    thread: std::marker::PhantomData<*const ()>,
-}
-
-impl Drop for EncodeCallWatch {
-    fn drop(&mut self) {
-        let previous = self.previous.take();
-        ENCODE_CALL_WATCH.with(|watch| {
-            watch.replace(previous);
-        });
-    }
-}
-
-pub(crate) fn beat_encode_call() {
-    ENCODE_CALL_WATCH.with(|watch| {
-        if let Some(beat) = watch.borrow().as_ref() {
-            beat();
-        }
-    });
-}
+pub(crate) use alpha2_host_core::encode_watch::beat_encode_call;
 
 /// Runs `body`, an encoder or muxer call, adding its time to `total` and beating the watch.
 pub(crate) fn timed<T>(total: &mut Duration, body: impl FnOnce() -> T) -> T {
@@ -343,7 +300,7 @@ impl NativeAvEncodeSink {
         }
         let target = path.into();
         let partial = PartialOutput::claim(&target, SeekNeed::Required)?;
-        let mut output = partial.open_muxer(config.video.container)?;
+        let mut output = crate::partial::open_muxer(&partial, config.video.container)?;
         let global_header =
             output.oformat().flags & i32::try_from(ffi::AVFMT_GLOBALHEADER).unwrap_or(0) != 0;
 

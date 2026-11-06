@@ -652,7 +652,7 @@ pub struct SourceSupplyMetrics {
 /// The comparison path's frame supply, decoded synchronously with software decoders.
 pub struct NativeFrames {
     pub size: RenderSize,
-    pub providers: std::sync::Arc<crate::providers::ProviderMedia>,
+    pub providers: std::sync::Arc<alpha2_host_core::providers::ProviderMedia>,
     pub color: ColorPolicy,
     pub paths: HashMap<SourceId, PathBuf>,
     pub kinds: HashMap<SourceId, MediaKind>,
@@ -708,7 +708,7 @@ impl NativeFrames {
         }
         Ok(Self {
             size,
-            providers: crate::providers::ProviderMedia::none(),
+            providers: alpha2_host_core::providers::ProviderMedia::none(),
             color: alpha2_engine::color_policy(&project.settings.color),
             paths,
             kinds,
@@ -820,7 +820,11 @@ impl NativeFrames {
             return Ok(());
         }
         let decode_started = Instant::now();
-        let frame = Arc::new(self.providers.frame(cursor, requested, self.supplied)?);
+        let frame = Arc::new(
+            self.providers
+                .frame(cursor, requested, self.supplied)
+                .map_err(crate::providers::tagged)?,
+        );
         metrics.decode = metrics.decode.saturating_add(decode_started.elapsed());
         let mut upload = |frames: &Self| {
             let upload_started = Instant::now();

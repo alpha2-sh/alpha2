@@ -1,0 +1,31 @@
+[package]
+name = "alpha2-container"
+version.workspace = true
+description = "alpha2's own media container layer: MP4/MOV/M4A, Matroska/WebM and audio-only files, demuxed and muxed in pure Rust with edit lists, priming and deterministic output."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["mp4", "matroska", "webm", "demux", "mux"]
+categories = ["multimedia::video", "multimedia::encoding", "parser-implementations"]
+# Tests and fixtures stay in the repository; the package ships sources only.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[dependencies]
+alpha2-media.workspace = true
+alpha2-time.workspace = true
+bytes.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+sha2 = "0.11"
+
+[lints]
+workspace = true

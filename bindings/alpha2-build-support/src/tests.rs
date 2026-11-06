@@ -288,3 +288,21 @@ fn the_directive_is_a_linker_argument_for_this_package() {
         ]
     );
 }
+
+#[test]
+fn rejected_triples_take_the_clang_spelling() {
+    assert_eq!(
+        clang_target_override("aarch64-apple-ios-sim").as_deref(),
+        Some("arm64-apple-ios-simulator")
+    );
+    assert_eq!(
+        clang_target_override("x86_64-apple-ios-sim").as_deref(),
+        Some("x86_64-apple-ios-simulator")
+    );
+    assert_eq!(
+        clang_target_override("aarch64-linux-android").as_deref(),
+        Some("aarch64-linux-android29")
+    );
+    assert_eq!(clang_target_override("aarch64-apple-ios"), None);
+    assert_eq!(clang_target_override("x86_64-unknown-linux-gnu"), None);
+}

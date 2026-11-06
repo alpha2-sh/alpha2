@@ -60,6 +60,7 @@ pub(crate) fn encoder_capability(name: &str) -> Option<alpha2_test_support::Capa
 
 mod alpha;
 mod audio_io;
+mod conformance;
 mod containers;
 mod copies;
 mod damaged_input;
@@ -70,7 +71,9 @@ mod muxing;
 mod openh264;
 mod outputs;
 mod pixel_outputs;
+mod project_audio;
 mod seeking;
+mod stills;
 
 /// A scratch file named for `label` and the running test, with characters Windows refuses (such as
 /// `:` in the thread name) replaced by `-`.

@@ -33,13 +33,13 @@ pub struct ExportDecodePlan {
     /// software encoder; zero otherwise.
     pub source_frame_pixels: u64,
     pub source_probe: Duration,
-    pub providers: Arc<crate::providers::ProviderMedia>,
+    pub providers: Arc<alpha2_host_core::providers::ProviderMedia>,
 }
 
 impl ExportDecodePlan {
     pub(crate) fn new(
         split: ExportCodecSplit,
-        providers: Arc<crate::providers::ProviderMedia>,
+        providers: Arc<alpha2_host_core::providers::ProviderMedia>,
     ) -> Self {
         Self {
             hardware_decode: split.hardware_decode,
@@ -140,8 +140,8 @@ impl Host {
         &self,
         project: &Project,
         size: RenderSize,
-    ) -> Arc<crate::providers::ProviderMedia> {
-        let providers = Arc::new(crate::providers::ProviderMedia::new(
+    ) -> Arc<alpha2_host_core::providers::ProviderMedia> {
+        let providers = Arc::new(alpha2_host_core::providers::ProviderMedia::new(
             project,
             self.provider_files.clone(),
             (size.width, size.height),

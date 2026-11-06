@@ -186,5 +186,9 @@
   "yuv-video-frames": {
     "description": "Decoded VideoFrames in 8-bit 4:2:0.",
     "probe": "a VideoFrame made from a decoded video element is I420 or NV12"
+  },
+  "ahb-import": {
+    "description": "Android hardware decoder buffers imported into the renderer's Vulkan device.",
+    "probe": "reopen_for_ahb_import accepts the product GPU and a hardware decoder renders the fixture into a GPU-sampled image reader"
   }
 }

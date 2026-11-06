@@ -6,16 +6,14 @@
 // Diagnostics go through `alpha2_os::diagnostic!` so a closed stderr cannot panic the process.
 #![cfg_attr(not(test), warn(clippy::print_stderr))]
 
-mod audio_host;
 mod audio_input;
 pub use audio_input::AudioStreamConfig;
-mod audio_timeline;
 mod bitstream;
 mod capabilities;
 mod convert;
 mod decode;
 mod recovery;
-pub use recovery::{
+pub use alpha2_host_core::recovery::{
     ConcealedAudioGap, CorruptPacket, DECODE_WORK_LIMIT, DecodeDiagnostic, DecodeDiagnosticCounts,
     DecodeDiagnostics, DecodePolicy, DecodeProgressWatch, DroppedAudioOverlap, VideoRecoveryGap,
     watch_decode_progress,
@@ -23,20 +21,11 @@ pub use recovery::{
 mod encode;
 mod mux;
 mod partial;
-pub use alpha2_os::PublishMethod;
-pub use partial::{
+pub use alpha2_host_core::partial::{
     ExistingOutput, OutputTarget, PARTIAL_OUTPUT_IN_USE, PublishReport,
     remove_stale_partial_output, write_png, write_whole,
 };
-// Every decode reads the HEVC layers; only hardware decode reads the leading crop.
-#[cfg_attr(
-    not(all(
-        any(target_os = "linux", target_os = "macos", target_os = "windows"),
-        feature = "hwdecode"
-    )),
-    allow(dead_code)
-)]
-mod parameter_sets;
+pub use alpha2_os::PublishMethod;
 mod passthrough;
 pub use passthrough::{
     AudioBlockFeed, CopyAudio, PacketCopy, PacketCopyAudio, PacketCopyPlan, PacketCopyPlanner,
@@ -53,11 +42,10 @@ pub use openh264::{
     OpenH264Library, OpenH264Provider, OpenH264Status, openh264_status,
 };
 mod rate_control;
-pub use rate_control::{AppliedRateControl, RateControlMechanism};
+pub use alpha2_host_core::rate_control::{AppliedRateControl, RateControlMechanism};
 #[cfg(test)]
 mod tests;
-mod tools;
-pub use tools::{
+pub use alpha2_host_core::{
     FrameScore, THUMBNAIL_LUMA_RANGE, choose_thumbnail, downscale_frame, resize_rgba, score_frame,
 };
 mod video_backend;
@@ -65,15 +53,16 @@ mod video_encode;
 mod video_frame;
 mod vt_sei;
 pub use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
-pub use alpha2_media::{EncoderRefusal, OpenFailureKind};
+pub use alpha2_host_core::encode_watch::{EncodeCallWatch, watch_encode_calls};
 #[cfg(feature = "cpal-host")]
-pub use audio_host::{CpalHostError, CpalOutputHost, RealtimeAudioSource};
-pub use audio_host::{
+pub use alpha2_host_core::{CpalHostError, CpalOutputHost, RealtimeAudioSource};
+pub use alpha2_host_core::{
     DecodedAudioSources, HostAudioConfig, HostSampleFormat, OfflineAudioError,
     negotiate_output_config, render_offline,
 };
 #[cfg(feature = "timeline")]
-pub use audio_host::{ProjectAudioRequest, render_project_audio};
+pub use alpha2_host_core::{ProjectAudioRequest, render_project_audio};
+pub use alpha2_media::{EncoderRefusal, OpenFailureKind};
 pub use capabilities::{
     AvEncodeConfig, EncoderInventory, NativeAudioCodec, NativeAudioEncoderCapability,
     NativeCodecCapabilities, NativeEncoderClass, NativeEncoderHardwareConfig, NativeEncoderLibrary,
@@ -95,10 +84,7 @@ pub use decode::{
     SOURCE_SAMPLE_RATES, alpha_dropped_reason, decodes_vp9_alpha, probe,
     software_decode_unsupported, visit_packet_times,
 };
-pub use encode::{
-    EncodeCallWatch, EncodeStageTimings, NativeAvEncodeSink, NativeWavEncodeSink,
-    watch_encode_calls,
-};
+pub use encode::{EncodeStageTimings, NativeAvEncodeSink, NativeWavEncodeSink};
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 pub use hwdecode::{VulkanDecodeProbe, probe_vulkan_decode};
 #[cfg(all(target_os = "windows", feature = "hwencode"))]

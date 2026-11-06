@@ -57,6 +57,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "alpha2-container"
+version = "0.6.0"
+dependencies = [
+ "alpha2-media",
+ "alpha2-time",
+ "bytes",
+]
+
+[[package]]
 name = "alpha2-engine"
 version = "0.6.0"
 dependencies = [
@@ -120,10 +129,12 @@ name = "alpha2-fuzz"
 version = "0.0.0"
 dependencies = [
  "alpha2-audio",
+ "alpha2-container",
  "alpha2-engine",
  "alpha2-eval",
  "alpha2-extensions",
  "alpha2-geometry",
+ "alpha2-host-core",
  "alpha2-media",
  "alpha2-model",
  "alpha2-text",
@@ -151,6 +162,22 @@ dependencies = [
  "web-time",
  "wgpu",
  "windows",
+]
+
+[[package]]
+name = "alpha2-host-core"
+version = "0.6.0"
+dependencies = [
+ "alpha2-audio",
+ "alpha2-container",
+ "alpha2-media",
+ "alpha2-os",
+ "alpha2-time",
+ "bytes",
+ "image-webp",
+ "png",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -186,6 +213,14 @@ dependencies = [
  "libm",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "alpha2-os"
+version = "0.6.0"
+dependencies = [
+ "libc",
+ "windows-sys",
 ]
 
 [[package]]

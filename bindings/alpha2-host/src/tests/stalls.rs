@@ -286,11 +286,11 @@ fn a_long_provider_open_that_keeps_decoding_is_not_a_stall() {
         ]}
     }))
     .expect("project");
-    let providers = Arc::new(crate::providers::ProviderMedia::new(
+    let providers = Arc::new(alpha2_host_core::providers::ProviderMedia::new(
         &project,
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             originals,
-            ..crate::providers::ProviderFiles::default()
+            ..alpha2_host_core::providers::ProviderFiles::default()
         },
         (256, 256),
         u64::MAX,
@@ -384,11 +384,11 @@ fn a_shard_stuck_inside_an_extension_provider_is_reported_there() {
         ]}
     }))
     .expect("project");
-    let providers = Arc::new(crate::providers::ProviderMedia::new(
+    let providers = Arc::new(alpha2_host_core::providers::ProviderMedia::new(
         &project,
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([("animation".to_owned(), path)]),
-            ..crate::providers::ProviderFiles::default()
+            ..alpha2_host_core::providers::ProviderFiles::default()
         },
         (16, 16),
         u64::MAX,

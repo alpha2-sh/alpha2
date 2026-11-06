@@ -1219,7 +1219,7 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
             result["audioEncoder"],
             json!(match audio {
                 NativeAudioCodec::Opus => "libopus",
-                _ => "aac",
+                NativeAudioCodec::Aac => "aac",
             }),
             "{result}"
         );

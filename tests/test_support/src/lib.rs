@@ -107,6 +107,8 @@ pub enum Capability {
     AudioAutostart,
     /// Decoded `VideoFrame`s in 8-bit 4:2:0.
     YuvVideoFrames,
+    /// Android hardware decoder buffers imported into the renderer's Vulkan device.
+    AhbImport,
 }
 
 impl Capability {
@@ -159,6 +161,7 @@ impl Capability {
         Self::AudioOutputTimestamp,
         Self::AudioAutostart,
         Self::YuvVideoFrames,
+        Self::AhbImport,
     ];
 
     /// The capability's name in `ALPHA2_REQUIRE` and the skip log.
@@ -212,6 +215,7 @@ impl Capability {
             Self::AudioOutputTimestamp => "audio-output-timestamp",
             Self::AudioAutostart => "audio-autostart",
             Self::YuvVideoFrames => "yuv-video-frames",
+            Self::AhbImport => "ahb-import",
         }
     }
 

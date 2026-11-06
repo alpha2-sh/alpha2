@@ -25,6 +25,16 @@ allow = [
 exceptions = [
   # Build-script dependency of pyo3-build-config; linked into nothing.
   { allow = ["Apache-2.0 WITH LLVM-exception"], crate = "target-lexicon" },
+  # The mobile bindings' generator and runtime, used unmodified; the notice ships with the
+  # mobile packages. File-level copyleft only, and no other crate may bring MPL-2.0.
+  { allow = ["MPL-2.0"], crate = "uniffi" },
+  { allow = ["MPL-2.0"], crate = "uniffi_bindgen" },
+  { allow = ["MPL-2.0"], crate = "uniffi_core" },
+  { allow = ["MPL-2.0"], crate = "uniffi_internal_macros" },
+  { allow = ["MPL-2.0"], crate = "uniffi_macros" },
+  { allow = ["MPL-2.0"], crate = "uniffi_meta" },
+  { allow = ["MPL-2.0"], crate = "uniffi_pipeline" },
+  { allow = ["MPL-2.0"], crate = "uniffi_udl" },
 ]
 
 [bans]

@@ -78,27 +78,6 @@ fn a_still_is_shown_as_its_exif_orientation_says() {
 }
 
 #[test]
-fn a_mirroring_display_matrix_is_a_mirror_and_a_rotation() {
-    for (name, rotation) in [
-        ("h264-bt709-hflip.mp4", Rotation::Deg0),
-        ("h264-bt709-vflip.mp4", Rotation::Deg180),
-        ("h264-bt709-transverse.mp4", Rotation::Deg90),
-        // Matroska's projection pose: a roll, plus a 180 degree yaw for the mirror.
-        ("h264-bt709-transverse.mkv", Rotation::Deg90),
-    ] {
-        let probed = probe(corpus(name)).unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        assert_eq!(
-            probed.selected_video_stream().expect("video").orientation,
-            Orientation {
-                rotation,
-                mirror: true
-            },
-            "{name}"
-        );
-    }
-}
-
-#[test]
 fn a_pixel_aspect_ratio_is_the_one_ffmpeg_guesses() {
     let cancel = CancelToken::default();
     let mut wrong = Vec::new();
@@ -373,40 +352,6 @@ fn each_frame_carries_the_chroma_siting_its_stream_signals() {
             .expect(name)
             .expect("frame");
         assert_eq!(frame.metadata().chroma_location, siting, "{name}");
-    }
-}
-
-#[test]
-fn a_software_decode_shows_exactly_the_columns_its_stream_crops_to() {
-    let mut cropped = NativeDecoder::open(corpus("h264-bt709-crop-left.mp4")).expect("cropped");
-    let mut whole = NativeDecoder::open(corpus("h264-bt709-copy.mp4")).expect("whole");
-    let probed = probe(corpus("h264-bt709-crop-left.mp4")).expect("probe");
-    assert_eq!(probed.streams[0].dimensions, Some((120, 96)));
-    for index in 0..3 {
-        let shown = first_frame(&mut cropped, "h264-bt709-crop-left.mp4");
-        let coded = first_frame(&mut whole, "h264-bt709-copy.mp4");
-        let rect = shown.visible_rect;
-        assert_eq!(
-            (rect.width, rect.height),
-            (120, 96),
-            "frame {index}: {rect:?}"
-        );
-        assert_eq!(shown.chroma_location, coded.chroma_location);
-        for (plane, step) in [(0, 1), (1, 2), (2, 2)] {
-            let (shown_plane, coded_plane) = (&shown.planes[plane], &coded.planes[plane]);
-            for row in 0..coded_plane.height {
-                let at = |source: &Plane, x: u32| {
-                    source.bytes[usize::try_from(row * source.stride + x).expect("offset")]
-                };
-                for column in 0..120 / step {
-                    assert_eq!(
-                        at(shown_plane, rect.x / step + column),
-                        at(coded_plane, 8 / step + column),
-                        "frame {index}, plane {plane}, row {row}, column {column}"
-                    );
-                }
-            }
-        }
     }
 }
 

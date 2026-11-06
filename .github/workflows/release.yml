@@ -76,6 +76,121 @@ jobs:
     with:
       targets: '["linux-x64","linux-arm64","macos-arm64","win-x64"]'
 
+  # The mobile libraries are built and checked as workflow artifacts; no job publishes them yet.
+  android:
+    name: Android library
+    needs: [validate, version]
+    if: >-
+      ${{ always() && needs.version.result == 'success' &&
+      (needs.validate.result == 'success' || (inputs.skip-validate && needs.validate.result == 'skipped')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      # Over budget: raise the number.
+      AAR_BUDGET_BYTES: "28000000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned Rust toolchain, the Android targets and the build tools
+        run: |
+          rustup toolchain install
+          rustup target add aarch64-linux-android x86_64-linux-android
+          cargo install cargo-ndk --version 4.1.2 --locked
+          cargo install cargo-about --version 0.9.2 --locked --features cli
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install Gradle 8.11
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-8.11-bin.zip
+          echo "57dafb5c2622c6cc08b993c85b7c06956a2f53536432a30ead46166dbca0f1e9  $RUNNER_TEMP/gradle.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-8.11/bin" >> "$GITHUB_PATH"
+      - name: Build the library
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:?}" JAVA_HOME="${JAVA_HOME_17_X64:?}"
+          node scripts/crate-licenses.mjs --target aarch64-linux-android \
+            --out "$RUNNER_TEMP/rust-crate-licenses.md" alpha2-mobile
+          ALPHA2_NOTICES="$RUNNER_TEMP/rust-crate-licenses.md" scripts/build-android.sh
+      - name: Check and name the library
+        run: |
+          library=packages/alpha2-android/lib
+          out=target/alpha2-mobile
+          mkdir -p "$out" "$RUNNER_TEMP/aar"
+          aar="$out/alpha2-android-$VERSION.aar"
+          cp "$library/build/outputs/aar/lib-release.aar" "$aar"
+          size=$(stat -c %s "$aar")
+          echo "$aar: $size bytes (budget $AAR_BUDGET_BYTES)"
+          test "$size" -le "$AAR_BUDGET_BYTES"
+          unzip -q "$aar" -d "$RUNNER_TEMP/aar"
+          unzip -l "$RUNNER_TEMP/aar/classes.jar" | grep -q 'META-INF/alpha2/rust-crate-licenses.md'
+          # Devices with 16 KB pages load only libraries whose segments are 16 KB aligned.
+          readelf=$(ls "$ANDROID_NDK_LATEST_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-readelf | head -n 1)
+          for abi in arm64-v8a x86_64; do
+            "$readelf" -lW "$RUNNER_TEMP/aar/jni/$abi/libalpha2_mobile.so" |
+              awk -v abi="$abi" '$1 == "LOAD" { seen = 1; if ($NF != "0x4000") bad = 1 }
+                END { if (!seen || bad) { print abi ": LOAD segments are not 16 KB aligned"; exit 1 } }'
+          done
+          # The unstripped libraries, for symbolicating crashes.
+          (cd "$library/build/native" && zip -qr "$OLDPWD/$out/alpha2-android-$VERSION-symbols.zip" .)
+          ls -la "$out"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: alpha2-android
+          if-no-files-found: error
+          path: target/alpha2-mobile
+
+  swift:
+    name: Swift package
+    needs: [validate, version]
+    if: >-
+      ${{ always() && needs.version.result == 'success' &&
+      (needs.validate.result == 'success' || (inputs.skip-validate && needs.validate.result == 'skipped')) }}
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      # Over budget: raise the number.
+      XCFRAMEWORK_ZIP_BUDGET_BYTES: "72000000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned Rust toolchain, the iOS targets and cargo-about
+        run: |
+          rustup toolchain install
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+          cargo install cargo-about --version 0.9.2 --locked --features cli
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # build-ios.sh refuses a library that calls a required-reason API the privacy manifest does
+      # not declare.
+      - name: Build the package
+        run: |
+          node scripts/crate-licenses.mjs --target aarch64-apple-ios \
+            --out "$RUNNER_TEMP/rust-crate-licenses.md" alpha2-mobile
+          ALPHA2_NOTICES="$RUNNER_TEMP/rust-crate-licenses.md" scripts/build-ios.sh
+      # The XCFramework zip and its checksum serve a remote binary target; the package archive
+      # (manifest, bindings and XCFramework) serves a local one.
+      - name: Archive the XCFramework and the package
+        run: |
+          out="$PWD/target/alpha2-mobile"
+          mkdir -p "$out"
+          cd packages/alpha2-swift
+          zip="$out/Alpha2FFI-$VERSION.xcframework.zip"
+          ditto -c -k --keepParent Alpha2FFI.xcframework "$zip"
+          size=$(stat -f %z "$zip")
+          echo "$zip: $size bytes (budget $XCFRAMEWORK_ZIP_BUDGET_BYTES)"
+          test "$size" -le "$XCFRAMEWORK_ZIP_BUDGET_BYTES"
+          swift package compute-checksum "$zip" > "$zip.checksum"
+          cat "$zip.checksum"
+          zip -qry "$out/alpha2-swift-$VERSION.zip" Package.swift Sources Alpha2FFI.xcframework
+          ls -la "$out"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: alpha2-swift
+          if-no-files-found: error
+          path: target/alpha2-mobile
+
   distribute:
     name: Distribute ${{ matrix.target }}
     # distribute.sh hashes the archive for the alpha2 wheel pin, so any step that changes the

@@ -751,6 +751,202 @@ jobs:
           print(compiler)
           PY
 
+  mobile-lint:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',mobile-lint,')) &&
+      needs.changes.outputs.native == 'true' }}
+    name: Mobile lint (${{ matrix.platform }})
+    needs: changes
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The runner's NDK must stay installed, so this job has no disk cleanup step.
+          - platform: android
+            runner: ubuntu-24.04
+            targets: aarch64-linux-android x86_64-linux-android
+          # Crates with Apple SDK build steps need Xcode's iOS SDKs.
+          - platform: ios
+            runner: macos-26
+            targets: aarch64-apple-ios aarch64-apple-ios-sim
+    defaults:
+      run:
+        shell: bash
+    env:
+      # The mobile crate set: everything an app links. FFmpeg-linked crates are desktop only.
+      MOBILE_PACKAGES: -p alpha2-os -p alpha2-native-gpu -p alpha2-extensions -p alpha2-text
+        -p alpha2-host-core -p alpha2-container -p alpha2-backend-conformance
+        -p alpha2-android-media -p alpha2-apple-media -p alpha2-mobile
+      MOBILE_ALL_FEATURE_PACKAGES: -p alpha2 -p alpha2-compose -p alpha2-host-core
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provenance
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc --version
+          if [ "${{ matrix.platform }}" = ios ]; then xcodebuild -version; fi
+      - name: Install the pinned Rust toolchain and the mobile targets
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.platform }}
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - name: Point Cargo at the NDK toolchain (API 29)
+        if: matrix.platform == 'android'
+        run: |
+          ndk="${ANDROID_NDK_LATEST_HOME:?}"
+          cat "$ndk/source.properties"
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          sysroot="$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          for target in ${{ matrix.targets }}; do
+            var="${target//-/_}"
+            upper="${var^^}"
+            {
+              echo "CC_$var=$bin/${target}29-clang"
+              echo "CXX_$var=$bin/${target}29-clang++"
+              echo "AR_$var=$bin/llvm-ar"
+              echo "CARGO_TARGET_${upper}_LINKER=$bin/${target}29-clang"
+              echo "BINDGEN_EXTRA_CLANG_ARGS_$var=--sysroot=$sysroot"
+            } >> "$GITHUB_ENV"
+          done
+      - name: Clippy of the mobile crate set
+        run: |
+          for target in ${{ matrix.targets }}; do
+            echo "::group::$target"
+            cargo clippy --locked $MOBILE_PACKAGES --all-targets --target "$target" -- -D warnings
+            cargo clippy --locked $MOBILE_ALL_FEATURE_PACKAGES --all-features --all-targets \
+              --target "$target" -- -D warnings
+            echo "::endgroup::"
+          done
+
+  mobile-test:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',mobile-test,')) &&
+      needs.changes.outputs.native == 'true' }}
+    name: Mobile tests (Android ${{ matrix.api }} emulator)
+    needs: changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest supported release, whose emulator image has GL only, and a current one.
+        api: [29, 36]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provenance
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc --version
+      - name: Install the pinned Rust toolchain and the emulator target
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: mobile-test
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - name: Point Cargo at the NDK toolchain (API 29)
+        run: |
+          ndk="${ANDROID_NDK_LATEST_HOME:?}"
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            echo "CC_x86_64_linux_android=$bin/x86_64-linux-android29-clang"
+            echo "CXX_x86_64_linux_android=$bin/x86_64-linux-android29-clang++"
+            echo "AR_x86_64_linux_android=$bin/llvm-ar"
+            echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$bin/x86_64-linux-android29-clang"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android=--sysroot=$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          } >> "$GITHUB_ENV"
+      - name: Build the test binaries
+        run: |
+          mkdir -p target/mobile-tests
+          cargo test --locked --no-run --target x86_64-linux-android \
+            -p alpha2-android-media -p alpha2-mobile --lib --message-format=json |
+            jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
+            xargs -I{} cp {} target/mobile-tests/
+          ls -la target/mobile-tests
+      - name: Let the emulator use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # The suites test the backends' logic on the emulator's software codecs and GPU; hardware
+      # codecs are covered on devices. Debug builds name GPU objects, which the emulator's Vulkan
+      # driver crashes on, so the tests run without wgpu's debug flag.
+      - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            adb shell mkdir -p /data/local/tmp/alpha2-test/tests
+            adb push tests/corpus tests/cases tests/fonts /data/local/tmp/alpha2-test/tests/ > /dev/null
+            adb push target/mobile-tests/. /data/local/tmp/alpha2-test/ > /dev/null
+            for binary in target/mobile-tests/*; do name=$(basename "$binary"); adb shell "cd /data/local/tmp/alpha2-test && chmod 755 $name && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test WGPU_DEBUG=0 ./$name --test-threads 1" || exit 1; done
+
+  mobile-test-ios:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',mobile-test-ios,')) &&
+      needs.changes.outputs.native == 'true' }}
+    name: Mobile tests (iOS simulator)
+    needs: changes
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provenance
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc --version
+          xcodebuild -version
+      - name: Install the pinned Rust toolchain and the simulator target
+        run: |
+          rustup toolchain install
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: mobile-test-ios
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - name: Boot a simulator
+        run: |
+          device=$(xcrun simctl list devices available -j |
+            jq -r '[.devices | to_entries[] | select(.key | test("iOS")) | .value[] | select(.name | test("iPhone"))][0].udid')
+          echo "SIMULATOR=$device" >> "$GITHUB_ENV"
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device"
+      # The suites test the backends' logic; the simulator's codecs are software and its GPU path
+      # is not exercised (wgpu hits a Metal validation assert there), so the session suite runs on
+      # the CPU renderer's paths only where it chooses one.
+      - name: The Apple media suite in the simulator
+        run: |
+          cargo test --locked --no-run --target aarch64-apple-ios-sim -p alpha2-apple-media --lib \
+            --message-format=json |
+            jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
+            while read -r binary; do
+              SIMCTL_CHILD_ALPHA2_TESTS_DIR="$PWD/tests" xcrun simctl spawn "$SIMULATOR" "$binary" --test-threads 1
+            done
+      - name: The Swift package in the simulator
+        run: |
+          scripts/build-ios.sh
+          cd packages/alpha2-swift
+          xcodebuild test -scheme Alpha2 -destination "platform=iOS Simulator,id=$SIMULATOR"
+
   platform-js:
     if: >-
       ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-js,')) &&

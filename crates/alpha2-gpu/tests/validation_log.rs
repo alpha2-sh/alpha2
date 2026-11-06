@@ -214,9 +214,12 @@ fn validated_device(
     ))
     .ok()?;
     eprintln!("validation tests on {:?}", adapter.get_info());
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-            .expect("a device");
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        // Within every adapter's limits, including reduced ones such as the iOS simulator's.
+        required_limits: wgpu::Limits::downlevel_defaults(),
+        ..wgpu::DeviceDescriptor::default()
+    }))
+    .expect("a device");
     Some((adapter, device, queue))
 }
 

@@ -10,11 +10,12 @@ pub struct MemoryCapacity {
     /// Physical memory installed.
     pub physical_bytes: Option<u64>,
     /// Memory available without paging: `MemAvailable` on Linux, free plus inactive plus
-    /// purgeable pages on macOS, `ullAvailPhys` on Windows.
+    /// purgeable pages on macOS, `ullAvailPhys` on Windows, what the app may still allocate on iOS.
     pub available_bytes: Option<u64>,
     /// The lowest of a cgroup or job limit and the physical total.
     pub limit_bytes: Option<u64>,
-    /// What set `limit_bytes`: `cgroup-v2`, `cgroup-v1`, `job` or `physical`.
+    /// What set `limit_bytes`: `cgroup-v2`, `cgroup-v1`, `job`, `app` (the per-app limit on
+    /// iOS) or `physical`.
     pub limit_source: &'static str,
     /// Usage charged against a cgroup limit; `None` for physical and job limits.
     pub used_in_limit_bytes: Option<u64>,
@@ -51,14 +52,14 @@ pub fn memory_capacity() -> MemoryCapacity {
     {
         memory_capacity_at(Path::new("/"))
     }
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_vendor = "apple", windows))]
     {
         crate::platform::memory_capacity()
     }
     #[cfg(not(any(
         target_os = "linux",
         target_os = "android",
-        target_os = "macos",
+        target_vendor = "apple",
         windows
     )))]
     {

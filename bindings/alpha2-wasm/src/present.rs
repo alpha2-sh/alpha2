@@ -1,16 +1,11 @@
 //! Surface presentation pipeline and playback frame plumbing.
 
-use alpha2_engine::FrameProvider;
-use alpha2_media::SourceId;
-use alpha2_render::{
-    PendingSourceWork, RenderCacheKey, RenderedTexture, SourceView, UploadTexture,
-};
-use alpha2_time::MediaTime;
+use alpha2_engine::frame_store::StoredFrame;
+use alpha2_render::{PendingSourceWork, RenderedTexture, SourceView, UploadTexture};
 use std::sync::atomic::{AtomicBool, Ordering};
 use wasm_bindgen::prelude::*;
 
 use crate::error::Code;
-use crate::frame_store::FrameStore;
 use crate::web::{coded_error, invalid_state};
 
 /// Draws `source` into the canvas surface's current texture and presents it.
@@ -22,7 +17,7 @@ use crate::web::{coded_error, invalid_state};
 pub(crate) fn present_texture(
     surface: Option<&wgpu::Surface<'_>>,
     surface_config: Option<&wgpu::SurfaceConfiguration>,
-    presenter: Option<&Presenter>,
+    presenter: Option<&alpha2_render::SurfacePresenter>,
     device: &wgpu::Device,
     gpu: &alpha2_gpu::GpuContext,
     device_lost: &AtomicBool,
@@ -112,36 +107,14 @@ impl UploadedTexture {
     }
 }
 
-impl FrameProvider for FrameStore<UploadedTexture> {
-    fn texture_for(&self, source: &SourceId, time: MediaTime) -> Option<SourceView<'_>> {
-        self.get(source.as_str(), time.ticks())
-            .map(|texture| SourceView::from_wgpu(&texture.view))
+impl StoredFrame for UploadedTexture {
+    fn view(&self) -> SourceView<'_> {
+        SourceView::from_wgpu(&self.view)
     }
 
-    fn pending_source_work(
-        &self,
-        source: &SourceId,
-        time: MediaTime,
-    ) -> Option<&PendingSourceWork> {
-        self.get(source.as_str(), time.ticks())
-            .and_then(|texture| texture.pending.as_ref())
+    fn pending_work(&self) -> Option<&PendingSourceWork> {
+        self.pending.as_ref()
     }
-
-    fn source_key(&self, source: &SourceId, time: MediaTime) -> Option<RenderCacheKey> {
-        upload_source_key(self, source, time)
-    }
-}
-
-/// Keyed by source and upload generation, since an upload's picture never changes.
-pub(crate) fn upload_source_key<T>(
-    frames: &FrameStore<T>,
-    source: &SourceId,
-    time: MediaTime,
-) -> Option<RenderCacheKey> {
-    let generation = frames.generation(source.as_str(), time.ticks())?;
-    let mut hash = std::hash::DefaultHasher::new();
-    std::hash::Hash::hash(&(source.as_str(), generation), &mut hash);
-    Some(RenderCacheKey::source(std::hash::Hasher::finish(&hash)))
 }
 
 #[derive(serde::Serialize)]
@@ -171,130 +144,4 @@ pub(crate) struct WebMissingFrame {
     pub(crate) source_id: String,
     /// Decimal string, so JavaScript keeps every i64 bit.
     pub(crate) media_time_ticks: String,
-}
-
-/// The pipeline that copies a rendered texture onto the canvas surface.
-pub(crate) struct Presenter {
-    pub(crate) layout: wgpu::BindGroupLayout,
-    pub(crate) pipeline: wgpu::RenderPipeline,
-    pub(crate) sampler: wgpu::Sampler,
-}
-
-impl Presenter {
-    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("alpha2 canvas presenter layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("alpha2 canvas presenter shader"),
-            source: wgpu::ShaderSource::Wgsl(alpha2_shaders::CANVAS_PRESENT_WGSL.into()),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("alpha2 canvas presenter pipeline layout"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("alpha2 canvas presenter pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("alpha2 canvas presenter sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        Self {
-            layout,
-            pipeline,
-            sampler,
-        }
-    }
-
-    pub(crate) fn draw(
-        &self,
-        device: &wgpu::Device,
-        gpu: &alpha2_gpu::GpuContext,
-        source: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-    ) {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("alpha2 canvas presenter bind group"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("alpha2 canvas presenter encoder"),
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("alpha2 canvas presenter pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        gpu.submit([encoder.finish()]);
-    }
 }

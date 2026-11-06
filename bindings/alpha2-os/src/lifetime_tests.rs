@@ -111,6 +111,7 @@ fn parent_child() {
 }
 
 #[test]
+#[cfg_attr(target_os = "android", ignore = "Android has no parent watch")]
 fn a_process_whose_parent_exits_is_told() {
     let _turn = fork_turn();
     let marker = marker("parent");

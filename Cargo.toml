@@ -14,6 +14,7 @@ members = [
     "crates/alpha2-geometry",
     "crates/alpha2-layout",
     "crates/alpha2-compose",
+    "crates/alpha2-container",
     "extensions",
     "extensions/web",
     "extensions/pdf-web",
@@ -22,6 +23,10 @@ members = [
     "bindings/alpha2-build-support",
     "bindings/alpha2-ffmpeg-bridge",
     "bindings/alpha2-native",
+    "bindings/alpha2-host-core",
+    "bindings/alpha2-mobile",
+    "bindings/alpha2-android-media",
+    "bindings/alpha2-apple-media",
     "bindings/alpha2-native-gpu",
     "bindings/alpha2-os",
     "bindings/alpha2-text",
@@ -29,6 +34,7 @@ members = [
     "bindings/alpha2-python",
     "tests/alloc_budget",
     "tests/audio_determinism",
+    "tests/backend_conformance",
     "tests/extension_raster_pins",
     "tests/facade_without_wgpu",
     "tests/golden_support",
@@ -63,6 +69,7 @@ alpha2 = { version = "0.6.0", path = "crates/alpha2" }
 alpha2-assets = { version = "0.6.0", path = "crates/alpha2-assets" }
 alpha2-audio = { version = "0.6.0", path = "crates/alpha2-audio" }
 alpha2-compose = { version = "0.6.0", path = "crates/alpha2-compose" }
+alpha2-container = { version = "0.6.0", path = "crates/alpha2-container" }
 alpha2-engine = { version = "0.6.0", path = "crates/alpha2-engine" }
 alpha2-eval = { version = "0.6.0", path = "crates/alpha2-eval" }
 alpha2-geometry = { version = "0.6.0", path = "crates/alpha2-geometry" }
@@ -77,9 +84,14 @@ alpha2-extensions = { version = "0.6.0", path = "extensions", default-features =
 alpha2-build-support = { version = "0.6.0", path = "bindings/alpha2-build-support" }
 alpha2-ffmpeg-bridge = { version = "0.6.0", path = "bindings/alpha2-ffmpeg-bridge" }
 alpha2-native = { version = "0.6.0", path = "bindings/alpha2-native" }
+alpha2-host-core = { version = "0.6.0", path = "bindings/alpha2-host-core", default-features = false }
+alpha2-mobile = { version = "0.6.0", path = "bindings/alpha2-mobile" }
+alpha2-android-media = { version = "0.6.0", path = "bindings/alpha2-android-media" }
+alpha2-apple-media = { version = "0.6.0", path = "bindings/alpha2-apple-media" }
 alpha2-native-gpu = { version = "0.6.0", path = "bindings/alpha2-native-gpu" }
 alpha2-os = { version = "0.6.0", path = "bindings/alpha2-os" }
 alpha2-text = { version = "0.6.0", path = "bindings/alpha2-text" }
+alpha2-backend-conformance = { path = "tests/backend_conformance" }
 alpha2-golden-support = { path = "tests/golden_support" }
 alpha2-provider-contract = { path = "tests/provider_contract", default-features = false }
 alpha2-scaling-support = { path = "tests/scaling_support" }

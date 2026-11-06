@@ -201,6 +201,9 @@ rm -f .vfr-30.mp4 .vfr-60.mp4 .vfr.txt
 # Opus needs 80 ms of pre-roll after a seek; MP4 keeps timestamps sample-exact.
 "${FFMPEG[@]}" -f lavfi -i "aevalsrc=0.3*sin(2*PI*440*t)+0.2*sin(2*PI*3000*t):s=48000:d=0.6" \
   -c:a opus -strict experimental -b:a 96k -fflags +bitexact -flags:a +bitexact audio-opus.mp4
+# The same Opus in Ogg, on one page and on pages of three packets.
+"${FFMPEG[@]}" -i audio-opus.mp4 -c copy -fflags +bitexact audio-opus.ogg
+"${FFMPEG[@]}" -i audio-opus.mp4 -c copy -fflags +bitexact -oggpagesize 500 audio-opus-pages.ogg
 
 # Audio seek versus straight decode. Matroska and WebM round timestamps to the millisecond.
 SEEK_TONES="aevalsrc=0.25*sin(2*PI*440*t)+0.2*sin(2*PI*1234.5*t)+0.15*sin(2*PI*3100*t):d=1.6"
@@ -233,6 +236,11 @@ for entry in "audio-3.0.wav:3.0:0.1|0.2|0.3" "audio-quad.wav:quad:0.1|0.2|0.3|0.
   "${FFMPEG[@]}" -f lavfi -i "aevalsrc=${levels}:c=${layout}:s=48000:d=0.1" \
     -c:a pcm_s16le -flags:a +bitexact "$name"
 done
+# Float WAVE with a LIST chunk before its data; 8-bit WAVE whose odd data chunk is padded.
+"${FFMPEG[@]}" -f lavfi -i sine=frequency=440:sample_rate=8000:duration=0.05 -c:a pcm_f32le \
+  -flags:a +bitexact -metadata title=Tone audio-f32-list.wav
+"${FFMPEG[@]}" -f lavfi -i sine=frequency=440:sample_rate=8000 -af atrim=end_sample=101 \
+  -c:a pcm_u8 -flags:a +bitexact -metadata title=Tone audio-u8-odd.wav
 # Two audio streams, stereo then quad, for clip stream and channel selection.
 "${FFMPEG[@]}" -f lavfi -i "aevalsrc=0.1|0.2:c=stereo:s=48000:d=0.1" \
   -f lavfi -i "aevalsrc=0.3|0.4|0.5|0.6:c=quad:s=48000:d=0.1" -map 0:a -map 1:a \
@@ -273,6 +281,8 @@ for name in audio-flac-4.0.flac audio-flac-4.0.mkv; do
   "${FFMPEG[@]}" -f lavfi -i "aevalsrc=$(tones FL FR FC BC):c=4.0:s=48000:d=0.3" \
     -loglevel fatal -c:a flac -flags:a +bitexact -fflags +bitexact "$name"
 done
+"${FFMPEG[@]}" -f lavfi -i sine=frequency=440:sample_rate=48000:duration=0.1 -c:a flac \
+  -flags:a +bitexact -fflags +bitexact audio-flac.ogg
 # PCM in MP4 with an ISO/IEC 23001-8 `chnl` box: a channel configuration and explicit positions.
 "${FFMPEG[@]}" -f lavfi -i "aevalsrc=0.3|0.1|0.2:c=FC+FL+FR:s=48000:d=0.1" \
   -c:a pcm_s16le -flags:a +bitexact -f mp4 audio-ipcm-lcr.mp4
@@ -364,6 +374,10 @@ done
 "${FFMPEG[@]}" -f lavfi -i "nullsrc=s=64x48:r=25,format=yuv420p,geq=lum='16+N':cb=128:cr=128" \
   -frames:v 150 -an -c:v mpeg2video -q:v 1 -g 1 -output_ts_offset 100 -fflags +bitexact \
   -flags:v +bitexact ts-offset-100.ts
+
+# Matroska block layouts FFmpeg's muxer never writes: lacing, BlockGroups, unknown sizes.
+python3 "$here/matroska-blocks.py" audio-seek-opus.webm subtitle-first.mkv matroska-laced.mkv \
+  matroska-groups.mkv
 
 # These need encoders the LGPL SDK does not ship: point FFMPEG_ENCODERS at an FFmpeg with libx264
 # and libvpx.
@@ -573,4 +587,19 @@ PATCH
     -c:a libopus -mapping_family 1 -b:a 192k -fflags +bitexact -flags:a +bitexact audio-opus-5.1.webm
   "${ENCODE[@]}" -f lavfi -i "aevalsrc=$(tones FL FR FC LFE BL BR):c=5.1:s=48000:d=0.3" \
     -c:a libvorbis -q:a 3 -fflags +bitexact -flags:a +bitexact audio-vorbis-5.1.ogg
+  # Both copied into Ogg: Opus on one page and repaginated so packets continue across pages,
+  # Vorbis on small pages.
+  "${FFMPEG[@]}" -i audio-opus-5.1.webm -c copy -fflags +bitexact audio-opus-5.1.ogg
+  python3 "$here/ogg-continued.py" audio-opus-5.1.ogg audio-opus-5.1-continued.ogg
+  "${FFMPEG[@]}" -i audio-vorbis-5.1.ogg -c copy -fflags +bitexact -oggpagesize 200 \
+    audio-vorbis-5.1-pages.ogg
+  # MP3 through LAME: VBR with Xing and LAME headers after an ID3v2 tag, MPEG-2 CBR without a
+  # Xing header but with an ID3v1 tag, and MPEG-2.5 CBR with an Info header.
+  "${ENCODE[@]}" -f lavfi -i sine=frequency=440:sample_rate=44100:duration=0.5 -c:a libmp3lame \
+    -q:a 4 -flags:a +bitexact -metadata title=Tone audio-mp3-lame.mp3
+  "${ENCODE[@]}" -f lavfi -i "aevalsrc=0.2*sin(2*PI*300*t)|0.2*sin(2*PI*500*t):c=stereo:s=22050:d=0.5" \
+    -c:a libmp3lame -b:a 32k -flags:a +bitexact -write_xing 0 -id3v2_version 0 -write_id3v1 1 \
+    -metadata title=Tone audio-mp3-mpeg2-id3v1.mp3
+  "${ENCODE[@]}" -f lavfi -i sine=frequency=440:sample_rate=8000:duration=0.5 -c:a libmp3lame \
+    -b:a 16k -flags:a +bitexact -id3v2_version 0 audio-mp3-mpeg25-info.mp3
 fi

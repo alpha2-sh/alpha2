@@ -5,8 +5,10 @@ use std::ffi::{CStr, CString};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::audio_timeline::SourceTimeline;
-use crate::recovery::{DecodeDiagnostics, DecodePolicy, Recovery, WorkBudget, submit_packet};
+use crate::recovery::{
+    DecodeDiagnostics, DecodePolicy, FfmpegRecovery, Recovery, WorkBudget, submit_packet,
+};
+use alpha2_host_core::audio_timeline::SourceTimeline;
 
 use crate::convert::{
     adapter_error, codec_thread_budget, color_metadata, convert_video_frame, declared_sar,
@@ -508,7 +510,7 @@ impl NativeAudioDecoder {
             block_frames: 1_024,
             demux_eof: false,
             decoder_flushed: false,
-            recovery: Recovery::new(time_base),
+            recovery: Recovery::new(crate::recovery::time_base(time_base)),
             repair_audio: AudioContinuity::Continuous,
             made_up,
             grid,
@@ -657,7 +659,8 @@ impl NativeAudioDecoder {
         if frame.flags & i32::try_from(ffi::AV_FRAME_FLAG_CORRUPT).expect("flag fits i32") != 0
             || frame.decode_error_flags != 0
         {
-            self.recovery.corrupt("audio frame", Some(frame.pts))?;
+            self.recovery
+                .corrupt("audio frame", crate::recovery::pts(frame.pts))?;
             self.repair_audio = AudioContinuity::Damaged;
             return Ok(true);
         }
@@ -672,7 +675,7 @@ impl NativeAudioDecoder {
             self.repair_audio = AudioContinuity::Damaged;
             return Ok(true);
         }
-        self.recovery.progress(pts.unwrap_or(ffi::AV_NOPTS_VALUE))?;
+        self.recovery.progress(pts)?;
         normalize_audio_frame_layout(&mut frame, &self.output_layout)?;
         // A decoder may change rate mid-stream, so check the frame's own rate.
         check_source_sample_rate(i64::from(frame.sample_rate))?;
@@ -894,7 +897,8 @@ impl NativeAudioDecoder {
                 continue;
             }
             if packet.flags & i32::try_from(ffi::AV_PKT_FLAG_CORRUPT).expect("flag fits i32") != 0 {
-                self.recovery.corrupt("audio packet", Some(packet.pts))?;
+                self.recovery
+                    .corrupt("audio packet", crate::recovery::pts(packet.pts))?;
                 self.repair_audio = AudioContinuity::Damaged;
                 continue;
             }
@@ -1319,7 +1323,7 @@ impl NativeDecoder {
             decoder_flushed: false,
             stages: DecodeStageTimings::default(),
             first_video_pts: None,
-            recovery: Recovery::new(time_base),
+            recovery: Recovery::new(crate::recovery::time_base(time_base)),
             slack,
             prefetched,
             dropped_layer,
@@ -1469,7 +1473,7 @@ impl NativeDecoder {
             decoder_flushed: false,
             stages: DecodeStageTimings::default(),
             first_video_pts: None,
-            recovery: Recovery::hardware(time_base),
+            recovery: Recovery::hardware(crate::recovery::time_base(time_base)),
             slack,
             prefetched,
             dropped_layer: None,
@@ -1519,18 +1523,19 @@ impl NativeDecoder {
                         != 0
                         || frame.decode_error_flags != 0
                     {
-                        self.recovery.corrupt("video frame", Some(frame.pts))?;
+                        self.recovery
+                            .corrupt("video frame", crate::recovery::pts(frame.pts))?;
                         continue;
                     }
                     #[cfg(test)]
                     VIDEO_FRAMES_DECODED.with(|decoded| decoded.set(decoded.get() + 1));
-                    self.recovery.progress(
+                    self.recovery.progress(crate::recovery::pts(
                         if frame.best_effort_timestamp == ffi::AV_NOPTS_VALUE {
                             frame.pts
                         } else {
                             frame.best_effort_timestamp
                         },
-                    )?;
+                    ))?;
                     return Ok(Some(frame));
                 }
                 Err(RsmpegError::DecoderDrainError | RsmpegError::DecoderFlushedError) => {
@@ -1831,7 +1836,8 @@ impl NativeDecoder {
                 continue;
             }
             if packet.flags & i32::try_from(ffi::AV_PKT_FLAG_CORRUPT).expect("flag fits i32") != 0 {
-                self.recovery.corrupt("video packet", Some(packet.pts))?;
+                self.recovery
+                    .corrupt("video packet", crate::recovery::pts(packet.pts))?;
                 continue;
             }
             submit_packet(
@@ -1992,9 +1998,9 @@ fn software_decoder_for(
             Ok((codec, dropped("alpha-dropped", HEVC_ALPHA_NOT_DECODED)))
         }
         _ if parameters.codec_id == ffi::AV_CODEC_ID_HEVC
-            && crate::parameter_sets::hevc_layers(
+            && alpha2_host_core::parameter_sets::hevc_layers(
                 &alpha2_ffmpeg_bridge::codec_parameters_extradata(parameters),
-            ) == Some(crate::parameter_sets::HevcLayers::Extra) =>
+            ) == Some(alpha2_host_core::parameter_sets::HevcLayers::Extra) =>
         {
             Ok((
                 codec,
@@ -2026,9 +2032,9 @@ fn source_alpha(
     match parameters.codec_id {
         ffi::AV_CODEC_ID_VP9 if tagged() => return Some(SourceAlpha::Vp9SideData),
         ffi::AV_CODEC_ID_HEVC
-            if crate::parameter_sets::hevc_layers(
+            if alpha2_host_core::parameter_sets::hevc_layers(
                 &alpha2_ffmpeg_bridge::codec_parameters_extradata(parameters),
-            ) == Some(crate::parameter_sets::HevcLayers::AuxiliaryAlpha) =>
+            ) == Some(alpha2_host_core::parameter_sets::HevcLayers::AuxiliaryAlpha) =>
         {
             return Some(SourceAlpha::HevcAuxiliaryLayer);
         }
@@ -2112,7 +2118,13 @@ fn check_hardware_crop(
         return Ok(());
     }
     let extradata = alpha2_ffmpeg_bridge::codec_parameters_extradata(parameters);
-    match crate::parameter_sets::leading_crop(parameters.codec_id, &extradata) {
+    let codec = match parameters.codec_id {
+        ffi::AV_CODEC_ID_H264 => Some(alpha2_host_core::parameter_sets::ParameterSetCodec::H264),
+        ffi::AV_CODEC_ID_HEVC => Some(alpha2_host_core::parameter_sets::ParameterSetCodec::Hevc),
+        _ => None,
+    };
+    match codec.and_then(|codec| alpha2_host_core::parameter_sets::leading_crop(codec, &extradata))
+    {
         Some((left, top)) if left > 0 || top > 0 => Err(HardwareOpenError::new(
             crate::video_frame::HardwareDecodeFallback::UnsupportedCrop,
             DecodeError::Unsupported(format!(

@@ -1,0 +1,40 @@
+[package]
+name = "alpha2-apple-media"
+version.workspace = true
+description = "Apple media backend for alpha2: video through VideoToolbox and audio through AudioToolbox, behind the host-core decoder and encoder traits."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["ios", "videotoolbox", "audiotoolbox", "video", "decode"]
+categories = ["multimedia::video", "os::macos-apis"]
+publish = false
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
+alpha2-container.workspace = true
+alpha2-host-core = { workspace = true, features = ["engine"] }
+alpha2-media.workspace = true
+bytes.workspace = true
+lewton = { version = "0.10.2", default-features = false }
+objc2-audio-toolbox = { version = "0.3.2", default-features = false, features = ["std", "AudioConverter", "AudioFormat", "objc2-core-audio-types"] }
+objc2-core-audio-types = { version = "0.3.2", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFArray", "CFBase", "CFData", "CFDictionary", "CFNumber", "CFString"] }
+objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMBase", "CMBlockBuffer", "CMFormatDescription", "CMSampleBuffer", "CMTime", "objc2-core-video"] }
+objc2-core-video = { version = "0.3.2", default-features = false, features = ["std", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVPixelBufferIOSurface", "CVPixelBufferPool", "CVReturn", "objc2-io-surface"] }
+objc2-io-surface = { version = "0.3.2", default-features = false, features = ["std", "IOSurfaceRef", "IOSurfaceTypes", "objc2-core-foundation"] }
+objc2-video-toolbox = { version = "0.3.2", default-features = false, features = ["std", "VTBase", "VTCompressionProperties", "VTCompressionSession", "VTDecompressionProperties", "VTDecompressionSession", "VTErrors", "VTSession", "VTUtilities", "VTVideoEncoderList", "objc2-core-media", "objc2-core-video"] }
+
+[target.'cfg(target_vendor = "apple")'.dev-dependencies]
+alpha2-backend-conformance.workspace = true
+alpha2-time.workspace = true
+
+# Workspace lints, but `unsafe_code` is deny (not forbid): the framework calls are FFI.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
