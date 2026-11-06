@@ -6,6 +6,7 @@ ignore = [
   { id = "RUSTSEC-2024-0436", reason = "paste, a proc-macro dependency of rsmpeg; goes when rsmpeg drops it" },
   { id = "RUSTSEC-2026-0206", reason = "rustybuzz, native text shaping; goes with a move to harfrust" },
   { id = "RUSTSEC-2026-0192", reason = "ttf-parser, native font parsing; goes with the same move" },
+  { id = "RUSTSEC-2026-0374", reason = "basic-toml, read by askama in uniffi's binding generator at build time; goes when uniffi drops it" },
 ]
 
 [licenses]
