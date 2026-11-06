@@ -14,13 +14,22 @@ use crate::session::{
 /// Everything an export thread needs.
 pub(crate) struct ExportJob {
     pub request: ExportRequest,
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "android", target_vendor = "apple")),
+        allow(dead_code)
+    )]
     pub config: EngineConfig,
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "android", target_vendor = "apple")),
+        allow(dead_code)
+    )]
     pub fonts: Vec<LoadedFont>,
     pub cancel: CancelToken,
     pub paused: Arc<PauseGate>,
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "android", target_vendor = "apple")),
+        allow(dead_code)
+    )]
     pub progress: Arc<dyn ExportProgress>,
 }
 
@@ -62,12 +71,33 @@ pub(crate) fn current() -> Arc<dyn Platform> {
             },
         })
     }
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_vendor = "apple")]
+    {
+        Arc::new(MediaPlatform {
+            name: if cfg!(target_os = "ios") {
+                "ios"
+            } else {
+                "macos"
+            },
+            media: crate::export::MediaBackends {
+                video_decoders: Arc::new(alpha2_apple_media::AppleVideo),
+                audio_decoders: Arc::new(alpha2_host_core::audio_stream::WithPcm(
+                    alpha2_apple_media::AppleAudio,
+                )),
+                video_encoders: Arc::new(alpha2_apple_media::AppleVideoEncoders),
+                audio_encoders: Arc::new(alpha2_apple_media::AppleAudioEncoders),
+            },
+        })
+    }
+    #[cfg(not(any(target_os = "android", target_vendor = "apple")))]
     Arc::new(NoMedia)
 }
 
 /// A platform's codecs behind the container layer.
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "android", target_vendor = "apple")),
+    allow(dead_code)
+)]
 pub(crate) struct MediaPlatform {
     pub name: &'static str,
     pub media: crate::export::MediaBackends,
@@ -115,10 +145,10 @@ impl Platform for MediaPlatform {
 }
 
 /// A build without a media backend: renders nothing that reads or writes media.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_vendor = "apple")))]
 struct NoMedia;
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_vendor = "apple")))]
 impl Platform for NoMedia {
     fn media_capabilities(&self) -> Value {
         json!({ "containers": [], "videoDecoders": [], "videoEncoders": [], "audioEncoders": [] })
@@ -138,7 +168,7 @@ impl Platform for NoMedia {
     }
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_vendor = "apple")))]
 fn unsupported() -> Alpha2Error {
     Alpha2Error::Unsupported {
         reason: format!(

@@ -23,7 +23,10 @@ uniffi::setup_scaffolding!();
 mod error;
 // The media pipeline is built everywhere so desktop tests compile it; only platforms with a media
 // backend run it.
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "android", target_vendor = "apple")),
+    allow(dead_code)
+)]
 mod export;
 mod platform;
 mod player;
@@ -34,7 +37,7 @@ mod surface;
 #[cfg(target_os = "android")]
 pub mod android;
 
-#[cfg(all(test, target_os = "android"))]
+#[cfg(all(test, any(target_os = "android", target_os = "ios")))]
 mod device_tests;
 
 pub use error::{Alpha2Error, EncoderRefusalRecord};
