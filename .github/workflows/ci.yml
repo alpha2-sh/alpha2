@@ -896,6 +896,57 @@ jobs:
             adb push target/mobile-tests/. /data/local/tmp/alpha2-test/ > /dev/null
             for binary in target/mobile-tests/*; do name=$(basename "$binary"); adb shell "cd /data/local/tmp/alpha2-test && chmod 755 $name && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test WGPU_DEBUG=0 ./$name --test-threads 1" || exit 1; done
 
+  mobile-test-ios:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',mobile-test-ios,')) &&
+      needs.changes.outputs.native == 'true' }}
+    name: Mobile tests (iOS simulator)
+    needs: changes
+    runs-on: macos-26
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provenance
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc --version
+          xcodebuild -version
+      - name: Install the pinned Rust toolchain and the simulator target
+        run: |
+          rustup toolchain install
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: mobile-test-ios
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - name: Boot a simulator
+        run: |
+          device=$(xcrun simctl list devices available -j |
+            jq -r '[.devices | to_entries[] | select(.key | test("iOS")) | .value[] | select(.name | test("iPhone"))][0].udid')
+          echo "SIMULATOR=$device" >> "$GITHUB_ENV"
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device"
+      # The suites test the backends' logic; the simulator's codecs are software and its GPU path
+      # is not exercised (wgpu hits a Metal validation assert there), so the session suite runs on
+      # the CPU renderer's paths only where it chooses one.
+      - name: The Apple media suite in the simulator
+        run: |
+          cargo test --locked --no-run --target aarch64-apple-ios-sim -p alpha2-apple-media --lib \
+            --message-format=json |
+            jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
+            while read -r binary; do
+              SIMCTL_CHILD_ALPHA2_TESTS_DIR="$PWD/tests" xcrun simctl spawn "$SIMULATOR" "$binary" --test-threads 1
+            done
+      - name: The Swift package in the simulator
+        run: |
+          scripts/build-ios.sh
+          cd packages/alpha2-swift
+          xcodebuild test -scheme Alpha2 -destination "platform=iOS Simulator,id=$SIMULATOR"
+
   platform-js:
     if: >-
       ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-js,')) &&
