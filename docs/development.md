@@ -155,7 +155,9 @@ adb install -r -t packages/alpha2-android/lib/build/outputs/apk/androidTest/debu
 adb shell am instrument -w sh.alpha2.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
-An app calls `Alpha2Android.init(context)` once, before anything else.
+An app calls `Alpha2Android.init(context)` once, before anything else. An app that takes the AAR file itself also adds its dependencies: `net.java.dev.jna:jna:5.17.0@aar` and `org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2`.
+
+Both mobile build scripts ship the Rust crates' license notices when `ALPHA2_NOTICES` names them (`node scripts/crate-licenses.mjs --target <triple> --out <file> alpha2-mobile`): the AAR in `META-INF/alpha2/`, each XCFramework slice beside its privacy manifest. The release workflow builds both packages that way and checks their sizes and the AAR's 16 KB alignment.
 
 #### The Swift package
 

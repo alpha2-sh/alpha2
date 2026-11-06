@@ -16,6 +16,8 @@ android {
     }
     sourceSets["main"].kotlin.srcDir("build/generated/uniffi")
     sourceSets["main"].jniLibs.srcDir("build/jniLibs")
+    // License notices, which apps merge into their META-INF.
+    sourceSets["main"].resources.srcDir("build/notices")
     // The instrumentation tests read the repository's fixtures.
     sourceSets["androidTest"].assets.srcDirs("../../../tests/cases", "../../../tests/fonts")
     sourceSets["androidTest"].assets.srcDir("build/test-corpus")

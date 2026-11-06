@@ -2,7 +2,8 @@
 # Builds the alpha2 Android library (AAR): the Rust library for arm64-v8a and x86_64 with 16 KB
 # pages, its uniffi Kotlin bindings, then the Gradle library in packages/alpha2-android. Needs the
 # NDK (ANDROID_NDK_HOME), cargo-ndk, Gradle 8.11 or later on PATH, and the Android SDK
-# (ANDROID_HOME). PROFILE=debug builds unoptimized libraries.
+# (ANDROID_HOME). PROFILE=debug builds unoptimized libraries. ALPHA2_NOTICES names the Rust crate
+# license notices (scripts/crate-licenses.mjs) the library ships in META-INF/alpha2/.
 #
 #   scripts/build-android.sh [gradle tasks...]   (default: :lib:assembleRelease)
 set -euo pipefail
@@ -36,6 +37,13 @@ for abi in arm64-v8a x86_64; do
     cp "$native/$abi/libalpha2_mobile.so" "$jni/$abi/"
   fi
 done
+
+notices=$library/build/notices
+rm -rf "$notices"
+mkdir -p "$notices/META-INF/alpha2"
+if [ -n "${ALPHA2_NOTICES:-}" ]; then
+  cp "$ALPHA2_NOTICES" "$notices/META-INF/alpha2/rust-crate-licenses.md"
+fi
 
 # The instrumentation tests' media fixtures.
 corpus=$library/build/test-corpus
