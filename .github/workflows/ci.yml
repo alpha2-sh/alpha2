@@ -845,7 +845,14 @@ jobs:
       fail-fast: false
       matrix:
         # The oldest supported release, whose emulator image has GL only, and a current one.
-        api: [29, 36]
+        include:
+          - api: 29
+            test-env: ""
+          # Debug builds name GPU objects, which this image's Vulkan driver crashes on. The
+          # library's instrumentation tests (audio output, a real Surface) run here.
+          - api: 36
+            test-env: WGPU_DEBUG=0
+            instrumentation: true
     defaults:
       run:
         shell: bash
@@ -883,6 +890,20 @@ jobs:
             jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
             xargs -I{} cp {} target/mobile-tests/
           ls -la target/mobile-tests
+      - name: Install Gradle 8.11 and cargo-ndk for the library's instrumentation tests
+        if: matrix.instrumentation
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-8.11-bin.zip
+          echo "57dafb5c2622c6cc08b993c85b7c06956a2f53536432a30ead46166dbca0f1e9  $RUNNER_TEMP/gradle.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-8.11/bin" >> "$GITHUB_PATH"
+          cargo install cargo-ndk --version 4.1.2 --locked
+      - name: Build the library's instrumentation tests
+        if: matrix.instrumentation
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:?}" JAVA_HOME="${JAVA_HOME_17_X64:?}"
+          ALPHA2_ANDROID_ABIS=x86_64 PROFILE=debug scripts/build-android.sh :lib:assembleDebugAndroidTest
+          echo "ALPHA2_TEST_APK=$PWD/packages/alpha2-android/lib/build/outputs/apk/androidTest/debug/lib-debug-androidTest.apk" >> "$GITHUB_ENV"
       - name: Let the emulator use KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
@@ -890,8 +911,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       # The suites test the backends' logic on the emulator's software codecs and GPU; hardware
-      # codecs are covered on devices. Debug builds name GPU objects, which the emulator's Vulkan
-      # driver crashes on, so the tests run without wgpu's debug flag.
+      # codecs are covered on devices.
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: ${{ matrix.api }}
@@ -903,7 +923,8 @@ jobs:
             adb shell mkdir -p /data/local/tmp/alpha2-test/tests
             adb push tests/corpus tests/cases tests/fonts /data/local/tmp/alpha2-test/tests/ > /dev/null
             adb push target/mobile-tests/. /data/local/tmp/alpha2-test/ > /dev/null
-            for binary in target/mobile-tests/*; do name=$(basename "$binary"); adb shell "cd /data/local/tmp/alpha2-test && chmod 755 $name && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test WGPU_DEBUG=0 ./$name --test-threads 1" || exit 1; done
+            for binary in target/mobile-tests/*; do name=$(basename "$binary"); adb shell "cd /data/local/tmp/alpha2-test && chmod 755 $name && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test ${{ matrix.test-env }} ./$name --test-threads 1" || exit 1; done
+            if [ -n "${ALPHA2_TEST_APK:-}" ]; then adb install -r -t "$ALPHA2_TEST_APK" && adb shell am instrument -w sh.alpha2.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/instrumentation.txt" && grep -q '^OK (' "$RUNNER_TEMP/instrumentation.txt"; fi
 
   mobile-test-ios:
     if: >-
@@ -939,16 +960,17 @@ jobs:
           echo "SIMULATOR=$device" >> "$GITHUB_ENV"
           xcrun simctl boot "$device"
           xcrun simctl bootstatus "$device"
-      # The suites test the backends' logic; the simulator's codecs are software and its GPU path
-      # is not exercised (wgpu hits a Metal validation assert there), so the session suite runs on
-      # the CPU renderer's paths only where it chooses one.
-      - name: The Apple media suite in the simulator
+      # The simulator's codecs are software; hardware codecs are covered on devices. `simctl
+      # spawn` may not pass a test's exit status on, so the summary line decides.
+      - name: The Apple media and session suites in the simulator
         run: |
-          cargo test --locked --no-run --target aarch64-apple-ios-sim -p alpha2-apple-media --lib \
-            --message-format=json |
+          cargo test --locked --no-run --target aarch64-apple-ios-sim \
+            -p alpha2-apple-media -p alpha2-mobile --lib --message-format=json |
             jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
             while read -r binary; do
-              SIMCTL_CHILD_ALPHA2_TESTS_DIR="$PWD/tests" xcrun simctl spawn "$SIMULATOR" "$binary" --test-threads 1
+              SIMCTL_CHILD_ALPHA2_TESTS_DIR="$PWD/tests" xcrun simctl spawn "$SIMULATOR" "$binary" \
+                --test-threads 1 2>&1 | tee "$RUNNER_TEMP/suite.txt"
+              grep -q '^test result: ok' "$RUNNER_TEMP/suite.txt" || exit 1
             done
       - name: The Swift package in the simulator
         run: |

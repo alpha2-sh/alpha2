@@ -39,8 +39,15 @@ category() {
     _statfs | _statvfs | _fstatfs | _fstatvfs | _getfsstat) echo NSPrivacyAccessedAPICategoryDiskSpace ;;
   esac
 }
+# The listing is checked before the loop: a failure inside a `for` list's substitution would be
+# ignored, and an empty list would pass the check.
+imports=$(nm -u "target/aarch64-apple-ios/$profile/libalpha2_mobile.a") || {
+  echo "nm could not list the library's imported symbols" >&2
+  exit 1
+}
+[ -n "$imports" ] || { echo "nm listed no imported symbols for the library" >&2; exit 1; }
 missing=0
-for symbol in $(nm -u "target/aarch64-apple-ios/$profile/libalpha2_mobile.a" 2>/dev/null | sort -u); do
+for symbol in $(sort -u <<<"$imports"); do
   needed=$(category "$symbol")
   if [ -n "$needed" ] && ! grep -qx "$needed" <<<"$declared"; then
     echo "the library calls $symbol, a $needed API the privacy manifest does not declare" >&2

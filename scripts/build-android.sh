@@ -4,6 +4,8 @@
 # NDK (ANDROID_NDK_HOME), cargo-ndk, Gradle 8.11 or later on PATH, and the Android SDK
 # (ANDROID_HOME). PROFILE=debug builds unoptimized libraries. ALPHA2_NOTICES names the Rust crate
 # license notices (scripts/crate-licenses.mjs) the library ships in META-INF/alpha2/.
+# ALPHA2_ANDROID_ABIS limits the ABIs built (default "arm64-v8a x86_64"), as an emulator test needs
+# only its own.
 #
 #   scripts/build-android.sh [gradle tasks...]   (default: :lib:assembleRelease)
 set -euo pipefail
@@ -17,19 +19,22 @@ rm -rf "$native" "$jni"
 mkdir -p "$native" "$jni"
 profile_flag=()
 [ "$profile" = release ] && profile_flag=(--release)
+abis=(${ALPHA2_ANDROID_ABIS:-arm64-v8a x86_64})
+targets=()
+for abi in "${abis[@]}"; do targets+=(-t "$abi"); done
 RUSTFLAGS="${RUSTFLAGS:-} -C link-arg=-Wl,-z,max-page-size=16384" \
-  cargo ndk -t arm64-v8a -t x86_64 -P 29 -o "$native" build --locked "${profile_flag[@]}" -p alpha2-mobile
+  cargo ndk "${targets[@]}" -P 29 -o "$native" build --locked "${profile_flag[@]}" -p alpha2-mobile
 
 # The bindings come from the built library's metadata, so they match it exactly.
 rm -rf "$library/build/generated/uniffi"
 cargo run --locked -q -p alpha2-mobile --features bindgen --bin uniffi-bindgen -- generate \
-  --library "$native/arm64-v8a/libalpha2_mobile.so" --language kotlin --no-format \
+  --library "$native/${abis[0]}/libalpha2_mobile.so" --language kotlin --no-format \
   --out-dir "$library/build/generated/uniffi"
 
 # The AAR ships the libraries without symbols; apps symbolicate crashes from the ones in
 # build/native.
 strip=$(ls "${ANDROID_NDK_HOME:?}"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -n 1)
-for abi in arm64-v8a x86_64; do
+for abi in "${abis[@]}"; do
   mkdir -p "$jni/$abi"
   if [ "$profile" = release ]; then
     "$strip" --strip-all -o "$jni/$abi/libalpha2_mobile.so" "$native/$abi/libalpha2_mobile.so"
