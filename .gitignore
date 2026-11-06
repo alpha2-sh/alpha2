@@ -8,6 +8,10 @@
 /node_modules/
 /packages/*/dist/
 /packages/*/wasm/
+/packages/alpha2-android/.gradle/
+/packages/alpha2-android/build/
+/packages/alpha2-android/lib/build/
+/packages/alpha2-android/local.properties
 *.wasm
 *.wasm.map
 .DS_Store
