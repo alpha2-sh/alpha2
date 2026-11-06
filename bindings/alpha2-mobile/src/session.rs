@@ -145,6 +145,13 @@ impl Alpha2 {
         self.platform.video_decoders()
     }
 
+    /// The platform's audio decoders, when it has any.
+    pub(crate) fn audio_backends(
+        &self,
+    ) -> Option<Arc<dyn alpha2_host_core::audio_stream::AudioBackends>> {
+        self.platform.audio_decoders()
+    }
+
     /// Which decoders the session's configuration allows.
     pub(crate) const fn decode_preference(
         &self,

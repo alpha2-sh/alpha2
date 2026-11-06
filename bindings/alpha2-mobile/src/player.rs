@@ -15,10 +15,12 @@ use std::time::{Duration, Instant};
 use alpha2_engine::{
     EngineProject, FramesWithText, Player as FramePlayer, QualityProfile, TextTextures,
 };
-use alpha2_host_core::DecodePolicy;
+use alpha2_host_core::audio_stream::AudioBackends;
 use alpha2_host_core::export::{ExportRenderer, SourceFrameCache, SourceStream, StreamSources};
+use alpha2_host_core::preview_audio::PreviewAudio;
 use alpha2_host_core::providers::ProviderMedia;
 use alpha2_host_core::video_stream::{DecodePreference, StreamOptions, VideoBackends};
+use alpha2_host_core::{DecodePolicy, DecodedAudioSources};
 use alpha2_media::{CancelToken, SourceId};
 use alpha2_model::{MediaKind, Project};
 use alpha2_render::{RenderedTexture, Renderer, SurfacePresenter};
@@ -99,6 +101,7 @@ impl Player {
             request,
             fonts: engine.fonts(),
             video: engine.video_backends(),
+            audio: engine.audio_backends(),
             preference: engine.decode_preference(),
             paused: engine.pause_gate(),
         };
@@ -231,6 +234,7 @@ struct Session {
     request: PlayerRequest,
     fonts: Vec<LoadedFont>,
     video: Option<Arc<dyn VideoBackends>>,
+    audio: Option<Arc<dyn AudioBackends>>,
     preference: DecodePreference,
     paused: Arc<PauseGate>,
 }
@@ -415,6 +419,16 @@ fn frame_length(session: &Session) -> MediaTime {
     )
 }
 
+/// A preview's audio sources.
+enum Sound {
+    /// Not decoded yet: the preview has not played.
+    Unread,
+    /// The project has none that decode.
+    Silent,
+    /// Every audible source, decoded whole.
+    Decoded(Arc<DecodedAudioSources>),
+}
+
 /// Opens a source's stream for the preview.
 type OpenSource = Box<dyn FnMut(&SourceId) -> Result<SourceStream, String> + Send>;
 
@@ -427,9 +441,15 @@ struct State {
     texts: TextTextures,
     position: MediaTime,
     end: MediaTime,
+    /// The project's sample rate.
+    rate: u32,
     /// The wall clock and position playing started from.
     started: Option<(Instant, MediaTime)>,
     index: u64,
+    /// The project's audio, decoded when it first plays.
+    sound: Sound,
+    /// Audio playing with the picture, whose heard position is the clock.
+    audio: Option<PreviewAudio>,
 }
 
 impl State {
@@ -467,8 +487,11 @@ impl State {
             texts,
             position: MediaTime::ZERO,
             end,
+            rate: session.project.settings.sample_rate,
             started: None,
             index: 0,
+            sound: Sound::Unread,
+            audio: None,
         }
     }
 
@@ -477,6 +500,12 @@ impl State {
     }
 
     fn clock_time(&self) -> MediaTime {
+        if let (Some(audio), Some((_, from))) = (self.audio.as_ref(), self.started) {
+            let heard = audio.heard_sample();
+            let ticks = i128::from(heard) * i128::from(alpha2_time::TICKS_PER_SECOND)
+                / i128::from(self.rate.max(1));
+            return MediaTime::from_ticks(i64::try_from(ticks).unwrap_or(0)).max(from);
+        }
         self.started.map_or(self.position, |(at, from)| {
             let elapsed = i64::try_from(at.elapsed().as_nanos()).unwrap_or(i64::MAX);
             MediaTime::from_ticks(
@@ -500,6 +529,7 @@ impl State {
     fn pause_at(&mut self, time: MediaTime, shared: &Shared) {
         self.position = time;
         self.started = None;
+        self.audio = None;
         shared.playing.store(false, Ordering::Release);
     }
 
@@ -533,9 +563,11 @@ impl State {
                 if let Some(output) = self.output.as_mut() {
                     output.surface = None;
                 }
-                if let Some((_, from)) = self.started.take() {
-                    self.position = self.clock_time().max(from);
+                if self.started.is_some() {
+                    self.position = self.clock_time();
+                    self.started = None;
                 }
+                self.audio = None;
                 shared.playing.store(false, Ordering::Release);
             }
             Command::Resize { width, height } => {
@@ -549,7 +581,7 @@ impl State {
                 let time = MediaTime::from_ticks(ticks.clamp(0, self.end.ticks()));
                 self.position = time;
                 if self.started.is_some() {
-                    self.started = Some((Instant::now(), time));
+                    self.start_playing(time, session, shared);
                 }
                 self.show(session, shared);
             }
@@ -559,7 +591,7 @@ impl State {
                 } else {
                     self.position
                 };
-                self.started = Some((Instant::now(), from));
+                self.start_playing(from, session, shared);
                 shared.playing.store(true, Ordering::Release);
             }
             Command::Pause => {
@@ -568,6 +600,30 @@ impl State {
                 self.show(session, shared);
             }
         }
+    }
+
+    /// Starts the clock, and the project's audio with it, at `from`.
+    fn start_playing(&mut self, from: MediaTime, session: &Session, shared: &Shared) {
+        self.audio = None;
+        if matches!(self.sound, Sound::Unread) {
+            self.sound =
+                decode_preview_audio(session, shared).map_or(Sound::Silent, Sound::Decoded);
+        }
+        if let Sound::Decoded(sources) = &self.sound {
+            let sources = Arc::clone(sources);
+            let sample = i128::from(from.ticks()) * i128::from(self.rate)
+                / i128::from(alpha2_time::TICKS_PER_SECOND);
+            match PreviewAudio::start(
+                session.snapshot.clone(),
+                sources,
+                i64::try_from(sample).unwrap_or(0),
+            ) {
+                Ok(audio) => self.audio = Some(audio),
+                // Without an output the picture keeps time by the wall clock.
+                Err(error) => alpha2_os::diagnostic!("alpha2 preview: no audio: {error}"),
+            }
+        }
+        self.started = Some((Instant::now(), from));
     }
 
     /// Renders and presents the frame at the position.
@@ -656,6 +712,42 @@ fn sources(session: &Session, providers: Arc<ProviderMedia>) -> StreamSources<Op
         )
     });
     StreamSources::new(open).with_providers(providers)
+}
+
+/// The project's audible sources, decoded for the preview; `None` for a silent project or one
+/// whose audio does not decode (recorded).
+fn decode_preview_audio(session: &Session, shared: &Shared) -> Option<Arc<DecodedAudioSources>> {
+    let decoders = session.audio.as_ref()?;
+    if !session
+        .project
+        .sources
+        .iter()
+        .any(alpha2_model::MediaSource::is_audible)
+    {
+        return None;
+    }
+    let assets = session
+        .request
+        .assets
+        .iter()
+        .map(|(id, path)| (id.clone(), PathBuf::from(path)))
+        .collect();
+    match crate::export::decode_audio(
+        &session.project,
+        &assets,
+        decoders.as_ref(),
+        session.project.settings.sample_rate,
+        &CancelToken::default(),
+    ) {
+        Ok(sources) => Some(Arc::new(sources)),
+        Err(error) => {
+            record(
+                shared,
+                format!("the project's audio does not decode: {error:?}"),
+            );
+            None
+        }
+    }
 }
 
 fn record(shared: &Shared, error: String) {

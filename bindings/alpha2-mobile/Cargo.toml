@@ -28,7 +28,7 @@ alpha2-container.workspace = true
 alpha2-engine.workspace = true
 alpha2-extensions = { workspace = true, features = ["svg", "animated-image", "image-sequence", "lottie", "exr", "latex", "pdf"] }
 alpha2-gpu.workspace = true
-alpha2-host-core = { workspace = true, features = ["engine", "providers"] }
+alpha2-host-core = { workspace = true, features = ["cpal-host", "engine", "providers"] }
 alpha2-media.workspace = true
 alpha2-model.workspace = true
 alpha2-os.workspace = true

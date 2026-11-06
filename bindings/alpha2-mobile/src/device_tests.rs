@@ -453,3 +453,58 @@ fn preview_presents_frames_into_a_window_and_survives_a_rebuild() {
     assert_eq!(player.last_error(), None);
     player.close();
 }
+
+#[test]
+fn preview_of_a_project_with_audio_keeps_time_without_an_output() {
+    use crate::{Player, PlayerRequest};
+
+    // A test process has no app context, so audio output cannot open; the picture keeps time by
+    // the wall clock instead.
+    let tests = tests_dir();
+    let player = Player::new(
+        Alpha2::new(EngineConfig::default()),
+        PlayerRequest {
+            project_json: std::fs::read_to_string(
+                tests.join("cases/host-audio-export-project.json"),
+            )
+            .expect("project"),
+            assets: HashMap::from([
+                (
+                    "image-source".to_owned(),
+                    tests
+                        .join("corpus/cross_topology_parity.png")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                (
+                    "audio-source".to_owned(),
+                    tests
+                        .join("corpus/audio-only-aac-priming.m4a")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            ]),
+            ..PlayerRequest::default()
+        },
+    )
+    .expect("player");
+    let reader = WindowReader::new(64, 48);
+    player
+        .attach_window(reader.window(), 64, 48)
+        .expect("attach");
+    player.play();
+    assert!(wait_for(Some(&reader), 5, || player.is_playing()));
+    assert!(
+        wait_for(Some(&reader), 10, || !player.is_playing()),
+        "{:?}",
+        player.last_error()
+    );
+    eprintln!("presented {}", player.frames_presented());
+    assert!(
+        player.frames_presented() >= 6,
+        "{}",
+        player.frames_presented()
+    );
+    assert_eq!(player.last_error(), None);
+    player.close();
+}

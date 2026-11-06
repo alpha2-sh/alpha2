@@ -251,7 +251,7 @@ fn attempt(
         Some(decode_audio(
             &project,
             &assets,
-            media,
+            media.audio_decoders.as_ref(),
             settings.sample_rate,
             &job.cancel,
         )?)
@@ -573,10 +573,10 @@ pub(crate) fn probe_source(path: &Path, media: &MediaBackends) -> Result<(), Str
 
 /// Every audible source's audio, decoded whole at the project rate, for each stream its clips
 /// play.
-fn decode_audio(
+pub(crate) fn decode_audio(
     project: &Project,
     assets: &HashMap<String, PathBuf>,
-    media: &MediaBackends,
+    decoders: &dyn AudioBackends,
     project_rate: u32,
     cancel: &CancelToken,
 ) -> Result<DecodedAudioSources, Alpha2Error> {
@@ -601,7 +601,7 @@ fn decode_audio(
         for stream in wanted {
             let mut stream_audio = AudioStream::open_file(
                 path,
-                media.audio_decoders.as_ref(),
+                decoders,
                 project_rate,
                 stream,
                 DecodePolicy::default(),

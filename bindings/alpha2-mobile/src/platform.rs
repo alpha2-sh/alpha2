@@ -39,6 +39,11 @@ pub(crate) trait Platform: Send + Sync {
     fn video_decoders(&self) -> Option<Arc<dyn alpha2_host_core::video_stream::VideoBackends>> {
         None
     }
+
+    /// The audio decoders a preview reads sources with, when the platform has any.
+    fn audio_decoders(&self) -> Option<Arc<dyn alpha2_host_core::audio_stream::AudioBackends>> {
+        None
+    }
 }
 
 /// The backend of the platform this library runs on.
@@ -102,6 +107,10 @@ impl Platform for MediaPlatform {
 
     fn video_decoders(&self) -> Option<Arc<dyn alpha2_host_core::video_stream::VideoBackends>> {
         Some(Arc::clone(&self.media.video_decoders))
+    }
+
+    fn audio_decoders(&self) -> Option<Arc<dyn alpha2_host_core::audio_stream::AudioBackends>> {
+        Some(Arc::clone(&self.media.audio_decoders))
     }
 }
 

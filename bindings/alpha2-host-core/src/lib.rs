@@ -22,6 +22,8 @@ pub mod export;
 pub mod export_policy;
 pub mod parameter_sets;
 pub mod partial;
+#[cfg(all(feature = "engine", feature = "cpal-host"))]
+pub mod preview_audio;
 pub mod probe_cache;
 #[cfg(feature = "providers")]
 pub mod providers;
