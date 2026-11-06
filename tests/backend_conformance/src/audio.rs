@@ -331,11 +331,13 @@ pub fn audio_seek_matches_a_linear_decode_in_every_container(backend: &dyn Backe
                 format!("{name} seek {ms} ms: samples {lag} off")
             });
             let at = usize::try_from(from).expect("inside");
-            // A resumed decoder differs within its noise; Opus converges over its pre-roll.
+            // A resumed decoder differs within its noise; Opus converges over its pre-roll. Some
+            // platform decoders work in 16-bit samples, where a resumed decode stays a few steps
+            // (each 1/32768) off a straight one.
             let differs = seeked
                 .iter()
                 .zip(&samples[at..])
-                .position(|(a, b)| (a - b).abs() > 1e-4);
+                .position(|(a, b)| (a - b).abs() > 8.0 / 32_768.0);
             failures.check(differs.is_none(), || {
                 format!(
                     "{name} seek {ms} ms: sample {:?} differs",
