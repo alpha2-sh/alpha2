@@ -134,6 +134,7 @@ The crates an iOS or Android app links build for `aarch64-apple-ios`, `aarch64-a
 
 - Never enable `alpha2-native-gpu`'s `hwdevice` feature for a mobile target: it links FFmpeg, which mobile builds do not use.
 - Test binaries run on a device or emulator with `adb push` and `adb shell`, and in the iOS simulator with `xcrun simctl spawn <device> <binary>`.
+- The media backend tests (`alpha2-apple-media`, `alpha2-android-media`) read the corpus from `ALPHA2_TESTS_DIR`, the directory holding `corpus/` and `cases/` (a copy of `tests/` on a device). The simulator passes environment variables prefixed with `SIMCTL_CHILD_`, so run them with `SIMCTL_CHILD_ALPHA2_TESTS_DIR=$PWD/tests xcrun simctl spawn <device> <binary>`. macOS runs `alpha2-apple-media`'s tests natively with `cargo test`.
 
 ## Lint and format
 

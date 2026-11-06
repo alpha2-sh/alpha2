@@ -26,6 +26,7 @@ members = [
     "bindings/alpha2-host-core",
     "bindings/alpha2-mobile",
     "bindings/alpha2-android-media",
+    "bindings/alpha2-apple-media",
     "bindings/alpha2-native-gpu",
     "bindings/alpha2-os",
     "bindings/alpha2-text",
@@ -86,6 +87,7 @@ alpha2-native = { version = "0.6.0", path = "bindings/alpha2-native" }
 alpha2-host-core = { version = "0.6.0", path = "bindings/alpha2-host-core", default-features = false }
 alpha2-mobile = { version = "0.6.0", path = "bindings/alpha2-mobile" }
 alpha2-android-media = { version = "0.6.0", path = "bindings/alpha2-android-media" }
+alpha2-apple-media = { version = "0.6.0", path = "bindings/alpha2-apple-media" }
 alpha2-native-gpu = { version = "0.6.0", path = "bindings/alpha2-native-gpu" }
 alpha2-os = { version = "0.6.0", path = "bindings/alpha2-os" }
 alpha2-text = { version = "0.6.0", path = "bindings/alpha2-text" }
