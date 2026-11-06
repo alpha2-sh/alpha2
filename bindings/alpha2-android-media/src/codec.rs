@@ -253,7 +253,9 @@ impl Codec {
         &self.name
     }
 
-    /// Whether the component is the platform's software codec.
+    /// Whether the component is one of the platform's software codecs, as their names say. The
+    /// API 36 codec store would declare it, but on some Android 16 builds a process that has
+    /// read the store aborts when it exits (a double free in its static codec table).
     pub(crate) fn is_software(&self) -> bool {
         self.name.starts_with("c2.android.") || self.name.starts_with("OMX.google.")
     }
@@ -270,6 +272,22 @@ impl Codec {
         format: &Format,
         window: *mut sys::ANativeWindow,
     ) -> Result<(), BackendError> {
+        self.configure_and_start(format, window, false)
+    }
+
+    /// Stops the codec and starts it again with `format`, into `window` when it is not null.
+    /// The window must outlive the codec.
+    pub(crate) fn restart(
+        &mut self,
+        format: &Format,
+        window: *mut sys::ANativeWindow,
+    ) -> Result<(), BackendError> {
+        if self.started {
+            // SAFETY: the codec is started; stopping returns it to the uninitialized state.
+            let stopped = unsafe { sys::AMediaCodec_stop(self.raw.as_ptr()) };
+            self.started = false;
+            status("stop", stopped.0)?;
+        }
         self.configure_and_start(format, window, false)
     }
 
