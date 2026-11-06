@@ -112,7 +112,7 @@ pub struct Host {
     /// Behind a lock because export stages borrow the host from several threads; only the render
     /// loop takes it.
     pub texts: std::sync::Mutex<TextTextures>,
-    pub provider_files: crate::providers::ProviderFiles,
+    pub provider_files: alpha2_host_core::providers::ProviderFiles,
     /// As the current export's conform probed them; `None` when not conformed here, so the decode
     /// plan probes the files itself.
     pub conformed_video_frames: Option<HashMap<String, crate::assets::VideoFrameSize>>,
@@ -197,7 +197,7 @@ impl Host {
             #[cfg(all(target_os = "windows", feature = "hwdevice"))]
             shared_d3d12: None,
             texts: std::sync::Mutex::new(TextTextures::new()),
-            provider_files: crate::providers::ProviderFiles::default(),
+            provider_files: alpha2_host_core::providers::ProviderFiles::default(),
             conformed_video_frames: None,
             largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
@@ -229,7 +229,7 @@ impl Host {
             adapter_choice: None,
             shared_metal,
             texts: std::sync::Mutex::new(TextTextures::new()),
-            provider_files: crate::providers::ProviderFiles::default(),
+            provider_files: alpha2_host_core::providers::ProviderFiles::default(),
             conformed_video_frames: None,
             largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
@@ -261,7 +261,7 @@ impl Host {
             adapter_choice: None,
             shared_d3d12,
             texts: std::sync::Mutex::new(TextTextures::new()),
-            provider_files: crate::providers::ProviderFiles::default(),
+            provider_files: alpha2_host_core::providers::ProviderFiles::default(),
             conformed_video_frames: None,
             largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
@@ -293,7 +293,7 @@ impl Host {
             adapter_choice: None,
             shared_vulkan,
             texts: std::sync::Mutex::new(TextTextures::new()),
-            provider_files: crate::providers::ProviderFiles::default(),
+            provider_files: alpha2_host_core::providers::ProviderFiles::default(),
             conformed_video_frames: None,
             largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
@@ -462,7 +462,7 @@ impl Host {
             #[cfg(all(target_os = "windows", feature = "hwdevice"))]
             shared_d3d12: None,
             texts: std::sync::Mutex::new(TextTextures::new()),
-            provider_files: crate::providers::ProviderFiles::default(),
+            provider_files: alpha2_host_core::providers::ProviderFiles::default(),
             conformed_video_frames: None,
             largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
@@ -778,7 +778,7 @@ impl Host {
             .renderer
             .release_idle_memory()
             .saturating_add(self.release_idle_decode_copies());
-        let provider_files = crate::providers::ProviderFiles {
+        let provider_files = alpha2_host_core::providers::ProviderFiles {
             originals: resolved.paths.clone(),
             frames: inputs.frames.clone(),
             fonts: Vec::new(),
@@ -870,7 +870,7 @@ impl Host {
         request: crate::render_cache::RenderCacheRequest,
         project: &str,
         assets: &HashMap<String, PathBuf>,
-        providers: &crate::providers::ProviderFiles,
+        providers: &alpha2_host_core::providers::ProviderFiles,
         effect_assets: &HashMap<String, PathBuf>,
         font_files: &[PathBuf],
         effects: &[EffectRequest],
@@ -1254,7 +1254,7 @@ impl Host {
         &self,
         project: &str,
         assets: &HashMap<String, PathBuf>,
-        providers: &crate::providers::ProviderFiles,
+        providers: &alpha2_host_core::providers::ProviderFiles,
         effect_assets: &HashMap<String, PathBuf>,
         font_files: &[PathBuf],
         effects: &[EffectRequest],
@@ -3490,7 +3490,7 @@ struct PreparedRequest {
     resolved: ResolvedMedia,
     selections: serde_json::Map<String, Value>,
     released: u64,
-    provider_files: crate::providers::ProviderFiles,
+    provider_files: alpha2_host_core::providers::ProviderFiles,
 }
 
 const fn existing_output(overwrite: bool) -> ExistingOutput {

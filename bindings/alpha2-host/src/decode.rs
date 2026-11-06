@@ -349,7 +349,7 @@ pub struct DecodeWorker {
 
 #[derive(Clone)]
 pub struct DecodeWorkerConfig {
-    pub providers: Arc<crate::providers::ProviderMedia>,
+    pub providers: Arc<alpha2_host_core::providers::ProviderMedia>,
     pub decoding: Arc<crate::recovery::ExportDecoding>,
     pub depth: usize,
     pub byte_budget: crate::memory::ByteBudget,
@@ -887,7 +887,7 @@ enum NextRead {
 }
 
 pub struct ExportDecodeState {
-    pub providers: Arc<crate::providers::ProviderMedia>,
+    pub providers: Arc<alpha2_host_core::providers::ProviderMedia>,
     pub decoding: Arc<crate::recovery::ExportDecoding>,
     pub paths: HashMap<SourceId, PathBuf>,
     pub kinds: HashMap<SourceId, MediaKind>,
@@ -1043,7 +1043,7 @@ impl ExportDecodeState {
             paths.insert(source.id.clone(), path.clone());
         }
         Ok(Self {
-            providers: crate::providers::ProviderMedia::none(),
+            providers: alpha2_host_core::providers::ProviderMedia::none(),
             decoding: Arc::default(),
             paths,
             kinds,
@@ -1449,12 +1449,15 @@ impl ExportDecodeState {
             return Ok(None);
         }
         if self.providers.supplies(&need.source_id) {
-            let frame = self.providers.frame_watched(
-                &decode_cursor_key(need),
-                need.media_time,
-                self.frame_index,
-                Some(&self.heartbeat),
-            )?;
+            let frame = self
+                .providers
+                .frame_watched(
+                    &decode_cursor_key(need),
+                    need.media_time,
+                    self.frame_index,
+                    Some(&crate::heartbeat::ProviderHeartbeat(&self.heartbeat)),
+                )
+                .map_err(crate::providers::tagged)?;
             return Ok(Some(DecodedSourceFrame {
                 source: need.source_id.clone(),
                 clip: need.clip_id.clone(),

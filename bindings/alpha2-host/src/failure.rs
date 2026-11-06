@@ -145,7 +145,7 @@ pub struct FailureContext {
     phase: Cell<ExportPhase>,
     frame: Cell<Option<u64>>,
     facts: RefCell<Map<String, Value>>,
-    providers: RefCell<Option<std::sync::Arc<crate::providers::ProviderMedia>>>,
+    providers: RefCell<Option<std::sync::Arc<alpha2_host_core::providers::ProviderMedia>>>,
     decoding: RefCell<std::sync::Arc<crate::recovery::ExportDecoding>>,
 }
 
@@ -181,7 +181,10 @@ impl FailureContext {
         self.decoding.borrow().diagnostics_json()
     }
 
-    pub fn watch_providers(&self, providers: std::sync::Arc<crate::providers::ProviderMedia>) {
+    pub fn watch_providers(
+        &self,
+        providers: std::sync::Arc<alpha2_host_core::providers::ProviderMedia>,
+    ) {
         *self.providers.borrow_mut() = Some(providers);
     }
 

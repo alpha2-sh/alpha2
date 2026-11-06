@@ -76,6 +76,22 @@ impl Drop for HardwareOpen<'_> {
     }
 }
 
+/// A shard's heartbeat as provider calls report to it: waits for another shard's call to the same
+/// source are idle, work of their own beats.
+pub struct ProviderHeartbeat<'a>(pub &'a Arc<WorkerHeartbeat>);
+
+impl alpha2_host_core::providers::ProviderWatch for ProviderHeartbeat<'_> {
+    type Waiting = HeartbeatIdle;
+
+    fn waiting(&self) -> HeartbeatIdle {
+        self.0.idle()
+    }
+
+    fn beat(&self) {
+        self.0.beat();
+    }
+}
+
 pub struct HeartbeatIdle {
     beat: Arc<WorkerHeartbeat>,
     was_busy: bool,

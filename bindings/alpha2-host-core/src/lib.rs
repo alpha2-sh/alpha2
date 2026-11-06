@@ -23,6 +23,8 @@ pub mod export_policy;
 pub mod parameter_sets;
 pub mod partial;
 pub mod probe_cache;
+#[cfg(feature = "providers")]
+pub mod providers;
 pub mod rate_control;
 pub mod recovery;
 pub mod stills;

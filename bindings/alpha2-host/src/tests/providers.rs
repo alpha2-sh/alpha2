@@ -289,7 +289,7 @@ fn a_document_file_past_its_limit_is_refused_before_it_is_read() {
     ] {
         let path = directory.join(name);
         sparse_tebibyte(&path, head);
-        let error = crate::providers::read_source(&path, spec).expect_err(name);
+        let error = alpha2_host_core::providers::read_source(&path, spec).expect_err(name);
         assert!(
             matches!(&error, alpha2_extensions::ExtensionError::Budget(message)
                 if message.contains(what) && message.contains("1099511627776 bytes")),
@@ -299,7 +299,8 @@ fn a_document_file_past_its_limit_is_refused_before_it_is_read() {
     let path = directory.join("small.svg");
     std::fs::write(&path, b"<svg/>").expect("file");
     assert_eq!(
-        crate::providers::read_source(&path, &alpha2_model::ProviderSource::Svg).expect("read"),
+        alpha2_host_core::providers::read_source(&path, &alpha2_model::ProviderSource::Svg)
+            .expect("read"),
         b"<svg/>"
     );
 }
@@ -476,9 +477,9 @@ fn an_exr_frame_is_handed_over_without_copying_its_halves() {
         .to_string(),
     )
     .expect("project");
-    let media = crate::providers::ProviderMedia::new(
+    let media = alpha2_host_core::providers::ProviderMedia::new(
         &project,
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([("still".to_owned(), extension_corpus("half.exr"))]),
             ..Default::default()
         },
@@ -541,9 +542,9 @@ fn a_sequence_reads_each_frame_file_when_the_export_shows_it() {
         })
         .collect::<Vec<_>>();
     let project = Project::from_json(&extension_project().to_string()).expect("project");
-    let media = crate::providers::ProviderMedia::new(
+    let media = alpha2_host_core::providers::ProviderMedia::new(
         &project,
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             frames: HashMap::from([("seq".to_owned(), paths.clone())]),
             ..Default::default()
         },
@@ -563,7 +564,7 @@ fn a_sequence_reads_each_frame_file_when_the_export_shows_it() {
     let error = media
         .frame(&seq, MediaTime::from_ticks(36_000), 3)
         .expect_err("frame 3 is gone");
-    assert!(error.contains("sequence_0010.png"), "{error}");
+    assert!(error.message.contains("sequence_0010.png"), "{error}");
     std::fs::remove_dir_all(&directory).ok();
 }
 
@@ -813,9 +814,9 @@ fn readers_of_one_animated_image_keep_their_own_positions() {
     let directory = scratch_directory("animation-readers");
     let path = directory.join("long.png");
     write_paced_apng(&path, 8, 60);
-    let media = crate::providers::ProviderMedia::new(
+    let media = alpha2_host_core::providers::ProviderMedia::new(
         &two_reader_project(),
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([
                 ("anim".to_owned(), path),
                 ("logo".to_owned(), extension_corpus("shapes.svg")),
@@ -856,7 +857,7 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     let directory = scratch_directory("animation-shared");
     let path = directory.join("long.png");
     write_paced_apng(&path, 32, FRAMES);
-    let files = || crate::providers::ProviderFiles {
+    let files = || alpha2_host_core::providers::ProviderFiles {
         originals: HashMap::from([
             ("anim".to_owned(), path.clone()),
             ("logo".to_owned(), extension_corpus("shapes.svg")),
@@ -868,7 +869,10 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     let _watch = alpha2_extensions::watch_progress(move || counter.set(counter.get() + 1));
     let at = |index: u64| MediaTime::from_ticks(i64::try_from(index).expect("index") * 12_000);
     let reader = |index: u64| provider_reader("anim", &format!("r{index}"));
-    let shown = |media: &crate::providers::ProviderMedia, reader_index: u64, index: u64, frame| {
+    let shown = |media: &alpha2_host_core::providers::ProviderMedia,
+                 reader_index: u64,
+                 index: u64,
+                 frame| {
         let shown = media
             .frame(&reader(reader_index), at(index), frame)
             .expect("frame");
@@ -879,8 +883,12 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
         );
     };
 
-    let one =
-        crate::providers::ProviderMedia::new(&two_reader_project(), files(), (96, 64), u64::MAX);
+    let one = alpha2_host_core::providers::ProviderMedia::new(
+        &two_reader_project(),
+        files(),
+        (96, 64),
+        u64::MAX,
+    );
     shown(&one, 0, 0, 0);
     let one_reader = one.resident_bytes();
     assert_eq!(
@@ -890,8 +898,12 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     );
 
     decoded.set(0);
-    let media =
-        crate::providers::ProviderMedia::new(&two_reader_project(), files(), (96, 64), u64::MAX);
+    let media = alpha2_host_core::providers::ProviderMedia::new(
+        &two_reader_project(),
+        files(),
+        (96, 64),
+        u64::MAX,
+    );
     for index in 0..READERS {
         shown(&media, index, index * 5, 0);
     }
@@ -917,7 +929,12 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     }
     assert_eq!(decoded.get(), u64::from(FRAMES));
 
-    let tight = crate::providers::ProviderMedia::new(&two_reader_project(), files(), (96, 64), 1);
+    let tight = alpha2_host_core::providers::ProviderMedia::new(
+        &two_reader_project(),
+        files(),
+        (96, 64),
+        1,
+    );
     for index in 0..READERS {
         shown(&tight, index, index, index);
     }
@@ -940,9 +957,9 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
     let directory = scratch_directory("animation-opening");
     let path = directory.join("long.png");
     write_paced_apng(&path, 8, FRAMES);
-    let media = Arc::new(crate::providers::ProviderMedia::new(
+    let media = Arc::new(alpha2_host_core::providers::ProviderMedia::new(
         &two_reader_project(),
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([
                 ("anim".to_owned(), path),
                 ("logo".to_owned(), extension_corpus("shapes.svg")),
@@ -1023,9 +1040,9 @@ fn different_provider_sources_are_drawn_at_once() {
     let directory = scratch_directory("provider-locks");
     let path = directory.join("long.png");
     write_paced_apng(&path, 8, 4);
-    let media = Arc::new(crate::providers::ProviderMedia::new(
+    let media = Arc::new(alpha2_host_core::providers::ProviderMedia::new(
         &two_reader_project(),
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([
                 ("anim".to_owned(), path),
                 ("logo".to_owned(), extension_corpus("shapes.svg")),
@@ -1115,7 +1132,7 @@ fn provider_succession_project() -> Value {
 #[cfg(feature = "extensions")]
 fn the_provider_sources_an_export_keeps_open_hold_at_most_their_budget() {
     let project = Project::from_json(&provider_succession_project().to_string()).expect("project");
-    let files = || crate::providers::ProviderFiles {
+    let files = || alpha2_host_core::providers::ProviderFiles {
         originals: HashMap::from([
             ("gif".to_owned(), extension_corpus("animation.gif")),
             ("gif2".to_owned(), extension_corpus("animation.gif")),
@@ -1125,15 +1142,18 @@ fn the_provider_sources_an_export_keeps_open_hold_at_most_their_budget() {
     };
     let source = |id: &str| provider_reader(id, &format!("{id}-clip"));
     let at = |ms: i64| MediaTime::from_ticks(ms * 120);
-    let unbounded = crate::providers::ProviderMedia::new(&project, files(), (96, 64), u64::MAX);
+    let unbounded =
+        alpha2_host_core::providers::ProviderMedia::new(&project, files(), (96, 64), u64::MAX);
     unbounded.frame(&source("gif"), at(0), 0).expect("gif");
     let one_gif = unbounded.resident_bytes();
     assert!(one_gif > 0);
     unbounded.frame(&source("logo"), at(0), 0).expect("logo");
     let logo = unbounded.resident_bytes() - one_gif;
     assert!(logo > 0 && logo < one_gif);
-    let media = crate::providers::ProviderMedia::new(&project, files(), (96, 64), one_gif);
-    let reference = crate::providers::ProviderMedia::new(&project, files(), (96, 64), u64::MAX);
+    let media =
+        alpha2_host_core::providers::ProviderMedia::new(&project, files(), (96, 64), one_gif);
+    let reference =
+        alpha2_host_core::providers::ProviderMedia::new(&project, files(), (96, 64), u64::MAX);
     // (output frame, the sources it shows at a source time, what stays open after it)
     let frames: [(u64, &[&str], i64, u64); 9] = [
         (0, &["gif"], 0, one_gif),

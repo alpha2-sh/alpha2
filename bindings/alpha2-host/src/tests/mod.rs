@@ -574,7 +574,7 @@ fn decode_worker_over(
     .expect("video export project");
     let assets = HashMap::from([("video-source".to_owned(), asset)]);
     let mut config = crate::decode::DecodeWorkerConfig {
-        providers: crate::providers::ProviderMedia::none(),
+        providers: alpha2_host_core::providers::ProviderMedia::none(),
         decoding: std::sync::Arc::default(),
         depth: 2,
         byte_budget: crate::memory::ByteBudget::exact(256 << 20),
