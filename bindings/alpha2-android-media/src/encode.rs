@@ -54,8 +54,8 @@ const PCM_16: i32 = 2;
 /// `MediaCodecInfo.CodecProfileLevel.AACObjectLC`.
 const AAC_LC: i32 = 2;
 
-/// Samples of priming the platform AAC encoder puts before the input, by round-trip measurement
-/// at 44.1 and 48 kHz; the encoder reports no delay itself.
+/// The delay of the platform's AAC-LC encoder, FDK AAC (`nDelay` of its `AACENC_InfoStruct`), the
+/// only AAC encoder opened here; an `encoder-delay` in its output format takes precedence.
 const AAC_PRIMING: u32 = 2048;
 
 const WAIT_US: i64 = 10_000;
@@ -90,6 +90,17 @@ fn refused(what: &str, refusals: Vec<EncoderRefusal>) -> EncodeError {
             .join("; ")
     };
     EncodeError::EncodersRefused { message, refusals }
+}
+
+/// The MIME type `MediaCodec` names a video codec it may encode by.
+const fn video_mime(codec: VideoCodec) -> Option<&'static str> {
+    match codec {
+        VideoCodec::H264 => Some("video/avc"),
+        VideoCodec::Hevc => Some("video/hevc"),
+        VideoCodec::Vp9 => Some("video/x-vnd.on2.vp9"),
+        VideoCodec::Av1 => Some("video/av01"),
+        _ => None,
+    }
 }
 
 /// The platform's software encoder for a video codec.
@@ -228,6 +239,8 @@ pub struct MediaCodecVideoEncoder {
     record: Option<Bytes>,
     times: HashMap<i64, i64>,
     frames_in: u64,
+    /// The codec time of the last frame queued.
+    last_us: Option<i64>,
     eos_pending: bool,
     drained: bool,
 }
@@ -248,14 +261,8 @@ impl MediaCodecVideoEncoder {
     /// # Errors
     /// [`EncodeError::EncodersRefused`] naming every encoder tried.
     pub fn open(config: &VideoEncodeConfig) -> Result<Self, EncodeError> {
-        let mime = match config.codec {
-            VideoCodec::H264 => "video/avc",
-            VideoCodec::Hevc => "video/hevc",
-            VideoCodec::Vp9 => "video/x-vnd.on2.vp9",
-            VideoCodec::Av1 => "video/av01",
-            other => {
-                return Err(refused(other.as_str(), Vec::new()));
-            }
+        let Some(mime) = video_mime(config.codec) else {
+            return Err(refused(config.codec.as_str(), Vec::new()));
         };
         let layout = config.layout;
         let ten_bit = layout.bit_depth == BitDepth::Ten;
@@ -358,6 +365,7 @@ impl MediaCodecVideoEncoder {
             record: (config.codec == VideoCodec::Vp9).then(Bytes::new),
             times: HashMap::new(),
             frames_in: 0,
+            last_us: None,
             eos_pending: false,
             drained: false,
         }
@@ -365,7 +373,9 @@ impl MediaCodecVideoEncoder {
 
     fn try_queue_eos(&mut self) -> Result<(), BackendError> {
         if let Some(index) = self.codec.dequeue_input(0)? {
-            self.codec.queue_input(index, &[], 0, FLAG_END_OF_STREAM)?;
+            let time = self.last_us.unwrap_or_else(|| to_codec_us(0, 1));
+            self.codec
+                .queue_input(index, &[], time, FLAG_END_OF_STREAM)?;
             self.eos_pending = false;
         }
         Ok(())
@@ -377,11 +387,13 @@ impl MediaCodecVideoEncoder {
             VideoCodec::H264 => avc_decoder_config(bytes),
             VideoCodec::Hevc => hevc_decoder_config(bytes),
             // The encoder's configuration is the `av1C` record, or the sequence header it holds.
-            VideoCodec::Av1 => Some(if bytes.first() == Some(&0x81) {
-                bytes.to_vec()
-            } else {
-                av1_config_record(bytes)
-            }),
+            VideoCodec::Av1 => {
+                if bytes.first() == Some(&0x81) {
+                    Some(bytes.to_vec())
+                } else {
+                    av1_config_record(bytes)
+                }
+            }
             _ => None,
         };
         if let Some(record) = record {
@@ -390,15 +402,230 @@ impl MediaCodecVideoEncoder {
     }
 }
 
-/// The `av1C` record (AV1-ISOBMFF 2.3) of an encoder's sequence header OBU, for the 8-bit 4:2:0
-/// profile 0 streams these encoders take: version 1, the level left at 31 (unconstrained), then
-/// the sequence header as the configuration OBUs.
-fn av1_config_record(sequence_header: &[u8]) -> Vec<u8> {
-    // Marker and version; profile 0 and level 31; main tier, 8 bits, colour, chroma subsampled
-    // in both directions at an unknown position; no initial presentation delay.
-    let mut record = vec![0x81, 31, 0b0000_1100, 0];
-    record.extend_from_slice(sequence_header);
-    record
+/// The `av1C` record (AV1-ISOBMFF 2.3) of the first sequence header OBU in `obus`, with that OBU
+/// as the configuration OBUs; `None` when there is none or it does not parse.
+fn av1_config_record(obus: &[u8]) -> Option<Vec<u8>> {
+    let (obu, payload) = sequence_header_obu(obus)?;
+    let sequence = Av1Sequence::parse(payload)?;
+    let flag = |value: bool, shift: u8| u8::from(value) << shift;
+    let mut record = vec![
+        0x81,
+        (sequence.profile << 5) | sequence.level,
+        flag(sequence.tier, 7)
+            | flag(sequence.high_bitdepth, 6)
+            | flag(sequence.twelve_bit, 5)
+            | flag(sequence.monochrome, 4)
+            | flag(sequence.subsampling_x, 3)
+            | flag(sequence.subsampling_y, 2)
+            | sequence.chroma_sample_position,
+        // No initial presentation delay.
+        0,
+    ];
+    record.extend_from_slice(obu);
+    Some(record)
+}
+
+/// The first `OBU_SEQUENCE_HEADER` in `data`, whole and its payload.
+fn sequence_header_obu(mut data: &[u8]) -> Option<(&[u8], &[u8])> {
+    const OBU_SEQUENCE_HEADER: u8 = 1;
+    while let Some(&header) = data.first() {
+        let mut at = 1 + usize::from(header & 4 != 0);
+        let size = if header & 2 != 0 {
+            let (size, length) = leb128(data.get(at..)?)?;
+            at += length;
+            size
+        } else {
+            data.len().checked_sub(at)?
+        };
+        let obu = data.get(..at.checked_add(size)?)?;
+        if (header >> 3) & 0xf == OBU_SEQUENCE_HEADER {
+            return Some((obu, &obu[at..]));
+        }
+        data = &data[obu.len()..];
+    }
+    None
+}
+
+/// A `leb128()` value (AV1 4.10.5) and the bytes it took.
+fn leb128(data: &[u8]) -> Option<(usize, usize)> {
+    let mut value = 0_usize;
+    for (index, &byte) in data.iter().take(8).enumerate() {
+        value |= usize::from(byte & 0x7f) << (7 * index);
+        if byte & 0x80 == 0 {
+            return Some((value, index + 1));
+        }
+    }
+    None
+}
+
+/// What a sequence header declares that `av1C` repeats: `seq_profile`, `seq_level_idx[0]`,
+/// `seq_tier[0]` and the color config.
+// The flags are the record's one-bit fields.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Av1Sequence {
+    profile: u8,
+    level: u8,
+    tier: bool,
+    high_bitdepth: bool,
+    twelve_bit: bool,
+    monochrome: bool,
+    subsampling_x: bool,
+    subsampling_y: bool,
+    chroma_sample_position: u8,
+}
+
+impl Av1Sequence {
+    /// The fields of a `sequence_header_obu()` payload (AV1 5.5).
+    fn parse(payload: &[u8]) -> Option<Self> {
+        let mut bits = ObuBits {
+            data: payload,
+            at: 0,
+        };
+        let mut sequence = Self {
+            profile: u8::try_from(bits.read(3)?).ok()?,
+            ..Self::default()
+        };
+        bits.read(1)?; // still_picture
+        let reduced = bits.flag()?;
+        let mut frame_id_numbers = false;
+        if reduced {
+            sequence.level = u8::try_from(bits.read(5)?).ok()?;
+        } else {
+            let mut buffer_delay_length = 0;
+            let mut decoder_model = false;
+            if bits.flag()? {
+                // timing_info()
+                bits.read(32)?;
+                bits.read(32)?;
+                if bits.flag()? {
+                    bits.uvlc()?;
+                }
+                decoder_model = bits.flag()?;
+                if decoder_model {
+                    buffer_delay_length = bits.read(5)? + 1;
+                    bits.read(32)?;
+                    bits.read(10)?;
+                }
+            }
+            let display_delay = bits.flag()?;
+            let operating_points = bits.read(5)? + 1;
+            for point in 0..operating_points {
+                bits.read(12)?; // operating_point_idc
+                let level = u8::try_from(bits.read(5)?).ok()?;
+                let tier = level > 7 && bits.flag()?;
+                if point == 0 {
+                    sequence.level = level;
+                    sequence.tier = tier;
+                }
+                if decoder_model && bits.flag()? {
+                    bits.read(buffer_delay_length)?;
+                    bits.read(buffer_delay_length)?;
+                    bits.read(1)?;
+                }
+                if display_delay && bits.flag()? {
+                    bits.read(4)?;
+                }
+            }
+        }
+        let width_bits = bits.read(4)? + 1;
+        let height_bits = bits.read(4)? + 1;
+        bits.read(width_bits)?;
+        bits.read(height_bits)?;
+        if !reduced {
+            frame_id_numbers = bits.flag()?;
+        }
+        if frame_id_numbers {
+            bits.read(7)?;
+        }
+        bits.read(3)?; // 128x128 superblocks, filter intra, intra edge filter
+        if !reduced {
+            bits.read(4)?; // interintra and masked compound, warped motion, dual filter
+            let order_hint = bits.flag()?;
+            if order_hint {
+                bits.read(2)?;
+            }
+            // seq_force_screen_content_tools is SELECT_SCREEN_CONTENT_TOOLS when chosen.
+            let screen_content = bits.flag()? || bits.flag()?;
+            if screen_content && !bits.flag()? {
+                bits.read(1)?;
+            }
+            if order_hint {
+                bits.read(3)?;
+            }
+        }
+        bits.read(3)?; // superres, CDEF, loop restoration
+        sequence.color_config(&mut bits)?;
+        Some(sequence)
+    }
+
+    /// `color_config()` (AV1 5.5.2).
+    fn color_config(&mut self, bits: &mut ObuBits<'_>) -> Option<()> {
+        self.high_bitdepth = bits.flag()?;
+        self.twelve_bit = self.profile == 2 && self.high_bitdepth && bits.flag()?;
+        self.monochrome = self.profile != 1 && bits.flag()?;
+        let (mut primaries, mut transfer, mut matrix) = (2, 2, 2);
+        if bits.flag()? {
+            primaries = bits.read(8)?;
+            transfer = bits.read(8)?;
+            matrix = bits.read(8)?;
+        }
+        if self.monochrome {
+            self.subsampling_x = true;
+            self.subsampling_y = true;
+            return Some(());
+        }
+        // BT.709 primaries, sRGB transfer and the identity matrix: 4:4:4, full range.
+        if (primaries, transfer, matrix) == (1, 13, 0) {
+            return Some(());
+        }
+        bits.read(1)?; // color_range
+        (self.subsampling_x, self.subsampling_y) = match self.profile {
+            0 => (true, true),
+            1 => (false, false),
+            _ if self.twelve_bit => {
+                let x = bits.flag()?;
+                (x, x && bits.flag()?)
+            }
+            _ => (true, false),
+        };
+        if self.subsampling_x && self.subsampling_y {
+            self.chroma_sample_position = u8::try_from(bits.read(2)?).ok()?;
+        }
+        Some(())
+    }
+}
+
+/// A most-significant-bit-first reader over an OBU payload.
+struct ObuBits<'a> {
+    data: &'a [u8],
+    at: usize,
+}
+
+impl ObuBits<'_> {
+    fn flag(&mut self) -> Option<bool> {
+        let byte = *self.data.get(self.at / 8)?;
+        self.at += 1;
+        Some((byte >> (7 - (self.at - 1) % 8)) & 1 == 1)
+    }
+
+    fn read(&mut self, count: u32) -> Option<u32> {
+        (0..count).try_fold(0_u32, |value, _| {
+            Some((value << 1) | u32::from(self.flag()?))
+        })
+    }
+
+    /// A `uvlc()` value (AV1 4.10.3).
+    fn uvlc(&mut self) -> Option<u32> {
+        let mut zeros = 0;
+        while !self.flag()? {
+            zeros += 1;
+            if zeros >= 32 {
+                return Some(u32::MAX);
+            }
+        }
+        Some(self.read(zeros)? + ((1_u32 << zeros) - 1))
+    }
 }
 
 /// The encoders to try for `config`, hardware first; refusals of missing ones go to `refusals`.
@@ -558,6 +785,7 @@ impl VideoEncodeBackend for MediaCodecVideoEncoder {
             .map_err(adapter)?;
         self.times.insert(pts_us, pts);
         self.frames_in += 1;
+        self.last_us = Some(pts_us);
         Ok(Submit::Accepted)
     }
 
@@ -664,6 +892,22 @@ fn opus_head(blob: &[u8]) -> Option<(Bytes, u32)> {
     })
 }
 
+/// The platform encoder's name, MIME type and frame size for an audio codec.
+const fn audio_encoder(codec: AudioCodec) -> (&'static str, &'static str, usize) {
+    match codec {
+        AudioCodec::Aac => ("c2.android.aac.encoder", "audio/mp4a-latm", 1024),
+        AudioCodec::Opus => ("c2.android.opus.encoder", "audio/opus", 960),
+    }
+}
+
+/// The platform's Codec2 encoder `name`, else the software encoder it prefers for `mime`: the
+/// older OMX component of Android 10 images, the same FDK AAC or libopus encoder.
+fn platform_audio_encoder(name: &str, mime: &str) -> Option<Codec> {
+    Codec::by_name(name)
+        .ok()
+        .or_else(|| Codec::encoder_for(mime).ok().filter(Codec::is_software))
+}
+
 /// A `MediaCodec` audio encoder session with 16-bit interleaved input.
 pub struct MediaCodecAudioEncoder {
     codec: Codec,
@@ -674,6 +918,8 @@ pub struct MediaCodecAudioEncoder {
     record: Option<Bytes>,
     priming: u32,
     packets: i64,
+    /// The sample after the last one queued.
+    next_sample: i64,
     /// Silent samples still to queue before the end of input.
     padding: usize,
     eos_pending: bool,
@@ -695,10 +941,7 @@ impl MediaCodecAudioEncoder {
     /// # Errors
     /// [`EncodeError::EncodersRefused`] when the encoder is missing or refuses the format.
     pub fn open(config: &AudioEncodeConfig) -> Result<Self, EncodeError> {
-        let (name, mime, frame_size) = match config.codec {
-            AudioCodec::Aac => ("c2.android.aac.encoder", "audio/mp4a-latm", 1024),
-            AudioCodec::Opus => ("c2.android.opus.encoder", "audio/opus", 960),
-        };
+        let (name, mime, frame_size) = audio_encoder(config.codec);
         // AAC keeps the project's rate where it is a standard one; Opus runs at 48 kHz.
         let rate = match (config.codec, config.project_rate) {
             (
@@ -709,22 +952,17 @@ impl MediaCodecAudioEncoder {
             _ => 48_000,
         };
         let channels = config.speakers.speakers().len();
-        // The Codec2 encoder, else the older OMX one of Android 10 images (the same FDK AAC
-        // encoder, with the same delay).
-        let mut codec = Codec::by_name(name)
-            .ok()
-            .or_else(|| Codec::encoder_for(mime).ok().filter(Codec::is_software))
-            .ok_or_else(|| {
-                refused(
-                    mime,
-                    vec![refusal(
-                        name,
-                        false,
-                        OpenFailureKind::Absent,
-                        format!("no platform {mime} encoder"),
-                    )],
-                )
-            })?;
+        let mut codec = platform_audio_encoder(name, mime).ok_or_else(|| {
+            refused(
+                mime,
+                vec![refusal(
+                    name,
+                    false,
+                    OpenFailureKind::Absent,
+                    format!("no platform {mime} encoder"),
+                )],
+            )
+        })?;
         let mut format = Format::new();
         format.set_str("mime", mime);
         format.set_i32("sample-rate", i32::try_from(rate).unwrap_or(48_000));
@@ -762,6 +1000,7 @@ impl MediaCodecAudioEncoder {
                 0
             },
             packets: 0,
+            next_sample: 0,
             padding: 0,
             eos_pending: false,
             drained: false,
@@ -776,7 +1015,8 @@ impl MediaCodecAudioEncoder {
             };
             let frames = self.padding.min(self.frame_size);
             let bytes = frames * self.channels * 2;
-            self.codec.write_input(index, 0, 0, |buffer| {
+            let time = to_codec_us(self.next_sample, i64::from(self.rate));
+            self.codec.write_input(index, time, 0, |buffer| {
                 let target = buffer.get_mut(..bytes).ok_or_else(|| {
                     BackendError::Failed("the padding does not fit an input buffer".into())
                 })?;
@@ -784,9 +1024,12 @@ impl MediaCodecAudioEncoder {
                 Ok(bytes)
             })?;
             self.padding -= frames;
+            self.next_sample += i64::try_from(frames).unwrap_or(0);
         }
         if let Some(index) = self.codec.dequeue_input(0)? {
-            self.codec.queue_input(index, &[], 0, FLAG_END_OF_STREAM)?;
+            let time = to_codec_us(self.next_sample, i64::from(self.rate));
+            self.codec
+                .queue_input(index, &[], time, FLAG_END_OF_STREAM)?;
             self.eos_pending = false;
         }
         Ok(())
@@ -834,6 +1077,7 @@ impl AudioEncodeBackend for MediaCodecAudioEncoder {
                 Ok(bytes)
             })
             .map_err(adapter)?;
+        self.next_sample = pts + i64::try_from(frames).unwrap_or(0);
         Ok(Submit::Accepted)
     }
 
@@ -852,8 +1096,17 @@ impl AudioEncodeBackend for MediaCodecAudioEncoder {
             {
                 Output::TryAgain => return Ok(EncodePoll::Pending),
                 Output::FormatChanged => {
-                    if self.record.is_none() && self.kind == AudioCodec::Aac {
-                        self.record = self.codec.output_format().buffer("csd-0").map(Bytes::from);
+                    if self.kind == AudioCodec::Aac {
+                        let format = self.codec.output_format();
+                        if self.record.is_none() {
+                            self.record = format.buffer("csd-0").map(Bytes::from);
+                        }
+                        if let Some(delay) = format
+                            .i32("encoder-delay")
+                            .and_then(|delay| u32::try_from(delay).ok())
+                        {
+                            self.priming = delay;
+                        }
                     }
                 }
                 Output::Buffer {
@@ -902,9 +1155,10 @@ impl AudioEncodeBackend for MediaCodecAudioEncoder {
     }
 
     fn finish_input(&mut self) -> Result<(), EncodeError> {
-        // Some encoders end their output where their input ends less their look-ahead (the
-        // priming): silence that long carries the last samples out, and the sink drops the
-        // padding packets after them.
+        // Silence as long as the encoder's delay carries the last input samples out of encoders
+        // that stop at the end of input less their look-ahead. It never reaches the file: the
+        // sink drops packets that start after the last input sample and cuts the one holding it
+        // there, so encoders that flush their look-ahead themselves give the same track.
         self.padding = usize::try_from(self.priming).unwrap_or(0);
         self.eos_pending = true;
         self.try_queue_eos().map_err(adapter)
@@ -923,6 +1177,26 @@ impl AudioEncodeBackend for MediaCodecAudioEncoder {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AndroidVideoEncoders;
 
+impl AndroidVideoEncoders {
+    /// The video codecs this device has an encoder for, hardware or the platform's software one.
+    ///
+    /// Each codec is probed by creating its encoder without configuring it, a few milliseconds
+    /// each. An encoder listed may still refuse a configuration (a size, or 10-bit input).
+    #[must_use]
+    pub fn available_codecs(&self) -> Vec<VideoCodec> {
+        VideoCodec::ALL
+            .into_iter()
+            .filter(|&codec| {
+                video_mime(codec).is_some_and(|mime| {
+                    Codec::encoder_for(mime).is_ok()
+                        || software_video_encoder(codec)
+                            .is_some_and(|name| Codec::by_name(name).is_ok())
+                })
+            })
+            .collect()
+    }
+}
+
 impl VideoEncoders for AndroidVideoEncoders {
     fn open(&self, config: &VideoEncodeConfig) -> Result<Box<dyn VideoEncodeBackend>, EncodeError> {
         Ok(Box::new(MediaCodecVideoEncoder::open(config)?))
@@ -933,8 +1207,69 @@ impl VideoEncoders for AndroidVideoEncoders {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AndroidAudioEncoders;
 
+impl AndroidAudioEncoders {
+    /// The audio codecs this device has the platform's encoder for, the ones sessions open.
+    ///
+    /// Each codec is probed by creating its encoder without configuring it, a few milliseconds
+    /// each.
+    #[must_use]
+    pub fn available_codecs(&self) -> Vec<AudioCodec> {
+        [AudioCodec::Aac, AudioCodec::Opus]
+            .into_iter()
+            .filter(|&codec| {
+                let (name, mime, _) = audio_encoder(codec);
+                platform_audio_encoder(name, mime).is_some()
+            })
+            .collect()
+    }
+}
+
 impl AudioEncoders for AndroidAudioEncoders {
     fn open(&self, config: &AudioEncodeConfig) -> Result<Box<dyn AudioEncodeBackend>, EncodeError> {
         Ok(Box::new(MediaCodecAudioEncoder::open(config)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::av1_config_record;
+
+    /// The `av1C` records of `tests/corpus/av1.mp4`, `av1-colocated.mp4` and
+    /// `av1-10bit-padded.mp4` (`FFmpeg`'s), each the four header bytes and a sequence header.
+    const RECORDS: [&[u8]; 3] = [
+        &[
+            0x81, 0x00, 0x0c, 0x00, 0x0a, 0x0a, 0x00, 0x00, 0x00, 0x02, 0xaf, 0xf7, 0x9b, 0x5f,
+            0x30, 0x08,
+        ],
+        &[
+            0x81, 0x00, 0x0e, 0x00, 0x0a, 0x0a, 0x00, 0x00, 0x00, 0x02, 0xaf, 0xf7, 0x9b, 0x5f,
+            0x30, 0x88,
+        ],
+        &[
+            0x81, 0x00, 0x4c, 0x00, 0x0a, 0x0e, 0x00, 0x00, 0x00, 0x04, 0x3c, 0xfe, 0xcc, 0xda,
+            0xf9, 0x50, 0x10, 0x10, 0x10, 0x40,
+        ],
+    ];
+
+    #[test]
+    fn the_av1_record_repeats_the_sequence_header() {
+        for record in RECORDS {
+            assert_eq!(av1_config_record(&record[4..]).as_deref(), Some(record));
+        }
+    }
+
+    #[test]
+    fn the_av1_record_skips_obus_before_the_sequence_header() {
+        // A temporal delimiter with an empty payload first.
+        let mut obus = vec![0x12, 0x00];
+        obus.extend_from_slice(&RECORDS[2][4..]);
+        assert_eq!(av1_config_record(&obus).as_deref(), Some(RECORDS[2]));
+    }
+
+    #[test]
+    fn no_av1_record_without_a_whole_sequence_header() {
+        assert_eq!(av1_config_record(&[0x12, 0x00]), None);
+        assert_eq!(av1_config_record(&RECORDS[0][4..10]), None);
+        assert_eq!(av1_config_record(&[]), None);
     }
 }
