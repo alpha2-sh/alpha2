@@ -52,6 +52,14 @@ pub struct FontFile {
     pub face_index: u32,
 }
 
+/// A font set with [`Alpha2::set_fonts`], with the family names text finds it by.
+#[derive(Clone, Debug)]
+pub(crate) struct LoadedFont {
+    pub bytes: Arc<[u8]>,
+    pub face_index: u32,
+    pub families: Vec<String>,
+}
+
 /// What [`Alpha2::conform`] reads.
 #[derive(Clone, Debug, Default, PartialEq, Eq, uniffi::Record)]
 pub struct ConformRequest {
@@ -119,7 +127,7 @@ pub struct ExportOutcome {
 pub struct Alpha2 {
     config: EngineConfig,
     platform: Arc<dyn Platform>,
-    fonts: Mutex<Vec<Arc<[u8]>>>,
+    fonts: Mutex<Vec<LoadedFont>>,
     paused: Arc<PauseGate>,
 }
 
@@ -158,8 +166,12 @@ impl Alpha2 {
                     font.face_index
                 )));
             }
+            kept.push(LoadedFont {
+                bytes: Arc::from(font.bytes),
+                face_index: font.face_index,
+                families: names.clone(),
+            });
             families.push(names);
-            kept.push(Arc::from(font.bytes));
         }
         *self
             .fonts
@@ -431,12 +443,20 @@ mod tests {
         fn on_progress(&self, _event: ExportProgressEvent) {}
     }
 
+    /// A file of the repository's `tests/`, or of `ALPHA2_TESTS_DIR` where a device runs the
+    /// tests from a copy.
+    fn tests_file(name: &str) -> std::path::PathBuf {
+        std::env::var_os("ALPHA2_TESTS_DIR")
+            .map_or_else(
+                || std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests"),
+                std::path::PathBuf::from,
+            )
+            .join(name)
+    }
+
     fn project() -> String {
-        std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tests/cases/host-parity-layout-project.json"),
-        )
-        .expect("project")
+        std::fs::read_to_string(tests_file("cases/host-parity-layout-project.json"))
+            .expect("project")
     }
 
     fn cpu() -> Arc<Alpha2> {
@@ -463,11 +483,7 @@ mod tests {
 
     #[test]
     fn fonts_answer_with_their_families_and_unreadable_ones_are_refused() {
-        let bytes = std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../tests/fonts/Alpha2Fixture.ttf"),
-        )
-        .expect("font");
+        let bytes = std::fs::read(tests_file("fonts/Alpha2Fixture.ttf")).expect("font");
         let engine = cpu();
         let families = engine
             .set_fonts(vec![FontFile {

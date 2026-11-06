@@ -7,19 +7,20 @@ use serde_json::{Value, json};
 
 use crate::error::Alpha2Error;
 use crate::session::{
-    ConformRequest, EngineConfig, ExportOutcome, ExportProgress, ExportRequest, PauseGate,
+    ConformRequest, EngineConfig, ExportOutcome, ExportProgress, ExportRequest, LoadedFont,
+    PauseGate,
 };
 
 /// Everything an export thread needs.
 pub(crate) struct ExportJob {
     pub request: ExportRequest,
-    #[allow(dead_code)]
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub config: EngineConfig,
-    #[allow(dead_code)]
-    pub fonts: Vec<Arc<[u8]>>,
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub fonts: Vec<LoadedFont>,
     pub cancel: CancelToken,
     pub paused: Arc<PauseGate>,
-    #[allow(dead_code)]
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     pub progress: Arc<dyn ExportProgress>,
 }
 
@@ -37,12 +38,69 @@ pub(crate) trait Platform: Send + Sync {
 
 /// The backend of the platform this library runs on.
 pub(crate) fn current() -> Arc<dyn Platform> {
+    #[cfg(target_os = "android")]
+    {
+        Arc::new(MediaPlatform {
+            name: "android",
+            media: crate::export::MediaBackends {
+                video_decoders: Arc::new(alpha2_android_media::AndroidVideo),
+                audio_decoders: Arc::new(alpha2_host_core::audio_stream::WithPcm(
+                    alpha2_android_media::AndroidAudio,
+                )),
+                video_encoders: Arc::new(alpha2_android_media::AndroidVideoEncoders),
+                audio_encoders: Arc::new(alpha2_android_media::AndroidAudioEncoders),
+            },
+        })
+    }
+    #[cfg(not(target_os = "android"))]
     Arc::new(NoMedia)
 }
 
+/// A platform's codecs behind the container layer.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) struct MediaPlatform {
+    pub name: &'static str,
+    pub media: crate::export::MediaBackends,
+}
+
+impl Platform for MediaPlatform {
+    fn media_capabilities(&self) -> Value {
+        json!({
+            "platform": self.name,
+            "containers": ["mp4", "mov"],
+            "videoEncoders": ["h264", "hevc"],
+            "audioEncoders": ["aac", "opus"],
+        })
+    }
+
+    fn conform(&self, request: &ConformRequest) -> Result<Value, Alpha2Error> {
+        // Whether each source's file opens: its container is read and a decoder takes it.
+        let sources = request
+            .assets
+            .iter()
+            .map(|(id, path)| {
+                let opened = crate::export::probe_source(std::path::Path::new(path), &self.media);
+                json!({
+                    "id": id,
+                    "path": path,
+                    "readable": opened.is_ok(),
+                    "reason": opened.err(),
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({ "sources": sources }))
+    }
+
+    fn export(&self, job: ExportJob) -> Result<ExportOutcome, Alpha2Error> {
+        crate::export::export(&job, &self.media)
+    }
+}
+
 /// A build without a media backend: renders nothing that reads or writes media.
+#[cfg(not(target_os = "android"))]
 struct NoMedia;
 
+#[cfg(not(target_os = "android"))]
 impl Platform for NoMedia {
     fn media_capabilities(&self) -> Value {
         json!({ "containers": [], "videoDecoders": [], "videoEncoders": [], "audioEncoders": [] })
@@ -62,6 +120,7 @@ impl Platform for NoMedia {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn unsupported() -> Alpha2Error {
     Alpha2Error::Unsupported {
         reason: format!(

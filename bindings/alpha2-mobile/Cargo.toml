@@ -24,19 +24,24 @@ default = []
 bindgen = ["uniffi/cli"]
 
 [dependencies]
+alpha2-container.workspace = true
+alpha2-engine.workspace = true
 alpha2-extensions = { workspace = true, features = ["svg", "animated-image", "image-sequence", "lottie", "exr", "latex", "pdf"] }
 alpha2-gpu.workspace = true
-alpha2-host-core.workspace = true
+alpha2-host-core = { workspace = true, features = ["engine"] }
 alpha2-media.workspace = true
 alpha2-model.workspace = true
 alpha2-os.workspace = true
+alpha2-render.workspace = true
 alpha2-text.workspace = true
+alpha2-time.workspace = true
 pollster.workspace = true
 serde_json.workspace = true
 thiserror = "2.0.20"
 uniffi = "=0.32.2"
 
 [target.'cfg(target_os = "android")'.dependencies]
+alpha2-android-media.workspace = true
 jni = "0.21"
 ndk-context = "0.1"
 ndk-sys = { version = "=0.6.0", features = ["nativewindow"] }
