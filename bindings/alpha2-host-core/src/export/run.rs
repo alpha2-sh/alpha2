@@ -15,6 +15,7 @@ use alpha2_time::MediaTime;
 use super::frame_store::FrameStore;
 use super::prepare::{GpuSource, prepare_cpu, prepare_gpu};
 use crate::cursor::{DecodeCursorKey, decode_cursor_key};
+use crate::encode::PlaneBuffer;
 
 /// Steps an export may wait on the same frame, refilling between them, before it fails: a frame
 /// still missing after this many refills will not arrive.
@@ -55,19 +56,6 @@ pub trait VideoSink {
         layout: PixelLayout,
         planes: &[PlaneBuffer],
     ) -> Result<(), EncodeError>;
-}
-
-/// One plane of a rendered picture.
-#[derive(Clone, Debug, Default)]
-pub struct PlaneBuffer {
-    /// The rows, `stride` bytes apart.
-    pub bytes: Vec<u8>,
-    /// Bytes between rows.
-    pub stride: usize,
-    /// Width in samples.
-    pub width: u32,
-    /// Height in rows.
-    pub height: u32,
 }
 
 /// Why an export stopped.

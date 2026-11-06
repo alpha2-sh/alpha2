@@ -141,6 +141,14 @@ fn samples_sit_at_their_packets_time_and_skip_samples_are_dropped() {
     let (start, samples) = linear(&mut open(&primed, 48_000));
     assert_eq!(start, 0);
     assert_eq!(samples.len(), 4_096 - 24);
+    // Priming of two packets, skipped from the first: the rest goes on into the second.
+    let mut primed = packets(0, 4);
+    primed.insert(0, (-1_024, 1_024, (0, 0)));
+    primed.insert(0, (-2_048, 1_024, (2_048, 0)));
+    let (start, samples) = linear(&mut open(&primed, 48_000));
+    assert_eq!(start, 0);
+    assert_eq!(samples.len(), 4_096);
+    assert_eq!(samples[0], value(0));
 }
 
 #[test]

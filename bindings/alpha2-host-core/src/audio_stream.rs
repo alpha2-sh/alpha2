@@ -247,6 +247,8 @@ pub struct AudioStream {
     pending_packet: Option<Packet>,
     /// Skip-samples of submitted packets, by presentation time.
     discards: HashMap<i64, (u32, u32)>,
+    /// Skip-samples a packet left over for the decoded audio after it.
+    carried_skip: usize,
     preroll: MediaTime,
     recovery: Recovery,
     info: Vec<StreamInfo>,
@@ -626,6 +628,7 @@ impl AudioStream {
             input: Input::Open,
             pending_packet: None,
             discards: HashMap::new(),
+            carried_skip: 0,
             preroll: if audio.codec == AudioCodec::Opus {
                 OPUS_SEEK_PREROLL
             } else {
@@ -710,6 +713,7 @@ impl AudioStream {
         self.input = Input::Open;
         self.pending_packet = None;
         self.discards.clear();
+        self.carried_skip = 0;
         self.recovery.reset_progress();
         Ok(())
     }
@@ -797,7 +801,12 @@ impl AudioStream {
         }
         let (front, back) = self.discards.remove(&chunk.pts).unwrap_or((0, 0));
         let length = chunk.planes[0].len();
-        let front = usize::try_from(front).unwrap_or(usize::MAX).min(length);
+        // Skip-samples longer than their packet go on into the next ones, as `FFmpeg` skips them.
+        let front = usize::try_from(front)
+            .unwrap_or(usize::MAX)
+            .saturating_add(std::mem::take(&mut self.carried_skip));
+        self.carried_skip = front.saturating_sub(length);
+        let front = front.min(length);
         let back = usize::try_from(back)
             .unwrap_or(usize::MAX)
             .min(length - front);

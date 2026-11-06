@@ -11,12 +11,25 @@ use alpha2_media::{
     AudioBlock, AudioBlockSink, CancelToken, ColorMetadata, EncodeError, Orientation, PixelLayout,
     SpeakerLayout, VideoRateControl,
 };
-use alpha2_time::{FrameRate, MediaTime};
+use alpha2_time::FrameRate;
 use bytes::Bytes;
 
 use crate::audio_frames::EncoderAudioInput;
 use crate::rate_control::AppliedRateControl;
 use crate::video_stream::Submit;
+
+/// One plane of a rendered picture.
+#[derive(Clone, Debug, Default)]
+pub struct PlaneBuffer {
+    /// The rows, `stride` bytes apart.
+    pub bytes: Vec<u8>,
+    /// Bytes between rows.
+    pub stride: usize,
+    /// Width in samples.
+    pub width: u32,
+    /// Height in rows.
+    pub height: u32,
+}
 
 /// What a video encoder is asked for.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,7 +96,7 @@ pub trait VideoEncodeBackend: Send {
     fn submit(
         &mut self,
         pts: i64,
-        planes: &[crate::export::PlaneBuffer],
+        planes: &[PlaneBuffer],
         keyframe: bool,
     ) -> Result<Submit, EncodeError>;
 
@@ -224,7 +237,10 @@ pub struct EncodeSink {
         AudioEncodeConfig,
     )>,
     audio_track: PendingTrack,
+    /// Samples handed to the audio encoder, at its rate.
     audio_pts: i64,
+    /// Every input is in: held audio packets go out.
+    finishing: bool,
 }
 
 impl std::fmt::Debug for EncodeSink {
@@ -262,6 +278,7 @@ impl EncodeSink {
             audio,
             audio_track: PendingTrack::new(),
             audio_pts: 0,
+            finishing: false,
         }
     }
 
@@ -407,16 +424,30 @@ impl EncodeSink {
             self.writer()?.write(packet)?;
         }
         if let Some(audio) = self.audio_track.id {
-            while let Some(packet) = self.audio_track.queued.pop_front() {
-                let frame = self
-                    .audio
-                    .as_ref()
-                    .map_or(1_024, |(encoder, _, _)| encoder.frame_size());
+            let frame = self.audio.as_ref().map_or(1_024, |(encoder, _, _)| {
+                i64::try_from(encoder.frame_size()).unwrap_or(1_024)
+            });
+            // Audio ends where the input does: a packet reaching past the samples written so far
+            // waits, and at the end its duration stops at the last input sample. Encoders pad
+            // their last frames; with the priming taken off, a packet starting at or after the
+            // end decodes to padding alone.
+            let end = self.audio_pts;
+            while let Some(packet) = self.audio_track.queued.front() {
+                let start = packet.pts - i64::from(priming);
+                if !self.finishing && start + frame > end {
+                    break;
+                }
+                let Some(packet) = self.audio_track.queued.pop_front() else {
+                    break;
+                };
+                if start >= end {
+                    continue;
+                }
                 let packet = Packet {
                     track: audio,
-                    pts: packet.pts - i64::from(priming),
+                    pts: start,
                     dts: packet.dts - i64::from(priming),
-                    duration: i64::try_from(frame).unwrap_or(1_024),
+                    duration: (end - start).clamp(1, frame),
                     keyframe: true,
                     data: packet.data,
                     discard: (0, 0),
@@ -473,6 +504,7 @@ impl EncodeSink {
                 return Err(EncodeError::Adapter("the encoders never drained".into()));
             }
         }
+        self.finishing = true;
         self.flush_tracks()?;
         if self.video_track.id.is_none() {
             return Err(EncodeError::Adapter(
@@ -487,14 +519,12 @@ impl EncodeSink {
     }
 }
 
-impl crate::export::VideoSink for EncodeSink {
-    fn write_video(
-        &mut self,
-        index: u64,
-        _time: MediaTime,
-        _layout: PixelLayout,
-        planes: &[crate::export::PlaneBuffer],
-    ) -> Result<(), EncodeError> {
+impl EncodeSink {
+    /// Encodes frame `index` of the export, its planes in the configured layout.
+    ///
+    /// # Errors
+    /// An encoder or writer failure.
+    pub fn write_frame(&mut self, index: u64, planes: &[PlaneBuffer]) -> Result<(), EncodeError> {
         let rate = self.video_config.frame_rate;
         let pts = i64::try_from(index).unwrap_or(i64::MAX)
             * i64::from(rate.denominator())
@@ -510,8 +540,20 @@ impl crate::export::VideoSink for EncodeSink {
                 }
             }
         }
-        self.drain(false, false)?;
-        Ok(())
+        self.drain(false, false).map(|_| ())
+    }
+}
+
+#[cfg(feature = "engine")]
+impl crate::export::VideoSink for EncodeSink {
+    fn write_video(
+        &mut self,
+        index: u64,
+        _time: alpha2_time::MediaTime,
+        _layout: PixelLayout,
+        planes: &[PlaneBuffer],
+    ) -> Result<(), EncodeError> {
+        self.write_frame(index, planes)
     }
 }
 

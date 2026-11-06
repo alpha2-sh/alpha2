@@ -4,13 +4,13 @@ use alpha2_container::MuxError;
 use alpha2_media::BitrateMode;
 
 use super::*;
-use crate::export::{PlaneBuffer, VideoSink};
 
 /// What the writer saw, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Event {
     Track(TrackKind, u32),
-    Packet(TrackId, i64, bool),
+    /// Track, presentation time, duration, keyframe.
+    Packet(TrackId, i64, i64, bool),
     Finished,
 }
 
@@ -44,8 +44,12 @@ impl ContainerWriter for Writer {
 
     fn write(&mut self, packet: Packet) -> Result<(), MuxError> {
         self.written = true;
-        self.log
-            .push(Event::Packet(packet.track, packet.pts, packet.keyframe));
+        self.log.push(Event::Packet(
+            packet.track,
+            packet.pts,
+            packet.duration,
+            packet.keyframe,
+        ));
         Ok(())
     }
 
@@ -127,6 +131,8 @@ impl VideoEncodeBackend for Video {
 #[derive(Default)]
 struct Audio {
     packets: VecDeque<(i64, usize)>,
+    /// Where the frame after the last one submitted starts, in samples.
+    next: i64,
     ended: bool,
 }
 
@@ -146,6 +152,7 @@ impl AudioEncodeBackend for Audio {
     fn submit(&mut self, pts: i64, planes: &[Vec<f32>]) -> Result<Submit, EncodeError> {
         assert_eq!(planes.len(), 2);
         self.packets.push_back((pts, planes[0].len()));
+        self.next = pts + 1_024;
         Ok(Submit::Accepted)
     }
 
@@ -163,6 +170,10 @@ impl AudioEncodeBackend for Audio {
     }
 
     fn finish_input(&mut self) -> Result<(), EncodeError> {
+        // Flushing gives the priming's worth of padding frames, as transform codecs do.
+        for frame in 0..3 {
+            self.packets.push_back((self.next + frame * 1_024, 1_024));
+        }
         self.ended = true;
         Ok(())
     }
@@ -232,8 +243,7 @@ fn sink(log: &Log, audio: bool) -> EncodeSink {
 
 fn write_frames(sink: &mut EncodeSink, count: u64) {
     for index in 0..count {
-        sink.write_video(index, MediaTime::ZERO, PixelLayout::YUV420P, &planes())
-            .expect("frame");
+        sink.write_frame(index, &planes()).expect("frame");
     }
 }
 
@@ -244,8 +254,7 @@ fn video_waits_for_its_configuration_and_is_timed_by_frame_index() {
     write_frames(&mut sink, 1);
     assert!(log.events().is_empty(), "no track before the configuration");
     for index in 1..5 {
-        sink.write_video(index, MediaTime::ZERO, PixelLayout::YUV420P, &planes())
-            .expect("frame");
+        sink.write_frame(index, &planes()).expect("frame");
     }
     sink.finish().expect("finish");
     let events = log.events();
@@ -253,7 +262,7 @@ fn video_waits_for_its_configuration_and_is_timed_by_frame_index() {
     let packets = events
         .iter()
         .filter_map(|event| match event {
-            Event::Packet(_, pts, keyframe) => Some((*pts, *keyframe)),
+            Event::Packet(_, pts, _, keyframe) => Some((*pts, *keyframe)),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -300,12 +309,22 @@ fn audio_is_cut_into_encoder_frames_and_shifted_back_by_its_priming() {
     let audio = events
         .iter()
         .filter_map(|event| match event {
-            Event::Packet(TrackId(2), pts, _) => Some(*pts),
+            Event::Packet(TrackId(2), pts, duration, _) => Some((*pts, *duration)),
             _ => None,
         })
         .collect::<Vec<_>>();
-    // 3000 samples: two whole frames and a short last one.
-    assert_eq!(audio, [-2_112, -1_088, -64]);
+    // 3000 samples after 2112 of priming: the packets up to the last input sample, the last one
+    // cut short there; the padding packets after it are dropped.
+    assert_eq!(
+        audio,
+        [
+            (-2_112, 1_024),
+            (-1_088, 1_024),
+            (-64, 1_024),
+            (960, 1_024),
+            (1_984, 1_016)
+        ]
+    );
 }
 
 #[test]

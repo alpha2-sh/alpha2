@@ -69,6 +69,10 @@ pub struct SequenceFacts {
     pub crop: CropWindow,
     /// `chroma_format_idc`: 0 monochrome, 1 4:2:0, 2 4:2:2, 3 4:4:4.
     pub chroma_format: u32,
+    /// Luma bits per sample.
+    pub bit_depth_luma: u32,
+    /// Chroma bits per sample.
+    pub bit_depth_chroma: u32,
     /// The VUI; empty when absent or unreadable.
     pub vui: Vui,
 }
@@ -91,6 +95,105 @@ pub fn sequence_facts(codec: ParameterSetCodec, extradata: &[u8]) -> Option<Sequ
     let hevc = codec == ParameterSetCodec::Hevc;
     let nal = *sequence_parameter_sets(hevc, extradata).first()?;
     if hevc { hevc_sps(nal) } else { h264_sps(nal) }
+}
+
+/// `annex_b`'s NAL units with 4-byte big-endian lengths in place of start codes, as MP4 stores
+/// H.264 and HEVC samples.
+#[must_use]
+pub fn length_prefixed_units(annex_b: &[u8]) -> Vec<u8> {
+    let units = annex_b_units(annex_b);
+    let mut out = Vec::with_capacity(annex_b.len() + units.len());
+    for unit in units {
+        out.extend_from_slice(&u32::try_from(unit.len()).unwrap_or(u32::MAX).to_be_bytes());
+        out.extend_from_slice(unit);
+    }
+    out
+}
+
+/// The `avcC` record (ISO/IEC 14496-15 5.3.3.1) of the SPS and PPS units in `annex_b`, with
+/// 4-byte NAL lengths; `None` without a readable SPS and a PPS.
+#[must_use]
+pub fn avc_decoder_config(annex_b: &[u8]) -> Option<Vec<u8>> {
+    let units = annex_b_units(annex_b);
+    let of_type = |kind: u8| -> Vec<&[u8]> {
+        units
+            .iter()
+            .copied()
+            .filter(|unit| unit[0] & 0x1f == kind)
+            .collect()
+    };
+    let (sps, pps) = (of_type(7), of_type(8));
+    let first = *sps.first()?;
+    if pps.is_empty() || first.len() < 4 {
+        return None;
+    }
+    let facts = h264_sps(first)?;
+    let mut record = vec![1, first[1], first[2], first[3], 0xff];
+    record.push(0xe0 | u8::try_from(sps.len()).ok().filter(|count| *count < 32)?);
+    for unit in &sps {
+        record.extend_from_slice(&u16::try_from(unit.len()).ok()?.to_be_bytes());
+        record.extend_from_slice(unit);
+    }
+    record.push(u8::try_from(pps.len()).ok()?);
+    for unit in &pps {
+        record.extend_from_slice(&u16::try_from(unit.len()).ok()?.to_be_bytes());
+        record.extend_from_slice(unit);
+    }
+    // The High profiles' extension: chroma format and bit depths, no SPS extensions.
+    if matches!(first[1], 100 | 110 | 122 | 144) {
+        record.push(0xfc | u8::try_from(facts.chroma_format & 3).ok()?);
+        record.push(0xf8 | u8::try_from(facts.bit_depth_luma.checked_sub(8)? & 7).ok()?);
+        record.push(0xf8 | u8::try_from(facts.bit_depth_chroma.checked_sub(8)? & 7).ok()?);
+        record.push(0);
+    }
+    Some(record)
+}
+
+/// The `hvcC` record (ISO/IEC 14496-15 8.3.3.1) of the VPS, SPS and PPS units in `annex_b`, with
+/// 4-byte NAL lengths; `None` without a readable SPS.
+#[must_use]
+pub fn hevc_decoder_config(annex_b: &[u8]) -> Option<Vec<u8>> {
+    let units = annex_b_units(annex_b);
+    let kind = |unit: &[u8]| (unit[0] >> 1) & 0x3f;
+    let sps = *units
+        .iter()
+        .find(|unit| unit.len() > 2 && kind(unit) == 33)?;
+    let facts = hevc_sps(sps)?;
+    // After the NAL header: VPS id, sub-layer count and nesting, then the general profile, tier
+    // and level that the record repeats (12 bytes).
+    let payload = unescape(sps.get(2..)?);
+    let general = payload.get(1..13)?;
+    let sub_layers = (payload[0] >> 1) & 7;
+    let nested = payload[0] & 1;
+    let mut record = vec![1];
+    record.extend_from_slice(general);
+    record.extend_from_slice(&[0xf0, 0x00, 0xfc]); // no segmentation or parallelism declared
+    record.push(0xfc | u8::try_from(facts.chroma_format & 3).ok()?);
+    record.push(0xf8 | u8::try_from(facts.bit_depth_luma.checked_sub(8)? & 7).ok()?);
+    record.push(0xf8 | u8::try_from(facts.bit_depth_chroma.checked_sub(8)? & 7).ok()?);
+    record.extend_from_slice(&[0, 0]); // average frame rate unknown
+    record.push(((sub_layers + 1) << 3) | (nested << 2) | 3);
+    let arrays = [32, 33, 34]
+        .into_iter()
+        .map(|wanted| {
+            units
+                .iter()
+                .copied()
+                .filter(|unit| unit.len() > 2 && kind(unit) == wanted)
+                .collect::<Vec<_>>()
+        })
+        .filter(|array| !array.is_empty())
+        .collect::<Vec<_>>();
+    record.push(u8::try_from(arrays.len()).ok()?);
+    for array in arrays {
+        record.push(0x80 | kind(array[0]));
+        record.extend_from_slice(&u16::try_from(array.len()).ok()?.to_be_bytes());
+        for unit in array {
+            record.extend_from_slice(&u16::try_from(unit.len()).ok()?.to_be_bytes());
+            record.extend_from_slice(unit);
+        }
+    }
+    Some(record)
 }
 
 /// The crop windows of every SPS in `extradata` (`avcC`, `hvcC` or Annex B); `None` when one does
@@ -249,6 +352,17 @@ fn avcc_units(data: &[u8]) -> Vec<&[u8]> {
     let mut at = 6;
     for _ in 0..(count & 0x1f) {
         let Some((nal, next)) = length_prefixed(data, at) else {
+            return units;
+        };
+        units.push(nal);
+        at = next;
+    }
+    let Some(&count) = data.get(at) else {
+        return units;
+    };
+    at += 1;
+    for _ in 0..count {
+        let Some((nal, next)) = length_prefixed(data, at) else {
             break;
         };
         units.push(nal);
@@ -315,7 +429,7 @@ fn h264_sps(nal: &[u8]) -> Option<SequenceFacts> {
     let profile = bits.read(8)?;
     bits.skip(16)?; // constraint flags and level_idc
     bits.ue()?; // seq_parameter_set_id
-    let mut chroma_format = 1;
+    let (mut chroma_format, mut bit_depth_luma, mut bit_depth_chroma) = (1, 8, 8);
     if matches!(
         profile,
         100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
@@ -324,8 +438,8 @@ fn h264_sps(nal: &[u8]) -> Option<SequenceFacts> {
         if chroma_format == 3 {
             bits.skip(1)?; // separate_colour_plane_flag
         }
-        bits.ue()?; // bit_depth_luma_minus8
-        bits.ue()?; // bit_depth_chroma_minus8
+        bit_depth_luma = bits.ue()?.saturating_add(8);
+        bit_depth_chroma = bits.ue()?.saturating_add(8);
         bits.skip(1)?; // qpprime_y_zero_transform_bypass_flag
         if bits.flag()? {
             for list in 0..if chroma_format == 3 { 12 } else { 8 } {
@@ -387,6 +501,8 @@ fn h264_sps(nal: &[u8]) -> Option<SequenceFacts> {
     Some(SequenceFacts {
         crop,
         chroma_format,
+        bit_depth_luma,
+        bit_depth_chroma,
         vui,
     })
 }
@@ -518,18 +634,20 @@ fn hevc_sps(nal: &[u8]) -> Option<SequenceFacts> {
         crop.top = top.saturating_mul(unit_y);
         crop.bottom = bottom.saturating_mul(unit_y);
     }
+    let bit_depth_luma = bits.ue()?.saturating_add(8);
+    let bit_depth_chroma = bits.ue()?.saturating_add(8);
     let vui = hevc_vui(&mut bits, sub_layers, chroma_format).unwrap_or_default();
     Some(SequenceFacts {
         crop,
         chroma_format,
+        bit_depth_luma,
+        bit_depth_chroma,
         vui,
     })
 }
 
-/// The HEVC SPS fields from `bit_depth_luma_minus8` to the VUI, then the VUI.
+/// The HEVC SPS fields from `log2_max_pic_order_cnt_lsb_minus4` to the VUI, then the VUI.
 fn hevc_vui(bits: &mut Bits<'_>, sub_layers: u32, chroma_format: u32) -> Option<Vui> {
-    bits.ue()?; // bit_depth_luma_minus8
-    bits.ue()?; // bit_depth_chroma_minus8
     let poc_lsb_bits = bits.ue()?.checked_add(4)?;
     let first = if bits.flag()? { 0 } else { sub_layers };
     for _ in first..=sub_layers {
@@ -691,7 +809,8 @@ impl<'a> Bits<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HevcLayers, ParameterSetCodec, crop_window, hevc_layers, leading_crop, sequence_facts,
+        HevcLayers, ParameterSetCodec, avc_decoder_config, crop_window, hevc_decoder_config,
+        hevc_layers, leading_crop, length_prefixed_units, sequence_facts,
     };
 
     /// The VPS of `tests/corpus/hevc-alpha.mov` (`hevc_videotoolbox` with `-alpha_quality`): two
@@ -910,6 +1029,54 @@ mod tests {
             assert_eq!(facts.vui.color, color, "{name}");
             assert_eq!(facts.chroma_location(), Some(chroma), "{name}");
         }
+    }
+
+    /// The configuration record after `tag` in a corpus file.
+    fn record(name: &str, tag: &[u8]) -> Vec<u8> {
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
+        let file = std::fs::read(corpus.join(name)).expect(name);
+        let at = file
+            .windows(4)
+            .position(|window| window == tag)
+            .expect("decoder configuration");
+        let size = u32::from_be_bytes(file[at - 4..at].try_into().expect("size")) as usize;
+        file[at + 4..at - 4 + size].to_vec()
+    }
+
+    /// Parameter sets with start codes, as an encoder emits them.
+    fn annex_b_of(units: &[&[u8]]) -> Vec<u8> {
+        units
+            .iter()
+            .flat_map(|unit| [&[0, 0, 0, 1][..], unit].concat())
+            .collect()
+    }
+
+    #[test]
+    fn decoder_configurations_are_rebuilt_from_annex_b_parameter_sets() {
+        let avcc = record("h264-bt709-copy.mp4", b"avcC");
+        let units = super::avcc_units(&avcc);
+        let built = avc_decoder_config(&annex_b_of(&units)).expect("avcC");
+        assert_eq!(built, avcc);
+        let hvcc = record("hevc-hvc1.mp4", b"hvcC");
+        let built = hevc_decoder_config(&annex_b_of(&super::hvcc_units(&hvcc))).expect("hvcC");
+        // Equal but for what the encoder may declare beyond the parameter sets: spatial
+        // segmentation, parallelism, frame rate and its SEI array.
+        assert_eq!(built[..13], hvcc[..13]);
+        assert_eq!(built[16..19], hvcc[16..19]);
+        assert_eq!(built[21] & 0x3f, hvcc[21] & 0x3f);
+        let parameter_sets = |record: &[u8]| {
+            super::hvcc_units(record)
+                .into_iter()
+                .filter(|unit| matches!((unit[0] >> 1) & 0x3f, 32..=34))
+                .map(<[u8]>::to_vec)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(parameter_sets(&built), parameter_sets(&hvcc));
+        assert_eq!(built[22], 3);
+        assert_eq!(
+            length_prefixed_units(&[0, 0, 0, 1, 0x65, 9, 0, 0, 1, 0x41, 7]),
+            [0, 0, 0, 2, 0x65, 9, 0, 0, 0, 2, 0x41, 7]
+        );
     }
 
     #[test]
