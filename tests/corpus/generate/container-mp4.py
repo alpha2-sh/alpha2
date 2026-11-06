@@ -209,7 +209,9 @@ def facts(path):
             track["channel_layout"] = stream.get("channel_layout")
             track["bits_per_sample"] = stream.get("bits_per_sample")
             track["speakers"] = (
-                speakers(stream.get("channel_layout")) if kinds & {b"chan", b"chnl"} else None
+                speakers(stream.get("channel_layout"))
+                if kinds & {b"chan", b"chnl", b"dac3", b"dec3"}
+                else None
             )
         track.update(packets_of(report.get("packets", []), stream["index"]))
         tracks.append(track)

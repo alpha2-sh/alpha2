@@ -18,6 +18,7 @@ mod audio;
 mod error;
 mod mp4;
 
+pub use audio::vorbis_order;
 pub use error::{DemuxError, MuxError};
 pub use mp4::{Mp4Flavor, Mp4Reader, Mp4Writer};
 

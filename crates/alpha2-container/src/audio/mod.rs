@@ -184,8 +184,9 @@ pub(crate) fn speakers_from_mask(mask: u64, channels: u32) -> Option<SpeakerLayo
     SpeakerLayout::new(&speakers)
 }
 
-/// The speakers of Vorbis's channel order (also Opus mapping family 1) for 1 to 8 channels.
-pub(crate) fn vorbis_order(channels: u32) -> Option<SpeakerLayout> {
+/// The speakers of Vorbis's coded channel order (also Opus mapping family 1) for 1 to 8 channels.
+#[must_use]
+pub fn vorbis_order(channels: u32) -> Option<SpeakerLayout> {
     use Speaker::{
         BackCenter, BackLeft, BackRight, FrontCenter, FrontLeft, FrontRight, LowFrequency,
         SideLeft, SideRight,

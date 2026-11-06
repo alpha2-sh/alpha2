@@ -752,8 +752,8 @@ const ISO_POSITIONS: [i64; 43] = [
     35, 39, 40, 38, 43, 44, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
 ];
 
-/// The speaker layout `chan` or `chnl` declares for `channels` channels, as `FFmpeg` reads it;
-/// `None` when they declare none or name no loudspeaker.
+/// The speaker layout `chan`, `chnl`, `SA3D` or an AC-3 `dac3`/`dec3` declares for `channels`
+/// channels, as `FFmpeg` reads it; `None` when they declare none or name no loudspeaker.
 fn speakers(entry: &SampleEntry, channels: u32) -> Option<SpeakerLayout> {
     if channels as usize > MAX_AUDIO_CHANNELS {
         return None;
@@ -779,6 +779,10 @@ fn speakers(entry: &SampleEntry, channels: u32) -> Option<SpeakerLayout> {
                     declared = Some(found);
                 }
             }
+            b"dac3" | b"dec3" if declared.is_none() => {
+                declared = dolby_layout(child.kind.0 == *b"dec3", child.payload())
+                    .filter(|found| found.len() == channels as usize);
+            }
             _ => {}
         }
     }
@@ -790,6 +794,38 @@ fn speakers(entry: &SampleEntry, channels: u32) -> Option<SpeakerLayout> {
         return None;
     }
     SpeakerLayout::new(&speakers)
+}
+
+/// The `FFmpeg` channels a `dac3` or `dec3` box's audio coding mode and LFE flag name (for
+/// E-AC-3, of the first independent substream, with no dependent ones).
+fn dolby_layout(enhanced: bool, payload: &[u8]) -> Option<Vec<i64>> {
+    /// `acmod` 0 to 7: 1+1, 1/0, 2/0, 3/0, 2/1, 3/1, 2/2, 3/2 (`FL` 0, `FR` 1, `FC` 2, `BC` 8,
+    /// `SL` 9, `SR` 10).
+    const MODES: [&[i64]; 8] = [
+        &[0, 1],
+        &[2],
+        &[0, 1],
+        &[0, 1, 2],
+        &[0, 1, 8],
+        &[0, 1, 2, 8],
+        &[0, 1, 9, 10],
+        &[0, 1, 2, 9, 10],
+    ];
+    let (bytes, mode_shift) = if enhanced {
+        (payload.get(2..5)?, 9)
+    } else {
+        (payload.get(..3)?, 11)
+    };
+    let info = u32::from(bytes[0]) << 16 | u32::from(bytes[1]) << 8 | u32::from(bytes[2]);
+    if enhanced && (info >> 1) & 0xf != 0 {
+        return None;
+    }
+    let mut channels = MODES[(info >> mode_shift & 7) as usize].to_vec();
+    if info >> (mode_shift - 1) & 1 == 1 {
+        channels.push(3);
+    }
+    channels.sort_unstable();
+    Some(channels)
 }
 
 fn chan_layout(payload: &[u8], channels: u32) -> Option<Vec<i64>> {

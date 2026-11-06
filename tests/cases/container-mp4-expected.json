@@ -967,7 +967,14 @@
      "packet_count": 16,
      "packets_sha256": "0781b658a5fb6d400dc3c63f9ab6e140d3c9f2868aa83b1e54e7029a27c31d1d",
      "sample_rate": 48000,
-     "speakers": null,
+     "speakers": [
+      "FL",
+      "FR",
+      "FC",
+      "LFE",
+      "SL",
+      "SR"
+     ],
      "timescale": 48000,
      "title": null
     }
@@ -1153,7 +1160,13 @@
      "packet_count": 16,
      "packets_sha256": "d19e016c74001fa7c8d418e90838de1192bca019fbb8ad77e8d6655fe724c0dc",
      "sample_rate": 48000,
-     "speakers": null,
+     "speakers": [
+      "FL",
+      "FR",
+      "FC",
+      "SL",
+      "SR"
+     ],
      "timescale": 48000,
      "title": null
     }
