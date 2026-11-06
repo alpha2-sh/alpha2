@@ -143,7 +143,7 @@ The crates an iOS or Android app links build for `aarch64-apple-ios`, `aarch64-a
   adb shell "cd /data/local/tmp/alpha2-test && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test ./<test binary> --test-threads 1"
   ```
 
-  Debug builds name GPU objects, which the emulator's Vulkan driver crashes on; run them there with `WGPU_DEBUG=0`. A test process has no app context, so audio output and anything else that needs one is tested through the Android library below.
+  The simulator passes environment variables prefixed with `SIMCTL_CHILD_`, so run them there with `SIMCTL_CHILD_ALPHA2_TESTS_DIR=$PWD/tests xcrun simctl spawn <device> <binary>`; macOS runs `alpha2-apple-media`'s tests natively with `cargo test`. Debug builds name GPU objects, which the Android emulator's Vulkan driver crashes on; run them there with `WGPU_DEBUG=0`. A test process has no app context, so audio output and anything else that needs one is tested through the Android library below.
 
 #### The Android library
 

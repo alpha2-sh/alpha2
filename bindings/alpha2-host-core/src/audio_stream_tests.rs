@@ -152,6 +152,17 @@ fn samples_sit_at_their_packets_time_and_skip_samples_are_dropped() {
 }
 
 #[test]
+fn skip_samples_longer_than_their_packet_continue_into_the_next() {
+    // 2112 samples of priming over 1024-sample packets, all on the first one.
+    let mut primed = packets(-2_112, 6);
+    primed[0].2 = (2_112, 0);
+    let (start, samples) = linear(&mut open(&primed, 48_000));
+    assert_eq!(start, 0);
+    assert_eq!(samples.len(), 6 * 1_024 - 2_112);
+    assert_eq!(samples[0], value(0));
+}
+
+#[test]
 fn a_timestamp_gap_is_silence_and_an_overlap_is_dropped() {
     let mut gapped = packets(0, 2);
     gapped.extend(packets(4_096, 2));
