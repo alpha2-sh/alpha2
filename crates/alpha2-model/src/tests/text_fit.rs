@@ -6,7 +6,7 @@ use crate::{
 fn text_generator(style: TextStyle) -> Generator {
     Generator::Text {
         text: "Hello".into(),
-        style,
+        style: Box::new(style),
     }
 }
 

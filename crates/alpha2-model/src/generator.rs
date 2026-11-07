@@ -117,8 +117,6 @@ impl Serialize for Rgba {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-// A document holds few generators; the text style stays inline so every reader matches it as is.
-#[allow(clippy::large_enum_variant)]
 pub enum Generator {
     /// Paint over the whole picture.
     Fill {
@@ -140,7 +138,7 @@ pub enum Generator {
         /// How it looks and where it lies. The font size is at most
         /// [`MAX_TEXT_GENERATOR_FONT_SIZE`].
         #[serde(default)]
-        style: TextStyle,
+        style: Box<TextStyle>,
     },
     /// Boxes laid out by CSS flexbox around their text and shapes, with the engine's fonts. Any
     /// value in the tree may be keyframed in picture time. See [`LayoutNode`].

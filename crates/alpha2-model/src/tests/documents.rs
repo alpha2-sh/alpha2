@@ -30,7 +30,7 @@ pub(crate) fn with_effect(mut project: Project, effect: crate::ClipEffect) -> Pr
 fn a_project_draws_text_through_a_caption_track_a_source_or_a_composition() {
     let text = || crate::Generator::Text {
         text: "Title".into(),
-        style: crate::TextStyle::default(),
+        style: Box::default(),
     };
     let fill = crate::Generator::Fill {
         paint: crate::Paint::Solid {

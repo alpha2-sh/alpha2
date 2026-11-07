@@ -1052,7 +1052,7 @@ impl<'a> Context<'a> {
                 let text_point = style.position;
                 let source = self.generated_source(Generator::Text {
                     text: text.text.clone().into(),
-                    style,
+                    style: Box::new(style),
                 });
                 let mut clip = Clip::new(
                     self.clip_id(),
