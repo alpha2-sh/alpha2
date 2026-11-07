@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Generic, Literal, Never, NotRequired, TypeAlias, TypeVar, TypedDict
+from typing import Any, Generic, Literal, Never, NotRequired, TypeAlias, TypeVar, TypedDict
 
 from .types import (
     AlignContent,
@@ -149,6 +149,12 @@ FIT_VALUES: tuple[Fit, ...] = ("contain", "cover", "fill", "none")
 GRID_LENGTH_VALUES: tuple[GridLength, ...] = ("shortest", "longest_freeze", "longest_loop")
 """Every `GridLength`, in the model's order."""
 
+LENGTH_TOKEN_VALUES: tuple[LengthToken, ...] = ("margin", "title_size", "subtitle_size", "body_size", "caption_size", "label_size")
+"""Every `LengthToken`, in the model's order."""
+
+MATTE_USE_VALUES: tuple[MatteUse, ...] = ("alpha", "luma")
+"""Every `MatteUse`, in the model's order."""
+
 MOTION_KIND_VALUES: tuple[MotionKind, ...] = ("fade", "rise", "slide", "scale")
 """Every `MotionKind`, in the model's order."""
 
@@ -161,47 +167,75 @@ REVEAL_UNIT_VALUES: tuple[RevealUnit, ...] = ("word", "line")
 TEXT_ROLE_VALUES: tuple[TextRole, ...] = ("title", "subtitle", "body", "label")
 """Every `TextRole`, in the model's order."""
 
+THEME_TOKEN_VALUES: tuple[ThemeToken, ...] = ("text", "background", "surface", "panel", "accent")
+"""Every `ThemeToken`, in the model's order."""
 
-class VideoSpec(TypedDict):
-    """A whole video: a body, what is drawn over it, and what plays under it."""
+WHEN_LONG_VALUES: tuple[WhenLong, ...] = ("trim", "stretch", "error")
+"""Every `WhenLong`, in the model's order."""
 
-    audio: NotRequired[list[Node]]
-    """Sound beside the body's: `audio` and `music_bed` nodes, placed as overlays are."""
-    body: Node
-    """The main picture, from time zero. Its length is the video's unless `duration` says
-    otherwise.
-    """
-    canvas: NotRequired[Canvas]
-    """Size, rate and background. Default `youtube-1080p`.
+WHEN_SHORT_VALUES: tuple[WhenShort, ...] = ("freeze", "loop", "stretch", "blank", "error")
+"""Every `WhenShort`, in the model's order."""
 
-    Default: `"youtube-1080p"`.
-    """
-    compose_version: NotRequired[Literal[1]]
-    """Spec version. This build reads only `COMPOSE_VERSION`.
 
-    Default: `1`.
-    """
-    duration: NotRequired[float | None]
-    """The video's length in seconds. Default: the body's."""
-    loudness: NotRequired[Loudness | None]
-    """The loudness an export normalizes the mix to. Returned as an export option, not stored
-    in the project.
-    """
-    name: NotRequired[str | None]
-    """The project's name. Default `video`."""
-    overlays: NotRequired[list[Node]]
-    """Nodes drawn over the body in order, placed by their own `at` (default 0) and lasting to
-    the end unless they say otherwise.
-    """
-    theme: NotRequired[ThemeChoice]
-    """Fonts, colors, sizes and default timings. Default `clean-dark`.
-
-    Default: `"clean-dark"`.
-    """
+VideoSpec = TypedDict(
+    "VideoSpec",
+    {
+        "$schema": "NotRequired[str | None]",
+        "audio": "NotRequired[list[Node]]",
+        "body": "Node",
+        "canvas": "NotRequired[Canvas]",
+        "compose_version": "NotRequired[Literal[1]]",
+        "duration": "NotRequired[float | None]",
+        "loudness": "NotRequired[Loudness | None]",
+        "name": "NotRequired[str | None]",
+        "overlays": "NotRequired[list[Node]]",
+        "theme": "NotRequired[ThemeChoice]",
+    },
+)
+VideoSpec.__doc__ = "A whole video: a body, what is drawn over it, and what plays under it."
 
 
 Align: TypeAlias = Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]
 """A point of an area: its center, an edge's middle or a corner."""
+
+
+Anim: TypeAlias = "Ramp | Keys | float"
+"""A value over a node's time: a constant, a ramp from one value to another, or keys. Times are
+seconds from the node's start.
+"""
+
+
+Anim2: TypeAlias = "Ramp2 | Keys2 | list[float]"
+"""A value over a node's time: a constant, a ramp from one value to another, or keys. Times are
+seconds from the node's start.
+"""
+
+
+class BoxBorder(TypedDict):
+    """A box border."""
+
+    paint: PaintChoice
+    """What covers it."""
+    width: LayoutSize2
+    """Width, as a layout size: a fraction of the picture's shorter side or `"<n>px"`."""
+
+
+BoxChild: TypeAlias = "PlacedChild | Node"
+"""A box's child: a node, or `{"box": item fields, "node": node}` when it has item fields (size,
+flex or grid placement, `aspect_ratio`, `border_radius`, `margin`).
+"""
+
+
+BoxNode: TypeAlias = dict[str, Any]
+"""A box laid out by CSS flexbox (the default) or grid, filling the node's area. Its fields are
+the engine layout's container fields as CSS writes them (`flex_direction`, `gap`,
+`"8px 16px"` paddings, `"repeat(3, 1fr)"` tracks); `background` and `border` take theme
+colors.
+
+Text, shapes, colors and boxes among its children are drawn by the layout itself. Any other
+child (a video, a group, a sequence) gets a place in the layout and is drawn there, clipped to
+its rounded corners; such a place keeps still.
+"""
 
 
 Canvas: TypeAlias = "str | CustomCanvas"
@@ -217,7 +251,7 @@ class CaptionsNode(TypedDict):
 
     at: NotRequired[float | None]
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """Text color. Default: the theme's."""
     cues: NotRequired[list[Cue]]
     """Cues as given, in seconds from the node's start."""
@@ -225,9 +259,9 @@ class CaptionsNode(TypedDict):
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
     file: NotRequired[str | None]
     """A SubRip (`.srt`) or WebVTT (`.vtt`) file, read by the binding."""
-    font_size: NotRequired[float | None]
+    font_size: NotRequired[Size | None]
     """Font size in pixels. Default: the theme's caption size."""
-    highlight: NotRequired[Rgba | None]
+    highlight: NotRequired[SolidColor | None]
     """The color `karaoke` and `pop` give the word being said. Default: the theme's accent."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
@@ -256,6 +290,13 @@ class CaptionsNode(TypedDict):
     """Words with their times, as speech recognition gives them, grouped into cues of up to
     `max_chars` characters.
     """
+
+
+class ConicPaint(TypedDict):
+    """`{"conic": gradient}`."""
+
+    conic: Gradient
+    """The gradient."""
 
 
 class Cue(TypedDict):
@@ -298,6 +339,743 @@ project easing object.
 """
 
 
+class EffectKeys_boolKeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: bool
+
+
+class EffectKeys_bool(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_boolKeysItem]
+
+
+class EffectKeys_choiceKeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: str
+
+
+class EffectKeys_choice(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_choiceKeysItem]
+
+
+class EffectKeys_colorKeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: Rgba
+
+
+class EffectKeys_color(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_colorKeysItem]
+
+
+class EffectKeys_numberKeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: float
+
+
+class EffectKeys_number(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_numberKeysItem]
+
+
+class EffectKeys_vec2KeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: list[float]
+
+
+class EffectKeys_vec2(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_vec2KeysItem]
+
+
+class EffectKeys_vec4KeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: list[float]
+
+
+class EffectKeys_vec4(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_vec4KeysItem]
+
+
+EffectRamp_bool = TypedDict(
+    "EffectRamp_bool",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "bool",
+        "to": "bool",
+    },
+)
+EffectRamp_bool.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+EffectRamp_choice = TypedDict(
+    "EffectRamp_choice",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "str",
+        "to": "str",
+    },
+)
+EffectRamp_choice.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+EffectRamp_color = TypedDict(
+    "EffectRamp_color",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "Rgba",
+        "to": "Rgba",
+    },
+)
+EffectRamp_color.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+EffectRamp_number = TypedDict(
+    "EffectRamp_number",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "float",
+        "to": "float",
+    },
+)
+EffectRamp_number.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+EffectRamp_vec2 = TypedDict(
+    "EffectRamp_vec2",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "list[float]",
+        "to": "list[float]",
+    },
+)
+EffectRamp_vec2.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+EffectRamp_vec4 = TypedDict(
+    "EffectRamp_vec4",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "list[float]",
+        "to": "list[float]",
+    },
+)
+EffectRamp_vec4.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+class EffectUseColorControls(TypedDict):
+    contrast: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["color-controls"]
+    exposure: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    saturation: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    temperature: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    tint: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLut3d(TypedDict):
+    effect: Literal["lut-3d"]
+    strength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseInvert(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["invert"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseBlackAndWhite(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    blue: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["black-and-white"]
+    green: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    red: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSepia(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["sepia"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseDuotone(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["duotone"]
+    highlights: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    shadows: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseGradientMap(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["gradient-map"]
+    highlights: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    midpoint: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    midtones: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    shadows: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUsePosterize(TypedDict):
+    effect: Literal["posterize"]
+    levels: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseThreshold(TypedDict):
+    effect: Literal["threshold"]
+    level: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLevels(TypedDict):
+    channel: NotRequired[Literal["all", "red", "green", "blue"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["levels"]
+    gamma: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    input_black: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    input_white: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    output_black: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    output_white: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseHueSaturation(TypedDict):
+    effect: Literal["hue-saturation"]
+    hue: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    lightness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    saturation: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseVibrance(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["vibrance"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseChannelMixer(TypedDict):
+    blue: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    effect: Literal["channel-mixer"]
+    green: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    monochrome: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    red: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLiftGammaGain(TypedDict):
+    effect: Literal["lift-gamma-gain"]
+    gain: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    gamma: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    lift: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseColorIsolate(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["color-isolate"]
+    hue: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    range: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSolarize(TypedDict):
+    effect: Literal["solarize"]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseFill(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    effect: Literal["fill"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseChromaKey(TypedDict):
+    distance_mode: NotRequired[Literal["rgb", "chroma"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["chroma-key"]
+    key_color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    spill_suppression: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLumaKey(TypedDict):
+    effect: Literal["luma-key"]
+    key_out: NotRequired[Literal["dark", "bright"] | EffectRamp_choice | EffectKeys_choice]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSpillSuppress(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["spill-suppress"]
+    screen: NotRequired[Literal["green", "blue"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseAlphaAdjust(TypedDict):
+    black: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["alpha-adjust"]
+    gamma: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    invert: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    white: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseMatteChoker(TypedDict):
+    choke: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["matte-choker"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSetMatte(TypedDict):
+    effect: Literal["set-matte"]
+    invert: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    matte: Node
+    """A node drawn as this image."""
+    mode: NotRequired[Literal["alpha", "luma"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseGaussianBlur(TypedDict):
+    effect: Literal["gaussian-blur"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSharpen(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["sharpen"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseDirectionalBlur(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["directional-blur"]
+    length: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseRadialBlur(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    center: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    effect: Literal["radial-blur"]
+    mode: NotRequired[Literal["zoom", "spin"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseUnsharpMask(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["unsharp-mask"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseTiltShift(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    blur: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["tilt-shift"]
+    falloff: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    focus: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    position: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLensBlur(TypedDict):
+    effect: Literal["lens-blur"]
+    highlights: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSurfaceBlur(TypedDict):
+    effect: Literal["surface-blur"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseVignette(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["vignette"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseGlow(TypedDict):
+    effect: Literal["glow"]
+    intensity: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseFilmGrain(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["film-grain"]
+    size: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseRgbSplit(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["rgb-split"]
+    mode: NotRequired[Literal["linear", "radial"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseGlitch(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    block_size: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    color_split: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["glitch"]
+    seed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    speed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseCrt(TypedDict):
+    curvature: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["crt"]
+    line_count: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    mask: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    scanlines: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    vignette: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseVhs(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    bleed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["vhs"]
+    noise: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    seed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    speed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseHalftone(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    cells: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["halftone"]
+    mode: NotRequired[Literal["mono", "color"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseEmboss(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    distance: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["emboss"]
+    keep_color: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    strength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseEdgeDetect(TypedDict):
+    colored: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    effect: Literal["edge-detect"]
+    invert: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    strength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    width: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseDropShadow(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    distance: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["drop-shadow"]
+    opacity: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    shadow_only: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseOutline(TypedDict):
+    color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    effect: Literal["outline"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    width: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseLightLeak(TypedDict):
+    color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    effect: Literal["light-leak"]
+    intensity: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    position: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    seed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    size: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    speed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLetterbox(TypedDict):
+    aspect: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    effect: Literal["letterbox"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseOilPaint(TypedDict):
+    effect: Literal["oil-paint"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUsePixelate(TypedDict):
+    blocks: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["pixelate"]
+    shape: NotRequired[Literal["square", "hexagon"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseCrop(TypedDict):
+    bottom_right: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    effect: Literal["crop"]
+    feather: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    top_left: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseMirror(TypedDict):
+    axis: NotRequired[Literal["horizontal", "vertical"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["mirror"]
+    keep_second_half: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSwirl(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    center: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["swirl"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseBulge(TypedDict):
+    center: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["bulge"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    strength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseWaveWarp(TypedDict):
+    amplitude: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["wave-warp"]
+    phase: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    speed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    wavelength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseRipple(TypedDict):
+    amplitude: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    center: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    decay: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["ripple"]
+    speed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    wavelength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseLensDistortion(TypedDict):
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["lens-distortion"]
+    k1: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    k2: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    zoom: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUsePolarCoordinates(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["polar-coordinates"]
+    mode: NotRequired[Literal["rect_to_polar", "polar_to_rect"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseOffset(TypedDict):
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["offset"]
+    shift: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseCornerPin(TypedDict):
+    bottom_left: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    bottom_right: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    effect: Literal["corner-pin"]
+    top_left: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    top_right: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseShake(TypedDict):
+    amplitude: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["shake"]
+    frequency: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    rotation: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    seed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    zoom: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseTurbulentDisplace(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    complexity: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["turbulent-displace"]
+    evolution: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    seed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    size: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseDisplacementMap(TypedDict):
+    amount_x: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    amount_y: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    channel_x: NotRequired[Literal["red", "green", "blue", "alpha", "luma"] | EffectRamp_choice | EffectKeys_choice]
+    channel_y: NotRequired[Literal["red", "green", "blue", "alpha", "luma"] | EffectRamp_choice | EffectKeys_choice]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["displacement-map"]
+    map: Node
+    """A node drawn as this image."""
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseKaleidoscope(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    center: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["kaleidoscope"]
+    segments: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseTile(TypedDict):
+    effect: Literal["tile"]
+    mirror: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    offset: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    tiles: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+EffectUse: TypeAlias = "EffectUseColorControls | EffectUseLut3d | EffectUseInvert | EffectUseBlackAndWhite | EffectUseSepia | EffectUseDuotone | EffectUseGradientMap | EffectUsePosterize | EffectUseThreshold | EffectUseLevels | EffectUseHueSaturation | EffectUseVibrance | EffectUseChannelMixer | EffectUseLiftGammaGain | EffectUseColorIsolate | EffectUseSolarize | EffectUseFill | EffectUseChromaKey | EffectUseLumaKey | EffectUseSpillSuppress | EffectUseAlphaAdjust | EffectUseMatteChoker | EffectUseSetMatte | EffectUseGaussianBlur | EffectUseSharpen | EffectUseDirectionalBlur | EffectUseRadialBlur | EffectUseUnsharpMask | EffectUseTiltShift | EffectUseLensBlur | EffectUseSurfaceBlur | EffectUseVignette | EffectUseGlow | EffectUseFilmGrain | EffectUseRgbSplit | EffectUseGlitch | EffectUseCrt | EffectUseVhs | EffectUseHalftone | EffectUseEmboss | EffectUseEdgeDetect | EffectUseDropShadow | EffectUseOutline | EffectUseLightLeak | EffectUseLetterbox | EffectUseOilPaint | EffectUsePixelate | EffectUseCrop | EffectUseMirror | EffectUseSwirl | EffectUseBulge | EffectUseWaveWarp | EffectUseRipple | EffectUseLensDistortion | EffectUsePolarCoordinates | EffectUseOffset | EffectUseCornerPin | EffectUseShake | EffectUseTurbulentDisplace | EffectUseDisplacementMap | EffectUseKaleidoscope | EffectUseTile | dict[str, Any]"
+"""One effect: a built-in by its short name, or any effect by its full id, with its parameters by name. A parameter is a constant, a ramp or keys; a named image input is a node."""
+
+
+Ellipsis: TypeAlias = "bool | str"
+"""What ends a cut line: an ellipsis or nothing (`true`, `false`), or a text."""
+
+
 FileKind: TypeAlias = Literal["video", "image", "audio"]
 """What a media file holds, when its extension does not say."""
 
@@ -310,12 +1088,165 @@ FrameRateChoice: TypeAlias = "float | FrameRate"
 """A frame rate, as a number or exactly."""
 
 
+class GeometryRect(TypedDict):
+    """A rectangle, optionally with rounded corners."""
+
+    center: NotRequired[Anim2 | None]
+    """Centre. Default `[0.5, 0.5]`."""
+    corner_radius: NotRequired[Anim | None]
+    """Corner radius. Default 0."""
+    rotation: NotRequired[Anim | None]
+    """Clockwise turn in degrees. Default 0."""
+    shape: Literal["rect"]
+    size: NotRequired[Anim2 | None]
+    """Width and height. Default `[1, 1]`."""
+
+
+class GeometryEllipse(TypedDict):
+    """An ellipse."""
+
+    center: NotRequired[Anim2 | None]
+    """Centre. Default `[0.5, 0.5]`."""
+    rotation: NotRequired[Anim | None]
+    """Clockwise turn in degrees. Default 0."""
+    shape: Literal["ellipse"]
+    size: NotRequired[Anim2 | None]
+    """Width and height. Default `[1, 1]`."""
+
+
+class GeometryPolygon(TypedDict):
+    """A regular polygon."""
+
+    center: NotRequired[Anim2 | None]
+    """Centre. Default `[0.5, 0.5]`."""
+    points: int
+    """Corners, 3 or more."""
+    radius: NotRequired[Anim | None]
+    """Distance of the corners from the centre. Default 0.5."""
+    rotation: NotRequired[Anim | None]
+    """Clockwise turn in degrees. Default 0."""
+    roundness: NotRequired[Anim | None]
+    """How round the corners are, 0..=1. Default 0."""
+    shape: Literal["polygon"]
+
+
+class GeometryStar(TypedDict):
+    """A star."""
+
+    center: NotRequired[Anim2 | None]
+    """Centre. Default `[0.5, 0.5]`."""
+    inner_radius: NotRequired[Anim | None]
+    """Distance of the inner corners from the centre. Default 0.25."""
+    outer_radius: NotRequired[Anim | None]
+    """Distance of the tips from the centre. Default 0.5."""
+    points: int
+    """Tips, 3 or more."""
+    rotation: NotRequired[Anim | None]
+    """Clockwise turn in degrees. Default 0."""
+    shape: Literal["star"]
+
+
+class GeometryPath(TypedDict):
+    """An outline as SVG path data (`d`), in the area's unit square."""
+
+    d: str
+    """The path data: `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A` and `Z`, absolute or
+    relative.
+    """
+    shape: Literal["path"]
+
+
+Geometry: TypeAlias = "GeometryRect | GeometryEllipse | GeometryPolygon | GeometryStar | GeometryPath"
+"""One outline, in its area's unit square. Masks take the same outlines."""
+
+
+class Gradient(TypedDict):
+    """Colors spread over a gradient."""
+
+    angle: NotRequired[float | None]
+    """A linear gradient's direction in degrees, as CSS: 0 upward, 90 rightward. A conic one's
+    start. Default 180 for linear (downward), 0 for conic.
+    """
+    center: NotRequired[list[float] | None]
+    """A radial or conic gradient's centre. Default `[0.5, 0.5]`."""
+    radius: NotRequired[float | None]
+    """A radial gradient's radius. Default 0.5."""
+    stops: list[Stop]
+    """Two or more colors, evenly spaced unless each says its `offset` in 0..=1."""
+
+
 GridLength: TypeAlias = Literal["shortest", "longest_freeze", "longest_loop"]
 """How long a grid of clips of different lengths lasts."""
 
 
+class GroupTransform(TypedDict):
+    """A group's movement, about `anchor`."""
+
+    anchor: NotRequired[list[float] | None]
+    """The point it scales and turns about, `[0, 0]` the area's top left to `[1, 1]` its bottom
+    right. Default `[0.5, 0.5]`.
+    """
+    position: NotRequired[Anim2 | None]
+    """Offset in pixels, `[x, y]`. Default `[0, 0]`."""
+    rotation: NotRequired[Anim | None]
+    """Clockwise turn in degrees. Default 0."""
+    scale: NotRequired[Anim | None]
+    """Size multiple. Default 1."""
+
+
 Inset: TypeAlias = "float | list[float]"
 """Space kept clear inside an area."""
+
+
+class Key(TypedDict):
+    """One keyed value."""
+
+    ease: NotRequired[EasingChoice | None]
+    """The timing curve to the next key. Default linear."""
+    t: float
+    """Seconds from the node's start."""
+    v: float
+    """The value."""
+
+
+class Key2(TypedDict):
+    """One keyed value."""
+
+    ease: NotRequired[EasingChoice | None]
+    """The timing curve to the next key. Default linear."""
+    t: float
+    """Seconds from the node's start."""
+    v: list[float]
+    """The value."""
+
+
+class Keys(TypedDict):
+    """Values at times; the value holds before the first and after the last."""
+
+    keys: list[Key]
+    """The keys, in increasing time; at least one."""
+
+
+class Keys2(TypedDict):
+    """Values at times; the value holds before the first and after the last."""
+
+    keys: list[Key2]
+    """The keys, in increasing time; at least one."""
+
+
+LayoutSize2: TypeAlias = "float | str"
+"""A layout size: a number is a fraction of the picture's shorter side, `"<n>px"` canvas pixels."""
+
+
+LengthToken: TypeAlias = Literal["margin", "title_size", "subtitle_size", "body_size", "caption_size", "label_size"]
+"""A theme's named lengths."""
+
+
+class LinearPaint(TypedDict):
+    """`{"linear": gradient}`."""
+
+    linear: Gradient
+    """The gradient."""
 
 
 Loudness: TypeAlias = "float | LoudnessTarget"
@@ -334,6 +1265,14 @@ class LoudnessTarget(TypedDict):
     """
 
 
+MaskShape: TypeAlias = dict[str, Any]
+"""One mask outline and how it combines with those before it."""
+
+
+MatteUse: TypeAlias = Literal["alpha", "luma"]
+"""What of a matte's picture is coverage."""
+
+
 MediaItem: TypeAlias = "str | Node"
 """A file given by its path alone, or a media node."""
 
@@ -346,7 +1285,7 @@ class Motion(TypedDict):
     distance: NotRequired[float | None]
     """How far a `rise` or `slide` travels, in pixels. Default: the theme's margin."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the theme's fade length."""
+    """Length in seconds; 0 is no motion. Default: the theme's fade length."""
     easing: NotRequired[EasingChoice | None]
     """The timing curve. Default linear."""
     fade: NotRequired[bool | None]
@@ -500,8 +1439,16 @@ class NodeMedia(TypedDict):
     type: Literal["media"]
     volume: NotRequired[float | None]
     """Linear gain of a video's sound. Default 1."""
-    zoom: NotRequired[list[float] | None]
-    """A slow zoom over the node's length, `[from, to]`, as multiples of the fitted size."""
+    when_long: NotRequired[WhenLong | None]
+    """What a video does when it outlasts the node. Default `trim`."""
+    when_short: NotRequired[WhenShort | None]
+    """What a video does when the node outlasts it. Default: what its parent asks (a grid's
+    length rule), else `freeze`.
+    """
+    zoom: NotRequired[Anim | None]
+    """How large it shows, as a multiple of its fitted size: a constant, a ramp
+    (`{"from": 1, "to": 1.2}` is a slow zoom over the node), or keys. Default 1.
+    """
 
 
 class NodeText(TypedDict):
@@ -511,29 +1458,38 @@ class NodeText(TypedDict):
     """Where in its area the picture or text lies. Default `center`."""
     at: NotRequired[float | None]
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    background: NotRequired[Rgba | None]
+    background: NotRequired[SolidColor | None]
     """A box of this color behind each line."""
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """Color. Default: the theme's text color."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    ellipsis: NotRequired[Ellipsis | None]
+    """What ends a line `max_lines` cuts: `true` an ellipsis, `false` nothing, or this text.
+    Default `true`.
+    """
     enter: NotRequired[Motion | None]
     """How it comes in at its start."""
     exit: NotRequired[Motion | None]
     """How it goes out, ending at its end."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default none."""
+    fit: NotRequired[TextFit | None]
+    """The font sizes in pixels it is fitted between, the largest at which it fits its area and
+    `max_lines`. Default with `max_lines`: 0.3 times its font size up to its font size;
+    otherwise its font size alone.
+    """
     font_family: NotRequired[str | None]
     """Family. Default: the theme's."""
-    font_size: NotRequired[float | None]
-    """Font size in pixels. Default: the style's."""
+    font_size: NotRequired[Size | None]
+    """Font size in pixels, or a theme length. Default: the style's."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     inset: NotRequired[Inset | None]
     """Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."""
     max_lines: NotRequired[int | None]
-    """The most lines it may take; with fonts to measure by, longer text shrinks until it fits.
-    Default: no limit.
+    """The most lines it may take. It first shrinks within `fit`; text still longer is cut after
+    its last line, ended by `ellipsis`. Default: no limit.
     """
     opacity: NotRequired[float | None]
     """Opacity, 0..=1. Default 1."""
@@ -562,7 +1518,7 @@ class NodeColor(TypedDict):
 
     at: NotRequired[float | None]
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """The color. Default: the theme's surface."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
@@ -582,7 +1538,7 @@ class NodeCaptions(TypedDict):
 
     at: NotRequired[float | None]
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """Text color. Default: the theme's."""
     cues: NotRequired[list[Cue]]
     """Cues as given, in seconds from the node's start."""
@@ -590,9 +1546,9 @@ class NodeCaptions(TypedDict):
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
     file: NotRequired[str | None]
     """A SubRip (`.srt`) or WebVTT (`.vtt`) file, read by the binding."""
-    font_size: NotRequired[float | None]
+    font_size: NotRequired[Size | None]
     """Font size in pixels. Default: the theme's caption size."""
-    highlight: NotRequired[Rgba | None]
+    highlight: NotRequired[SolidColor | None]
     """The color `karaoke` and `pop` give the word being said. Default: the theme's accent."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
@@ -734,176 +1690,6 @@ class NodeCaptionedVideo(TypedDict):
     """The video."""
 
 
-class NodeTitle(TypedDict):
-    """A title (and subtitle) over what is under it, laid out on the whole canvas."""
-
-    align: NotRequired[Align | None]
-    """Where it lies. Default `center`."""
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    background: NotRequired[Rgba | None]
-    """A card's color. Default: the theme's surface."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    enter: NotRequired[Motion | None]
-    """How it comes in at its start."""
-    exit: NotRequired[Motion | None]
-    """How it goes out, ending at its end."""
-    fade: NotRequired[float | None]
-    """Seconds of fade in and out. Default: the theme's."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    subtitle: NotRequired[str | None]
-    """A smaller line under it."""
-    text: str
-    """The title."""
-    type: Literal["title"]
-
-
-class NodeTitleCard(TypedDict):
-    """A title (and subtitle) on the theme's surface, over the whole canvas."""
-
-    align: NotRequired[Align | None]
-    """Where it lies. Default `center`."""
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    background: NotRequired[Rgba | None]
-    """A card's color. Default: the theme's surface."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    enter: NotRequired[Motion | None]
-    """How it comes in at its start."""
-    exit: NotRequired[Motion | None]
-    """How it goes out, ending at its end."""
-    fade: NotRequired[float | None]
-    """Seconds of fade in and out. Default: the theme's."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    subtitle: NotRequired[str | None]
-    """A smaller line under it."""
-    text: str
-    """The title."""
-    type: Literal["title_card"]
-
-
-class NodeLowerThird(TypedDict):
-    """A name and role in the canvas's lower left."""
-
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    enter: NotRequired[Motion | None]
-    """How it comes in at its start."""
-    exit: NotRequired[Motion | None]
-    """How it goes out, ending at its end."""
-    fade: NotRequired[float | None]
-    """Seconds of fade in and out. Default: the theme's."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    subtitle: NotRequired[str | None]
-    """The role, under it."""
-    text: str
-    """The name."""
-    type: Literal["lower_third"]
-
-
-class NodeEndCard(TypedDict):
-    """A closing card over the whole canvas: a logo, a title and a subtitle on the theme's
-    surface.
-    """
-
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    background: NotRequired[Rgba | None]
-    """The card's color. Default: the theme's surface."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    enter: NotRequired[Motion | None]
-    """How it comes in at its start."""
-    exit: NotRequired[Motion | None]
-    """How it goes out, ending at its end."""
-    fade: NotRequired[float | None]
-    """Seconds of fade in and out. Default: the theme's."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    logo: NotRequired[str | None]
-    """A picture above the title."""
-    subtitle: NotRequired[str | None]
-    """A smaller line under it."""
-    text: str
-    """The title."""
-    type: Literal["end_card"]
-
-
-class NodeComparisonGrid(TypedDict):
-    """Clips side by side in a grid, each labeled."""
-
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    audio_from: NotRequired[int | None]
-    """Which item's sound plays, by index. Default: none."""
-    columns: NotRequired[int | None]
-    """Columns. Default: as square a grid as the items make."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    gap: NotRequired[float]
-    """Pixels between cells.
-
-    Default: `0`.
-    """
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    items: list[MediaItem]
-    """The clips, row by row; each one's `label` names its cell."""
-    length: NotRequired[GridLength]
-    """How long the grid lasts when its clips differ. Default `shortest`.
-
-    Default: `"shortest"`.
-    """
-    type: Literal["comparison_grid"]
-
-
-class NodeReframe(TypedDict):
-    """A video fitted to a canvas of another shape, over a blurred copy of itself."""
-
-    at: NotRequired[float | None]
-    """When it starts in its parent; its length is the video's."""
-    blur: NotRequired[float | None]
-    """The background's blur radius, as a fraction of its shorter side. Default 0.05."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to. Its sound is the video's."""
-    type: Literal["reframe"]
-    video: MediaItem
-    """The video."""
-
-
-class NodeLogo(TypedDict):
-    """A picture in a corner."""
-
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    corner: NotRequired[Align | None]
-    """The corner. Default `top-right`."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    enter: NotRequired[Motion | None]
-    """How it comes in at its start."""
-    exit: NotRequired[Motion | None]
-    """How it goes out, ending at its end."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    margin: NotRequired[float | None]
-    """Pixels from the edges. Default: the theme's margin."""
-    opacity: NotRequired[float | None]
-    """Opacity, 0..=1. Default 1."""
-    path: str
-    """The picture."""
-    size: NotRequired[float | None]
-    """Its longer side, in pixels. Default: 15% of the canvas's shorter side."""
-    type: Literal["logo"]
-
-
 class NodeMusicBed(TypedDict):
     """Music under the video, faded in and out and ducked under speech."""
 
@@ -940,7 +1726,7 @@ class NodeCounter(TypedDict):
     """Where in its area the number lies. Default `center`."""
     at: NotRequired[float | None]
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """Color. Default: the theme's text color."""
     count_duration: NotRequired[float | None]
     """Seconds the count takes from the node's start; it then holds `end`. Default: the node's
@@ -958,8 +1744,8 @@ class NodeCounter(TypedDict):
     """How it goes out, ending at its end."""
     font_family: NotRequired[str | None]
     """Family. Default: the theme's."""
-    font_size: NotRequired[float | None]
-    """Font size in pixels. Default: the style's."""
+    font_size: NotRequired[Size | None]
+    """Font size in pixels, or a theme length. Default: the style's."""
     format: NotRequired[NumberFormat | None]
     """How the number is written."""
     id: NotRequired[str | None]
@@ -979,7 +1765,510 @@ class NodeCounter(TypedDict):
     type: Literal["counter"]
 
 
-Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed | NodeCounter"
+class NodeGroup(TypedDict):
+    """Children drawn together into one picture, which then takes an opacity, a blend mode,
+    effects and a transform as one layer.
+    """
+
+    at: NotRequired[float | None]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    blend: NotRequired[ClipBlendMode | None]
+    """How the whole meets what is under it. Default `normal`."""
+    children: list[Node]
+    """The children, each over the ones before, placed in the group's area."""
+    duration: NotRequired[float | None]
+    """Length in seconds. Default: the longest child's."""
+    effects: NotRequired[list[EffectUse]]
+    """Effects on the whole, in order, before its transform."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
+    id: NotRequired[str | None]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset | None]
+    """Pixels kept clear inside the parent's area: the group's area."""
+    opacity: NotRequired[Anim | None]
+    """Opacity of the whole, 0..=1. Default 1."""
+    transform: NotRequired[GroupTransform | None]
+    """Moves, scales or turns the whole."""
+    type: Literal["group"]
+
+
+class NodeShape(TypedDict):
+    """Shapes drawn with one fill and one stroke: bars, frames, dividers, badges, icons."""
+
+    at: NotRequired[float | None]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    duration: NotRequired[float | None]
+    """Length in seconds. Default: what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
+    fill: NotRequired[PaintChoice | None]
+    """What covers their inside. Default: nothing, unless there is no stroke, then the theme's
+    accent.
+    """
+    id: NotRequired[str | None]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset | None]
+    """Pixels kept clear inside the parent's area: the shapes' area."""
+    opacity: NotRequired[float | None]
+    """Opacity, 0..=1. Default 1."""
+    shapes: list[Geometry]
+    """The outlines, at least one."""
+    stroke: NotRequired[Stroke | None]
+    """A line along the outlines."""
+    trim: NotRequired[Trim | None]
+    """Keeps part of the outlines' length. A line that draws itself has
+    `{"end": {"from": 0, "to": 1}}`.
+    """
+    type: Literal["shape"]
+
+
+class NodeMatte(TypedDict):
+    """A node shown only where another node's picture is."""
+
+    at: NotRequired[float | None]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    by: Node
+    """Where it is shown. One picture: not a sequence."""
+    content: Node
+    """What is shown."""
+    duration: NotRequired[float | None]
+    """Length in seconds. Default: the content's."""
+    id: NotRequired[str | None]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset | None]
+    """Pixels kept clear inside the parent's area."""
+    invert: NotRequired[bool]
+    """Shows `content` where `by` is not instead."""
+    type: Literal["matte"]
+    use: NotRequired[MatteUse | None]
+    """What of `by` counts: `alpha` (default) or `luma`."""
+
+
+class NodeMask(TypedDict):
+    """A node shown only inside outlines."""
+
+    at: NotRequired[float | None]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    content: Node
+    """What is shown."""
+    duration: NotRequired[float | None]
+    """Length in seconds. Default: the content's."""
+    id: NotRequired[str | None]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset | None]
+    """Pixels kept clear inside the parent's area."""
+    shapes: list[MaskShape]
+    """The outlines, at least one."""
+    type: Literal["mask"]
+
+
+class NodeAlpha2CircleRevealWith(TypedDict):
+    content: Node
+    ease: NotRequired[Literal["linear", "ease", "ease-in", "ease-out", "ease-in-out"]]
+    """Default: `"ease-out"`."""
+    seconds: NotRequired[float]
+    """Default: `0.8`."""
+
+
+NodeAlpha2CircleReveal = TypedDict(
+    "NodeAlpha2CircleReveal",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/circle-reveal\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2CircleRevealWith",
+    },
+)
+NodeAlpha2CircleReveal.__doc__ = "Shows a node through a circle that grows from the middle of its area until it covers it."
+
+
+NodeAlpha2WipeRevealWith = TypedDict(
+    "NodeAlpha2WipeRevealWith",
+    {
+        "content": "Node",
+        "ease": "NotRequired[Literal[\"linear\", \"ease\", \"ease-in\", \"ease-out\", \"ease-in-out\"]]",
+        "from": "NotRequired[Literal[\"left\", \"right\", \"top\", \"bottom\"]]",
+        "seconds": "NotRequired[float]",
+    },
+)
+
+
+NodeAlpha2WipeReveal = TypedDict(
+    "NodeAlpha2WipeReveal",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/wipe-reveal\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2WipeRevealWith",
+    },
+)
+NodeAlpha2WipeReveal.__doc__ = "Shows a node as an edge sweeps across its area."
+
+
+class NodeTitle(TypedDict):
+    """A title and an optional subtitle over what is under it, fading in and out."""
+
+    align: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"center"`."""
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    fade: NotRequired[float]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    subtitle: NotRequired[str]
+    text: str
+    type: Literal["title"]
+
+
+class NodeAlpha2TitleWith(TypedDict):
+    align: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"center"`."""
+    fade: NotRequired[float]
+    subtitle: NotRequired[str]
+    text: str
+
+
+NodeAlpha2Title = TypedDict(
+    "NodeAlpha2Title",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/title\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2TitleWith",
+    },
+)
+NodeAlpha2Title.__doc__ = "A title and an optional subtitle over what is under it, fading in and out."
+
+
+class NodeTitleCard(TypedDict):
+    """A title and an optional subtitle on a background of their own, fading in and out as one picture."""
+
+    align: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"center"`."""
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    background: NotRequired[SolidColor]
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    fade: NotRequired[float]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    subtitle: NotRequired[str]
+    text: str
+    type: Literal["title_card"]
+
+
+class NodeAlpha2TitleCardWith(TypedDict):
+    align: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"center"`."""
+    background: NotRequired[SolidColor]
+    fade: NotRequired[float]
+    subtitle: NotRequired[str]
+    text: str
+
+
+NodeAlpha2TitleCard = TypedDict(
+    "NodeAlpha2TitleCard",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/title-card\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2TitleCardWith",
+    },
+)
+NodeAlpha2TitleCard.__doc__ = "A title and an optional subtitle on a background of their own, fading in and out as one picture."
+
+
+class NodeLowerThird(TypedDict):
+    """A name and an optional role in the lower left, on panels beside an accent bar."""
+
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    fade: NotRequired[float]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    subtitle: NotRequired[str]
+    text: str
+    type: Literal["lower_third"]
+
+
+class NodeAlpha2LowerThirdWith(TypedDict):
+    fade: NotRequired[float]
+    subtitle: NotRequired[str]
+    text: str
+
+
+NodeAlpha2LowerThird = TypedDict(
+    "NodeAlpha2LowerThird",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/lower-third\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2LowerThirdWith",
+    },
+)
+NodeAlpha2LowerThird.__doc__ = "A name and an optional role in the lower left, on panels beside an accent bar."
+
+
+class NodeEndCard(TypedDict):
+    """A closing title, an optional subtitle and an optional logo on a background, fading in and out as one picture."""
+
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    background: NotRequired[SolidColor]
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    fade: NotRequired[float]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    logo: NotRequired[str]
+    subtitle: NotRequired[str]
+    text: str
+    type: Literal["end_card"]
+
+
+class NodeAlpha2EndCardWith(TypedDict):
+    background: NotRequired[SolidColor]
+    fade: NotRequired[float]
+    logo: NotRequired[str]
+    subtitle: NotRequired[str]
+    text: str
+
+
+NodeAlpha2EndCard = TypedDict(
+    "NodeAlpha2EndCard",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/end-card\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2EndCardWith",
+    },
+)
+NodeAlpha2EndCard.__doc__ = "A closing title, an optional subtitle and an optional logo on a background, fading in and out as one picture."
+
+
+class NodeLogo(TypedDict):
+    """An image or video in a corner, inside a margin, at a size relative to the canvas."""
+
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    corner: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"top-right"`."""
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    margin: NotRequired[float]
+    opacity: NotRequired[float]
+    """Default: `1`."""
+    path: str
+    size: NotRequired[float]
+    """Default: `0.15`."""
+    type: Literal["logo"]
+
+
+class NodeAlpha2LogoWith(TypedDict):
+    corner: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"top-right"`."""
+    margin: NotRequired[float]
+    opacity: NotRequired[float]
+    """Default: `1`."""
+    path: str
+    size: NotRequired[float]
+    """Default: `0.15`."""
+
+
+NodeAlpha2Logo = TypedDict(
+    "NodeAlpha2Logo",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/logo\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2LogoWith",
+    },
+)
+NodeAlpha2Logo.__doc__ = "An image or video in a corner, inside a margin, at a size relative to the canvas."
+
+
+class NodeReframe(TypedDict):
+    """A video whole in the area, over a blurred copy of itself that covers it: a clip of another shape on this canvas."""
+
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    blur: NotRequired[float]
+    """Default: `0.05`."""
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    type: Literal["reframe"]
+    video: str
+
+
+class NodeAlpha2ReframeWith(TypedDict):
+    blur: NotRequired[float]
+    """Default: `0.05`."""
+    video: str
+
+
+NodeAlpha2Reframe = TypedDict(
+    "NodeAlpha2Reframe",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/reframe\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2ReframeWith",
+    },
+)
+NodeAlpha2Reframe.__doc__ = "A video whole in the area, over a blurred copy of itself that covers it: a clip of another shape on this canvas."
+
+
+class NodeComparisonGridItemsItem(TypedDict):
+    audio: NotRequired[bool]
+    """Default: `false`."""
+    label: NotRequired[str]
+    path: str
+
+
+class NodeComparisonGrid(TypedDict):
+    """Clips side by side in a grid, each with an optional label; one of them may be heard."""
+
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    columns: NotRequired[float]
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    gap: NotRequired[float]
+    """Default: `0`."""
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    items: list[NodeComparisonGridItemsItem]
+    length: NotRequired[Literal["shortest", "longest_freeze", "longest_loop"]]
+    """Default: `"shortest"`."""
+    type: Literal["comparison_grid"]
+
+
+class NodeAlpha2ComparisonGridWithItemsItem(TypedDict):
+    audio: NotRequired[bool]
+    """Default: `false`."""
+    label: NotRequired[str]
+    path: str
+
+
+class NodeAlpha2ComparisonGridWith(TypedDict):
+    columns: NotRequired[float]
+    gap: NotRequired[float]
+    """Default: `0`."""
+    items: list[NodeAlpha2ComparisonGridWithItemsItem]
+    length: NotRequired[Literal["shortest", "longest_freeze", "longest_loop"]]
+    """Default: `"shortest"`."""
+
+
+NodeAlpha2ComparisonGrid = TypedDict(
+    "NodeAlpha2ComparisonGrid",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/comparison-grid\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2ComparisonGridWith",
+    },
+)
+NodeAlpha2ComparisonGrid.__doc__ = "Clips side by side in a grid, each with an optional label; one of them may be heard."
+
+
+NodeVariant36 = TypedDict(
+    "NodeVariant36",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "str",
+        "version": "NotRequired[int]",
+        "with": "NotRequired[dict[str, Never]]",
+    },
+)
+NodeVariant36.__doc__ = "A node template by its id, bound to `with`."
+
+
+Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeMusicBed | NodeCounter | NodeGroup | NodeShape | NodeMatte | NodeMask | dict[str, Any] | NodeAlpha2CircleReveal | NodeAlpha2WipeReveal | NodeTitle | NodeAlpha2Title | NodeTitleCard | NodeAlpha2TitleCard | NodeLowerThird | NodeAlpha2LowerThird | NodeEndCard | NodeAlpha2EndCard | NodeLogo | NodeAlpha2Logo | NodeReframe | NodeAlpha2Reframe | NodeComparisonGrid | NodeAlpha2ComparisonGrid | NodeVariant36"
 """One part of a video."""
 
 
@@ -996,6 +2285,61 @@ class NumberFormat(TypedDict):
     """Text after the number."""
     thousands: NotRequired[str | None]
     """Put between each group of three integer digits, as `,`. Default none."""
+
+
+class OffsetStop(TypedDict):
+    """A gradient color at a set position."""
+
+    color: SolidColor
+    """The color."""
+    offset: float
+    """Where along the gradient, 0..=1."""
+
+
+PaintChoice: TypeAlias = "ThemeColor | LinearPaint | RadialPaint | ConicPaint | Rgba"
+"""A color, a theme color, or a gradient."""
+
+
+class PlacedChild(TypedDict):
+    """A box child with item fields."""
+
+    box: dict[str, Never]
+    """Item fields of an engine layout box, as it writes them; lengths may be theme lengths."""
+    node: Node
+    """The node."""
+
+
+class RadialPaint(TypedDict):
+    """`{"radial": gradient}`."""
+
+    radial: Gradient
+    """The gradient."""
+
+
+Ramp = TypedDict(
+    "Ramp",
+    {
+        "at": "NotRequired[float | None]",
+        "duration": "NotRequired[float | None]",
+        "ease": "NotRequired[EasingChoice | None]",
+        "from": "float",
+        "to": "float",
+    },
+)
+Ramp.__doc__ = "A change from one value to another; before it the value is `from`, after it `to`."
+
+
+Ramp2 = TypedDict(
+    "Ramp2",
+    {
+        "at": "NotRequired[float | None]",
+        "duration": "NotRequired[float | None]",
+        "ease": "NotRequired[EasingChoice | None]",
+        "from": "list[float]",
+        "to": "list[float]",
+    },
+)
+Ramp2.__doc__ = "A change from one value to another; before it the value is `from`, after it `to`."
 
 
 class Reveal(TypedDict):
@@ -1021,13 +2365,49 @@ RevealUnit: TypeAlias = Literal["word", "line"]
 """The unit a text is revealed by."""
 
 
+Size: TypeAlias = "float | ThemeLength"
+"""A size in pixels, or one of the theme's lengths."""
+
+
+SolidColor: TypeAlias = "ThemeColor | Rgba"
+"""One color: a theme color, CSS hex, or the project's color object."""
+
+
 class SpeakerLook(TypedDict):
     """How one speaker's captions look."""
 
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """Their text color."""
     position: NotRequired[Vec2 | None]
     """Where their text's middle lies, as fractions of the canvas, `(0, 0)` top-left."""
+
+
+Stop: TypeAlias = "OffsetStop | SolidColor"
+"""One gradient color."""
+
+
+class Stroke(TypedDict):
+    """A line along outlines."""
+
+    cap: NotRequired[LineCap | None]
+    """How open ends look. Default `butt`."""
+    dash: NotRequired[list[float]]
+    """Dash and gap lengths, as fractions of the area's shorter side. Default: solid."""
+    join: NotRequired[LineJoin | None]
+    """How segments meet. Default `miter`."""
+    paint: NotRequired[PaintChoice | None]
+    """What covers it. Default: the theme's text color."""
+    width: Anim
+    """Width, as a fraction of the area's shorter side."""
+
+
+class TextFit(TypedDict):
+    """The font sizes a text is fitted between, in pixels."""
+
+    max: NotRequired[float | None]
+    """Largest font size. Default: the text's font size, so it only shrinks."""
+    min: float
+    """Smallest font size; when nothing larger fits, the text draws at this size."""
 
 
 TextRole: TypeAlias = Literal["title", "subtitle", "body", "label"]
@@ -1081,6 +2461,30 @@ ThemeChoice: TypeAlias = "str | Theme"
 """A theme by name, or one built on a named theme."""
 
 
+ThemeColor = TypedDict(
+    "ThemeColor",
+    {
+        "$theme": "ThemeToken",
+        "alpha": "NotRequired[float | None]",
+    },
+)
+ThemeColor.__doc__ = "A theme color, so a design follows whatever theme it is drawn with."
+
+
+ThemeLength = TypedDict(
+    "ThemeLength",
+    {
+        "$theme": "LengthToken",
+        "scale": "NotRequired[float | None]",
+    },
+)
+ThemeLength.__doc__ = "One of the theme's lengths times `scale`, as a fraction of the picture's shorter side."
+
+
+ThemeToken: TypeAlias = Literal["text", "background", "surface", "panel", "accent"]
+"""A theme's named colors."""
+
+
 class Transition(TypedDict):
     """The transition between two neighbours of a sequence."""
 
@@ -1100,3 +2504,22 @@ class Transition(TypedDict):
 
 TransitionChoice: TypeAlias = "str | Transition"
 """A sequence's transitions: none, the theme's, or one given."""
+
+
+class Trim(TypedDict):
+    """The part of outlines' length that is kept, from `start` to `end`, shifted by `offset` turns."""
+
+    end: NotRequired[Anim | None]
+    """Default 1."""
+    offset: NotRequired[Anim | None]
+    """Default 0."""
+    start: NotRequired[Anim | None]
+    """Default 0."""
+
+
+WhenLong: TypeAlias = Literal["trim", "stretch", "error"]
+"""What a video longer than its node does."""
+
+
+WhenShort: TypeAlias = Literal["freeze", "loop", "stretch", "blank", "error"]
+"""What a video shorter than its node does once it ends."""

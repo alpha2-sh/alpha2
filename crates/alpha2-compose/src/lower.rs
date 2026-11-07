@@ -1,8 +1,10 @@
 //! Lowers every spec node, components included, to the few primitives the emitter places
 //! ([`Prim`]), with theme defaults filled in, times in ticks, and caption files parsed.
 
+use std::collections::BTreeMap;
+
 use alpha2_model::{
-    CaptionCue, CubicBezier, Easing, LayoutNode, Paint, Rgba, RunState, RunTime,
+    CaptionCue, CubicBezier, Easing, EffectValue, LayoutNode, Paint, Rgba, RunState, RunTime,
     TextContent as CueText, TextRun, TextShadow, TextStroke, TextStyle, TextUnit,
 };
 use alpha2_time::MediaTime;
@@ -10,9 +12,11 @@ use alpha2_time::MediaTime;
 use crate::ComposeError;
 use crate::compile::Context;
 use crate::spec::{
-    Align, Audio, CaptionStyle, Captions, ComparisonGrid, Counter, Cue, Direction, EasingChoice,
-    EndCard, FileKind, Fit, GridLength, Inset, LowerThird, Media, MediaItem, Motion, MotionKind,
-    MusicBed, Node, Raw, RevealKind, RevealUnit, Slideshow, Text, TextRole, Title, Transition,
+    Align, Anim, Audio, BoxNode, CaptionStyle, Captions, ConicPaint, Counter, Cue, Direction,
+    EasingChoice, EffectUse, Ellipsis, FileKind, Fit, Geometry, Gradient, GridLength, Group, Inset,
+    Key, Keys, LengthToken, LinearPaint, MatteUse, Media, MediaItem, Motion, MotionKind, MusicBed,
+    Node, PaintChoice, RadialPaint, Ramp, Raw, RevealKind, RevealUnit, Shape, Size, Slideshow,
+    SolidColor, Stop, Text, TextRole, ThemeColor, ThemeLength, ThemeToken, Transition,
     TransitionChoice,
 };
 
@@ -21,6 +25,9 @@ use crate::spec::{
 pub(crate) enum Prim {
     Sequence(SequencePrim),
     Stack(StackPrim),
+    Group(Box<GroupPrim>),
+    Coverage(Box<CoveragePrim>),
+    Box(Box<BoxPrim>),
     Visual(Box<Visual>),
     Captions(Box<CaptionsPrim>),
     Audio(Box<AudioPrim>),
@@ -74,11 +81,124 @@ pub(crate) struct StackPrim {
     pub grid: Option<GridLayout>,
 }
 
+/// Children composited into one picture before it meets what is under it.
+#[derive(Clone, Debug)]
+pub(crate) struct GroupPrim {
+    /// The children, the group's name, time and area.
+    pub stack: StackPrim,
+    pub opacity: Option<AnimPrim<f32>>,
+    pub blend: alpha2_model::ClipBlendMode,
+    pub effects: Vec<EffectPrim>,
+    pub transform: TransformPrim,
+}
+
+/// A box layout in the node's area.
+#[derive(Clone, Debug)]
+pub(crate) struct BoxPrim {
+    pub head: Head,
+    pub inset: [f32; 4],
+    pub tree: BoxTree,
+}
+
+/// One layout box with its container fields as written, its paints and its children.
+#[derive(Clone, Debug)]
+pub(crate) struct BoxTree {
+    pub css: BTreeMap<String, serde_json::Value>,
+    pub background: Option<PaintPrim>,
+    pub border: Option<(serde_json::Value, PaintPrim)>,
+    pub children: Vec<BoxKid>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BoxKid {
+    /// Item fields as written.
+    pub item: BTreeMap<String, serde_json::Value>,
+    pub content: BoxContent,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum BoxContent {
+    /// A nested box.
+    Tree(BoxTree),
+    /// Text, a shape or a color, drawn by the layout.
+    Native(Box<Visual>),
+    /// Anything else, drawn in its place.
+    Foreign(Prim),
+}
+
+/// A node shown only where a matte's picture or mask outlines say.
+#[derive(Clone, Debug)]
+pub(crate) struct CoveragePrim {
+    pub head: Head,
+    pub inset: [f32; 4],
+    pub content: Prim,
+    pub by: Coverage,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum Coverage {
+    Matte {
+        by: Prim,
+        mode: alpha2_model::MatteMode,
+    },
+    Mask(Vec<MaskShapePrim>),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MaskShapePrim {
+    pub geometry: GeometryPrim,
+    pub mode: alpha2_model::MaskMode,
+    pub feather: AnimPrim<f32>,
+    pub invert: bool,
+}
+
+/// One effect on a group, checked against its definition when it is a built-in.
+#[derive(Clone, Debug)]
+pub(crate) struct EffectPrim {
+    pub path: String,
+    pub id: String,
+    pub version: u32,
+    pub params: BTreeMap<String, AnimPrim<EffectValue>>,
+    /// Named image inputs, as nodes drawn in the group's area and time.
+    pub inputs: BTreeMap<String, Prim>,
+}
+
+/// A group's movement, with positions in pixels and the anchor in its area's unit square.
+#[derive(Clone, Debug)]
+pub(crate) struct TransformPrim {
+    pub position: Option<AnimPrim<[f32; 2]>>,
+    pub scale: Option<AnimPrim<f32>>,
+    pub rotation: Option<AnimPrim<f32>>,
+    pub anchor: [f32; 2],
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GridLayout {
     pub columns: u32,
     pub gap: f32,
     pub length: GridLength,
+}
+
+/// A lowered [`Anim`], one value or keys whose times are ticks from the node's start.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum AnimPrim<T> {
+    Value(T),
+    Keys(Vec<KeyPrim<T>>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct KeyPrim<T> {
+    pub at: KeyTime,
+    pub value: T,
+    /// The curve to the next key.
+    pub easing: Easing,
+}
+
+/// When a key falls, in ticks from the node's start or from its end once its length is known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum KeyTime {
+    Ticks(i64),
+    End,
 }
 
 #[derive(Clone, Debug)]
@@ -90,7 +210,7 @@ pub(crate) struct Visual {
     pub opacity: f32,
     pub fade_in: i64,
     pub fade_out: i64,
-    pub zoom: Option<[f32; 2]>,
+    pub zoom: Option<AnimPrim<f32>>,
     pub content: Content,
 }
 
@@ -104,8 +224,80 @@ pub(crate) enum Content {
     },
     Text(TextContent),
     Color(Rgba),
+    Shape(Box<ShapeContent>),
     Layout(Box<LayoutNode>),
     Counter(Box<CounterContent>),
+}
+
+/// Outlines in their area's unit square, with what fills, strokes and trims them.
+#[derive(Clone, Debug)]
+pub(crate) struct ShapeContent {
+    pub geometry: Vec<GeometryPrim>,
+    pub fill: Option<PaintPrim>,
+    pub stroke: Option<StrokePrim>,
+    pub trim: Option<TrimPrim>,
+}
+
+/// One outline, with points in the area's unit square and lengths in its shorter side.
+#[derive(Clone, Debug)]
+pub(crate) enum GeometryPrim {
+    Rect {
+        center: AnimPrim<[f32; 2]>,
+        size: AnimPrim<[f32; 2]>,
+        corner: AnimPrim<f32>,
+        rotation: AnimPrim<f32>,
+    },
+    Ellipse {
+        center: AnimPrim<[f32; 2]>,
+        size: AnimPrim<[f32; 2]>,
+        rotation: AnimPrim<f32>,
+    },
+    Polystar {
+        kind: alpha2_model::PolystarKind,
+        center: AnimPrim<[f32; 2]>,
+        points: u32,
+        outer: AnimPrim<f32>,
+        inner: AnimPrim<f32>,
+        roundness: AnimPrim<f32>,
+        rotation: AnimPrim<f32>,
+    },
+    Path(alpha2_model::Path),
+}
+
+/// A paint with its theme colors resolved and positions in the area's unit square.
+#[derive(Clone, Debug)]
+pub(crate) enum PaintPrim {
+    Solid(Rgba),
+    Linear {
+        stops: Vec<(f32, Rgba)>,
+        angle: f32,
+    },
+    Radial {
+        stops: Vec<(f32, Rgba)>,
+        center: [f32; 2],
+        radius: f32,
+    },
+    Conic {
+        stops: Vec<(f32, Rgba)>,
+        center: [f32; 2],
+        angle: f32,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StrokePrim {
+    pub paint: PaintPrim,
+    pub width: AnimPrim<f32>,
+    pub dash: Vec<f32>,
+    pub cap: alpha2_model::LineCap,
+    pub join: alpha2_model::LineJoin,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TrimPrim {
+    pub start: AnimPrim<f32>,
+    pub end: AnimPrim<f32>,
+    pub offset: AnimPrim<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -144,6 +336,9 @@ pub(crate) struct VideoContent {
     pub blur: Option<f32>,
     /// One frame of the file, for a hold on its last.
     pub frame_ticks: i64,
+    /// What it does past its end; `None` follows the parent.
+    pub when_short: Option<crate::spec::WhenShort>,
+    pub when_long: crate::spec::WhenLong,
 }
 
 impl VideoContent {
@@ -164,8 +359,15 @@ pub(crate) struct TextContent {
     pub strokes: Vec<TextStroke>,
     pub shadows: Vec<TextShadow>,
     pub max_lines: Option<u32>,
+    /// Font sizes in pixels the text is fitted between.
+    pub fit: Option<(f32, f32)>,
+    /// What ends a cut line, when lines are cut.
+    pub ellipsis: Option<alpha2_model::BlockEllipsis>,
     pub reveal: Option<RevealPrim>,
 }
+
+/// The font sizes in pixels a text is fitted between, and what ends a line it cuts.
+type TextFitting = (Option<(f32, f32)>, Option<alpha2_model::BlockEllipsis>);
 
 /// A text revealed a unit at a time: unit `i` changes over
 /// `i * stagger..i * stagger + duration` of the clip's picture time.
@@ -210,6 +412,9 @@ impl Prim {
         match self {
             Self::Sequence(sequence) => &sequence.head,
             Self::Stack(stack) => &stack.head,
+            Self::Group(group) => &group.stack.head,
+            Self::Coverage(coverage) => &coverage.head,
+            Self::Box(node) => &node.head,
             Self::Visual(visual) => &visual.head,
             Self::Captions(captions) => &captions.head,
             Self::Audio(audio) => &audio.head,
@@ -221,6 +426,9 @@ impl Prim {
         match self {
             Self::Sequence(sequence) => &mut sequence.head,
             Self::Stack(stack) => &mut stack.head,
+            Self::Group(group) => &mut group.stack.head,
+            Self::Coverage(coverage) => &mut coverage.head,
+            Self::Box(node) => &mut node.head,
             Self::Visual(visual) => &mut visual.head,
             Self::Captions(captions) => &mut captions.head,
             Self::Audio(audio) => &mut audio.head,
@@ -256,20 +464,17 @@ fn motion_fields(node: &Node) -> (Option<&Motion>, Option<&Motion>, Option<f64>)
         Node::Text(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Color(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Layout(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
-        Node::Title(node) | Node::TitleCard(node) => {
-            (node.enter.as_ref(), node.exit.as_ref(), None)
-        }
-        Node::LowerThird(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
-        Node::EndCard(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
-        Node::Logo(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Counter(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
-        Node::Captions(_)
+        Node::Group(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Shape(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Matte(_)
+        | Node::Mask(_)
+        | Node::Box(_)
+        | Node::Captions(_)
         | Node::Audio(_)
         | Node::Raw(_)
         | Node::Slideshow(_)
         | Node::CaptionedVideo(_)
-        | Node::ComparisonGrid(_)
-        | Node::Reframe(_)
         | Node::MusicBed(_) => (None, None, None),
     }
 }
@@ -412,6 +617,9 @@ impl Context<'_> {
     pub(crate) fn lower(&mut self, node: &Node, path: &str) -> Result<Prim, ComposeError> {
         let mut prim = self.lower_node(node, path)?;
         let (enter, exit, stagger) = motion_fields(node);
+        // A motion of zero seconds is none.
+        let moves = |motion: &&Motion| motion.duration != Some(0.0);
+        let (enter, exit) = (enter.filter(moves), exit.filter(moves));
         if enter.is_some() || exit.is_some() {
             let motion = NodeMotion {
                 enter: enter
@@ -427,6 +635,74 @@ impl Context<'_> {
             prim.head_mut().stagger = Self::time(path, "stagger", stagger)?;
         }
         Ok(prim)
+    }
+
+    /// Lowers `anim`, each of whose values `valid` accepts.
+    pub(crate) fn anim<T: Clone>(
+        path: &str,
+        anim: &Anim<T>,
+        valid: impl Fn(&T) -> bool,
+    ) -> Result<AnimPrim<T>, ComposeError> {
+        let invalid = |path: &str| Self::error(path, "a value is out of range");
+        // `easing` names its field `easing`; here it is `ease`.
+        let ease = |path: &str, choice: Option<&EasingChoice>| {
+            Self::easing(path, choice)
+                .map_err(|error| Self::error(&format!("{path}.ease"), error.message))
+        };
+        match anim {
+            Anim::Value(value) if valid(value) => Ok(AnimPrim::Value(value.clone())),
+            Anim::Value(_) => Err(invalid(path)),
+            Anim::Ramp(ramp) => {
+                if !valid(&ramp.from) || !valid(&ramp.to) {
+                    return Err(invalid(path));
+                }
+                let at = Self::optional_time(path, "at", ramp.at)?.unwrap_or(0);
+                let end = match Self::optional_time(path, "duration", ramp.duration)? {
+                    Some(duration) => KeyTime::Ticks(at + duration),
+                    None => KeyTime::End,
+                };
+                Ok(AnimPrim::Keys(vec![
+                    KeyPrim {
+                        at: KeyTime::Ticks(at),
+                        value: ramp.from.clone(),
+                        easing: ease(path, ramp.ease.as_ref())?,
+                    },
+                    KeyPrim {
+                        at: end,
+                        value: ramp.to.clone(),
+                        easing: Easing::Linear,
+                    },
+                ]))
+            }
+            Anim::Keys(keys) => {
+                if keys.keys.is_empty() {
+                    return Err(Self::error(path, "keys hold at least one key"));
+                }
+                let mut lowered = Vec::with_capacity(keys.keys.len());
+                for (index, key) in keys.keys.iter().enumerate() {
+                    let at = format!("{path}.keys[{index}]");
+                    if !valid(&key.v) {
+                        return Err(invalid(&format!("{at}.v")));
+                    }
+                    let ticks = Self::time(&at, "t", key.t)?;
+                    if lowered
+                        .last()
+                        .is_some_and(|last: &KeyPrim<T>| last.at >= KeyTime::Ticks(ticks))
+                    {
+                        return Err(Self::error(
+                            &format!("{at}.t"),
+                            "keys are in increasing time",
+                        ));
+                    }
+                    lowered.push(KeyPrim {
+                        at: KeyTime::Ticks(ticks),
+                        value: key.v.clone(),
+                        easing: ease(&at, key.ease.as_ref())?,
+                    });
+                }
+                Ok(AnimPrim::Keys(lowered))
+            }
+        }
     }
 
     /// A curve from `choice`: linear when absent.
@@ -557,6 +833,62 @@ impl Context<'_> {
                 }))
             }
             Node::Media(media) => self.lower_media(media, path),
+            Node::Group(group) => self.lower_group(group, path),
+            Node::Shape(shape) => self.lower_shape(shape, path),
+            Node::Box(node) => Ok(Prim::Box(Box::new(BoxPrim {
+                head: Self::head(path, node.id.as_ref(), node.at, node.duration)?,
+                inset: inset_sides(node.inset),
+                tree: self.box_tree(node, path)?,
+            }))),
+            Node::Matte(matte) => Ok(Prim::Coverage(Box::new(CoveragePrim {
+                head: Self::head(path, matte.id.as_ref(), matte.at, matte.duration)?,
+                inset: inset_sides(matte.inset),
+                content: self.lower(&matte.content, &format!("{path}.content"))?,
+                by: Coverage::Matte {
+                    by: self.lower(&matte.by, &format!("{path}.by"))?,
+                    mode: match (matte.uses.unwrap_or_default(), matte.invert) {
+                        (MatteUse::Alpha, false) => alpha2_model::MatteMode::Alpha,
+                        (MatteUse::Alpha, true) => alpha2_model::MatteMode::AlphaInverted,
+                        (MatteUse::Luma, false) => alpha2_model::MatteMode::Luma,
+                        (MatteUse::Luma, true) => alpha2_model::MatteMode::LumaInverted,
+                    },
+                },
+            }))),
+            Node::Mask(mask) => {
+                if mask.shapes.is_empty() || mask.shapes.len() > alpha2_model::MAX_CLIP_MASKS {
+                    return Err(Self::error(
+                        &format!("{path}.shapes"),
+                        format!("a mask has 1 to {} outlines", alpha2_model::MAX_CLIP_MASKS),
+                    ));
+                }
+                let shapes = mask
+                    .shapes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, shape)| {
+                        let at = format!("{path}.shapes[{index}]");
+                        Ok(MaskShapePrim {
+                            geometry: Self::geometry(&shape.geometry, &at)?,
+                            mode: shape.mode.unwrap_or_default(),
+                            feather: match &shape.feather {
+                                Some(feather) => {
+                                    Self::anim(&format!("{at}.feather"), feather, |value| {
+                                        value.is_finite() && *value >= 0.0
+                                    })?
+                                }
+                                None => AnimPrim::Value(0.0),
+                            },
+                            invert: shape.invert,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ComposeError>>()?;
+                Ok(Prim::Coverage(Box::new(CoveragePrim {
+                    head: Self::head(path, mask.id.as_ref(), mask.at, mask.duration)?,
+                    inset: inset_sides(mask.inset),
+                    content: self.lower(&mask.content, &format!("{path}.content"))?,
+                    by: Coverage::Mask(shapes),
+                })))
+            }
             Node::Text(text) => self.lower_text(text, path),
             Node::Color(color) => Ok(Prim::Visual(Box::new(Visual {
                 head: Self::head(path, color.id.as_ref(), color.at, color.duration)?,
@@ -567,7 +899,12 @@ impl Context<'_> {
                 fade_in: 0,
                 fade_out: 0,
                 zoom: None,
-                content: Content::Color(color.color.unwrap_or(self.theme.surface)),
+                content: Content::Color(
+                    color
+                        .color
+                        .as_ref()
+                        .map_or(self.theme.surface, |color| self.solid(color)),
+                ),
             }))),
             Node::Captions(captions) => self.lower_captions(captions, path),
             Node::Layout(layout) => Ok(Prim::Visual(Box::new(Visual {
@@ -603,64 +940,537 @@ impl Context<'_> {
                     grid: None,
                 }))
             }
-            Node::Title(title) => self.lower_title(title, path, false),
-            Node::TitleCard(title) => self.lower_title(title, path, true),
-            Node::LowerThird(lower) => self.lower_lower_third(lower, path),
-            Node::EndCard(card) => self.lower_end_card(card, path),
-            Node::ComparisonGrid(grid) => self.lower_comparison_grid(grid, path),
-            Node::Reframe(reframe) => {
-                let item = format!("{path}.video");
-                let video = Self::item_media(&reframe.video, &item)?;
-                let blur = Self::unit(path, "blur", reframe.blur, 0.05)?;
-                let mut background = video.clone();
-                background.fit = Some(Fit::Cover);
-                background.blur = Some(blur);
-                background.muted = true;
-                let mut front = video;
-                front.fit = Some(Fit::Contain);
-                Ok(Prim::Stack(StackPrim {
-                    head: Self::head(path, reframe.id.as_ref(), reframe.at, None)?,
-                    children: vec![
-                        self.lower_media(&background, &item)?,
-                        self.lower_media(&front, &item)?,
-                    ],
-                    inset: [0.0; 4],
-                    grid: None,
-                }))
-            }
-            Node::Logo(logo) => {
-                let (width, height) = self.canvas_px();
-                let size = match logo.size {
-                    Some(size) => Self::pixels(path, "size", size)?,
-                    None => 0.15 * self.short_side(),
-                };
-                let margin = match logo.margin {
-                    Some(margin) => Self::pixels(path, "margin", margin)?,
-                    None => self.theme_px(self.theme.margin),
-                };
-                let corner = logo.corner.unwrap_or(Align::TopRight);
-                let (x, y) = align_point(corner);
-                // The square box of `size` at the corner, `margin` from its edges.
-                let left = margin + x * (width - size - 2.0 * margin);
-                let top = margin + y * (height - size - 2.0 * margin);
-                let mut media = Media::new(logo.path.clone());
-                media.id.clone_from(&logo.id);
-                media.at = logo.at;
-                media.duration = logo.duration;
-                media.opacity = logo.opacity;
-                media.fit = Some(Fit::Contain);
-                media.align = Some(corner);
-                media.inset = Some(Inset::Sides([
-                    top,
-                    width - left - size,
-                    height - top - size,
-                    left,
-                ]));
-                self.lower_media(&media, path)
-            }
             Node::MusicBed(music) => self.lower_music_bed(music, path),
             Node::Counter(counter) => self.lower_counter(counter, path),
         }
+    }
+
+    fn lower_group(&mut self, group: &Group, path: &str) -> Result<Prim, ComposeError> {
+        let opacity = group
+            .opacity
+            .as_ref()
+            .map(|opacity| {
+                Self::anim(&format!("{path}.opacity"), opacity, |value| {
+                    (0.0..=1.0).contains(value)
+                })
+            })
+            .transpose()?;
+        let transform = group.transform.clone().unwrap_or_default();
+        let at = format!("{path}.transform");
+        let transform = TransformPrim {
+            position: transform
+                .position
+                .as_ref()
+                .map(|position| {
+                    Self::anim(&format!("{at}.position"), position, |value| {
+                        value.iter().all(|part| part.is_finite())
+                    })
+                })
+                .transpose()?,
+            scale: transform
+                .scale
+                .as_ref()
+                .map(|scale| {
+                    Self::anim(&format!("{at}.scale"), scale, |value| {
+                        value.is_finite() && *value > 0.0
+                    })
+                })
+                .transpose()?,
+            rotation: transform
+                .rotation
+                .as_ref()
+                .map(|rotation| {
+                    Self::anim(&format!("{at}.rotation"), rotation, |value| {
+                        value.is_finite()
+                    })
+                })
+                .transpose()?,
+            anchor: match transform.anchor {
+                Some(anchor) if anchor.iter().all(|part| part.is_finite()) => anchor,
+                Some(_) => return Err(Self::error(&format!("{at}.anchor"), "an anchor is finite")),
+                None => [0.5, 0.5],
+            },
+        };
+        let effects = group
+            .effects
+            .iter()
+            .enumerate()
+            .map(|(index, effect)| self.lower_effect(effect, &format!("{path}.effects[{index}]")))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Prim::Group(Box::new(GroupPrim {
+            stack: StackPrim {
+                head: Self::head(path, group.id.as_ref(), group.at, group.duration)?,
+                children: self.lower_children(&group.children, &format!("{path}.children"))?,
+                inset: inset_sides(group.inset),
+                grid: None,
+            },
+            opacity,
+            blend: group.blend.unwrap_or_default(),
+            effects,
+            transform,
+        })))
+    }
+
+    fn lower_shape(&mut self, shape: &Shape, path: &str) -> Result<Prim, ComposeError> {
+        if shape.shapes.is_empty() {
+            return Err(Self::error(
+                &format!("{path}.shapes"),
+                "a shape has at least one outline",
+            ));
+        }
+        let geometry = shape
+            .shapes
+            .iter()
+            .enumerate()
+            .map(|(index, geometry)| Self::geometry(geometry, &format!("{path}.shapes[{index}]")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let stroke = shape
+            .stroke
+            .as_ref()
+            .map(|stroke| {
+                let at = format!("{path}.stroke");
+                if !stroke
+                    .dash
+                    .iter()
+                    .all(|length| length.is_finite() && *length >= 0.0)
+                {
+                    return Err(Self::error(
+                        &format!("{at}.dash"),
+                        "dash lengths are not negative",
+                    ));
+                }
+                Ok(StrokePrim {
+                    paint: match &stroke.paint {
+                        Some(paint) => self.paint(paint, &format!("{at}.paint"))?,
+                        None => PaintPrim::Solid(self.theme.text),
+                    },
+                    width: Self::anim(&format!("{at}.width"), &stroke.width, |width| {
+                        width.is_finite() && *width >= 0.0
+                    })?,
+                    dash: stroke.dash.clone(),
+                    cap: stroke.cap.unwrap_or_default(),
+                    join: stroke.join.unwrap_or_default(),
+                })
+            })
+            .transpose()?;
+        let fill = match &shape.fill {
+            Some(paint) => Some(self.paint(paint, &format!("{path}.fill"))?),
+            None if stroke.is_none() => Some(PaintPrim::Solid(self.theme.accent)),
+            None => None,
+        };
+        let trim = shape
+            .trim
+            .as_ref()
+            .map(|trim| {
+                let at = format!("{path}.trim");
+                let part = |field: &str, anim: Option<&Anim<f32>>, default: f32| {
+                    anim.map_or(Ok(AnimPrim::Value(default)), |anim| {
+                        Self::anim(&format!("{at}.{field}"), anim, |value| value.is_finite())
+                    })
+                };
+                Ok::<_, ComposeError>(TrimPrim {
+                    start: part("start", trim.start.as_ref(), 0.0)?,
+                    end: part("end", trim.end.as_ref(), 1.0)?,
+                    offset: part("offset", trim.offset.as_ref(), 0.0)?,
+                })
+            })
+            .transpose()?;
+        Ok(Prim::Visual(Box::new(Visual {
+            head: Self::head(path, shape.id.as_ref(), shape.at, shape.duration)?,
+            inset: inset_sides(shape.inset),
+            fit: Fit::Fill,
+            align: Align::Center,
+            opacity: Self::unit(path, "opacity", shape.opacity, 1.0)?,
+            fade_in: 0,
+            fade_out: 0,
+            zoom: None,
+            content: Content::Shape(Box::new(ShapeContent {
+                geometry,
+                fill,
+                stroke,
+                trim,
+            })),
+        })))
+    }
+
+    /// Lowers one outline, its omitted values defaulted.
+    fn geometry(geometry: &Geometry, path: &str) -> Result<GeometryPrim, ComposeError> {
+        let point = |field: &str, anim: Option<&Anim<[f32; 2]>>, default: [f32; 2]| {
+            anim.map_or(Ok(AnimPrim::Value(default)), |anim| {
+                Self::anim(&format!("{path}.{field}"), anim, |value| {
+                    value.iter().all(|part| part.is_finite())
+                })
+            })
+        };
+        let size = |anim: Option<&Anim<[f32; 2]>>| {
+            anim.map_or(Ok(AnimPrim::Value([1.0, 1.0])), |anim| {
+                Self::anim(&format!("{path}.size"), anim, |value| {
+                    value.iter().all(|part| part.is_finite() && *part >= 0.0)
+                })
+            })
+        };
+        let length = |field: &str, anim: Option<&Anim<f32>>, default: f32| {
+            anim.map_or(Ok(AnimPrim::Value(default)), |anim| {
+                Self::anim(&format!("{path}.{field}"), anim, |value| {
+                    value.is_finite() && *value >= 0.0
+                })
+            })
+        };
+        let turn = |anim: Option<&Anim<f32>>| {
+            anim.map_or(Ok(AnimPrim::Value(0.0)), |anim| {
+                Self::anim(&format!("{path}.rotation"), anim, |value| value.is_finite())
+            })
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let points = |points: u32| {
+            if (alpha2_model::MIN_POLYSTAR_POINTS..=alpha2_model::MAX_POLYSTAR_POINTS)
+                .contains(&(points as f32))
+            {
+                Ok(points)
+            } else {
+                Err(Self::error(
+                    &format!("{path}.points"),
+                    format!(
+                        "from {} to {} points",
+                        alpha2_model::MIN_POLYSTAR_POINTS,
+                        alpha2_model::MAX_POLYSTAR_POINTS
+                    ),
+                ))
+            }
+        };
+        Ok(match geometry {
+            Geometry::Rect {
+                center,
+                size: extent,
+                corner_radius,
+                rotation,
+            } => GeometryPrim::Rect {
+                center: point("center", center.as_ref(), [0.5, 0.5])?,
+                size: size(extent.as_ref())?,
+                corner: length("corner_radius", corner_radius.as_ref(), 0.0)?,
+                rotation: turn(rotation.as_ref())?,
+            },
+            Geometry::Ellipse {
+                center,
+                size: extent,
+                rotation,
+            } => GeometryPrim::Ellipse {
+                center: point("center", center.as_ref(), [0.5, 0.5])?,
+                size: size(extent.as_ref())?,
+                rotation: turn(rotation.as_ref())?,
+            },
+            Geometry::Polygon {
+                center,
+                points: count,
+                radius,
+                roundness,
+                rotation,
+            } => GeometryPrim::Polystar {
+                kind: alpha2_model::PolystarKind::Polygon,
+                center: point("center", center.as_ref(), [0.5, 0.5])?,
+                points: points(*count)?,
+                outer: length("radius", radius.as_ref(), 0.5)?,
+                inner: AnimPrim::Value(0.0),
+                roundness: length("roundness", roundness.as_ref(), 0.0)?,
+                rotation: turn(rotation.as_ref())?,
+            },
+            Geometry::Star {
+                center,
+                points: count,
+                outer_radius,
+                inner_radius,
+                rotation,
+            } => GeometryPrim::Polystar {
+                kind: alpha2_model::PolystarKind::Star,
+                center: point("center", center.as_ref(), [0.5, 0.5])?,
+                points: points(*count)?,
+                outer: length("outer_radius", outer_radius.as_ref(), 0.5)?,
+                inner: length("inner_radius", inner_radius.as_ref(), 0.25)?,
+                roundness: AnimPrim::Value(0.0),
+                rotation: turn(rotation.as_ref())?,
+            },
+            Geometry::Path { d } => GeometryPrim::Path(
+                crate::svg_path::parse(d)
+                    .map_err(|message| Self::error(&format!("{path}.d"), message))?,
+            ),
+        })
+    }
+
+    /// A theme color, or a color as written.
+    pub(crate) fn solid(&self, color: &SolidColor) -> Rgba {
+        match color {
+            SolidColor::Color(color) => *color,
+            SolidColor::Theme(theme) => self.theme_color(*theme),
+        }
+    }
+
+    fn theme_color(&self, color: ThemeColor) -> Rgba {
+        let mut picked = match color.token {
+            ThemeToken::Text => self.theme.text,
+            ThemeToken::Background => self.theme.background,
+            ThemeToken::Surface => self.theme.surface,
+            ThemeToken::Panel => self.theme.panel,
+            ThemeToken::Accent => self.theme.accent,
+        };
+        picked.alpha *= color.alpha.unwrap_or(1.0).clamp(0.0, 1.0);
+        picked
+    }
+
+    /// Lowers a paint, resolving theme colors and spacing gradient stops.
+    #[allow(clippy::cast_precision_loss)]
+    pub(crate) fn paint(&self, paint: &PaintChoice, path: &str) -> Result<PaintPrim, ComposeError> {
+        let stops = |gradient: &Gradient| {
+            let count = gradient.stops.len();
+            if !(2..=alpha2_model::MAX_GRADIENT_STOPS).contains(&count) {
+                return Err(Self::error(
+                    &format!("{path}.stops"),
+                    format!(
+                        "a gradient has 2 to {} stops",
+                        alpha2_model::MAX_GRADIENT_STOPS
+                    ),
+                ));
+            }
+            let mut previous = 0.0_f32;
+            gradient
+                .stops
+                .iter()
+                .enumerate()
+                .map(|(index, stop)| {
+                    let (offset, color) = match stop {
+                        Stop::At(stop) => (stop.offset, self.solid(&stop.color)),
+                        Stop::Even(color) => (index as f32 / (count - 1) as f32, self.solid(color)),
+                    };
+                    if !(previous..=1.0).contains(&offset) {
+                        return Err(Self::error(
+                            &format!("{path}.stops[{index}].offset"),
+                            "offsets are in 0..=1, each not before the one before",
+                        ));
+                    }
+                    previous = offset;
+                    Ok((offset, color))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let center = |gradient: &Gradient| gradient.center.unwrap_or([0.5, 0.5]);
+        Ok(match paint {
+            PaintChoice::Color(color) => PaintPrim::Solid(*color),
+            PaintChoice::Theme(theme) => PaintPrim::Solid(self.theme_color(*theme)),
+            PaintChoice::Linear(LinearPaint { linear }) => PaintPrim::Linear {
+                stops: stops(linear)?,
+                angle: linear.angle.unwrap_or(180.0),
+            },
+            PaintChoice::Radial(RadialPaint { radial }) => PaintPrim::Radial {
+                stops: stops(radial)?,
+                center: center(radial),
+                radius: radial.radius.unwrap_or(0.5),
+            },
+            PaintChoice::Conic(ConicPaint { conic }) => PaintPrim::Conic {
+                stops: stops(conic)?,
+                center: center(conic),
+                angle: conic.angle.unwrap_or(0.0),
+            },
+        })
+    }
+
+    /// Lowers a box and sorts its children into nested boxes, layout leaves and other nodes.
+    fn box_tree(&mut self, node: &BoxNode, path: &str) -> Result<BoxTree, ComposeError> {
+        const OWN: [&str; 6] = ["children", "text", "shape", "position", "inset", "type"];
+        if let Some(field) = node.css.keys().find(|field| OWN.contains(&field.as_str())) {
+            return Err(Self::error(
+                &format!("{path}.{field}"),
+                format!("a box sets `{field}` itself"),
+            ));
+        }
+        let mut children = Vec::with_capacity(node.children.len());
+        for (index, child) in node.children.iter().enumerate() {
+            let at = format!("{path}.children[{index}]");
+            let content = match child.node() {
+                Node::Box(inner) => {
+                    if inner.at.is_some() || inner.duration.is_some() || inner.inset.is_some() {
+                        return Err(Self::error(
+                            &at,
+                            "a box in a box shares its time and takes its place from its item \
+                             fields, so it has no `at`, `duration` or `inset`",
+                        ));
+                    }
+                    BoxContent::Tree(self.box_tree(inner, &at)?)
+                }
+                Node::Text(_) | Node::Shape(_) | Node::Color(_) => {
+                    match self.lower(child.node(), &at)? {
+                        Prim::Visual(visual) => BoxContent::Native(visual),
+                        other => BoxContent::Foreign(other),
+                    }
+                }
+                other => BoxContent::Foreign(self.lower(other, &at)?),
+            };
+            let mut item = child.item();
+            for (field, value) in &mut item {
+                self.theme_lengths(value, &format!("{at}.box.{field}"))?;
+            }
+            children.push(BoxKid { item, content });
+        }
+        let mut css = node.css.clone();
+        for (field, value) in &mut css {
+            self.theme_lengths(value, &format!("{path}.{field}"))?;
+        }
+        Ok(BoxTree {
+            css,
+            background: node
+                .background
+                .as_ref()
+                .map(|paint| self.paint(paint, &format!("{path}.background")))
+                .transpose()?,
+            border: node
+                .border
+                .as_ref()
+                .map(|border| {
+                    Ok::<_, ComposeError>((
+                        serde_json::to_value(&border.width).expect("a size serializes"),
+                        self.paint(&border.paint, &format!("{path}.border.paint"))?,
+                    ))
+                })
+                .transpose()?,
+            children,
+        })
+    }
+
+    /// A theme length, as a fraction of the picture's shorter side.
+    fn theme_length(&self, length: &ThemeLength) -> f32 {
+        let token = match length.token {
+            LengthToken::Margin => self.theme.margin,
+            LengthToken::TitleSize => self.theme.title_size,
+            LengthToken::SubtitleSize => self.theme.subtitle_size,
+            LengthToken::BodySize => self.theme.body_size,
+            LengthToken::CaptionSize => self.theme.caption_size,
+            LengthToken::LabelSize => self.theme.label_size,
+        };
+        token * length.scale.unwrap_or(1.0)
+    }
+
+    /// `size` in pixels, above zero.
+    fn size_px(&self, path: &str, size: &Size) -> Result<f32, ComposeError> {
+        let pixels = match size {
+            Size::Pixels(pixels) => *pixels,
+            Size::Theme(length) => self.theme_px(self.theme_length(length)),
+        };
+        if pixels.is_finite() && pixels > 0.0 {
+            Ok(pixels)
+        } else {
+            Err(Self::error(
+                path,
+                format!("{pixels} is not a size above zero in pixels"),
+            ))
+        }
+    }
+
+    /// `value` with each theme length in it, `{"$theme": "margin", "scale": 2}`, replaced by its
+    /// fraction of the picture's shorter side.
+    fn theme_lengths(&self, value: &mut serde_json::Value, path: &str) -> Result<(), ComposeError> {
+        match value {
+            serde_json::Value::Object(object) if object.contains_key("$theme") => {
+                let length: ThemeLength =
+                    crate::de::from_value(value.clone()).map_err(|error| {
+                        Self::error(&crate::de::join(path, &error.path), error.message)
+                    })?;
+                *value = serde_json::json!(self.theme_length(&length));
+            }
+            serde_json::Value::Object(object) => {
+                for (field, inner) in object {
+                    self.theme_lengths(inner, &format!("{path}.{field}"))?;
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (index, inner) in items.iter_mut().enumerate() {
+                    self.theme_lengths(inner, &format!("{path}[{index}]"))?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn lower_effect(&mut self, effect: &EffectUse, path: &str) -> Result<EffectPrim, ComposeError> {
+        let id = effect_id(&effect.effect);
+        let spec = alpha2_model::builtin_effect(&id);
+        if spec.is_none() && id.starts_with(alpha2_model::BUILTIN_EFFECT_PREFIX) {
+            return Err(Self::error(
+                &format!("{path}.effect"),
+                format!(
+                    "\"{}\" is not a built-in effect; schema/effects.v1.json lists them",
+                    effect.effect
+                ),
+            ));
+        }
+        if spec.is_some_and(|spec| spec.kind != alpha2_model::EffectKind::Effect) {
+            return Err(Self::error(
+                &format!("{path}.effect"),
+                format!("\"{}\" is a transition, not an effect", effect.effect),
+            ));
+        }
+        let mut params = BTreeMap::new();
+        let mut inputs = BTreeMap::new();
+        for (name, value) in &effect.params {
+            let at = format!("{path}.{name}");
+            if spec.is_some_and(|spec| spec.inputs.contains(name)) {
+                let node: Node = crate::de::from_value(value.clone()).map_err(|error| {
+                    Self::error(&crate::de::join(&at, &error.path), error.message)
+                })?;
+                inputs.insert(name.clone(), self.lower(&node, &at)?);
+                continue;
+            }
+            let param = match spec {
+                Some(spec) => Some(spec.param(name).ok_or_else(|| {
+                    let names = spec
+                        .params
+                        .iter()
+                        .map(|param| param.name.as_str())
+                        .chain(spec.inputs.iter().map(String::as_str))
+                        .collect::<Vec<_>>();
+                    Self::error(
+                        &at,
+                        format!(
+                            "{} has no parameter {name}; it takes {}",
+                            effect.effect,
+                            if names.is_empty() {
+                                "none".to_owned()
+                            } else {
+                                names.join(", ")
+                            }
+                        ),
+                    )
+                })?),
+                None => None,
+            };
+            let anim: Anim<serde_json::Value> = crate::de::from_value(value.clone())
+                .map_err(|error| Self::error(&at, error.message))?;
+            let typed = map_anim(&anim, |value| effect_value(param, value))
+                .ok_or_else(|| Self::error(&at, "a value of the parameter's type"))?;
+            let lowered = Self::anim(&at, &typed, |value| {
+                param.is_none_or(|param| param.accepts(value))
+            })?;
+            params.insert(name.clone(), lowered);
+        }
+        if let Some(spec) = spec
+            && let Some(missing) = spec.inputs.iter().find(|name| !inputs.contains_key(*name))
+        {
+            return Err(Self::error(
+                path,
+                format!(
+                    "{} needs its image input {missing} as a node",
+                    effect.effect
+                ),
+            ));
+        }
+        Ok(EffectPrim {
+            path: path.to_owned(),
+            version: effect
+                .version
+                .or_else(|| spec.map(|spec| spec.version))
+                .unwrap_or(1),
+            id,
+            params,
+            inputs,
+        })
     }
 
     fn lower_children(&mut self, children: &[Node], path: &str) -> Result<Vec<Prim>, ComposeError> {
@@ -787,6 +1597,8 @@ impl Context<'_> {
                     speed,
                     preserve_pitch: media.preserve_pitch.unwrap_or(true),
                     looped: media.r#loop,
+                    when_short: media.when_short,
+                    when_long: media.when_long.unwrap_or(crate::spec::WhenLong::Trim),
                     volume: media
                         .volume
                         .map_or(Ok(1.0), |volume| Self::gain(path, "volume", volume))?,
@@ -797,14 +1609,15 @@ impl Context<'_> {
                 })
             }
         };
-        if let Some(zoom) = media.zoom
-            && !zoom.iter().all(|value| value.is_finite() && *value > 0.0)
-        {
-            return Err(Self::error(
-                &format!("{path}.zoom"),
-                "zoom factors are positive",
-            ));
-        }
+        let zoom = media
+            .zoom
+            .as_ref()
+            .map(|zoom| {
+                Self::anim(&format!("{path}.zoom"), zoom, |value| {
+                    value.is_finite() && *value > 0.0
+                })
+            })
+            .transpose()?;
         Ok(Prim::Visual(Box::new(Visual {
             head,
             inset: inset_sides(media.inset),
@@ -813,7 +1626,7 @@ impl Context<'_> {
             opacity: Self::unit(path, "opacity", media.opacity, 1.0)?,
             fade_in: Self::optional_time(path, "fade_in", media.fade_in)?.unwrap_or(0),
             fade_out: Self::optional_time(path, "fade_out", media.fade_out)?.unwrap_or(0),
-            zoom: media.zoom,
+            zoom,
             content,
         })))
     }
@@ -858,14 +1671,8 @@ impl Context<'_> {
                 format!("{decimals} decimals: at most 6"),
             ));
         }
-        let font_px = match counter.font_size {
-            Some(size) if size.is_finite() && size > 0.0 => size,
-            Some(size) => {
-                return Err(Self::error(
-                    &format!("{path}.font_size"),
-                    format!("{size} is not a font size in pixels"),
-                ));
-            }
+        let font_px = match &counter.font_size {
+            Some(size) => self.size_px(&format!("{path}.font_size"), size)?,
             None => self.role_size(counter.style.unwrap_or(TextRole::Title)),
         };
         Ok(Prim::Visual(Box::new(Visual {
@@ -892,7 +1699,10 @@ impl Context<'_> {
                     .font_family
                     .clone()
                     .or_else(|| self.theme.font_family.clone()),
-                color: counter.color.unwrap_or(self.theme.text),
+                color: counter
+                    .color
+                    .as_ref()
+                    .map_or(self.theme.text, |color| self.solid(color)),
                 strokes: counter.strokes.clone(),
                 shadows: counter.shadows.clone(),
             })),
@@ -909,21 +1719,49 @@ impl Context<'_> {
         self.theme_px(fraction)
     }
 
+    /// The font sizes in pixels `text` is fitted between, and what ends a line it cuts.
+    fn text_fit(text: &Text, font_px: f32, path: &str) -> Result<TextFitting, ComposeError> {
+        if text.max_lines == Some(0) {
+            return Err(Self::error(
+                &format!("{path}.max_lines"),
+                "a text takes at least one line",
+            ));
+        }
+        let fit = match text.fit {
+            Some(fit) => {
+                let max = fit.max.unwrap_or(font_px);
+                let valid = |size: f32| size.is_finite() && size > 0.0;
+                if !valid(fit.min) || !valid(max) || fit.min > max {
+                    return Err(Self::error(
+                        &format!("{path}.fit"),
+                        "a fit is from a positive font size up to one at least as large",
+                    ));
+                }
+                Some((fit.min, max))
+            }
+            None => text.max_lines.map(|_| (0.3 * font_px, font_px)),
+        };
+        let ellipsis = match &text.ellipsis {
+            None | Some(Ellipsis::Shown(true)) => alpha2_model::BlockEllipsis::Ellipsis,
+            Some(Ellipsis::Shown(false)) => alpha2_model::BlockEllipsis::NoEllipsis,
+            Some(Ellipsis::Text(mark)) => alpha2_model::BlockEllipsis::String(mark.clone()),
+        };
+        Ok((
+            fit,
+            (text.max_lines.is_some() || text.ellipsis.is_some()).then_some(ellipsis),
+        ))
+    }
+
     fn lower_text(&mut self, text: &Text, path: &str) -> Result<Prim, ComposeError> {
         if text.text.is_empty() {
             return Err(Self::error(&format!("{path}.text"), "text is not empty"));
         }
-        let font_px = match text.font_size {
-            Some(size) if size.is_finite() && size > 0.0 => size,
-            Some(size) => {
-                return Err(Self::error(
-                    &format!("{path}.font_size"),
-                    format!("{size} is not a font size in pixels"),
-                ));
-            }
+        let font_px = match &text.font_size {
+            Some(size) => self.size_px(&format!("{path}.font_size"), size)?,
             None => self.role_size(text.style),
         };
         let fade = Self::optional_time(path, "fade", text.fade)?.unwrap_or(0);
+        let (fit, ellipsis) = Self::text_fit(text, font_px, path)?;
         let reveal = text
             .reveal
             .as_ref()
@@ -992,11 +1830,16 @@ impl Context<'_> {
                     .font_family
                     .clone()
                     .or_else(|| self.theme.font_family.clone()),
-                color: text.color.unwrap_or(self.theme.text),
-                background: text.background,
+                color: text
+                    .color
+                    .as_ref()
+                    .map_or(self.theme.text, |color| self.solid(color)),
+                background: text.background.as_ref().map(|color| self.solid(color)),
                 strokes: text.strokes.clone(),
                 shadows: text.shadows.clone(),
                 max_lines: text.max_lines,
+                fit,
+                ellipsis,
                 reveal,
             }),
         })))
@@ -1057,14 +1900,8 @@ impl Context<'_> {
             return Err(Self::error(path, "the captions have no cues"));
         }
         let (width, height) = self.canvas_px();
-        let mut font_px = match captions.font_size {
-            Some(size) if size.is_finite() && size > 0.0 => size,
-            Some(size) => {
-                return Err(Self::error(
-                    &format!("{path}.font_size"),
-                    format!("{size} is not a font size in pixels"),
-                ));
-            }
+        let mut font_px = match &captions.font_size {
+            Some(size) => self.size_px(&format!("{path}.font_size"), size)?,
             None => self.theme_px(self.theme.caption_size),
         };
         let position = match captions.position {
@@ -1085,7 +1922,10 @@ impl Context<'_> {
         let mut style = TextStyle {
             font_family: self.theme.font_family.clone(),
             fill: Paint::Solid {
-                color: captions.color.unwrap_or(self.theme.text),
+                color: captions
+                    .color
+                    .as_ref()
+                    .map_or(self.theme.text, |color| self.solid(color)),
             },
             max_width: if vertical { 0.86 } else { 0.8 },
             anchor: alpha2_model::Vec2::new(0.5, 0.5),
@@ -1103,7 +1943,10 @@ impl Context<'_> {
             ));
             look = CaptionStyle::Bold;
         }
-        let highlight = captions.highlight.unwrap_or(self.theme.accent);
+        let highlight = captions
+            .highlight
+            .as_ref()
+            .map_or(self.theme.accent, |color| self.solid(color));
         let y = match look {
             CaptionStyle::Outline => {
                 style.strokes = outline(0.12);
@@ -1128,7 +1971,10 @@ impl Context<'_> {
                 position.unwrap_or(if vertical { 0.62 } else { 0.7 })
             }
             CaptionStyle::Bold | CaptionStyle::Karaoke | CaptionStyle::Pop => {
-                bold_look(&mut style, captions.color);
+                bold_look(
+                    &mut style,
+                    captions.color.as_ref().map(|color| self.solid(color)),
+                );
                 match look {
                     CaptionStyle::Karaoke => {
                         style.animators = [RunState::Spoken, RunState::Active]
@@ -1163,7 +2009,9 @@ impl Context<'_> {
             styles.insert(
                 name.clone(),
                 alpha2_model::TextStylePatch {
-                    fill: speaker.color.map(|color| Paint::Solid { color }),
+                    fill: speaker.color.as_ref().map(|color| Paint::Solid {
+                        color: self.solid(color),
+                    }),
                     position: speaker.position,
                     ..alpha2_model::TextStylePatch::default()
                 },
@@ -1429,8 +2277,14 @@ impl Context<'_> {
             if media.duration.is_none() {
                 media.duration = Some(seconds);
             }
-            if let (None, Some(zoom)) = (media.zoom, slideshow.ken_burns) {
-                media.zoom = Some([1.0, zoom]);
+            if let (None, Some(zoom)) = (&media.zoom, slideshow.ken_burns) {
+                media.zoom = Some(Anim::Ramp(Ramp {
+                    from: 1.0,
+                    to: zoom,
+                    ease: None,
+                    at: None,
+                    duration: None,
+                }));
             }
             children.push(self.lower_media(&media, &at)?);
         }
@@ -1438,364 +2292,6 @@ impl Context<'_> {
             head: Self::head(path, slideshow.id.as_ref(), slideshow.at, None)?,
             children,
             transition,
-        }))
-    }
-
-    /// A text primitive at `inset` in the canvas, aligned to `align`.
-    #[allow(clippy::too_many_arguments)]
-    fn text_prim(
-        &self,
-        path: &str,
-        text: &str,
-        font_px: f32,
-        inset: [f32; 4],
-        align: Align,
-        fade: i64,
-        max_lines: Option<u32>,
-        background: Option<Rgba>,
-    ) -> Prim {
-        Prim::Visual(Box::new(Visual {
-            head: Head {
-                path: path.to_owned(),
-                ..Head::default()
-            },
-            inset,
-            fit: Fit::None,
-            align,
-            opacity: 1.0,
-            fade_in: fade,
-            fade_out: fade,
-            zoom: None,
-            content: Content::Text(TextContent {
-                text: text.to_owned(),
-                font_px,
-                family: self.theme.font_family.clone(),
-                color: self.theme.text,
-                background,
-                strokes: Vec::new(),
-                shadows: Vec::new(),
-                max_lines,
-                reveal: None,
-            }),
-        }))
-    }
-
-    /// A title and an optional subtitle as one group at `align` on the canvas. Returns its
-    /// children and its top.
-    fn title_group(
-        &mut self,
-        path: &str,
-        text: &str,
-        subtitle: Option<&str>,
-        align: Align,
-        fade: i64,
-        top_offset: f32,
-    ) -> Vec<Prim> {
-        let (width, height) = self.canvas_px();
-        let margin = self.theme_px(self.theme.margin) * 2.0;
-        let (title_px, sub_px) = (
-            self.role_size(TextRole::Title),
-            self.role_size(TextRole::Subtitle),
-        );
-        let max_width = width - 2.0 * margin;
-        let title_px = self.fit_font(path, text, title_px, max_width, 2);
-        let title_height = self.text_height(text, title_px, max_width);
-        let gap = 0.5 * sub_px;
-        let sub_height = subtitle.map_or(0.0, |subtitle| {
-            gap + self.text_height(subtitle, sub_px, max_width)
-        });
-        let group = title_height + sub_height;
-        let (x, y) = align_point(align);
-        let top = top_offset + margin + y * (height - top_offset - 2.0 * margin - group);
-        let horizontal = match x {
-            x if x < 0.25 => Align::TopLeft,
-            x if x > 0.75 => Align::TopRight,
-            _ => Align::Top,
-        };
-        let inset = |top: f32, height_used: f32| [top, margin, height - top - height_used, margin];
-        let mut children = vec![self.text_prim(
-            &format!("{path}.text"),
-            text,
-            title_px,
-            inset(top, title_height),
-            horizontal,
-            fade,
-            Some(2),
-            None,
-        )];
-        if let Some(subtitle) = subtitle {
-            let sub_top = top + title_height + gap;
-            children.push(self.text_prim(
-                &format!("{path}.subtitle"),
-                subtitle,
-                sub_px,
-                inset(sub_top, sub_height - gap),
-                horizontal,
-                fade,
-                None,
-                None,
-            ));
-        }
-        children
-    }
-
-    fn lower_title(&mut self, title: &Title, path: &str, card: bool) -> Result<Prim, ComposeError> {
-        if title.text.is_empty() {
-            return Err(Self::error(&format!("{path}.text"), "a title is not empty"));
-        }
-        let head = Self::head(path, title.id.as_ref(), title.at, title.duration)?;
-        let fade = Self::time(path, "fade", title.fade.unwrap_or(self.theme.fade_seconds))?;
-        let mut children = Vec::new();
-        if card {
-            children.push(Prim::Visual(Box::new(Visual {
-                head: Head {
-                    path: path.to_owned(),
-                    ..Head::default()
-                },
-                inset: [0.0; 4],
-                fit: Fit::Fill,
-                align: Align::Center,
-                opacity: 1.0,
-                fade_in: 0,
-                fade_out: 0,
-                zoom: None,
-                content: Content::Color(title.background.unwrap_or(self.theme.surface)),
-            })));
-        }
-        let text_fade = if card { 0 } else { fade };
-        children.extend(self.title_group(
-            path,
-            &title.text,
-            title.subtitle.as_deref(),
-            title.align.unwrap_or_default(),
-            text_fade,
-            0.0,
-        ));
-        let mut stack = StackPrim {
-            head,
-            children,
-            inset: [0.0; 4],
-            grid: None,
-        };
-        if card && fade > 0 {
-            // A card fades as a whole: each of its pictures by the same ramp.
-            for child in &mut stack.children {
-                if let Prim::Visual(visual) = child {
-                    visual.fade_in = fade;
-                    visual.fade_out = fade;
-                }
-            }
-        }
-        Ok(Prim::Stack(stack))
-    }
-
-    fn lower_lower_third(&mut self, lower: &LowerThird, path: &str) -> Result<Prim, ComposeError> {
-        if lower.text.is_empty() {
-            return Err(Self::error(
-                &format!("{path}.text"),
-                "a lower third has a name",
-            ));
-        }
-        let head = Self::head(path, lower.id.as_ref(), lower.at, lower.duration)?;
-        let fade = Self::time(path, "fade", lower.fade.unwrap_or(self.theme.fade_seconds))?;
-        let (width, height) = self.canvas_px();
-        let margin = self.theme_px(self.theme.margin) * 1.5;
-        let name_px = self.theme_px(self.theme.subtitle_size) * 1.2;
-        let role_px = self.theme_px(self.theme.body_size);
-        let bar_width = (0.008 * self.short_side()).max(2.0);
-        let left = margin + bar_width * 2.5;
-        let max_width = width * 0.6;
-        let name_px = self.fit_font(&format!("{path}.text"), &lower.text, name_px, max_width, 1);
-        let name_height = self.text_height(&lower.text, name_px, max_width);
-        let gap = 0.6 * role_px;
-        let role_height = lower
-            .subtitle
-            .as_deref()
-            .map_or(0.0, |role| gap + self.text_height(role, role_px, max_width));
-        let bottom = height - margin * 1.5;
-        let top = bottom - name_height - role_height;
-        let inset =
-            |top: f32, used: f32| [top, width - left - max_width, height - top - used, left];
-        let mut children = vec![
-            Prim::Visual(Box::new(Visual {
-                head: Head {
-                    path: path.to_owned(),
-                    ..Head::default()
-                },
-                inset: [
-                    top - 0.2 * name_px,
-                    width - margin - bar_width,
-                    height - bottom - 0.2 * name_px,
-                    margin,
-                ],
-                fit: Fit::Fill,
-                align: Align::Center,
-                opacity: 1.0,
-                fade_in: fade,
-                fade_out: fade,
-                zoom: None,
-                content: Content::Color(self.theme.accent),
-            })),
-            self.text_prim(
-                &format!("{path}.text"),
-                &lower.text,
-                name_px,
-                inset(top, name_height),
-                Align::TopLeft,
-                fade,
-                Some(1),
-                Some(self.theme.panel),
-            ),
-        ];
-        if let Some(role) = &lower.subtitle {
-            let role_top = top + name_height + gap;
-            children.push(self.text_prim(
-                &format!("{path}.subtitle"),
-                role,
-                role_px,
-                inset(role_top, role_height - gap),
-                Align::TopLeft,
-                fade,
-                None,
-                Some(self.theme.panel),
-            ));
-        }
-        Ok(Prim::Stack(StackPrim {
-            head,
-            children,
-            inset: [0.0; 4],
-            grid: None,
-        }))
-    }
-
-    fn lower_end_card(&mut self, card: &EndCard, path: &str) -> Result<Prim, ComposeError> {
-        if card.text.is_empty() {
-            return Err(Self::error(
-                &format!("{path}.text"),
-                "an end card has a title",
-            ));
-        }
-        let head = Self::head(path, card.id.as_ref(), card.at, card.duration)?;
-        let fade = Self::time(path, "fade", card.fade.unwrap_or(self.theme.fade_seconds))?;
-        let (width, height) = self.canvas_px();
-        let mut children = vec![Prim::Visual(Box::new(Visual {
-            head: Head {
-                path: path.to_owned(),
-                ..Head::default()
-            },
-            inset: [0.0; 4],
-            fit: Fit::Fill,
-            align: Align::Center,
-            opacity: 1.0,
-            fade_in: fade,
-            fade_out: fade,
-            zoom: None,
-            content: Content::Color(card.background.unwrap_or(self.theme.surface)),
-        }))];
-        let mut top_offset = 0.0;
-        if let Some(logo) = &card.logo {
-            let size = 0.22 * self.short_side();
-            let top = 0.5 * height - size - 0.04 * self.short_side();
-            let mut media = Media::new(logo.clone());
-            media.fit = Some(Fit::Contain);
-            media.align = Some(Align::Bottom);
-            media.inset = Some(Inset::Sides([
-                top,
-                0.5 * (width - size),
-                height - top - size,
-                0.5 * (width - size),
-            ]));
-            media.fade_in = Some(crate::compile::seconds(fade));
-            media.fade_out = Some(crate::compile::seconds(fade));
-            children.push(self.lower_media(&media, &format!("{path}.logo"))?);
-            top_offset = 0.5 * height;
-        }
-        let align = if card.logo.is_some() {
-            Align::Top
-        } else {
-            Align::Center
-        };
-        children.extend(self.title_group(
-            path,
-            &card.text,
-            card.subtitle.as_deref(),
-            align,
-            fade,
-            top_offset,
-        ));
-        Ok(Prim::Stack(StackPrim {
-            head,
-            children,
-            inset: [0.0; 4],
-            grid: None,
-        }))
-    }
-
-    fn lower_comparison_grid(
-        &mut self,
-        grid: &ComparisonGrid,
-        path: &str,
-    ) -> Result<Prim, ComposeError> {
-        if grid.items.is_empty() {
-            return Err(Self::error(
-                &format!("{path}.items"),
-                "a comparison grid has at least one item",
-            ));
-        }
-        if let Some(index) = grid.audio_from
-            && index as usize >= grid.items.len()
-        {
-            return Err(Self::error(
-                &format!("{path}.audio_from"),
-                format!("there is no item {index}"),
-            ));
-        }
-        let label_px = self.role_size(TextRole::Label);
-        let pad = 0.8 * label_px;
-        let mut cells = Vec::with_capacity(grid.items.len());
-        for (index, item) in grid.items.iter().enumerate() {
-            let at = format!("{path}.items[{index}]");
-            let mut media = Self::item_media(item, &at)?;
-            media.muted |= grid.audio_from != Some(u32::try_from(index).unwrap_or(u32::MAX));
-            let label = media.label.take();
-            let mut children = vec![self.lower_media(&media, &at)?];
-            if let Some(label) = label.filter(|label| !label.is_empty()) {
-                let mut text = self.text_prim(
-                    &format!("{at}.label"),
-                    &label,
-                    label_px,
-                    [pad; 4],
-                    Align::TopLeft,
-                    0,
-                    Some(1),
-                    Some(self.theme.panel),
-                );
-                if let Prim::Visual(visual) = &mut text
-                    && let Content::Text(content) = &mut visual.content
-                {
-                    content.max_lines = None;
-                }
-                children.push(text);
-            }
-            cells.push(Prim::Stack(StackPrim {
-                head: Head {
-                    path: at,
-                    ..Head::default()
-                },
-                children,
-                inset: [0.0; 4],
-                grid: None,
-            }));
-        }
-        Ok(Prim::Stack(StackPrim {
-            head: Self::head(path, grid.id.as_ref(), grid.at, grid.duration)?,
-            inset: [0.0; 4],
-            grid: Some(GridLayout {
-                columns: Self::columns(path, grid.columns, cells.len())?,
-                gap: Self::pixels(path, "gap", grid.gap)?,
-                length: grid.length,
-            }),
-            children: cells,
         }))
     }
 }
@@ -1853,4 +2349,90 @@ pub(crate) fn clip_runs(cue: &mut CaptionCue) {
             });
         }
     }
+}
+
+/// A built-in's full id from its short name; a name with a dot is already an id.
+pub(crate) fn effect_id(name: &str) -> String {
+    if name.contains('.') {
+        name.to_owned()
+    } else {
+        format!("{}effect.{name}", alpha2_model::BUILTIN_EFFECT_PREFIX)
+    }
+}
+
+/// `anim` with each value mapped by `map`, if every value maps.
+fn map_anim<T, U>(anim: &Anim<T>, map: impl Fn(&T) -> Option<U>) -> Option<Anim<U>> {
+    Some(match anim {
+        Anim::Value(value) => Anim::Value(map(value)?),
+        Anim::Ramp(ramp) => Anim::Ramp(Ramp {
+            from: map(&ramp.from)?,
+            to: map(&ramp.to)?,
+            ease: ramp.ease.clone(),
+            at: ramp.at,
+            duration: ramp.duration,
+        }),
+        Anim::Keys(keys) => Anim::Keys(Keys {
+            keys: keys
+                .keys
+                .iter()
+                .map(|key| {
+                    Some(Key {
+                        t: key.t,
+                        v: map(&key.v)?,
+                        ease: key.ease.clone(),
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?,
+        }),
+    })
+}
+
+/// A parameter value from what a spec writes for it: a number, a list of numbers, a color as hex
+/// or the color object, a boolean, or an enum choice by name or index. Without a definition the
+/// value's JSON type decides.
+#[allow(clippy::cast_possible_truncation)]
+fn effect_value(
+    param: Option<&alpha2_model::EffectParamSpec>,
+    value: &serde_json::Value,
+) -> Option<EffectValue> {
+    use alpha2_model::EffectParamType as Type;
+    let numbers = |count: usize| {
+        let values = value.as_array()?;
+        (values.len() == count)
+            .then(|| {
+                values
+                    .iter()
+                    .map(|value| value.as_f64().map(|value| value as f32))
+            })?
+            .collect::<Option<Vec<f32>>>()
+    };
+    let Some(param) = param else {
+        return match value {
+            serde_json::Value::Number(number) => Some(EffectValue::Float(number.as_f64()? as f32)),
+            serde_json::Value::Bool(flag) => Some(EffectValue::Bool(*flag)),
+            serde_json::Value::Array(values) if values.len() == 2 => {
+                Some(EffectValue::Vec2(numbers(2)?.try_into().ok()?))
+            }
+            serde_json::Value::Array(values) if values.len() == 4 => {
+                Some(EffectValue::Vec4(numbers(4)?.try_into().ok()?))
+            }
+            _ => None,
+        };
+    };
+    Some(match param.param_type {
+        Type::Float => EffectValue::Float(value.as_f64()? as f32),
+        Type::Vec2 => EffectValue::Vec2(numbers(2)?.try_into().ok()?),
+        Type::Vec4 => EffectValue::Vec4(numbers(4)?.try_into().ok()?),
+        Type::Color => {
+            let color: Rgba = serde_json::from_value(value.clone()).ok()?;
+            EffectValue::Color([color.red, color.green, color.blue, color.alpha])
+        }
+        Type::Enum => EffectValue::Enum(match value {
+            serde_json::Value::String(name) => {
+                u32::try_from(param.enum_values.iter().position(|choice| choice == name)?).ok()?
+            }
+            other => u32::try_from(other.as_u64()?).ok()?,
+        }),
+        Type::Bool => EffectValue::Bool(value.as_bool()?),
+    })
 }

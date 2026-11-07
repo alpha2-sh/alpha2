@@ -39,6 +39,7 @@ mod assets;
 mod audio;
 mod capture;
 mod cli;
+mod compose_request;
 mod config;
 mod cpu_frames;
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
@@ -1450,7 +1451,10 @@ fn serve_requests(
             continue;
         }
         let needs_host = match &envelope {
-            Ok(request) => !matches!(request, crate::protocol::Request::Conform(_)),
+            Ok(request) => !matches!(
+                request,
+                crate::protocol::Request::Conform(_) | crate::protocol::Request::Compose(_)
+            ),
             Err(_) => refused_export,
         };
         if needs_host && let Err(error) = serving.host() {
@@ -1464,6 +1468,9 @@ fn serve_requests(
             Ok(_) if guard.cancelled_before_start() => Err(cancelled_before_start(is_export)),
             Ok(crate::protocol::Request::Conform(request)) => {
                 crate::host::conform_media(request, serving.policy)
+            }
+            Ok(crate::protocol::Request::Compose(request)) => {
+                crate::compose_request::answer(&request)
             }
             Ok(request) => serving.host()?.handle(request, &mut |progress| {
                 let mut event = json!({

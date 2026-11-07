@@ -1224,7 +1224,7 @@
       "description": "One versioned effect invocation: a composition's effect or transition node, or a timeline\ntransition.",
       "properties": {
         "id": {
-          "description": "Stable effect definition identifier.",
+          "description": "Stable effect definition identifier. Ids under `alpha2.` name built-ins\n(`schema/effects.v1.json`): validation checks such an invocation's version, kind,\nparameters, inputs and resources against its definition.",
           "type": "string"
         },
         "params": {
@@ -3919,7 +3919,7 @@
                   }
                 ]
               },
-              "description": "The images the effect samples besides its input, by the names its definition declares\n(`sample_<name>` in its shader); at most [`MAX_EFFECT_INPUTS`]. An undeclared name, or a\ndeclared one left out, fails the frames that draw the node.",
+              "description": "The images the effect samples besides its input, by the names its definition declares\n(`sample_<name>` in its shader); at most [`MAX_EFFECT_INPUTS`]. An undeclared name, or a\ndeclared one left out, is invalid for a built-in and fails the frames that draw the\nnode otherwise.",
               "type": "object"
             },
             "type": {
@@ -6694,10 +6694,19 @@
       "type": "object"
     }
   },
+  "$id": "https://alpha2.sh/schema/project.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The deserialized shape of a [`Project`] before its invariants are checked.\n\nThis is the wire contract the published JSON Schema is derived from; [`Project::validate`]\nthen decides whether a well-shaped document is valid.",
   "properties": {
+    "$schema": {
+      "default": null,
+      "description": "The schema the document follows (`https://alpha2.sh/schema/project.v1.json`), for editors\nand validators. The engine does not read or keep it.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "audio": {
       "$ref": "#/$defs/MasterAudio",
       "default": {

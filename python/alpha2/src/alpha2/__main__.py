@@ -188,6 +188,19 @@ def _capabilities(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _mcp(arguments: argparse.Namespace) -> int:
+    from .mcp import Server, load_templates, serve
+
+    serve(
+        Server(
+            templates=load_templates(arguments.templates),
+            fonts=list(arguments.font),
+            host_path=arguments.host,
+        )
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     # Escape paths the output encoding cannot spell instead of failing after the work is done.
     for stream in (sys.stdout, sys.stderr):
@@ -252,6 +265,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     still.add_argument("--json", action="store_true", help="print the host's result")
     still.add_argument("--host", help="the alpha2-host binary to run")
     still.set_defaults(run=_still)
+
+    mcp = commands.add_parser(
+        "mcp", help="serve compose, templates and rendering as MCP tools on standard I/O"
+    )
+    mcp.add_argument(
+        "--templates",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="a directory of template JSON files beside the built-in ones",
+    )
+    mcp.add_argument("--font", action="append", default=[], metavar="PATH")
+    mcp.add_argument("--host", help="the alpha2-host binary to run")
+    mcp.set_defaults(run=_mcp)
 
     report = commands.add_parser("capabilities", help="print what the host can decode and encode")
     report.add_argument("--host", help="the alpha2-host binary to run")

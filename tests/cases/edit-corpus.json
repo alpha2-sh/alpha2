@@ -3367,7 +3367,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -3468,7 +3468,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -3503,7 +3503,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -3613,7 +3613,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -3648,7 +3648,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -3749,7 +3749,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -3784,7 +3784,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -3819,7 +3819,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -3929,7 +3929,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -4030,7 +4030,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -4132,7 +4132,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -4237,7 +4237,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -4343,7 +4343,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -4444,7 +4444,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -4546,7 +4546,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -4647,7 +4647,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -4749,7 +4749,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -4850,7 +4850,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -4952,7 +4952,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]
@@ -5053,7 +5053,7 @@
                         },
                         {
                           "time": 120000,
-                          "value": { "type": "float", "value": 8 },
+                          "value": { "type": "float", "value": 0.8 },
                           "interpolation": { "type": "hold" }
                         }
                       ]

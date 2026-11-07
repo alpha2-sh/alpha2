@@ -992,6 +992,10 @@ export interface Alpha2HostErrorOptions extends ErrorOptions {
   readonly signal?: string | null;
   /** As {@link Alpha2HostError.keptPath}. */
   readonly keptPath?: string;
+  /** As {@link Alpha2HostError.path}. */
+  readonly path?: string;
+  /** As {@link Alpha2HostError.problem}. */
+  readonly problem?: string;
 }
 
 /** Bytes of the host's standard error an error keeps. */
@@ -1014,6 +1018,10 @@ export class Alpha2HostError extends Error {
    * The caller owns the file.
    */
   readonly keptPath?: string;
+  /** Where a compose refusal lies in the spec, template or data, such as `data.title`. */
+  readonly path?: string;
+  /** What is wrong where a compose refusal lies. */
+  readonly problem?: string;
 
   constructor(code: string, message: string, options?: Alpha2HostErrorOptions) {
     super(message, options);
@@ -1036,6 +1044,8 @@ export class Alpha2HostError extends Error {
     if (options?.exitCode !== undefined) this.exitCode = options.exitCode;
     if (options?.signal !== undefined) this.signal = options.signal;
     if (options?.keptPath !== undefined) this.keptPath = options.keptPath;
+    if (options?.path !== undefined) this.path = options.path;
+    if (options?.problem !== undefined) this.problem = options.problem;
   }
 }
 
@@ -1406,6 +1416,37 @@ export class Alpha2NodeClient {
         },
         request.signal,
       )) as ConformResult;
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Compiles a compose spec or binds, lints or describes a template without a GPU, with the
+   * functions `alpha2/compose` and Python's `alpha2.compose` use. `compile` takes
+   * `{spec, facts?, fonts?, templates?}`, `bind` `{template, data?, theme?, templates?}`,
+   * `dataSchema` `{template}`, `lint` `{template, data?, templates?}`, `requirements` `{spec}`
+   * and `templates` nothing. Rejects with {@link Alpha2HostError} `INVALID_INPUT`, whose `path`
+   * and `problem` name where a spec, template or data fails.
+   */
+  async compose(
+    action: ComposeAction,
+    fields: Readonly<Record<string, unknown>> = {},
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
+    const release = await this.#slots.acquire(signal);
+    try {
+      return (await requestHost(
+        this.#binary,
+        "compose",
+        { ...fields, action },
+        {
+          videoDecode: this.#videoDecode,
+          renderer: this.#renderer,
+          hostStartTimeoutMs: this.#hostStartTimeoutMs,
+        },
+        signal,
+      )) as Record<string, unknown>;
     } finally {
       release();
     }
@@ -2090,9 +2131,13 @@ function validateQuality(
     invalid(".quantizer must be an integer from 0 to 255");
 }
 
+/** What a {@link Alpha2NodeClient.compose} request does. */
+export type ComposeAction =
+  "compile" | "bind" | "dataSchema" | "lint" | "requirements" | "templates";
+
 async function requestHost(
   binary: string,
-  operation: "capabilities" | "export" | "conform" | "still",
+  operation: "capabilities" | "export" | "conform" | "still" | "compose",
   payload: Readonly<Record<string, unknown>>,
   settings: {
     readonly videoDecode?: VideoDecodeMode | undefined;
@@ -2596,14 +2641,18 @@ function errorFromHost(
       error.details as ConformReport,
       { failure, stderr, phase },
     );
-  const keptPath = (error.details as { keptPath?: unknown } | undefined)
-    ?.keptPath;
+  const details = error.details as
+    { keptPath?: unknown; path?: unknown; problem?: unknown } | undefined;
+  const keptPath = details?.keptPath;
   return new Alpha2HostError(error.code, error.message, {
     failure,
     stderr,
     phase,
     ...(error.code === "OUTPUT_PUBLISH_FAILED" && typeof keptPath === "string"
       ? { keptPath }
+      : {}),
+    ...(typeof details?.path === "string" && typeof details.problem === "string"
+      ? { path: details.path, problem: details.problem }
       : {}),
   });
 }

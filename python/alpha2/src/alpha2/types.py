@@ -402,37 +402,22 @@ TRIM_MODE_VALUES: tuple[TrimMode, ...] = ("together", "individually")
 """Every `TrimMode`, in the model's order."""
 
 
-class Project(TypedDict):
-    """The deserialized shape of a `Project` before its invariants are checked.
-
-    This is the wire contract the published JSON Schema is derived from; `Project::validate`
-    then decides whether a well-shaped document is valid.
-    """
-
-    audio: NotRequired[MasterAudio]
-    """Master bus applied to the summed track audio."""
-    compositions: NotRequired[list[Composition]]
-    """Composition graphs that clips show.
-
-    Default: `[]`.
-    """
-    effect_resources: NotRequired[list[EffectResource]]
-    """Non-media resources referenced by effect invocations.
-
-    Default: `[]`.
-    """
-    id: ProjectId
-    """Stable identity of this project."""
-    name: str
-    """Human-readable project name. It has no semantic meaning."""
-    schema_version: Literal[1]
-    """Document version. This build reads and writes only `CURRENT_SCHEMA_VERSION`."""
-    settings: ProjectSettings
-    """Output-wide timeline settings."""
-    sources: list[MediaSource]
-    """Media resources referenced by clips."""
-    timeline: Timeline
-    """Ordered visual and audio tracks."""
+Project = TypedDict(
+    "Project",
+    {
+        "$schema": "NotRequired[str | None]",
+        "audio": "NotRequired[MasterAudio]",
+        "compositions": "NotRequired[list[Composition]]",
+        "effect_resources": "NotRequired[list[EffectResource]]",
+        "id": "ProjectId",
+        "name": "str",
+        "schema_version": "Literal[1]",
+        "settings": "ProjectSettings",
+        "sources": "list[MediaSource]",
+        "timeline": "Timeline",
+    },
+)
+Project.__doc__ = "The deserialized shape of a `Project` before its invariants are checked.\n\nThis is the wire contract the published JSON Schema is derived from; `Project::validate`\nthen decides whether a well-shaped document is valid."
 
 
 AlignContent: TypeAlias = Literal["start", "center", "end", "space_between", "space_around", "space_evenly", "stretch"]
@@ -735,7 +720,10 @@ class ClipEffect(TypedDict):
     """
 
     id: str
-    """Stable effect definition identifier."""
+    """Stable effect definition identifier. Ids under `alpha2.` name built-ins
+    (`schema/effects.v1.json`): validation checks such an invocation's version, kind,
+    parameters, inputs and resources against its definition.
+    """
     params: NotRequired[dict[str, Animated[EffectValue]]]
     """Named parameter values, constant or keyframed. Omitted entries use definition defaults.
 
@@ -1695,7 +1683,8 @@ class NodeOpEffect(TypedDict):
     inputs: NotRequired[dict[str, NodeId | None]]
     """The images the effect samples besides its input, by the names its definition declares
     (`sample_<name>` in its shader); at most `MAX_EFFECT_INPUTS`. An undeclared name, or a
-    declared one left out, fails the frames that draw the node.
+    declared one left out, is invalid for a built-in and fails the frames that draw the
+    node otherwise.
     """
     type: Literal["effect"]
 
@@ -1703,11 +1692,11 @@ class NodeOpEffect(TypedDict):
 NodeOpTransition = TypedDict(
     "NodeOpTransition",
     {
-        "effect": ClipEffect,
-        "from": NotRequired[NodeId | None],
-        "progress": Animated[float],
-        "to": NotRequired[NodeId | None],
-        "type": Literal["transition"],
+        "effect": "ClipEffect",
+        "from": "NotRequired[NodeId | None]",
+        "progress": "Animated[float]",
+        "to": "NotRequired[NodeId | None]",
+        "type": "Literal[\"transition\"]",
     },
 )
 NodeOpTransition.__doc__ = "A registered two-input transition at an explicit progress."
@@ -2556,9 +2545,9 @@ Written as `"Hello"` or `[{ "text": "Hel" }, { "text": "lo", "class": ["key"] }]
 TextRun = TypedDict(
     "TextRun",
     {
-        "class": NotRequired[list[str]],
-        "text": str,
-        "time": NotRequired[RunTime | None],
+        "class": "NotRequired[list[str]]",
+        "text": "str",
+        "time": "NotRequired[RunTime | None]",
     },
 )
 TextRun.__doc__ = "A piece of a text that animators' Class and Timing selectors can pick."
@@ -2628,8 +2617,8 @@ class TextSelectorTiming(TypedDict):
 TextSelectorClass = TypedDict(
     "TextSelectorClass",
     {
-        "class": str,
-        "type": Literal["class"],
+        "class": "str",
+        "type": "Literal[\"class\"]",
     },
 )
 TextSelectorClass.__doc__ = "Characters of runs that carry a class."

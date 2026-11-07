@@ -1,0 +1,179 @@
+{
+  "compose_version": 1,
+  "template": {
+    "id": "alpha2/end-card",
+    "version": 1,
+    "kind": "node",
+    "title": "End card",
+    "description": "A closing title, an optional subtitle and an optional logo on a background, fading in and out as one picture."
+  },
+  "params": [
+    {
+      "name": "text",
+      "type": "text",
+      "min_chars": 1,
+      "title": "The title"
+    },
+    {
+      "name": "subtitle",
+      "type": "text",
+      "required": false,
+      "title": "A line under it"
+    },
+    {
+      "name": "logo",
+      "type": "media",
+      "accept": [
+        "image",
+        "video"
+      ],
+      "required": false,
+      "title": "A logo above the title"
+    },
+    {
+      "name": "background",
+      "type": "color",
+      "required": false,
+      "title": "The card's color. Default: the theme's surface"
+    },
+    {
+      "name": "fade",
+      "type": "number",
+      "min": 0,
+      "max": 60,
+      "required": false,
+      "title": "Seconds of fade in and out; 0 for none. Default: the theme's"
+    }
+  ],
+  "node": {
+    "type": "group",
+    "enter": {
+      "type": "fade",
+      "duration": {
+        "$param": "fade"
+      }
+    },
+    "exit": {
+      "type": "fade",
+      "duration": {
+        "$param": "fade"
+      }
+    },
+    "children": [
+      {
+        "type": "color",
+        "color": {
+          "$if": "background",
+          "then": {
+            "$param": "background"
+          },
+          "else": {
+            "$theme": "surface"
+          }
+        }
+      },
+      {
+        "$if": "logo",
+        "then": {
+          "type": "box",
+          "flex_direction": "column",
+          "children": [
+            {
+              "box": {
+                "height": "50%"
+              },
+              "node": {
+                "type": "box",
+                "flex_direction": "column",
+                "justify_content": "end",
+                "align_items": "center",
+                "padding": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": {
+                    "$theme": "margin"
+                  },
+                  "left": 0
+                },
+                "children": [
+                  {
+                    "box": {
+                      "width": "100%",
+                      "height": {
+                        "$theme": "margin",
+                        "scale": 5.5
+                      }
+                    },
+                    "node": {
+                      "type": "media",
+                      "path": {
+                        "$param": "logo"
+                      },
+                      "fit": "contain",
+                      "align": "bottom"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "type": "box",
+        "flex_direction": "column",
+        "align_items": "center",
+        "gap": {
+          "$theme": "subtitle_size",
+          "scale": 0.5
+        },
+        "justify_content": {
+          "$if": "logo",
+          "then": "start",
+          "else": "center"
+        },
+        "padding": {
+          "$theme": "margin",
+          "scale": 2
+        },
+        "children": [
+          {
+            "$if": "logo",
+            "then": {
+              "box": {
+                "height": "50%",
+                "margin": {
+                  "top": 0,
+                  "right": 0,
+                  "bottom": {
+                    "$theme": "margin",
+                    "scale": 1.5
+                  },
+                  "left": 0
+                }
+              },
+              "node": {
+                "type": "box",
+                "children": []
+              }
+            }
+          },
+          {
+            "type": "text",
+            "text": "{{text}}",
+            "style": "title",
+            "max_lines": 2
+          },
+          {
+            "$if": "subtitle",
+            "then": {
+              "type": "text",
+              "text": "{{subtitle}}",
+              "style": "subtitle"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

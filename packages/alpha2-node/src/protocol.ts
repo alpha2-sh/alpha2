@@ -2,7 +2,7 @@
 export const PROTOCOL_VERSION = 1 as const;
 
 export function createRequest(
-  operation: "capabilities" | "export" | "conform" | "still",
+  operation: "capabilities" | "export" | "conform" | "still" | "compose",
   requestId: string,
   payload: Readonly<Record<string, unknown>> = {},
 ): Readonly<Record<string, unknown>> {

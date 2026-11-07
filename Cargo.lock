@@ -189,10 +189,20 @@ dependencies = [
  "alpha2-render",
  "alpha2-text",
  "alpha2-time",
+ "libm",
  "schemars",
  "serde",
  "serde_json",
  "serde_path_to_error",
+]
+
+[[package]]
+name = "alpha2-compose-wasm"
+version = "0.6.0"
+dependencies = [
+ "alpha2-compose",
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -362,6 +372,7 @@ dependencies = [
  "alpha2-assets",
  "alpha2-audio",
  "alpha2-build-support",
+ "alpha2-compose",
  "alpha2-engine",
  "alpha2-eval",
  "alpha2-extensions",
@@ -448,6 +459,7 @@ version = "0.6.0"
 dependencies = [
  "alpha2-android-media",
  "alpha2-apple-media",
+ "alpha2-compose",
  "alpha2-container",
  "alpha2-engine",
  "alpha2-extensions",

@@ -106,15 +106,13 @@ fn node(mut value: Value) -> Result<Node, Located> {
         "raw" => from_value(value).map(Node::Raw),
         "slideshow" => from_value(value).map(Node::Slideshow),
         "captioned_video" => from_value(value).map(Node::CaptionedVideo),
-        "title" => from_value(value).map(Node::Title),
-        "title_card" => from_value(value).map(Node::TitleCard),
-        "lower_third" => from_value(value).map(Node::LowerThird),
-        "end_card" => from_value(value).map(Node::EndCard),
-        "comparison_grid" => from_value(value).map(Node::ComparisonGrid),
-        "reframe" => from_value(value).map(Node::Reframe),
-        "logo" => from_value(value).map(Node::Logo),
         "music_bed" => from_value(value).map(Node::MusicBed),
         "counter" => from_value(value).map(Node::Counter),
+        "group" => from_value(value).map(Node::Group),
+        "shape" => from_value(value).map(Node::Shape),
+        "matte" => from_value(value).map(Node::Matte),
+        "mask" => from_value(value).map(Node::Mask),
+        "box" => from_value(value).map(Node::Box),
         other => Err(Located {
             path: "type".to_owned(),
             message: format!(
@@ -126,7 +124,7 @@ fn node(mut value: Value) -> Result<Node, Located> {
 }
 
 /// Every node type, as specs write them.
-pub(crate) const NODE_TYPES: [&str; 21] = [
+pub(crate) const NODE_TYPES: [&str; 26] = [
     "sequence",
     "stack",
     "grid",
@@ -148,6 +146,11 @@ pub(crate) const NODE_TYPES: [&str; 21] = [
     "logo",
     "music_bed",
     "counter",
+    "group",
+    "shape",
+    "matte",
+    "mask",
+    "box",
 ];
 
 impl<'de> Deserialize<'de> for Node {

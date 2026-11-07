@@ -54,8 +54,10 @@ PathLike = str | os.PathLike[str]
 
 __all__ = [
     "COMPOSE_VERSION",
+    "TEMPLATES",
     "THEMES",
     "Audio",
+    "Box",
     "CaptionedVideo",
     "Captions",
     "Color",
@@ -63,30 +65,42 @@ __all__ = [
     "Compiled",
     "Counter",
     "Crossfade",
+    "Effect",
     "EndCard",
     "Fade",
     "Grid",
+    "Group",
+    "Item",
+    "Keys",
     "Layout",
     "Logo",
     "LowerThird",
+    "Mask",
+    "Matte",
     "Media",
     "MusicBed",
+    "Ramp",
     "Raw",
     "Reframe",
     "Reveal",
     "Rise",
     "Scale",
     "Sequence",
+    "Shape",
     "Slide",
     "Slideshow",
     "Stack",
     "Text",
+    "ThemeColor",
     "Title",
     "TitleCard",
     "Transition",
     "Video",
+    "bind",
     "compile",
+    "data_schema",
     "gather_facts",
+    "lint",
     "requirements",
 ]
 
@@ -170,6 +184,169 @@ def Stack(
     )
 
 
+def Group(
+    children: Iterable[Node],
+    *,
+    opacity: float | Mapping[str, Any] | None = None,
+    blend: str | None = None,
+    effects: abc.Sequence[Mapping[str, Any]] | None = None,
+    transform: Mapping[str, Any] | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+    inset: float | abc.Sequence[float] | None = None,
+) -> Node:
+    """Children drawn together into one picture that then takes ``opacity``, ``blend``,
+    ``effects`` (:func:`Effect`) and ``transform`` (``position``, ``scale``, ``rotation``,
+    ``anchor``) as one layer. A video in it plays over the group's whole time."""
+    return _node(
+        "group",
+        children=list(children),
+        opacity=opacity,
+        blend=blend,
+        effects=None if effects is None else [dict(effect) for effect in effects],
+        transform=None if transform is None else dict(transform),
+        enter=enter,
+        exit=exit,
+        id=id,
+        at=at,
+        duration=duration,
+        inset=inset,
+    )
+
+
+def Shape(
+    shapes: Iterable[Mapping[str, Any]],
+    *,
+    fill: str | Mapping[str, Any] | None = None,
+    stroke: Mapping[str, Any] | None = None,
+    trim: Mapping[str, Any] | None = None,
+    opacity: float | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+    inset: float | abc.Sequence[float] | None = None,
+) -> Node:
+    """Outlines (``{"shape": "rect" | "ellipse" | "polygon" | "star" | "path", ...}``) in the
+    node's unit square, filled and stroked as one path. Paints are colors, theme colors
+    (:func:`ThemeColor`) or gradients; without fill or stroke it fills with the theme's accent."""
+    return _node(
+        "shape",
+        shapes=[dict(shape) for shape in shapes],
+        fill=fill if fill is None or isinstance(fill, str) else dict(fill),
+        stroke=None if stroke is None else dict(stroke),
+        trim=None if trim is None else dict(trim),
+        opacity=opacity,
+        enter=enter,
+        exit=exit,
+        id=id,
+        at=at,
+        duration=duration,
+        inset=inset,
+    )
+
+
+def Matte(
+    content: Node,
+    by: Node,
+    *,
+    use: str | None = None,
+    invert: bool | None = None,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+    inset: float | abc.Sequence[float] | None = None,
+) -> Node:
+    """``content`` shown where ``by``'s picture is, by its ``alpha`` (default) or ``luma``;
+    ``invert`` shows it where ``by`` is not. ``by`` is never drawn itself."""
+    return _node(
+        "matte",
+        content=content,
+        by=by,
+        use=use,
+        invert=invert or None,
+        id=id,
+        at=at,
+        duration=duration,
+        inset=inset,
+    )
+
+
+def Mask(
+    content: Node,
+    shapes: Iterable[Mapping[str, Any]],
+    *,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+    inset: float | abc.Sequence[float] | None = None,
+) -> Node:
+    """``content`` shown only inside ``shapes`` (outlines as :func:`Shape` takes, each with an
+    optional ``mode``, ``feather`` and ``invert``), which stay put while the content moves."""
+    return _node(
+        "mask",
+        content=content,
+        shapes=[dict(shape) for shape in shapes],
+        id=id,
+        at=at,
+        duration=duration,
+        inset=inset,
+    )
+
+
+def Box(
+    children: Iterable[Node],
+    *,
+    background: str | Mapping[str, Any] | None = None,
+    border: Mapping[str, Any] | None = None,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+    inset: float | abc.Sequence[float] | None = None,
+    **css: Any,
+) -> Node:
+    """A CSS flexbox (or ``display="grid"``) box filling the node's area. ``css`` are the engine
+    layout's container fields (``flex_direction="column"``, ``gap="8px"``,
+    ``padding="12px 16px"``). Text, shapes, colors and boxes are laid out by it; any other child
+    (a video, a group) is drawn in its place, clipped to its ``border_radius``. A child's item
+    fields go with it through :func:`Item`."""
+    return _node(
+        "box",
+        children=list(children),
+        background=background
+        if background is None or isinstance(background, str)
+        else dict(background),
+        border=None if border is None else dict(border),
+        id=id,
+        at=at,
+        duration=duration,
+        inset=inset,
+        **css,
+    )
+
+
+def Item(node: Node, /, **item: Any) -> Node:
+    """``node`` with box item fields (``flex_grow=1``, ``width="200px"``, ``aspect_ratio=1``,
+    ``border_radius="12px"``) for the box it is in."""
+    return cast("Node", {"box": _plain(item), "node": node})
+
+
+def ThemeColor(token: str, alpha: float | None = None) -> dict[str, Any]:
+    """The theme's ``text``, ``background``, ``surface``, ``panel`` or ``accent`` color, its
+    opacity times ``alpha``."""
+    return cast("dict[str, Any]", _plain({"$theme": token, "alpha": alpha}))
+
+
+def Effect(effect: str, /, **params: Any) -> dict[str, Any]:
+    """An effect for :func:`Group`: a built-in's short name (``"gaussian-blur"``) or a full id,
+    with its parameters (and named image inputs, as nodes) by name."""
+    return cast("dict[str, Any]", _plain({"effect": effect, **params}))
+
+
 def Grid(
     children: Iterable[Node],
     *,
@@ -216,7 +393,9 @@ def Media(
     opacity: float | None = None,
     fade_in: float | None = None,
     fade_out: float | None = None,
-    zoom: tuple[float, float] | None = None,
+    zoom: float | Mapping[str, Any] | None = None,
+    when_short: str | None = None,
+    when_long: str | None = None,
     blur: float | None = None,
     label: str | None = None,
     fit: Fit | None = None,
@@ -229,7 +408,10 @@ def Media(
     duration: float | None = None,
 ) -> Node:
     """A video or still file. ``fit`` is ``contain`` (default), ``cover``, ``fill`` or ``none``;
-    ``zoom`` is ``(from, to)`` over its time; ``label`` names its cell in a comparison grid. At a
+    ``zoom`` is a multiple or its change (:func:`Ramp`, :func:`Keys`); ``label`` names its cell
+    in a comparison grid. ``when_short`` (``freeze``, ``loop``, ``stretch``, ``blank``,
+    ``error``) and ``when_long`` (``trim``, ``stretch``, ``error``) say what a video does when its
+    node outlasts it or it outlasts its node. At a
     ``speed`` other than 1 its sound keeps its pitch unless ``preserve_pitch`` is false."""
     return _node(
         "media",
@@ -248,6 +430,8 @@ def Media(
                 "fade_in": fade_in,
                 "fade_out": fade_out,
                 "zoom": zoom,
+                "when_short": when_short,
+                "when_long": when_long,
                 "blur": blur,
                 "label": label,
                 "fit": fit,
@@ -274,6 +458,8 @@ def Text(
     strokes: abc.Sequence[TextStroke] | None = None,
     shadows: abc.Sequence[TextShadow] | None = None,
     max_lines: int | None = None,
+    fit: Mapping[str, float] | None = None,
+    ellipsis: bool | str | None = None,
     opacity: float | None = None,
     fade: float | None = None,
     align: Align | None = None,
@@ -285,9 +471,10 @@ def Text(
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
-    """Text in a theme style (``title``, ``subtitle``, ``body``, ``label``). With fonts to
-    measure by, text longer than ``max_lines`` shrinks until it fits. ``reveal``
-    (:func:`Reveal`) shows it a word or line at a time."""
+    """Text in a theme style (``title``, ``subtitle``, ``body``, ``label``). It shrinks within
+    ``fit`` (``{"min": px, "max": px}``) to fit its area and ``max_lines``, then lines past
+    ``max_lines`` are cut and end with ``ellipsis``. ``reveal`` (:func:`Reveal`) shows it a word
+    or line at a time."""
     return _node(
         "text",
         text=text,
@@ -299,6 +486,8 @@ def Text(
         strokes=None if strokes is None else list(strokes),
         shadows=None if shadows is None else list(shadows),
         max_lines=max_lines,
+        fit=None if fit is None else dict(fit),
+        ellipsis=ellipsis,
         opacity=opacity,
         fade=fade,
         align=align,
@@ -658,7 +847,7 @@ def EndCard(
 
 
 def ComparisonGrid(
-    items: Iterable[PathLike | Node],
+    items: Iterable[PathLike | Mapping[str, Any]],
     *,
     columns: int | None = None,
     gap: float | None = None,
@@ -668,15 +857,21 @@ def ComparisonGrid(
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
-    """Clips side by side, each labeled by its :func:`Media` ``label``. Silent unless
-    ``audio_from`` names an item by index."""
+    """Clips side by side: each a path, or ``{"path", "label", "audio"}`` to label its cell or
+    hear it. ``audio_from`` hears the item at that index."""
+    cells: list[dict[str, Any]] = [
+        dict(item) if isinstance(item, Mapping) else {"path": os.fspath(item)} for item in items
+    ]
+    if audio_from is not None:
+        if not 0 <= audio_from < len(cells):
+            raise ValueError(f"audio_from: there is no item {audio_from}")
+        cells[audio_from]["audio"] = True
     return _node(
         "comparison_grid",
-        items=list(items),
+        items=cells,
         columns=columns,
         gap=gap,
         length=length,
-        audio_from=audio_from,
         id=id,
         at=at,
         duration=duration,
@@ -684,13 +879,14 @@ def ComparisonGrid(
 
 
 def Reframe(
-    video: PathLike | Node,
+    video: PathLike,
     *,
     blur: float | None = None,
     id: str | None = None,
     at: float | None = None,
 ) -> Node:
-    """A video fitted to the canvas over a blurred, cropped copy of itself."""
+    """A video whole in its area over a blurred copy of itself that covers it. ``blur`` is the
+    copy's blur radius as a fraction of its shorter side (default 0.05)."""
     return _node("reframe", video=video, blur=blur, id=id, at=at)
 
 
@@ -707,7 +903,8 @@ def Logo(
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
-    """A picture ``size`` pixels on its longer side in a corner (default ``top-right``)."""
+    """A picture in a corner (default ``top-right``), in a square box ``size`` (default 0.15) of
+    the canvas's shorter side, ``margin`` (default the theme's) from the edges."""
     return _node(
         "logo",
         path=path,
@@ -840,6 +1037,36 @@ def Scale(
     """A change of size about the node's own anchor: an entrance grows from ``size`` times its
     own (default 0), an exit shrinks to it."""
     return _motion("scale", duration=duration, size=size, fade=fade, easing=easing)
+
+
+def Ramp(
+    from_: Any,
+    to: Any,
+    *,
+    ease: str | Mapping[str, Any] | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+) -> dict[str, Any]:
+    """A value changing from ``from_`` to ``to``, starting ``at`` seconds into its node and lasting
+    ``duration`` (default: to the node's end), along ``ease`` (default linear)."""
+    return cast(
+        "dict[str, Any]",
+        _plain({"from": from_, "to": to, "ease": ease, "at": at, "duration": duration}),
+    )
+
+
+def Keys(*keys: tuple[float, Any] | tuple[float, Any, str | Mapping[str, Any]]) -> dict[str, Any]:
+    """A value through keys ``(seconds, value)`` or ``(seconds, value, ease)``, in increasing
+    time; each ``ease`` curves the change to the next key."""
+    return {
+        "keys": [
+            cast(
+                "dict[str, Any]",
+                _plain({"t": key[0], "v": key[1], "ease": key[2] if len(key) > 2 else None}),
+            )
+            for key in keys
+        ]
+    }
 
 
 def Reveal(
@@ -1034,12 +1261,74 @@ def gather_facts(
     return facts
 
 
+TEMPLATES: tuple[dict[str, Any], ...] = tuple(json.loads(_native.COMPOSE_TEMPLATES))
+"""The 1st-party ``alpha2/`` templates; any spec may name them as node types."""
+
+
+def bind(
+    template: Mapping[str, Any],
+    data: Mapping[str, Any] | None = None,
+    *,
+    theme: str | Mapping[str, Any] | None = None,
+    templates: abc.Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Binds ``template`` to ``data``, replacing its parameters and expanding its ``owner/name``
+    template nodes (from ``templates`` and :data:`TEMPLATES`) into a plain spec (or node).
+    ``theme`` replaces a video template's theme. A spec without a ``template`` header only has
+    its template nodes expanded.
+
+    Raises :class:`~alpha2.Alpha2ComposeError` naming where the template or data does not bind.
+    """
+    options = {"templates": [_plain(entry) for entry in templates]}
+    if theme is not None:
+        options["theme"] = _plain(theme)
+    try:
+        bound = _native.compose_bind(
+            json.dumps(_plain(template), ensure_ascii=False, allow_nan=False),
+            json.dumps(_plain(data or {}), ensure_ascii=False, allow_nan=False),
+            json.dumps(options, ensure_ascii=False, allow_nan=False),
+        )
+    except ValueError as error:
+        raise _compose_error(error) from None
+    return cast("dict[str, Any]", json.loads(bound))
+
+
+def data_schema(template: Mapping[str, Any]) -> dict[str, Any]:
+    """The JSON Schema of the data a form, an API or a model fills in for ``template``.
+
+    Raises :class:`~alpha2.Alpha2ComposeError` for a template that does not parse.
+    """
+    try:
+        schema = _native.compose_data_schema(json.dumps(_plain(template), ensure_ascii=False))
+    except ValueError as error:
+        raise _compose_error(error) from None
+    return cast("dict[str, Any]", json.loads(schema))
+
+
+def lint(
+    template: Mapping[str, Any],
+    data: Mapping[str, Any] | None = None,
+    *,
+    templates: abc.Sequence[Mapping[str, Any]] = (),
+) -> list[dict[str, Any]]:
+    """``template``'s problems as ``{path, code, message, severity}``. It flags unknown or unused
+    parameters, and literal files, colors and words a template takes from its data and theme. It
+    also checks that it binds (to ``data``, or to sample data) into a spec that parses."""
+    issues = _native.compose_lint(
+        json.dumps(_plain(template), ensure_ascii=False),
+        "" if data is None else json.dumps(_plain(data), ensure_ascii=False),
+        json.dumps({"templates": [_plain(entry) for entry in templates]}, ensure_ascii=False),
+    )
+    return cast("list[dict[str, Any]]", json.loads(issues))
+
+
 def compile(  # noqa: A001 - the module's verb, as `re.compile`
     spec: Mapping[str, Any] | Video,
     *,
     facts: Mapping[str, Any] | None = None,
     fonts: abc.Sequence[PathLike] | None = None,
     client: _client.HostClient | None = None,
+    templates: abc.Sequence[Mapping[str, Any]] = (),
 ) -> Compiled:
     """Compiles ``spec`` into a project.
 
@@ -1048,8 +1337,13 @@ def compile(  # noqa: A001 - the module's verb, as `re.compile`
     :func:`gather_facts`, which needs a host. ``fonts`` measure text that must fit and pass to the
     export via :attr:`Compiled.fonts`.
 
+    The spec may name templates (``owner/name`` node types) from ``templates`` and
+    :data:`TEMPLATES`; bind a template's data with :func:`bind` first.
+
     Raises :class:`~alpha2.Alpha2ComposeError` naming where in the spec it does not compile.
     """
+    if templates:
+        spec = bind(json.loads(_spec_json(spec)), templates=templates)
     document = _spec_json(spec)
     gathered = gather_facts(json.loads(document), known=facts, client=client)
     font_paths = [os.fspath(font) for font in fonts or ()]

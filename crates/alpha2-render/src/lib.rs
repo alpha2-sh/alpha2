@@ -76,7 +76,7 @@ pub use builtins::{
     builtin_transition_definitions, chroma_key_definition, gaussian_blur_definition,
     glow_definition, lut_3d_definition,
 };
-pub use catalog::{builtin_catalog, builtin_catalog_json};
+pub use catalog::{builtin_catalog, builtin_catalog_document, builtin_catalog_json};
 pub use color::{
     Color, ColorDiagnostic, ColorError, ColorPolicy, SdrOutputTransfer, YuvSample,
     convert_yuv_to_linear_rgba, encode_linear_rgb, is_hdr,

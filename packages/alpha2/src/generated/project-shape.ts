@@ -2748,6 +2748,7 @@ export const PROJECT_SHAPE: unknown = {
   },
   additionalProperties: false,
   properties: {
+    $schema: { default: null, type: ["string", "null"] },
     audio: {
       $ref: "#/$defs/MasterAudio",
       default: {

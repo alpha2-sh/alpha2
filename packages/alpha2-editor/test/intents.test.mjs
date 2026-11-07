@@ -414,7 +414,7 @@ test("a ripple delete of a dissolve's incoming clip closes only its own time, ma
     fromId: "one",
     toId: "two",
     duration: S / 4,
-    effect: { id: "alpha2.transition.crossfade", version: 1 },
+    effect: { id: "alpha2.transition.fade", version: 1 },
   });
   assert.equal(added.ok, true, added.error?.message);
   const { end } = range(e, "two");

@@ -1,0 +1,123 @@
+{
+  "compose_version": 1,
+  "template": {
+    "id": "alpha2/comparison-grid",
+    "version": 1,
+    "kind": "node",
+    "title": "Comparison grid",
+    "description": "Clips side by side in a grid, each with an optional label; one of them may be heard."
+  },
+  "params": [
+    {
+      "name": "items",
+      "type": "list",
+      "min_items": 1,
+      "item": [
+        {
+          "name": "path",
+          "type": "media",
+          "accept": [
+            "video",
+            "image"
+          ],
+          "title": "The clip"
+        },
+        {
+          "name": "label",
+          "type": "text",
+          "required": false,
+          "title": "Its cell's label"
+        },
+        {
+          "name": "audio",
+          "type": "bool",
+          "default": false,
+          "title": "Whether its sound plays"
+        }
+      ],
+      "title": "The clips, row by row"
+    },
+    {
+      "name": "columns",
+      "type": "number",
+      "min": 1,
+      "max": 64,
+      "required": false,
+      "title": "Columns. Default: as square a grid as the items make"
+    },
+    {
+      "name": "gap",
+      "type": "number",
+      "min": 0,
+      "default": 0,
+      "title": "Pixels between cells"
+    },
+    {
+      "name": "length",
+      "type": "enum",
+      "values": [
+        "shortest",
+        "longest_freeze",
+        "longest_loop"
+      ],
+      "default": "shortest",
+      "title": "How long the grid lasts when its clips differ"
+    }
+  ],
+  "node": {
+    "type": "grid",
+    "columns": {
+      "$param": "columns"
+    },
+    "gap": {
+      "$param": "gap"
+    },
+    "length": {
+      "$param": "length"
+    },
+    "children": [
+      {
+        "$each": "items",
+        "as": "item",
+        "node": {
+          "type": "stack",
+          "children": [
+            {
+              "type": "media",
+              "path": {
+                "$param": "item.path"
+              },
+              "muted": {
+                "$if": "item.audio",
+                "then": false,
+                "else": true
+              }
+            },
+            {
+              "$if": "item.label",
+              "then": {
+                "type": "box",
+                "align_items": "start",
+                "padding": {
+                  "$theme": "label_size",
+                  "scale": 0.8
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "text": "{{item.label}}",
+                    "style": "label",
+                    "background": {
+                      "$theme": "panel"
+                    },
+                    "align": "top-left"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

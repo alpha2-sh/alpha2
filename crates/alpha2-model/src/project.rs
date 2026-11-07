@@ -64,6 +64,11 @@ pub struct Project {
 #[cfg_attr(feature = "schema", schemars(rename = "Project"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProjectWire {
+    /// The schema the document follows (`https://alpha2.sh/schema/project.v1.json`), for editors
+    /// and validators. The engine does not read or keep it.
+    #[serde(rename = "$schema", default)]
+    #[allow(dead_code)]
+    pub(crate) schema_url: Option<String>,
     /// Document version. This build reads and writes only [`CURRENT_SCHEMA_VERSION`].
     #[cfg_attr(feature = "schema", schemars(extend("const" = CURRENT_SCHEMA_VERSION)))]
     pub(crate) schema_version: u32,
@@ -386,6 +391,7 @@ impl Project {
                 )?;
             }
             ensure_transitions_are_supported(track)?;
+            ensure_transition_effects_match_builtins(track)?;
             if !track.audio.validate() {
                 return Err(ModelError::InvalidTrackAudio {
                     track: track.id.clone(),
@@ -608,6 +614,23 @@ fn ensure_transitions_are_supported(track: &crate::Track) -> Result<(), ModelErr
                 second: transition.to_clip.clone(),
             });
         }
+    }
+    Ok(())
+}
+
+/// Checks each transition's built-in effect against its definition.
+fn ensure_transition_effects_match_builtins(track: &crate::Track) -> Result<(), ModelError> {
+    for transition in &track.transitions {
+        crate::effect_spec::check_builtin(&transition.effect, crate::EffectKind::Transition, None)
+            .map_err(|problem| ModelError::InvalidEffect {
+                owner: Box::new(crate::EffectOwner::Transition {
+                    track: track.id.clone(),
+                    from: transition.from_clip.clone(),
+                    to: transition.to_clip.clone(),
+                }),
+                id: transition.effect.id.clone(),
+                problem,
+            })?;
     }
     Ok(())
 }

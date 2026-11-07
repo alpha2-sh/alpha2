@@ -14,10 +14,13 @@
 mod compile;
 mod de;
 mod facts;
+mod library;
 mod lower;
 #[cfg(feature = "schema")]
 mod schema;
 pub mod spec;
+mod svg_path;
+pub mod template;
 #[cfg(test)]
 mod tests;
 mod theme;
@@ -31,7 +34,9 @@ use serde::{Deserialize, Serialize};
 
 pub use facts::{Facts, MediaFacts, RequiredMedia, Requirements, kind_of_path, requirements};
 #[cfg(feature = "schema")]
-pub use schema::compose_json_schema;
+pub use schema::{
+    COMPOSE_CORE_SCHEMA_ID, COMPOSE_SCHEMA_ID, compose_core_json_schema, compose_json_schema,
+};
 pub use spec::{COMPOSE_VERSION, VideoSpec};
 pub use theme::THEMES;
 
@@ -150,7 +155,7 @@ fn parse<T: serde::de::DeserializeOwned>(json: &str, root: &str) -> Result<T, Co
 /// # Panics
 /// Never; a compiled project always serializes.
 pub fn compile_json(spec: &str, facts: &str, fonts: &[Arc<[u8]>]) -> Result<String, ComposeError> {
-    let spec = parse_spec(spec)?;
+    let spec = parse_spec(&expand_builtins(spec)?)?;
     let facts = parse_facts(facts)?;
     let compiled = compile(&spec, &facts, fonts)?;
     Ok(serde_json::to_string(&compiled).expect("a compiled project serializes"))
@@ -164,6 +169,86 @@ pub fn compile_json(spec: &str, facts: &str, fonts: &[Arc<[u8]>]) -> Result<Stri
 /// # Panics
 /// Never; requirements always serialize.
 pub fn requirements_json(spec: &str) -> Result<String, ComposeError> {
-    let spec = parse_spec(spec)?;
+    let spec = parse_spec(&expand_builtins(spec)?)?;
     Ok(serde_json::to_string(&requirements(&spec)).expect("requirements serialize"))
+}
+
+/// `spec` with its 1st-party template nodes expanded (`alpha2/` ids and their bare names).
+fn expand_builtins(spec: &str) -> Result<String, ComposeError> {
+    let value: serde_json::Value =
+        serde_json::from_str(spec).map_err(|error| ComposeError::new("spec", error.to_string()))?;
+    Ok(template::bind(
+        &value,
+        &serde_json::Value::Null,
+        &template::BindOptions::default(),
+    )?
+    .to_string())
+}
+
+fn json_value(json: &str, root: &str) -> Result<serde_json::Value, ComposeError> {
+    serde_json::from_str(json).map_err(|error| ComposeError::new(root, error.to_string()))
+}
+
+fn bind_options(options: &str) -> Result<template::BindOptions, ComposeError> {
+    let options = json_value(options, "options")?;
+    Ok(template::BindOptions {
+        theme: options
+            .get("theme")
+            .filter(|theme| !theme.is_null())
+            .cloned(),
+        templates: options
+            .get("templates")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+/// [`template::bind`] across a JSON boundary: `options` is `{theme?, templates?}`.
+///
+/// # Errors
+/// Returns where in the template, data or options, and why, they do not bind.
+pub fn bind_json(document: &str, data: &str, options: &str) -> Result<String, ComposeError> {
+    let bound = template::bind(
+        &json_value(document, "template")?,
+        &json_value(data, "data")?,
+        &bind_options(options)?,
+    )?;
+    Ok(bound.to_string())
+}
+
+/// [`template::data_schema`] across a JSON boundary.
+///
+/// # Errors
+/// Returns where the template does not parse.
+pub fn data_schema_json(template: &str) -> Result<String, ComposeError> {
+    Ok(template::data_schema(&json_value(template, "template")?)?.to_string())
+}
+
+/// [`template::lint`] across a JSON boundary: `data` may be empty for none, and `options` is
+/// `{templates?}`. Returns the issues as a JSON list.
+///
+/// # Errors
+/// Returns where the template, data or options are not JSON.
+///
+/// # Panics
+/// Never; issues always serialize.
+pub fn lint_json(template: &str, data: &str, options: &str) -> Result<String, ComposeError> {
+    let data = if data.trim().is_empty() {
+        None
+    } else {
+        Some(json_value(data, "data")?)
+    };
+    let issues = template::lint(
+        &json_value(template, "template")?,
+        data.as_ref(),
+        &bind_options(options)?.templates,
+    );
+    Ok(serde_json::to_string(&issues).expect("issues serialize"))
+}
+
+/// The 1st-party `alpha2/` templates, as a JSON list.
+#[must_use]
+pub fn templates_json() -> String {
+    serde_json::Value::Array(library::TEMPLATES.clone()).to_string()
 }

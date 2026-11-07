@@ -37,6 +37,10 @@
       "types": "./dist/project.d.ts",
       "import": "./dist/project.js"
     },
+    "./compose": {
+      "types": "./dist/compose.d.ts",
+      "import": "./dist/compose.js"
+    },
     "./exporter": {
       "types": "./dist/exporter.d.ts",
       "import": "./dist/exporter.js"
@@ -187,6 +191,11 @@
     },
     "./wasm/alpha2_wasm_bg.wasm": "./wasm/alpha2_wasm_bg.wasm",
     "./wasm/alpha2_audio_worklet.wasm": "./wasm/alpha2_audio_worklet.wasm",
+    "./compose-wasm": {
+      "types": "./wasm/alpha2_compose.d.ts",
+      "import": "./wasm/alpha2_compose.js"
+    },
+    "./wasm/alpha2_compose_bg.wasm": "./wasm/alpha2_compose_bg.wasm",
     "./extensions-wasm": {
       "types": "./wasm/alpha2_extensions.d.ts",
       "import": "./wasm/alpha2_extensions.js"

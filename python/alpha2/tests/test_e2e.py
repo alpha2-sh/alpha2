@@ -317,7 +317,7 @@ def test_a_compose_spec_compiles_from_the_hosts_facts_and_exports(
         ),
         canvas={"preset": "youtube-720p", "frame_rate": 24},
         overlays=[
-            c.Logo(ASSET, size=96, opacity=0.8),
+            c.Logo(ASSET, size=0.133, opacity=0.8),
             c.Captions([{"start": 0.2, "end": 0.9, "text": "Hello"}], style="boxed"),
         ],
         audio=c.MusicBed(music, volume=0.5, duck_under="body"),

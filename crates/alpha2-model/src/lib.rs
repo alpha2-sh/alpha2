@@ -12,6 +12,7 @@ mod checks;
 mod composition;
 mod easing;
 mod effect;
+mod effect_spec;
 mod error;
 mod fingerprint;
 mod generator;
@@ -61,7 +62,11 @@ pub use composition::{
 };
 pub use easing::{CubicBezier, Easing};
 pub use effect::{ClipBlendMode, ClipEffect, EffectValue};
-pub use error::{ModelError, ProjectLoadError, ShapeOwner};
+pub use effect_spec::{
+    BUILTIN_EFFECT_PREFIX, EffectKind, EffectParamSpec, EffectParamType, EffectParamUnit,
+    EffectProblem, EffectSpec, builtin_effect, builtin_effects, builtin_effects_json,
+};
+pub use error::{EffectOwner, ModelError, ProjectLoadError, ShapeOwner};
 pub use fingerprint::{AudioStreamShape, MediaFingerprint, StreamTopology, VideoStreamShape};
 pub use generator::{Generator, GradientStop, MAX_GRADIENT_STOPS, Paint, Rgba, Spread};
 pub use ids::{ClipId, CompositionId, EffectResourceId, NodeId, ProjectId, TrackId};
@@ -91,7 +96,7 @@ pub use provider::{
 };
 pub use resource::{EffectResource, EffectResourceKind};
 #[cfg(feature = "schema")]
-pub use schema::{finish_json_schema, project_json_schema, project_limits_json};
+pub use schema::{PROJECT_SCHEMA_ID, finish_json_schema, project_json_schema, project_limits_json};
 pub use shapes::{
     Dash, EllipseGeometry, FillRule, LineCap, LineJoin, MAX_DASH_ENTRIES, MAX_PATH_SUBPATHS,
     MAX_PATH_VERTICES, MAX_POLYSTAR_POINTS, MAX_SHAPE_DEPTH, MAX_SHAPE_ITEMS, MIN_POLYSTAR_POINTS,

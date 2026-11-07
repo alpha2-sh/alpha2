@@ -1,4 +1,4 @@
-use crate::{ClipId, CompositionId, EffectResourceId, NodeId, TrackId};
+use crate::{ClipId, CompositionId, EffectProblem, EffectResourceId, NodeId, TrackId};
 use alpha2_media::SourceId;
 use std::fmt;
 
@@ -27,6 +27,62 @@ impl fmt::Display for ShapeOwner {
             Self::Node { composition, node } => {
                 write!(formatter, "composition {composition} node {node}")
             }
+        }
+    }
+}
+
+/// What holds the effect a [`ModelError::InvalidEffect`] names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EffectOwner {
+    /// A composition's effect, transition or group node.
+    Node {
+        /// The composition.
+        composition: CompositionId,
+        /// The node.
+        node: NodeId,
+    },
+    /// A timeline transition.
+    Transition {
+        /// Its track.
+        track: TrackId,
+        /// The clip at progress zero.
+        from: ClipId,
+        /// The clip at progress one.
+        to: ClipId,
+    },
+}
+
+impl fmt::Display for EffectOwner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Node { composition, node } => {
+                write!(formatter, "composition {composition} node {node}")
+            }
+            Self::Transition { track, from, to } => {
+                write!(
+                    formatter,
+                    "the transition from {from} to {to} on track {track}"
+                )
+            }
+        }
+    }
+}
+
+impl fmt::Display for EffectProblem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownBuiltin => formatter.write_str("is not a built-in"),
+            Self::Version { expected } => write!(formatter, "needs version {expected}"),
+            Self::Kind => formatter.write_str("is used as the wrong kind"),
+            Self::UnknownParam(name) => write!(formatter, "has no parameter {name}"),
+            Self::InvalidParam(name) => {
+                write!(
+                    formatter,
+                    "has a parameter {name} of the wrong type or out of range"
+                )
+            }
+            Self::Inputs => formatter.write_str("does not get exactly its declared inputs"),
+            Self::Resources => formatter.write_str("does not get exactly its declared resources"),
         }
     }
 }
@@ -305,6 +361,16 @@ pub enum ModelError {
     InvalidCompositionSource {
         /// The source.
         source: SourceId,
+    },
+    /// An effect or transition under [`crate::BUILTIN_EFFECT_PREFIX`] that does not match its
+    /// built-in definition.
+    InvalidEffect {
+        /// Where it is used.
+        owner: Box<EffectOwner>,
+        /// The effect id.
+        id: String,
+        /// How it fails its definition.
+        problem: EffectProblem,
     },
     /// A node's effect references an absent effect resource.
     UnknownNodeResource {
@@ -679,6 +745,9 @@ impl fmt::Display for ModelError {
                     formatter,
                     "source {source} is not a valid composition source"
                 )
+            }
+            Self::InvalidEffect { owner, id, problem } => {
+                write!(formatter, "effect {id} in {owner} {problem}")
             }
             Self::UnknownNodeResource {
                 composition,

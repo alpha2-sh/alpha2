@@ -1,0 +1,21 @@
+[package]
+name = "alpha2-compose-wasm"
+version.workspace = true
+description = "The compose compiler and templates as their own wasm module, loaded by a page only when it writes specs."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# An npm artifact (`alpha2/compose-wasm`), not a crate.
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+alpha2-compose.workspace = true
+js-sys.workspace = true
+wasm-bindgen.workspace = true
+
+[lints]
+workspace = true

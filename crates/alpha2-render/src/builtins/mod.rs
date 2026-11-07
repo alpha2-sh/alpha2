@@ -91,6 +91,49 @@ pub(crate) fn builtin_effect_groups() -> Vec<(&'static str, Vec<EffectDef>)> {
     ]
 }
 
+/// Transitions that mix the two pictures at each pixel's own place and add nothing, for every
+/// parameter value, so a matte or mask may apply to each side. A render test checks the list.
+pub const COVERAGE_COMMUTING_TRANSITIONS: [&str; 38] = [
+    "alpha2.transition.fade",
+    "alpha2.transition.circle-open",
+    "alpha2.transition.angular",
+    "alpha2.transition.directional-wipe",
+    "alpha2.transition.radial",
+    "alpha2.transition.hsv-fade",
+    "alpha2.transition.wipe-up",
+    "alpha2.transition.wipe-down",
+    "alpha2.transition.wipe-left",
+    "alpha2.transition.wipe-right",
+    "alpha2.transition.window-blinds",
+    "alpha2.transition.window-slice",
+    "alpha2.transition.wind",
+    "alpha2.transition.pinwheel",
+    "alpha2.transition.heart",
+    "alpha2.transition.horizontal-open",
+    "alpha2.transition.horizontal-close",
+    "alpha2.transition.vertical-open",
+    "alpha2.transition.vertical-close",
+    "alpha2.transition.squares-wire",
+    "alpha2.transition.gradient-wipe",
+    "alpha2.transition.color-phase",
+    "alpha2.transition.fade-grayscale",
+    "alpha2.transition.polka-dots-curtain",
+    "alpha2.transition.block-dissolve",
+    "alpha2.transition.random-squares",
+    "alpha2.transition.perlin",
+    "alpha2.transition.overexposure",
+    "alpha2.transition.burn",
+    "alpha2.transition.crosshatch",
+    "alpha2.transition.random-noise",
+    "alpha2.transition.box",
+    "alpha2.transition.chessboard",
+    "alpha2.transition.bow-tie",
+    "alpha2.transition.bow-tie-horizontal",
+    "alpha2.transition.bow-tie-vertical",
+    "alpha2.transition.polar-function",
+    "alpha2.transition.shape-wipe",
+];
+
 /// Returns fresh, data-only definitions for all built-in transitions.
 #[must_use]
 pub fn builtin_transition_definitions() -> Vec<EffectDef> {

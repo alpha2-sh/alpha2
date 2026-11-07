@@ -116,9 +116,16 @@ fn a_title_fades_in_and_out_over_its_time() {
         clip["timeline_range"],
         json!({"start": SECOND / 2, "end": 9 * SECOND / 2})
     );
-    let opacity = clip["visual"]["opacity"]["keyframes"]
+    let source = clip["source_id"].as_str().expect("a source");
+    let layout = compiled["project"]["sources"]
         .as_array()
-        .expect("keyframes");
+        .expect("sources")
+        .iter()
+        .find(|entry| entry["id"] == source)
+        .expect("the title's layout");
+    let text = &layout["generator"]["root"]["children"][0]["children"][0];
+    assert_eq!(text["text"]["value"], "Summer 2026");
+    let opacity = text["opacity"]["keyframes"].as_array().expect("keyframes");
     let values = opacity
         .iter()
         .map(|keyframe| keyframe["value"].as_f64().unwrap())
@@ -141,7 +148,7 @@ fn captions_on_a_bar_with_a_logo_and_loudness() {
         "body": {"type": "media", "path": "talk.mp4"},
         "overlays": [
             {"type": "captions", "file": "talk.srt", "style": "bar-bottom"},
-            {"type": "logo", "path": "logo.png", "corner": "top-right", "size": 180, "opacity": 0.85},
+            {"type": "logo", "path": "logo.png", "corner": "top-right", "size": 0.166_666_67, "opacity": 0.85},
         ],
         "loudness": -14,
     }));
@@ -159,7 +166,7 @@ fn captions_on_a_bar_with_a_logo_and_loudness() {
         tracks[2]["captions"]["cues"].as_array().map(Vec::len),
         Some(30)
     );
-    // The logo is 180 px at the top-right corner, 40 px (the theme's margin) in.
+    // A sixth of the 1080 px shorter side is 180 px, placed the theme's margin from the corner.
     let logo = &tracks[3]["clips"][0]["visual"];
     let scale = logo["scale"]["value"]["x"].as_f64().unwrap();
     assert!((scale * 1080.0 - 180.0).abs() < 1e-3, "{scale}");
@@ -184,7 +191,7 @@ fn a_comparison_grid_lasts_as_its_shortest_clip_and_labels_each_cell() {
     let compiled = compile(&json!({
         "body": {
             "type": "comparison_grid",
-            "items": labels.iter().enumerate().map(|(index, label)| json!({"type": "media", "path": format!("grid{}.mp4", index + 1), "label": label})).collect::<Vec<_>>(),
+            "items": labels.iter().enumerate().map(|(index, label)| json!({"path": format!("grid{}.mp4", index + 1), "label": label})).collect::<Vec<_>>(),
         },
     }));
     let tracks = tracks(&compiled);
@@ -199,9 +206,9 @@ fn a_comparison_grid_lasts_as_its_shortest_clip_and_labels_each_cell() {
         video["visual"]["scale"]["value"],
         json!({"x": 0.5, "y": 0.5})
     );
-    let label = &compiled["project"]["sources"][3]["generator"];
-    assert_eq!(label["text"], "Model A");
-    assert_eq!(label["style"]["anchor"], json!({"x": 0.0, "y": 0.0}));
+    let label = &compiled["project"]["sources"][3]["generator"]["root"]["children"][0];
+    assert_eq!(label["align_items"], "start");
+    assert_eq!(label["children"][0]["text"]["value"], "Model A");
 }
 
 #[test]
@@ -528,20 +535,33 @@ fn a_faster_video_keeps_its_pitch_unless_told_not_to() {
     );
 }
 
-/// Specs that use no motion field, compiled before motion presets existed.
+/// Specs that use no motion field compile to pinned bytes. Set `ALPHA2_UPDATE_GOLDENS=1` to
+/// re-pin after an intended change.
 #[test]
 fn old_specs_compile_to_the_same_bytes() {
-    let cases: Vec<Value> =
-        serde_json::from_str(include_str!("../tests/old-specs.golden.json")).expect("JSON");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/old-specs.golden.json");
+    let mut cases: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
+    let update =
+        std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"));
     let facts = facts().to_string();
-    for case in cases {
+    for case in &mut cases {
         let compiled = compile_json(&case["spec"].to_string(), &facts, &[]).expect("compiles");
+        if update {
+            case["compiled"] = Value::String(compiled);
+            continue;
+        }
         assert_eq!(
             compiled,
             case["compiled"].as_str().expect("a string"),
             "{}",
             case["spec"]
         );
+    }
+    if update {
+        let mut text = serde_json::to_string_pretty(&cases).expect("serializes");
+        text.push('\n');
+        std::fs::write(path, text).expect("writes the golden");
     }
 }
 
@@ -693,4 +713,720 @@ fn motion_fields_are_checked() {
         "body": {"type": "color", "enter": {"type": "fade", "easing": "bouncy"}},
     }));
     assert!(error.contains("unknown easing"), "{error}");
+}
+
+fn text_style(spec: &Value) -> Value {
+    let compiled = compile(spec);
+    compiled["project"]["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .find_map(|source| source["generator"].get("style").cloned())
+        .expect("a text source")
+}
+
+#[test]
+fn a_text_fits_and_clamps_in_its_area_as_the_engine_draws_it() {
+    let text = |fields: Value| {
+        let mut node =
+            json!({"type": "text", "text": "A headline long enough to wrap", "font_size": 100});
+        node.as_object_mut()
+            .expect("object")
+            .extend(fields.as_object().expect("object").clone());
+        text_style(&json!({"canvas": "youtube-1080p", "duration": 2, "body": node}))
+    };
+    // 1080 px is the shorter side.
+    let style = text(json!({"max_lines": 2}));
+    assert_eq!(
+        style["line_clamp"],
+        json!({"max_lines": 2, "block_ellipsis": "ellipsis"})
+    );
+    let fit = &style["font_size_fit"];
+    assert!(
+        (fit["min"].as_f64().unwrap() - 30.0 / 1080.0).abs() < 1e-6,
+        "{fit}"
+    );
+    assert!(
+        (fit["max"].as_f64().unwrap() - 100.0 / 1080.0).abs() < 1e-6,
+        "{fit}"
+    );
+    assert!(style["max_height"].as_f64().is_some());
+
+    let style = text(json!({"fit": {"min": 40, "max": 120}, "ellipsis": "..."}));
+    assert_eq!(
+        style["line_clamp"],
+        json!({"block_ellipsis": {"string": "..."}})
+    );
+    assert!((style["font_size_fit"]["max"].as_f64().unwrap() - 120.0 / 1080.0).abs() < 1e-6);
+
+    let style = text(json!({"max_lines": 1, "ellipsis": false}));
+    assert_eq!(style["line_clamp"]["block_ellipsis"], json!("no_ellipsis"));
+
+    let style = text(json!({}));
+    assert!(style.get("font_size_fit").is_none_or(Value::is_null));
+    assert!(style.get("line_clamp").is_none_or(Value::is_null));
+}
+
+#[test]
+fn a_text_fit_and_line_count_are_checked() {
+    let error = |fields: Value| {
+        let mut node = json!({"type": "text", "text": "Hi", "font_size": 100});
+        node.as_object_mut()
+            .expect("object")
+            .extend(fields.as_object().expect("object").clone());
+        compile_error(&json!({"duration": 1, "body": node}))
+    };
+    assert!(error(json!({"max_lines": 0})).contains("at least one line"));
+    assert!(error(json!({"fit": {"min": 0}})).contains("fit"));
+    assert!(error(json!({"fit": {"min": 120}})).contains("fit"));
+}
+
+fn media_scale(zoom: &Value) -> Value {
+    let compiled = compile(&json!({
+        "canvas": "youtube-1080p",
+        "body": {"type": "media", "path": "logo.png", "duration": 4, "zoom": zoom},
+    }));
+    tracks(&compiled)[0]["clips"][0]["visual"]["scale"].clone()
+}
+
+#[test]
+fn an_animated_value_is_a_constant_a_ramp_or_keys_over_the_node() {
+    assert_eq!(media_scale(&json!(1.5))["mode"], "constant");
+
+    let ramp = media_scale(&json!({"from": 1, "to": 2, "ease": "ease-in", "at": 1, "duration": 2}));
+    let keys = ramp["keyframes"].as_array().expect("keyframes");
+    let times = keys
+        .iter()
+        .map(|key| key["time"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(times, [SECOND, 3 * SECOND]);
+    assert_eq!(keys[0]["interpolation"]["type"], "cubic_bezier");
+    let ratio = keys[1]["value"]["x"].as_f64().unwrap() / keys[0]["value"]["x"].as_f64().unwrap();
+    assert!((ratio - 2.0).abs() < 1e-6, "{ratio}");
+
+    // A ramp without a duration runs to the node's end.
+    let to_end = media_scale(&json!({"from": 1, "to": 2}));
+    assert_eq!(to_end["keyframes"][1]["time"].as_i64(), Some(4 * SECOND));
+
+    let keyed = media_scale(
+        &json!({"keys": [{"t": 0, "v": 1}, {"t": 1, "v": 1.2, "ease": "ease-out"}, {"t": 4, "v": 1}]}),
+    );
+    let keys = keyed["keyframes"].as_array().expect("keyframes");
+    assert_eq!(keys.len(), 3);
+    assert_eq!(keys[0]["interpolation"]["type"], "linear");
+    assert_eq!(keys[1]["interpolation"]["type"], "cubic_bezier");
+}
+
+#[test]
+fn animated_values_are_checked() {
+    let error = |zoom: Value| {
+        compile_error(
+            &json!({"body": {"type": "media", "path": "logo.png", "duration": 1, "zoom": zoom}}),
+        )
+    };
+    assert!(error(json!(0)).contains("zoom"));
+    assert!(error(json!({"from": 1, "to": -1})).contains("zoom"));
+    assert!(error(json!({"keys": []})).contains("at least one key"));
+    assert!(error(json!({"keys": [{"t": 1, "v": 1}, {"t": 1, "v": 2}]})).contains("increasing"));
+    assert!(error(json!({"from": 1, "to": 2, "ease": "bounce"})).contains("ease"));
+    assert!(error(json!([1, 2])).contains("zoom"));
+}
+
+fn composition<'a>(project: &'a Value, clip: &Value) -> &'a Value {
+    let source = project["project"]["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .find(|source| source["id"] == clip["source_id"])
+        .expect("the clip's source");
+    project["project"]["compositions"]
+        .as_array()
+        .expect("compositions")
+        .iter()
+        .find(|composition| composition["id"] == source["composition"])
+        .expect("the source's composition")
+}
+
+fn ops(composition: &Value) -> Vec<String> {
+    composition["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .map(|node| node["op"]["type"].as_str().expect("op").to_owned())
+        .collect()
+}
+
+#[test]
+fn a_group_composites_its_children_into_one_layer_with_effects_and_a_transform() {
+    let compiled = compile(&json!({
+        "canvas": "youtube-1080p",
+        "duration": 4,
+        "body": {
+            "type": "group",
+            "inset": 100,
+            "opacity": {"from": 0.5, "to": 1},
+            "blend": "screen",
+            "effects": [{"effect": "gaussian-blur", "radius": 0.1}],
+            "transform": {"scale": {"from": 1, "to": 1.2}, "rotation": 5},
+            "children": [
+                {"type": "media", "path": "logo.png", "fit": "cover"},
+                {"type": "text", "text": "Hello", "at": 1, "duration": 2},
+            ],
+        },
+    }));
+    let clip = &tracks(&compiled)[0]["clips"][0];
+    assert_eq!(clip["blend_mode"], "screen");
+    let group = composition(&compiled, clip);
+    let ops = ops(group);
+    assert_eq!(ops.iter().filter(|op| *op == "media").count(), 2, "{ops:?}");
+    assert!(ops.contains(&"merge".to_owned()) && ops.contains(&"effect".to_owned()));
+    let output = group["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == group["output"])
+        .expect("the output node");
+    assert_eq!(output["op"]["type"], "transform");
+    assert_eq!(output["op"]["transform"]["opacity"]["mode"], "keyframes");
+    assert_eq!(output["op"]["transform"]["rotation_degrees"]["value"], 5.0);
+    // The text shows only from 1 s to 3 s of the group.
+    let text = group["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|node| node["op"]["type"] == "transform" && node["id"] != group["output"])
+        .nth(1)
+        .expect("the text's transform");
+    let times = text["op"]["transform"]["opacity"]["keyframes"]
+        .as_array()
+        .expect("windowed opacity")
+        .iter()
+        .map(|key| key["time"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(times, [0, SECOND, 3 * SECOND]);
+}
+
+#[test]
+fn a_video_in_a_group_keeps_its_sound_outside_the_picture() {
+    let compiled = compile(&json!({
+        "duration": 3,
+        "body": {"type": "group", "children": [{"type": "media", "path": "talk.mp4"}]},
+    }));
+    let audio = tracks(&compiled)
+        .iter()
+        .find(|track| track["kind"] == "audio")
+        .expect("an audio track");
+    let source = &audio["clips"][0]["source_id"];
+    let sources = compiled["project"]["sources"].as_array().unwrap();
+    let audio_source = sources.iter().find(|s| &s["id"] == source).unwrap();
+    assert_eq!(audio_source["kind"], "audio");
+    assert_eq!(audio_source["locator"], "talk.mp4");
+}
+
+#[test]
+fn a_group_refuses_what_one_picture_over_one_time_cannot_hold() {
+    let late_video = compile_error(&json!({
+        "duration": 4,
+        "body": {"type": "group", "children": [{"type": "media", "path": "talk.mp4", "at": 1}]},
+    }));
+    assert!(late_video.contains("whole time"), "{late_video}");
+    let transition = compile_error(&json!({
+        "body": {"type": "group", "children": [{
+            "type": "sequence",
+            "transition": {"type": "crossfade", "duration": 0.5},
+            "children": [
+                {"type": "color", "color": "#ff0000", "duration": 1},
+                {"type": "color", "color": "#0000ff", "duration": 1},
+            ],
+        }]},
+    }));
+    assert!(transition.contains("no transitions"), "{transition}");
+    let unknown = compile_error(&json!({
+        "duration": 1,
+        "body": {"type": "group", "effects": [{"effect": "no-such-effect"}], "children": [
+            {"type": "color", "color": "#ff0000"},
+        ]},
+    }));
+    assert!(unknown.contains("not a built-in effect"), "{unknown}");
+    let param = compile_error(&json!({
+        "duration": 1,
+        "body": {"type": "group", "effects": [{"effect": "gaussian-blur", "strength": 1}], "children": [
+            {"type": "color", "color": "#ff0000"},
+        ]},
+    }));
+    assert!(param.contains("radius"), "{param}");
+    let range = compile_error(&json!({
+        "duration": 1,
+        "body": {"type": "group", "effects": [{"effect": "gaussian-blur", "radius": 4}], "children": [
+            {"type": "color", "color": "#ff0000"},
+        ]},
+    }));
+    assert!(range.contains("radius"), "{range}");
+    let transition_effect = compile_error(&json!({
+        "duration": 1,
+        "body": {"type": "group", "effects": [{"effect": "alpha2.transition.fade"}], "children": [
+            {"type": "color", "color": "#ff0000"},
+        ]},
+    }));
+    assert!(
+        transition_effect.contains("transition"),
+        "{transition_effect}"
+    );
+}
+
+#[test]
+fn an_effect_takes_a_node_as_its_named_image_input() {
+    let compiled = compile(&json!({
+        "duration": 2,
+        "body": {
+            "type": "group",
+            "effects": [{
+                "effect": "displacement-map",
+                "map": {"type": "color", "color": "#808080"},
+                "amount_x": 0.01,
+                "channel_x": "red",
+            }],
+            "children": [{"type": "media", "path": "logo.png"}],
+        },
+    }));
+    let group = composition(&compiled, &tracks(&compiled)[0]["clips"][0]);
+    let effect = group["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["op"]["type"] == "effect")
+        .expect("the effect");
+    assert_eq!(
+        effect["op"]["effect"]["id"],
+        "alpha2.effect.displacement-map"
+    );
+    assert!(effect["op"]["inputs"]["map"].is_string());
+    assert_eq!(
+        effect["op"]["effect"]["params"]["channel_x"]["value"]["type"],
+        "enum"
+    );
+}
+
+fn shape_items(node: &Value) -> Vec<Value> {
+    let compiled = compile(&json!({
+        "canvas": {"width": 1000, "height": 500},
+        "theme": {"accent": "#ff0000", "text": "#ffffff"},
+        "duration": 2,
+        "body": node,
+    }));
+    compiled["project"]["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .find_map(|source| source["generator"]["items"].as_array().cloned())
+        .expect("a shapes source")
+}
+
+#[test]
+fn a_shape_places_its_outlines_in_its_area_and_paints_them_from_the_theme() {
+    let items = shape_items(&json!({
+        "type": "shape",
+        "inset": [100, 500, 100, 0],
+        "shapes": [{"shape": "rect", "center": [0.5, 0.5], "size": [1, 0.5], "corner_radius": 0.1}],
+    }));
+    // The area is the left half, 100 px in from top and bottom: 500 x 300.
+    let rect = &items[0];
+    assert_eq!(rect["type"], "rectangle");
+    assert_eq!(rect["center"]["value"], json!({"x": 0.25, "y": 0.5}));
+    assert_eq!(rect["size"]["value"], json!({"x": 0.5, "y": 0.3}));
+    // 0.1 of the area's 300 px shorter side is 30 px, 0.06 of the canvas's 500 px.
+    let corner = rect["corner_radius"]["value"].as_f64().unwrap();
+    assert!((corner - 0.06).abs() < 1e-6, "{corner}");
+    // Without a stroke it fills with the theme's accent.
+    let fill = items.last().expect("a fill");
+    assert_eq!(fill["type"], "fill");
+    assert_eq!(fill["paint"]["value"]["color"]["red"], 1.0);
+}
+
+#[test]
+fn a_shape_strokes_trims_and_fills_with_gradients_and_paths() {
+    let items = shape_items(&json!({
+        "type": "shape",
+        "shapes": [{"shape": "path", "d": "M0 0.5 L1 0.5"}],
+        "stroke": {"paint": {"$theme": "text", "alpha": 0.5}, "width": 0.02, "dash": [0.1, 0.05]},
+        "trim": {"end": {"from": 0, "to": 1}},
+        "fill": {"linear": {"stops": [{"$theme": "accent"}, "#0000ff"], "angle": 90}},
+    }));
+    let kinds = items
+        .iter()
+        .map(|item| item["type"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(kinds, ["path", "trim", "stroke", "fill"]);
+    assert_eq!(items[1]["end"]["mode"], "keyframes");
+    assert_eq!(items[2]["paint"]["value"]["color"]["alpha"], 0.5);
+    assert_eq!(items[2]["dash"]["pattern"].as_array().unwrap().len(), 2);
+    let gradient = &items[3]["paint"]["value"];
+    assert_eq!(gradient["type"], "linear_gradient");
+    // 90 degrees runs left to right across the area's middle.
+    let close = |point: &Value, [x, y]: [f64; 2]| {
+        (point["x"].as_f64().unwrap() - x).abs() < 1e-5
+            && (point["y"].as_f64().unwrap() - y).abs() < 1e-5
+    };
+    assert!(close(&gradient["start"], [0.0, 0.5]), "{gradient}");
+    assert!(close(&gradient["end"], [1.0, 0.5]), "{gradient}");
+    assert_eq!(gradient["stops"][1]["offset"], 1.0);
+}
+
+#[test]
+fn shape_values_are_checked() {
+    let error = |node: Value| compile_error(&json!({"duration": 1, "body": node}));
+    assert!(error(json!({"type": "shape", "shapes": []})).contains("at least one"));
+    assert!(
+        error(json!({"type": "shape", "shapes": [{"shape": "polygon", "points": 2}]}))
+            .contains("points")
+    );
+    assert!(
+        error(json!({"type": "shape", "shapes": [{"shape": "path", "d": "Q"}]})).contains(".d")
+    );
+    assert!(
+        error(json!({"type": "shape", "shapes": [{"shape": "ellipse"}], "fill": {"radial": {"stops": ["#fff"]}}}))
+            .contains("stops")
+    );
+    assert!(
+        error(json!({"type": "shape", "shapes": [{"shape": "rect", "size": [-1, 1]}]}))
+            .contains("size")
+    );
+}
+
+fn visual_clips(project: &Value) -> Vec<Value> {
+    tracks(project)
+        .iter()
+        .filter(|track| track["kind"] == "video")
+        .flat_map(|track| track["clips"].as_array().cloned().unwrap_or_default())
+        .collect()
+}
+
+#[test]
+fn a_matte_shows_its_content_through_its_by_pictures_alpha_or_luma() {
+    let compiled = compile(&json!({
+        "duration": 3,
+        "body": {
+            "type": "matte",
+            "content": {"type": "media", "path": "talk.mp4"},
+            "by": {"type": "text", "text": "WINDOW", "style": "title"},
+        },
+    }));
+    let clips = visual_clips(&compiled);
+    let shown = clips
+        .iter()
+        .find(|clip| !clip["matte"].is_null())
+        .expect("a matted clip");
+    let by = clips
+        .iter()
+        .find(|clip| clip["id"] == shown["matte"]["source"])
+        .expect("the matte clip");
+    assert_eq!(shown["matte"]["mode"], "alpha");
+    assert_eq!(by["audio"]["muted"], true);
+    let inverted = compile(&json!({
+        "duration": 1,
+        "body": {
+            "type": "matte", "use": "luma", "invert": true,
+            "content": {"type": "color", "color": "#ff0000"},
+            "by": {"type": "media", "path": "logo.png"},
+        },
+    }));
+    let matted = visual_clips(&inverted)
+        .into_iter()
+        .find(|clip| !clip["matte"].is_null())
+        .expect("a matted clip");
+    assert_eq!(matted["matte"]["mode"], "luma_inverted");
+}
+
+#[test]
+fn a_mask_over_a_crossfading_slideshow_mattes_every_slide_by_one_masked_fill() {
+    let compiled = compile(&json!({
+        "body": {
+            "type": "mask",
+            "inset": 100,
+            "shapes": [{"shape": "rect", "corner_radius": 0.1, "feather": 0.01}],
+            "content": {
+                "type": "slideshow",
+                "items": ["slides/01.jpg", "slides/02.jpg", "slides/03.jpg"],
+                "seconds": 2,
+                "transition": {"type": "crossfade", "duration": 0.5},
+            },
+        },
+    }));
+    let clips = visual_clips(&compiled);
+    let slides = clips
+        .iter()
+        .filter(|clip| !clip["matte"].is_null())
+        .collect::<Vec<_>>();
+    assert_eq!(slides.len(), 3);
+    let source = &slides[0]["matte"]["source"];
+    assert!(
+        slides
+            .iter()
+            .all(|slide| &slide["matte"]["source"] == source)
+    );
+    let fill = clips
+        .iter()
+        .find(|clip| &clip["id"] == source)
+        .expect("the masked fill");
+    let mask = &fill["masks"][0];
+    assert_eq!(mask["shape"]["type"], "rectangle");
+    assert!(mask["feather"]["value"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn a_matte_or_mask_isolates_layered_content_and_refuses_moving_transitions() {
+    // Two layers at once are drawn as one picture first, then matted.
+    let layered = compile(&json!({
+        "duration": 2,
+        "body": {
+            "type": "mask",
+            "shapes": [{"shape": "ellipse"}],
+            "content": {"type": "stack", "children": [
+                {"type": "color", "color": "#ff0000"},
+                {"type": "text", "text": "Over"},
+            ]},
+        },
+    }));
+    let matted = visual_clips(&layered)
+        .into_iter()
+        .filter(|clip| !clip["matte"].is_null())
+        .collect::<Vec<_>>();
+    assert_eq!(matted.len(), 1);
+    assert!(ops(composition(&layered, &matted[0])).contains(&"merge".to_owned()));
+    // A mask over a matte nests by isolating the matte.
+    let nested = compile(&json!({
+        "duration": 2,
+        "body": {
+            "type": "mask",
+            "shapes": [{"shape": "rect", "size": [0.5, 0.5]}],
+            "content": {
+                "type": "matte",
+                "content": {"type": "media", "path": "logo.png"},
+                "by": {"type": "text", "text": "IN"},
+            },
+        },
+    }));
+    let group = visual_clips(&nested)
+        .into_iter()
+        .find(|clip| !clip["matte"].is_null())
+        .expect("the isolated matte");
+    assert!(ops(composition(&nested, &group)).contains(&"matte".to_owned()));
+    let masked = |transition: &str| {
+        json!({
+            "body": {
+                "type": "mask",
+                "shapes": [{"shape": "ellipse"}],
+                "content": {
+                    "type": "sequence",
+                    "transition": {"type": transition, "duration": 0.5},
+                    "children": [
+                        {"type": "color", "color": "#ff0000", "duration": 1},
+                        {"type": "color", "color": "#0000ff", "duration": 1},
+                    ],
+                },
+            },
+        })
+    };
+    let moving = compile_error(&masked("directional"));
+    assert!(
+        moving.contains("alpha2.transition.directional moves"),
+        "{moving}"
+    );
+    // A wipe mixes in place, so each side takes the mask.
+    let wiped = compile(&masked("wipe-left"));
+    assert!(
+        visual_clips(&wiped)
+            .iter()
+            .filter(|clip| clip["source_id"] != Value::Null)
+            .count()
+            >= 2
+    );
+}
+
+fn compile_with_font(spec: &Value) -> Result<Value, String> {
+    let font: std::sync::Arc<[u8]> =
+        std::sync::Arc::from(&include_bytes!("../../../tests/fonts/Alpha2Fixture.ttf")[..]);
+    compile_json(&spec.to_string(), &facts().to_string(), &[font])
+        .map(|text| serde_json::from_str(&text).expect("JSON"))
+        .map_err(|error| error.to_string())
+}
+
+fn layout_roots(project: &Value) -> Vec<Value> {
+    project["project"]["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .filter_map(|source| source["generator"].get("root").cloned())
+        .collect()
+}
+
+#[test]
+fn a_box_lays_out_text_shapes_and_colors_in_one_layout_in_its_area() {
+    let compiled = compile(&json!({
+        "canvas": {"width": 1000, "height": 500},
+        "duration": 2,
+        "body": {
+            "type": "box",
+            "inset": 50,
+            "flex_direction": "column",
+            "gap": "10px",
+            "padding": "20px",
+            "background": {"$theme": "surface"},
+            "border_radius": "12px",
+            "children": [
+                {"box": {"flex_grow": 1}, "node": {"type": "text", "text": "Title", "font_size": 40}},
+                {"box": {"height": "20px"}, "node": {"type": "shape", "shapes": [{"shape": "ellipse"}]}},
+                {"box": {"height": "4px"}, "node": {"type": "color", "color": "#ff0000"}},
+            ],
+        },
+    }));
+    let roots = layout_roots(&compiled);
+    assert_eq!(roots.len(), 1);
+    let root = &roots[0];
+    // The root's padding puts the box 50 px inside the canvas.
+    assert_eq!(
+        root["padding"]["value"]["top"], "50px",
+        "{}",
+        root["padding"]
+    );
+    let card = &root["children"][0];
+    assert_eq!(card["flex_direction"], "column");
+    assert!(card["background"].is_object());
+    let kids = card["children"].as_array().unwrap();
+    assert_eq!(kids[0]["text"]["value"], "Title");
+    assert_eq!(kids[0]["flex_grow"]["value"], 1.0);
+    assert!(kids[1]["shape"]["items"].is_array());
+    assert!(kids[2]["background"].is_object());
+}
+
+#[test]
+fn box_lengths_may_be_theme_lengths_and_colors_theme_colors() {
+    let compiled = compile(&json!({
+        "canvas": {"width": 1000, "height": 500},
+        "duration": 2,
+        "body": {
+            "type": "box",
+            "padding": {"$theme": "margin", "scale": 2},
+            "children": [
+                {"box": {"height": {"$theme": "title_size"}}, "node": {"type": "text", "text": "T", "color": {"$theme": "accent"}}},
+            ],
+        },
+    }));
+    let card = &layout_roots(&compiled)[0]["children"][0];
+    let near = |value: &Value, want: f64| (value.as_f64().expect("a number") - want).abs() < 1e-6;
+    assert!(near(&card["padding"]["value"]["top"], 0.08), "{card}");
+    assert!(near(&card["children"][0]["height"]["value"], 0.1), "{card}");
+    let wrong = compile_error(&json!({
+        "duration": 1,
+        "body": {"type": "box", "gap": {"$theme": "accent"}, "children": []},
+    }));
+    assert!(wrong.starts_with("spec.body.gap.$theme:"), "{wrong}");
+}
+
+#[test]
+fn a_box_places_a_picture_in_its_measured_box_between_the_layout_under_and_over_it() {
+    let compiled = compile_with_font(&json!({
+        "canvas": {"width": 1000, "height": 500},
+        "duration": 2,
+        "body": {
+            "type": "box",
+            "flex_direction": "column",
+            "padding": "20px",
+            "background": "#202020",
+            "children": [
+                {"box": {"border_radius": "16px", "width": "200px"}, "node": {"type": "media", "path": "logo.png", "fit": "cover"}},
+                {"type": "text", "text": "Caption", "font_size": 30},
+            ],
+        },
+    }))
+    .expect("compiles");
+    // The card's background under the picture, the caption over it.
+    let roots = layout_roots(&compiled);
+    assert_eq!(roots.len(), 2, "{roots:?}");
+    let clips = visual_clips(&compiled);
+    let picture = clips
+        .iter()
+        .find(|clip| {
+            compiled["project"]["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|source| source["id"] == clip["source_id"] && source["locator"] == "logo.png")
+        })
+        .expect("the picture");
+    // Its rounded corners come from a masked matte.
+    assert!(!picture["matte"].is_null());
+    // The picture keeps its aspect ratio in a 200 px wide place: 200 x 200 at the padding.
+    let position = &picture["visual"]["position"]["value"];
+    assert!(
+        (position["x"].as_f64().unwrap() - 0.12).abs() < 1e-3,
+        "{position}"
+    );
+}
+
+#[test]
+fn a_boxed_picture_needs_fonts_only_beside_text_and_a_still_place() {
+    let picture = json!({"type": "media", "path": "logo.png"});
+    compile(&json!({"duration": 1, "body": {"type": "box", "children": [picture]}}));
+    let beside_text = compile_error(&json!({
+        "duration": 1,
+        "body": {"type": "box", "children": [picture, {"type": "text", "text": "Hi"}]},
+    }));
+    assert!(beside_text.contains("fonts"), "{beside_text}");
+    let moving = compile_with_font(&json!({
+        "duration": 1,
+        "body": {"type": "box", "padding": {"mode": "keyframes", "keyframes": [
+            {"time": 0, "value": "0px", "interpolation": {"type": "linear"}},
+            {"time": SECOND, "value": "40px", "interpolation": {"type": "linear"}},
+        ]}, "children": [{"type": "media", "path": "logo.png"}]},
+    }))
+    .expect_err("a moving place");
+    assert!(moving.contains("keeps still"), "{moving}");
+    let own = compile_error(&json!({"duration": 1, "body": {"type": "box", "text": "x"}}));
+    assert!(own.contains("sets `text` itself"), "{own}");
+}
+
+fn video_clips(fields: &Value) -> Result<Vec<Value>, String> {
+    let mut node = json!({"type": "media", "path": "grid1.mp4"});
+    node.as_object_mut()
+        .expect("object")
+        .extend(fields.as_object().expect("object").clone());
+    compile_json(
+        &json!({"body": node}).to_string(),
+        &facts().to_string(),
+        &[],
+    )
+    .map(|text| {
+        let compiled: Value = serde_json::from_str(&text).expect("JSON");
+        visual_clips(&compiled)
+    })
+    .map_err(|error| error.to_string())
+}
+
+#[test]
+fn a_video_shorter_or_longer_than_its_node_does_what_it_says() {
+    let span = |clip: &Value, field: &str| {
+        clip[field]["end"].as_i64().unwrap() - clip[field]["start"].as_i64().unwrap()
+    };
+    // grid1.mp4 lasts 31 s.
+    let frozen = video_clips(&json!({"duration": 40})).expect("compiles");
+    assert_eq!(frozen.len(), 2);
+    assert_eq!(frozen[1]["time_map"]["type"], "freeze");
+    let looped = video_clips(&json!({"duration": 40, "when_short": "loop"})).expect("compiles");
+    assert_eq!(looped[0]["time_map"]["type"], "loop");
+    let slowed = video_clips(&json!({"duration": 40, "when_short": "stretch"})).expect("compiles");
+    assert_eq!(slowed.len(), 1);
+    assert_eq!(span(&slowed[0], "timeline_range"), 40 * SECOND);
+    assert_eq!(span(&slowed[0], "source_range"), 31 * SECOND);
+    let blank = video_clips(&json!({"duration": 40, "when_short": "blank"})).expect("compiles");
+    assert_eq!(blank.len(), 1);
+    assert_eq!(span(&blank[0], "timeline_range"), 31 * SECOND);
+    assert!(video_clips(&json!({"duration": 40, "when_short": "error"})).is_err());
+
+    let trimmed = video_clips(&json!({"duration": 10})).expect("compiles");
+    assert_eq!(span(&trimmed[0], "source_range"), 10 * SECOND);
+    let hurried = video_clips(&json!({"duration": 10, "when_long": "stretch"})).expect("compiles");
+    assert_eq!(span(&hurried[0], "source_range"), 31 * SECOND);
+    let refused = video_clips(&json!({"duration": 10, "when_long": "error"})).expect_err("refused");
+    assert!(refused.contains("longer"), "{refused}");
 }

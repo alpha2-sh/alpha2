@@ -216,6 +216,11 @@ alpha2.export(compiled, "summer.mp4")
   `Slideshow`, `CaptionedVideo`, `Title`, `TitleCard`, `LowerThird`, `EndCard`,
   `ComparisonGrid`, `Reframe`, `Logo`, `MusicBed`. Themes `clean-dark` and `clean-light`, or your
   own (`theme={"base": "clean-light", "accent": "#e63946"}`).
+- Wrappers combine any nodes: `Group` (one layer, with `effects=[Effect("gaussian-blur",
+  radius=8)]`, a transform and a blend mode), `Matte` (one node shown through another's alpha or
+  luma), `Mask` (shapes cut out of a node), `Shape` (rectangles, ellipses, polygons and SVG paths)
+  and `Box` (CSS flexbox or grid around text, shapes and any other node). Any value may move:
+  `Ramp(0, 1, ease="ease-out")` or `Keys((0, 0), (1, 1))`.
 - Motion: `enter=` and `exit=` on visual nodes and containers take `Fade`, `Rise`, `Slide` or
   `Scale`, timed from the node's own start and back from its own end; `Stack` and `Grid` take
   `stagger=` to move children one after another; `Text` takes `reveal=Reveal("word")` (or
@@ -226,11 +231,39 @@ alpha2.export(compiled, "summer.mp4")
 - Compiling needs each file's size and length. `compile` asks the host's `conform` for them (no
   GPU), or takes them as `facts=`; with every fact given it runs without a host. The same spec,
   facts and fonts compile to the same project.
-- Templates are Python: loops, conditions and arithmetic build the lists the nodes take. A spec is
-  JSON (`video.to_json()`, typed as `alpha2.compose_types.VideoSpec`) that every binding compiles
-  the same way.
+- A spec is JSON (`video.to_json()`, typed as `alpha2.compose_types.VideoSpec`, schema
+  `https://alpha2.sh/schema/compose.v1.json`) that every binding compiles the same way.
 - An error names where in the spec it lies (`alpha2.Alpha2ComposeError`, `.path ==
   "spec.body.items[3].path"`).
+
+## Templates
+
+A template is a spec with parameters: `{"template": {"id": "acme/promo", "version": 1}, "params":
+[...], ...}`, its text, files and colors taken from its data. `c.bind(template, data)` fills it in
+and checks the data, `c.data_schema(template)` is the JSON Schema of its data (for a form, an API
+or a model), and `c.lint(template)` finds what a template should take from its data but does not.
+A `node` template is a node type of its own, `{"type": "acme/card", "with": {...}}`, in any spec
+compiled with `templates=[...]`. `c.TEMPLATES` are the built-in `alpha2/` ones, such as
+`alpha2/circle-reveal`.
+
+```python
+spec = c.bind(promo, {"headline": "Summer sale", "photo": "beach.jpg"})
+alpha2.export(c.compile(spec, fonts=["Inter.ttf"]), "promo.mp4")
+```
+
+## MCP server
+
+`python -m alpha2 mcp` serves compose, templates and rendering as MCP tools on standard input and
+output, for an agent to list templates, fill in their data, check, look at a frame and render the
+video, or write a spec from the compose schema one node type at a time.
+
+```sh
+claude mcp add alpha2 -- python -m alpha2 mcp --font Inter.ttf --templates ./templates
+```
+
+`--font` gives the fonts text is drawn with (text needs one), `--templates` a directory of template
+JSON files beside the built-in ones, and `--host` the `alpha2-host` binary. Relative paths in specs
+are read from the server's working directory.
 
 ## Finding `alpha2-host`
 
