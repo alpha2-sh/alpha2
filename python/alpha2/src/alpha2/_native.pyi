@@ -60,6 +60,9 @@ def compose(spec: str, facts: str, fonts: list[bytes]) -> str:
 COMPOSE_TEMPLATES: str
 """The 1st-party ``alpha2/`` templates, as a JSON list."""
 
+def compose_core_schema() -> str:
+    """The compose schema without engine nodes, as JSON."""
+
 def compose_bind(document: str, data: str, options: str) -> str:
     """A template (JSON text) bound to its data, or a spec with its template nodes expanded, as
     JSON text. ``options`` is ``{"theme"?, "templates"?}``.
