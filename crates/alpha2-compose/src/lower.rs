@@ -10,10 +10,10 @@ use alpha2_time::MediaTime;
 use crate::ComposeError;
 use crate::compile::Context;
 use crate::spec::{
-    Align, Audio, CaptionStyle, Captions, ComparisonGrid, Counter, Cue, Direction, EasingChoice,
-    Ellipsis, EndCard, FileKind, Fit, GridLength, Inset, LowerThird, Media, MediaItem, Motion,
-    MotionKind, MusicBed, Node, Raw, RevealKind, RevealUnit, Slideshow, Text, TextRole, Title,
-    Transition, TransitionChoice,
+    Align, Anim, Audio, CaptionStyle, Captions, ComparisonGrid, Counter, Cue, Direction,
+    EasingChoice, Ellipsis, EndCard, FileKind, Fit, GridLength, Inset, LowerThird, Media,
+    MediaItem, Motion, MotionKind, MusicBed, Node, Ramp, Raw, RevealKind, RevealUnit, Slideshow,
+    Text, TextRole, Title, Transition, TransitionChoice,
 };
 
 /// A node, ready to place.
@@ -81,6 +81,28 @@ pub(crate) struct GridLayout {
     pub length: GridLength,
 }
 
+/// A lowered [`Anim`]: one value, or keys whose times are ticks from the node's start.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum AnimPrim<T> {
+    Value(T),
+    Keys(Vec<KeyPrim<T>>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct KeyPrim<T> {
+    pub at: KeyTime,
+    pub value: T,
+    /// The curve to the next key.
+    pub easing: Easing,
+}
+
+/// When a key falls: ticks from the node's start, or its end once the node's length is known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum KeyTime {
+    Ticks(i64),
+    End,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Visual {
     pub head: Head,
@@ -90,7 +112,7 @@ pub(crate) struct Visual {
     pub opacity: f32,
     pub fade_in: i64,
     pub fade_out: i64,
-    pub zoom: Option<[f32; 2]>,
+    pub zoom: Option<AnimPrim<f32>>,
     pub content: Content,
 }
 
@@ -437,6 +459,74 @@ impl Context<'_> {
     }
 
     /// A curve from `choice`: linear when absent.
+    /// Lowers `anim`, each of whose values `valid` accepts.
+    pub(crate) fn anim<T: Copy>(
+        path: &str,
+        anim: &Anim<T>,
+        valid: impl Fn(&T) -> bool,
+    ) -> Result<AnimPrim<T>, ComposeError> {
+        let invalid = |path: &str| Self::error(path, "a value is out of range");
+        // `easing` names its field `easing`; here it is `ease`.
+        let ease = |path: &str, choice: Option<&EasingChoice>| {
+            Self::easing(path, choice)
+                .map_err(|error| Self::error(&format!("{path}.ease"), error.message))
+        };
+        match anim {
+            Anim::Value(value) if valid(value) => Ok(AnimPrim::Value(*value)),
+            Anim::Value(_) => Err(invalid(path)),
+            Anim::Ramp(ramp) => {
+                if !valid(&ramp.from) || !valid(&ramp.to) {
+                    return Err(invalid(path));
+                }
+                let at = Self::optional_time(path, "at", ramp.at)?.unwrap_or(0);
+                let end = match Self::optional_time(path, "duration", ramp.duration)? {
+                    Some(duration) => KeyTime::Ticks(at + duration),
+                    None => KeyTime::End,
+                };
+                Ok(AnimPrim::Keys(vec![
+                    KeyPrim {
+                        at: KeyTime::Ticks(at),
+                        value: ramp.from,
+                        easing: ease(path, ramp.ease.as_ref())?,
+                    },
+                    KeyPrim {
+                        at: end,
+                        value: ramp.to,
+                        easing: Easing::Linear,
+                    },
+                ]))
+            }
+            Anim::Keys(keys) => {
+                if keys.keys.is_empty() {
+                    return Err(Self::error(path, "keys hold at least one key"));
+                }
+                let mut lowered = Vec::with_capacity(keys.keys.len());
+                for (index, key) in keys.keys.iter().enumerate() {
+                    let at = format!("{path}.keys[{index}]");
+                    if !valid(&key.v) {
+                        return Err(invalid(&format!("{at}.v")));
+                    }
+                    let ticks = Self::time(&at, "t", key.t)?;
+                    if lowered
+                        .last()
+                        .is_some_and(|last: &KeyPrim<T>| last.at >= KeyTime::Ticks(ticks))
+                    {
+                        return Err(Self::error(
+                            &format!("{at}.t"),
+                            "keys are in increasing time",
+                        ));
+                    }
+                    lowered.push(KeyPrim {
+                        at: KeyTime::Ticks(ticks),
+                        value: key.v,
+                        easing: ease(&at, key.ease.as_ref())?,
+                    });
+                }
+                Ok(AnimPrim::Keys(lowered))
+            }
+        }
+    }
+
     pub(crate) fn easing(
         path: &str,
         choice: Option<&EasingChoice>,
@@ -804,14 +894,15 @@ impl Context<'_> {
                 })
             }
         };
-        if let Some(zoom) = media.zoom
-            && !zoom.iter().all(|value| value.is_finite() && *value > 0.0)
-        {
-            return Err(Self::error(
-                &format!("{path}.zoom"),
-                "zoom factors are positive",
-            ));
-        }
+        let zoom = media
+            .zoom
+            .as_ref()
+            .map(|zoom| {
+                Self::anim(&format!("{path}.zoom"), zoom, |value| {
+                    value.is_finite() && *value > 0.0
+                })
+            })
+            .transpose()?;
         Ok(Prim::Visual(Box::new(Visual {
             head,
             inset: inset_sides(media.inset),
@@ -820,7 +911,7 @@ impl Context<'_> {
             opacity: Self::unit(path, "opacity", media.opacity, 1.0)?,
             fade_in: Self::optional_time(path, "fade_in", media.fade_in)?.unwrap_or(0),
             fade_out: Self::optional_time(path, "fade_out", media.fade_out)?.unwrap_or(0),
-            zoom: media.zoom,
+            zoom,
             content,
         })))
     }
@@ -917,11 +1008,7 @@ impl Context<'_> {
     }
 
     /// The font sizes in pixels `text` is fitted between, and what ends a line it cuts.
-    fn text_fit(
-        text: &Text,
-        font_px: f32,
-        path: &str,
-    ) -> Result<TextFitting, ComposeError> {
+    fn text_fit(text: &Text, font_px: f32, path: &str) -> Result<TextFitting, ComposeError> {
         if text.max_lines == Some(0) {
             return Err(Self::error(
                 &format!("{path}.max_lines"),
@@ -1476,8 +1563,14 @@ impl Context<'_> {
             if media.duration.is_none() {
                 media.duration = Some(seconds);
             }
-            if let (None, Some(zoom)) = (media.zoom, slideshow.ken_burns) {
-                media.zoom = Some([1.0, zoom]);
+            if let (None, Some(zoom)) = (&media.zoom, slideshow.ken_burns) {
+                media.zoom = Some(Anim::Ramp(Ramp {
+                    from: 1.0,
+                    to: zoom,
+                    ease: None,
+                    at: None,
+                    duration: None,
+                }));
             }
             children.push(self.lower_media(&media, &at)?);
         }

@@ -773,3 +773,54 @@ fn a_text_fit_and_line_count_are_checked() {
     assert!(error(json!({"fit": {"min": 0}})).contains("fit"));
     assert!(error(json!({"fit": {"min": 120}})).contains("fit"));
 }
+
+fn media_scale(zoom: &Value) -> Value {
+    let compiled = compile(&json!({
+        "canvas": "youtube-1080p",
+        "body": {"type": "media", "path": "logo.png", "duration": 4, "zoom": zoom},
+    }));
+    tracks(&compiled)[0]["clips"][0]["visual"]["scale"].clone()
+}
+
+#[test]
+fn an_animated_value_is_a_constant_a_ramp_or_keys_over_the_node() {
+    assert_eq!(media_scale(&json!(1.5))["mode"], "constant");
+
+    let ramp = media_scale(&json!({"from": 1, "to": 2, "ease": "ease-in", "at": 1, "duration": 2}));
+    let keys = ramp["keyframes"].as_array().expect("keyframes");
+    let times = keys
+        .iter()
+        .map(|key| key["time"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(times, [SECOND, 3 * SECOND]);
+    assert_eq!(keys[0]["interpolation"]["type"], "cubic_bezier");
+    let ratio = keys[1]["value"]["x"].as_f64().unwrap() / keys[0]["value"]["x"].as_f64().unwrap();
+    assert!((ratio - 2.0).abs() < 1e-6, "{ratio}");
+
+    // A ramp without a duration runs to the node's end.
+    let to_end = media_scale(&json!({"from": 1, "to": 2}));
+    assert_eq!(to_end["keyframes"][1]["time"].as_i64(), Some(4 * SECOND));
+
+    let keyed = media_scale(
+        &json!({"keys": [{"t": 0, "v": 1}, {"t": 1, "v": 1.2, "ease": "ease-out"}, {"t": 4, "v": 1}]}),
+    );
+    let keys = keyed["keyframes"].as_array().expect("keyframes");
+    assert_eq!(keys.len(), 3);
+    assert_eq!(keys[0]["interpolation"]["type"], "linear");
+    assert_eq!(keys[1]["interpolation"]["type"], "cubic_bezier");
+}
+
+#[test]
+fn animated_values_are_checked() {
+    let error = |zoom: Value| {
+        compile_error(
+            &json!({"body": {"type": "media", "path": "logo.png", "duration": 1, "zoom": zoom}}),
+        )
+    };
+    assert!(error(json!(0)).contains("zoom"));
+    assert!(error(json!({"from": 1, "to": -1})).contains("zoom"));
+    assert!(error(json!({"keys": []})).contains("at least one key"));
+    assert!(error(json!({"keys": [{"t": 1, "v": 1}, {"t": 1, "v": 2}]})).contains("increasing"));
+    assert!(error(json!({"from": 1, "to": 2, "ease": "bounce"})).contains("ease"));
+    assert!(error(json!([1, 2])).contains("zoom"));
+}

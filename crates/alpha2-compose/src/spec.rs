@@ -509,9 +509,10 @@ pub struct Media {
     /// Seconds of fade out to transparent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fade_out: Option<f64>,
-    /// A slow zoom over the node's length, `[from, to]`, as multiples of the fitted size.
+    /// How large it shows, as a multiple of its fitted size: a constant, a ramp
+    /// (`{"from": 1, "to": 1.2}` is a slow zoom over the node), or keys. Default 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub zoom: Option<[f32; 2]>,
+    pub zoom: Option<Anim<f32>>,
     /// A Gaussian blur's radius, as a fraction of the picture's shorter side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blur: Option<f32>,
@@ -1216,6 +1217,91 @@ pub enum EasingChoice {
     Named(String),
     /// A project easing.
     Curve(Easing),
+}
+
+/// A value over a node's time: a constant, a ramp from one value to another, or keys. Times are
+/// seconds from the node's start.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum Anim<T> {
+    /// From `from` to `to`.
+    Ramp(Ramp<T>),
+    /// Through keyed values.
+    Keys(Keys<T>),
+    /// One value throughout.
+    Value(T),
+}
+
+impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Anim<T> {
+    // An object with `keys` is keys and one with `from` a ramp; anything else is a value. Ramps
+    // and keys are objects only, as the schema says, though serde would read a struct from an array.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let object = value.as_object();
+        if object.is_some_and(|object| object.contains_key("keys")) {
+            serde_json::from_value(value).map(Anim::Keys)
+        } else if object.is_some_and(|object| object.contains_key("from")) {
+            serde_json::from_value(value).map(Anim::Ramp)
+        } else if value.is_array() && !accepts_array::<T>() {
+            return Err(D::Error::custom(
+                "expected a value, `{from, to}` or `{keys}`, not an array",
+            ));
+        } else {
+            serde_json::from_value(value).map(Anim::Value)
+        }
+        .map_err(D::Error::custom)
+    }
+}
+
+/// Whether `T` itself is written as an array, as a vector value is.
+fn accepts_array<T: serde::de::DeserializeOwned>() -> bool {
+    serde_json::from_value::<T>(serde_json::json!([0, 0])).is_ok()
+        || serde_json::from_value::<T>(serde_json::json!([0, 0, 0, 0])).is_ok()
+}
+
+/// A change from one value to another; before it the value is `from`, after it `to`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Ramp<T> {
+    /// The value at the start.
+    pub from: T,
+    /// The value at the end.
+    pub to: T,
+    /// The timing curve. Default linear.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ease: Option<EasingChoice>,
+    /// When it starts. Default 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<f64>,
+    /// How long it lasts. Default: to the node's end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+}
+
+/// Values at times; the value holds before the first and after the last.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Keys<T> {
+    /// The keys, in increasing time; at least one.
+    pub keys: Vec<Key<T>>,
+}
+
+/// One keyed value.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Key<T> {
+    /// Seconds from the node's start.
+    pub t: f64,
+    /// The value.
+    pub v: T,
+    /// The timing curve to the next key. Default linear.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ease: Option<EasingChoice>,
 }
 
 /// An entrance or exit, timed from the node's own start or back from its own end.

@@ -18,8 +18,9 @@ use alpha2_text::{TextFont, TextRasterizer};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 
 use crate::lower::{
-    AudioPrim, CaptionsPrim, Content, CounterContent, GridLayout, Head, NodeMotion, Preset, Prim,
-    RevealPrim, SequencePrim, StackPrim, Visual, align_point, ticks_scaled,
+    AnimPrim, AudioPrim, CaptionsPrim, Content, CounterContent, GridLayout, Head, KeyPrim, KeyTime,
+    NodeMotion, Preset, Prim, RevealPrim, SequencePrim, StackPrim, Visual, align_point,
+    ticks_scaled,
 };
 use crate::spec::{
     Canvas, CustomCanvas, Fit, FrameRateChoice, GridLength, Loudness, Transition, VideoSpec,
@@ -1314,19 +1315,19 @@ impl<'a> Context<'a> {
         let (width, height) = self.canvas_px();
         let fitted = Fitted::new(size, (width, height), rect, visual.fit);
         let (x, y) = align_point(visual.align);
-        let scale = match visual.zoom {
+        let scaled = |zoom: f32| Vec2::new(fitted.scale.x * zoom, fitted.scale.y * zoom);
+        let scale = match &visual.zoom {
             None => constant(fitted.scale),
-            Some([from, to]) => Animated::Keyframes {
-                keyframes: vec![
-                    linear(
-                        clip.start(),
-                        Vec2::new(fitted.scale.x * from, fitted.scale.y * from),
-                    ),
-                    linear(
-                        clip.end(),
-                        Vec2::new(fitted.scale.x * to, fitted.scale.y * to),
-                    ),
-                ],
+            Some(AnimPrim::Value(zoom)) => constant(scaled(*zoom)),
+            Some(AnimPrim::Keys(keys)) => Animated::Keyframes {
+                keyframes: resolve_keys(keys, clip)
+                    .into_iter()
+                    .map(|(time, zoom, easing)| Keyframe {
+                        time,
+                        value: scaled(zoom),
+                        interpolation: interpolation(easing),
+                    })
+                    .collect(),
             },
         };
         VisualProperties {
@@ -1356,12 +1357,16 @@ impl<'a> Context<'a> {
         let fitted = Fitted::new(size, (width, height), rect, visual.fit);
         let (x, y) = align_point(visual.align);
         let full = rect == self.canvas_rect();
-        let [from, to] = visual.zoom.unwrap_or([1.0, 1.0]);
+        let keys = match &visual.zoom {
+            None => vec![(clip.start(), 1.0, Easing::Linear)],
+            Some(AnimPrim::Value(zoom)) => vec![(clip.start(), *zoom, Easing::Linear)],
+            Some(AnimPrim::Keys(keys)) => resolve_keys(keys, clip),
+        };
         let overflows = |zoom: f32| {
             fitted.displayed.0 * zoom > rect.width * 1.0001
                 || fitted.displayed.1 * zoom > rect.height * 1.0001
         };
-        if full || !(overflows(from) || overflows(to)) {
+        if full || !keys.iter().any(|(_, zoom, _)| overflows(*zoom)) {
             return Vec::new();
         }
         // The part of the picture inside `rect`, in its own unit square, at zoom `zoom`.
@@ -1377,26 +1382,27 @@ impl<'a> Context<'a> {
         };
         // Exactly equal factors make no animation.
         #[allow(clippy::float_cmp)]
-        let still = visual.zoom.is_none() || from == to;
+        let still = keys.iter().all(|(_, zoom, _)| *zoom == keys[0].1);
         let (center, size) = if still {
-            let (center, size) = visible(from);
+            let (center, size) = visible(keys[0].1);
             (AnimatedPoint::Constant { value: center }, constant(size))
         } else {
-            // The visible part shrinks as one over the zoom; eight linear keyframe pieces follow it
-            // closely enough.
+            // The visible part shrinks as one over the zoom; eight linear pieces per key span
+            // follow it closely enough.
             let steps = 8_i64;
-            let (start, length) = (
-                clip.start().ticks(),
-                clip.end().ticks() - clip.start().ticks(),
-            );
-            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-            let samples = (0..=steps)
-                .map(|step| {
-                    let time = MediaTime::from_ticks(start + length * step / steps);
-                    let zoom = from + (to - from) * (step as f32 / steps as f32);
-                    (time, visible(zoom))
-                })
-                .collect::<Vec<_>>();
+            let mut samples = Vec::with_capacity(keys.len() * 8 + 1);
+            for pair in keys.windows(2) {
+                let ((start, from, easing), (end, to, _)) = (pair[0], pair[1]);
+                let length = end.ticks() - start.ticks();
+                #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+                for step in 0..steps {
+                    let progress = easing.apply(step as f64 / steps as f64) as f32;
+                    let time = MediaTime::from_ticks(start.ticks() + length * step / steps);
+                    samples.push((time, visible(from + (to - from) * progress)));
+                }
+            }
+            let (end, last, _) = keys[keys.len() - 1];
+            samples.push((end, visible(last)));
             (
                 AnimatedPoint::from(Animated::Keyframes {
                     keyframes: samples
@@ -1610,6 +1616,39 @@ impl Fitted {
             self.frame_offset.x + point.x * self.frame_part.x,
             self.frame_offset.y + point.y * self.frame_part.y,
         )
+    }
+}
+
+/// `keys` placed on `clip`: each key's timeline time, value and curve to the next. A key at the
+/// node's end that would not follow the key before it falls one tick after it.
+fn resolve_keys<T: Copy>(keys: &[KeyPrim<T>], clip: TimeRange) -> Vec<(MediaTime, T, Easing)> {
+    let length = clip.end().ticks() - clip.start().ticks();
+    let mut previous = None;
+    keys.iter()
+        .map(|key| {
+            let mut ticks = match key.at {
+                KeyTime::Ticks(ticks) => ticks,
+                KeyTime::End => length,
+            };
+            if let Some(previous) = previous
+                && ticks <= previous
+            {
+                ticks = previous + 1;
+            }
+            previous = Some(ticks);
+            (
+                MediaTime::from_ticks(clip.start().ticks() + ticks),
+                key.value,
+                key.easing,
+            )
+        })
+        .collect()
+}
+
+const fn interpolation(easing: Easing) -> Interpolation {
+    match easing {
+        Easing::Linear => Interpolation::Linear,
+        Easing::CubicBezier(curve) => Interpolation::CubicBezier(curve),
     }
 }
 

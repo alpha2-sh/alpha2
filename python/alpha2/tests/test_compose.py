@@ -36,12 +36,15 @@ FACTS: dict[str, Any] = {
 
 
 def test_constructors_write_the_spec_as_plain_dicts() -> None:
-    node = c.Media(Path("clips") / "a.mp4", loop=True, zoom=(1, 1.2), label=None)
+    node = c.Media(Path("clips") / "a.mp4", loop=True, zoom=c.Ramp(1, 1.2), label=None)
     assert node == {
         "type": "media",
         "path": str(Path("clips") / "a.mp4"),
         "loop": True,
-        "zoom": [1, 1.2],
+        "zoom": {"from": 1, "to": 1.2},
+    }
+    assert c.Keys((0, 1), (2, 1.5, "ease-out")) == {
+        "keys": [{"t": 0, "v": 1}, {"t": 2, "v": 1.5, "ease": "ease-out"}]
     }
     assert c.Captions("talk.srt", style="bar-bottom") == {
         "type": "captions",

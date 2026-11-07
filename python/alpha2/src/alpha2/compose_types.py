@@ -204,6 +204,12 @@ Align: TypeAlias = Literal["center", "top", "bottom", "left", "right", "top-left
 """A point of an area: its center, an edge's middle or a corner."""
 
 
+Anim: TypeAlias = "Ramp | Keys | float"
+"""A value over a node's time: a constant, a ramp from one value to another, or keys. Times are
+seconds from the node's start.
+"""
+
+
 Canvas: TypeAlias = "str | CustomCanvas"
 """The canvas: a preset name, or its parts."""
 
@@ -320,6 +326,24 @@ GridLength: TypeAlias = Literal["shortest", "longest_freeze", "longest_loop"]
 
 Inset: TypeAlias = "float | list[float]"
 """Space kept clear inside an area."""
+
+
+class Key(TypedDict):
+    """One keyed value."""
+
+    ease: NotRequired[EasingChoice | None]
+    """The timing curve to the next key. Default linear."""
+    t: float
+    """Seconds from the node's start."""
+    v: float
+    """The value."""
+
+
+class Keys(TypedDict):
+    """Values at times; the value holds before the first and after the last."""
+
+    keys: list[Key]
+    """The keys, in increasing time; at least one."""
 
 
 Loudness: TypeAlias = "float | LoudnessTarget"
@@ -504,8 +528,10 @@ class NodeMedia(TypedDict):
     type: Literal["media"]
     volume: NotRequired[float | None]
     """Linear gain of a video's sound. Default 1."""
-    zoom: NotRequired[list[float] | None]
-    """A slow zoom over the node's length, `[from, to]`, as multiples of the fitted size."""
+    zoom: NotRequired[Anim | None]
+    """How large it shows, as a multiple of its fitted size: a constant, a ramp
+    (`{"from": 1, "to": 1.2}` is a slow zoom over the node), or keys. Default 1.
+    """
 
 
 class NodeText(TypedDict):
@@ -1009,6 +1035,19 @@ class NumberFormat(TypedDict):
     """Text after the number."""
     thousands: NotRequired[str | None]
     """Put between each group of three integer digits, as `,`. Default none."""
+
+
+Ramp = TypedDict(
+    "Ramp",
+    {
+        "at": NotRequired[float | None],
+        "duration": NotRequired[float | None],
+        "ease": NotRequired[EasingChoice | None],
+        "from": float,
+        "to": float,
+    },
+)
+Ramp.__doc__ = "A change from one value to another; before it the value is `from`, after it `to`."
 
 
 class Reveal(TypedDict):

@@ -115,6 +115,24 @@
         }
       ]
     },
+    "Anim": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Ramp",
+          "description": "From `from` to `to`."
+        },
+        {
+          "$ref": "#/$defs/Keys",
+          "description": "Through keyed values."
+        },
+        {
+          "description": "One value throughout.",
+          "format": "float",
+          "type": "number"
+        }
+      ],
+      "description": "A value over a node's time: a constant, a ramp from one value to another, or keys. Times are\nseconds from the node's start."
+    },
     "AnimatedPoint": {
       "description": "A position that can move along curves between its keyframes.\n\nIts JSON is an `Animated<Vec2>` plus optional spatial tangents per keyframe. With them,\nthe value travels the cubic Bezier through this keyframe's `out_tangent` and the next's\n`in_tangent`, at the speed its timing curve sets along the arc length. Without them it\nmoves in a straight line.",
       "oneOf": [
@@ -2712,6 +2730,38 @@
         }
       ]
     },
+    "Key": {
+      "additionalProperties": false,
+      "description": "One keyed value.",
+      "properties": {
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EasingChoice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The timing curve to the next key. Default linear."
+        },
+        "t": {
+          "description": "Seconds from the node's start.",
+          "format": "double",
+          "type": "number"
+        },
+        "v": {
+          "description": "The value.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "t",
+        "v"
+      ],
+      "type": "object"
+    },
     "Keyframe_EffectValue": {
       "additionalProperties": false,
       "description": "One timestamped control value.",
@@ -2974,6 +3024,23 @@
         "time",
         "value",
         "interpolation"
+      ],
+      "type": "object"
+    },
+    "Keys": {
+      "additionalProperties": false,
+      "description": "Values at times; the value holds before the first and after the last.",
+      "properties": {
+        "keys": {
+          "description": "The keys, in increasing time; at least one.",
+          "items": {
+            "$ref": "#/$defs/Key"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "keys"
       ],
       "type": "object"
     },
@@ -4748,17 +4815,15 @@
               ]
             },
             "zoom": {
-              "description": "A slow zoom over the node's length, `[from, to]`, as multiples of the fitted size.",
-              "items": {
-                "format": "float",
-                "type": "number"
-              },
-              "maxItems": 2,
-              "minItems": 2,
-              "type": [
-                "array",
-                "null"
-              ]
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How large it shows, as a multiple of its fitted size: a constant, a ramp\n(`{\"from\": 1, \"to\": 1.2}` is a slow zoom over the node), or keys. Default 1."
             }
           },
           "required": [
@@ -7295,6 +7360,54 @@
           "type": "object"
         }
       ]
+    },
+    "Ramp": {
+      "additionalProperties": false,
+      "description": "A change from one value to another; before it the value is `from`, after it `to`.",
+      "properties": {
+        "at": {
+          "description": "When it starts. Default 0.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "duration": {
+          "description": "How long it lasts. Default: to the node's end.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EasingChoice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The timing curve. Default linear."
+        },
+        "from": {
+          "description": "The value at the start.",
+          "format": "float",
+          "type": "number"
+        },
+        "to": {
+          "description": "The value at the end.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
     },
     "RangeShape": {
       "description": "How selection rises and falls across a Range selector's range.",

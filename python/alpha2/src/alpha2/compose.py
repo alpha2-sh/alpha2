@@ -66,11 +66,13 @@ __all__ = [
     "EndCard",
     "Fade",
     "Grid",
+    "Keys",
     "Layout",
     "Logo",
     "LowerThird",
     "Media",
     "MusicBed",
+    "Ramp",
     "Raw",
     "Reframe",
     "Reveal",
@@ -216,7 +218,7 @@ def Media(
     opacity: float | None = None,
     fade_in: float | None = None,
     fade_out: float | None = None,
-    zoom: tuple[float, float] | None = None,
+    zoom: float | Mapping[str, Any] | None = None,
     blur: float | None = None,
     label: str | None = None,
     fit: Fit | None = None,
@@ -229,7 +231,8 @@ def Media(
     duration: float | None = None,
 ) -> Node:
     """A video or still file. ``fit`` is ``contain`` (default), ``cover``, ``fill`` or ``none``;
-    ``zoom`` is ``(from, to)`` over its time; ``label`` names its cell in a comparison grid. At a
+    ``zoom`` is a multiple or its change (:func:`Ramp`, :func:`Keys`); ``label`` names its cell
+    in a comparison grid. At a
     ``speed`` other than 1 its sound keeps its pitch unless ``preserve_pitch`` is false."""
     return _node(
         "media",
@@ -845,6 +848,36 @@ def Scale(
     """A change of size about the node's own anchor: an entrance grows from ``size`` times its
     own (default 0), an exit shrinks to it."""
     return _motion("scale", duration=duration, size=size, fade=fade, easing=easing)
+
+
+def Ramp(
+    from_: Any,
+    to: Any,
+    *,
+    ease: str | Mapping[str, Any] | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+) -> dict[str, Any]:
+    """A value changing from ``from_`` to ``to``, starting ``at`` seconds into its node and lasting
+    ``duration`` (default: to the node's end), along ``ease`` (default linear)."""
+    return cast(
+        "dict[str, Any]",
+        _plain({"from": from_, "to": to, "ease": ease, "at": at, "duration": duration}),
+    )
+
+
+def Keys(*keys: tuple[float, Any] | tuple[float, Any, str | Mapping[str, Any]]) -> dict[str, Any]:
+    """A value through keys ``(seconds, value)`` or ``(seconds, value, ease)``, in increasing
+    time; each ``ease`` curves the change to the next key."""
+    return {
+        "keys": [
+            cast(
+                "dict[str, Any]",
+                _plain({"t": key[0], "v": key[1], "ease": key[2] if len(key) > 2 else None}),
+            )
+            for key in keys
+        ]
+    }
 
 
 def Reveal(
