@@ -248,7 +248,7 @@ class CaptionsNode(TypedDict):
 
     at: NotRequired[float | None]
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """Text color. Default: the theme's."""
     cues: NotRequired[list[Cue]]
     """Cues as given, in seconds from the node's start."""
@@ -258,7 +258,7 @@ class CaptionsNode(TypedDict):
     """A SubRip (`.srt`) or WebVTT (`.vtt`) file, read by the binding."""
     font_size: NotRequired[float | None]
     """Font size in pixels. Default: the theme's caption size."""
-    highlight: NotRequired[Rgba | None]
+    highlight: NotRequired[SolidColor | None]
     """The color `karaoke` and `pop` give the word being said. Default: the theme's accent."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
@@ -1451,9 +1451,9 @@ class NodeText(TypedDict):
     """Where in its area the picture or text lies. Default `center`."""
     at: NotRequired[float | None]
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    background: NotRequired[Rgba | None]
+    background: NotRequired[SolidColor | None]
     """A box of this color behind each line."""
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """Color. Default: the theme's text color."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
@@ -1511,7 +1511,7 @@ class NodeColor(TypedDict):
 
     at: NotRequired[float | None]
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """The color. Default: the theme's surface."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
@@ -1531,7 +1531,7 @@ class NodeCaptions(TypedDict):
 
     at: NotRequired[float | None]
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """Text color. Default: the theme's."""
     cues: NotRequired[list[Cue]]
     """Cues as given, in seconds from the node's start."""
@@ -1541,7 +1541,7 @@ class NodeCaptions(TypedDict):
     """A SubRip (`.srt`) or WebVTT (`.vtt`) file, read by the binding."""
     font_size: NotRequired[float | None]
     """Font size in pixels. Default: the theme's caption size."""
-    highlight: NotRequired[Rgba | None]
+    highlight: NotRequired[SolidColor | None]
     """The color `karaoke` and `pop` give the word being said. Default: the theme's accent."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
@@ -1889,7 +1889,7 @@ class NodeCounter(TypedDict):
     """Where in its area the number lies. Default `center`."""
     at: NotRequired[float | None]
     """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """Color. Default: the theme's text color."""
     count_duration: NotRequired[float | None]
     """Seconds the count takes from the node's start; it then holds `end`. Default: the node's
@@ -2064,7 +2064,7 @@ class PlacedChild(TypedDict):
     """A box child with item fields."""
 
     box: dict[str, Never]
-    """Item fields of an engine layout box, as it writes them."""
+    """Item fields of an engine layout box, as it writes them; lengths may be theme lengths."""
     node: Node
     """The node."""
 
@@ -2132,7 +2132,7 @@ SolidColor: TypeAlias = "ThemeColor | Rgba"
 class SpeakerLook(TypedDict):
     """How one speaker's captions look."""
 
-    color: NotRequired[Rgba | None]
+    color: NotRequired[SolidColor | None]
     """Their text color."""
     position: NotRequired[Vec2 | None]
     """Where their text's middle lies, as fractions of the canvas, `(0, 0)` top-left."""

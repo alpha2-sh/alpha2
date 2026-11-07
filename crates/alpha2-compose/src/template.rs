@@ -609,8 +609,8 @@ impl Binder<'_> {
         if let Some(name) = object.get("$if") {
             let name = name
                 .as_str()
-                .ok_or_else(|| error(path, "`$if` names a bool parameter"))?;
-            let branch = if scope.lookup(name).and_then(Value::as_bool).unwrap_or(false) {
+                .ok_or_else(|| error(path, "`$if` names a parameter"))?;
+            let branch = if is_set(scope.lookup(name)) {
                 "then"
             } else {
                 "else"
@@ -907,6 +907,19 @@ pub fn bind(document: &Value, data: &Value, options: &BindOptions) -> Result<Val
     Ok(bound)
 }
 
+/// Whether `$if` takes its `then`: a bool that is true, or any other value that is given and not
+/// empty.
+fn is_set(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(value)) => *value,
+        Some(Value::String(text)) => !text.is_empty(),
+        Some(Value::Array(items)) => !items.is_empty(),
+        Some(Value::Object(fields)) => !fields.is_empty(),
+        Some(Value::Number(_)) => true,
+    }
+}
+
 /// The JSON Schema (2020-12) of a template's data, with each parameter's title, description,
 /// default and checks a schema can say; file rules are in `x-alpha2-media`.
 ///
@@ -1138,7 +1151,7 @@ fn names(
         Value::Object(object) => {
             for (directive, want) in [
                 ("$param", None),
-                ("$if", Some("bool")),
+                ("$if", None),
                 ("$switch", Some("enum")),
                 ("$each", Some("list")),
             ] {

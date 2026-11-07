@@ -904,7 +904,12 @@ impl Context<'_> {
                 fade_in: 0,
                 fade_out: 0,
                 zoom: None,
-                content: Content::Color(color.color.unwrap_or(self.theme.surface)),
+                content: Content::Color(
+                    color
+                        .color
+                        .as_ref()
+                        .map_or(self.theme.surface, |color| self.solid(color)),
+                ),
             }))),
             Node::Captions(captions) => self.lower_captions(captions, path),
             Node::Layout(layout) => Ok(Prim::Visual(Box::new(Visual {
@@ -1358,13 +1363,18 @@ impl Context<'_> {
                 }
                 other => BoxContent::Foreign(self.lower(other, &at)?),
             };
-            children.push(BoxKid {
-                item: child.item(),
-                content,
-            });
+            let mut item = child.item();
+            for (field, value) in &mut item {
+                self.theme_lengths(value, &format!("{at}.box.{field}"))?;
+            }
+            children.push(BoxKid { item, content });
+        }
+        let mut css = node.css.clone();
+        for (field, value) in &mut css {
+            self.theme_lengths(value, &format!("{path}.{field}"))?;
         }
         Ok(BoxTree {
-            css: node.css.clone(),
+            css,
             background: node
                 .background
                 .as_ref()
@@ -1382,6 +1392,64 @@ impl Context<'_> {
                 .transpose()?,
             children,
         })
+    }
+
+    /// `value` with each `{"$theme": length, "scale"?: k}` in it replaced by that theme length,
+    /// a fraction of the picture's shorter side, times `k`.
+    fn theme_lengths(&self, value: &mut serde_json::Value, path: &str) -> Result<(), ComposeError> {
+        match value {
+            serde_json::Value::Object(object) if object.contains_key("$theme") => {
+                if let Some(field) = object
+                    .keys()
+                    .find(|field| !["$theme", "scale"].contains(&field.as_str()))
+                {
+                    return Err(Self::error(
+                        &format!("{path}.{field}"),
+                        "a theme length takes `$theme` and `scale`",
+                    ));
+                }
+                let token = object["$theme"].as_str().unwrap_or_default();
+                let length = match token {
+                    "margin" => self.theme.margin,
+                    "title_size" => self.theme.title_size,
+                    "subtitle_size" => self.theme.subtitle_size,
+                    "body_size" => self.theme.body_size,
+                    "caption_size" => self.theme.caption_size,
+                    "label_size" => self.theme.label_size,
+                    _ => {
+                        return Err(Self::error(
+                            &format!("{path}.$theme"),
+                            format!(
+                                "\"{token}\" is not a theme length; the lengths are margin, \
+                                 title_size, subtitle_size, body_size, caption_size, label_size"
+                            ),
+                        ));
+                    }
+                };
+                let scale = match object.get("scale") {
+                    None => 1.0,
+                    #[allow(clippy::cast_possible_truncation)]
+                    Some(scale) => scale
+                        .as_f64()
+                        .filter(|scale| scale.is_finite())
+                        .ok_or_else(|| Self::error(&format!("{path}.scale"), "scale is a number"))?
+                        as f32,
+                };
+                *value = serde_json::json!(length * scale);
+            }
+            serde_json::Value::Object(object) => {
+                for (field, inner) in object {
+                    self.theme_lengths(inner, &format!("{path}.{field}"))?;
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (index, inner) in items.iter_mut().enumerate() {
+                    self.theme_lengths(inner, &format!("{path}[{index}]"))?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     fn lower_effect(&mut self, effect: &EffectUse, path: &str) -> Result<EffectPrim, ComposeError> {
@@ -1700,7 +1768,10 @@ impl Context<'_> {
                     .font_family
                     .clone()
                     .or_else(|| self.theme.font_family.clone()),
-                color: counter.color.unwrap_or(self.theme.text),
+                color: counter
+                    .color
+                    .as_ref()
+                    .map_or(self.theme.text, |color| self.solid(color)),
                 strokes: counter.strokes.clone(),
                 shadows: counter.shadows.clone(),
             })),
@@ -1834,8 +1905,11 @@ impl Context<'_> {
                     .font_family
                     .clone()
                     .or_else(|| self.theme.font_family.clone()),
-                color: text.color.unwrap_or(self.theme.text),
-                background: text.background,
+                color: text
+                    .color
+                    .as_ref()
+                    .map_or(self.theme.text, |color| self.solid(color)),
+                background: text.background.as_ref().map(|color| self.solid(color)),
                 strokes: text.strokes.clone(),
                 shadows: text.shadows.clone(),
                 max_lines: text.max_lines,
@@ -1929,7 +2003,10 @@ impl Context<'_> {
         let mut style = TextStyle {
             font_family: self.theme.font_family.clone(),
             fill: Paint::Solid {
-                color: captions.color.unwrap_or(self.theme.text),
+                color: captions
+                    .color
+                    .as_ref()
+                    .map_or(self.theme.text, |color| self.solid(color)),
             },
             max_width: if vertical { 0.86 } else { 0.8 },
             anchor: alpha2_model::Vec2::new(0.5, 0.5),
@@ -1947,7 +2024,10 @@ impl Context<'_> {
             ));
             look = CaptionStyle::Bold;
         }
-        let highlight = captions.highlight.unwrap_or(self.theme.accent);
+        let highlight = captions
+            .highlight
+            .as_ref()
+            .map_or(self.theme.accent, |color| self.solid(color));
         let y = match look {
             CaptionStyle::Outline => {
                 style.strokes = outline(0.12);
@@ -1972,7 +2052,10 @@ impl Context<'_> {
                 position.unwrap_or(if vertical { 0.62 } else { 0.7 })
             }
             CaptionStyle::Bold | CaptionStyle::Karaoke | CaptionStyle::Pop => {
-                bold_look(&mut style, captions.color);
+                bold_look(
+                    &mut style,
+                    captions.color.as_ref().map(|color| self.solid(color)),
+                );
                 match look {
                     CaptionStyle::Karaoke => {
                         style.animators = [RunState::Spoken, RunState::Active]
@@ -2007,7 +2090,9 @@ impl Context<'_> {
             styles.insert(
                 name.clone(),
                 alpha2_model::TextStylePatch {
-                    fill: speaker.color.map(|color| Paint::Solid { color }),
+                    fill: speaker.color.as_ref().map(|color| Paint::Solid {
+                        color: self.solid(color),
+                    }),
                     position: speaker.position,
                     ..alpha2_model::TextStylePatch::default()
                 },

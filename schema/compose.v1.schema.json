@@ -261,7 +261,7 @@
         "color": {
           "anyOf": [
             {
-              "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
+              "$ref": "#/$defs/SolidColor"
             },
             {
               "type": "null"
@@ -302,7 +302,7 @@
         "highlight": {
           "anyOf": [
             {
-              "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
+              "$ref": "#/$defs/SolidColor"
             },
             {
               "type": "null"
@@ -6938,7 +6938,7 @@
             "background": {
               "anyOf": [
                 {
-                  "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
+                  "$ref": "#/$defs/SolidColor"
                 },
                 {
                   "type": "null"
@@ -6949,7 +6949,7 @@
             "color": {
               "anyOf": [
                 {
-                  "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
+                  "$ref": "#/$defs/SolidColor"
                 },
                 {
                   "type": "null"
@@ -7128,7 +7128,7 @@
             "color": {
               "anyOf": [
                 {
-                  "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
+                  "$ref": "#/$defs/SolidColor"
                 },
                 {
                   "type": "null"
@@ -7209,7 +7209,7 @@
             "color": {
               "anyOf": [
                 {
-                  "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
+                  "$ref": "#/$defs/SolidColor"
                 },
                 {
                   "type": "null"
@@ -7250,7 +7250,7 @@
             "highlight": {
               "anyOf": [
                 {
-                  "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
+                  "$ref": "#/$defs/SolidColor"
                 },
                 {
                   "type": "null"
@@ -8394,7 +8394,7 @@
             "color": {
               "anyOf": [
                 {
-                  "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
+                  "$ref": "#/$defs/SolidColor"
                 },
                 {
                   "type": "null"
@@ -9033,7 +9033,7 @@
       "properties": {
         "box": {
           "additionalProperties": true,
-          "description": "Item fields of an engine layout box, as it writes them.",
+          "description": "Item fields of an engine layout box, as it writes them; lengths may be theme lengths.",
           "type": "object"
         },
         "node": {
@@ -9266,7 +9266,7 @@
         "color": {
           "anyOf": [
             {
-              "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
+              "$ref": "#/$defs/SolidColor"
             },
             {
               "type": "null"

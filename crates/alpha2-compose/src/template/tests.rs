@@ -114,6 +114,31 @@ fn a_node_template_is_a_node_with_its_placement_and_theme_overrides_a_video_temp
 }
 
 #[test]
+fn if_takes_then_for_a_true_bool_or_a_value_that_is_given_and_not_empty() {
+    let template = json!({
+        "template": {"id": "acme/t", "version": 1, "kind": "node"},
+        "params": [{"name": "subtitle", "type": "text", "required": false}],
+        "node": {"type": "stack", "children": [
+            {"$if": "subtitle", "then": {"type": "text", "text": "{{subtitle}}"}},
+        ]},
+    });
+    let children = |data: Value| {
+        bind(&template, &data, &BindOptions::default()).expect("binds")["children"]
+            .as_array()
+            .expect("children")
+            .len()
+    };
+    assert_eq!(children(json!({"subtitle": "Hi"})), 1);
+    assert_eq!(children(json!({"subtitle": ""})), 0);
+    assert_eq!(children(json!({})), 0);
+    assert!(
+        lint(&template, None, &[])
+            .iter()
+            .all(|issue| issue.code != "param-type")
+    );
+}
+
+#[test]
 fn a_template_cannot_name_itself() {
     let looping = json!({
         "template": {"id": "acme/loop", "version": 1, "kind": "node"},
@@ -194,7 +219,7 @@ fn lint_finds_unknown_names_unused_parameters_and_literal_content() {
             {"type": "media", "path": "logo.png"},
             {"type": "color", "color": "#ff3366"},
             {"type": "color", "color": "#000000"},
-            {"$if": "flag", "then": {"type": "color"}},
+            {"$switch": "flag", "cases": {"a": {"type": "color"}}},
         ]},
     });
     let issues = lint(&template, None, &[]);

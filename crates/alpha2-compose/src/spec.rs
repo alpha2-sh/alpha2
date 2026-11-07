@@ -741,10 +741,10 @@ pub struct Text {
     pub font_family: Option<String>,
     /// Color. Default: the theme's text color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<Rgba>,
+    pub color: Option<SolidColor>,
     /// A box of this color behind each line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub background: Option<Rgba>,
+    pub background: Option<SolidColor>,
     /// Bands around the glyphs, innermost first, widths as fractions of the font size (as a
     /// text style's `strokes`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -992,7 +992,9 @@ pub struct BoxNode {
     /// Pixels kept clear inside the parent's area. A nested box places itself by its item fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inset: Option<Inset>,
-    /// The other container fields of an engine layout box, by name.
+    /// The other container fields of an engine layout box, by name. A length may be a theme
+    /// length, `{"$theme": "margin", "scale": 2}`: `margin`, `title_size`, `subtitle_size`,
+    /// `body_size`, `caption_size` or `label_size`, times `scale` (default 1).
     #[serde(flatten)]
     pub css: BTreeMap<String, serde_json::Value>,
 }
@@ -1036,7 +1038,7 @@ pub enum BoxChild {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct PlacedChild {
-    /// Item fields of an engine layout box, as it writes them.
+    /// Item fields of an engine layout box, as it writes them; lengths may be theme lengths.
     #[serde(rename = "box")]
     pub item: BTreeMap<String, serde_json::Value>,
     /// The node.
@@ -1331,7 +1333,7 @@ pub struct ColorFill {
     pub id: Option<String>,
     /// The color. Default: the theme's surface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<Rgba>,
+    pub color: Option<SolidColor>,
     /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<f64>,
@@ -1386,10 +1388,10 @@ pub struct Captions {
     pub font_size: Option<f32>,
     /// Text color. Default: the theme's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<Rgba>,
+    pub color: Option<SolidColor>,
     /// The color `karaoke` and `pop` give the word being said. Default: the theme's accent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub highlight: Option<Rgba>,
+    pub highlight: Option<SolidColor>,
     /// Each speaker's look, keyed by a WebVTT voice or a cue's `speaker`; it overrides the
     /// style.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1429,7 +1431,7 @@ pub struct Cue {
 pub struct SpeakerLook {
     /// Their text color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<Rgba>,
+    pub color: Option<SolidColor>,
     /// Where their text's middle lies, as fractions of the canvas, `(0, 0)` top-left.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<alpha2_model::Vec2>,
@@ -2063,7 +2065,7 @@ pub struct Counter {
     pub font_family: Option<String>,
     /// Color. Default: the theme's text color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<Rgba>,
+    pub color: Option<SolidColor>,
     /// Bands around the glyphs, as a text node's `strokes`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub strokes: Vec<TextStroke>,

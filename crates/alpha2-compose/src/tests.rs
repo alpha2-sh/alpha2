@@ -1278,6 +1278,30 @@ fn a_box_lays_out_text_shapes_and_colors_in_one_layout_in_its_area() {
 }
 
 #[test]
+fn box_lengths_may_be_theme_lengths_and_colors_theme_colors() {
+    let compiled = compile(&json!({
+        "canvas": {"width": 1000, "height": 500},
+        "duration": 2,
+        "body": {
+            "type": "box",
+            "padding": {"$theme": "margin", "scale": 2},
+            "children": [
+                {"box": {"height": {"$theme": "title_size"}}, "node": {"type": "text", "text": "T", "color": {"$theme": "accent"}}},
+            ],
+        },
+    }));
+    let card = &layout_roots(&compiled)[0]["children"][0];
+    let near = |value: &Value, want: f64| (value.as_f64().expect("a number") - want).abs() < 1e-6;
+    assert!(near(&card["padding"]["value"]["top"], 0.08), "{card}");
+    assert!(near(&card["children"][0]["height"]["value"], 0.1), "{card}");
+    let wrong = compile_error(&json!({
+        "duration": 1,
+        "body": {"type": "box", "gap": {"$theme": "accent"}, "children": []},
+    }));
+    assert!(wrong.starts_with("spec.body.gap.$theme:"), "{wrong}");
+}
+
+#[test]
 fn a_box_places_a_picture_in_its_measured_box_between_the_layout_under_and_over_it() {
     let compiled = compile_with_font(&json!({
         "canvas": {"width": 1000, "height": 500},
