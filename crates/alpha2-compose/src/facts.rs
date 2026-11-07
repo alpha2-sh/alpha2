@@ -138,6 +138,25 @@ fn walk(node: &Node, found: &mut Requirements) {
             .iter()
             .for_each(|child| walk(child, found)),
         Node::Stack(stack) => stack.children.iter().for_each(|child| walk(child, found)),
+        Node::Group(group) => {
+            group.children.iter().for_each(|child| walk(child, found));
+            for effect in &group.effects {
+                let Some(spec) =
+                    alpha2_model::builtin_effect(&crate::lower::effect_id(&effect.effect))
+                else {
+                    continue;
+                };
+                for input in spec
+                    .inputs
+                    .iter()
+                    .filter_map(|name| effect.params.get(name))
+                {
+                    if let Ok(node) = serde_json::from_value::<Node>(input.clone()) {
+                        walk(&node, found);
+                    }
+                }
+            }
+        }
         Node::Grid(grid) => grid.children.iter().for_each(|child| walk(child, found)),
         Node::Media(media) => add_media(found, &media.path, media.kind),
         Node::Audio(audio) => add_media(found, &audio.path, Some(FileKind::Audio)),

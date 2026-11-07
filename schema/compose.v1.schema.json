@@ -133,6 +133,29 @@
       ],
       "description": "A value over a node's time: a constant, a ramp from one value to another, or keys. Times are\nseconds from the node's start."
     },
+    "Anim2": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Ramp2",
+          "description": "From `from` to `to`."
+        },
+        {
+          "$ref": "#/$defs/Keys2",
+          "description": "Through keyed values."
+        },
+        {
+          "description": "One value throughout.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      ],
+      "description": "A value over a node's time: a constant, a ramp from one value to another, or keys. Times are\nseconds from the node's start."
+    },
     "AnimatedPoint": {
       "description": "A position that can move along curves between its keyframes.\n\nIts JSON is an `Animated<Vec2>` plus optional spatial tangents per keyframe. With them,\nthe value travels the cubic Bezier through this keyframe's `out_tangent` and the next's\n`in_tangent`, at the speed its timing curve sets along the arc length. Without them it\nmoves in a straight line.",
       "oneOf": [
@@ -2004,6 +2027,30 @@
       "minLength": 1,
       "type": "string"
     },
+    "EffectUse": {
+      "additionalProperties": true,
+      "description": "One effect: a built-in by its short name (`gaussian-blur`) or any effect by its full id, with\nits parameters by name. A parameter is a constant, a ramp or keys; a named image input is a\nnode.",
+      "properties": {
+        "effect": {
+          "description": "The effect: a built-in's short name or a full id with its dots.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The version a full id names. Default: the built-in's, else 1.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "effect"
+      ],
+      "type": "object"
+    },
     "EffectValue": {
       "description": "Serializable value supplied to one runtime effect parameter.",
       "oneOf": [
@@ -2573,6 +2620,59 @@
       ],
       "description": "Where a grid item lies on one axis, as CSS writes it: 2, \"1 / 3\", \"span 2\", \"2 / span 3\", \"auto\". Lines count from 1, or from -1 at the end."
     },
+    "GroupTransform": {
+      "additionalProperties": false,
+      "description": "A group's movement, about `anchor`.",
+      "properties": {
+        "anchor": {
+          "description": "The point it scales and turns about, `[0, 0]` the area's top left to `[1, 1]` its bottom\nright. Default `[0.5, 0.5]`.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Anim2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Offset in pixels, `[x, y]`. Default `[0, 0]`."
+        },
+        "rotation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Anim"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Clockwise turn in degrees. Default 0."
+        },
+        "scale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Anim"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Size multiple. Default 1."
+        }
+      },
+      "type": "object"
+    },
     "Inset": {
       "anyOf": [
         {
@@ -2754,6 +2854,43 @@
           "description": "The value.",
           "format": "float",
           "type": "number"
+        }
+      },
+      "required": [
+        "t",
+        "v"
+      ],
+      "type": "object"
+    },
+    "Key2": {
+      "additionalProperties": false,
+      "description": "One keyed value.",
+      "properties": {
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EasingChoice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The timing curve to the next key. Default linear."
+        },
+        "t": {
+          "description": "Seconds from the node's start.",
+          "format": "double",
+          "type": "number"
+        },
+        "v": {
+          "description": "The value.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
         }
       },
       "required": [
@@ -3035,6 +3172,23 @@
           "description": "The keys, in increasing time; at least one.",
           "items": {
             "$ref": "#/$defs/Key"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    },
+    "Keys2": {
+      "additionalProperties": false,
+      "description": "Values at times; the value holds before the first and after the last.",
+      "properties": {
+        "keys": {
+          "description": "The keys, in increasing time; at least one.",
+          "items": {
+            "$ref": "#/$defs/Key2"
           },
           "type": "array"
         }
@@ -6469,6 +6623,124 @@
             "end"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Children drawn together into one picture, which then takes an opacity, a blend mode,\neffects and a transform as one layer.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "blend": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ClipBlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How the whole meets what is under it. Default `normal`."
+            },
+            "children": {
+              "description": "The children, each over the ones before, placed in the group's area.",
+              "items": {
+                "$ref": "#/$defs/Node"
+              },
+              "type": "array"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the longest child's.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "effects": {
+              "description": "Effects on the whole, in order, before its transform.",
+              "items": {
+                "$ref": "#/$defs/EffectUse"
+              },
+              "type": "array"
+            },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "inset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Inset"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pixels kept clear inside the parent's area: the group's area."
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opacity of the whole, 0..=1. Default 1."
+            },
+            "transform": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/GroupTransform"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Moves, scales or turns the whole."
+            },
+            "type": {
+              "const": "group",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "children"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -7401,6 +7673,64 @@
           "description": "The value at the end.",
           "format": "float",
           "type": "number"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "Ramp2": {
+      "additionalProperties": false,
+      "description": "A change from one value to another; before it the value is `from`, after it `to`.",
+      "properties": {
+        "at": {
+          "description": "When it starts. Default 0.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "duration": {
+          "description": "How long it lasts. Default: to the node's end.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "ease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EasingChoice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The timing curve. Default linear."
+        },
+        "from": {
+          "description": "The value at the start.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "to": {
+          "description": "The value at the end.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
         }
       },
       "required": [

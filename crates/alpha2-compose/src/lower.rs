@@ -1,8 +1,10 @@
 //! Lowers every spec node, components included, to the few primitives the emitter places
 //! ([`Prim`]), with theme defaults filled in, times in ticks, and caption files parsed.
 
+use std::collections::BTreeMap;
+
 use alpha2_model::{
-    CaptionCue, CubicBezier, Easing, LayoutNode, Paint, Rgba, RunState, RunTime,
+    CaptionCue, CubicBezier, Easing, EffectValue, LayoutNode, Paint, Rgba, RunState, RunTime,
     TextContent as CueText, TextRun, TextShadow, TextStroke, TextStyle, TextUnit,
 };
 use alpha2_time::MediaTime;
@@ -11,9 +13,9 @@ use crate::ComposeError;
 use crate::compile::Context;
 use crate::spec::{
     Align, Anim, Audio, CaptionStyle, Captions, ComparisonGrid, Counter, Cue, Direction,
-    EasingChoice, Ellipsis, EndCard, FileKind, Fit, GridLength, Inset, LowerThird, Media,
-    MediaItem, Motion, MotionKind, MusicBed, Node, Ramp, Raw, RevealKind, RevealUnit, Slideshow,
-    Text, TextRole, Title, Transition, TransitionChoice,
+    EasingChoice, EffectUse, Ellipsis, EndCard, FileKind, Fit, GridLength, Group, Inset, Key, Keys,
+    LowerThird, Media, MediaItem, Motion, MotionKind, MusicBed, Node, Ramp, Raw, RevealKind,
+    RevealUnit, Slideshow, Text, TextRole, Title, Transition, TransitionChoice,
 };
 
 /// A node, ready to place.
@@ -21,6 +23,7 @@ use crate::spec::{
 pub(crate) enum Prim {
     Sequence(SequencePrim),
     Stack(StackPrim),
+    Group(Box<GroupPrim>),
     Visual(Box<Visual>),
     Captions(Box<CaptionsPrim>),
     Audio(Box<AudioPrim>),
@@ -72,6 +75,37 @@ pub(crate) struct StackPrim {
     pub inset: [f32; 4],
     /// Children in grid cells rather than over each other.
     pub grid: Option<GridLayout>,
+}
+
+/// Children composited into one picture before it meets what is under it.
+#[derive(Clone, Debug)]
+pub(crate) struct GroupPrim {
+    /// The children, the group's name, time and area.
+    pub stack: StackPrim,
+    pub opacity: Option<AnimPrim<f32>>,
+    pub blend: alpha2_model::ClipBlendMode,
+    pub effects: Vec<EffectPrim>,
+    pub transform: TransformPrim,
+}
+
+/// One effect on a group, checked against its definition when it is a built-in.
+#[derive(Clone, Debug)]
+pub(crate) struct EffectPrim {
+    pub path: String,
+    pub id: String,
+    pub version: u32,
+    pub params: BTreeMap<String, AnimPrim<EffectValue>>,
+    /// Named image inputs, as nodes drawn in the group's area and time.
+    pub inputs: BTreeMap<String, Prim>,
+}
+
+/// A group's movement; positions in pixels, the anchor in its area's unit square.
+#[derive(Clone, Debug)]
+pub(crate) struct TransformPrim {
+    pub position: Option<AnimPrim<[f32; 2]>>,
+    pub scale: Option<AnimPrim<f32>>,
+    pub rotation: Option<AnimPrim<f32>>,
+    pub anchor: [f32; 2],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -239,6 +273,7 @@ impl Prim {
         match self {
             Self::Sequence(sequence) => &sequence.head,
             Self::Stack(stack) => &stack.head,
+            Self::Group(group) => &group.stack.head,
             Self::Visual(visual) => &visual.head,
             Self::Captions(captions) => &captions.head,
             Self::Audio(audio) => &audio.head,
@@ -250,6 +285,7 @@ impl Prim {
         match self {
             Self::Sequence(sequence) => &mut sequence.head,
             Self::Stack(stack) => &mut stack.head,
+            Self::Group(group) => &mut group.stack.head,
             Self::Visual(visual) => &mut visual.head,
             Self::Captions(captions) => &mut captions.head,
             Self::Audio(audio) => &mut audio.head,
@@ -292,6 +328,7 @@ fn motion_fields(node: &Node) -> (Option<&Motion>, Option<&Motion>, Option<f64>)
         Node::EndCard(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Logo(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Counter(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Group(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Captions(_)
         | Node::Audio(_)
         | Node::Raw(_)
@@ -654,6 +691,7 @@ impl Context<'_> {
                 }))
             }
             Node::Media(media) => self.lower_media(media, path),
+            Node::Group(group) => self.lower_group(group, path),
             Node::Text(text) => self.lower_text(text, path),
             Node::Color(color) => Ok(Prim::Visual(Box::new(Visual {
                 head: Self::head(path, color.id.as_ref(), color.at, color.duration)?,
@@ -758,6 +796,156 @@ impl Context<'_> {
             Node::MusicBed(music) => self.lower_music_bed(music, path),
             Node::Counter(counter) => self.lower_counter(counter, path),
         }
+    }
+
+    fn lower_group(&mut self, group: &Group, path: &str) -> Result<Prim, ComposeError> {
+        let opacity = group
+            .opacity
+            .as_ref()
+            .map(|opacity| {
+                Self::anim(&format!("{path}.opacity"), opacity, |value| {
+                    (0.0..=1.0).contains(value)
+                })
+            })
+            .transpose()?;
+        let transform = group.transform.clone().unwrap_or_default();
+        let at = format!("{path}.transform");
+        let transform = TransformPrim {
+            position: transform
+                .position
+                .as_ref()
+                .map(|position| {
+                    Self::anim(&format!("{at}.position"), position, |value| {
+                        value.iter().all(|part| part.is_finite())
+                    })
+                })
+                .transpose()?,
+            scale: transform
+                .scale
+                .as_ref()
+                .map(|scale| {
+                    Self::anim(&format!("{at}.scale"), scale, |value| {
+                        value.is_finite() && *value > 0.0
+                    })
+                })
+                .transpose()?,
+            rotation: transform
+                .rotation
+                .as_ref()
+                .map(|rotation| {
+                    Self::anim(&format!("{at}.rotation"), rotation, |value| {
+                        value.is_finite()
+                    })
+                })
+                .transpose()?,
+            anchor: match transform.anchor {
+                Some(anchor) if anchor.iter().all(|part| part.is_finite()) => anchor,
+                Some(_) => return Err(Self::error(&format!("{at}.anchor"), "an anchor is finite")),
+                None => [0.5, 0.5],
+            },
+        };
+        let effects = group
+            .effects
+            .iter()
+            .enumerate()
+            .map(|(index, effect)| self.lower_effect(effect, &format!("{path}.effects[{index}]")))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Prim::Group(Box::new(GroupPrim {
+            stack: StackPrim {
+                head: Self::head(path, group.id.as_ref(), group.at, group.duration)?,
+                children: self.lower_children(&group.children, &format!("{path}.children"))?,
+                inset: inset_sides(group.inset),
+                grid: None,
+            },
+            opacity,
+            blend: group.blend.unwrap_or_default(),
+            effects,
+            transform,
+        })))
+    }
+
+    fn lower_effect(&mut self, effect: &EffectUse, path: &str) -> Result<EffectPrim, ComposeError> {
+        let id = effect_id(&effect.effect);
+        let spec = alpha2_model::builtin_effect(&id);
+        if spec.is_none() && id.starts_with(alpha2_model::BUILTIN_EFFECT_PREFIX) {
+            return Err(Self::error(
+                &format!("{path}.effect"),
+                format!(
+                    "\"{}\" is not a built-in effect; schema/effects.v1.json lists them",
+                    effect.effect
+                ),
+            ));
+        }
+        if spec.is_some_and(|spec| spec.kind != alpha2_model::EffectKind::Effect) {
+            return Err(Self::error(
+                &format!("{path}.effect"),
+                format!("\"{}\" is a transition, not an effect", effect.effect),
+            ));
+        }
+        let mut params = BTreeMap::new();
+        let mut inputs = BTreeMap::new();
+        for (name, value) in &effect.params {
+            let at = format!("{path}.{name}");
+            if spec.is_some_and(|spec| spec.inputs.contains(name)) {
+                let node: Node = crate::de::from_value(value.clone()).map_err(|error| {
+                    Self::error(&crate::de::join(&at, &error.path), error.message)
+                })?;
+                inputs.insert(name.clone(), self.lower(&node, &at)?);
+                continue;
+            }
+            let param = match spec {
+                Some(spec) => Some(spec.param(name).ok_or_else(|| {
+                    let names = spec
+                        .params
+                        .iter()
+                        .map(|param| param.name.as_str())
+                        .chain(spec.inputs.iter().map(String::as_str))
+                        .collect::<Vec<_>>();
+                    Self::error(
+                        &at,
+                        format!(
+                            "{} has no parameter {name}; it takes {}",
+                            effect.effect,
+                            if names.is_empty() {
+                                "none".to_owned()
+                            } else {
+                                names.join(", ")
+                            }
+                        ),
+                    )
+                })?),
+                None => None,
+            };
+            let anim: Anim<serde_json::Value> = crate::de::from_value(value.clone())
+                .map_err(|error| Self::error(&at, error.message))?;
+            let typed = map_anim(&anim, |value| effect_value(param, value))
+                .ok_or_else(|| Self::error(&at, "a value of the parameter's type"))?;
+            let lowered = Self::anim(&at, &typed, |value| {
+                param.is_none_or(|param| param.accepts(value))
+            })?;
+            params.insert(name.clone(), lowered);
+        }
+        if let Some(spec) = spec
+            && let Some(missing) = spec.inputs.iter().find(|name| !inputs.contains_key(*name))
+        {
+            return Err(Self::error(
+                path,
+                format!(
+                    "{} needs its image input {missing} as a node",
+                    effect.effect
+                ),
+            ));
+        }
+        Ok(EffectPrim {
+            path: path.to_owned(),
+            version: effect
+                .version
+                .or_else(|| spec.map(|spec| spec.version))
+                .unwrap_or(1),
+            id,
+            params,
+            inputs,
+        })
     }
 
     fn lower_children(&mut self, children: &[Node], path: &str) -> Result<Vec<Prim>, ComposeError> {
@@ -1997,4 +2185,90 @@ pub(crate) fn clip_runs(cue: &mut CaptionCue) {
             });
         }
     }
+}
+
+/// A built-in's full id from its short name; a name with a dot is already an id.
+pub(crate) fn effect_id(name: &str) -> String {
+    if name.contains('.') {
+        name.to_owned()
+    } else {
+        format!("{}effect.{name}", alpha2_model::BUILTIN_EFFECT_PREFIX)
+    }
+}
+
+/// `anim` with each value mapped by `map`, if every value maps.
+fn map_anim<T, U>(anim: &Anim<T>, map: impl Fn(&T) -> Option<U>) -> Option<Anim<U>> {
+    Some(match anim {
+        Anim::Value(value) => Anim::Value(map(value)?),
+        Anim::Ramp(ramp) => Anim::Ramp(Ramp {
+            from: map(&ramp.from)?,
+            to: map(&ramp.to)?,
+            ease: ramp.ease.clone(),
+            at: ramp.at,
+            duration: ramp.duration,
+        }),
+        Anim::Keys(keys) => Anim::Keys(Keys {
+            keys: keys
+                .keys
+                .iter()
+                .map(|key| {
+                    Some(Key {
+                        t: key.t,
+                        v: map(&key.v)?,
+                        ease: key.ease.clone(),
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?,
+        }),
+    })
+}
+
+/// A parameter value from what a spec writes for it: a number, a list of numbers, a color as hex
+/// or the color object, a boolean, or an enum choice by name or index. Without a definition the
+/// value's JSON type decides.
+#[allow(clippy::cast_possible_truncation)]
+fn effect_value(
+    param: Option<&alpha2_model::EffectParamSpec>,
+    value: &serde_json::Value,
+) -> Option<EffectValue> {
+    use alpha2_model::EffectParamType as Type;
+    let numbers = |count: usize| {
+        let values = value.as_array()?;
+        (values.len() == count)
+            .then(|| {
+                values
+                    .iter()
+                    .map(|value| value.as_f64().map(|value| value as f32))
+            })?
+            .collect::<Option<Vec<f32>>>()
+    };
+    let Some(param) = param else {
+        return match value {
+            serde_json::Value::Number(number) => Some(EffectValue::Float(number.as_f64()? as f32)),
+            serde_json::Value::Bool(flag) => Some(EffectValue::Bool(*flag)),
+            serde_json::Value::Array(values) if values.len() == 2 => {
+                Some(EffectValue::Vec2(numbers(2)?.try_into().ok()?))
+            }
+            serde_json::Value::Array(values) if values.len() == 4 => {
+                Some(EffectValue::Vec4(numbers(4)?.try_into().ok()?))
+            }
+            _ => None,
+        };
+    };
+    Some(match param.param_type {
+        Type::Float => EffectValue::Float(value.as_f64()? as f32),
+        Type::Vec2 => EffectValue::Vec2(numbers(2)?.try_into().ok()?),
+        Type::Vec4 => EffectValue::Vec4(numbers(4)?.try_into().ok()?),
+        Type::Color => {
+            let color: Rgba = serde_json::from_value(value.clone()).ok()?;
+            EffectValue::Color([color.red, color.green, color.blue, color.alpha])
+        }
+        Type::Enum => EffectValue::Enum(match value {
+            serde_json::Value::String(name) => {
+                u32::try_from(param.enum_values.iter().position(|choice| choice == name)?).ok()?
+            }
+            other => u32::try_from(other.as_u64()?).ok()?,
+        }),
+        Type::Bool => EffectValue::Bool(value.as_bool()?),
+    })
 }

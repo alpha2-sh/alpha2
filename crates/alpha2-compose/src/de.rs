@@ -115,6 +115,7 @@ fn node(mut value: Value) -> Result<Node, Located> {
         "logo" => from_value(value).map(Node::Logo),
         "music_bed" => from_value(value).map(Node::MusicBed),
         "counter" => from_value(value).map(Node::Counter),
+        "group" => from_value(value).map(Node::Group),
         other => Err(Located {
             path: "type".to_owned(),
             message: format!(
@@ -126,7 +127,7 @@ fn node(mut value: Value) -> Result<Node, Located> {
 }
 
 /// Every node type, as specs write them.
-pub(crate) const NODE_TYPES: [&str; 21] = [
+pub(crate) const NODE_TYPES: [&str; 22] = [
     "sequence",
     "stack",
     "grid",
@@ -148,6 +149,7 @@ pub(crate) const NODE_TYPES: [&str; 21] = [
     "logo",
     "music_bed",
     "counter",
+    "group",
 ];
 
 impl<'de> Deserialize<'de> for Node {

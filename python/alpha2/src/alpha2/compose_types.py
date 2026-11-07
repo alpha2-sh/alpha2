@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Generic, Literal, Never, NotRequired, TypeAlias, TypeVar, TypedDict
+from typing import Any, Generic, Literal, Never, NotRequired, TypeAlias, TypeVar, TypedDict
 
 from .types import (
     AlignContent,
@@ -210,6 +210,12 @@ seconds from the node's start.
 """
 
 
+Anim2: TypeAlias = "Ramp2 | Keys2 | list[float]"
+"""A value over a node's time: a constant, a ramp from one value to another, or keys. Times are
+seconds from the node's start.
+"""
+
+
 Canvas: TypeAlias = "str | CustomCanvas"
 """The canvas: a preset name, or its parts."""
 
@@ -304,6 +310,13 @@ project easing object.
 """
 
 
+EffectUse: TypeAlias = dict[str, Any]
+"""One effect: a built-in by its short name (`gaussian-blur`) or any effect by its full id, with
+its parameters by name. A parameter is a constant, a ramp or keys; a named image input is a
+node.
+"""
+
+
 Ellipsis: TypeAlias = "bool | str"
 """What ends a cut line: an ellipsis or nothing (`true`, `false`), or a text."""
 
@@ -324,6 +337,21 @@ GridLength: TypeAlias = Literal["shortest", "longest_freeze", "longest_loop"]
 """How long a grid of clips of different lengths lasts."""
 
 
+class GroupTransform(TypedDict):
+    """A group's movement, about `anchor`."""
+
+    anchor: NotRequired[list[float] | None]
+    """The point it scales and turns about, `[0, 0]` the area's top left to `[1, 1]` its bottom
+    right. Default `[0.5, 0.5]`.
+    """
+    position: NotRequired[Anim2 | None]
+    """Offset in pixels, `[x, y]`. Default `[0, 0]`."""
+    rotation: NotRequired[Anim | None]
+    """Clockwise turn in degrees. Default 0."""
+    scale: NotRequired[Anim | None]
+    """Size multiple. Default 1."""
+
+
 Inset: TypeAlias = "float | list[float]"
 """Space kept clear inside an area."""
 
@@ -339,10 +367,28 @@ class Key(TypedDict):
     """The value."""
 
 
+class Key2(TypedDict):
+    """One keyed value."""
+
+    ease: NotRequired[EasingChoice | None]
+    """The timing curve to the next key. Default linear."""
+    t: float
+    """Seconds from the node's start."""
+    v: list[float]
+    """The value."""
+
+
 class Keys(TypedDict):
     """Values at times; the value holds before the first and after the last."""
 
     keys: list[Key]
+    """The keys, in increasing time; at least one."""
+
+
+class Keys2(TypedDict):
+    """Values at times; the value holds before the first and after the last."""
+
+    keys: list[Key2]
     """The keys, in increasing time; at least one."""
 
 
@@ -1018,7 +1064,37 @@ class NodeCounter(TypedDict):
     type: Literal["counter"]
 
 
-Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed | NodeCounter"
+class NodeGroup(TypedDict):
+    """Children drawn together into one picture, which then takes an opacity, a blend mode,
+    effects and a transform as one layer.
+    """
+
+    at: NotRequired[float | None]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    blend: NotRequired[ClipBlendMode | None]
+    """How the whole meets what is under it. Default `normal`."""
+    children: list[Node]
+    """The children, each over the ones before, placed in the group's area."""
+    duration: NotRequired[float | None]
+    """Length in seconds. Default: the longest child's."""
+    effects: NotRequired[list[EffectUse]]
+    """Effects on the whole, in order, before its transform."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
+    id: NotRequired[str | None]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset | None]
+    """Pixels kept clear inside the parent's area: the group's area."""
+    opacity: NotRequired[Anim | None]
+    """Opacity of the whole, 0..=1. Default 1."""
+    transform: NotRequired[GroupTransform | None]
+    """Moves, scales or turns the whole."""
+    type: Literal["group"]
+
+
+Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed | NodeCounter | NodeGroup"
 """One part of a video."""
 
 
@@ -1048,6 +1124,19 @@ Ramp = TypedDict(
     },
 )
 Ramp.__doc__ = "A change from one value to another; before it the value is `from`, after it `to`."
+
+
+Ramp2 = TypedDict(
+    "Ramp2",
+    {
+        "at": NotRequired[float | None],
+        "duration": NotRequired[float | None],
+        "ease": NotRequired[EasingChoice | None],
+        "from": list[float],
+        "to": list[float],
+    },
+)
+Ramp2.__doc__ = "A change from one value to another; before it the value is `from`, after it `to`."
 
 
 class Reveal(TypedDict):

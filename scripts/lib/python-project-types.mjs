@@ -370,6 +370,19 @@ function pythonTypes(
   function declareDef(out, name, node, generic) {
     const r = renderer(out, generic);
     const doc = schemaDoc({ description: node.description });
+    // An object that also takes fields it does not name (an effect's parameters) has no
+    // TypedDict; it is a plain mapping.
+    if (
+      node.type === "object" &&
+      node.properties !== undefined &&
+      node.additionalProperties !== false
+    ) {
+      out.declare(
+        name,
+        `${name}: TypeAlias = dict[str, Any]\n${docstring(doc, "")}`,
+      );
+      return;
+    }
     if (node.type === "object" && node.properties !== undefined) {
       r.declareClass(name, node);
       return;
@@ -480,10 +493,16 @@ function pythonTypes(
     imported.length === 0
       ? ""
       : `from ${sharedModule} import (\n${imported.map((name) => `    ${name},`).join("\n")}\n)\n\n`;
+  // `Any` only for open mappings, so a module without one imports nothing unused.
+  const typing = [...out.declared.values()].some((text) =>
+    text.includes("dict[str, Any]"),
+  )
+    ? ["Any", ...TYPING_NAMES]
+    : TYPING_NAMES;
   const preamble =
     header +
     "\nfrom __future__ import annotations\n\n" +
-    `from typing import ${TYPING_NAMES.join(", ")}\n\n` +
+    `from typing import ${typing.join(", ")}\n\n` +
     imports +
     'T = TypeVar("T")\n';
   return [

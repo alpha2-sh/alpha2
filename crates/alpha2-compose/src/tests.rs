@@ -824,3 +824,178 @@ fn animated_values_are_checked() {
     assert!(error(json!({"from": 1, "to": 2, "ease": "bounce"})).contains("ease"));
     assert!(error(json!([1, 2])).contains("zoom"));
 }
+
+fn composition<'a>(project: &'a Value, clip: &Value) -> &'a Value {
+    let source = project["project"]["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .find(|source| source["id"] == clip["source_id"])
+        .expect("the clip's source");
+    project["project"]["compositions"]
+        .as_array()
+        .expect("compositions")
+        .iter()
+        .find(|composition| composition["id"] == source["composition"])
+        .expect("the source's composition")
+}
+
+fn ops(composition: &Value) -> Vec<String> {
+    composition["nodes"]
+        .as_array()
+        .expect("nodes")
+        .iter()
+        .map(|node| node["op"]["type"].as_str().expect("op").to_owned())
+        .collect()
+}
+
+#[test]
+fn a_group_composites_its_children_into_one_layer_with_effects_and_a_transform() {
+    let compiled = compile(&json!({
+        "canvas": "youtube-1080p",
+        "duration": 4,
+        "body": {
+            "type": "group",
+            "inset": 100,
+            "opacity": {"from": 0.5, "to": 1},
+            "blend": "screen",
+            "effects": [{"effect": "gaussian-blur", "radius": 0.1}],
+            "transform": {"scale": {"from": 1, "to": 1.2}, "rotation": 5},
+            "children": [
+                {"type": "media", "path": "logo.png", "fit": "cover"},
+                {"type": "text", "text": "Hello", "at": 1, "duration": 2},
+            ],
+        },
+    }));
+    let clip = &tracks(&compiled)[0]["clips"][0];
+    assert_eq!(clip["blend_mode"], "screen");
+    let group = composition(&compiled, clip);
+    let ops = ops(group);
+    assert_eq!(ops.iter().filter(|op| *op == "media").count(), 2, "{ops:?}");
+    assert!(ops.contains(&"merge".to_owned()) && ops.contains(&"effect".to_owned()));
+    let output = group["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["id"] == group["output"])
+        .expect("the output node");
+    assert_eq!(output["op"]["type"], "transform");
+    assert_eq!(output["op"]["transform"]["opacity"]["mode"], "keyframes");
+    assert_eq!(output["op"]["transform"]["rotation_degrees"]["value"], 5.0);
+    // The text shows only from 1 s to 3 s of the group.
+    let text = group["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|node| node["op"]["type"] == "transform" && node["id"] != group["output"])
+        .nth(1)
+        .expect("the text's transform");
+    let times = text["op"]["transform"]["opacity"]["keyframes"]
+        .as_array()
+        .expect("windowed opacity")
+        .iter()
+        .map(|key| key["time"].as_i64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(times, [0, SECOND, 3 * SECOND]);
+}
+
+#[test]
+fn a_video_in_a_group_keeps_its_sound_outside_the_picture() {
+    let compiled = compile(&json!({
+        "duration": 3,
+        "body": {"type": "group", "children": [{"type": "media", "path": "talk.mp4"}]},
+    }));
+    let audio = tracks(&compiled)
+        .iter()
+        .find(|track| track["kind"] == "audio")
+        .expect("an audio track");
+    let source = &audio["clips"][0]["source_id"];
+    let sources = compiled["project"]["sources"].as_array().unwrap();
+    let audio_source = sources.iter().find(|s| &s["id"] == source).unwrap();
+    assert_eq!(audio_source["kind"], "audio");
+    assert_eq!(audio_source["locator"], "talk.mp4");
+}
+
+#[test]
+fn a_group_refuses_what_one_picture_over_one_time_cannot_hold() {
+    let late_video = compile_error(&json!({
+        "duration": 4,
+        "body": {"type": "group", "children": [{"type": "media", "path": "talk.mp4", "at": 1}]},
+    }));
+    assert!(late_video.contains("whole time"), "{late_video}");
+    let transition = compile_error(&json!({
+        "body": {"type": "group", "children": [{
+            "type": "sequence",
+            "transition": {"type": "crossfade", "duration": 0.5},
+            "children": [
+                {"type": "color", "color": "#ff0000", "duration": 1},
+                {"type": "color", "color": "#0000ff", "duration": 1},
+            ],
+        }]},
+    }));
+    assert!(transition.contains("no transitions"), "{transition}");
+    let unknown = compile_error(&json!({
+        "duration": 1,
+        "body": {"type": "group", "effects": [{"effect": "no-such-effect"}], "children": [
+            {"type": "color", "color": "#ff0000"},
+        ]},
+    }));
+    assert!(unknown.contains("not a built-in effect"), "{unknown}");
+    let param = compile_error(&json!({
+        "duration": 1,
+        "body": {"type": "group", "effects": [{"effect": "gaussian-blur", "strength": 1}], "children": [
+            {"type": "color", "color": "#ff0000"},
+        ]},
+    }));
+    assert!(param.contains("radius"), "{param}");
+    let range = compile_error(&json!({
+        "duration": 1,
+        "body": {"type": "group", "effects": [{"effect": "gaussian-blur", "radius": 4}], "children": [
+            {"type": "color", "color": "#ff0000"},
+        ]},
+    }));
+    assert!(range.contains("radius"), "{range}");
+    let transition_effect = compile_error(&json!({
+        "duration": 1,
+        "body": {"type": "group", "effects": [{"effect": "alpha2.transition.fade"}], "children": [
+            {"type": "color", "color": "#ff0000"},
+        ]},
+    }));
+    assert!(
+        transition_effect.contains("transition"),
+        "{transition_effect}"
+    );
+}
+
+#[test]
+fn an_effect_takes_a_node_as_its_named_image_input() {
+    let compiled = compile(&json!({
+        "duration": 2,
+        "body": {
+            "type": "group",
+            "effects": [{
+                "effect": "displacement-map",
+                "map": {"type": "color", "color": "#808080"},
+                "amount_x": 0.01,
+                "channel_x": "red",
+            }],
+            "children": [{"type": "media", "path": "logo.png"}],
+        },
+    }));
+    let group = composition(&compiled, &tracks(&compiled)[0]["clips"][0]);
+    let effect = group["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["op"]["type"] == "effect")
+        .expect("the effect");
+    assert_eq!(
+        effect["op"]["effect"]["id"],
+        "alpha2.effect.displacement-map"
+    );
+    assert!(effect["op"]["inputs"]["map"].is_string());
+    assert_eq!(
+        effect["op"]["effect"]["params"]["channel_x"]["value"]["type"],
+        "enum"
+    );
+}

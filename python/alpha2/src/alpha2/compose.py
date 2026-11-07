@@ -63,9 +63,11 @@ __all__ = [
     "Compiled",
     "Counter",
     "Crossfade",
+    "Effect",
     "EndCard",
     "Fade",
     "Grid",
+    "Group",
     "Keys",
     "Layout",
     "Logo",
@@ -170,6 +172,45 @@ def Stack(
         duration=duration,
         inset=inset,
     )
+
+
+def Group(
+    children: Iterable[Node],
+    *,
+    opacity: float | Mapping[str, Any] | None = None,
+    blend: str | None = None,
+    effects: abc.Sequence[Mapping[str, Any]] | None = None,
+    transform: Mapping[str, Any] | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+    inset: float | abc.Sequence[float] | None = None,
+) -> Node:
+    """Children drawn together into one picture that then takes ``opacity``, ``blend``,
+    ``effects`` (:func:`Effect`) and ``transform`` (``position``, ``scale``, ``rotation``,
+    ``anchor``) as one layer. A video in it plays over the group's whole time."""
+    return _node(
+        "group",
+        children=list(children),
+        opacity=opacity,
+        blend=blend,
+        effects=None if effects is None else [dict(effect) for effect in effects],
+        transform=None if transform is None else dict(transform),
+        enter=enter,
+        exit=exit,
+        id=id,
+        at=at,
+        duration=duration,
+        inset=inset,
+    )
+
+
+def Effect(effect: str, /, **params: Any) -> dict[str, Any]:
+    """An effect for :func:`Group`: a built-in's short name (``"gaussian-blur"``) or a full id,
+    with its parameters (and named image inputs, as nodes) by name."""
+    return cast("dict[str, Any]", _plain({"effect": effect, **params}))
 
 
 def Grid(

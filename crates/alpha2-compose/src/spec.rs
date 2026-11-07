@@ -346,6 +346,90 @@ pub enum Node {
     MusicBed(MusicBed),
     /// A number counting from one value to another, as text.
     Counter(Counter),
+    /// Children drawn together into one picture, which then takes an opacity, a blend mode,
+    /// effects and a transform as one layer.
+    Group(Group),
+}
+
+/// Children drawn together as one layer. Unlike a stack, whose children each meet what is under
+/// them, a group composites its children first: its opacity, blend mode, effects and transform
+/// apply to that one picture.
+///
+/// A group's children share its time as one picture does: a video or animated picture in it
+/// starts with the group and plays at its own speed, and it holds no sequences, captions or
+/// sound nodes. A child's sound still plays, outside the picture.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Group {
+    /// The node's name, for other nodes to refer to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The children, each over the ones before, placed in the group's area.
+    pub children: Vec<Node>,
+    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<f64>,
+    /// Length in seconds. Default: the longest child's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    /// Pixels kept clear inside the parent's area: the group's area.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inset: Option<Inset>,
+    /// Opacity of the whole, 0..=1. Default 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<Anim<f32>>,
+    /// How the whole meets what is under it. Default `normal`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend: Option<alpha2_model::ClipBlendMode>,
+    /// Effects on the whole, in order, before its transform.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<EffectUse>,
+    /// Moves, scales or turns the whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<GroupTransform>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
+}
+
+/// One effect: a built-in by its short name (`gaussian-blur`) or any effect by its full id, with
+/// its parameters by name. A parameter is a constant, a ramp or keys; a named image input is a
+/// node.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct EffectUse {
+    /// The effect: a built-in's short name or a full id with its dots.
+    pub effect: String,
+    /// The version a full id names. Default: the built-in's, else 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<u32>,
+    /// Parameters and named inputs, as `schema/effects.v1.json` lists them.
+    #[serde(flatten)]
+    pub params: BTreeMap<String, serde_json::Value>,
+}
+
+/// A group's movement, about `anchor`.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GroupTransform {
+    /// Offset in pixels, `[x, y]`. Default `[0, 0]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<Anim<[f32; 2]>>,
+    /// Size multiple. Default 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<Anim<f32>>,
+    /// Clockwise turn in degrees. Default 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotation: Option<Anim<f32>>,
+    /// The point it scales and turns about, `[0, 0]` the area's top left to `[1, 1]` its bottom
+    /// right. Default `[0.5, 0.5]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<[f32; 2]>,
 }
 
 /// Children one after another.

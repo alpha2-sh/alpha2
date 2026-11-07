@@ -43,6 +43,14 @@ def test_constructors_write_the_spec_as_plain_dicts() -> None:
         "loop": True,
         "zoom": {"from": 1, "to": 1.2},
     }
+    assert c.Group(
+        [c.Text("Hi")], blend="screen", effects=[c.Effect("gaussian-blur", radius=0.1)]
+    ) == {
+        "type": "group",
+        "children": [{"type": "text", "text": "Hi"}],
+        "blend": "screen",
+        "effects": [{"effect": "gaussian-blur", "radius": 0.1}],
+    }
     assert c.Keys((0, 1), (2, 1.5, "ease-out")) == {
         "keys": [{"t": 0, "v": 1}, {"t": 2, "v": 1.5, "ease": "ease-out"}]
     }

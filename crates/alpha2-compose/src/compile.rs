@@ -9,18 +9,18 @@ use alpha2_model::{
     Animated, AnimatedPoint, CaptionCue, Captions, Clip, ClipComposition, ClipEffect, ClipId,
     ClipTransition, Composition, CompositionId, CompositionNode, Ducking, Easing, EffectValue,
     FontSizeFit, Generator, Interpolation, Keyframe, LayoutNode, LineClamp, LoopMode,
-    MediaKind as ModelKind, MediaSource, NodeId, NodeOp, Paint, Project, ProjectId,
+    MediaKind as ModelKind, MediaSource, MergeLayer, NodeId, NodeOp, Paint, Project, ProjectId,
     ProjectSettings, RangeShape, RangeUnits, RectangleGeometry, Rgb, Rgba, ShapeGeometry,
     ShapeMask, TextAlign, TextAnimator, TextAnimatorProperties, TextBackground, TextSelector,
-    TextStyle, TimeMap, Timeline, Track, TrackId, TrackKind, Vec2, VisualProperties,
+    TextStyle, TimeMap, TimeScale, Timeline, Track, TrackId, TrackKind, Vec2, VisualProperties,
 };
 use alpha2_text::{TextFont, TextRasterizer};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 
 use crate::lower::{
-    AnimPrim, AudioPrim, CaptionsPrim, Content, CounterContent, GridLayout, Head, KeyPrim, KeyTime,
-    NodeMotion, Preset, Prim, RevealPrim, SequencePrim, StackPrim, Visual, align_point,
-    ticks_scaled,
+    AnimPrim, AudioPrim, CaptionsPrim, Content, CounterContent, EffectPrim, GridLayout, GroupPrim,
+    Head, KeyPrim, KeyTime, NodeMotion, Preset, Prim, RevealPrim, SequencePrim, StackPrim, Visual,
+    align_point, ticks_scaled,
 };
 use crate::spec::{
     Canvas, CustomCanvas, Fit, FrameRateChoice, GridLength, Loudness, Transition, VideoSpec,
@@ -593,35 +593,8 @@ impl<'a> Context<'a> {
                     .sum::<i64>();
                 Length::Fixed(total.max(0))
             }
-            Prim::Stack(stack) => {
-                let lengths = stack
-                    .children
-                    .iter()
-                    .map(|child| (child.head().at.unwrap_or(0), self.length(child)));
-                let fixed = lengths.clone().filter_map(|(at, length)| match length {
-                    Length::Fixed(ticks) => Some(at + ticks),
-                    Length::Flexible(_) => None,
-                });
-                let shortest = matches!(
-                    stack.grid,
-                    Some(GridLayout {
-                        length: GridLength::Shortest,
-                        ..
-                    })
-                );
-                let fixed = if shortest { fixed.min() } else { fixed.max() };
-                fixed.map_or_else(
-                    || {
-                        Length::Flexible(
-                            lengths
-                                .map(|(at, length)| at + length.resolve())
-                                .max()
-                                .unwrap_or(0),
-                        )
-                    },
-                    Length::Fixed,
-                )
-            }
+            Prim::Stack(stack) => self.stack_length(stack),
+            Prim::Group(group) => self.stack_length(&group.stack),
             Prim::Visual(visual) => match &visual.content {
                 Content::Video(video) if video.looped => Length::Flexible(video.natural()),
                 Content::Video(video) => Length::Fixed(video.natural()),
@@ -648,6 +621,37 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// A stack's own length, or the one it takes by default.
+    fn stack_length(&self, stack: &StackPrim) -> Length {
+        let lengths = stack
+            .children
+            .iter()
+            .map(|child| (child.head().at.unwrap_or(0), self.length(child)));
+        let fixed = lengths.clone().filter_map(|(at, length)| match length {
+            Length::Fixed(ticks) => Some(at + ticks),
+            Length::Flexible(_) => None,
+        });
+        let shortest = matches!(
+            stack.grid,
+            Some(GridLayout {
+                length: GridLength::Shortest,
+                ..
+            })
+        );
+        let fixed = if shortest { fixed.min() } else { fixed.max() };
+        fixed.map_or_else(
+            || {
+                Length::Flexible(
+                    lengths
+                        .map(|(at, length)| at + length.resolve())
+                        .max()
+                        .unwrap_or(0),
+                )
+            },
+            Length::Fixed,
+        )
+    }
+
     /// Places `prim` in `slot`, adding its lanes to `out`.
     fn emit(&mut self, prim: &Prim, slot: &Slot, out: &mut Lanes) -> Result<(), ComposeError> {
         if slot.len <= 0 {
@@ -659,6 +663,7 @@ impl<'a> Context<'a> {
         match prim {
             Prim::Sequence(sequence) => self.emit_sequence(sequence, &slot, out),
             Prim::Stack(stack) => self.emit_stack(stack, &slot, out),
+            Prim::Group(group) => self.emit_group(group, &slot, out),
             Prim::Visual(visual) => {
                 self.emit_visual(visual, &slot, out);
                 Ok(())
@@ -869,6 +874,345 @@ impl<'a> Context<'a> {
             out.stack(lanes);
         }
         Ok(())
+    }
+
+    /// Draws a group's children over its own time into one composition, and places that as one
+    /// clip with the group's motion and blend mode. Their sound goes on audio lanes.
+    fn emit_group(
+        &mut self,
+        group: &GroupPrim,
+        slot: &Slot,
+        out: &mut Lanes,
+    ) -> Result<(), ComposeError> {
+        let path = group.stack.head.path.clone();
+        let len = slot.len;
+        let rect = slot.rect.inset(group.stack.inset);
+        let inner = Slot {
+            start: 0,
+            len,
+            rect: slot.rect,
+            hold: Hold::None,
+            ramp: None,
+            owners: slot.owners.clone(),
+            motions: Vec::new(),
+            pending: Vec::new(),
+            delay: 0,
+        };
+        let mut lanes = Lanes::default();
+        self.emit_stack(&group.stack, &inner, &mut lanes)?;
+        let mut graph = Graph::default();
+        let picture = self.group_picture(&mut graph, &lanes, len, &path)?;
+        self.move_sound(&lanes, slot.start, out);
+        let mut node = picture;
+        for effect in &group.effects {
+            node = self.group_effect(&mut graph, effect, node, rect, len)?;
+        }
+        node = graph.add(NodeOp::Transform {
+            input: Some(node),
+            transform: self.group_transform(group, rect, len),
+        });
+        let id = CompositionId::new(Self::fresh(
+            &self.reserved,
+            &mut self.next_composition,
+            "group",
+        ))
+        .expect("a generated id is not empty");
+        let mut composition = Composition::new(id.clone());
+        composition.nodes = graph.nodes;
+        composition.output = Some(node);
+        self.compositions.push(composition);
+        let source = self.source_id();
+        let mut shown = MediaSource::new(source.clone(), "", ModelKind::Composition);
+        shown.composition = Some(id);
+        self.sources.push(shown);
+        let (start, end) = (slot.start, slot.start + len);
+        let mut clip = Clip::new(self.clip_id(), source, range(start, end), range(0, len));
+        clip.blend_mode = group.blend;
+        let (width, height) = self.canvas_px();
+        let anchor = Vec2::new(
+            (rect.x + group.transform.anchor[0] * rect.width) / width,
+            (rect.y + group.transform.anchor[1] * rect.height) / height,
+        );
+        clip.visual.position = AnimatedPoint::Constant { value: anchor };
+        clip.visual.anchor = anchor;
+        let opacity = Opacity {
+            base: 1.0,
+            start,
+            end,
+            fade_in: 0,
+            fade_out: 0,
+            ramp: slot.ramp,
+        };
+        clip.visual.opacity = opacity.animation(clip.timeline_range);
+        if !slot.motions.is_empty() {
+            let range = clip.timeline_range;
+            self.apply_motion(&mut clip.visual, &opacity, &slot.motions, range);
+        }
+        let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+        lane.clips.push(clip);
+        out.visual.push(lane);
+        Ok(())
+    }
+
+    /// The merged picture of `lanes`, placed over `0..len`, as nodes of `graph`.
+    fn group_picture(
+        &mut self,
+        graph: &mut Graph,
+        lanes: &Lanes,
+        len: i64,
+        path: &str,
+    ) -> Result<NodeId, ComposeError> {
+        if lanes.visual.iter().any(|lane| !lane.transitions.is_empty()) {
+            return Err(ComposeError::new(
+                path,
+                "a group draws its children as one picture over one time, so it holds no \
+                 transitions; put the group in the sequence instead",
+            ));
+        }
+        if lanes
+            .visual
+            .iter()
+            .any(|lane| lane.captions.is_some() || lane.raw.is_some())
+        {
+            return Err(ComposeError::new(
+                path,
+                "captions and raw fragments go outside a group",
+            ));
+        }
+        let clips = lanes
+            .visual
+            .iter()
+            .flat_map(|lane| &lane.clips)
+            .collect::<Vec<_>>();
+        let mattes = clips
+            .iter()
+            .filter_map(|clip| clip.matte.as_ref().map(|matte| matte.source.clone()))
+            .collect::<HashSet<_>>();
+        let mut layers = Vec::with_capacity(clips.len());
+        for clip in &clips {
+            if mattes.contains(&clip.id) {
+                continue;
+            }
+            let mut node = self.group_layer(graph, clip, len, path)?;
+            if let Some(matte) = &clip.matte {
+                let matte_clip = clips
+                    .iter()
+                    .find(|other| other.id == matte.source)
+                    .expect("a matte names a clip of the same lanes");
+                let coverage = self.group_layer(graph, matte_clip, len, path)?;
+                node = graph.add(NodeOp::Matte {
+                    input: Some(node),
+                    matte: Some(coverage),
+                    mode: matte.mode,
+                });
+            }
+            layers.push(MergeLayer {
+                input: Some(node),
+                blend_mode: clip.blend_mode,
+                opacity: constant(1.0),
+            });
+        }
+        Ok(graph.add(NodeOp::Merge { layers }))
+    }
+
+    /// One clip of a group as nodes: its picture at the group's time, its composition, masks
+    /// and transform, shown only over its own range.
+    fn group_layer(
+        &self,
+        graph: &mut Graph,
+        clip: &Clip,
+        len: i64,
+        path: &str,
+    ) -> Result<NodeId, ComposeError> {
+        let source = self
+            .sources
+            .iter()
+            .find(|source| source.id == clip.source_id)
+            .expect("a clip's source is in the project");
+        let (start, end) = (
+            clip.timeline_range.start().ticks(),
+            clip.timeline_range.end().ticks(),
+        );
+        let plays = matches!(clip.time_map, TimeMap::Forward)
+            && clip.source_range.end().ticks() - clip.source_range.start().ticks() == end - start;
+        let still = still_source(source);
+        if !still && (!plays || start != 0 || end < len) {
+            return Err(ComposeError::new(
+                path,
+                "a video or animated picture in a group plays at its own speed over the group's \
+                 whole time; speed, loop, freeze and a later start or earlier end are not available \
+                 in a group yet",
+            ));
+        }
+        let picture = if source.kind == ModelKind::Composition {
+            graph.add(NodeOp::Group {
+                composition: source
+                    .composition
+                    .clone()
+                    .expect("a composition source names its composition"),
+                inputs: Vec::new(),
+                controls: BTreeMap::new(),
+            })
+        } else {
+            let from = (clip.source_range.start().ticks() - start).max(0);
+            graph.add(NodeOp::Media {
+                source_id: clip.source_id.clone(),
+                start: MediaTime::from_ticks(if still { 0 } else { from }),
+            })
+        };
+        let mut node = picture.clone();
+        if let Some(used) = &clip.composition {
+            let composition = self
+                .compositions
+                .iter()
+                .find(|composition| composition.id == used.id)
+                .expect("a clip's composition is in the project");
+            if used.offset != MediaTime::ZERO || used.scale != TimeScale::ONE {
+                return Err(ComposeError::new(
+                    path,
+                    "a picture in a group takes its composition at the group's own time",
+                ));
+            }
+            node = graph.inline(composition, &picture);
+        }
+        if !clip.masks.is_empty() {
+            node = graph.add(NodeOp::ShapeMask {
+                input: Some(node),
+                masks: clip.masks.clone(),
+            });
+        }
+        let mut transform = clip.visual.clone();
+        transform.opacity = windowed(&clip.visual.opacity, start, end, len);
+        Ok(graph.add(NodeOp::Transform {
+            input: Some(node),
+            transform,
+        }))
+    }
+
+    /// Puts the sound of `lanes`, placed from 0, on audio lanes of `out` from `start`: audio
+    /// lanes as they are, and each video's sound read from its file.
+    fn move_sound(&mut self, lanes: &Lanes, start: i64, out: &mut Lanes) {
+        let shift = |clip: &mut Clip| {
+            clip.timeline_range = range(
+                clip.timeline_range.start().ticks() + start,
+                clip.timeline_range.end().ticks() + start,
+            );
+        };
+        for lane in &lanes.audio {
+            let mut lane = lane.clone();
+            lane.clips.iter_mut().for_each(shift);
+            out.audio.push(lane);
+        }
+        for clip in lanes.visual.iter().flat_map(|lane| &lane.clips) {
+            let Some(file) = self
+                .sources
+                .iter()
+                .find(|source| source.id == clip.source_id && source.has_audio)
+                .map(|source| source.locator.clone())
+            else {
+                continue;
+            };
+            if clip.audio.muted {
+                continue;
+            }
+            let source = self.media_source(&file, ModelKind::Audio, true);
+            let mut sound = Clip::new(
+                self.clip_id(),
+                source,
+                clip.timeline_range,
+                clip.source_range,
+            );
+            sound.audio = clip.audio.clone();
+            sound.time_map = clip.time_map;
+            shift(&mut sound);
+            let mut lane = Lane::new(TrackKind::Audio, &BTreeSet::new());
+            lane.clips.push(sound);
+            out.audio.push(lane);
+        }
+    }
+
+    /// `effect` over `input`, its named inputs drawn as nodes of the group.
+    fn group_effect(
+        &mut self,
+        graph: &mut Graph,
+        effect: &EffectPrim,
+        input: NodeId,
+        rect: Rect,
+        len: i64,
+    ) -> Result<NodeId, ComposeError> {
+        let mut inputs = BTreeMap::new();
+        for (name, prim) in &effect.inputs {
+            let slot = Slot {
+                start: 0,
+                len,
+                rect,
+                hold: Hold::None,
+                ramp: None,
+                owners: BTreeSet::new(),
+                motions: Vec::new(),
+                pending: Vec::new(),
+                delay: 0,
+            };
+            let mut lanes = Lanes::default();
+            self.emit(prim, &slot, &mut lanes)?;
+            let picture =
+                self.group_picture(graph, &lanes, len, &format!("{}.{name}", effect.path))?;
+            inputs.insert(name.clone(), Some(picture));
+        }
+        let whole = range(0, len);
+        let params = effect
+            .params
+            .iter()
+            .map(|(name, anim)| (name.clone(), animated(anim, whole)))
+            .collect();
+        Ok(graph.add(NodeOp::Effect {
+            input: Some(input),
+            inputs,
+            effect: ClipEffect {
+                id: effect.id.clone(),
+                version: effect.version,
+                params,
+                resources: BTreeMap::new(),
+            },
+        }))
+    }
+
+    /// The group's opacity and movement over `0..len`, about its anchor in `rect`.
+    fn group_transform(&self, group: &GroupPrim, rect: Rect, len: i64) -> VisualProperties {
+        let (width, height) = self.canvas_px();
+        let whole = range(0, len);
+        let anchor = Vec2::new(
+            (rect.x + group.transform.anchor[0] * rect.width) / width,
+            (rect.y + group.transform.anchor[1] * rect.height) / height,
+        );
+        let position = group.transform.position.as_ref().map_or(
+            AnimatedPoint::Constant { value: anchor },
+            |position| {
+                AnimatedPoint::from(map_animated(animated(position, whole), |[x, y]| {
+                    Vec2::new(anchor.x + x / width, anchor.y + y / height)
+                }))
+            },
+        );
+        VisualProperties {
+            position,
+            anchor,
+            scale: group
+                .transform
+                .scale
+                .as_ref()
+                .map_or(constant(Vec2::new(1.0, 1.0)), |scale| {
+                    map_animated(animated(scale, whole), |scale| Vec2::new(scale, scale))
+                }),
+            rotation_degrees: group
+                .transform
+                .rotation
+                .as_ref()
+                .map_or(constant(0.0), |rotation| animated(rotation, whole)),
+            opacity: group
+                .opacity
+                .as_ref()
+                .map_or(constant(1.0), |opacity| animated(opacity, whole)),
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1643,6 +1987,204 @@ fn resolve_keys<T: Copy>(keys: &[KeyPrim<T>], clip: TimeRange) -> Vec<(MediaTime
             )
         })
         .collect()
+}
+
+/// `anim` as a property animation over `clip`.
+fn animated<T: Copy>(anim: &AnimPrim<T>, clip: TimeRange) -> Animated<T> {
+    match anim {
+        AnimPrim::Value(value) => constant(*value),
+        AnimPrim::Keys(keys) => Animated::Keyframes {
+            keyframes: resolve_keys(keys, clip)
+                .into_iter()
+                .map(|(time, value, easing)| Keyframe {
+                    time,
+                    value,
+                    interpolation: interpolation(easing),
+                })
+                .collect(),
+        },
+    }
+}
+
+fn map_animated<T, U>(animation: Animated<T>, map: impl Fn(T) -> U) -> Animated<U> {
+    match animation {
+        Animated::Constant { value } => Animated::Constant { value: map(value) },
+        Animated::Keyframes { keyframes } => Animated::Keyframes {
+            keyframes: keyframes
+                .into_iter()
+                .map(|keyframe| Keyframe {
+                    time: keyframe.time,
+                    value: map(keyframe.value),
+                    interpolation: keyframe.interpolation,
+                })
+                .collect(),
+        },
+    }
+}
+
+/// `opacity` shown over `start..end` of `0..len` and zero outside it.
+fn windowed(opacity: &Animated<f32>, start: i64, end: i64, len: i64) -> Animated<f32> {
+    if start <= 0 && end >= len {
+        return opacity.clone();
+    }
+    let hold = |time: i64, value: f32| Keyframe {
+        time: MediaTime::from_ticks(time),
+        value,
+        interpolation: Interpolation::Hold,
+    };
+    let mut keyframes = Vec::new();
+    if start > 0 {
+        keyframes.push(hold(0, 0.0));
+    }
+    match opacity {
+        Animated::Constant { value } => keyframes.push(hold(start, *value)),
+        Animated::Keyframes { keyframes: own } => {
+            let inside = own
+                .iter()
+                .filter(|keyframe| (start..end).contains(&keyframe.time.ticks()))
+                .cloned()
+                .collect::<Vec<_>>();
+            if inside
+                .first()
+                .is_none_or(|first| first.time.ticks() > start)
+            {
+                keyframes.push(hold(start, sample_scalar(opacity, start)));
+            }
+            keyframes.extend(inside);
+        }
+    }
+    if end < len {
+        if let Some(last) = keyframes.last_mut() {
+            last.interpolation = Interpolation::Hold;
+        }
+        keyframes.push(hold(end, 0.0));
+    }
+    Animated::Keyframes { keyframes }
+}
+
+/// `animation` at `time`, linear between keys, holding outside them.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+fn sample_scalar(animation: &Animated<f32>, time: i64) -> f32 {
+    match animation {
+        Animated::Constant { value } => *value,
+        Animated::Keyframes { keyframes } => {
+            let after = keyframes.partition_point(|keyframe| keyframe.time.ticks() <= time);
+            match (
+                after.checked_sub(1).map(|index| &keyframes[index]),
+                keyframes.get(after),
+            ) {
+                (Some(before), Some(next)) if before.interpolation != Interpolation::Hold => {
+                    let span = (next.time.ticks() - before.time.ticks()) as f64;
+                    let progress = (time - before.time.ticks()) as f64 / span;
+                    (f64::from(before.value)
+                        + (f64::from(next.value) - f64::from(before.value)) * progress)
+                        as f32
+                }
+                (Some(before), _) => before.value,
+                (None, Some(next)) => next.value,
+                (None, None) => 1.0,
+            }
+        }
+    }
+}
+
+/// Whether `source` shows the same picture at every time: a still, or a generated picture with
+/// nothing keyed or animated.
+fn still_source(source: &MediaSource) -> bool {
+    match source.kind {
+        ModelKind::Image => true,
+        ModelKind::Generated => {
+            source
+                .generator
+                .as_ref()
+                .is_some_and(|generator| match generator {
+                    Generator::Fill { .. } => true,
+                    Generator::Text { style, .. } => style.animators.is_empty(),
+                    other => !serde_json::to_string(other)
+                        .is_ok_and(|text| text.contains("\"keyframes\"")),
+                })
+        }
+        _ => false,
+    }
+}
+
+/// The nodes of one group composition, with fresh ids.
+#[derive(Default)]
+struct Graph {
+    nodes: Vec<CompositionNode>,
+    next: u32,
+}
+
+impl Graph {
+    fn id(&mut self) -> NodeId {
+        self.next += 1;
+        NodeId::new(format!("n{}", self.next)).expect("a generated id is not empty")
+    }
+
+    fn add(&mut self, op: NodeOp) -> NodeId {
+        let id = self.id();
+        self.nodes.push(CompositionNode::new(id.clone(), op));
+        id
+    }
+
+    /// Copies `composition`'s nodes in with fresh ids, its clip node read as `picture`; returns
+    /// its output.
+    fn inline(&mut self, composition: &Composition, picture: &NodeId) -> NodeId {
+        let mut ids = BTreeMap::new();
+        for node in &composition.nodes {
+            let id = if matches!(node.op, NodeOp::Clip {}) {
+                picture.clone()
+            } else {
+                self.id()
+            };
+            ids.insert(node.id.clone(), id);
+        }
+        for node in &composition.nodes {
+            if matches!(node.op, NodeOp::Clip {}) {
+                continue;
+            }
+            let mut op = node.op.clone();
+            remap_inputs(&mut op, &ids);
+            let mut copy = CompositionNode::new(ids[&node.id].clone(), op);
+            copy.bypass = node.bypass;
+            self.nodes.push(copy);
+        }
+        composition
+            .output
+            .as_ref()
+            .and_then(|output| ids.get(output))
+            .cloned()
+            .unwrap_or_else(|| picture.clone())
+    }
+}
+
+/// Renames every input `op` reads through `ids`.
+fn remap_inputs(op: &mut NodeOp, ids: &BTreeMap<NodeId, NodeId>) {
+    let rename = |input: &mut Option<NodeId>| {
+        if let Some(id) = input.as_mut()
+            && let Some(renamed) = ids.get(id)
+        {
+            *id = renamed.clone();
+        }
+    };
+    match op {
+        NodeOp::Effect { input, inputs, .. } => {
+            rename(input);
+            inputs.values_mut().for_each(rename);
+        }
+        NodeOp::Transition { from, to, .. } => {
+            rename(from);
+            rename(to);
+        }
+        NodeOp::Transform { input, .. } | NodeOp::ShapeMask { input, .. } => rename(input),
+        NodeOp::Merge { layers } => layers.iter_mut().for_each(|layer| rename(&mut layer.input)),
+        NodeOp::Matte { input, matte, .. } => {
+            rename(input);
+            rename(matte);
+        }
+        NodeOp::Group { inputs, .. } => inputs.iter_mut().for_each(rename),
+        _ => {}
+    }
 }
 
 const fn interpolation(easing: Easing) -> Interpolation {
