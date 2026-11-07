@@ -178,7 +178,7 @@ fn effect_parameters_animate_with_one_type_and_hold_only_discrete_values() {
         with_effect(
             project(),
             crate::ClipEffect {
-                id: "alpha2.effect.gaussian-blur".into(),
+                id: "test.blur".into(),
                 version: 1,
                 resources: BTreeMap::new(),
                 params: BTreeMap::from([("radius".into(), param)]),

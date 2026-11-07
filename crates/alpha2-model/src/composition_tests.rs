@@ -50,7 +50,7 @@ fn branched() -> Project {
                 NodeOp::Effect {
                     input: input("clip"),
                     inputs: BTreeMap::new(),
-                    effect: effect("alpha2.effect.gaussian-blur"),
+                    effect: effect("test.gaussian-blur"),
                 },
             ),
             node(
@@ -58,7 +58,7 @@ fn branched() -> Project {
                 NodeOp::Effect {
                     input: input("clip"),
                     inputs: BTreeMap::new(),
-                    effect: effect("alpha2.effect.brightness"),
+                    effect: effect("test.brightness"),
                 },
             ),
             node("clip", NodeOp::Clip {}),
@@ -134,7 +134,7 @@ fn cycles_are_rejected_wherever_they_are() {
     project.compositions[0].nodes[1].op = NodeOp::Effect {
         input: input("spare"),
         inputs: BTreeMap::new(),
-        effect: effect("alpha2.effect.gaussian-blur"),
+        effect: effect("test.gaussian-blur"),
     };
     assert!(matches!(
         project.validate(),
@@ -233,7 +233,7 @@ fn node_settings_are_checked() {
         NodeOp::Transition {
             from: None,
             to: None,
-            effect: effect("alpha2.transition.fade"),
+            effect: effect("test.fade"),
             progress: Animated::Constant { value: -0.1 },
         },
         false,
@@ -570,7 +570,7 @@ fn grouped() -> Project {
             NodeOp::Effect {
                 input: input("in"),
                 inputs: BTreeMap::new(),
-                effect: effect("alpha2.effect.gaussian-blur"),
+                effect: effect("test.gaussian-blur"),
             },
         ),
     ];

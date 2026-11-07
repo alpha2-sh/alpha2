@@ -262,10 +262,10 @@ test("nodes fold into a group and back without changing the graph's meaning", ()
         },
       },
     },
-    position: { x: radius * 100, y: 0 },
+    position: { x: radius * 1000, y: 0 },
   });
-  ok(effect("soft", "clip", 1));
-  ok(effect("sharp", "soft", 2));
+  ok(effect("soft", "clip", 0.1));
+  ok(effect("sharp", "soft", 0.2));
   ok({
     type: "graph.node.add",
     compositionId: id,
@@ -329,7 +329,7 @@ test("nodes fold into a group and back without changing the graph's meaning", ()
       op: {
         ...parent.look.op,
         controls: {
-          softness: { mode: "constant", value: { type: "float", value: 7 } },
+          softness: { mode: "constant", value: { type: "float", value: 0.7 } },
         },
       },
     },
@@ -344,7 +344,7 @@ test("nodes fold into a group and back without changing the graph's meaning", ()
   assert.equal(flat["look-sharp"].op.input, "look-soft");
   assert.equal(
     flat["look-soft"].op.effect.params.radius.value.value,
-    7,
+    0.7,
     "the group node's control value",
   );
   assert.deepEqual(
@@ -393,7 +393,7 @@ test("a group input added to a definition appears on every group node, and a rem
       op: {
         ...group().op,
         controls: {
-          amount: { mode: "constant", value: { type: "float", value: 3 } },
+          amount: { mode: "constant", value: { type: "float", value: 0.3 } },
         },
       },
     },
@@ -773,7 +773,7 @@ test("a bypassed group is refused ungrouping, since its nodes would draw", () =>
 });
 
 test("removing a node a control exposes removes the control and its values; grouping it says which", () => {
-  const softness = { mode: "constant", value: { type: "float", value: 4 } };
+  const softness = { mode: "constant", value: { type: "float", value: 0.4 } };
   const e = createEditor({
     document: drawing([
       {

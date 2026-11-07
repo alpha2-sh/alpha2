@@ -30,6 +30,7 @@ import type {
   Vec2,
   VisualProperties,
 } from "./generated/project-schema.js";
+import { BUILTIN_EFFECT_RULES } from "./generated/builtin-effects.js";
 import {
   parseHex,
   parseInsets,
@@ -523,6 +524,20 @@ function catalogOf(
     }
     return names;
   };
+  const builtinControls = new Map<
+    Record<string, unknown>,
+    ReadonlyMap<string, BuiltinControl>
+  >();
+  const builtinControlsOf = (
+    target: Record<string, unknown>,
+  ): ReadonlyMap<string, BuiltinControl> => {
+    let found = builtinControls.get(target);
+    if (found === undefined) {
+      found = builtinControlTargets(target);
+      builtinControls.set(target, found);
+    }
+    return found;
+  };
   for (const composition of compositionList) {
     const found = compositionProblems(
       composition,
@@ -530,6 +545,7 @@ function catalogOf(
       effectResources,
       compositionsById,
       controlNamesOf,
+      builtinControlsOf,
       canvas,
     );
     for (const problem of found) problems.push(problem);
@@ -2352,6 +2368,161 @@ function validClipEffect(effect: unknown): boolean {
   );
 }
 
+/** What validation reads of a built-in effect or transition, generated from its definition. */
+export interface BuiltinEffectRules {
+  readonly version: number;
+  readonly kind: "effect" | "transition";
+  readonly inputs: readonly string[];
+  readonly resources: readonly string[];
+  readonly params: Readonly<
+    Record<
+      string,
+      {
+        readonly type: string;
+        readonly min?: number;
+        readonly max?: number;
+        readonly choices?: number;
+      }
+    >
+  >;
+}
+
+/** Ids under this prefix must name a built-in. Mirrors `alpha2_model::BUILTIN_EFFECT_PREFIX`. */
+const BUILTIN_EFFECT_PREFIX = "alpha2.";
+
+function builtinRules(id: string): BuiltinEffectRules | undefined {
+  return Object.hasOwn(BUILTIN_EFFECT_RULES, id)
+    ? BUILTIN_EFFECT_RULES[id]
+    : undefined;
+}
+
+/** A group control that sets a built-in effect's parameter. */
+interface BuiltinControl {
+  readonly effect: string;
+  readonly param: string;
+  readonly rule: BuiltinEffectRules["params"][string];
+}
+
+/** Each control of `composition` that sets a built-in parameter, by name; the first of a name. */
+function builtinControlTargets(
+  composition: Record<string, unknown>,
+): ReadonlyMap<string, BuiltinControl> {
+  const nodes = new Map<string, unknown>();
+  for (const node of Array.isArray(composition.nodes)
+    ? composition.nodes
+    : []) {
+    if (isRecord(node) && !nodes.has(text(node.id))) {
+      nodes.set(text(node.id), node);
+    }
+  }
+  const found = new Map<string, BuiltinControl>();
+  const seen = new Set<string>();
+  for (const control of Array.isArray(composition.controls)
+    ? composition.controls
+    : []) {
+    if (!isRecord(control) || seen.has(text(control.name))) continue;
+    seen.add(text(control.name));
+    const node = nodes.get(text(control.node));
+    const effect =
+      isRecord(node) && isRecord(node.op) ? node.op.effect : undefined;
+    if (!isRecord(effect)) continue;
+    const param = text(control.param);
+    const rule = builtinParamRule(text(effect.id), param);
+    if (rule)
+      found.set(text(control.name), { effect: text(effect.id), param, rule });
+  }
+  return found;
+}
+
+function builtinParamRule(
+  id: string,
+  name: string,
+): BuiltinEffectRules["params"][string] | undefined {
+  const rules = builtinRules(id);
+  return rules && Object.hasOwn(rules.params, name)
+    ? rules.params[name]
+    : undefined;
+}
+
+function acceptsBuiltinParam(
+  param: BuiltinEffectRules["params"][string],
+  animation: unknown,
+): boolean {
+  const values = animationValues<unknown>(animation) ?? [];
+  const scalar = (value: unknown): boolean =>
+    finiteNumber(value) &&
+    (param.min === undefined || Math.fround(value) >= param.min) &&
+    (param.max === undefined || Math.fround(value) <= param.max);
+  return values.every((held) => {
+    if (!isRecord(held) || held.type !== param.type) return false;
+    const value = held.value;
+    switch (param.type) {
+      case "float":
+        return scalar(value);
+      case "vec2":
+      case "vec4":
+        return Array.isArray(value) && value.every(scalar);
+      case "color":
+        return (
+          Array.isArray(value) &&
+          value.every(
+            (part) =>
+              finiteNumber(part) &&
+              Math.fround(part) >= 0 &&
+              Math.fround(part) <= 1,
+          )
+        );
+      case "enum":
+        return (
+          Number.isInteger(value) &&
+          (value as number) >= 0 &&
+          (value as number) < (param.choices ?? 0)
+        );
+      default:
+        return true;
+    }
+  });
+}
+
+/** How `effect`, used as `kind`, fails its built-in definition, worded as the model words it. */
+function builtinEffectProblem(
+  effect: unknown,
+  kind: BuiltinEffectRules["kind"],
+  inputs: unknown,
+): string | undefined {
+  if (!isRecord(effect)) return undefined;
+  const id = text(effect.id);
+  if (!id.startsWith(BUILTIN_EFFECT_PREFIX)) return undefined;
+  const rules = builtinRules(id);
+  if (rules === undefined) return "is not a built-in";
+  if (effect.version !== rules.version) return `needs version ${rules.version}`;
+  if (rules.kind !== kind) return "is used as the wrong kind";
+  const params = isRecord(effect.params) ? effect.params : {};
+  // The model reads parameters in name order.
+  for (const name of Object.keys(params).sort()) {
+    const param = Object.hasOwn(rules.params, name)
+      ? rules.params[name]
+      : undefined;
+    if (param === undefined) return `has no parameter ${name}`;
+    if (!acceptsBuiltinParam(param, params[name])) {
+      return `has a parameter ${name} of the wrong type or out of range`;
+    }
+  }
+  const declared = (names: readonly string[], used: unknown): boolean => {
+    const keys = Object.keys(isRecord(used) ? used : {});
+    return (
+      keys.length === names.length && keys.every((key) => names.includes(key))
+    );
+  };
+  if (!declared(rules.inputs, inputs)) {
+    return "does not get exactly its declared inputs";
+  }
+  if (!declared(rules.resources, effect.resources)) {
+    return "does not get exactly its declared resources";
+  }
+  return undefined;
+}
+
 function validEffectInputs(inputs: unknown): boolean {
   if (inputs === undefined) return true;
   if (!isRecord(inputs)) return false;
@@ -2652,6 +2823,16 @@ function transitionProblems(
     ) {
       problems.push(`track ${trackId} has an invalid clip transition`);
       continue;
+    }
+    const builtin = builtinEffectProblem(
+      transition.effect,
+      "transition",
+      undefined,
+    );
+    if (builtin !== undefined) {
+      problems.push(
+        `effect ${text(transition.effect.id)} in the transition from ${text(transition.from_clip)} to ${text(transition.to_clip)} on track ${trackId} ${builtin}`,
+      );
     }
     // At most one transition per pair of clips, in either direction.
     const ends = [text(transition.from_clip), text(transition.to_clip)].sort();
@@ -4408,6 +4589,9 @@ function compositionProblems(
   effectResources: ReadonlySet<string>,
   compositions: ReadonlyMap<string, Record<string, unknown>>,
   controlNamesOf: (target: Record<string, unknown>) => ReadonlySet<string>,
+  builtinControlsOf: (
+    target: Record<string, unknown>,
+  ) => ReadonlyMap<string, BuiltinControl>,
   canvas: Canvas,
 ): string[] {
   if (!isRecord(composition)) return ["each composition must be an object"];
@@ -4460,6 +4644,24 @@ function compositionProblems(
     !controlsValid
   )
     problems.push(`composition ${id} has invalid group inputs or controls`);
+  else {
+    for (const control of controls.filter(isRecord)) {
+      const target = byId.get(text(control.node));
+      const effect =
+        isRecord(target) && isRecord(target.op) ? target.op.effect : undefined;
+      const param = text(control.param);
+      if (
+        isRecord(effect) &&
+        builtinRules(text(effect.id)) !== undefined &&
+        builtinParamRule(text(effect.id), param) === undefined
+      ) {
+        problems.push(
+          `effect ${text(effect.id)} in composition ${id} node ${text(control.node)} has no parameter ${param}`,
+        );
+        break;
+      }
+    }
+  }
   for (const node of nodes) {
     if (!isRecord(node) || !isRecord(node.op)) continue;
     const nodeId = text(node.id);
@@ -4468,6 +4670,18 @@ function compositionProblems(
       problems.push(
         `node ${nodeId} of composition ${id} has an invalid setting`,
       );
+    };
+    const builtinProblem = (
+      effect: unknown,
+      kind: BuiltinEffectRules["kind"],
+      effectInputs: unknown,
+    ): void => {
+      const problem = builtinEffectProblem(effect, kind, effectInputs);
+      if (problem !== undefined && isRecord(effect)) {
+        problems.push(
+          `effect ${text(effect.id)} in composition ${id} node ${nodeId} ${problem}`,
+        );
+      }
     };
     const inputs = nodeInputs(op);
     if (
@@ -4513,10 +4727,13 @@ function compositionProblems(
       case "effect":
         if (!validClipEffect(op.effect) || !validEffectInputs(op.inputs)) {
           invalid();
+        } else {
+          builtinProblem(op.effect, "effect", op.inputs);
         }
         break;
       case "transition":
         if (!validClipEffect(op.effect) || !unit(op.progress)) invalid();
+        else builtinProblem(op.effect, "transition", undefined);
         break;
       case "transform":
         if (!validVisual(op.transform)) invalid();
@@ -4563,8 +4780,19 @@ function compositionProblems(
             ([name, value]) =>
               targetControls.has(name) && validEffectParam(value),
           )
-        )
+        ) {
           invalid();
+          break;
+        }
+        for (const [name, value] of Object.entries(values)) {
+          const control = builtinControlsOf(target).get(name);
+          if (control && !acceptsBuiltinParam(control.rule, value)) {
+            problems.push(
+              `effect ${control.effect} in composition ${id} node ${nodeId} has a parameter ${control.param} of the wrong type or out of range`,
+            );
+            break;
+          }
+        }
         break;
       }
       case "group_input":

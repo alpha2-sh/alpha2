@@ -735,7 +735,10 @@ class ClipEffect(TypedDict):
     """
 
     id: str
-    """Stable effect definition identifier."""
+    """Stable effect definition identifier. Ids under `alpha2.` name built-ins
+    (`schema/effects.v1.json`): validation checks such an invocation's version, kind,
+    parameters, inputs and resources against its definition.
+    """
     params: NotRequired[dict[str, Animated[EffectValue]]]
     """Named parameter values, constant or keyframed. Omitted entries use definition defaults.
 
@@ -1695,7 +1698,8 @@ class NodeOpEffect(TypedDict):
     inputs: NotRequired[dict[str, NodeId | None]]
     """The images the effect samples besides its input, by the names its definition declares
     (`sample_<name>` in its shader); at most `MAX_EFFECT_INPUTS`. An undeclared name, or a
-    declared one left out, fails the frames that draw the node.
+    declared one left out, is invalid for a built-in and fails the frames that draw the
+    node otherwise.
     """
     type: Literal["effect"]
 

@@ -24,6 +24,23 @@ pub fn builtin_catalog() -> Value {
     })
 }
 
+/// The published catalog document: [`builtin_catalog`] with its `$id`, pretty-printed, as
+/// `schema/effects.v1.json` holds it.
+#[must_use]
+pub fn builtin_catalog_document() -> String {
+    let mut catalog = builtin_catalog();
+    if let Some(object) = catalog.as_object_mut() {
+        object.insert(
+            "$id".to_owned(),
+            "https://alpha2.sh/schema/effects.v1.json".into(),
+        );
+    }
+    // A `Value` always serializes.
+    let mut text = serde_json::to_string_pretty(&catalog).unwrap_or_default();
+    text.push('\n');
+    text
+}
+
 /// Serializes [`builtin_catalog`] for process and WebAssembly boundaries.
 #[must_use]
 pub fn builtin_catalog_json() -> String {

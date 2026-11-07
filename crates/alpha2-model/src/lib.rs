@@ -12,6 +12,7 @@ mod checks;
 mod composition;
 mod easing;
 mod effect;
+mod effect_spec;
 mod error;
 mod fingerprint;
 mod generator;
@@ -61,7 +62,11 @@ pub use composition::{
 };
 pub use easing::{CubicBezier, Easing};
 pub use effect::{ClipBlendMode, ClipEffect, EffectValue};
-pub use error::{ModelError, ProjectLoadError, ShapeOwner};
+pub use effect_spec::{
+    BUILTIN_EFFECT_PREFIX, EffectKind, EffectParamSpec, EffectParamType, EffectParamUnit,
+    EffectProblem, EffectSpec, builtin_effect, builtin_effects, builtin_effects_json,
+};
+pub use error::{EffectOwner, ModelError, ProjectLoadError, ShapeOwner};
 pub use fingerprint::{AudioStreamShape, MediaFingerprint, StreamTopology, VideoStreamShape};
 pub use generator::{Generator, GradientStop, MAX_GRADIENT_STOPS, Paint, Rgba, Spread};
 pub use ids::{ClipId, CompositionId, EffectResourceId, NodeId, ProjectId, TrackId};

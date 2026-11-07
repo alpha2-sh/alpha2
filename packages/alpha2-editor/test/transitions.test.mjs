@@ -71,7 +71,7 @@ test("transition creation, resizing, removal move animation atomically and prese
     fromId: "a",
     toId: "b",
     duration: 60000,
-    effect: { id: "alpha2.transition.crossfade", version: 1 },
+    effect: { id: "alpha2.transition.fade", version: 1 },
   });
   assert.equal(result.ok, true, result.error?.message);
   let track = editor.document.project.timeline.tracks[0];

@@ -178,7 +178,8 @@ pub enum NodeOp {
         input: Option<NodeId>,
         /// The images the effect samples besides its input, by the names its definition declares
         /// (`sample_<name>` in its shader); at most [`MAX_EFFECT_INPUTS`]. An undeclared name, or a
-        /// declared one left out, fails the frames that draw the node.
+        /// declared one left out, is invalid for a built-in and fails the frames that draw the
+        /// node otherwise.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         inputs: BTreeMap<String, Option<NodeId>>,
         /// The versioned effect and its parameters.
@@ -822,6 +823,19 @@ fn validate_ports(
         {
             return Err(invalid());
         }
+        if let Some(effect) = node.and_then(|node| node.op.effect())
+            && let Some(spec) = crate::builtin_effect(&effect.id)
+            && spec.param(&control.param).is_none()
+        {
+            return Err(crate::ModelError::InvalidEffect {
+                owner: Box::new(crate::EffectOwner::Node {
+                    composition: composition.id.clone(),
+                    node: control.node.clone(),
+                }),
+                id: effect.id.clone(),
+                problem: crate::EffectProblem::UnknownParam(control.param.clone()),
+            });
+        }
     }
     Ok(())
 }
@@ -911,6 +925,68 @@ fn layout_error(
         at: issue.at,
         problem: issue.problem,
     }
+}
+
+/// Checks a node's built-in effect or transition, and the values a group node sets on its
+/// target's built-in parameters, against their definitions.
+fn check_builtin_effects(
+    composition: &Composition,
+    node: &CompositionNode,
+    compositions: &std::collections::HashMap<&CompositionId, &Composition>,
+) -> Result<(), crate::ModelError> {
+    use crate::effect_spec::{EffectKind, EffectProblem, builtin_effect, check_builtin};
+    let error = |id: &str, problem| crate::ModelError::InvalidEffect {
+        owner: Box::new(crate::EffectOwner::Node {
+            composition: composition.id.clone(),
+            node: node.id.clone(),
+        }),
+        id: id.to_owned(),
+        problem,
+    };
+    match &node.op {
+        NodeOp::Effect { effect, inputs, .. } => {
+            check_builtin(effect, EffectKind::Effect, Some(inputs))
+                .map_err(|problem| error(&effect.id, problem))?;
+        }
+        NodeOp::Transition { effect, .. } => {
+            check_builtin(effect, EffectKind::Transition, None)
+                .map_err(|problem| error(&effect.id, problem))?;
+        }
+        NodeOp::Group {
+            composition: target,
+            controls,
+            ..
+        } => {
+            let Some(target) = compositions.get(target) else {
+                return Ok(());
+            };
+            for (name, value) in controls {
+                let Some(control) = target.controls.iter().find(|control| &control.name == name)
+                else {
+                    continue;
+                };
+                let Some(effect) = target
+                    .nodes
+                    .iter()
+                    .find(|inner| inner.id == control.node)
+                    .and_then(|inner| inner.op.effect())
+                else {
+                    continue;
+                };
+                if let Some(param) =
+                    builtin_effect(&effect.id).and_then(|spec| spec.param(&control.param))
+                    && !param.accepts_animation(value)
+                {
+                    return Err(error(
+                        &effect.id,
+                        EffectProblem::InvalidParam(control.param.clone()),
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn validate_node(
@@ -1006,6 +1082,7 @@ fn validate_node(
     if !valid {
         return Err(invalid());
     }
+    check_builtin_effects(composition, node, compositions)?;
     if let Some(effect) = node.op.effect()
         && let Some(resource) = effect
             .resources

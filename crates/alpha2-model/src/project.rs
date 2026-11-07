@@ -386,6 +386,7 @@ impl Project {
                 )?;
             }
             ensure_transitions_are_supported(track)?;
+            ensure_transition_effects_match_builtins(track)?;
             if !track.audio.validate() {
                 return Err(ModelError::InvalidTrackAudio {
                     track: track.id.clone(),
@@ -608,6 +609,23 @@ fn ensure_transitions_are_supported(track: &crate::Track) -> Result<(), ModelErr
                 second: transition.to_clip.clone(),
             });
         }
+    }
+    Ok(())
+}
+
+/// Checks each transition's built-in effect against its definition.
+fn ensure_transition_effects_match_builtins(track: &crate::Track) -> Result<(), ModelError> {
+    for transition in &track.transitions {
+        crate::effect_spec::check_builtin(&transition.effect, crate::EffectKind::Transition, None)
+            .map_err(|problem| ModelError::InvalidEffect {
+                owner: Box::new(crate::EffectOwner::Transition {
+                    track: track.id.clone(),
+                    from: transition.from_clip.clone(),
+                    to: transition.to_clip.clone(),
+                }),
+                id: transition.effect.id.clone(),
+                problem,
+            })?;
     }
     Ok(())
 }

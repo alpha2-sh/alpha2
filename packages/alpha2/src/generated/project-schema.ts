@@ -981,7 +981,9 @@ export interface ClipComposition {
  */
 export interface ClipEffect {
   /**
-   * Stable effect definition identifier.
+   * Stable effect definition identifier. Ids under `alpha2.` name built-ins
+   * (`schema/effects.v1.json`): validation checks such an invocation's version, kind,
+   * parameters, inputs and resources against its definition.
    */
   readonly id: string;
   /**
@@ -2258,7 +2260,8 @@ export type NodeOp =
       /**
        * The images the effect samples besides its input, by the names its definition declares
        * (`sample_<name>` in its shader); at most `MAX_EFFECT_INPUTS`. An undeclared name, or a
-       * declared one left out, fails the frames that draw the node.
+       * declared one left out, is invalid for a built-in and fails the frames that draw the
+       * node otherwise.
        */
       readonly inputs?: Readonly<Record<string, NodeId | null>>;
       /**

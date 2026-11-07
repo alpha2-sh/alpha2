@@ -1316,7 +1316,7 @@
                 "from": "clip",
                 "to": "to",
                 "effect": {
-                  "id": "alpha2.transition.cross-dissolve",
+                  "id": "test.cross-dissolve",
                   "version": 1
                 },
                 "progress": {
