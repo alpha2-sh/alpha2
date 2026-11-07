@@ -57,6 +57,29 @@ def compose(spec: str, facts: str, fonts: list[bytes]) -> str:
     Raises ValueError(message, path, problem) for a spec that does not compile.
     """
 
+COMPOSE_TEMPLATES: str
+"""The 1st-party ``alpha2/`` templates, as a JSON list."""
+
+def compose_bind(document: str, data: str, options: str) -> str:
+    """A template (JSON text) bound to its data, or a spec with its template nodes expanded, as
+    JSON text. ``options`` is ``{"theme"?, "templates"?}``.
+
+    Raises ValueError(message, path, problem) for a template or data that does not bind.
+    """
+
+def compose_data_schema(template: str) -> str:
+    """A template's data as a JSON Schema, as JSON text.
+
+    Raises ValueError(message, path, problem) for a template that does not parse.
+    """
+
+def compose_lint(template: str, data: str, options: str) -> str:
+    """A template's problems, with ``data`` when not empty, as a JSON list of
+    ``{path, code, message, severity}``.
+
+    Raises ValueError for text that is not JSON.
+    """
+
 class TextMeasurer:
     """A text and layout measurer over the export's font files, registered as the host registers
     them (every face of a collection, in order)."""

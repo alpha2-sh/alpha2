@@ -130,6 +130,30 @@ fn compose(py: Python<'_>, spec: &str, facts: &str, fonts: Vec<Vec<u8>>) -> PyRe
     .map_err(|error| compose_error(&error))
 }
 
+/// Binds a template (or expands a spec's template nodes) to its data, giving a plain spec or
+/// node as JSON. `options` is `{"theme"?, "templates"?}`. Raises `ValueError(message, path,
+/// problem)`.
+#[pyfunction]
+fn compose_bind(py: Python<'_>, document: &str, data: &str, options: &str) -> PyResult<String> {
+    py.detach(|| alpha2_compose::bind_json(document, data, options))
+        .map_err(|error| compose_error(&error))
+}
+
+/// A template's data as a JSON Schema. Raises `ValueError(message, path, problem)`.
+#[pyfunction]
+fn compose_data_schema(py: Python<'_>, template: &str) -> PyResult<String> {
+    py.detach(|| alpha2_compose::data_schema_json(template))
+        .map_err(|error| compose_error(&error))
+}
+
+/// A template's problems, with `data` when not empty, as a JSON list of
+/// `{path, code, message, severity}`. Raises `ValueError` for text that is not JSON.
+#[pyfunction]
+fn compose_lint(py: Python<'_>, template: &str, data: &str, options: &str) -> PyResult<String> {
+    py.detach(|| alpha2_compose::lint_json(template, data, options))
+        .map_err(|error| compose_error(&error))
+}
+
 /// Text and layout measurer over the export's fonts, registered in the same order as the host.
 #[pyclass(module = "alpha2._native", frozen)]
 struct TextMeasurer {
@@ -222,6 +246,10 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("COMPOSE_THEMES", alpha2_compose::THEMES.to_vec())?;
     module.add_function(wrap_pyfunction!(compose_requirements, module)?)?;
     module.add_function(wrap_pyfunction!(compose, module)?)?;
+    module.add_function(wrap_pyfunction!(compose_bind, module)?)?;
+    module.add_function(wrap_pyfunction!(compose_data_schema, module)?)?;
+    module.add_function(wrap_pyfunction!(compose_lint, module)?)?;
+    module.add("COMPOSE_TEMPLATES", alpha2_compose::templates_json())?;
     module.add_class::<TextMeasurer>()?;
     Ok(())
 }

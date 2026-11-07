@@ -54,6 +54,7 @@ PathLike = str | os.PathLike[str]
 
 __all__ = [
     "COMPOSE_VERSION",
+    "TEMPLATES",
     "THEMES",
     "Audio",
     "Box",
@@ -95,8 +96,11 @@ __all__ = [
     "TitleCard",
     "Transition",
     "Video",
+    "bind",
     "compile",
+    "data_schema",
     "gather_facts",
+    "lint",
     "requirements",
 ]
 
@@ -1249,12 +1253,74 @@ def gather_facts(
     return facts
 
 
+TEMPLATES: tuple[dict[str, Any], ...] = tuple(json.loads(_native.COMPOSE_TEMPLATES))
+"""The 1st-party ``alpha2/`` templates; any spec may name them as node types."""
+
+
+def bind(
+    template: Mapping[str, Any],
+    data: Mapping[str, Any] | None = None,
+    *,
+    theme: str | Mapping[str, Any] | None = None,
+    templates: abc.Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """``template`` bound to ``data``: its parameters replaced and its ``owner/name`` template
+    nodes (from ``templates`` and :data:`TEMPLATES`) expanded, giving a plain spec (or node).
+    ``theme`` replaces a video template's theme. A spec without a ``template`` header only has
+    its template nodes expanded.
+
+    Raises :class:`~alpha2.Alpha2ComposeError` naming where the template or data does not bind.
+    """
+    options = {"templates": [_plain(entry) for entry in templates]}
+    if theme is not None:
+        options["theme"] = _plain(theme)
+    try:
+        bound = _native.compose_bind(
+            json.dumps(_plain(template), ensure_ascii=False, allow_nan=False),
+            json.dumps(_plain(data or {}), ensure_ascii=False, allow_nan=False),
+            json.dumps(options, ensure_ascii=False, allow_nan=False),
+        )
+    except ValueError as error:
+        raise _compose_error(error) from None
+    return cast("dict[str, Any]", json.loads(bound))
+
+
+def data_schema(template: Mapping[str, Any]) -> dict[str, Any]:
+    """The JSON Schema of ``template``'s data: what a form, an API or a model fills in.
+
+    Raises :class:`~alpha2.Alpha2ComposeError` for a template that does not parse.
+    """
+    try:
+        schema = _native.compose_data_schema(json.dumps(_plain(template), ensure_ascii=False))
+    except ValueError as error:
+        raise _compose_error(error) from None
+    return cast("dict[str, Any]", json.loads(schema))
+
+
+def lint(
+    template: Mapping[str, Any],
+    data: Mapping[str, Any] | None = None,
+    *,
+    templates: abc.Sequence[Mapping[str, Any]] = (),
+) -> list[dict[str, Any]]:
+    """``template``'s problems as ``{path, code, message, severity}``: unknown or unused
+    parameters, literal files, colors and words a template takes from its data and theme, and
+    whether it binds (to ``data``, or to sample data) into a spec that parses."""
+    issues = _native.compose_lint(
+        json.dumps(_plain(template), ensure_ascii=False),
+        "" if data is None else json.dumps(_plain(data), ensure_ascii=False),
+        json.dumps({"templates": [_plain(entry) for entry in templates]}, ensure_ascii=False),
+    )
+    return cast("list[dict[str, Any]]", json.loads(issues))
+
+
 def compile(  # noqa: A001 - the module's verb, as `re.compile`
     spec: Mapping[str, Any] | Video,
     *,
     facts: Mapping[str, Any] | None = None,
     fonts: abc.Sequence[PathLike] | None = None,
     client: _client.HostClient | None = None,
+    templates: abc.Sequence[Mapping[str, Any]] = (),
 ) -> Compiled:
     """Compiles ``spec`` into a project.
 
@@ -1263,8 +1329,13 @@ def compile(  # noqa: A001 - the module's verb, as `re.compile`
     :func:`gather_facts`, which needs a host. ``fonts`` measure text that must fit and pass to the
     export via :attr:`Compiled.fonts`.
 
+    The spec may name templates (``owner/name`` node types) from ``templates`` and
+    :data:`TEMPLATES`; bind a template's data with :func:`bind` first.
+
     Raises :class:`~alpha2.Alpha2ComposeError` naming where in the spec it does not compile.
     """
+    if templates:
+        spec = bind(json.loads(_spec_json(spec)), templates=templates)
     document = _spec_json(spec)
     gathered = gather_facts(json.loads(document), known=facts, client=client)
     font_paths = [os.fspath(font) for font in fonts or ()]

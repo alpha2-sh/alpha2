@@ -309,3 +309,33 @@ def test_motion_constructors_write_plain_dicts() -> None:
     assert c.Scale(size=0.5, fade=False) == {"type": "scale", "size": 0.5, "fade": False}
     assert c.Reveal("line") == {"by": "line"}
     assert c.Counter(1, 2)["start"] == 1
+
+
+def test_a_template_binds_its_data_and_says_what_it_takes() -> None:
+    template = {
+        "template": {"id": "acme/card", "version": 1, "kind": "video", "title": "Card"},
+        "params": [
+            {"name": "title", "type": "text", "max_chars": 10},
+            {"name": "photo", "type": "media"},
+        ],
+        "duration": 2,
+        "body": {
+            "type": "alpha2/wipe-reveal",
+            "with": {"content": {"type": "media", "path": {"$param": "photo"}}, "from": "right"},
+        },
+        "overlays": [{"type": "text", "text": "{{title}}!"}],
+    }
+    spec = c.bind(template, {"title": "Hello", "photo": "a.jpg"}, theme="clean-light")
+    assert spec["theme"] == "clean-light"
+    assert spec["overlays"][0]["text"] == "Hello!"
+    assert spec["body"]["children"][0]["content"]["path"] == "a.jpg"
+    schema = c.data_schema(template)
+    assert schema["title"] == "Card"
+    assert schema["required"] == ["title", "photo"]
+    assert c.lint(template, {"title": "Hello", "photo": "a.jpg"}) == []
+    with pytest.raises(alpha2.Alpha2ComposeError, match="at most 10"):
+        c.bind(template, {"title": "x" * 11, "photo": "a.jpg"})
+    assert {entry["template"]["id"] for entry in c.TEMPLATES} >= {
+        "alpha2/circle-reveal",
+        "alpha2/wipe-reveal",
+    }
