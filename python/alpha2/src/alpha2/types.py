@@ -606,6 +606,18 @@ modes such as overlay and soft-light match design tools only in
 """
 
 
+class BlockEllipsisVariant3(TypedDict):
+    """This text: 1 to `MAX_BLOCK_ELLIPSIS_BYTES` bytes with no control characters or line
+    and paragraph separators.
+    """
+
+    string: str
+
+
+BlockEllipsis: TypeAlias = "Literal[\"no_ellipsis\", \"ellipsis\"] | BlockEllipsisVariant3"
+"""What ends a line that a clamp cuts, as CSS `block-ellipsis`."""
+
+
 CacheIntent: TypeAlias = Literal["auto", "pin", "bypass"]
 """Whether a runtime may keep and reuse a clip's rendered picture."""
 
@@ -1039,6 +1051,28 @@ FlexWrap: TypeAlias = Literal["nowrap", "wrap"]
 """Whether a flex container's children wrap."""
 
 
+class FontSizeFit(TypedDict):
+    """The font sizes a text is fitted between, as fractions of the canvas's shorter side.
+
+    The text draws at the largest size in `[min, max]` at which it fits its box: no line
+    breaks inside a word at the wrapping width, the lines fit in the box's height (when it has
+    one), and there are no more lines than `line_clamp.max_lines` allows. When it fits at no
+    size, it draws at `min` and the clamp, if any, cuts it. A `min` above `max` wins, as CSS
+    `min-width` wins over `max-width`.
+
+    Candidate sizes are `max`, `min`, and the multiples of `1 / FONT_SIZE_FIT_STEPS` between
+    them, searched by bisection; smaller sizes are taken to fit at least as well. Text animators
+    never change the fit.
+    """
+
+    max: NotRequired[float | None]
+    """Largest font size, at least `min` and at most the holder's largest font size. `None`
+    is `font_size`, so the text only shrinks.
+    """
+    min: float
+    """Smallest font size, positive. At most the holder's largest font size."""
+
+
 class FrameRate(TypedDict):
     """A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps)."""
 
@@ -1194,6 +1228,21 @@ class LayoutBorder(TypedDict):
     """Width. At least 0."""
 
 
+class LayoutFontSizeFit(TypedDict):
+    """The font sizes a layout text is fitted between, as a text style's
+    `FontSizeFit`, in layout sizes. A `min` above `max` wins.
+    """
+
+    max: NotRequired[LayoutSize | None]
+    """Largest font size, with the same limits. `None` is the box's `font_size`, so the text
+    only shrinks.
+    """
+    min: LayoutSize
+    """Smallest font size: positive, at most `MAX_LAYOUT_FONT_SIZE` of the picture's shorter
+    side.
+    """
+
+
 class LayoutInset(TypedDict):
     """Where an absolute box lies in its parent's padding box. A missing side is auto; with
     neither `left` nor `right`, the box keeps its flow position on that axis.
@@ -1276,6 +1325,11 @@ class LayoutNode(TypedDict):
     """Font size: positive, at most `MAX_LAYOUT_FONT_SIZE` of the picture's shorter side.
     Inherited; the root's is 0.05.
     """
+    font_size_fit: NotRequired[LayoutFontSizeFit | None]
+    """The range the font size of the box's own text is fitted in so the text fits its content
+    box, as a text style's `font_size_fit`. The box is laid out at `font_size` first; the
+    fit never changes its size. Not inherited.
+    """
     font_weight: NotRequired[int | None]
     """The weight in `[1, 1000]` used to match the family's faces, as a text style's
     `font_weight`. Not animated. Inherited; the root's is 400.
@@ -1315,6 +1369,11 @@ class LayoutNode(TypedDict):
     letter_spacing: NotRequired[float | None]
     """Space after each character, as a fraction of the font size, in `[-0.5, 1]`, as a text
     style's `letter_spacing`. Not animated. Inherited; the root's is 0.
+    """
+    line_clamp: NotRequired[LineClamp | None]
+    """Where the lines of the box's own text are cut and what ends the cut line, as CSS
+    `line-clamp` and a text style's `line_clamp`. The clamp point is also at the content
+    box's height. The box's automatic height ends at the clamp point. Not inherited.
     """
     line_height: NotRequired[float | None]
     """Baseline-to-baseline distance in font sizes, in `[0.5, 3]`, as a text style's
@@ -1415,6 +1474,28 @@ class Limiter(TypedDict):
 
 LineCap: TypeAlias = Literal["butt", "round", "square"]
 """How an open stroke ends."""
+
+
+class LineClamp(TypedDict):
+    """Lines past a clamp point are discarded, as CSS Overflow 4 `line-clamp` discards them.
+
+    The clamp point is after the last line within `max_lines` that fits in the text's box
+    height, and never before the first line. CSS clamps at the height only for
+    `max-lines: auto`; here the height always takes part, so clamped text stays within a box
+    that has a height. When text is cut, the last kept line is shortened to its last soft wrap
+    opportunity at which the ellipsis fits after it (to its last character that does when none
+    does), and the ellipsis is drawn at the line's end in the text's style. The ellipsis is not
+    counted by text animators and moves with the character before it.
+    """
+
+    block_ellipsis: NotRequired[BlockEllipsis]
+    """What ends the last kept line when text is cut. Default `ellipsis`, as in the CSS
+    `line-clamp` shorthand.
+
+    Default: `"ellipsis"`.
+    """
+    max_lines: NotRequired[int | None]
+    """Most lines, at least 1, as CSS `max-lines`. `None` cuts at the box's height alone."""
 
 
 LineJoin: TypeAlias = Literal["miter", "round", "bevel"]
@@ -2653,6 +2734,10 @@ class TextStyle(TypedDict):
 
     Default: `0.05`.
     """
+    font_size_fit: NotRequired[FontSizeFit | None]
+    """The range the font size is fitted in so the text fits its box; `None` draws at
+    `font_size`.
+    """
     font_weight: NotRequired[int]
     """The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches
     `font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is
@@ -2667,11 +2752,20 @@ class TextStyle(TypedDict):
 
     Default: `0`.
     """
+    line_clamp: NotRequired[LineClamp | None]
+    """Where lines are cut and what ends the cut line, as CSS `line-clamp`; `None` keeps every
+    line.
+    """
     line_height: NotRequired[float]
     """Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each line's em box (0.8 font
     sizes above the baseline, 0.2 below) is centred in a taller line.
 
     Default: `1.2`.
+    """
+    max_height: NotRequired[float | None]
+    """Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for
+    `font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS
+    `max-height` lets a box with visible overflow; `None` sets no height.
     """
     max_width: NotRequired[float]
     """Width text wraps at, as a fraction of the canvas width, in `(0, 1]`.
@@ -2712,12 +2806,18 @@ class TextStylePatch(TypedDict):
     """The family; `null` draws from the fallback order alone."""
     font_size: NotRequired[float | None]
     """See `TextStyle::font_size`."""
+    font_size_fit: NotRequired[FontSizeFit | None]
+    """See `TextStyle::font_size_fit`; `null` removes the base's."""
     font_weight: NotRequired[int | None]
     """See `TextStyle::font_weight`."""
     letter_spacing: NotRequired[float | None]
     """See `TextStyle::letter_spacing`."""
+    line_clamp: NotRequired[LineClamp | None]
+    """See `TextStyle::line_clamp`; `null` removes the base's."""
     line_height: NotRequired[float | None]
     """See `TextStyle::line_height`."""
+    max_height: NotRequired[float | None]
+    """See `TextStyle::max_height`; `null` removes the base's."""
     max_width: NotRequired[float | None]
     """See `TextStyle::max_width`."""
     position: NotRequired[Vec2 | None]

@@ -801,6 +801,16 @@ export interface AudioStreamShape {
 export type BlendSpace = "linear_light" | "srgb_encoded";
 
 /**
+ * What ends a line that a clamp cuts, as CSS `block-ellipsis`.
+ */
+export type BlockEllipsis =
+  | "no_ellipsis"
+  | "ellipsis"
+  | {
+      readonly string: string;
+    };
+
+/**
  * Whether a runtime may keep and reuse a clip's rendered picture.
  */
 export type CacheIntent = "auto" | "pin" | "bypass";
@@ -1388,6 +1398,31 @@ export type FlexDirection = "row" | "column" | "row_reverse" | "column_reverse";
 export type FlexWrap = "nowrap" | "wrap";
 
 /**
+ * The font sizes a text is fitted between, as fractions of the canvas's shorter side.
+ *
+ * The text draws at the largest size in `[min, max]` at which it fits its box: no line
+ * breaks inside a word at the wrapping width, the lines fit in the box's height (when it has
+ * one), and there are no more lines than `line_clamp.max_lines` allows. When it fits at no
+ * size, it draws at `min` and the clamp, if any, cuts it. A `min` above `max` wins, as CSS
+ * `min-width` wins over `max-width`.
+ *
+ * Candidate sizes are `max`, `min`, and the multiples of `1 / FONT_SIZE_FIT_STEPS` between
+ * them, searched by bisection; smaller sizes are taken to fit at least as well. Text animators
+ * never change the fit.
+ */
+export interface FontSizeFit {
+  /**
+   * Largest font size, at least `min` and at most the holder's largest font size. `None`
+   * is `font_size`, so the text only shrinks.
+   */
+  readonly max?: number | null;
+  /**
+   * Smallest font size, positive. At most the holder's largest font size.
+   */
+  readonly min: number;
+}
+
+/**
  * A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps).
  */
 export interface FrameRate {
@@ -1589,6 +1624,23 @@ export interface LayoutBorder {
 }
 
 /**
+ * The font sizes a layout text is fitted between, as a text style's
+ * `FontSizeFit`, in layout sizes. A `min` above `max` wins.
+ */
+export interface LayoutFontSizeFit {
+  /**
+   * Largest font size, with the same limits. `None` is the box's `font_size`, so the text
+   * only shrinks.
+   */
+  readonly max?: LayoutSize | null;
+  /**
+   * Smallest font size: positive, at most `MAX_LAYOUT_FONT_SIZE` of the picture's shorter
+   * side.
+   */
+  readonly min: LayoutSize;
+}
+
+/**
  * Where an absolute box lies in its parent's padding box. A missing side is auto; with
  * neither `left` nor `right`, the box keeps its flow position on that axis.
  */
@@ -1707,6 +1759,12 @@ export interface LayoutNode {
    */
   readonly font_size?: Animated<LayoutSize> | null;
   /**
+   * The range the font size of the box's own text is fitted in so the text fits its content
+   * box, as a text style's `font_size_fit`. The box is laid out at `font_size` first; the
+   * fit never changes its size. Not inherited.
+   */
+  readonly font_size_fit?: LayoutFontSizeFit | null;
+  /**
    * The weight in `[1, 1000]` used to match the family's faces, as a text style's
    * `font_weight`. Not animated. Inherited; the root's is 400.
    */
@@ -1771,6 +1829,12 @@ export interface LayoutNode {
    * style's `letter_spacing`. Not animated. Inherited; the root's is 0.
    */
   readonly letter_spacing?: number | null;
+  /**
+   * Where the lines of the box's own text are cut and what ends the cut line, as CSS
+   * `line-clamp` and a text style's `line_clamp`. The clamp point is also at the content
+   * box's height. The box's automatic height ends at the clamp point. Not inherited.
+   */
+  readonly line_clamp?: LineClamp | null;
   /**
    * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`, as a text style's
    * `line_height`. Inherited; the root's is 1.2.
@@ -1913,6 +1977,31 @@ export interface Limiter {
  * How an open stroke ends.
  */
 export type LineCap = "butt" | "round" | "square";
+
+/**
+ * Lines past a clamp point are discarded, as CSS Overflow 4 `line-clamp` discards them.
+ *
+ * The clamp point is after the last line within `max_lines` that fits in the text's box
+ * height, and never before the first line. CSS clamps at the height only for
+ * `max-lines: auto`; here the height always takes part, so clamped text stays within a box
+ * that has a height. When text is cut, the last kept line is shortened to its last soft wrap
+ * opportunity at which the ellipsis fits after it (to its last character that does when none
+ * does), and the ellipsis is drawn at the line's end in the text's style. The ellipsis is not
+ * counted by text animators and moves with the character before it.
+ */
+export interface LineClamp {
+  /**
+   * What ends the last kept line when text is cut. Default `ellipsis`, as in the CSS
+   * `line-clamp` shorthand.
+   *
+   * @defaultValue `"ellipsis"`
+   */
+  readonly block_ellipsis?: BlockEllipsis;
+  /**
+   * Most lines, at least 1, as CSS `max-lines`. `None` cuts at the box's height alone.
+   */
+  readonly max_lines?: number | null;
+}
 
 /**
  * How stroke segments meet at a vertex.
@@ -3468,6 +3557,11 @@ export interface TextStyle {
    */
   readonly font_size?: number;
   /**
+   * The range the font size is fitted in so the text fits its box; `None` draws at
+   * `font_size`.
+   */
+  readonly font_size_fit?: FontSizeFit | null;
+  /**
    * The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches
    * `font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is
    * synthetically emboldened.
@@ -3484,12 +3578,23 @@ export interface TextStyle {
    */
   readonly letter_spacing?: number;
   /**
+   * Where lines are cut and what ends the cut line, as CSS `line-clamp`; `None` keeps every
+   * line.
+   */
+  readonly line_clamp?: LineClamp | null;
+  /**
    * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each line's em box (0.8 font
    * sizes above the baseline, 0.2 below) is centred in a taller line.
    *
    * @defaultValue `1.2`
    */
   readonly line_height?: number;
+  /**
+   * Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for
+   * `font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS
+   * `max-height` lets a box with visible overflow; `None` sets no height.
+   */
+  readonly max_height?: number | null;
   /**
    * Width text wraps at, as a fraction of the canvas width, in `(0, 1]`.
    *
@@ -3548,6 +3653,10 @@ export interface TextStylePatch {
    */
   readonly font_size?: number | null;
   /**
+   * See `TextStyle::font_size_fit`; `null` removes the base's.
+   */
+  readonly font_size_fit?: FontSizeFit | null;
+  /**
    * See `TextStyle::font_weight`.
    */
   readonly font_weight?: number | null;
@@ -3556,9 +3665,17 @@ export interface TextStylePatch {
    */
   readonly letter_spacing?: number | null;
   /**
+   * See `TextStyle::line_clamp`; `null` removes the base's.
+   */
+  readonly line_clamp?: LineClamp | null;
+  /**
    * See `TextStyle::line_height`.
    */
   readonly line_height?: number | null;
+  /**
+   * See `TextStyle::max_height`; `null` removes the base's.
+   */
+  readonly max_height?: number | null;
   /**
    * See `TextStyle::max_width`.
    */

@@ -44,9 +44,12 @@ fn rect(rect: CanvasRect) -> serde_json::Value {
 /// Measures the text generator `generator_json` on a `width` by `height` canvas
 /// ([`crate::measure_text`]).
 ///
-/// Returns JSON `{ layout, content, ink, lineCount, baselines }`. Rectangles are
-/// `{ left, top, right, bottom }` in fractions of the canvas, `ink` is `null` when the text
-/// draws nothing, and `baselines` is `{ first, last }` in fractions of the canvas height.
+/// Returns JSON `{ layout, content, ink, lineCount, baselines, fontSize, truncated, overflow }`.
+/// Rectangles are `{ left, top, right, bottom }` in fractions of the canvas, `ink` is `null`
+/// when the text draws nothing, and `baselines` is `{ first, last }` in fractions of the canvas
+/// height. `fontSize` is the size drawn (fitted by `font_size_fit`), a fraction of the canvas's
+/// shorter side; `truncated` says `line_clamp` cut lines; `overflow` says the drawn text still
+/// splits a word or is taller than `max_height`.
 ///
 /// # Errors
 /// Returns [`MeasureError::Input`] for invalid generator JSON or an empty canvas, and
@@ -79,6 +82,9 @@ pub fn measure_text_json(
         "ink": bounds.ink.map(rect),
         "lineCount": bounds.line_count,
         "baselines": baselines(bounds.baselines),
+        "fontSize": bounds.font_size,
+        "truncated": bounds.truncated,
+        "overflow": bounds.overflow,
     })
     .to_string())
 }
@@ -87,10 +93,12 @@ pub fn measure_text_json(
 /// picture at picture time `time` ([`crate::measure_layout`]).
 ///
 /// Returns JSON `{ nodes }`, each node in preorder as
-/// `{ at, border, content, overflow, lineCount, baselines }` with boxes in fractions of the
-/// picture. `lineCount` is `null` for non-text nodes; `baselines` (`{ first, last }`,
-/// fractions of the picture height) is `null` for non-text nodes and empty text. `canvas` is
-/// the project canvas the generator's pixel lengths refer to, the picture's size when `None`.
+/// `{ at, border, content, overflow, lineCount, baselines, fontSize, truncated }` with boxes in
+/// fractions of the picture. `lineCount` and `fontSize` (the size drawn, a fraction of the
+/// picture's shorter side) are `null` for non-text nodes; `baselines` (`{ first, last }`,
+/// fractions of the picture height) is `null` for non-text nodes and empty text; `truncated`
+/// says `line_clamp` cut the node's lines. `canvas` is the project canvas the generator's
+/// pixel lengths refer to, the picture's size when `None`.
 ///
 /// # Errors
 /// Returns [`MeasureError::Input`] for an invalid layout generator on that canvas or an empty
@@ -144,6 +152,8 @@ pub fn measure_layout_json(
                 "overflow": node.overflow,
                 "lineCount": node.line_count,
                 "baselines": node.baselines.map(baselines),
+                "fontSize": node.font_size,
+                "truncated": node.truncated,
             })
         })
         .collect::<Vec<_>>();

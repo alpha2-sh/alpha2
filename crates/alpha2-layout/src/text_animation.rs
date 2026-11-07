@@ -226,8 +226,35 @@ fn timing(
 /// Each cluster's state under `animators` at `time`, in pixels of a `font_size`-pixel font,
 /// and a hash of the states. The hash is 0 when every state is identity, so the text draws as
 /// it would without animators. `base_fill` and `base_stroke` are where color mixes start.
+///
+/// The ellipsis of a clamped text is no unit of any selector: it takes the state of the
+/// cluster before it, so it moves and fades with the text it ends.
 #[must_use]
 pub fn cluster_states(
+    layout: &TextLayout,
+    runs: &[TextRun],
+    animators: &[SampledAnimator],
+    time: MediaTime,
+    font_size: f32,
+) -> (Vec<ClusterState>, u64) {
+    let Some(mark) = layout.clusters.iter().position(|cluster| cluster.ellipsis) else {
+        return text_states(layout, runs, animators, time, font_size);
+    };
+    let mut text = layout.clone();
+    text.clusters.remove(mark);
+    for line in &mut text.lines {
+        let shift = |index: usize| index - usize::from(index > mark);
+        line.clusters = shift(line.clusters.start)..shift(line.clusters.end);
+    }
+    let (mut states, hash) = text_states(&text, runs, animators, time, font_size);
+    let before = mark
+        .checked_sub(1)
+        .map_or(ClusterState::IDENTITY, |index| states[index]);
+    states.insert(mark, before);
+    (states, hash)
+}
+
+fn text_states(
     layout: &TextLayout,
     runs: &[TextRun],
     animators: &[SampledAnimator],

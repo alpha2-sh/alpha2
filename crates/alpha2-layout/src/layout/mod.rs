@@ -10,12 +10,13 @@ mod resolve;
 #[cfg(test)]
 mod tests;
 
-use crate::text::{MAX_FONT_PIXELS, TextDraw, layout_text_key, stroke_pixels, text_fill};
+use crate::fit::{BoxedLines, boxed_lines, fit_font_size, pixels, text_clamp};
+use crate::text::{TextDraw, layout_text_key, stroke_pixels, text_fill};
 use crate::{Baselines, CanvasRect, PictureSize};
 use alpha2_eval::{EvaluatedLayout, EvaluatedNode, EvaluatedText, LayoutPlan, NodeContent};
 use alpha2_media::EmojiPolicy;
 use alpha2_model::{LayoutNode, TextAlign};
-use alpha2_text::{ShapedText, TextRasterError, TextRasterRequest, TextRasterizer};
+use alpha2_text::{ShapedText, TextClamp, TextRasterError, TextRasterRequest, TextRasterizer};
 use alpha2_time::MediaTime;
 use std::sync::Arc;
 
@@ -43,6 +44,15 @@ pub struct NodeRects {
     pub content: [f32; 4],
     /// The unrounded content width a text breaks at, before the slack.
     pub text_width: f32,
+    /// The unrounded content height a text fits and is clamped in, before the slack.
+    pub text_height: f32,
+    /// A text node's font size as a fraction of the picture's shorter side, fitted when it
+    /// has a `font_size_fit` ([`fit_texts`]); zero for other nodes.
+    pub font_size: f32,
+    /// A text node's font size in pixels, as the text host draws it.
+    pub font_pixels: f32,
+    /// Whether a text node's `line_clamp` discarded lines.
+    pub truncated: bool,
     /// Whether it overflows, as [`NodeBounds::overflow`] says.
     pub overflow: bool,
     /// A text node's line count, zero for empty text.
@@ -75,30 +85,30 @@ pub struct NodeBounds {
     pub border: CanvasRect,
     /// The content box, as fractions of the picture.
     pub content: CanvasRect,
-    /// Whether it overflows: its text is taller than its content box or splits a word, or an
-    /// in-flow child reaches past its padding box.
+    /// Whether it overflows: its text (at its fitted size, once clamped) is taller than its
+    /// content box or splits a word, or an in-flow child reaches past its padding box.
     pub overflow: bool,
     /// A text node's line count; `None` for other nodes.
     pub line_count: Option<u32>,
+    /// A text node's font size as drawn, a fraction of the picture's shorter side; `None` for
+    /// other nodes.
+    pub font_size: Option<f32>,
+    /// Whether a text node's `line_clamp` discarded lines.
+    pub truncated: bool,
     /// A text node's first and last baselines as fractions of the picture height. `None` for
     /// other nodes and empty text.
     pub baselines: Option<Baselines>,
 }
 
-/// The font size in pixels of `text` on a picture whose shorter side is `unit` pixels,
-/// clamped to what the text host draws.
-pub(crate) fn font_pixels(text: &EvaluatedText, unit: f32) -> f32 {
-    (text.font_size * unit).clamp(1.0, MAX_FONT_PIXELS)
-}
-
-/// The text host request for a layout's text, wrapped at `max_width`.
+/// The text host request for a layout's text at `font_size` pixels, wrapped at `max_width`
+/// and cut by `clamp`.
 pub(crate) fn text_request(
     text: &EvaluatedText,
-    unit: f32,
+    font_size: f32,
     max_width: f32,
+    clamp: Option<TextClamp>,
     content_version: u64,
 ) -> TextRasterRequest {
-    let font_size = font_pixels(text, unit);
     TextRasterRequest {
         text: text.content.clone(),
         font_size,
@@ -118,6 +128,88 @@ pub(crate) fn text_request(
         font_family: text.font_family.clone(),
         letter_spacing: text.letter_spacing * font_size,
         font_weight: text.font_weight,
+        clamp,
+    }
+}
+
+/// How `shaped` lies in a text node's content box `width` by `height` unrounded pixels,
+/// cut by its clamp. Lines break at the width plus the slack and fit in the height plus the
+/// slack.
+pub(crate) fn node_lines(
+    text: &EvaluatedText,
+    shaped: &ShapedText,
+    width: f32,
+    height: f32,
+) -> BoxedLines {
+    boxed_lines(
+        shaped,
+        wrap(width),
+        height + LAYOUT_WRAP_SLACK,
+        text.line_clamp.as_ref().and_then(|clamp| clamp.max_lines),
+        text.line_clamp.is_some(),
+    )
+}
+
+/// Fits the font size of each text node with a `font_size_fit` to its content box in
+/// `resolved` ([`resolve`]), with lines from `shape`, and updates its font size, lines and
+/// overflow. The boxes keep the sizes they were laid out at.
+///
+/// # Errors
+/// Returns the first refusal of `shape`.
+pub fn fit_texts(
+    layout: &EvaluatedLayout,
+    resolved: &mut ResolvedLayout,
+    size: PictureSize,
+    mut shape: impl FnMut(&TextRasterRequest) -> Result<Arc<ShapedText>, TextRasterError>,
+) -> Result<(), TextRasterError> {
+    let unit = size.unit();
+    let mut found = Vec::new();
+    text_nodes(&layout.root, &mut 0, &mut found);
+    for (node, text) in found {
+        let (Some(text), Some(rects)) = (text, resolved.nodes.get_mut(node)) else {
+            continue;
+        };
+        if text.font_size_fit.is_none() {
+            continue;
+        }
+        let (width, height) = (rects.text_width, rects.text_height);
+        let request = |pixels| text_request(text, pixels, 0.0, None, 1);
+        let fitted = fit_font_size(text.font_size, text.font_size_fit, unit, |pixels| {
+            Ok(node_lines(text, &*shape(&request(pixels))?, width, height).fits)
+        })?;
+        let lines = node_lines(text, &*shape(&request(fitted.font_pixels))?, width, height);
+        let top = rects.content[1];
+        rects.font_size = fitted.font_size;
+        rects.font_pixels = fitted.font_pixels;
+        rects.truncated = lines.truncated;
+        rects.line_count = Some(lines.lines.line_count);
+        rects.baselines = Some([
+            top + lines.lines.first_baseline,
+            top + lines.lines.last_baseline,
+        ]);
+        rects.overflow = lines.overflow;
+    }
+    Ok(())
+}
+
+/// Each text node's preorder index and its text, `None` for empty text.
+fn text_nodes<'a>(
+    node: &'a EvaluatedNode,
+    index: &mut usize,
+    out: &mut Vec<(usize, Option<&'a EvaluatedText>)>,
+) {
+    let at = *index;
+    *index += 1;
+    match &node.content {
+        NodeContent::Text(text) => {
+            out.push((at, Some(&**text).filter(|text| !text.content.is_empty())));
+        }
+        NodeContent::Children(children) => {
+            for child in children {
+                text_nodes(child, index, out);
+            }
+        }
+        NodeContent::Empty | NodeContent::Shape(_) => {}
     }
 }
 
@@ -125,7 +217,7 @@ pub(crate) fn text_request(
 /// nothing.
 pub(crate) fn texts<'a>(node: &'a EvaluatedNode, out: &mut Vec<Option<&'a EvaluatedText>>) {
     match &node.content {
-        NodeContent::Text(text) => out.push(Some(text).filter(|text| !text.content.is_empty())),
+        NodeContent::Text(text) => out.push(Some(&**text).filter(|text| !text.content.is_empty())),
         NodeContent::Children(children) => {
             for child in children {
                 texts(child, out);
@@ -150,42 +242,32 @@ pub fn shape_texts(
     texts(&layout.root, &mut list);
     list.into_iter()
         .map(|text| {
-            text.map(|text| shape(&text_request(text, unit, 0.0, 1)))
-                .transpose()
+            text.map(|text| {
+                shape(&text_request(
+                    text,
+                    pixels(text.font_size, unit),
+                    0.0,
+                    None,
+                    1,
+                ))
+            })
+            .transpose()
         })
         .collect()
 }
 
 /// Each text node's store key in preorder (`None` for empty text), and each distinct key's
-/// raster request, wrapped at its unrounded content width plus the slack.
+/// raster request at its font size in `resolved`, wrapped at its unrounded content width plus
+/// the slack and clamped in its content height plus the slack.
 #[must_use]
 pub fn layout_texts(
     layout: &EvaluatedLayout,
     resolved: &ResolvedLayout,
     size: PictureSize,
 ) -> (Vec<Option<u64>>, Vec<(u64, TextDraw)>) {
-    fn walk<'a>(
-        node: &'a EvaluatedNode,
-        index: &mut usize,
-        out: &mut Vec<(usize, Option<&'a EvaluatedText>)>,
-    ) {
-        let at = *index;
-        *index += 1;
-        match &node.content {
-            NodeContent::Text(text) => {
-                out.push((at, Some(text).filter(|text| !text.content.is_empty())));
-            }
-            NodeContent::Children(children) => {
-                for child in children {
-                    walk(child, index, out);
-                }
-            }
-            NodeContent::Empty | NodeContent::Shape(_) => {}
-        }
-    }
     let unit = size.unit();
     let mut found = Vec::new();
-    walk(&layout.root, &mut 0, &mut found);
+    text_nodes(&layout.root, &mut 0, &mut found);
     let mut keys = Vec::with_capacity(found.len());
     let mut requests: Vec<(u64, TextDraw)> = Vec::new();
     for (node, text) in found {
@@ -193,11 +275,17 @@ pub fn layout_texts(
             keys.push(None);
             continue;
         };
-        let width = resolved
-            .nodes
-            .get(node)
-            .map_or(0.0, |rects| rects.text_width);
-        let mut request = text_request(text, unit, wrap(width), 1);
+        let rects = resolved.nodes.get(node).copied().unwrap_or_default();
+        let font_size = if rects.font_pixels > 0.0 {
+            rects.font_pixels
+        } else {
+            pixels(text.font_size, unit)
+        };
+        let clamp = text
+            .line_clamp
+            .as_ref()
+            .map(|clamp| text_clamp(clamp, rects.text_height + LAYOUT_WRAP_SLACK));
+        let mut request = text_request(text, font_size, wrap(rects.text_width), clamp, 1);
         let shadows = crate::text::shadow_pixels(&text.shadows, request.font_size);
         let key = layout_text_key(&request, &shadows, &text.animators);
         request.content_version = key;
@@ -242,7 +330,10 @@ pub fn measure_layout(
     let shaped = shape_texts(&evaluated, size, |request| {
         rasterizer.shape(request).map(Arc::new)
     })?;
-    let resolved = resolve(&evaluated, size, &shaped);
+    let mut resolved = resolve(&evaluated, size, &shaped);
+    fit_texts(&evaluated, &mut resolved, size, |request| {
+        rasterizer.shape(request).map(Arc::new)
+    })?;
     let (width, height) = (size.width() as f32, size.height() as f32);
     let rect = |[left, top, right, bottom]: [f32; 4]| CanvasRect {
         left: left / width,
@@ -262,6 +353,8 @@ pub fn measure_layout(
                 content: rect(node.content),
                 overflow: node.overflow,
                 line_count: node.line_count,
+                font_size: node.line_count.map(|_| node.font_size),
+                truncated: node.truncated,
                 baselines: node.baselines.map(|[first, last]| Baselines {
                     first: first / height,
                     last: last / height,

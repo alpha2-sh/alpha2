@@ -1,0 +1,407 @@
+{
+  "schema_version": 1,
+  "id": "text-fit",
+  "name": "Fitted and clamped text: captions, text generators and a layout card",
+  "settings": {
+    "width": 320,
+    "height": 180,
+    "frame_rate": {
+      "num": 24,
+      "den": 1
+    },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "backdrop",
+      "kind": "generated",
+      "generator": {
+        "type": "fill",
+        "paint": {
+          "type": "linear_gradient",
+          "start": {
+            "x": 0,
+            "y": 0
+          },
+          "end": {
+            "x": 1,
+            "y": 1
+          },
+          "stops": [
+            {
+              "offset": 0,
+              "color": "#1a2550"
+            },
+            {
+              "offset": 1,
+              "color": "#4a1a40"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "headline",
+      "kind": "generated",
+      "generator": {
+        "type": "text",
+        "text": "Fitted headline shrinks into its box",
+        "style": {
+          "font_size": 0.3,
+          "max_width": 0.55,
+          "max_height": 0.3,
+          "position": {
+            "x": 0.03,
+            "y": 0.04
+          },
+          "anchor": {
+            "x": 0,
+            "y": 0
+          },
+          "align": "start",
+          "font_size_fit": {
+            "min": 0.05
+          },
+          "background": {
+            "color": "#10203080",
+            "padding": 0.1
+          }
+        }
+      }
+    },
+    {
+      "id": "grow",
+      "kind": "generated",
+      "generator": {
+        "type": "text",
+        "text": "Grow",
+        "style": {
+          "font_size": 0.05,
+          "max_width": 0.3,
+          "max_height": 0.22,
+          "position": {
+            "x": 0.97,
+            "y": 0.04
+          },
+          "anchor": {
+            "x": 1,
+            "y": 0
+          },
+          "font_size_fit": {
+            "min": 0.03,
+            "max": 0.6
+          },
+          "fill": "#ffcc33",
+          "strokes": [
+            {
+              "color": "#000000",
+              "width": 0.05
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "teaser",
+      "kind": "generated",
+      "generator": {
+        "type": "text",
+        "text": "שלום עולם מה שלומך היום ומה נשמע",
+        "style": {
+          "font_size": 0.08,
+          "max_width": 0.4,
+          "position": {
+            "x": 0.03,
+            "y": 0.55
+          },
+          "anchor": {
+            "x": 0,
+            "y": 0.5
+          },
+          "align": "start",
+          "line_clamp": {
+            "max_lines": 1
+          }
+        }
+      }
+    },
+    {
+      "id": "card",
+      "kind": "generated",
+      "generator": {
+        "type": "layout",
+        "root": {
+          "justify_content": "center",
+          "align_items": "end",
+          "padding": {
+            "mode": "constant",
+            "value": {
+              "top": 0.03,
+              "right": 0.03,
+              "bottom": 0.03,
+              "left": 0.03
+            }
+          },
+          "children": [
+            {
+              "width": {
+                "mode": "constant",
+                "value": "60%"
+              },
+              "height": {
+                "mode": "constant",
+                "value": 0.42
+              },
+              "padding": {
+                "mode": "constant",
+                "value": {
+                  "top": 0.015,
+                  "right": 0.02,
+                  "bottom": 0.015,
+                  "left": 0.02
+                }
+              },
+              "background": {
+                "mode": "constant",
+                "value": {
+                  "type": "solid",
+                  "color": {
+                    "red": 0.95,
+                    "green": 0.95,
+                    "blue": 0.92,
+                    "alpha": 1
+                  }
+                }
+              },
+              "border_radius": {
+                "mode": "constant",
+                "value": 0.02
+              },
+              "fill": {
+                "type": "solid",
+                "color": {
+                  "red": 0.1,
+                  "green": 0.1,
+                  "blue": 0.15,
+                  "alpha": 1
+                }
+              },
+              "font_size": {
+                "mode": "keyframes",
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": 0.04,
+                    "interpolation": {
+                      "type": "linear"
+                    }
+                  },
+                  {
+                    "time": 120000,
+                    "value": 0.2,
+                    "interpolation": {
+                      "type": "linear"
+                    }
+                  }
+                ]
+              },
+              "font_size_fit": {
+                "min": 0.035
+              },
+              "line_clamp": {
+                "max_lines": 4,
+                "block_ellipsis": {
+                  "string": " ..."
+                }
+              },
+              "text": {
+                "mode": "constant",
+                "value": "A fitted card keeps its text in view while its font size grows."
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "t-backdrop",
+        "name": "backdrop",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "backdrop-clip",
+            "source_id": "backdrop",
+            "timeline_range": {
+              "start": 0,
+              "end": 120000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 120000
+            }
+          }
+        ]
+      },
+      {
+        "id": "t-headline",
+        "name": "headline",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "headline-clip",
+            "source_id": "headline",
+            "timeline_range": {
+              "start": 0,
+              "end": 120000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 120000
+            }
+          }
+        ]
+      },
+      {
+        "id": "t-grow",
+        "name": "grow",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "grow-clip",
+            "source_id": "grow",
+            "timeline_range": {
+              "start": 0,
+              "end": 120000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 120000
+            }
+          }
+        ]
+      },
+      {
+        "id": "t-teaser",
+        "name": "teaser",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "teaser-clip",
+            "source_id": "teaser",
+            "timeline_range": {
+              "start": 0,
+              "end": 120000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 120000
+            }
+          }
+        ]
+      },
+      {
+        "id": "t-card",
+        "name": "card",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "card-clip",
+            "source_id": "card",
+            "timeline_range": {
+              "start": 0,
+              "end": 120000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 120000
+            }
+          }
+        ]
+      },
+      {
+        "id": "subs",
+        "name": "Subtitles",
+        "kind": "caption",
+        "captions": {
+          "style": {
+            "font_size": 0.12,
+            "max_width": 0.9,
+            "max_height": 0.12,
+            "position": {
+              "x": 0.5,
+              "y": 0.97
+            },
+            "font_size_fit": {
+              "min": 0.07
+            },
+            "line_clamp": {
+              "max_lines": 1
+            },
+            "strokes": [
+              {
+                "color": "#000000",
+                "width": 0.08
+              }
+            ],
+            "animators": [
+              {
+                "selector": {
+                  "type": "timing",
+                  "state": "active",
+                  "ramp": 3000
+                },
+                "properties": {
+                  "fill": {
+                    "mode": "constant",
+                    "value": "#ffd040"
+                  },
+                  "scale": {
+                    "mode": "constant",
+                    "value": {
+                      "x": 1.15,
+                      "y": 1.15
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "cues": [
+            {
+              "timeline_range": {
+                "start": 0,
+                "end": 120000
+              },
+              "text": [
+                {
+                  "text": "Captions fit ",
+                  "time": {
+                    "start": 0,
+                    "end": 30000
+                  }
+                },
+                {
+                  "text": "before they clamp, ",
+                  "time": {
+                    "start": 30000,
+                    "end": 60000
+                  }
+                },
+                {
+                  "text": "and the ellipsis follows the last word",
+                  "time": {
+                    "start": 60000,
+                    "end": 120000
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

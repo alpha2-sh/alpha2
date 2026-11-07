@@ -48,6 +48,9 @@ pub struct ClusterInfo {
     pub advance: f32,
     /// Line baseline in pixels from the layout box's top.
     pub baseline: f32,
+    /// Whether it is the ellipsis a [`crate::TextClamp`] ends a cut line with. Its byte range
+    /// is empty, at the cut, and it is in no word.
+    pub ellipsis: bool,
 }
 
 /// One line of a [`TextLayout`].
@@ -1050,9 +1053,10 @@ fn text_layout(layout: &Layout, request: &TextRasterRequest) -> TextLayout {
                 .try_into()
                 .ok()
                 .filter(|&index: &u32| {
-                    words
-                        .get(index as usize)
-                        .is_some_and(|word| word.contains(&bytes.start))
+                    !span.ellipsis
+                        && words
+                            .get(index as usize)
+                            .is_some_and(|word| word.contains(&bytes.start))
                 });
             ClusterInfo {
                 is_space: !text.is_empty() && text.chars().all(char::is_whitespace),
@@ -1062,6 +1066,7 @@ fn text_layout(layout: &Layout, request: &TextRasterRequest) -> TextLayout {
                 x: 0.0,
                 advance: 0.0,
                 baseline: 0.0,
+                ellipsis: span.ellipsis,
             }
         })
         .collect::<Vec<_>>();

@@ -430,6 +430,18 @@ export const PROJECT_SHAPE: unknown = {
         { const: "srgb_encoded", type: "string" },
       ],
     },
+    BlockEllipsis: {
+      oneOf: [
+        { const: "no_ellipsis", type: "string" },
+        { const: "ellipsis", type: "string" },
+        {
+          additionalProperties: false,
+          properties: { string: { type: "string" } },
+          required: ["string"],
+          type: "object",
+        },
+      ],
+    },
     CacheIntent: {
       oneOf: [
         { const: "auto", type: "string" },
@@ -883,6 +895,15 @@ export const PROJECT_SHAPE: unknown = {
         { const: "wrap", type: "string" },
       ],
     },
+    FontSizeFit: {
+      additionalProperties: false,
+      properties: {
+        max: { format: "float", type: ["number", "null"] },
+        min: { format: "float", type: "number" },
+      },
+      required: ["min"],
+      type: "object",
+    },
     FrameRate: {
       additionalProperties: false,
       properties: {
@@ -1166,6 +1187,15 @@ export const PROJECT_SHAPE: unknown = {
       required: ["width", "paint"],
       type: "object",
     },
+    LayoutFontSizeFit: {
+      additionalProperties: false,
+      properties: {
+        max: { anyOf: [{ $ref: "#/$defs/LayoutSize" }, { type: "null" }] },
+        min: { $ref: "#/$defs/LayoutSize" },
+      },
+      required: ["min"],
+      type: "object",
+    },
     LayoutInset: {
       additionalProperties: false,
       properties: {
@@ -1233,6 +1263,9 @@ export const PROJECT_SHAPE: unknown = {
         font_size: {
           anyOf: [{ $ref: "#/$defs/Animated_LayoutSize" }, { type: "null" }],
         },
+        font_size_fit: {
+          anyOf: [{ $ref: "#/$defs/LayoutFontSizeFit" }, { type: "null" }],
+        },
         font_weight: {
           format: "uint16",
           maximum: 65535,
@@ -1277,6 +1310,9 @@ export const PROJECT_SHAPE: unknown = {
           anyOf: [{ $ref: "#/$defs/AlignItems" }, { type: "null" }],
         },
         letter_spacing: { format: "float", type: ["number", "null"] },
+        line_clamp: {
+          anyOf: [{ $ref: "#/$defs/LineClamp" }, { type: "null" }],
+        },
         line_height: { format: "float", type: ["number", "null"] },
         margin: {
           anyOf: [{ $ref: "#/$defs/Animated_Insets" }, { type: "null" }],
@@ -1383,6 +1419,19 @@ export const PROJECT_SHAPE: unknown = {
         { const: "round", type: "string" },
         { const: "square", type: "string" },
       ],
+    },
+    LineClamp: {
+      additionalProperties: false,
+      properties: {
+        block_ellipsis: { $ref: "#/$defs/BlockEllipsis", default: "ellipsis" },
+        max_lines: {
+          format: "uint32",
+          maximum: 4294967295,
+          minimum: 0,
+          type: ["integer", "null"],
+        },
+      },
+      type: "object",
     },
     LineJoin: {
       oneOf: [
@@ -2419,6 +2468,9 @@ export const PROJECT_SHAPE: unknown = {
         },
         font_family: { type: ["string", "null"] },
         font_size: { default: 0.05, format: "float", type: "number" },
+        font_size_fit: {
+          anyOf: [{ $ref: "#/$defs/FontSizeFit" }, { type: "null" }],
+        },
         font_weight: {
           default: 400,
           format: "uint16",
@@ -2427,7 +2479,11 @@ export const PROJECT_SHAPE: unknown = {
           type: "integer",
         },
         letter_spacing: { default: 0, format: "float", type: "number" },
+        line_clamp: {
+          anyOf: [{ $ref: "#/$defs/LineClamp" }, { type: "null" }],
+        },
         line_height: { default: 1.2, format: "float", type: "number" },
+        max_height: { format: "float", type: ["number", "null"] },
         max_width: { default: 0.9, format: "float", type: "number" },
         position: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 0.92 } },
         shadows: { items: { $ref: "#/$defs/TextShadow" }, type: "array" },
@@ -2450,6 +2506,9 @@ export const PROJECT_SHAPE: unknown = {
         fill: { anyOf: [{ $ref: "#/$defs/Paint" }, { type: "null" }] },
         font_family: { type: ["string", "null"] },
         font_size: { format: "float", type: ["number", "null"] },
+        font_size_fit: {
+          anyOf: [{ $ref: "#/$defs/FontSizeFit" }, { type: "null" }],
+        },
         font_weight: {
           format: "uint16",
           maximum: 65535,
@@ -2457,7 +2516,11 @@ export const PROJECT_SHAPE: unknown = {
           type: ["integer", "null"],
         },
         letter_spacing: { format: "float", type: ["number", "null"] },
+        line_clamp: {
+          anyOf: [{ $ref: "#/$defs/LineClamp" }, { type: "null" }],
+        },
         line_height: { format: "float", type: ["number", "null"] },
+        max_height: { format: "float", type: ["number", "null"] },
         max_width: { format: "float", type: ["number", "null"] },
         position: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
         shadows: {

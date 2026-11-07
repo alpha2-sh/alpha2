@@ -1,7 +1,7 @@
 {
   "cases": [
     {
-      "expected": "{\"baselines\":{\"first\":0.9048148393630981,\"last\":0.9048148393630981},\"content\":{\"bottom\":0.9198148250579834,\"left\":0.4510696530342102,\"right\":0.5489303469657898,\"top\":0.8598148226737976},\"ink\":{\"bottom\":0.9152151942253113,\"left\":0.4512893557548523,\"right\":0.5461151003837585,\"top\":0.8668265342712402},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.8598148226737976},\"lineCount\":1}",
+      "expected": "{\"baselines\":{\"first\":0.9048148393630981,\"last\":0.9048148393630981},\"content\":{\"bottom\":0.9198148250579834,\"left\":0.4510696530342102,\"right\":0.5489303469657898,\"top\":0.8598148226737976},\"fontSize\":0.05000000074505806,\"ink\":{\"bottom\":0.9152151942253113,\"left\":0.4512893557548523,\"right\":0.5461151003837585,\"top\":0.8668265342712402},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.8598148226737976},\"lineCount\":1,\"overflow\":false,\"truncated\":false}",
       "generator": {
         "text": "Alpha2",
         "type": "text"
@@ -11,7 +11,7 @@
       "width": 1920
     },
     {
-      "expected": "{\"baselines\":{\"first\":0.17999999225139618,\"last\":0.40400001406669617},\"content\":{\"bottom\":0.4360000193119049,\"left\":0.10000000149011612,\"right\":0.49961671233177185,\"top\":0.10000000149011612},\"ink\":{\"bottom\":0.40513283014297485,\"left\":0.10035156458616257,\"right\":0.4985400438308716,\"top\":0.11921875923871994},\"layout\":{\"bottom\":0.43611112236976624,\"left\":0.10000000149011612,\"right\":0.5,\"top\":0.10000000149011612},\"lineCount\":3}",
+      "expected": "{\"baselines\":{\"first\":0.17999999225139618,\"last\":0.40400001406669617},\"content\":{\"bottom\":0.4360000193119049,\"left\":0.10000000149011612,\"right\":0.49961671233177185,\"top\":0.10000000149011612},\"fontSize\":0.07999999821186066,\"ink\":{\"bottom\":0.40513283014297485,\"left\":0.10035156458616257,\"right\":0.4985400438308716,\"top\":0.11921875923871994},\"layout\":{\"bottom\":0.43611112236976624,\"left\":0.10000000149011612,\"right\":0.5,\"top\":0.10000000149011612},\"lineCount\":3,\"overflow\":false,\"truncated\":false}",
       "generator": {
         "style": {
           "align": "start",
@@ -35,7 +35,7 @@
       "width": 1920
     },
     {
-      "expected": "{\"baselines\":{\"first\":0.8691250085830688,\"last\":0.9096249938011169},\"content\":{\"bottom\":0.9197500348091125,\"left\":0.6690722703933716,\"right\":0.949999988079071,\"top\":0.8387500047683716},\"ink\":{\"bottom\":0.910102903842926,\"left\":0.6730273962020874,\"right\":0.9485644102096558,\"top\":0.8434829115867615},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.8387500047683716},\"lineCount\":2}",
+      "expected": "{\"baselines\":{\"first\":0.8691250085830688,\"last\":0.9096249938011169},\"content\":{\"bottom\":0.9197500348091125,\"left\":0.6690722703933716,\"right\":0.949999988079071,\"top\":0.8387500047683716},\"fontSize\":0.05999999865889549,\"ink\":{\"bottom\":0.910102903842926,\"left\":0.6730273962020874,\"right\":0.9485644102096558,\"top\":0.8434829115867615},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.8387500047683716},\"lineCount\":2,\"overflow\":false,\"truncated\":false}",
       "generator": {
         "style": {
           "align": "end",
@@ -50,7 +50,7 @@
       "width": 1080
     },
     {
-      "expected": "{\"baselines\":{\"first\":0.8794444799423218,\"last\":0.8794444799423218},\"content\":{\"bottom\":0.9191667437553406,\"left\":0.407958984375,\"right\":0.592041015625,\"top\":0.779722273349762},\"ink\":{\"bottom\":0.9014444947242737,\"left\":0.41230273246765137,\"right\":0.5876972675323486,\"top\":0.7940790057182312},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.04453124850988388,\"right\":0.9554687738418579,\"top\":0.779722273349762},\"lineCount\":1}",
+      "expected": "{\"baselines\":{\"first\":0.8794444799423218,\"last\":0.8794444799423218},\"content\":{\"bottom\":0.9191667437553406,\"left\":0.407958984375,\"right\":0.592041015625,\"top\":0.779722273349762},\"fontSize\":0.10000000149011612,\"ink\":{\"bottom\":0.9014444947242737,\"left\":0.41230273246765137,\"right\":0.5876972675323486,\"top\":0.7940790057182312},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.04453124850988388,\"right\":0.9554687738418579,\"top\":0.779722273349762},\"lineCount\":1,\"overflow\":false,\"truncated\":false}",
       "generator": {
         "style": {
           "background": {
@@ -58,10 +58,12 @@
             "padding": 0.02
           },
           "font_size": 0.1,
-          "strokes": [{
-            "color": "#000000",
-            "width": 0.08
-          }]
+          "strokes": [
+            {
+              "color": "#000000",
+              "width": 0.08
+            }
+          ]
         },
         "text": "Boxed",
         "type": "text"
@@ -71,7 +73,7 @@
       "width": 1280
     },
     {
-      "expected": "{\"baselines\":{\"first\":0.9038889408111572,\"last\":0.9038889408111572},\"content\":{\"bottom\":0.9188889265060425,\"left\":0.5,\"right\":0.5,\"top\":0.8588889241218567},\"ink\":null,\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.8588889241218567},\"lineCount\":1}",
+      "expected": "{\"baselines\":{\"first\":0.9038889408111572,\"last\":0.9038889408111572},\"content\":{\"bottom\":0.9188889265060425,\"left\":0.5,\"right\":0.5,\"top\":0.8588889241218567},\"fontSize\":0.05000000074505806,\"ink\":null,\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.8588889241218567},\"lineCount\":1,\"overflow\":false,\"truncated\":false}",
       "generator": {
         "text": "   ",
         "type": "text"
@@ -79,6 +81,164 @@
       "height": 360,
       "name": "empty-ink",
       "width": 640
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.9026619791984558,\"last\":0.9026619791984558},\"content\":{\"bottom\":0.9191048741340637,\"left\":0.35026639699935913,\"right\":0.6497336030006409,\"top\":0.8533333539962769},\"fontSize\":0.0548095703125,\"ink\":{\"bottom\":0.9034380912780762,\"left\":0.3532922565937042,\"right\":0.6471142172813416,\"top\":0.8610195517539978},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.3499999940395355,\"right\":0.6499999761581421,\"top\":0.8533333539962769},\"lineCount\":1,\"overflow\":false,\"truncated\":false}",
+      "generator": {
+        "style": {
+          "font_size": 0.2,
+          "font_size_fit": {
+            "min": 0.01
+          },
+          "max_width": 0.3
+        },
+        "text": "Internationalization",
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "fit-shrinks-a-long-word",
+      "width": 1920
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.6949267983436584,\"last\":0.8947314620018005},\"content\":{\"bottom\":0.9197071194648743,\"left\":0.2597601115703583,\"right\":0.7402398586273193,\"top\":0.6200000047683716},\"fontSize\":0.083251953125,\"ink\":{\"bottom\":0.9120485782623291,\"left\":0.26234397292137146,\"right\":0.736261248588562,\"top\":0.6316748261451721},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.25,\"right\":0.75,\"top\":0.6200000047683716},\"lineCount\":3,\"overflow\":false,\"truncated\":false}",
+      "generator": {
+        "style": {
+          "font_size": 0.12,
+          "font_size_fit": {
+            "min": 0.02
+          },
+          "max_height": 0.3,
+          "max_width": 0.5
+        },
+        "text": "The quick brown fox jumps over the lazy dog again and again",
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "fit-shrinks-to-the-height",
+      "width": 1920
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.8199267983436584,\"last\":0.8199267983436584},\"content\":{\"bottom\":0.9199024438858032,\"left\":0.3501647710800171,\"right\":0.6498352289199829,\"top\":0.5200000405311584},\"fontSize\":0.333251953125,\"ink\":{\"bottom\":0.8892458081245422,\"left\":0.36856237053871155,\"right\":0.6328105926513672,\"top\":0.5667334198951721},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.10000000149011612,\"right\":0.8999999761581421,\"top\":0.5200000405311584},\"lineCount\":1,\"overflow\":false,\"truncated\":false}",
+      "generator": {
+        "style": {
+          "font_size": 0.05,
+          "font_size_fit": {
+            "max": 0.5,
+            "min": 0.02
+          },
+          "max_height": 0.4,
+          "max_width": 0.8
+        },
+        "text": "Big",
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "fit-grows-to-the-box",
+      "width": 1920
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.5114445090293884,\"last\":0.8954445123672485},\"content\":{\"bottom\":0.9194445013999939,\"left\":0.451934814453125,\"right\":0.548065185546875,\"top\":0.43944448232650757},\"fontSize\":0.07999999821186066,\"ink\":{\"bottom\":0.8965773582458496,\"left\":0.4561755359172821,\"right\":0.5458459258079529,\"top\":0.45312419533729553},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.44999998807907104,\"right\":0.550000011920929,\"top\":0.43944448232650757},\"lineCount\":5,\"overflow\":true,\"truncated\":false}",
+      "generator": {
+        "style": {
+          "font_size": 0.2,
+          "font_size_fit": {
+            "min": 0.08
+          },
+          "max_width": 0.1
+        },
+        "text": "Internationalization",
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "fit-overflows-at-its-minimum",
+      "width": 1920
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.8446296453475952,\"last\":0.9046297073364258},\"content\":{\"bottom\":0.919629693031311,\"left\":0.35795363783836365,\"right\":0.642046332359314,\"top\":0.7996296882629395},\"fontSize\":0.05000000074505806,\"ink\":{\"bottom\":0.9150300621986389,\"left\":0.35787123441696167,\"right\":0.641126275062561,\"top\":0.8066413402557373},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.3499999940395355,\"right\":0.6499999761581421,\"top\":0.7996296882629395},\"lineCount\":2,\"overflow\":false,\"truncated\":true}",
+      "generator": {
+        "style": {
+          "line_clamp": {
+            "max_lines": 2
+          },
+          "max_width": 0.3
+        },
+        "text": "The quick brown fox jumps over the lazy dog again and again",
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "clamp-two-lines-with-an-ellipsis",
+      "width": 1920
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.8446296453475952,\"last\":0.9046297073364258},\"content\":{\"bottom\":0.919629693031311,\"left\":0.35795363783836365,\"right\":0.642046332359314,\"top\":0.7996296882629395},\"fontSize\":0.05000000074505806,\"ink\":{\"bottom\":0.9150300621986389,\"left\":0.35787123441696167,\"right\":0.641126275062561,\"top\":0.8066413402557373},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.3499999940395355,\"right\":0.6499999761581421,\"top\":0.7996296882629395},\"lineCount\":2,\"overflow\":false,\"truncated\":true}",
+      "generator": {
+        "style": {
+          "line_clamp": {
+            "block_ellipsis": {
+              "string": " (more)"
+            }
+          },
+          "max_height": 0.15,
+          "max_width": 0.3
+        },
+        "text": "The quick brown fox jumps over the lazy dog again and again",
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "clamp-at-the-height-with-a-string",
+      "width": 1920
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.8446296453475952,\"last\":0.9046297073364258},\"content\":{\"bottom\":0.919629693031311,\"left\":0.4738319516181946,\"right\":0.5261680483818054,\"top\":0.7996296882629395},\"fontSize\":0.05000000074505806,\"ink\":{\"bottom\":0.9053376913070679,\"left\":0.47513657808303833,\"right\":0.524671196937561,\"top\":0.8166267275810242},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.7996296882629395},\"lineCount\":2,\"overflow\":false,\"truncated\":true}",
+      "generator": {
+        "style": {
+          "line_clamp": {
+            "block_ellipsis": "no_ellipsis",
+            "max_lines": 2
+          }
+        },
+        "text": "one\ntwo\nthree",
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "clamp-without-an-ellipsis",
+      "width": 1920
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.8295555710792542,\"last\":0.901555597782135},\"content\":{\"bottom\":0.9195555448532104,\"left\":0.3577078580856323,\"right\":0.6422921419143677,\"top\":0.7755556106567383},\"fontSize\":0.05999999865889549,\"ink\":{\"bottom\":0.9140360355377197,\"left\":0.35848236083984375,\"right\":0.6384029984474182,\"top\":0.7839697003364563},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.3499999940395355,\"right\":0.6499999761581421,\"top\":0.7755556106567383},\"lineCount\":2,\"overflow\":false,\"truncated\":true}",
+      "generator": {
+        "style": {
+          "font_size": 0.1,
+          "font_size_fit": {
+            "min": 0.06
+          },
+          "line_clamp": {
+            "max_lines": 2
+          },
+          "max_width": 0.3
+        },
+        "text": "The quick brown fox jumps over the lazy dog again and again",
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "fit-then-clamp-at-its-minimum",
+      "width": 1920
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.9048148393630981,\"last\":0.9048148393630981},\"content\":{\"bottom\":0.9198148250579834,\"left\":0.4203903079032898,\"right\":0.5796096920967102,\"top\":0.8598148226737976},\"fontSize\":0.05000000074505806,\"ink\":{\"bottom\":0.9094535112380981,\"left\":0.4236312806606293,\"right\":0.5784012079238892,\"top\":0.8683646321296692},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.4000000059604645,\"right\":0.6000000238418579,\"top\":0.8598148226737976},\"lineCount\":1,\"overflow\":false,\"truncated\":true}",
+      "generator": {
+        "style": {
+          "line_clamp": {
+            "max_lines": 1
+          },
+          "max_width": 0.2
+        },
+        "text": "שלום עולם מה שלומך היום",
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "clamp-rtl",
+      "width": 1920
     }
   ],
   "font": "tests/fonts/Alpha2Fixture.ttf"

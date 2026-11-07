@@ -284,6 +284,7 @@ impl TextRequestWire {
             font_family: self.font_family,
             letter_spacing: self.letter_spacing,
             font_weight: self.font_weight,
+            clamp: None,
         }
     }
 }
@@ -580,12 +581,14 @@ mod web {
 
         /// Where the text generator `generator_json` (`{ "type": "text", "text", "style" }`)
         /// lies on a `width` by `height` canvas, as JSON `{ layout, content, ink, lineCount,
-        /// baselines }`.
+        /// baselines, fontSize, truncated, overflow }`.
         ///
         /// Rectangles are `{ left, top, right, bottom }` in canvas fractions, before the clip's
         /// transform; `ink` is `null` when nothing draws. `baselines` is `{ first, last }`, the
-        /// first and last alphabetic baselines as fractions of canvas height. Measure at the
-        /// project canvas size, since another size can break lines elsewhere.
+        /// first and last alphabetic baselines as fractions of canvas height. `fontSize` is the
+        /// size drawn after `font_size_fit`; `truncated` says `line_clamp` cut lines, and
+        /// `overflow` that the drawn text splits a word or is taller than `max_height`. Measure
+        /// at the project canvas size, since another size can break lines elsewhere.
         ///
         /// # Errors
         /// Rejects an invalid text generator, an empty canvas, and a measurer without fonts.
@@ -602,10 +605,11 @@ mod web {
         /// "root" }`) lies on a `width` by `height` picture at `time` (ticks), as JSON
         /// `{ nodes }`.
         ///
-        /// Nodes are in preorder as `{ at, border, content, overflow, lineCount, baselines }`,
-        /// boxes `{ left, top, right, bottom }` in picture fractions before the clip's transform
-        /// and node visuals. `lineCount` is `null` for a node without text, and `baselines`
-        /// (`{ first, last }`, fractions of picture height) also for empty text. `"<n>px"`
+        /// Nodes are in preorder as `{ at, border, content, overflow, lineCount, baselines,
+        /// fontSize, truncated }`, boxes `{ left, top, right, bottom }` in picture fractions
+        /// before the clip's transform and node visuals. `lineCount` and `fontSize` are `null`
+        /// for a node without text, and `baselines` (`{ first, last }`, fractions of picture
+        /// height) also for empty text; `truncated` says `line_clamp` cut its lines. `"<n>px"`
         /// lengths are project canvas pixels (`canvasWidth` by `canvasHeight`, defaulting to the
         /// picture size).
         ///

@@ -5,7 +5,9 @@
 
 use std::sync::Arc;
 
-use alpha2_engine::{EngineProject, FrameProvider, FrameRenderer, QualityProfile};
+use alpha2_engine::{
+    EngineProject, FrameProvider, FrameRenderer, FramesWithText, QualityProfile, TextTextures,
+};
 use alpha2_geometry::kurbo::{Point, Vec2};
 use alpha2_geometry::{
     CanvasSize, EvaluatedGeometry, EvaluatedItem, EvaluatedPath, EvaluatedSubpath, EvaluatedVertex,
@@ -28,6 +30,18 @@ pub const PINNED_BLUR_AND_STROKE_HASH: u64 = 12_803_358_345_075_414_110;
 
 /// [`project_hash`] on linux-x64.
 pub const PINNED_PROJECT_HASH: u64 = 8_340_324_065_314_071_693;
+
+/// [`text_fit_hash`] on linux-x64.
+pub const PINNED_TEXT_FIT_HASH: u64 = 2_492_912_094_599_430_155;
+
+/// Captions, text generators and a layout with fitted font sizes and clamped lines.
+pub const TEXT_FIT_PROJECT_JSON: &str = include_str!("../../cases/text-fit-project.json");
+
+/// The font [`text_fit_hash`] draws with.
+const FIXTURE_FONT: &[u8] = include_bytes!("../../fonts/Alpha2Fixture.ttf");
+
+/// The times [`text_fit_hash`] draws, in ticks; the layout's font size animates between them.
+pub const TEXT_FIT_TIMES: [i64; 3] = [0, 36_000, 108_000];
 
 /// The host parity project [`project_hash`] renders.
 pub const PROJECT_JSON: &str = include_str!("../../cases/host-parity-effects-project.json");
@@ -272,6 +286,43 @@ impl FrameProvider for Cards {
     }
 }
 
+/// No source frames: the text fit project draws generators and captions only.
+struct NoFrames;
+
+impl FrameProvider for NoFrames {
+    fn texture_for(&self, _: &SourceId, _: MediaTime) -> Option<SourceView<'_>> {
+        None
+    }
+}
+
+/// FNV-1a hash of the text fit project's frames at [`TEXT_FIT_TIMES`], drawn on the CPU with
+/// the fixture font. The fit search, the clamp and the ellipsis all take part.
+///
+/// # Panics
+/// Panics if the engine refuses the fixed project or its font.
+#[must_use]
+pub fn text_fit_hash() -> u64 {
+    let project = EngineProject::new(Project::from_json(TEXT_FIT_PROJECT_JSON).expect("project"))
+        .expect("snapshot");
+    let settings = &project.project().settings;
+    let size = RenderSize::new(settings.width, settings.height).expect("size");
+    let renderer = CpuRenderer::new(1);
+    let mut texts = TextTextures::new();
+    texts
+        .add_font("Alpha2 Fixture", FIXTURE_FONT, 0)
+        .expect("font");
+    let mut hash = FNV_OFFSET;
+    for ticks in TEXT_FIT_TIMES {
+        let frame = project.evaluate(MediaTime(ticks)).expect("frame");
+        texts.prepare(&renderer, &frame, size).expect("text");
+        let output = renderer
+            .render_frame(size, &frame, &FramesWithText::new(&NoFrames, &texts))
+            .expect("render");
+        hash = fnv(hash, &output.texture.expect("complete").read_rgba8());
+    }
+    hash
+}
+
 /// Every frame time of the parity project, in ticks.
 ///
 /// # Panics
@@ -360,6 +411,14 @@ pub fn cpu_blur_and_stroke_hash() -> u64 {
     blur_and_stroke_hash()
 }
 
+/// The wasm entry point for [`text_fit_hash`], a `BigInt` in JavaScript.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = cpuTextFitHash)]
+#[must_use]
+pub fn cpu_text_fit_hash() -> u64 {
+    text_fit_hash()
+}
+
 /// The wasm entry point for [`project_hash`], a `BigInt` in JavaScript.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = cpuProjectHash)]
@@ -386,5 +445,10 @@ mod tests {
     #[test]
     fn the_every_effect_project_hashes_to_its_pin() {
         assert_eq!(super::project_hash(), super::PINNED_PROJECT_HASH);
+    }
+
+    #[test]
+    fn fitted_and_clamped_text_hashes_to_its_pin() {
+        assert_eq!(super::text_fit_hash(), super::PINNED_TEXT_FIT_HASH);
     }
 }

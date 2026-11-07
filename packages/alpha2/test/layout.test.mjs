@@ -209,6 +209,8 @@ test("measureLayout sends a layout generator and its canvas and reads the engine
         overflow: false,
         lineCount: null,
         baselines: null,
+        fontSize: null,
+        truncated: false,
       },
     ],
   };

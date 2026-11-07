@@ -266,7 +266,13 @@ impl TextTextures {
                 entry.last_used = self.frame;
                 continue;
             }
-            let mut draw = text_draw(&text.content.text(), text.style, picture, key);
+            let content = text.content.text();
+            let frame_number = self.frame;
+            let fitted = alpha2_layout::fit_text(&content, text.style, picture, |request| {
+                self.shape(request, frame_number)
+            })
+            .map_err(TextError::Raster)?;
+            let mut draw = text_draw(&content, text.style, picture, key, fitted.font_pixels);
             if !text.style.animators.is_empty() {
                 draw.animation = Some(TextAnimation {
                     animators: alpha2_eval::sample_text_animators(&text.style.animators, text.time),
@@ -419,7 +425,11 @@ impl TextTextures {
         let shaped =
             alpha2_layout::shape_texts(&evaluated, picture, |request| self.shape(request, frame))
                 .map_err(TextError::Raster)?;
-        let resolved = alpha2_layout::resolve(&evaluated, picture, &shaped);
+        let mut resolved = alpha2_layout::resolve(&evaluated, picture, &shaped);
+        alpha2_layout::fit_texts(&evaluated, &mut resolved, picture, |request| {
+            self.shape(request, frame)
+        })
+        .map_err(TextError::Raster)?;
         let (texts, requests) = alpha2_layout::layout_texts(&evaluated, &resolved, picture);
         let mut boxes = Vec::with_capacity(texts.len());
         for text in &texts {

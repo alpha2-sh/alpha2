@@ -112,6 +112,7 @@ fn fixture_requests_match_the_pinned_rasters() {
             font_family: request["fontFamily"].as_str().map(Into::into),
             letter_spacing: request["letterSpacing"].as_f64().unwrap_or(0.0) as f32,
             font_weight: 400,
+            clamp: None,
         };
         let result = match request.get("clusterState") {
             Some(state) => {
@@ -206,6 +207,7 @@ fn metrics_pixels_cache_and_invalidation_are_stable() {
         font_family: None,
         letter_spacing: 0.0,
         font_weight: 400,
+        clamp: None,
     };
     let first = rasterizer.rasterize(&request).expect("rasterized");
     assert!(first.descriptor.is_valid());
@@ -557,6 +559,7 @@ fn caption(text: &str, outline: Option<TextStroke>, version: u64) -> TextRasterR
         font_family: None,
         letter_spacing: 0.0,
         font_weight: 400,
+        clamp: None,
     }
 }
 
@@ -862,6 +865,7 @@ fn plain(
             font_family: None,
             letter_spacing: 0.0,
             font_weight: 400,
+            clamp: None,
         })
         .unwrap_or_else(|error| panic!("{text:?}: {error}"))
 }
@@ -1146,6 +1150,7 @@ fn request(text: &str, size: f32) -> TextRasterRequest {
         font_family: None,
         letter_spacing: 0.0,
         font_weight: 400,
+        clamp: None,
     }
 }
 

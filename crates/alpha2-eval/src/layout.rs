@@ -237,7 +237,7 @@ pub enum NodeContent {
     /// Boxes laid out in this one, in document order.
     Children(Vec<EvaluatedNode>),
     /// One paragraph of text.
-    Text(EvaluatedText),
+    Text(Box<EvaluatedText>),
     /// Shapes, evaluated at draw time because spatial curves need the post-layout aspect.
     Shape(Arc<ShapesPlan>),
 }
@@ -267,6 +267,10 @@ pub struct EvaluatedText {
     pub shadows: Vec<TextShadow>,
     /// The node's text animators at the layout's picture time.
     pub animators: Vec<crate::SampledAnimator>,
+    /// The font sizes it is fitted between, fractions of the picture's shorter side.
+    pub font_size_fit: Option<alpha2_model::FontSizeFit>,
+    /// Where its lines are cut.
+    pub line_clamp: Option<alpha2_model::LineClamp>,
 }
 
 fn non_negative(animation: Option<&Animated<f32>>, time: MediaTime, default: f32) -> f32 {
@@ -414,7 +418,7 @@ fn evaluate_node<'a>(
     });
     let style = text_style(node, time, inherited);
     let content = if let Some(text) = &node.text {
-        NodeContent::Text(EvaluatedText {
+        NodeContent::Text(Box::new(EvaluatedText {
             content: sample_hold(text, time),
             font_family: style.font_family,
             font_size: style.font_size,
@@ -426,7 +430,12 @@ fn evaluate_node<'a>(
             strokes: style.strokes.clone(),
             shadows: style.shadows.clone(),
             animators: crate::sample_text_animators(&node.text_animators, time),
-        })
+            font_size_fit: node.font_size_fit.map(|fit| alpha2_model::FontSizeFit {
+                min: fit.min.value(),
+                max: fit.max.map(alpha2_model::LayoutSize::value),
+            }),
+            line_clamp: node.line_clamp.clone(),
+        }))
     } else if node.shape.is_some() {
         let (plan, _) = shapes.next().expect("one plan per shape node");
         NodeContent::Shape(Arc::clone(plan))
@@ -675,6 +684,22 @@ fn hash_node_in(
             // Nothing for a text without animators, so a static layout keeps its key.
             if !text.animators.is_empty() {
                 crate::hash_sampled_animators(hash, &text.animators);
+            }
+            if let Some(fit) = text.font_size_fit {
+                hash.u32(0xf17);
+                hash.f32(fit.min);
+                hash.f32(fit.max.unwrap_or(-1.0));
+            }
+            if let Some(clamp) = &text.line_clamp {
+                hash.u32(0xc1a);
+                hash.u32(clamp.max_lines.unwrap_or(0));
+                match clamp.block_ellipsis.text() {
+                    None => hash.u32(0),
+                    Some(ellipsis) => {
+                        hash.u32(1);
+                        hash.bytes(ellipsis.as_bytes());
+                    }
+                }
             }
         }
         NodeContent::Shape(_) => {

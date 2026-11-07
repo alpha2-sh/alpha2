@@ -5,8 +5,8 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::{
-    MAX_TEXT_CONTENT_BYTES, Paint, TextAlign, TextAnimator, TextBackground, TextShadow, TextStroke,
-    TextStyle, Vec2,
+    FontSizeFit, LineClamp, MAX_TEXT_CONTENT_BYTES, Paint, TextAlign, TextAnimator, TextBackground,
+    TextShadow, TextStroke, TextStyle, Vec2,
 };
 use alpha2_time::TimeRange;
 use serde::{Deserialize, Serialize};
@@ -100,6 +100,30 @@ pub struct TextStylePatch {
     /// See [`TextStyle::max_width`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_width: Option<f32>,
+    /// See [`TextStyle::max_height`]; `null` removes the base's.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "double_option"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<f32>"))]
+    pub max_height: Option<Option<f32>>,
+    /// See [`TextStyle::font_size_fit`]; `null` removes the base's.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "double_option"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<FontSizeFit>"))]
+    pub font_size_fit: Option<Option<FontSizeFit>>,
+    /// See [`TextStyle::line_clamp`]; `null` removes the base's.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "double_option"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<LineClamp>"))]
+    pub line_clamp: Option<Option<LineClamp>>,
     /// See [`TextStyle::position`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Vec2>,
@@ -153,6 +177,15 @@ impl TextStylePatch {
         }
         if let Some(width) = self.max_width {
             style.max_width = width;
+        }
+        if let Some(height) = self.max_height {
+            style.max_height = height;
+        }
+        if let Some(fit) = self.font_size_fit {
+            style.font_size_fit = fit;
+        }
+        if let Some(clamp) = &self.line_clamp {
+            style.line_clamp.clone_from(clamp);
         }
         if let Some(position) = self.position {
             style.position = position;

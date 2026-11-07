@@ -40,6 +40,13 @@ pub const MAX_TEXT_SHADOW_BLUR: f32 = 1.0;
 /// Largest text background padding, as a fraction of the font size.
 pub const MAX_TEXT_PADDING: f32 = 2.0;
 
+/// Most bytes in a [`BlockEllipsis::String`].
+pub const MAX_BLOCK_ELLIPSIS_BYTES: usize = 64;
+
+/// Steps per unit of font size (a fraction of the shorter side) that a fitted font size takes
+/// between its bounds. Steps of `1 / 8192` are exact in `f32` and under a pixel at 8K.
+pub const FONT_SIZE_FIT_STEPS: f32 = 8_192.0;
+
 /// How text looks and where it lies, for caption cues or a text [`crate::Generator`].
 ///
 /// The font size is a fraction of the canvas's shorter side, the wrapping width a fraction
@@ -89,6 +96,19 @@ pub struct TextStyle {
     /// Width text wraps at, as a fraction of the canvas width, in `(0, 1]`.
     #[serde(default = "default_max_width")]
     pub max_width: f32,
+    /// Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for
+    /// `font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS
+    /// `max-height` lets a box with visible overflow; `None` sets no height.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<f32>,
+    /// The range the font size is fitted in so the text fits its box; `None` draws at
+    /// `font_size`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_fit: Option<FontSizeFit>,
+    /// Where lines are cut and what ends the cut line, as CSS `line-clamp`; `None` keeps every
+    /// line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_clamp: Option<LineClamp>,
     /// Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right.
     #[serde(default = "default_position")]
     pub position: Vec2,
@@ -125,6 +145,9 @@ impl Default for TextStyle {
             font_weight: default_font_weight(),
             align: TextAlign::default(),
             max_width: default_max_width(),
+            max_height: None,
+            font_size_fit: None,
+            line_clamp: None,
             position: default_position(),
             anchor: default_anchor(),
             strokes: Vec::new(),
@@ -163,6 +186,105 @@ const fn default_position() -> Vec2 {
 
 const fn default_anchor() -> Vec2 {
     Vec2::new(0.5, 1.0)
+}
+
+/// The font sizes a text is fitted between, as fractions of the canvas's shorter side.
+///
+/// The text draws at the largest size in `[min, max]` at which it fits its box: no line
+/// breaks inside a word at the wrapping width, the lines fit in the box's height (when it has
+/// one), and there are no more lines than `line_clamp.max_lines` allows. When it fits at no
+/// size, it draws at `min` and the clamp, if any, cuts it. A `min` above `max` wins, as CSS
+/// `min-width` wins over `max-width`.
+///
+/// Candidate sizes are `max`, `min`, and the multiples of `1 / FONT_SIZE_FIT_STEPS` between
+/// them, searched by bisection; smaller sizes are taken to fit at least as well. Text animators
+/// never change the fit.
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct FontSizeFit {
+    /// Smallest font size, positive. At most the holder's largest font size.
+    pub min: f32,
+    /// Largest font size, at least `min` and at most the holder's largest font size. `None`
+    /// is `font_size`, so the text only shrinks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f32>,
+}
+
+impl FontSizeFit {
+    /// Whether both bounds are positive, in order, and at most `max_font_size`.
+    pub(crate) fn is_valid(&self, max_font_size: f32) -> bool {
+        let size = |value: f32| value.is_finite() && value > 0.0 && value <= max_font_size;
+        size(self.min) && self.max.is_none_or(|max| size(max) && self.min <= max)
+    }
+}
+
+/// Lines past a clamp point are discarded, as CSS Overflow 4 `line-clamp` discards them.
+///
+/// The clamp point is after the last line within `max_lines` that fits in the text's box
+/// height, and never before the first line. CSS clamps at the height only for
+/// `max-lines: auto`; here the height always takes part, so clamped text stays within a box
+/// that has a height. When text is cut, the last kept line is shortened to its last soft wrap
+/// opportunity at which the ellipsis fits after it (to its last character that does when none
+/// does), and the ellipsis is drawn at the line's end in the text's style. The ellipsis is not
+/// counted by text animators and moves with the character before it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LineClamp {
+    /// Most lines, at least 1, as CSS `max-lines`. `None` cuts at the box's height alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_lines: Option<u32>,
+    /// What ends the last kept line when text is cut. Default `ellipsis`, as in the CSS
+    /// `line-clamp` shorthand.
+    #[serde(default)]
+    pub block_ellipsis: BlockEllipsis,
+}
+
+impl LineClamp {
+    pub(crate) fn is_valid(&self) -> bool {
+        self.max_lines != Some(0) && self.block_ellipsis.is_valid()
+    }
+}
+
+/// What ends a line that a clamp cuts, as CSS `block-ellipsis`.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum BlockEllipsis {
+    /// No mark; the cut line keeps its own end.
+    NoEllipsis,
+    /// U+2026 HORIZONTAL ELLIPSIS.
+    #[default]
+    Ellipsis,
+    /// This text: 1 to [`MAX_BLOCK_ELLIPSIS_BYTES`] bytes with no control characters or line
+    /// and paragraph separators.
+    String(String),
+}
+
+impl BlockEllipsis {
+    /// The text drawn at the end of a cut line, `None` for no mark.
+    #[must_use]
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::NoEllipsis => None,
+            Self::Ellipsis => Some("\u{2026}"),
+            Self::String(text) => Some(text),
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        match self {
+            Self::String(text) => {
+                !text.is_empty()
+                    && text.len() <= MAX_BLOCK_ELLIPSIS_BYTES
+                    && !text.chars().any(|character| {
+                        character.is_control() || matches!(character, '\u{2028}' | '\u{2029}')
+                    })
+            }
+            Self::NoEllipsis | Self::Ellipsis => true,
+        }
+    }
 }
 
 /// How lines of text align within it.
@@ -235,6 +357,13 @@ impl TextStyle {
             && FONT_WEIGHT_RANGE.contains(&self.font_weight)
             && self.max_width > 0.0
             && self.max_width <= 1.0
+            && self
+                .max_height
+                .is_none_or(|height| height > 0.0 && height <= 1.0)
+            && self
+                .font_size_fit
+                .is_none_or(|fit| fit.is_valid(max_font_size))
+            && self.line_clamp.as_ref().is_none_or(LineClamp::is_valid)
             && finite(self.position)
             && finite(self.anchor)
             && valid_strokes(&self.strokes)

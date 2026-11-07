@@ -25,6 +25,7 @@ Every node of the tree is one kind of box. A box is a container when it has `chi
 | Flex item | `flex_grow`, `flex_shrink`, `flex_basis` | In a flex container only. |
 | Grid item | `grid_column`, `grid_row`, `justify_self` | In a grid only. |
 | Text style | `font_family`, `font_size`, `fill`, `line_height`, `text_align`, `strokes`, `shadows` | On any box; inherited. See [Text](#text). |
+| Own text | `font_size_fit`, `line_clamp`, `text_animators` | The box's own text only; not inherited. See [Fitting and clamping](#fitting-and-clamping). |
 | Drawn after layout | `opacity`, `translate`, `scale`, `rotation_degrees` | About the border box's centre; they never move other boxes. A box with any of them, or with hidden overflow, is drawn as one group: its opacity is group opacity. |
 
 The root is the picture: its border box is the canvas, so it takes no size, margin or item field. Place its content with its own `justify_content`, `align_items` and `padding`, as with Remotion's `AbsoluteFill`.
@@ -77,7 +78,28 @@ Lines are `line_height` font sizes apart, baseline to baseline. Each line's em b
 }
 ```
 
-A text may be empty (it then takes no room) and may change over time, but its keyframes must all `hold`: strings do not interpolate. Text is never shrunk to fit.
+A text may be empty (it then takes no room) and may change over time, but its keyframes must all `hold`: strings do not interpolate.
+
+### Fitting and clamping
+
+A text box's own `font_size_fit` and `line_clamp` keep its text inside its content box. Text styles of captions and text generators take the same two fields, with `max_width` and `max_height` as their box.
+
+`line_clamp` is CSS `line-clamp`: `max_lines` is CSS `max-lines`, and `block_ellipsis` is CSS `block-ellipsis`, `"ellipsis"` (U+2026, the default, as the CSS shorthand sets it), `"no_ellipsis"`, or `{ "string": " ..." }` (1 to 64 bytes on one line). Lines after the clamp point are not drawn. The clamp point is after the last line within `max_lines` that fits in the content box's height, and never before the first line; where CSS clamps at the height only for `max-lines: auto`, the height always counts here, so a clamped text stays inside a box that has a height. A box whose height is `auto` ends at the clamp point, as a CSS line-clamp container does. When text is cut, the last kept line gives up its end until the ellipsis fits after it: back to its last soft wrap opportunity (a word's end) at which it fits, else to its last character that fits, and the ellipsis is drawn at the line's end (the left of a right-to-left line) in the text's style. Text animators count no unit for the ellipsis; it moves, scales and fades with the character before it.
+
+`font_size_fit` has no CSS standard (the CSS Working Group's `text-fit` sketch fits widths only). `{ "min": 0.02, "max": 0.1 }` draws the text at the largest font size from `min` to `max` at which it fits its box: no line breaks inside a word, the lines fit the content height, and there are no more lines than `line_clamp.max_lines`. `max` defaults to the box's `font_size`, so the text only shrinks; `min` wins over a smaller `max`. Both take a number or `"<n>px"`. Sizes are tried by bisection on steps of 1/8192 of the shorter side between them, so every platform picks the same one. Text that fits at no size draws at `min`; its clamp, if any, then cuts it, and measuring reports it.
+
+The box is laid out at `font_size` first; the fit never changes the box's size. A fit fills a box whose size is set (`width` and `height`, `flex_grow`, `stretch`, a grid area); in a box whose height is `auto`, it can only shrink the text to fit the width or the line count. An animated `font_size` is fitted again at each frame. Text animators never change the fit. Caption cues are fitted one by one.
+
+```json
+{
+  "width": { "mode": "constant", "value": "60%" },
+  "height": { "mode": "constant", "value": "240px" },
+  "font_size": { "mode": "constant", "value": "64px" },
+  "font_size_fit": { "min": "24px" },
+  "line_clamp": { "max_lines": 3 },
+  "text": { "mode": "constant", "value": "A headline that may be longer than the card" }
+}
+```
 
 ## Grid
 
@@ -126,7 +148,7 @@ Numeric values are keyframed in the picture's time, as shapes are: a clip's sour
 
 ## Measuring
 
-`measureLayout` (from `alpha2/layout`, on `alpha2/wasm`'s `WasmTextMeasurer`) lays a layout out with the given fonts, at the given picture size and time, as a frame lays it out, and answers each node's border and content box as fractions of the picture, its text's line count and first and last baselines (`baselines: { first, last }`, fractions of the picture's height; `null` without text), and whether it overflows: its text is taller than its box or splits a word, or an in-flow child reaches past its padding box. Rendering draws overflowing boxes anyway; measure at the size the picture is drawn at, and fix the document. Its `"<n>px"` lengths are pixels of the project canvas: pass the project's size as `canvas` when measuring at another size.
+`measureLayout` (from `alpha2/layout`, on `alpha2/wasm`'s `WasmTextMeasurer`) lays a layout out with the given fonts, at the given picture size and time, as a frame lays it out, and answers each node's border and content box as fractions of the picture, its text's line count and first and last baselines (`baselines: { first, last }`, fractions of the picture's height; `null` without text), its text's font size as drawn (`fontSize`, fitted by `font_size_fit`; `null` without text), whether `line_clamp` cut its text (`truncated`), and whether it overflows: its text, at that size and once clamped, is taller than its box or splits a word, or an in-flow child reaches past its padding box. A text with a fit that still overflows did not fit at its `min`. Rendering draws overflowing boxes anyway; measure at the size the picture is drawn at, and fix the document. Its `"<n>px"` lengths are pixels of the project canvas: pass the project's size as `canvas` when measuring at another size.
 
 ```ts
 import init, { WasmTextMeasurer } from "alpha2/wasm";
@@ -327,4 +349,4 @@ Two text cards, a bar column spanning both rows, and a bar chart that is itself 
 
 ## Not supported
 
-Block and inline layout; named grid lines and `grid_template_areas`; subgrid; baseline alignment; `auto` margins; `em` and `rem`; color names and color functions; animated text color; rich-text spans; per-side border widths and per-corner radii; box shadows; ellipsis and line clamping; right-to-left flex direction; percent padding and margin; and image or video boxes. Bidirectional text inside a paragraph is shaped as text generators shape it.
+Block and inline layout; named grid lines and `grid_template_areas`; subgrid; baseline alignment; `auto` margins; `em` and `rem`; color names and color functions; animated text color; rich-text spans; per-side border widths and per-corner radii; box shadows; `text-overflow` (a line never overflows its box sideways: a word wider than the line is broken between characters); right-to-left flex direction; percent padding and margin; and image or video boxes. Bidirectional text inside a paragraph is shaped as text generators shape it.

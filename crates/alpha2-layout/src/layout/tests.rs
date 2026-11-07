@@ -69,6 +69,7 @@ fn shaped(rasterizer: &TextRasterizer, content: &str, pixels: f32) -> ShapedText
             font_family: None,
             letter_spacing: 0.0,
             font_weight: 400,
+            clamp: None,
         })
         .expect("shapes")
 }
@@ -658,4 +659,161 @@ fn layout_resolve_cost() {
     }
     let warm = start.elapsed() / runs;
     eprintln!("layout_resolve_cost nodes=41 texts=8 1920x1080 cold={cold:?} warm={warm:?}");
+}
+
+const QUICK: &str = "The quick brown fox jumps over the lazy dog again and again";
+
+fn measured(root: &LayoutNode, time: MediaTime) -> LayoutBounds {
+    measure_layout(&fixture(), root, time, size(1280, 720), (1280, 720)).expect("measures")
+}
+
+#[test]
+fn a_clamp_by_count_ends_the_automatic_height_at_the_clamp_point() {
+    let clamped = node(json!({ "align_items": "start", "children": [
+        { "width": length(0.4), "font_size": length(0.05), "line_clamp": { "max_lines": 2 },
+          "text": constant(json!(QUICK)) } ] }));
+    let free = node(json!({ "align_items": "start", "children": [
+        { "width": length(0.4), "font_size": length(0.05), "text": constant(json!(QUICK)) } ] }));
+    let (clamped, free) = (
+        measured(&clamped, MediaTime::ZERO),
+        measured(&free, MediaTime::ZERO),
+    );
+    let (text, whole) = (&clamped.nodes[1], &free.nodes[1]);
+    assert!(whole.line_count > Some(2) && !whole.truncated);
+    assert_eq!(text.line_count, Some(2));
+    assert!(text.truncated && !text.overflow);
+    let height = |node: &NodeBounds| node.border.bottom - node.border.top;
+    let line = 0.05 * 1.2 * 720.0 / 720.0;
+    assert!(
+        (height(text) - 2.0 * line).abs() < 2.0 / 720.0,
+        "{}",
+        height(text)
+    );
+    assert_eq!(text.font_size, Some(0.05));
+}
+
+#[test]
+fn a_clamp_cuts_at_a_fixed_height_and_the_draw_asks_for_the_same_cut() {
+    let root = node(json!({ "align_items": "start", "children": [
+        { "width": length(0.4), "height": length(0.15), "font_size": length(0.05),
+          "line_clamp": { "block_ellipsis": { "string": "..." } },
+          "text": constant(json!(QUICK)) } ] }));
+    let bounds = measured(&root, MediaTime::ZERO);
+    assert_eq!(bounds.nodes[1].line_count, Some(2));
+    assert!(bounds.nodes[1].truncated);
+    let picture = size(1280, 720);
+    let evaluated = LayoutPlan::new(&root, (1280, 720)).evaluate(MediaTime::ZERO);
+    let resolved = resolved(&fixture(), &root, picture);
+    let (_, requests) = layout_texts(&evaluated, &resolved, picture);
+    let clamp = requests[0].1.request.clamp.clone().expect("a clamp");
+    assert_eq!(clamp.max_lines, None);
+    assert_eq!(clamp.ellipsis.as_deref(), Some("..."));
+    assert!((clamp.max_height - (0.15 * 720.0 + LAYOUT_WRAP_SLACK)).abs() < 0.01);
+    let measure = fixture().measure(&requests[0].1.request).expect("measures");
+    assert_eq!((measure.line_count, measure.truncated), (2, true));
+}
+
+#[test]
+fn a_fit_fills_a_fixed_box_without_changing_it() {
+    let card = |fit: serde_json::Value| {
+        node(json!({ "align_items": "start", "children": [
+            { "width": length(0.5), "height": length(0.2), "font_size": length(0.1),
+              "font_size_fit": fit, "text": constant(json!(QUICK)) } ] }))
+    };
+    let fitted = measured(&card(json!({ "min": 0.02 })), MediaTime::ZERO);
+    let base = measured(&card(serde_json::Value::Null), MediaTime::ZERO);
+    let (fitted_text, base_text) = (&fitted.nodes[1], &base.nodes[1]);
+    assert_eq!(fitted_text.border, base_text.border);
+    assert!(base_text.overflow);
+    assert!(!fitted_text.overflow);
+    let font_size = fitted_text.font_size.expect("a text");
+    assert!(font_size < 0.1 && font_size > 0.02, "{font_size}");
+    // The fitted lines, drawn, fit the box.
+    let picture = size(1280, 720);
+    let root = card(json!({ "min": 0.02 }));
+    let evaluated = LayoutPlan::new(&root, (1280, 720)).evaluate(MediaTime::ZERO);
+    let rasterizer = fixture();
+    let shaped = shape_texts(&evaluated, picture, |request| {
+        rasterizer.shape(request).map(Arc::new)
+    })
+    .expect("shapes");
+    let mut resolved = resolve(&evaluated, picture, &shaped);
+    fit_texts(&evaluated, &mut resolved, picture, |request| {
+        rasterizer.shape(request).map(Arc::new)
+    })
+    .expect("fits");
+    let (_, requests) = layout_texts(&evaluated, &resolved, picture);
+    let request = &requests[0].1.request;
+    assert_eq!(request.font_size, resolved.nodes[1].font_pixels);
+    assert_eq!(request.font_size, (font_size * 720.0).clamp(1.0, 2048.0));
+    let measure = rasterizer.measure(request).expect("measures");
+    assert!(f64::from(measure.box_height) <= 0.2 * 720.0 + 1.0);
+}
+
+#[test]
+fn an_animated_font_size_is_fitted_at_each_time() {
+    let root = node(json!({ "align_items": "start", "children": [
+        { "width": length(0.4), "height": length(0.2),
+          "font_size": { "mode": "keyframes", "keyframes": [
+              { "time": 0, "value": 0.03, "interpolation": { "type": "linear" } },
+              { "time": 120_000, "value": 0.3, "interpolation": { "type": "linear" } } ] },
+          "font_size_fit": { "min": 0.01 }, "text": constant(json!(QUICK)) } ] }));
+    let at = |ticks| {
+        measured(&root, MediaTime(ticks)).nodes[1]
+            .font_size
+            .expect("a text")
+    };
+    // Below the fit the text follows its keyframes; above it, the box caps it.
+    assert_eq!(at(0), 0.03);
+    let (late, later) = (at(100_000), at(120_000));
+    assert!(late < 0.03 + 0.27 * 100.0 / 120.0);
+    assert_eq!(late, later);
+}
+
+#[test]
+fn text_animators_never_change_the_fit() {
+    let card = |animators: serde_json::Value| {
+        node(json!({ "align_items": "start", "children": [
+            { "width": length(0.5), "height": length(0.2), "font_size": length(0.1),
+              "font_size_fit": { "min": 0.02 }, "text_animators": animators,
+              "text": constant(json!(QUICK)) } ] }))
+    };
+    let still = measured(&card(json!([])), MediaTime::ZERO);
+    let moving = measured(
+        &card(json!([{ "selector": { "type": "range" },
+            "properties": { "scale": constant(json!({ "x": 3, "y": 3 })) } }])),
+        MediaTime::ZERO,
+    );
+    assert_eq!(still.nodes[1].font_size, moving.nodes[1].font_size);
+    assert_eq!(still.nodes[1].line_count, moving.nodes[1].line_count);
+}
+
+#[test]
+fn layout_fit_and_clamp_values_out_of_range_are_refused() {
+    let refused = |text: serde_json::Value| {
+        let root: LayoutNode =
+            serde_json::from_value(json!({ "children": [text] })).expect("a layout node");
+        alpha2_model::Generator::Layout {
+            root: Box::new(root),
+        }
+        .validate_on(1000, 1000)
+        .expect_err("refused")
+    };
+    for (field, value) in [
+        ("font_size_fit", json!({ "min": 0 })),
+        ("font_size_fit", json!({ "min": 0.1, "max": 0.05 })),
+        ("font_size_fit", json!({ "min": "10px", "max": 0.005 })),
+        ("font_size_fit", json!({ "min": "2000px" })),
+        ("line_clamp", json!({ "max_lines": 0 })),
+        ("line_clamp", json!({ "block_ellipsis": { "string": "" } })),
+    ] {
+        let mut text = text("a", 0.05);
+        text[field] = value;
+        let issue = refused(text);
+        assert!(
+            matches!(&issue, alpha2_model::GeneratorIssue::Layout(issue)
+                if issue.at == format!("root.children[0].{field}")),
+            "{field}: {issue:?}"
+        );
+    }
 }

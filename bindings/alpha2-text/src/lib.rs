@@ -93,6 +93,69 @@ pub struct TextRasterRequest {
     /// Weight in `[1, 1000]`, matched per CSS Fonts 4 and applied to a variable face's `wght`
     /// axis. Faces are never synthetically emboldened.
     pub font_weight: u16,
+    /// Where lines are cut, as CSS `line-clamp` cuts them; `None` keeps every line.
+    pub clamp: Option<TextClamp>,
+}
+
+/// Most bytes in a [`TextClamp::ellipsis`].
+pub const MAX_ELLIPSIS_BYTES: usize = 256;
+
+/// Lines past a clamp point are discarded, as CSS Overflow 4 `line-clamp` discards them.
+///
+/// The clamp point is after the last line within both limits, and never before the first line.
+/// When text is cut, the kept part of the last line is shortened to its last soft wrap
+/// opportunity at which the ellipsis fits, else to its last cluster at which it fits, and the
+/// ellipsis is drawn at the line's inline end in the text's style. The ellipsis is one cluster
+/// of [`TextLayout`], marked [`ClusterInfo::ellipsis`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextClamp {
+    /// Most lines, at least 1, as CSS `max-lines`; `None` sets no count.
+    pub max_lines: Option<u32>,
+    /// Height in pixels the kept lines' box fits in, as the automatic clamp point of CSS
+    /// `max-lines: auto`; non-positive sets no height.
+    pub max_height: f32,
+    /// What ends a cut line, as CSS `block-ellipsis`, at most [`MAX_ELLIPSIS_BYTES`] bytes with
+    /// no `\n`; `None` cuts without a mark.
+    pub ellipsis: Option<String>,
+}
+
+/// The most lines a clamp keeps of text `font_size` pixels tall with lines `line_height` font
+/// sizes apart: at most `max_lines`, and as many as fit in `max_height` pixels (non-positive
+/// for no height), but at least one. `None` when neither limits.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+pub fn line_limit(
+    font_size: f32,
+    line_height: f32,
+    max_lines: Option<u32>,
+    max_height: f32,
+) -> Option<u32> {
+    let advance = font_size * line_height;
+    let by_height = (max_height > 0.0).then(|| {
+        // An estimate, then the exact comparison the box height makes.
+        let first = advance.max(font_size);
+        let estimate = ((max_height - first) / advance).floor() + 1.0;
+        let mut lines = if estimate.is_finite() {
+            estimate.clamp(1.0, 1.0e9) as u32
+        } else {
+            1
+        };
+        while lines > 1 && box_height(lines, advance, font_size) > max_height {
+            lines -= 1;
+        }
+        while lines < 1_000_000_000 && box_height(lines + 1, advance, font_size) <= max_height {
+            lines += 1;
+        }
+        lines
+    });
+    match (max_lines.map(|lines| lines.max(1)), by_height) {
+        (Some(count), Some(height)) => Some(count.min(height)),
+        (count, height) => count.or(height),
+    }
 }
 
 /// What paints a text's glyphs.
@@ -183,6 +246,8 @@ pub struct TextMeasure {
     pub first_baseline: f32,
     /// Last alphabetic baseline, in pixels from the layout box's top.
     pub last_baseline: f32,
+    /// Whether [`TextRasterRequest::clamp`] discarded text.
+    pub truncated: bool,
 }
 
 /// Text shaped once ([`TextRasterizer::shape`]) so lines can be broken at any width without
@@ -239,26 +304,72 @@ impl ShapedText {
     /// Lines at `max_width`; a non-positive width does not wrap.
     #[must_use]
     pub fn lines_at(&self, max_width: f32) -> LineMetrics {
+        self.lines_within(max_width, None).lines
+    }
+
+    /// [`line_limit`] for this text's font size and line height.
+    #[must_use]
+    pub fn line_limit(&self, max_lines: Option<u32>, max_height: f32) -> Option<u32> {
+        line_limit(self.font_size, self.line_height, max_lines, max_height)
+    }
+
+    /// Lines at `max_width` (non-positive does not wrap), cut after `limit` lines as a
+    /// [`TextClamp`] cuts them. The ellipsis takes no part in the widths.
+    #[must_use]
+    pub fn lines_within(&self, max_width: f32, limit: Option<u32>) -> ClampedLines {
+        let limit = limit.map_or(u32::MAX, |limit| limit.max(1));
         let (mut count, mut kept, mut widest) = (0_u32, 1_u32, 0.0_f32);
-        for clusters in &self.paragraphs {
-            for range in break_lines(clusters, max_width) {
+        let (mut truncated, mut emergency) = (false, false);
+        'paragraphs: for (index, clusters) in self.paragraphs.iter().enumerate() {
+            let ranges = break_lines(clusters, max_width);
+            for (at, range) in ranges.iter().enumerate() {
                 count = count.saturating_add(1);
                 if !range.is_empty() {
                     kept = count;
                 }
-                widest = widest.max(advance(&clusters[range]));
+                widest = widest.max(advance(&clusters[range.clone()]));
+                emergency |= !range.is_empty()
+                    && range.end < clusters.len()
+                    && !clusters[range.end].break_before;
+                if count == limit {
+                    truncated = ranges[at + 1..].iter().any(|range| !range.is_empty())
+                        || self.paragraphs[index + 1..]
+                            .iter()
+                            .any(|clusters| !clusters.is_empty());
+                    break 'paragraphs;
+                }
             }
         }
         let [first_baseline, last_baseline] =
             baselines(kept, self.font_size, self.line_height, self.line_advance);
-        LineMetrics {
-            line_count: kept,
-            widest,
-            height: box_height(kept, self.line_advance, self.font_size),
-            first_baseline,
-            last_baseline,
+        ClampedLines {
+            lines: LineMetrics {
+                line_count: kept,
+                widest,
+                height: box_height(kept, self.line_advance, self.font_size),
+                first_baseline,
+                last_baseline,
+            },
+            truncated,
+            splits_word: if truncated {
+                emergency
+            } else {
+                max_width > 0.0 && self.min_content_width() > max_width
+            },
         }
     }
+}
+
+/// The lines a clamp keeps ([`ShapedText::lines_within`]).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ClampedLines {
+    /// The kept lines.
+    pub lines: LineMetrics,
+    /// Whether lines with content were cut off.
+    pub truncated: bool,
+    /// Whether a kept line breaks inside a word: for text that is not cut, whether its
+    /// min-content width exceeds the wrapping width.
+    pub splits_word: bool,
 }
 
 /// Line advance as [`break_lines`] sums it, excluding hanging clusters and the last cluster's
@@ -755,6 +866,7 @@ impl TextRasterizer {
             content: grown(content, request.decoration_margin() as f32),
             ink,
             line_count: layout.line_count,
+            truncated: layout.truncated,
         })
     }
 
@@ -814,33 +926,72 @@ impl TextRasterizer {
     ) -> Result<Layout, TextRasterError> {
         let line_advance = request.font_size * request.line_height;
         let order = self.font_order(request.font_family.as_deref(), request.font_weight);
+        let clamp = request.clamp.as_ref();
+        let limit = clamp
+            .and_then(|clamp| {
+                line_limit(
+                    request.font_size,
+                    request.line_height,
+                    clamp.max_lines,
+                    clamp.max_height,
+                )
+            })
+            .map_or(usize::MAX, |limit| limit as usize);
         let mut lines = Vec::new();
         // Trailing blank lines take no room.
         let mut kept = 1;
         let mut clusters = Vec::new();
         let mut paragraph_start = 0;
-        for paragraph in normalize(&request.text, request.emoji_policy).split('\n') {
+        let mut truncated = false;
+        let normalized = normalize(&request.text, request.emoji_policy);
+        let paragraphs = normalized.split('\n').collect::<Vec<_>>();
+        for (index, paragraph) in paragraphs.iter().enumerate() {
             let first = clusters.len();
-            for line in layout_paragraph(
-                faces,
-                paragraph,
-                request.font_size,
-                request.max_width,
-                &order,
-                request.emoji_policy,
-                request.letter_spacing,
-                (first, lines.len()),
-                &mut clusters,
-            ) {
+            let shaped = ShapedParagraph::new(faces, paragraph, None, request, &order);
+            let ranges = break_lines(&shaped.clusters, request.max_width);
+            let mut clamped = false;
+            for (at, range) in ranges.iter().enumerate() {
+                let at_line = (first, lines.len());
+                clamped = lines.len() + 1 >= limit;
+                let cut = clamped
+                    && (ranges[at + 1..].iter().any(|range| !range.is_empty())
+                        || paragraphs[index + 1..]
+                            .iter()
+                            .any(|paragraph| !paragraph.is_empty()));
+                truncated |= cut;
+                let ellipsis = clamp
+                    .and_then(|clamp| clamp.ellipsis.as_deref())
+                    .filter(|_| cut);
+                let line = match ellipsis {
+                    Some(ellipsis) => {
+                        let level = shaped.bidi.paragraph_level;
+                        let mark =
+                            ShapedParagraph::new(faces, ellipsis, Some(level), request, &order);
+                        shaped.place_cut(
+                            range.clone(),
+                            &mark,
+                            request.max_width,
+                            at_line,
+                            &mut clusters,
+                        )
+                    }
+                    None => shaped.place(range.clone(), at_line, &mut clusters),
+                };
+                if line.has_glyphs {
+                    kept = lines.len() + 1;
+                }
                 lines.push(line);
-                if lines.last().is_some_and(|line| line.has_glyphs) {
-                    kept = lines.len();
+                if clamped {
+                    break;
                 }
             }
             for span in &mut clusters[first..] {
                 span.bytes = span.bytes.start + paragraph_start..span.bytes.end + paragraph_start;
             }
             paragraph_start += paragraph.len() + 1;
+            if clamped {
+                break;
+            }
         }
         lines.truncate(kept);
         let line_count = u32::try_from(lines.len()).map_err(|_| TextRasterError::TooLarge)?;
@@ -863,6 +1014,7 @@ impl TextRasterizer {
             descent: request.font_size * 0.2,
             width,
             height,
+            truncated,
         })
     }
 
@@ -1249,6 +1401,8 @@ struct Layout {
     height: f32,
     box_width: u32,
     box_height: u32,
+    /// Whether the request's clamp discarded lines.
+    truncated: bool,
 }
 
 impl Layout {
@@ -1310,6 +1464,8 @@ fn grown([left, top, right, bottom]: [f32; 4], by: f32) -> [f32; 4] {
 struct ClusterSpan {
     bytes: Range<usize>,
     line: usize,
+    /// The ellipsis of a cut line, with an empty range where the text was cut.
+    ellipsis: bool,
 }
 
 struct LaidLine {
@@ -1322,99 +1478,208 @@ struct LaidLine {
     has_glyphs: bool,
 }
 
-/// Shapes, breaks at `max_width` (non-positive does not wrap) and visually orders one paragraph.
-/// Clusters are numbered from `cluster_base` and lines from `line_base`; spans go to `spans`.
-#[allow(clippy::too_many_arguments)]
-fn layout_paragraph(
-    faces: &Faces<'_>,
-    paragraph: &str,
-    font_size: f32,
-    max_width: f32,
-    order: &[usize],
-    policy: EmojiPolicy,
-    letter_spacing: f32,
-    (cluster_base, line_base): (usize, usize),
-    spans: &mut Vec<ClusterSpan>,
-) -> Vec<LaidLine> {
-    let bidi = ParagraphBidiInfo::new(paragraph, None);
-    let rtl = bidi.paragraph_level.is_rtl();
-    let glyphs = shape_paragraph(
-        faces,
-        paragraph,
-        &bidi,
-        font_size,
-        order,
-        policy,
-        letter_spacing,
-    );
-    let clusters = clusters(&glyphs, paragraph, letter_spacing);
-    let lines = break_lines(&clusters, max_width);
-    for (line, range) in lines.iter().enumerate() {
-        for index in range.clone() {
-            let end = clusters
+/// A paragraph shaped and grouped into clusters, its lines not yet placed.
+struct ShapedParagraph<'a> {
+    text: &'a str,
+    bidi: ParagraphBidiInfo<'a>,
+    glyphs: Vec<ShapedGlyph>,
+    clusters: Vec<Cluster>,
+}
+
+impl<'a> ShapedParagraph<'a> {
+    /// Shapes `text` at `level`, else at the level its first strong character gives.
+    fn new(
+        faces: &Faces<'_>,
+        text: &'a str,
+        level: Option<unicode_bidi::Level>,
+        request: &TextRasterRequest,
+        order: &[usize],
+    ) -> Self {
+        let bidi = ParagraphBidiInfo::new(text, level);
+        let glyphs = shape_paragraph(
+            faces,
+            text,
+            &bidi,
+            request.font_size,
+            order,
+            request.emoji_policy,
+            request.letter_spacing,
+        );
+        let clusters = clusters(&glyphs, text, request.letter_spacing);
+        Self {
+            text,
+            bidi,
+            glyphs,
+            clusters,
+        }
+    }
+
+    /// Places the clusters of `range` as line `line` in visual order. Their spans go to `spans`,
+    /// where this paragraph's clusters are numbered from `cluster_base`.
+    fn place(
+        &self,
+        range: Range<usize>,
+        (cluster_base, line): (usize, usize),
+        spans: &mut Vec<ClusterSpan>,
+    ) -> LaidLine {
+        self.push_spans(range.clone(), cluster_base, line, spans);
+        self.position(range, cluster_base)
+    }
+
+    /// [`Self::place`] for the last line a clamp keeps, shortened so `mark` fits after it within
+    /// `max_width` (non-positive for any width) and ending with `mark` as one more cluster.
+    fn place_cut(
+        &self,
+        range: Range<usize>,
+        mark: &ShapedParagraph<'_>,
+        max_width: f32,
+        (cluster_base, line): (usize, usize),
+        spans: &mut Vec<ClusterSpan>,
+    ) -> LaidLine {
+        let mark_width = advance(&mark.clusters);
+        let mut end = self.cut_end(range.clone(), mark_width, max_width);
+        // Spaces before the cut go with the text after it.
+        while end > range.start && self.clusters[end - 1].hangs {
+            end -= 1;
+        }
+        self.push_spans(range.start..end, cluster_base, line, spans);
+        let at = self
+            .clusters
+            .get(end)
+            .map_or(self.text.len(), |next| next.start);
+        spans.push(ClusterSpan {
+            bytes: at..at,
+            line,
+            ellipsis: true,
+        });
+        let mut laid = self.position(range.start..end, cluster_base);
+        // The letter spacing of the last kept cluster, which no longer ends the line.
+        let gap = self.clusters[range.start..end]
+            .last()
+            .map_or(0.0, |cluster| cluster.spacing);
+        let mut glyphs = mark.position(0..mark.clusters.len(), 0).glyphs;
+        let shift = if laid.rtl { 0.0 } else { laid.width + gap };
+        for glyph in &mut glyphs {
+            glyph.cluster = cluster_base + end;
+            glyph.x += shift;
+        }
+        if laid.rtl {
+            for glyph in &mut laid.glyphs {
+                glyph.x += mark_width + gap;
+            }
+            glyphs.append(&mut laid.glyphs);
+            laid.glyphs = glyphs;
+        } else {
+            laid.glyphs.append(&mut glyphs);
+        }
+        laid.width += mark_width + gap;
+        laid.has_glyphs = true;
+        laid
+    }
+
+    /// Where a line holding `range` is cut so `mark_width` more fits in `max_width`: the last
+    /// soft wrap opportunity (or the paragraph's end) at which it fits, else the last cluster
+    /// boundary, else the line's start.
+    fn cut_end(&self, range: Range<usize>, mark_width: f32, max_width: f32) -> usize {
+        if max_width <= 0.0 {
+            return range.end;
+        }
+        let fits = |end: usize| {
+            let kept = &self.clusters[range.start..end];
+            let width = kept
+                .iter()
+                .rposition(|cluster| !cluster.hangs)
+                .map_or(0.0, |last| {
+                    kept[..=last]
+                        .iter()
+                        .fold(0.0, |width, cluster| width + cluster.width)
+                });
+            width + mark_width <= max_width
+        };
+        let soft = |end: usize| end == self.clusters.len() || self.clusters[end].break_before;
+        let ends = || (range.start + 1..=range.end).rev();
+        ends()
+            .find(|&end| soft(end) && fits(end))
+            .or_else(|| ends().find(|&end| fits(end)))
+            .unwrap_or(range.start)
+    }
+
+    fn push_spans(
+        &self,
+        range: Range<usize>,
+        cluster_base: usize,
+        line: usize,
+        spans: &mut Vec<ClusterSpan>,
+    ) {
+        debug_assert_eq!(spans.len(), cluster_base + range.start);
+        for index in range {
+            let end = self
+                .clusters
                 .get(index + 1)
-                .map_or(paragraph.len(), |next| next.start);
+                .map_or(self.text.len(), |next| next.start);
             spans.push(ClusterSpan {
-                bytes: clusters[index].start..end.max(clusters[index].start),
-                line: line_base + line,
+                bytes: self.clusters[index].start..end.max(self.clusters[index].start),
+                line,
+                ellipsis: false,
             });
         }
     }
-    lines
-        .into_iter()
-        .map(|range| {
-            let has_glyphs = !range.is_empty();
-            // Trailing spaces hang: no width, nothing drawn.
-            let mut end = range.end;
-            while end > range.start && clusters[end - 1].hangs {
-                end -= 1;
+
+    /// The clusters of `range` in visual order, pens from the line's start. Trailing spaces
+    /// hang: no width, nothing drawn.
+    fn position(&self, range: Range<usize>, cluster_base: usize) -> LaidLine {
+        let clusters = &self.clusters;
+        let glyphs = &self.glyphs;
+        let has_glyphs = !range.is_empty();
+        let mut end = range.end;
+        while end > range.start && clusters[end - 1].hangs {
+            end -= 1;
+        }
+        let mut line = LaidLine {
+            glyphs: Vec::new(),
+            width: 0.0,
+            rtl: self.bidi.paragraph_level.is_rtl(),
+            has_glyphs,
+        };
+        if end == range.start {
+            return line;
+        }
+        let bytes = clusters[range.start].start
+            ..clusters
+                .get(range.end)
+                .map_or(self.text.len(), |next| next.start);
+        let levels = self.bidi.reordered_levels(bytes);
+        // Letter spacing goes between visual neighbours, never after the line's last cluster.
+        let mut cluster_of = vec![0; clusters[end - 1].glyphs.end];
+        for (index, cluster) in clusters[range.start..end].iter().enumerate() {
+            cluster_of[cluster.glyphs.clone()].fill(range.start + index);
+        }
+        let mut x = 0.0_f32;
+        let mut previous: Option<usize> = None;
+        for index in visual_order(
+            clusters[range.start].glyphs.start..clusters[end - 1].glyphs.end,
+            |index| levels[glyphs[index].cluster].number(),
+        ) {
+            let glyph = &glyphs[index];
+            let cluster = cluster_of[index];
+            if let Some(before) = previous.filter(|&before| before != cluster) {
+                x += clusters[before].spacing;
             }
-            let mut line = LaidLine {
-                glyphs: Vec::new(),
-                width: 0.0,
-                rtl,
-                has_glyphs,
-            };
-            if end == range.start {
-                return line;
-            }
-            let bytes = clusters[range.start].start
-                ..clusters
-                    .get(range.end)
-                    .map_or(paragraph.len(), |next| next.start);
-            let levels = bidi.reordered_levels(bytes);
-            // Letter spacing goes between visual neighbours, never after the line's last cluster.
-            let mut cluster_of = vec![0; clusters[end - 1].glyphs.end];
-            for (index, cluster) in clusters[range.start..end].iter().enumerate() {
-                cluster_of[cluster.glyphs.clone()].fill(range.start + index);
-            }
-            let mut x = 0.0_f32;
-            let mut previous: Option<usize> = None;
-            for index in visual_order(
-                clusters[range.start].glyphs.start..clusters[end - 1].glyphs.end,
-                |index| levels[glyphs[index].cluster].number(),
-            ) {
-                let glyph = &glyphs[index];
-                let cluster = cluster_of[index];
-                if let Some(before) = previous.filter(|&before| before != cluster) {
-                    x += clusters[before].spacing;
-                }
-                previous = Some(cluster);
-                line.glyphs.push(PositionedGlyph {
-                    font: glyph.font,
-                    glyph_index: glyph.glyph_index,
-                    cluster: cluster_base + cluster,
-                    advance: glyph.advance,
-                    x,
-                    x_offset: glyph.x_offset,
-                    y_offset: glyph.y_offset,
-                });
-                x += glyph.advance;
-            }
-            line.width = x;
-            line
-        })
-        .collect()
+            previous = Some(cluster);
+            line.glyphs.push(PositionedGlyph {
+                font: glyph.font,
+                glyph_index: glyph.glyph_index,
+                cluster: cluster_base + cluster,
+                advance: glyph.advance,
+                x,
+                x_offset: glyph.x_offset,
+                y_offset: glyph.y_offset,
+            });
+            x += glyph.advance;
+        }
+        line.width = x;
+        line
+    }
 }
 
 /// Reorders logical-order glyphs visually per UAX #9 rule L2.
@@ -2047,6 +2312,13 @@ fn validate_request(request: &TextRasterRequest) -> Result<(), TextRasterError> 
                 && background.padding >= 0.0
                 && background.padding <= MAX_BACKGROUND_PADDING
         })
+        && request.clamp.as_ref().is_none_or(|clamp| {
+            clamp.max_lines != Some(0)
+                && clamp.max_height.is_finite()
+                && clamp.ellipsis.as_ref().is_none_or(|ellipsis| {
+                    ellipsis.len() <= MAX_ELLIPSIS_BYTES && !ellipsis.contains('\n')
+                })
+        })
     {
         Ok(())
     } else {
@@ -2554,3 +2826,7 @@ impl WindowMax {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "clamp_tests.rs"]
+mod clamp_tests;

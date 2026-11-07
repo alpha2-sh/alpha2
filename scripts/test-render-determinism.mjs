@@ -20,15 +20,10 @@ const cargo = (args) =>
     stdio: ["ignore", "pipe", "inherit"],
   });
 
-const [nativeGraph, nativeProject, nativeBlurAndStroke, times] = cargo([
-  "run",
-  "--quiet",
-  "--release",
-  "-p",
-  "alpha2-render-determinism",
-])
-  .trim()
-  .split("\n");
+const [nativeGraph, nativeProject, nativeBlurAndStroke, nativeTextFit, times] =
+  cargo(["run", "--quiet", "--release", "-p", "alpha2-render-determinism"])
+    .trim()
+    .split("\n");
 assert.equal(
   nativeGraph,
   PINNED_GRAPH_HASH,
@@ -100,6 +95,15 @@ assert.equal(
 );
 console.log(
   `verified the blur and stroke graph hashes to ${nativeBlurAndStroke} natively and as wasm`,
+);
+const wasmTextFit = hex(determinism.cpuTextFitHash());
+assert.equal(
+  wasmTextFit,
+  nativeTextFit,
+  `wasm fitted and clamped text ${wasmTextFit} != native`,
+);
+console.log(
+  `verified the fitted and clamped text frames hash to ${nativeTextFit} natively and as wasm`,
 );
 
 const rasterGlue = await mkdtemp(

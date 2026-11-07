@@ -67,10 +67,10 @@ pub use generator::{Generator, GradientStop, MAX_GRADIENT_STOPS, Paint, Rgba, Sp
 pub use ids::{ClipId, CompositionId, EffectResourceId, NodeId, ProjectId, TrackId};
 pub use layout::{
     AlignContent, AlignItems, Display, FlexDirection, FlexWrap, GeneratorIssue, GridAutoFlow,
-    JustifyContent, LAYOUT_TEXT_DEFAULTS, LayoutBorder, LayoutInset, LayoutIssue, LayoutNode,
-    LayoutProblem, LayoutShape, LayoutTextStyle, MAX_GRID_TRACKS, MAX_LAYOUT_DEPTH,
-    MAX_LAYOUT_FONT_SIZE, MAX_LAYOUT_ISOLATED, MAX_LAYOUT_NODES, MAX_LAYOUT_TEXTS, Overflow,
-    Position,
+    JustifyContent, LAYOUT_TEXT_DEFAULTS, LayoutBorder, LayoutFontSizeFit, LayoutInset,
+    LayoutIssue, LayoutNode, LayoutProblem, LayoutShape, LayoutTextStyle, MAX_GRID_TRACKS,
+    MAX_LAYOUT_DEPTH, MAX_LAYOUT_FONT_SIZE, MAX_LAYOUT_ISOLATED, MAX_LAYOUT_NODES,
+    MAX_LAYOUT_TEXTS, Overflow, Position,
 };
 pub use layout_values::{
     GridEdge, GridPlacement, Insets, LayoutLength, LayoutOffset, LayoutSize, RepeatCount,
@@ -101,7 +101,8 @@ pub use shapes::{
 };
 pub use source::{MediaKind, MediaSource};
 pub use text::{
-    FONT_WEIGHT_RANGE, LETTER_SPACING_RANGE, LINE_HEIGHT_RANGE, MAX_FONT_FAMILY_BYTES,
+    BlockEllipsis, FONT_SIZE_FIT_STEPS, FONT_WEIGHT_RANGE, FontSizeFit, LETTER_SPACING_RANGE,
+    LINE_HEIGHT_RANGE, LineClamp, MAX_BLOCK_ELLIPSIS_BYTES, MAX_FONT_FAMILY_BYTES,
     MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_PADDING, MAX_TEXT_SHADOW_BLUR,
     MAX_TEXT_SHADOW_OFFSET, MAX_TEXT_SHADOWS, MAX_TEXT_STROKE_EXTENT, MAX_TEXT_STROKES, TextAlign,
     TextBackground, TextShadow, TextStroke, TextStyle,

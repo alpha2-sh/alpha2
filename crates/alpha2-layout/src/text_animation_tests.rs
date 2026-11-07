@@ -15,6 +15,7 @@ fn row(count: usize) -> TextLayout {
             x: index as f32 * 10.0,
             advance: 10.0,
             baseline: 16.0,
+            ellipsis: false,
         })
         .collect();
     TextLayout {
@@ -317,4 +318,60 @@ fn animators_apply_in_order() {
     let (identity, hash) = cluster_states(&layout, &[], &none, MediaTime::ZERO, 20.0);
     assert_eq!(hash, 0);
     assert!(identity.iter().all(ClusterState::is_identity));
+}
+
+/// [`row`] cut after `count` clusters by a clamp: an ellipsis cluster ends the line.
+fn cut_row(count: usize) -> TextLayout {
+    let mut layout = row(count);
+    let at = layout.clusters.len();
+    layout.clusters.push(ClusterInfo {
+        bytes: at..at,
+        line: 0,
+        word: None,
+        is_space: false,
+        #[allow(clippy::cast_precision_loss)]
+        x: at as f32 * 10.0,
+        advance: 10.0,
+        baseline: 16.0,
+        ellipsis: true,
+    });
+    layout.lines[0].clusters.end += 1;
+    layout
+}
+
+#[test]
+fn an_ellipsis_counts_as_no_unit_and_takes_the_state_before_it() {
+    // A ramp over every character reaches its end at the last character, not the ellipsis.
+    let fade = SampledAnimator {
+        opacity: Some(0.0),
+        ..animator(range(RangeShape::RampUp, RangeUnits::Percent, 0.0, 100.0))
+    };
+    let (plain, plain_hash) = cluster_states(
+        &row(4),
+        &[],
+        std::slice::from_ref(&fade),
+        MediaTime::ZERO,
+        20.0,
+    );
+    let (cut, cut_hash) = cluster_states(&cut_row(4), &[], &[fade], MediaTime::ZERO, 20.0);
+    assert_eq!(cut.len(), 5);
+    assert_eq!(cut[..4], plain[..]);
+    assert_eq!(cut[4], cut[3]);
+    assert_eq!(cut_hash, plain_hash);
+    // With nothing before it, the ellipsis keeps its own look.
+    let mut alone = cut_row(0);
+    alone.lines[0].clusters = 0..1;
+    let (states, _) = cluster_states(
+        &alone,
+        &[],
+        &[animator(range(
+            RangeShape::Square,
+            RangeUnits::Index,
+            0.0,
+            1.0,
+        ))],
+        MediaTime::ZERO,
+        20.0,
+    );
+    assert_eq!(states, [ClusterState::IDENTITY]);
 }

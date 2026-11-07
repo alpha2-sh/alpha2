@@ -6,7 +6,8 @@
 //! pixels), or, for sizes and insets, `"<n>%"` of the parent's content box (see
 //! [`crate::layout_values`]). Boxes are `border-box`. Text style fields (`font_family`,
 //! `font_size`, `fill`, `font_weight`, `line_height`, `letter_spacing`, `text_align`,
-//! `strokes`, `shadows`) may be set on any box and inherit as in CSS.
+//! `strokes`, `shadows`) may be set on any box and inherit as in CSS; `font_size_fit`,
+//! `line_clamp` and `text_animators` apply to the box's own text only.
 
 use crate::animation::visit_keyed;
 use crate::checks::{
@@ -262,6 +263,16 @@ pub struct LayoutNode {
     /// (as CSS `text-shadow`); the root has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadows: Option<Vec<TextShadow>>,
+    /// The range the font size of the box's own text is fitted in so the text fits its content
+    /// box, as a text style's `font_size_fit`. The box is laid out at `font_size` first; the
+    /// fit never changes its size. Not inherited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_fit: Option<LayoutFontSizeFit>,
+    /// Where the lines of the box's own text are cut and what ends the cut line, as CSS
+    /// `line-clamp` and a text style's `line_clamp`. The clamp point is also at the content
+    /// box's height. The box's automatic height ends at the clamp point. Not inherited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_clamp: Option<crate::LineClamp>,
     /// Per-character motion of the box's own text, Range selectors only (layout text has no
     /// runs). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited; never
     /// changes layout.
@@ -282,6 +293,21 @@ pub struct LayoutNode {
     /// degrees, after layout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation_degrees: Option<Animated<f32>>,
+}
+
+/// The font sizes a layout text is fitted between, as a text style's
+/// [`crate::FontSizeFit`], in layout sizes. A `min` above `max` wins.
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LayoutFontSizeFit {
+    /// Smallest font size: positive, at most [`MAX_LAYOUT_FONT_SIZE`] of the picture's shorter
+    /// side.
+    pub min: LayoutSize,
+    /// Largest font size, with the same limits. `None` is the box's `font_size`, so the text
+    /// only shrinks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<LayoutSize>,
 }
 
 /// A box's shapes, drawn as a shapes generator draws its items on a picture the size of the
@@ -991,6 +1017,33 @@ fn validate_style(node: &LayoutNode, at: &str, shorter_side: Option<f32>) -> Lay
     if !crate::text_animation::valid_animators(&node.text_animators, true) {
         return out_of_range("text_animators");
     }
+    if let Some(fit) = &node.font_size_fit {
+        let font_size = |value: LayoutSize| {
+            // Pixels compare with the limit on a known canvas only.
+            let fraction = match (value, shorter_side) {
+                (LayoutSize::Px(_), None) => 0.0,
+                (value, Some(side)) => value.fraction(side),
+                (value, None) => value.value(),
+            };
+            value.value().is_finite() && value.value() > 0.0 && fraction <= MAX_LAYOUT_FONT_SIZE
+        };
+        let ordered = match (fit.min, fit.max, shorter_side) {
+            (min, Some(max), Some(side)) => min.fraction(side) <= max.fraction(side),
+            (LayoutSize::Fraction(min), Some(LayoutSize::Fraction(max)), None)
+            | (LayoutSize::Px(min), Some(LayoutSize::Px(max)), None) => min <= max,
+            _ => true,
+        };
+        if !font_size(fit.min) || !fit.max.is_none_or(font_size) || !ordered {
+            return out_of_range("font_size_fit");
+        }
+    }
+    if node
+        .line_clamp
+        .as_ref()
+        .is_some_and(|clamp| !clamp.is_valid())
+    {
+        return out_of_range("line_clamp");
+    }
     Ok(())
 }
 
@@ -1311,6 +1364,10 @@ impl LayoutNode {
             &mut self.font_size,
         ] {
             size(value);
+        }
+        if let Some(fit) = &mut self.font_size_fit {
+            fit.min = fit.min.without_px(shorter_side);
+            fit.max = fit.max.map(|max| max.without_px(shorter_side));
         }
         insets(&mut self.padding);
         insets(&mut self.margin);

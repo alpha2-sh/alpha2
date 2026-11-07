@@ -91,3 +91,201 @@ fn baselines_lie_a_half_leading_and_an_ascent_below_each_line_top() {
         (three.baselines.last - three.baselines.first - 2.0 * 1.4 * 40.0 / 1000.0).abs() < 1e-6
     );
 }
+
+fn fixture() -> TextRasterizer {
+    TextRasterizer::new(vec![TextFont {
+        family: "Alpha2 Fixture".into(),
+        bytes: std::fs::read("../../tests/fonts/Alpha2Fixture.ttf")
+            .expect("fixture font")
+            .into(),
+        face_index: 0,
+    }])
+    .expect("font")
+}
+
+fn shape(
+    rasterizer: &TextRasterizer,
+) -> impl FnMut(&TextRasterRequest) -> Result<std::sync::Arc<ShapedText>, TextRasterError> + '_ {
+    |request| rasterizer.shape(request).map(std::sync::Arc::new)
+}
+
+const QUICK: &str = "The quick brown fox jumps over the lazy dog again and again";
+
+#[test]
+fn a_fitted_word_no_longer_splits_and_the_next_step_would() {
+    let rasterizer = fixture();
+    let size = PictureSize::new(1920, 1080).expect("size");
+    let style = TextStyle {
+        font_size: 0.2,
+        max_width: 0.3,
+        font_size_fit: Some(alpha2_model::FontSizeFit {
+            min: 0.01,
+            max: None,
+        }),
+        ..TextStyle::default()
+    };
+    let word = "Internationalization";
+    let fitted = fit_text(word, &style, size, shape(&rasterizer)).expect("fits");
+    assert!(fitted.font_size < 0.2 && fitted.font_size > 0.01);
+    let width = |pixels| {
+        rasterizer
+            .shape(&text_request_at(word, &style, size, 1, pixels))
+            .expect("shapes")
+            .min_content_width()
+    };
+    assert!(width(fitted.font_pixels) <= 0.3 * 1920.0);
+    let next = (fitted.font_size + 1.0 / alpha2_model::FONT_SIZE_FIT_STEPS) * size.unit();
+    assert!(width(next) > 0.3 * 1920.0);
+    let bounds = measure_text(&rasterizer, word, &style, size).expect("measures");
+    assert_eq!(bounds.font_size, fitted.font_size);
+    assert_eq!(bounds.line_count, 1);
+    assert!(!bounds.overflow && !bounds.truncated);
+}
+
+#[test]
+fn a_fit_that_needs_no_change_draws_the_style_as_it_is() {
+    let rasterizer = fixture();
+    let size = PictureSize::new(1920, 1080).expect("size");
+    let plain = TextStyle::default();
+    let fitted = TextStyle {
+        font_size_fit: Some(alpha2_model::FontSizeFit {
+            min: 0.01,
+            max: None,
+        }),
+        ..TextStyle::default()
+    };
+    let found = fit_text("Hi", &fitted, size, shape(&rasterizer)).expect("fits");
+    assert_eq!(found.font_size, plain.font_size);
+    assert_eq!(found.font_pixels, font_pixels(&plain, size));
+    let unfitted = fit_text("Hi", &plain, size, |_: &TextRasterRequest| {
+        Err::<std::sync::Arc<ShapedText>, _>(TextRasterError::NoFonts)
+    })
+    .expect("a style without a fit shapes nothing");
+    assert_eq!(unfitted, found);
+}
+
+#[test]
+fn text_fits_to_its_box_height_and_grows_to_its_maximum() {
+    let rasterizer = fixture();
+    let size = PictureSize::new(1920, 1080).expect("size");
+    let shrink = TextStyle {
+        font_size: 0.12,
+        max_width: 0.5,
+        max_height: Some(0.3),
+        font_size_fit: Some(alpha2_model::FontSizeFit {
+            min: 0.02,
+            max: None,
+        }),
+        ..TextStyle::default()
+    };
+    let bounds = measure_text(&rasterizer, QUICK, &shrink, size).expect("measures");
+    assert!(bounds.font_size < 0.12);
+    assert!(bounds.layout.bottom - bounds.layout.top <= 0.3 + 1.0e-6);
+    assert!(!bounds.overflow);
+    let grow = TextStyle {
+        font_size: 0.05,
+        max_width: 0.8,
+        max_height: Some(0.4),
+        font_size_fit: Some(alpha2_model::FontSizeFit {
+            min: 0.02,
+            max: Some(0.5),
+        }),
+        ..TextStyle::default()
+    };
+    let bounds = measure_text(&rasterizer, "Big", &grow, size).expect("measures");
+    assert!(bounds.font_size > 0.3, "{}", bounds.font_size);
+    assert_eq!(bounds.line_count, 1);
+}
+
+#[test]
+fn text_that_fits_at_no_size_is_clamped_at_its_minimum_and_reported() {
+    let rasterizer = fixture();
+    let size = PictureSize::new(1920, 1080).expect("size");
+    let style = TextStyle {
+        font_size: 0.1,
+        max_width: 0.3,
+        font_size_fit: Some(alpha2_model::FontSizeFit {
+            min: 0.06,
+            max: None,
+        }),
+        line_clamp: Some(alpha2_model::LineClamp {
+            max_lines: Some(2),
+            ..alpha2_model::LineClamp::default()
+        }),
+        ..TextStyle::default()
+    };
+    let bounds = measure_text(&rasterizer, QUICK, &style, size).expect("measures");
+    assert_eq!(bounds.font_size, 0.06);
+    assert_eq!(bounds.line_count, 2);
+    assert!(bounds.truncated && !bounds.overflow);
+    let unclamped = TextStyle {
+        line_clamp: None,
+        max_height: Some(0.1),
+        ..style
+    };
+    let bounds = measure_text(&rasterizer, QUICK, &unclamped, size).expect("measures");
+    assert!(bounds.overflow && !bounds.truncated);
+}
+
+#[test]
+fn a_text_key_changes_with_the_box_height_fit_and_clamp() {
+    let size = PictureSize::new(1920, 1080).expect("size");
+    let base = TextStyle::default();
+    let key = text_key("Hi", &base, size);
+    let styles = [
+        TextStyle {
+            max_height: Some(0.5),
+            ..base.clone()
+        },
+        TextStyle {
+            font_size_fit: Some(alpha2_model::FontSizeFit {
+                min: 0.01,
+                max: None,
+            }),
+            ..base.clone()
+        },
+        TextStyle {
+            line_clamp: Some(alpha2_model::LineClamp::default()),
+            ..base.clone()
+        },
+        TextStyle {
+            line_clamp: Some(alpha2_model::LineClamp {
+                block_ellipsis: alpha2_model::BlockEllipsis::NoEllipsis,
+                ..alpha2_model::LineClamp::default()
+            }),
+            ..base.clone()
+        },
+    ];
+    let keys = styles
+        .iter()
+        .map(|style| text_key("Hi", style, size))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(keys.len(), styles.len());
+    assert!(!keys.contains(&key));
+}
+
+#[test]
+fn a_clamped_style_asks_the_text_host_to_cut_at_its_box() {
+    let size = PictureSize::new(1920, 1080).expect("size");
+    let style = TextStyle {
+        max_height: Some(0.25),
+        line_clamp: Some(alpha2_model::LineClamp {
+            max_lines: Some(3),
+            block_ellipsis: alpha2_model::BlockEllipsis::String(" (more)".into()),
+        }),
+        ..TextStyle::default()
+    };
+    let request = text_request(QUICK, &style, size, 1);
+    assert_eq!(
+        request.clamp,
+        Some(alpha2_text::TextClamp {
+            max_lines: Some(3),
+            max_height: 0.25 * 1080.0,
+            ellipsis: Some(" (more)".into()),
+        })
+    );
+    assert_eq!(
+        text_request(QUICK, &TextStyle::default(), size, 1).clamp,
+        None
+    );
+}

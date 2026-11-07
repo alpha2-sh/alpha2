@@ -117,6 +117,8 @@ impl Serialize for Rgba {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+// A document holds few generators; the text style stays inline so every reader matches it as is.
+#[allow(clippy::large_enum_variant)]
 pub enum Generator {
     /// Paint over the whole picture.
     Fill {
