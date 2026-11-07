@@ -166,8 +166,7 @@ fn captions_on_a_bar_with_a_logo_and_loudness() {
         tracks[2]["captions"]["cues"].as_array().map(Vec::len),
         Some(30)
     );
-    // The logo is a sixth of the shorter side, 180 px, at the top-right corner, the theme's margin
-    // in.
+    // A sixth of the 1080 px shorter side is 180 px, placed the theme's margin from the corner.
     let logo = &tracks[3]["clips"][0]["visual"];
     let scale = logo["scale"]["value"]["x"].as_f64().unwrap();
     assert!((scale * 1080.0 - 180.0).abs() < 1e-3, "{scale}");

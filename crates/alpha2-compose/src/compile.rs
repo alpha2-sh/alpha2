@@ -1009,8 +1009,8 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
-    /// Draws a box: the layout in paint-order segments, with each placed child drawn in its
-    /// measured place between the segment under it and the one over it.
+    /// Draws a box as layout segments in paint order, each placed child in its measured place
+    /// between the segment under it and the one over it.
     fn emit_box(
         &mut self,
         node: &BoxPrim,
@@ -1397,8 +1397,8 @@ impl<'a> Context<'a> {
                         "max": format!("{max}px"),
                     })),
                     "background": text.background.map(|color| to_json(&Paint::Solid { color })),
-                    // As a text style's background: 0.3 em beside the text; its line box
-                    // already leaves room above and below.
+                    // A text style's background pads 0.3 em at the sides; the line box pads
+                    // above and below.
                     "padding": text.background.map(|_| format!(
                         "{}px {}px",
                         0.05 * text.font_px,
@@ -2870,8 +2870,8 @@ fn shape_items_placed(shape: &ShapeContent, place: Placement, len: i64) -> Vec<S
     items
 }
 
-/// What a box build collects: node numbers in paint order, placed children, and the boxes
-/// around the current one that hide their overflow.
+/// Node numbers in paint order, placed children, and the enclosing boxes that hide their
+/// overflow, collected while a box is built.
 #[derive(Default)]
 struct BoxBuild {
     count: usize,

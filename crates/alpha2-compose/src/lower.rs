@@ -100,7 +100,7 @@ pub(crate) struct BoxPrim {
     pub tree: BoxTree,
 }
 
-/// One layout box: its container fields as written, its paints, and its children.
+/// One layout box with its container fields as written, its paints and its children.
 #[derive(Clone, Debug)]
 pub(crate) struct BoxTree {
     pub css: BTreeMap<String, serde_json::Value>,
@@ -163,7 +163,7 @@ pub(crate) struct EffectPrim {
     pub inputs: BTreeMap<String, Prim>,
 }
 
-/// A group's movement; positions in pixels, the anchor in its area's unit square.
+/// A group's movement, with positions in pixels and the anchor in its area's unit square.
 #[derive(Clone, Debug)]
 pub(crate) struct TransformPrim {
     pub position: Option<AnimPrim<[f32; 2]>>,
@@ -179,7 +179,7 @@ pub(crate) struct GridLayout {
     pub length: GridLength,
 }
 
-/// A lowered [`Anim`]: one value, or keys whose times are ticks from the node's start.
+/// A lowered [`Anim`], one value or keys whose times are ticks from the node's start.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum AnimPrim<T> {
     Value(T),
@@ -194,7 +194,7 @@ pub(crate) struct KeyPrim<T> {
     pub easing: Easing,
 }
 
-/// When a key falls: ticks from the node's start, or its end once the node's length is known.
+/// When a key falls, in ticks from the node's start or from its end once its length is known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum KeyTime {
     Ticks(i64),
@@ -238,7 +238,7 @@ pub(crate) struct ShapeContent {
     pub trim: Option<TrimPrim>,
 }
 
-/// One outline; points in the area's unit square, lengths in its shorter side.
+/// One outline, with points in the area's unit square and lengths in its shorter side.
 #[derive(Clone, Debug)]
 pub(crate) enum GeometryPrim {
     Rect {
@@ -264,7 +264,7 @@ pub(crate) enum GeometryPrim {
     Path(alpha2_model::Path),
 }
 
-/// A paint with its theme colors resolved; positions in the area's unit square.
+/// A paint with its theme colors resolved and positions in the area's unit square.
 #[derive(Clone, Debug)]
 pub(crate) enum PaintPrim {
     Solid(Rgba),
@@ -1272,7 +1272,7 @@ impl Context<'_> {
         })
     }
 
-    /// A box and its children: nested boxes, what the layout draws, and the rest.
+    /// Lowers a box and sorts its children into nested boxes, layout leaves and other nodes.
     fn box_tree(&mut self, node: &BoxNode, path: &str) -> Result<BoxTree, ComposeError> {
         const OWN: [&str; 6] = ["children", "text", "shape", "position", "inset", "type"];
         if let Some(field) = node.css.keys().find(|field| OWN.contains(&field.as_str())) {

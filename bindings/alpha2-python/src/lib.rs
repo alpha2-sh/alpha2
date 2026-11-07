@@ -154,8 +154,7 @@ fn compose_lint(py: Python<'_>, template: &str, data: &str, options: &str) -> Py
         .map_err(|error| compose_error(&error))
 }
 
-/// The compose schema without engine nodes (`raw`, `layout`), as JSON: what a spec written by
-/// hand or by a model uses.
+/// The compose schema without engine nodes (`raw`, `layout`), as JSON.
 #[pyfunction]
 fn compose_core_schema() -> String {
     alpha2_compose::compose_core_json_schema().to_string()

@@ -1,6 +1,5 @@
-//! The compose compiler and its templates for the web, as a wasm module of their own: a page
-//! that only plays and exports projects does not load them. The same functions, and the same
-//! bytes, as the native hosts.
+//! Compose and its templates as a wasm module apart from the engine's, so a page that only plays
+//! and exports projects does not load them.
 
 use std::sync::Arc;
 

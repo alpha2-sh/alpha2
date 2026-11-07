@@ -1018,9 +1018,9 @@ export class Alpha2HostError extends Error {
    * The caller owns the file.
    */
   readonly keptPath?: string;
-  /** For a compose refusal: where in the spec, template or data, such as `data.title`. */
+  /** Where a compose refusal lies in the spec, template or data, such as `data.title`. */
   readonly path?: string;
-  /** For a compose refusal: what is wrong there. */
+  /** What is wrong where a compose refusal lies. */
   readonly problem?: string;
 
   constructor(code: string, message: string, options?: Alpha2HostErrorOptions) {
@@ -1422,12 +1422,12 @@ export class Alpha2NodeClient {
   }
 
   /**
-   * Compiles a compose spec or binds, lints or describes a template, without a GPU: the same
-   * functions as `alpha2/compose` in the browser and `alpha2.compose` in Python. `compile` takes
+   * Compiles a compose spec or binds, lints or describes a template without a GPU, with the
+   * functions `alpha2/compose` and Python's `alpha2.compose` use. `compile` takes
    * `{spec, facts?, fonts?, templates?}`, `bind` `{template, data?, theme?, templates?}`,
    * `dataSchema` `{template}`, `lint` `{template, data?, templates?}`, `requirements` `{spec}`
-   * and `templates` nothing. Rejects with {@link Alpha2HostError} `INVALID_INPUT`, its `details`
-   * `{path, problem}` naming where a spec, template or data fails.
+   * and `templates` nothing. Rejects with {@link Alpha2HostError} `INVALID_INPUT`, whose `path`
+   * and `problem` name where a spec, template or data fails.
    */
   async compose(
     action: ComposeAction,

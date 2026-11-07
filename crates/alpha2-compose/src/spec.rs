@@ -838,7 +838,8 @@ pub struct Shape {
     /// A line along the outlines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<Stroke>,
-    /// Keeps part of the outlines' length: a line drawing itself is `{"end": {"from": 0, "to": 1}}`.
+    /// Keeps part of the outlines' length. A line that draws itself has
+    /// `{"end": {"from": 0, "to": 1}}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trim: Option<Trim>,
     /// Opacity, 0..=1. Default 1.
@@ -1203,8 +1204,7 @@ pub enum Size {
     Theme(ThemeLength),
 }
 
-/// One of the theme's lengths times `scale`, so a design follows the theme it is drawn with: a
-/// fraction of the picture's shorter side.
+/// One of the theme's lengths times `scale`, as a fraction of the picture's shorter side.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -1705,7 +1705,7 @@ pub enum Anim<T> {
 
 impl<'de, T: serde::de::DeserializeOwned> Deserialize<'de> for Anim<T> {
     // An object with `keys` is keys and one with `from` a ramp; anything else is a value. Ramps
-    // and keys are objects only, as the schema says, though serde would read a struct from an array.
+    // and keys are objects only, as the schema says, though serde reads a struct from an array.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error as _;
         let value = serde_json::Value::deserialize(deserializer)?;

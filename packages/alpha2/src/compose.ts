@@ -1,13 +1,11 @@
 /**
- * The compose compiler and its templates in the browser: a spec of intent (sequences, boxes,
- * groups, mattes, shapes, components) compiled to a project, and templates bound to their data.
- * Every function runs the engine's own code through the wasm binding, so a spec compiles to the
- * same bytes here as in Python or on a server.
+ * Compose and its templates in the browser. The engine's own code runs through the wasm binding,
+ * so a spec compiles to the same bytes here as in Python or on a server.
  */
 
 import { WasmModule, type WasmBindgenGlue } from "./wasm-module.js";
 
-/** The binding functions compose uses: {@link loadCompose} returns them. */
+/** The binding functions {@link loadCompose} returns. */
 export interface ComposeBinding {
   composeRequirements(spec: string): string;
   composeCompile(spec: string, facts: string, fonts: Uint8Array[]): string;
@@ -31,10 +29,10 @@ export function loadCompose(wasmUrl?: string | URL): Promise<ComposeBinding> {
   return composeModule.load(wasmUrl);
 }
 
-/** A compose spec or template: plain JSON data. */
+/** A compose spec or template, as plain JSON data. */
 export type ComposeDocument = Readonly<Record<string, unknown>>;
 
-/** The files a spec names: media to gather facts about, and caption texts to read. */
+/** The media files a spec names, to gather facts about, and the caption texts it reads. */
 export interface ComposeRequirements {
   readonly media: readonly {
     readonly path: string;
@@ -60,7 +58,7 @@ export interface ComposeFacts {
   readonly texts?: Readonly<Record<string, string>>;
 }
 
-/** A compiled spec: the project, which file each media source reads, and notes. */
+/** A compiled spec with its project, the file each media source reads, and notes. */
 export interface CompiledCompose {
   readonly project: Readonly<Record<string, unknown>>;
   readonly assets: Readonly<Record<string, string>>;
@@ -123,7 +121,7 @@ export function compileCompose(
 }
 
 /**
- * `template` bound to `data`: its parameters replaced and its template nodes expanded, giving a
+ * Binds `template` to `data`, replacing its parameters and expanding its template nodes into a
  * plain spec (or, for a node template, a node). A spec without a `template` header only has
  * its template nodes expanded.
  *
@@ -145,7 +143,7 @@ export function bindTemplate(
 }
 
 /**
- * The JSON Schema of `template`'s data: what a form, an API or a model fills in.
+ * The JSON Schema of the data a form, an API or a model fills in for `template`.
  *
  * @throws The binding's `INVALID_INPUT` error for a template that does not parse.
  */
@@ -159,9 +157,9 @@ export function templateDataSchema(
 }
 
 /**
- * `template`'s problems: unknown or unused parameters, literal files, colors and words a
- * template takes from its data and theme, and whether it binds (to `data`, or to sample data)
- * into a spec that parses.
+ * Lists `template`'s problems. It flags unknown or unused parameters, and literal files, colors
+ * and words a template takes from its data and theme. It also checks that it binds (to `data`,
+ * or to sample data) into a spec that parses.
  */
 export function lintTemplate(
   binding: ComposeBinding,

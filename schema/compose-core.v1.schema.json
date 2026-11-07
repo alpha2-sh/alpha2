@@ -8613,7 +8613,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Keeps part of the outlines' length: a line drawing itself is `{\"end\": {\"from\": 0, \"to\": 1}}`."
+              "description": "Keeps part of the outlines' length. A line that draws itself has\n`{\"end\": {\"from\": 0, \"to\": 1}}`."
             },
             "type": {
               "const": "shape",
@@ -10765,7 +10765,7 @@
     },
     "ThemeLength": {
       "additionalProperties": false,
-      "description": "One of the theme's lengths times `scale`, so a design follows the theme it is drawn with: a\nfraction of the picture's shorter side.",
+      "description": "One of the theme's lengths times `scale`, as a fraction of the picture's shorter side.",
       "properties": {
         "$theme": {
           "$ref": "#/$defs/LengthToken",

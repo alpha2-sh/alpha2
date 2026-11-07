@@ -12,7 +12,7 @@ pub use crate::spec::COMPOSE_SCHEMA_ID;
 /// Where the core compose schema, the one without the engine-level nodes, is published.
 pub const COMPOSE_CORE_SCHEMA_ID: &str = "https://alpha2.sh/schema/compose-core.v1.json";
 
-/// Node types the core schema leaves out: they take engine documents as they are.
+/// Node types the core schema leaves out, since they take engine documents as they are.
 const ADVANCED_NODES: [&str; 2] = ["raw", "layout"];
 
 /// The compose spec as schemars writes it, every type inline.

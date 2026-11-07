@@ -1,5 +1,4 @@
-//! The compose compiler and its templates on the device: the same functions, and the same
-//! bytes, as the browser module, the Python package and `alpha2-host serve`.
+//! Compose and its templates on the device, with the functions the other hosts use.
 
 use std::sync::Arc;
 

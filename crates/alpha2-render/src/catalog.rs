@@ -24,8 +24,7 @@ pub fn builtin_catalog() -> Value {
     })
 }
 
-/// The published catalog document: [`builtin_catalog`] with its `$id`, pretty-printed, as
-/// `schema/effects.v1.json` holds it.
+/// [`builtin_catalog`] with its `$id`, pretty-printed as `schema/effects.v1.json` holds it.
 #[must_use]
 pub fn builtin_catalog_document() -> String {
     let mut catalog = builtin_catalog();

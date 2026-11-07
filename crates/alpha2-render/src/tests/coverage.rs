@@ -1,7 +1,6 @@
 use super::*;
 
-/// A transition of pictures each under a coverage `m` is `m` over the transition of the
-/// pictures: every output pixel mixes the two inputs at its own place, and adds nothing.
+/// Whether the transition of two pictures under coverage `m` is `m` over their transition.
 fn commutes_with_coverage(
     renderer: &Renderer,
     id: &str,
@@ -94,8 +93,7 @@ fn transitions_marked_coverage_commuting_are_the_ones_that_commute() {
     );
 }
 
-/// The defaults, then each parameter alone at its ends: a property of the transition holds for
-/// every value it may take.
+/// The defaults, then each parameter alone at its ends.
 fn variations(definition: &crate::EffectDef) -> Vec<EffectParams<'_>> {
     let mut all = vec![EffectParams::new()];
     for spec in &definition.params {

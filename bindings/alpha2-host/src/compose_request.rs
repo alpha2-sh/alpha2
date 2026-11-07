@@ -1,5 +1,4 @@
-//! The `compose` operation: specs compiled and templates bound, linted and described, the same
-//! functions as the browser module and the Python package.
+//! The `compose` operation, answered with the functions the browser and Python bindings use.
 
 use std::sync::Arc;
 

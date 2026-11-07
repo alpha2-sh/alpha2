@@ -309,7 +309,7 @@ def Box(
     inset: float | abc.Sequence[float] | None = None,
     **css: Any,
 ) -> Node:
-    """A CSS flexbox (or ``display="grid"``) box filling the node's area: ``css`` are the engine
+    """A CSS flexbox (or ``display="grid"``) box filling the node's area. ``css`` are the engine
     layout's container fields (``flex_direction="column"``, ``gap="8px"``,
     ``padding="12px 16px"``). Text, shapes, colors and boxes are laid out by it; any other child
     (a video, a group) is drawn in its place, clipped to its ``border_radius``. A child's item
@@ -1272,8 +1272,8 @@ def bind(
     theme: str | Mapping[str, Any] | None = None,
     templates: abc.Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    """``template`` bound to ``data``: its parameters replaced and its ``owner/name`` template
-    nodes (from ``templates`` and :data:`TEMPLATES`) expanded, giving a plain spec (or node).
+    """Binds ``template`` to ``data``, replacing its parameters and expanding its ``owner/name``
+    template nodes (from ``templates`` and :data:`TEMPLATES`) into a plain spec (or node).
     ``theme`` replaces a video template's theme. A spec without a ``template`` header only has
     its template nodes expanded.
 
@@ -1294,7 +1294,7 @@ def bind(
 
 
 def data_schema(template: Mapping[str, Any]) -> dict[str, Any]:
-    """The JSON Schema of ``template``'s data: what a form, an API or a model fills in.
+    """The JSON Schema of the data a form, an API or a model fills in for ``template``.
 
     Raises :class:`~alpha2.Alpha2ComposeError` for a template that does not parse.
     """
@@ -1311,9 +1311,9 @@ def lint(
     *,
     templates: abc.Sequence[Mapping[str, Any]] = (),
 ) -> list[dict[str, Any]]:
-    """``template``'s problems as ``{path, code, message, severity}``: unknown or unused
-    parameters, literal files, colors and words a template takes from its data and theme, and
-    whether it binds (to ``data``, or to sample data) into a spec that parses."""
+    """``template``'s problems as ``{path, code, message, severity}``. It flags unknown or unused
+    parameters, and literal files, colors and words a template takes from its data and theme. It
+    also checks that it binds (to ``data``, or to sample data) into a spec that parses."""
     issues = _native.compose_lint(
         json.dumps(_plain(template), ensure_ascii=False),
         "" if data is None else json.dumps(_plain(data), ensure_ascii=False),

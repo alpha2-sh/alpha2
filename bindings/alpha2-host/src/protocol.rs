@@ -34,7 +34,7 @@ pub enum Request {
     Compose(Box<ComposeRequest>),
 }
 
-/// A compose or template request: no GPU, no media read.
+/// A compose or template request, answered without a GPU or reading media.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComposeRequest {

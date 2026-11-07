@@ -91,10 +91,8 @@ pub(crate) fn builtin_effect_groups() -> Vec<(&'static str, Vec<EffectDef>)> {
     ]
 }
 
-/// Transitions whose every pixel mixes the two pictures at its own place and adds nothing
-/// they do not already cover, for every parameter value: one over pictures each under a
-/// coverage is that coverage over one of the pictures. A matte or mask may be applied to each
-/// side of these. A render test checks the list both ways.
+/// Transitions that mix the two pictures at each pixel's own place and add nothing, for every
+/// parameter value, so a matte or mask may apply to each side. A render test checks the list.
 pub const COVERAGE_COMMUTING_TRANSITIONS: [&str; 38] = [
     "alpha2.transition.fade",
     "alpha2.transition.circle-open",

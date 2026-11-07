@@ -144,9 +144,8 @@ pub struct EffectSpec {
     pub params: Vec<EffectParamSpec>,
     /// The external resources it reads, by slot name.
     pub resources: Vec<String>,
-    /// For a transition: whether one over pictures each under a coverage (a matte or mask) is
-    /// that coverage over one of the pictures, for every parameter value. A transition that mixes
-    /// the two pictures at each pixel's own place and adds nothing has it.
+    /// Whether this transition of two pictures under one coverage (a matte or mask) equals that
+    /// coverage over their transition, for every parameter value.
     pub coverage_commutes: bool,
 }
 

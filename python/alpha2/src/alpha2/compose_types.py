@@ -1821,7 +1821,9 @@ class NodeShape(TypedDict):
     stroke: NotRequired[Stroke | None]
     """A line along the outlines."""
     trim: NotRequired[Trim | None]
-    """Keeps part of the outlines' length: a line drawing itself is `{"end": {"from": 0, "to": 1}}`."""
+    """Keeps part of the outlines' length. A line that draws itself has
+    `{"end": {"from": 0, "to": 1}}`.
+    """
     type: Literal["shape"]
 
 
@@ -2476,7 +2478,7 @@ ThemeLength = TypedDict(
         "scale": "NotRequired[float | None]",
     },
 )
-ThemeLength.__doc__ = "One of the theme's lengths times `scale`, so a design follows the theme it is drawn with: a\nfraction of the picture's shorter side."
+ThemeLength.__doc__ = "One of the theme's lengths times `scale`, as a fraction of the picture's shorter side."
 
 
 ThemeToken: TypeAlias = Literal["text", "background", "surface", "panel", "accent"]

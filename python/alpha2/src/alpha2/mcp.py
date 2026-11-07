@@ -1,8 +1,7 @@
-"""``python -m alpha2 mcp``: an MCP server over standard input and output.
+"""An MCP server over standard input and output, run as ``python -m alpha2 mcp``.
 
-Its tools pick a template, fill in its data, check it and render it, or write a compose spec from
-the compose schema, one slice at a time. Specs and templates are compiled here; frames and videos
-are rendered by ``alpha2-host``. Relative paths are read from the server's working directory.
+Specs and templates compile in this process and ``alpha2-host`` renders. Relative paths are read
+from the server's working directory.
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ template or data that does not compile names where: fix that path and try again.
 
 
 class ToolError(Exception):
-    """A tool call that fails: the model reads the message and may try again."""
+    """A tool call that fails with a message the model can act on."""
 
     def __init__(self, message: str, details: Mapping[str, Any] | None = None) -> None:
         super().__init__(message)
@@ -183,7 +182,7 @@ def _read_json(path: str, what: str) -> Any:
 
 @dataclass
 class Server:
-    """The tools and their state; :func:`serve` speaks the protocol around it."""
+    """The tools and their state, served by :func:`serve`."""
 
     templates: list[dict[str, Any]] = field(default_factory=list)
     """Templates beside the built-in ones."""
@@ -223,7 +222,7 @@ class Server:
         raise ToolError(f'no template "{value}"; `templates` lists them')
 
     def spec(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        """The spec ``arguments`` names: ``spec``, or ``template`` bound to ``data``."""
+        """The spec ``arguments`` names, as ``spec`` or as ``template`` bound to ``data``."""
         if "spec" in arguments:
             value = arguments["spec"]
             spec = _read_json(value, "spec") if isinstance(value, str) else value

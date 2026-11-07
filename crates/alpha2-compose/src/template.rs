@@ -1,4 +1,4 @@
-//! Templates: compose documents with typed parameters, bound to data into plain specs.
+//! Templates are compose documents with typed parameters, bound to data into plain specs.
 //!
 //! A template is a compose document with a `template` header and `params`. Binding validates
 //! the data, then replaces `{"$param": name}` values, `{{name}}` in strings, and the `$if`,
@@ -39,7 +39,7 @@ pub struct BindOptions {
 /// A problem `lint` finds.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Issue {
-    /// Where, as a dotted path into the template (`template.…`) or the data (`data.…`).
+    /// Where, as a dotted path into the template (`template.params[0]`) or the data (`data.title`).
     pub path: String,
     /// A stable code for the kind of problem.
     pub code: &'static str,
@@ -708,8 +708,7 @@ impl Binder<'_> {
         self.reference(id, object, scope, &format!("{path}.with"), path)
     }
 
-    /// A 1st-party template named by its bare type: its own fields are the template's data,
-    /// beside its placement.
+    /// Binds a 1st-party template named by its bare type, whose other fields are its data.
     fn bare(
         &mut self,
         id: &str,
@@ -967,8 +966,7 @@ fn bare_template(kind: &str) -> Option<&'static str> {
         .map(|(_, id)| *id)
 }
 
-/// Whether `$if` takes its `then`: a bool that is true, or any other value that is given and not
-/// empty.
+/// Whether `$if` takes its `then`, for a true bool or any other value that is given and not empty.
 fn is_set(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) => false,
@@ -1035,9 +1033,8 @@ impl Refs {
     }
 }
 
-/// The compose schema's variants for template nodes: each 1st-party template by its `alpha2/`
-/// id and, when it has one, its bare name, its data typed; and any other template by its
-/// `owner/name`.
+/// Compose schema variants for template nodes. Each 1st-party template gets typed variants for
+/// its `alpha2/` id and bare name, and one variant takes any other `owner/name`.
 #[cfg(feature = "schema")]
 pub(crate) fn node_schemas() -> Vec<Value> {
     let placement = |properties: &mut Map<String, Value>| {
@@ -1385,7 +1382,7 @@ fn names(
     }
 }
 
-/// Flags literal files, colors and copy: a template takes those from its data and theme.
+/// Flags literal files, colors and copy, which a template takes from its data and theme.
 fn content(value: &Value, key: Option<&str>, path: &str, issues: &mut Vec<Issue>) {
     let mut flag = |code, message: String| {
         issues.push(Issue {
