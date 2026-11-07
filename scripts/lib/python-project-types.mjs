@@ -314,11 +314,12 @@ function pythonTypes(
           throw new Error(
             `${name} needs the functional TypedDict syntax, which is not generic`,
           );
-        // A Python keyword (`from`) cannot be a class-body field.
+        // A Python keyword (`from`) cannot be a class-body field. The call evaluates its
+        // annotations, so they are strings: a type declared later still resolves.
         const entries = fields
           .map(
             ({ field, annotation }) =>
-              `        ${JSON.stringify(field)}: ${annotation},`,
+              `        ${JSON.stringify(field)}: ${JSON.stringify(annotation)},`,
           )
           .join("\n");
         text =

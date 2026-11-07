@@ -1270,11 +1270,11 @@ class RadialPaint(TypedDict):
 Ramp = TypedDict(
     "Ramp",
     {
-        "at": NotRequired[float | None],
-        "duration": NotRequired[float | None],
-        "ease": NotRequired[EasingChoice | None],
-        "from": float,
-        "to": float,
+        "at": "NotRequired[float | None]",
+        "duration": "NotRequired[float | None]",
+        "ease": "NotRequired[EasingChoice | None]",
+        "from": "float",
+        "to": "float",
     },
 )
 Ramp.__doc__ = "A change from one value to another; before it the value is `from`, after it `to`."
@@ -1283,11 +1283,11 @@ Ramp.__doc__ = "A change from one value to another; before it the value is `from
 Ramp2 = TypedDict(
     "Ramp2",
     {
-        "at": NotRequired[float | None],
-        "duration": NotRequired[float | None],
-        "ease": NotRequired[EasingChoice | None],
-        "from": list[float],
-        "to": list[float],
+        "at": "NotRequired[float | None]",
+        "duration": "NotRequired[float | None]",
+        "ease": "NotRequired[EasingChoice | None]",
+        "from": "list[float]",
+        "to": "list[float]",
     },
 )
 Ramp2.__doc__ = "A change from one value to another; before it the value is `from`, after it `to`."
@@ -1411,8 +1411,8 @@ ThemeChoice: TypeAlias = "str | Theme"
 ThemeColor = TypedDict(
     "ThemeColor",
     {
-        "$theme": ThemeToken,
-        "alpha": NotRequired[float | None],
+        "$theme": "ThemeToken",
+        "alpha": "NotRequired[float | None]",
     },
 )
 ThemeColor.__doc__ = "A theme color, so a design follows whatever theme it is drawn with."

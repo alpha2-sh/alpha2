@@ -1707,11 +1707,11 @@ class NodeOpEffect(TypedDict):
 NodeOpTransition = TypedDict(
     "NodeOpTransition",
     {
-        "effect": ClipEffect,
-        "from": NotRequired[NodeId | None],
-        "progress": Animated[float],
-        "to": NotRequired[NodeId | None],
-        "type": Literal["transition"],
+        "effect": "ClipEffect",
+        "from": "NotRequired[NodeId | None]",
+        "progress": "Animated[float]",
+        "to": "NotRequired[NodeId | None]",
+        "type": "Literal[\"transition\"]",
     },
 )
 NodeOpTransition.__doc__ = "A registered two-input transition at an explicit progress."
@@ -2560,9 +2560,9 @@ Written as `"Hello"` or `[{ "text": "Hel" }, { "text": "lo", "class": ["key"] }]
 TextRun = TypedDict(
     "TextRun",
     {
-        "class": NotRequired[list[str]],
-        "text": str,
-        "time": NotRequired[RunTime | None],
+        "class": "NotRequired[list[str]]",
+        "text": "str",
+        "time": "NotRequired[RunTime | None]",
     },
 )
 TextRun.__doc__ = "A piece of a text that animators' Class and Timing selectors can pick."
@@ -2632,8 +2632,8 @@ class TextSelectorTiming(TypedDict):
 TextSelectorClass = TypedDict(
     "TextSelectorClass",
     {
-        "class": str,
-        "type": Literal["class"],
+        "class": "str",
+        "type": "Literal[\"class\"]",
     },
 )
 TextSelectorClass.__doc__ = "Characters of runs that carry a class."
