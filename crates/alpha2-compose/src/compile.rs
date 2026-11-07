@@ -1514,14 +1514,18 @@ impl<'a> Context<'a> {
             ));
         }
         let transitions = lanes.visual.iter().flat_map(|lane| &lane.transitions);
-        if transitions
+        if let Some(transition) = transitions
             .clone()
-            .any(|transition| !is_crossfade_effect(&transition.effect))
+            .find(|transition| !coverage_commutes(&transition.effect))
         {
             return Err(ComposeError::new(
                 path,
-                "a matte or mask over a sequence takes cuts and crossfades only; other \
-                 transitions move the picture under it",
+                format!(
+                    "a matte or mask over a sequence takes cuts and transitions that mix in place \
+                     (`coverage_commutes` in schema/effects.v1.json); {} moves or adds to the \
+                     picture under it",
+                    transition.effect.id
+                ),
             ));
         }
         let filled = lanes
@@ -2582,10 +2586,10 @@ fn is_crossfade(transition: &Transition) -> bool {
     )
 }
 
-/// Whether `effect` mixes its two pictures pixel by pixel at one rate, so a matte over each is a
-/// matte over the mix.
-fn is_crossfade_effect(effect: &ClipEffect) -> bool {
-    effect.id == "alpha2.transition.fade"
+/// Whether `effect` mixes its two pictures at each pixel's own place and adds nothing, so a
+/// matte over each is a matte over the mix.
+fn coverage_commutes(effect: &ClipEffect) -> bool {
+    alpha2_model::builtin_effect(&effect.id).is_some_and(|spec| spec.coverage_commutes)
 }
 
 fn transition_effect_id(kind: &str) -> String {

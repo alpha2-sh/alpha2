@@ -144,6 +144,10 @@ pub struct EffectSpec {
     pub params: Vec<EffectParamSpec>,
     /// The external resources it reads, by slot name.
     pub resources: Vec<String>,
+    /// For a transition: whether one over pictures each under a coverage (a matte or mask) is
+    /// that coverage over one of the pictures, for every parameter value. A transition that mixes
+    /// the two pictures at each pixel's own place and adds nothing has it.
+    pub coverage_commutes: bool,
 }
 
 impl EffectSpec {
@@ -275,6 +279,8 @@ struct SpecWire {
     inputs: Vec<NamedWire>,
     params: Vec<ParamWire>,
     resources: Vec<NamedWire>,
+    #[serde(default)]
+    coverage_commutes: bool,
 }
 
 #[derive(Deserialize)]
@@ -312,6 +318,7 @@ impl From<SpecWire> for EffectSpec {
                 .into_iter()
                 .map(|resource| resource.name)
                 .collect(),
+            coverage_commutes: wire.coverage_commutes,
         }
     }
 }

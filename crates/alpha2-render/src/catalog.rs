@@ -49,7 +49,7 @@ pub fn builtin_catalog_json() -> String {
 
 fn catalog_entry(definition: &EffectDef, group: &str) -> Value {
     let label = label(&definition.id);
-    json!({
+    let mut entry = json!({
         "id": definition.id,
         "version": definition.version,
         "kind": match definition.kind {
@@ -69,7 +69,13 @@ fn catalog_entry(definition: &EffectDef, group: &str) -> Value {
             "name": resource.name,
             "kind": match resource.kind { EffectResourceKind::Lut3d => "lut3d" },
         })).collect::<Vec<_>>(),
-    })
+    });
+    if definition.kind == EffectKind::Transition {
+        entry["coverage_commutes"] = json!(
+            crate::builtins::COVERAGE_COMMUTING_TRANSITIONS.contains(&definition.id.as_str())
+        );
+    }
+    entry
 }
 
 fn param(spec: &ParamSpec) -> Value {

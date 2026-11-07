@@ -31,6 +31,7 @@ mod chroma_siting;
 mod colour_spaces;
 mod composite_batch;
 mod compositing;
+mod coverage;
 mod cpu_composite;
 mod cpu_determinism;
 mod cpu_effects;

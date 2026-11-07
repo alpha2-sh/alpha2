@@ -1212,21 +1212,36 @@ fn a_matte_or_mask_isolates_layered_content_and_refuses_moving_transitions() {
         .find(|clip| !clip["matte"].is_null())
         .expect("the isolated matte");
     assert!(ops(composition(&nested, &group)).contains(&"matte".to_owned()));
-    let moving = compile_error(&json!({
-        "body": {
-            "type": "mask",
-            "shapes": [{"shape": "ellipse"}],
-            "content": {
-                "type": "sequence",
-                "transition": {"type": "directional", "duration": 0.5},
-                "children": [
-                    {"type": "color", "color": "#ff0000", "duration": 1},
-                    {"type": "color", "color": "#0000ff", "duration": 1},
-                ],
+    let masked = |transition: &str| {
+        json!({
+            "body": {
+                "type": "mask",
+                "shapes": [{"shape": "ellipse"}],
+                "content": {
+                    "type": "sequence",
+                    "transition": {"type": transition, "duration": 0.5},
+                    "children": [
+                        {"type": "color", "color": "#ff0000", "duration": 1},
+                        {"type": "color", "color": "#0000ff", "duration": 1},
+                    ],
+                },
             },
-        },
-    }));
-    assert!(moving.contains("cuts and crossfades"), "{moving}");
+        })
+    };
+    let moving = compile_error(&masked("directional"));
+    assert!(
+        moving.contains("alpha2.transition.directional moves"),
+        "{moving}"
+    );
+    // A wipe mixes in place, so each side takes the mask.
+    let wiped = compile(&masked("wipe-left"));
+    assert!(
+        visual_clips(&wiped)
+            .iter()
+            .filter(|clip| clip["source_id"] != Value::Null)
+            .count()
+            >= 2
+    );
 }
 
 fn compile_with_font(spec: &Value) -> Result<Value, String> {
