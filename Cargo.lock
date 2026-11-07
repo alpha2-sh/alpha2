@@ -189,6 +189,7 @@ dependencies = [
  "alpha2-render",
  "alpha2-text",
  "alpha2-time",
+ "libm",
  "schemars",
  "serde",
  "serde_json",

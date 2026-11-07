@@ -14,13 +14,17 @@ use alpha2_model::{
     ShapeMask, TextAlign, TextAnimator, TextAnimatorProperties, TextBackground, TextSelector,
     TextStyle, TimeMap, TimeScale, Timeline, Track, TrackId, TrackKind, Vec2, VisualProperties,
 };
+use alpha2_model::{
+    Dash, EllipseGeometry, FillRule, GradientStop, PathGeometry, PolystarGeometry, ShapeItem,
+    Spread, StrokeItem, TrimItem, TrimMode,
+};
 use alpha2_text::{TextFont, TextRasterizer};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 
 use crate::lower::{
-    AnimPrim, AudioPrim, CaptionsPrim, Content, CounterContent, EffectPrim, GridLayout, GroupPrim,
-    Head, KeyPrim, KeyTime, NodeMotion, Preset, Prim, RevealPrim, SequencePrim, StackPrim, Visual,
-    align_point, ticks_scaled,
+    AnimPrim, AudioPrim, CaptionsPrim, Content, CounterContent, EffectPrim, GeometryPrim,
+    GridLayout, GroupPrim, Head, KeyPrim, KeyTime, NodeMotion, PaintPrim, Preset, Prim, RevealPrim,
+    SequencePrim, ShapeContent, StackPrim, Visual, align_point, ticks_scaled,
 };
 use crate::spec::{
     Canvas, CustomCanvas, Fit, FrameRateChoice, GridLength, Loudness, Transition, VideoSpec,
@@ -601,7 +605,11 @@ impl<'a> Context<'a> {
                 Content::Image { .. } => {
                     Length::Flexible(crate::lower::seconds_to_ticks(self.theme.still_seconds))
                 }
-                Content::Text(_) | Content::Color(_) | Content::Layout(_) | Content::Counter(_) => {
+                Content::Text(_)
+                | Content::Color(_)
+                | Content::Shape(_)
+                | Content::Layout(_)
+                | Content::Counter(_) => {
                     Length::Flexible(crate::lower::seconds_to_ticks(self.theme.text_seconds))
                 }
             },
@@ -1303,6 +1311,27 @@ impl<'a> Context<'a> {
                     blur.map(|radius| ClipComposition::new(self.blur_composition(radius)));
                 lane.clips.push(clip);
             }
+            Content::Shape(shape) => {
+                let items = self.shape_items(shape, rect, slot.len);
+                let source = self.generated_source(Generator::Shapes { items });
+                let mut clip = Clip::new(
+                    self.clip_id(),
+                    source,
+                    range(start, end),
+                    range(0, slot.len),
+                );
+                clip.visual.opacity = opacity.animation(clip.timeline_range);
+                if slot.motions.iter().any(Ramp::scales) {
+                    let (width, height) = self.canvas_px();
+                    let point = Vec2::new(
+                        (rect.x + 0.5 * rect.width) / width,
+                        (rect.y + 0.5 * rect.height) / height,
+                    );
+                    clip.visual.position = AnimatedPoint::Constant { value: point };
+                    clip.visual.anchor = point;
+                }
+                lane.clips.push(clip);
+            }
             Content::Color(color) => {
                 let (width, height) = self.canvas_px();
                 let source = self.generated_source(Generator::Fill {
@@ -1447,6 +1476,106 @@ impl<'a> Context<'a> {
             }
         }
         out.visual.push(lane);
+    }
+
+    /// A shape's outlines, trim, stroke and fill as shape items in canvas fractions, placed in
+    /// `rect`, animated over `0..len` of the picture's time.
+    fn shape_items(&self, shape: &ShapeContent, rect: Rect, len: i64) -> Vec<ShapeItem> {
+        let place = Placement::new(rect, self.canvas_px());
+        let whole = range(0, len);
+        let point = |anim: &AnimPrim<[f32; 2]>| {
+            AnimatedPoint::from(map_animated(animated(anim, whole), |value| {
+                place.point(value)
+            }))
+        };
+        let size = |anim: &AnimPrim<[f32; 2]>| {
+            map_animated(animated(anim, whole), |value| place.size(value))
+        };
+        let length =
+            |anim: &AnimPrim<f32>| map_animated(animated(anim, whole), |value| place.length(value));
+        let plain = |anim: &AnimPrim<f32>| animated(anim, whole);
+        let mut items = shape
+            .geometry
+            .iter()
+            .map(|geometry| match geometry {
+                GeometryPrim::Rect {
+                    center,
+                    size: extent,
+                    corner,
+                    rotation,
+                } => ShapeItem::Rectangle(RectangleGeometry {
+                    center: point(center),
+                    size: size(extent),
+                    corner_radius: length(corner),
+                    rotation_degrees: plain(rotation),
+                }),
+                GeometryPrim::Ellipse {
+                    center,
+                    size: extent,
+                    rotation,
+                } => ShapeItem::Ellipse(EllipseGeometry {
+                    center: point(center),
+                    size: size(extent),
+                    rotation_degrees: plain(rotation),
+                }),
+                #[allow(clippy::cast_precision_loss)]
+                GeometryPrim::Polystar {
+                    kind,
+                    center,
+                    points,
+                    outer,
+                    inner,
+                    roundness,
+                    rotation,
+                } => ShapeItem::Polystar(PolystarGeometry {
+                    kind: *kind,
+                    center: point(center),
+                    points: constant(*points as f32),
+                    outer_radius: length(outer),
+                    inner_radius: length(inner),
+                    outer_roundness: plain(roundness),
+                    inner_roundness: constant(0.0),
+                    rotation_degrees: plain(rotation),
+                }),
+                GeometryPrim::Path(path) => ShapeItem::Path(PathGeometry {
+                    path: constant(place.path(path)),
+                }),
+            })
+            .collect::<Vec<_>>();
+        if let Some(trim) = &shape.trim {
+            items.push(ShapeItem::Trim(TrimItem {
+                start: plain(&trim.start),
+                end: plain(&trim.end),
+                offset: plain(&trim.offset),
+                mode: TrimMode::default(),
+            }));
+        }
+        if let Some(stroke) = &shape.stroke {
+            items.push(ShapeItem::Stroke(StrokeItem {
+                paint: constant(place.paint(&stroke.paint)),
+                width: length(&stroke.width),
+                cap: stroke.cap,
+                join: stroke.join,
+                dash: (!stroke.dash.is_empty()).then(|| Dash {
+                    pattern: stroke
+                        .dash
+                        .iter()
+                        .map(|dash| constant(place.length(*dash)))
+                        .collect(),
+                    offset: constant(0.0),
+                }),
+                opacity: constant(1.0),
+                miter_limit: 4.0,
+            }));
+        }
+        if let Some(fill) = &shape.fill {
+            items.push(ShapeItem::Fill {
+                paint: constant(place.paint(fill)),
+                opacity: constant(1.0),
+                rule: FillRule::default(),
+            });
+        }
+        items
     }
 
     /// Multiplies the entrances' and exits' opacity and scale into `visual` and adds their
@@ -2105,6 +2234,108 @@ fn still_source(source: &MediaSource) -> bool {
                 })
         }
         _ => false,
+    }
+}
+
+/// Maps an area's unit square, and lengths in its shorter side, to canvas fractions.
+#[derive(Clone, Copy)]
+struct Placement {
+    rect: Rect,
+    canvas: (f32, f32),
+}
+
+impl Placement {
+    const fn new(rect: Rect, canvas: (f32, f32)) -> Self {
+        Self { rect, canvas }
+    }
+
+    fn point(self, [x, y]: [f32; 2]) -> Vec2 {
+        Vec2::new(
+            (self.rect.x + x * self.rect.width) / self.canvas.0,
+            (self.rect.y + y * self.rect.height) / self.canvas.1,
+        )
+    }
+
+    fn size(self, [x, y]: [f32; 2]) -> Vec2 {
+        Vec2::new(
+            x * self.rect.width / self.canvas.0,
+            y * self.rect.height / self.canvas.1,
+        )
+    }
+
+    fn length(self, length: f32) -> f32 {
+        length * self.rect.width.min(self.rect.height) / self.canvas.0.min(self.canvas.1)
+    }
+
+    fn path(self, path: &alpha2_model::Path) -> alpha2_model::Path {
+        let mut placed = path.clone();
+        for vertex in placed
+            .subpaths
+            .iter_mut()
+            .flat_map(|subpath| &mut subpath.vertices)
+        {
+            vertex.point = self.point([vertex.point.x, vertex.point.y]);
+            vertex.in_tangent = self.size([vertex.in_tangent.x, vertex.in_tangent.y]);
+            vertex.out_tangent = self.size([vertex.out_tangent.x, vertex.out_tangent.y]);
+        }
+        placed
+    }
+
+    fn paint(self, paint: &PaintPrim) -> Paint {
+        let stops = |stops: &[(f32, Rgba)]| {
+            stops
+                .iter()
+                .map(|(offset, color)| GradientStop {
+                    offset: *offset,
+                    color: *color,
+                })
+                .collect::<Vec<_>>()
+        };
+        match paint {
+            PaintPrim::Solid(color) => Paint::Solid { color: *color },
+            PaintPrim::Linear {
+                stops: colors,
+                angle,
+            } => {
+                // The CSS gradient line: through the area's centre along `angle`, as long as the
+                // area is across that direction.
+                let (sin, cos) = libm::sincosf(angle.to_radians());
+                let (width, height) = (self.rect.width, self.rect.height);
+                let half = f32::midpoint(width * sin.abs(), height * cos.abs());
+                let center = (self.rect.x + width / 2.0, self.rect.y + height / 2.0);
+                let at = |sign: f32| {
+                    Vec2::new(
+                        (center.0 + sign * sin * half) / self.canvas.0,
+                        (center.1 - sign * cos * half) / self.canvas.1,
+                    )
+                };
+                Paint::LinearGradient {
+                    start: at(-1.0),
+                    end: at(1.0),
+                    stops: stops(colors),
+                    spread: Spread::default(),
+                }
+            }
+            PaintPrim::Radial {
+                stops: colors,
+                center,
+                radius,
+            } => Paint::RadialGradient {
+                center: self.point(*center),
+                radius: self.length(*radius),
+                stops: stops(colors),
+                spread: Spread::default(),
+            },
+            PaintPrim::Conic {
+                stops: colors,
+                center,
+                angle,
+            } => Paint::ConicGradient {
+                center: self.point(*center),
+                angle_degrees: *angle,
+                stops: stops(colors),
+            },
+        }
     }
 }
 

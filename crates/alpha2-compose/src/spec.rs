@@ -349,6 +349,8 @@ pub enum Node {
     /// Children drawn together into one picture, which then takes an opacity, a blend mode,
     /// effects and a transform as one layer.
     Group(Group),
+    /// Shapes drawn with one fill and one stroke: bars, frames, dividers, badges, icons.
+    Shape(Shape),
 }
 
 /// Children drawn together as one layer. Unlike a stack, whose children each meet what is under
@@ -781,6 +783,285 @@ pub enum TextRole {
     Body,
     /// A cell's label.
     Label,
+}
+
+/// Shapes in the node's area, filled and stroked as one compound path. Coordinates are fractions
+/// of the area, `[0, 0]` its top left to `[1, 1]` its bottom right; lengths are fractions of its
+/// shorter side.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Shape {
+    /// The node's name, for other nodes to refer to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The outlines, at least one.
+    pub shapes: Vec<Geometry>,
+    /// What covers their inside. Default: nothing, unless there is no stroke, then the theme's
+    /// accent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<PaintChoice>,
+    /// A line along the outlines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<Stroke>,
+    /// Keeps part of the outlines' length: a line drawing itself is `{"end": {"from": 0, "to": 1}}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trim: Option<Trim>,
+    /// Opacity, 0..=1. Default 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f32>,
+    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<f64>,
+    /// Length in seconds. Default: what its parent gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    /// Pixels kept clear inside the parent's area: the shapes' area.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inset: Option<Inset>,
+    /// How it comes in at its start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<Motion>,
+    /// How it goes out, ending at its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<Motion>,
+}
+
+/// One outline, in its area's unit square. Masks take the same outlines.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "shape", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Geometry {
+    /// A rectangle, optionally with rounded corners.
+    Rect {
+        /// Centre. Default `[0.5, 0.5]`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center: Option<Anim<[f32; 2]>>,
+        /// Width and height. Default `[1, 1]`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<Anim<[f32; 2]>>,
+        /// Corner radius. Default 0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        corner_radius: Option<Anim<f32>>,
+        /// Clockwise turn in degrees. Default 0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rotation: Option<Anim<f32>>,
+    },
+    /// An ellipse.
+    Ellipse {
+        /// Centre. Default `[0.5, 0.5]`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center: Option<Anim<[f32; 2]>>,
+        /// Width and height. Default `[1, 1]`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<Anim<[f32; 2]>>,
+        /// Clockwise turn in degrees. Default 0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rotation: Option<Anim<f32>>,
+    },
+    /// A regular polygon.
+    Polygon {
+        /// Centre. Default `[0.5, 0.5]`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center: Option<Anim<[f32; 2]>>,
+        /// Corners, 3 or more.
+        points: u32,
+        /// Distance of the corners from the centre. Default 0.5.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        radius: Option<Anim<f32>>,
+        /// How round the corners are, 0..=1. Default 0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        roundness: Option<Anim<f32>>,
+        /// Clockwise turn in degrees. Default 0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rotation: Option<Anim<f32>>,
+    },
+    /// A star.
+    Star {
+        /// Centre. Default `[0.5, 0.5]`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        center: Option<Anim<[f32; 2]>>,
+        /// Tips, 3 or more.
+        points: u32,
+        /// Distance of the tips from the centre. Default 0.5.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outer_radius: Option<Anim<f32>>,
+        /// Distance of the inner corners from the centre. Default 0.25.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        inner_radius: Option<Anim<f32>>,
+        /// Clockwise turn in degrees. Default 0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rotation: Option<Anim<f32>>,
+    },
+    /// An outline as SVG path data (`d`), in the area's unit square.
+    Path {
+        /// The path data: `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A` and `Z`, absolute or
+        /// relative.
+        d: String,
+    },
+}
+
+/// A color, a theme color, or a gradient.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum PaintChoice {
+    /// A theme color by name.
+    Theme(ThemeColor),
+    /// Colors along a line across the area.
+    Linear(LinearPaint),
+    /// Colors out from a point.
+    Radial(RadialPaint),
+    /// Colors around a point.
+    Conic(ConicPaint),
+    /// One color: CSS hex or the project's color object.
+    Color(Rgba),
+}
+
+/// `{"linear": gradient}`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LinearPaint {
+    /// The gradient.
+    pub linear: Gradient,
+}
+
+/// `{"radial": gradient}`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct RadialPaint {
+    /// The gradient.
+    pub radial: Gradient,
+}
+
+/// `{"conic": gradient}`.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ConicPaint {
+    /// The gradient.
+    pub conic: Gradient,
+}
+
+/// A theme color, so a design follows whatever theme it is drawn with.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ThemeColor {
+    /// Which of the theme's colors.
+    #[serde(rename = "$theme")]
+    pub token: ThemeToken,
+    /// Opacity multiplied into it, 0..=1. Default 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<f32>,
+}
+
+/// A theme's named colors.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeToken {
+    /// Text.
+    Text,
+    /// The canvas behind everything.
+    Background,
+    /// Cards and title cards.
+    Surface,
+    /// Bars behind text.
+    Panel,
+    /// Highlights.
+    Accent,
+}
+
+/// Colors spread over a gradient.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Gradient {
+    /// Two or more colors, evenly spaced unless each says its `offset` in 0..=1.
+    pub stops: Vec<Stop>,
+    /// A linear gradient's direction in degrees, as CSS: 0 upward, 90 rightward. A conic one's
+    /// start. Default 180 for linear (downward), 0 for conic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub angle: Option<f32>,
+    /// A radial or conic gradient's centre. Default `[0.5, 0.5]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f32; 2]>,
+    /// A radial gradient's radius. Default 0.5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f32>,
+}
+
+/// One gradient color.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum Stop {
+    /// A color at a set position.
+    At(OffsetStop),
+    /// A color, spaced evenly with the others.
+    Even(SolidColor),
+}
+
+/// A gradient color at a set position.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct OffsetStop {
+    /// The color.
+    pub color: SolidColor,
+    /// Where along the gradient, 0..=1.
+    pub offset: f32,
+}
+
+/// One color: a theme color, CSS hex, or the project's color object.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum SolidColor {
+    /// A theme color by name.
+    Theme(ThemeColor),
+    /// CSS hex or the color object.
+    Color(Rgba),
+}
+
+/// A line along outlines.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Stroke {
+    /// What covers it. Default: the theme's text color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<PaintChoice>,
+    /// Width, as a fraction of the area's shorter side.
+    pub width: Anim<f32>,
+    /// Dash and gap lengths, as fractions of the area's shorter side. Default: solid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dash: Vec<f32>,
+    /// How open ends look. Default `butt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap: Option<alpha2_model::LineCap>,
+    /// How segments meet. Default `miter`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join: Option<alpha2_model::LineJoin>,
+}
+
+/// The part of outlines' length that is kept, from `start` to `end`, shifted by `offset` turns.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Trim {
+    /// Default 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<Anim<f32>>,
+    /// Default 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<Anim<f32>>,
+    /// Default 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<Anim<f32>>,
 }
 
 /// An area painted one color.

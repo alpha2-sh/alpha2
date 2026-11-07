@@ -12,10 +12,12 @@ use alpha2_time::MediaTime;
 use crate::ComposeError;
 use crate::compile::Context;
 use crate::spec::{
-    Align, Anim, Audio, CaptionStyle, Captions, ComparisonGrid, Counter, Cue, Direction,
-    EasingChoice, EffectUse, Ellipsis, EndCard, FileKind, Fit, GridLength, Group, Inset, Key, Keys,
-    LowerThird, Media, MediaItem, Motion, MotionKind, MusicBed, Node, Ramp, Raw, RevealKind,
-    RevealUnit, Slideshow, Text, TextRole, Title, Transition, TransitionChoice,
+    Align, Anim, Audio, CaptionStyle, Captions, ComparisonGrid, ConicPaint, Counter, Cue,
+    Direction, EasingChoice, EffectUse, Ellipsis, EndCard, FileKind, Fit, Geometry, Gradient,
+    GridLength, Group, Inset, Key, Keys, LinearPaint, LowerThird, Media, MediaItem, Motion,
+    MotionKind, MusicBed, Node, PaintChoice, RadialPaint, Ramp, Raw, RevealKind, RevealUnit, Shape,
+    Slideshow, SolidColor, Stop, Text, TextRole, ThemeColor, ThemeToken, Title, Transition,
+    TransitionChoice,
 };
 
 /// A node, ready to place.
@@ -160,8 +162,80 @@ pub(crate) enum Content {
     },
     Text(TextContent),
     Color(Rgba),
+    Shape(Box<ShapeContent>),
     Layout(Box<LayoutNode>),
     Counter(Box<CounterContent>),
+}
+
+/// Outlines in their area's unit square, with what fills, strokes and trims them.
+#[derive(Clone, Debug)]
+pub(crate) struct ShapeContent {
+    pub geometry: Vec<GeometryPrim>,
+    pub fill: Option<PaintPrim>,
+    pub stroke: Option<StrokePrim>,
+    pub trim: Option<TrimPrim>,
+}
+
+/// One outline; points in the area's unit square, lengths in its shorter side.
+#[derive(Clone, Debug)]
+pub(crate) enum GeometryPrim {
+    Rect {
+        center: AnimPrim<[f32; 2]>,
+        size: AnimPrim<[f32; 2]>,
+        corner: AnimPrim<f32>,
+        rotation: AnimPrim<f32>,
+    },
+    Ellipse {
+        center: AnimPrim<[f32; 2]>,
+        size: AnimPrim<[f32; 2]>,
+        rotation: AnimPrim<f32>,
+    },
+    Polystar {
+        kind: alpha2_model::PolystarKind,
+        center: AnimPrim<[f32; 2]>,
+        points: u32,
+        outer: AnimPrim<f32>,
+        inner: AnimPrim<f32>,
+        roundness: AnimPrim<f32>,
+        rotation: AnimPrim<f32>,
+    },
+    Path(alpha2_model::Path),
+}
+
+/// A paint with its theme colors resolved; positions in the area's unit square.
+#[derive(Clone, Debug)]
+pub(crate) enum PaintPrim {
+    Solid(Rgba),
+    Linear {
+        stops: Vec<(f32, Rgba)>,
+        angle: f32,
+    },
+    Radial {
+        stops: Vec<(f32, Rgba)>,
+        center: [f32; 2],
+        radius: f32,
+    },
+    Conic {
+        stops: Vec<(f32, Rgba)>,
+        center: [f32; 2],
+        angle: f32,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct StrokePrim {
+    pub paint: PaintPrim,
+    pub width: AnimPrim<f32>,
+    pub dash: Vec<f32>,
+    pub cap: alpha2_model::LineCap,
+    pub join: alpha2_model::LineJoin,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TrimPrim {
+    pub start: AnimPrim<f32>,
+    pub end: AnimPrim<f32>,
+    pub offset: AnimPrim<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -329,6 +403,7 @@ fn motion_fields(node: &Node) -> (Option<&Motion>, Option<&Motion>, Option<f64>)
         Node::Logo(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Counter(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Group(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
+        Node::Shape(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Captions(_)
         | Node::Audio(_)
         | Node::Raw(_)
@@ -692,6 +767,7 @@ impl Context<'_> {
             }
             Node::Media(media) => self.lower_media(media, path),
             Node::Group(group) => self.lower_group(group, path),
+            Node::Shape(shape) => self.lower_shape(shape, path),
             Node::Text(text) => self.lower_text(text, path),
             Node::Color(color) => Ok(Prim::Visual(Box::new(Visual {
                 head: Self::head(path, color.id.as_ref(), color.at, color.duration)?,
@@ -862,6 +938,267 @@ impl Context<'_> {
             effects,
             transform,
         })))
+    }
+
+    fn lower_shape(&mut self, shape: &Shape, path: &str) -> Result<Prim, ComposeError> {
+        if shape.shapes.is_empty() {
+            return Err(Self::error(
+                &format!("{path}.shapes"),
+                "a shape has at least one outline",
+            ));
+        }
+        let geometry = shape
+            .shapes
+            .iter()
+            .enumerate()
+            .map(|(index, geometry)| Self::geometry(geometry, &format!("{path}.shapes[{index}]")))
+            .collect::<Result<Vec<_>, _>>()?;
+        let stroke = shape
+            .stroke
+            .as_ref()
+            .map(|stroke| {
+                let at = format!("{path}.stroke");
+                if !stroke
+                    .dash
+                    .iter()
+                    .all(|length| length.is_finite() && *length >= 0.0)
+                {
+                    return Err(Self::error(
+                        &format!("{at}.dash"),
+                        "dash lengths are not negative",
+                    ));
+                }
+                Ok(StrokePrim {
+                    paint: match &stroke.paint {
+                        Some(paint) => self.paint(paint, &format!("{at}.paint"))?,
+                        None => PaintPrim::Solid(self.theme.text),
+                    },
+                    width: Self::anim(&format!("{at}.width"), &stroke.width, |width| {
+                        width.is_finite() && *width >= 0.0
+                    })?,
+                    dash: stroke.dash.clone(),
+                    cap: stroke.cap.unwrap_or_default(),
+                    join: stroke.join.unwrap_or_default(),
+                })
+            })
+            .transpose()?;
+        let fill = match &shape.fill {
+            Some(paint) => Some(self.paint(paint, &format!("{path}.fill"))?),
+            None if stroke.is_none() => Some(PaintPrim::Solid(self.theme.accent)),
+            None => None,
+        };
+        let trim = shape
+            .trim
+            .as_ref()
+            .map(|trim| {
+                let at = format!("{path}.trim");
+                let part = |field: &str, anim: Option<&Anim<f32>>, default: f32| {
+                    anim.map_or(Ok(AnimPrim::Value(default)), |anim| {
+                        Self::anim(&format!("{at}.{field}"), anim, |value| value.is_finite())
+                    })
+                };
+                Ok::<_, ComposeError>(TrimPrim {
+                    start: part("start", trim.start.as_ref(), 0.0)?,
+                    end: part("end", trim.end.as_ref(), 1.0)?,
+                    offset: part("offset", trim.offset.as_ref(), 0.0)?,
+                })
+            })
+            .transpose()?;
+        Ok(Prim::Visual(Box::new(Visual {
+            head: Self::head(path, shape.id.as_ref(), shape.at, shape.duration)?,
+            inset: inset_sides(shape.inset),
+            fit: Fit::Fill,
+            align: Align::Center,
+            opacity: Self::unit(path, "opacity", shape.opacity, 1.0)?,
+            fade_in: 0,
+            fade_out: 0,
+            zoom: None,
+            content: Content::Shape(Box::new(ShapeContent {
+                geometry,
+                fill,
+                stroke,
+                trim,
+            })),
+        })))
+    }
+
+    /// Lowers one outline, its omitted values defaulted.
+    fn geometry(geometry: &Geometry, path: &str) -> Result<GeometryPrim, ComposeError> {
+        let point = |field: &str, anim: Option<&Anim<[f32; 2]>>, default: [f32; 2]| {
+            anim.map_or(Ok(AnimPrim::Value(default)), |anim| {
+                Self::anim(&format!("{path}.{field}"), anim, |value| {
+                    value.iter().all(|part| part.is_finite())
+                })
+            })
+        };
+        let size = |anim: Option<&Anim<[f32; 2]>>| {
+            anim.map_or(Ok(AnimPrim::Value([1.0, 1.0])), |anim| {
+                Self::anim(&format!("{path}.size"), anim, |value| {
+                    value.iter().all(|part| part.is_finite() && *part >= 0.0)
+                })
+            })
+        };
+        let length = |field: &str, anim: Option<&Anim<f32>>, default: f32| {
+            anim.map_or(Ok(AnimPrim::Value(default)), |anim| {
+                Self::anim(&format!("{path}.{field}"), anim, |value| {
+                    value.is_finite() && *value >= 0.0
+                })
+            })
+        };
+        let turn = |anim: Option<&Anim<f32>>| {
+            anim.map_or(Ok(AnimPrim::Value(0.0)), |anim| {
+                Self::anim(&format!("{path}.rotation"), anim, |value| value.is_finite())
+            })
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let points = |points: u32| {
+            if (alpha2_model::MIN_POLYSTAR_POINTS..=alpha2_model::MAX_POLYSTAR_POINTS)
+                .contains(&(points as f32))
+            {
+                Ok(points)
+            } else {
+                Err(Self::error(
+                    &format!("{path}.points"),
+                    format!(
+                        "from {} to {} points",
+                        alpha2_model::MIN_POLYSTAR_POINTS,
+                        alpha2_model::MAX_POLYSTAR_POINTS
+                    ),
+                ))
+            }
+        };
+        Ok(match geometry {
+            Geometry::Rect {
+                center,
+                size: extent,
+                corner_radius,
+                rotation,
+            } => GeometryPrim::Rect {
+                center: point("center", center.as_ref(), [0.5, 0.5])?,
+                size: size(extent.as_ref())?,
+                corner: length("corner_radius", corner_radius.as_ref(), 0.0)?,
+                rotation: turn(rotation.as_ref())?,
+            },
+            Geometry::Ellipse {
+                center,
+                size: extent,
+                rotation,
+            } => GeometryPrim::Ellipse {
+                center: point("center", center.as_ref(), [0.5, 0.5])?,
+                size: size(extent.as_ref())?,
+                rotation: turn(rotation.as_ref())?,
+            },
+            Geometry::Polygon {
+                center,
+                points: count,
+                radius,
+                roundness,
+                rotation,
+            } => GeometryPrim::Polystar {
+                kind: alpha2_model::PolystarKind::Polygon,
+                center: point("center", center.as_ref(), [0.5, 0.5])?,
+                points: points(*count)?,
+                outer: length("radius", radius.as_ref(), 0.5)?,
+                inner: AnimPrim::Value(0.0),
+                roundness: length("roundness", roundness.as_ref(), 0.0)?,
+                rotation: turn(rotation.as_ref())?,
+            },
+            Geometry::Star {
+                center,
+                points: count,
+                outer_radius,
+                inner_radius,
+                rotation,
+            } => GeometryPrim::Polystar {
+                kind: alpha2_model::PolystarKind::Star,
+                center: point("center", center.as_ref(), [0.5, 0.5])?,
+                points: points(*count)?,
+                outer: length("outer_radius", outer_radius.as_ref(), 0.5)?,
+                inner: length("inner_radius", inner_radius.as_ref(), 0.25)?,
+                roundness: AnimPrim::Value(0.0),
+                rotation: turn(rotation.as_ref())?,
+            },
+            Geometry::Path { d } => GeometryPrim::Path(
+                crate::svg_path::parse(d)
+                    .map_err(|message| Self::error(&format!("{path}.d"), message))?,
+            ),
+        })
+    }
+
+    /// A theme color, or a color as written.
+    pub(crate) fn solid(&self, color: &SolidColor) -> Rgba {
+        match color {
+            SolidColor::Color(color) => *color,
+            SolidColor::Theme(theme) => self.theme_color(*theme),
+        }
+    }
+
+    fn theme_color(&self, color: ThemeColor) -> Rgba {
+        let mut picked = match color.token {
+            ThemeToken::Text => self.theme.text,
+            ThemeToken::Background => self.theme.background,
+            ThemeToken::Surface => self.theme.surface,
+            ThemeToken::Panel => self.theme.panel,
+            ThemeToken::Accent => self.theme.accent,
+        };
+        picked.alpha *= color.alpha.unwrap_or(1.0).clamp(0.0, 1.0);
+        picked
+    }
+
+    /// Lowers a paint, resolving theme colors and spacing gradient stops.
+    #[allow(clippy::cast_precision_loss)]
+    pub(crate) fn paint(&self, paint: &PaintChoice, path: &str) -> Result<PaintPrim, ComposeError> {
+        let stops = |gradient: &Gradient| {
+            let count = gradient.stops.len();
+            if !(2..=alpha2_model::MAX_GRADIENT_STOPS).contains(&count) {
+                return Err(Self::error(
+                    &format!("{path}.stops"),
+                    format!(
+                        "a gradient has 2 to {} stops",
+                        alpha2_model::MAX_GRADIENT_STOPS
+                    ),
+                ));
+            }
+            let mut previous = 0.0_f32;
+            gradient
+                .stops
+                .iter()
+                .enumerate()
+                .map(|(index, stop)| {
+                    let (offset, color) = match stop {
+                        Stop::At(stop) => (stop.offset, self.solid(&stop.color)),
+                        Stop::Even(color) => (index as f32 / (count - 1) as f32, self.solid(color)),
+                    };
+                    if !(previous..=1.0).contains(&offset) {
+                        return Err(Self::error(
+                            &format!("{path}.stops[{index}].offset"),
+                            "offsets are in 0..=1, each not before the one before",
+                        ));
+                    }
+                    previous = offset;
+                    Ok((offset, color))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        };
+        let center = |gradient: &Gradient| gradient.center.unwrap_or([0.5, 0.5]);
+        Ok(match paint {
+            PaintChoice::Color(color) => PaintPrim::Solid(*color),
+            PaintChoice::Theme(theme) => PaintPrim::Solid(self.theme_color(*theme)),
+            PaintChoice::Linear(LinearPaint { linear }) => PaintPrim::Linear {
+                stops: stops(linear)?,
+                angle: linear.angle.unwrap_or(180.0),
+            },
+            PaintChoice::Radial(RadialPaint { radial }) => PaintPrim::Radial {
+                stops: stops(radial)?,
+                center: center(radial),
+                radius: radial.radius.unwrap_or(0.5),
+            },
+            PaintChoice::Conic(ConicPaint { conic }) => PaintPrim::Conic {
+                stops: stops(conic)?,
+                center: center(conic),
+                angle: conic.angle.unwrap_or(0.0),
+            },
+        })
     }
 
     fn lower_effect(&mut self, effect: &EffectUse, path: &str) -> Result<EffectPrim, ComposeError> {

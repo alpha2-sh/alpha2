@@ -999,3 +999,89 @@ fn an_effect_takes_a_node_as_its_named_image_input() {
         "enum"
     );
 }
+
+fn shape_items(node: &Value) -> Vec<Value> {
+    let compiled = compile(&json!({
+        "canvas": {"width": 1000, "height": 500},
+        "theme": {"accent": "#ff0000", "text": "#ffffff"},
+        "duration": 2,
+        "body": node,
+    }));
+    compiled["project"]["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .find_map(|source| source["generator"]["items"].as_array().cloned())
+        .expect("a shapes source")
+}
+
+#[test]
+fn a_shape_places_its_outlines_in_its_area_and_paints_them_from_the_theme() {
+    let items = shape_items(&json!({
+        "type": "shape",
+        "inset": [100, 500, 100, 0],
+        "shapes": [{"shape": "rect", "center": [0.5, 0.5], "size": [1, 0.5], "corner_radius": 0.1}],
+    }));
+    // The area is the left half, 100 px in from top and bottom: 500 x 300.
+    let rect = &items[0];
+    assert_eq!(rect["type"], "rectangle");
+    assert_eq!(rect["center"]["value"], json!({"x": 0.25, "y": 0.5}));
+    assert_eq!(rect["size"]["value"], json!({"x": 0.5, "y": 0.3}));
+    // 0.1 of the area's 300 px shorter side is 30 px, 0.06 of the canvas's 500 px.
+    let corner = rect["corner_radius"]["value"].as_f64().unwrap();
+    assert!((corner - 0.06).abs() < 1e-6, "{corner}");
+    // Without a stroke it fills with the theme's accent.
+    let fill = items.last().expect("a fill");
+    assert_eq!(fill["type"], "fill");
+    assert_eq!(fill["paint"]["value"]["color"]["red"], 1.0);
+}
+
+#[test]
+fn a_shape_strokes_trims_and_fills_with_gradients_and_paths() {
+    let items = shape_items(&json!({
+        "type": "shape",
+        "shapes": [{"shape": "path", "d": "M0 0.5 L1 0.5"}],
+        "stroke": {"paint": {"$theme": "text", "alpha": 0.5}, "width": 0.02, "dash": [0.1, 0.05]},
+        "trim": {"end": {"from": 0, "to": 1}},
+        "fill": {"linear": {"stops": [{"$theme": "accent"}, "#0000ff"], "angle": 90}},
+    }));
+    let kinds = items
+        .iter()
+        .map(|item| item["type"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(kinds, ["path", "trim", "stroke", "fill"]);
+    assert_eq!(items[1]["end"]["mode"], "keyframes");
+    assert_eq!(items[2]["paint"]["value"]["color"]["alpha"], 0.5);
+    assert_eq!(items[2]["dash"]["pattern"].as_array().unwrap().len(), 2);
+    let gradient = &items[3]["paint"]["value"];
+    assert_eq!(gradient["type"], "linear_gradient");
+    // 90 degrees runs left to right across the area's middle.
+    let close = |point: &Value, [x, y]: [f64; 2]| {
+        (point["x"].as_f64().unwrap() - x).abs() < 1e-5
+            && (point["y"].as_f64().unwrap() - y).abs() < 1e-5
+    };
+    assert!(close(&gradient["start"], [0.0, 0.5]), "{gradient}");
+    assert!(close(&gradient["end"], [1.0, 0.5]), "{gradient}");
+    assert_eq!(gradient["stops"][1]["offset"], 1.0);
+}
+
+#[test]
+fn shape_values_are_checked() {
+    let error = |node: Value| compile_error(&json!({"duration": 1, "body": node}));
+    assert!(error(json!({"type": "shape", "shapes": []})).contains("at least one"));
+    assert!(
+        error(json!({"type": "shape", "shapes": [{"shape": "polygon", "points": 2}]}))
+            .contains("points")
+    );
+    assert!(
+        error(json!({"type": "shape", "shapes": [{"shape": "path", "d": "Q"}]})).contains(".d")
+    );
+    assert!(
+        error(json!({"type": "shape", "shapes": [{"shape": "ellipse"}], "fill": {"radial": {"stops": ["#fff"]}}}))
+            .contains("stops")
+    );
+    assert!(
+        error(json!({"type": "shape", "shapes": [{"shape": "rect", "size": [-1, 1]}]}))
+            .contains("size")
+    );
+}

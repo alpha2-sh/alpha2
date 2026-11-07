@@ -190,6 +190,7 @@ fn walk(node: &Node, found: &mut Requirements) {
             }
         }
         Node::Text(_)
+        | Node::Shape(_)
         | Node::Color(_)
         | Node::Layout(_)
         | Node::Raw(_)

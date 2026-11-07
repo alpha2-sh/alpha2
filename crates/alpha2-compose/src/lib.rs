@@ -18,6 +18,7 @@ mod lower;
 #[cfg(feature = "schema")]
 mod schema;
 pub mod spec;
+mod svg_path;
 #[cfg(test)]
 mod tests;
 mod theme;

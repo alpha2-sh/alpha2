@@ -1745,6 +1745,20 @@
       ],
       "type": "object"
     },
+    "ConicPaint": {
+      "additionalProperties": false,
+      "description": "`{\"conic\": gradient}`.",
+      "properties": {
+        "conic": {
+          "$ref": "#/$defs/Gradient",
+          "description": "The gradient."
+        }
+      },
+      "required": [
+        "conic"
+      ],
+      "type": "object"
+    },
     "Cue": {
       "additionalProperties": false,
       "description": "Text over an interval.",
@@ -2541,6 +2555,313 @@
           "type": "object"
         }
       ]
+    },
+    "Geometry": {
+      "description": "One outline, in its area's unit square. Masks take the same outlines.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A rectangle, optionally with rounded corners.",
+          "properties": {
+            "center": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Centre. Default `[0.5, 0.5]`."
+            },
+            "corner_radius": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Corner radius. Default 0."
+            },
+            "rotation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Clockwise turn in degrees. Default 0."
+            },
+            "shape": {
+              "const": "rect",
+              "type": "string"
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Width and height. Default `[1, 1]`."
+            }
+          },
+          "required": [
+            "shape"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An ellipse.",
+          "properties": {
+            "center": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Centre. Default `[0.5, 0.5]`."
+            },
+            "rotation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Clockwise turn in degrees. Default 0."
+            },
+            "shape": {
+              "const": "ellipse",
+              "type": "string"
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Width and height. Default `[1, 1]`."
+            }
+          },
+          "required": [
+            "shape"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A regular polygon.",
+          "properties": {
+            "center": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Centre. Default `[0.5, 0.5]`."
+            },
+            "points": {
+              "description": "Corners, 3 or more.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distance of the corners from the centre. Default 0.5."
+            },
+            "rotation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Clockwise turn in degrees. Default 0."
+            },
+            "roundness": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How round the corners are, 0..=1. Default 0."
+            },
+            "shape": {
+              "const": "polygon",
+              "type": "string"
+            }
+          },
+          "required": [
+            "shape",
+            "points"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A star.",
+          "properties": {
+            "center": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Centre. Default `[0.5, 0.5]`."
+            },
+            "inner_radius": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distance of the inner corners from the centre. Default 0.25."
+            },
+            "outer_radius": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distance of the tips from the centre. Default 0.5."
+            },
+            "points": {
+              "description": "Tips, 3 or more.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rotation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Clockwise turn in degrees. Default 0."
+            },
+            "shape": {
+              "const": "star",
+              "type": "string"
+            }
+          },
+          "required": [
+            "shape",
+            "points"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An outline as SVG path data (`d`), in the area's unit square.",
+          "properties": {
+            "d": {
+              "description": "The path data: `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A` and `Z`, absolute or\nrelative.",
+              "type": "string"
+            },
+            "shape": {
+              "const": "path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "shape",
+            "d"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Gradient": {
+      "additionalProperties": false,
+      "description": "Colors spread over a gradient.",
+      "properties": {
+        "angle": {
+          "description": "A linear gradient's direction in degrees, as CSS: 0 upward, 90 rightward. A conic one's\nstart. Default 180 for linear (downward), 0 for conic.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "center": {
+          "description": "A radial or conic gradient's centre. Default `[0.5, 0.5]`.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "radius": {
+          "description": "A radial gradient's radius. Default 0.5.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "stops": {
+          "description": "Two or more colors, evenly spaced unless each says its `offset` in 0..=1.",
+          "items": {
+            "$ref": "#/$defs/Stop"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "stops"
+      ],
+      "type": "object"
     },
     "GradientStop": {
       "additionalProperties": false,
@@ -4021,6 +4342,20 @@
           "type": "string"
         }
       ]
+    },
+    "LinearPaint": {
+      "additionalProperties": false,
+      "description": "`{\"linear\": gradient}`.",
+      "properties": {
+        "linear": {
+          "$ref": "#/$defs/Gradient",
+          "description": "The gradient."
+        }
+      },
+      "required": [
+        "linear"
+      ],
+      "type": "object"
     },
     "LinearPrimaries": {
       "description": "Named RGB primaries linear-light media may be in, each with its own white point.",
@@ -6741,6 +7076,125 @@
             "children"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Shapes drawn with one fill and one stroke: bars, frames, dividers, badges, icons.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "duration": {
+              "description": "Length in seconds. Default: what its parent gives it.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "enter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it comes in at its start."
+            },
+            "exit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Motion"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How it goes out, ending at its end."
+            },
+            "fill": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PaintChoice"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What covers their inside. Default: nothing, unless there is no stroke, then the theme's\naccent."
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "inset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Inset"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pixels kept clear inside the parent's area: the shapes' area."
+            },
+            "opacity": {
+              "description": "Opacity, 0..=1. Default 1.",
+              "format": "float",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "shapes": {
+              "description": "The outlines, at least one.",
+              "items": {
+                "$ref": "#/$defs/Geometry"
+              },
+              "type": "array"
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Stroke"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A line along the outlines."
+            },
+            "trim": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Trim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Keeps part of the outlines' length: a line drawing itself is `{\"end\": {\"from\": 0, \"to\": 1}}`."
+            },
+            "type": {
+              "const": "shape",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "shapes"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -7170,6 +7624,26 @@
       },
       "type": "object"
     },
+    "OffsetStop": {
+      "additionalProperties": false,
+      "description": "A gradient color at a set position.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/SolidColor",
+          "description": "The color."
+        },
+        "offset": {
+          "description": "Where along the gradient, 0..=1.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "color",
+        "offset"
+      ],
+      "type": "object"
+    },
     "Overflow": {
       "description": "Whether content past a box's padding box is drawn.",
       "oneOf": [
@@ -7319,6 +7793,31 @@
           "$ref": "#/$defs/Rgba"
         }
       ]
+    },
+    "PaintChoice": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ThemeColor",
+          "description": "A theme color by name."
+        },
+        {
+          "$ref": "#/$defs/LinearPaint",
+          "description": "Colors along a line across the area."
+        },
+        {
+          "$ref": "#/$defs/RadialPaint",
+          "description": "Colors out from a point."
+        },
+        {
+          "$ref": "#/$defs/ConicPaint",
+          "description": "Colors around a point."
+        },
+        {
+          "$ref": "#/$defs/Rgba",
+          "description": "One color: CSS hex or the project's color object."
+        }
+      ],
+      "description": "A color, a theme color, or a gradient."
     },
     "Path": {
       "additionalProperties": false,
@@ -7632,6 +8131,20 @@
           "type": "object"
         }
       ]
+    },
+    "RadialPaint": {
+      "additionalProperties": false,
+      "description": "`{\"radial\": gradient}`.",
+      "properties": {
+        "radial": {
+          "$ref": "#/$defs/Gradient",
+          "description": "The gradient."
+        }
+      },
+      "required": [
+        "radial"
+      ],
+      "type": "object"
     },
     "Ramp": {
       "additionalProperties": false,
@@ -8551,6 +9064,19 @@
       },
       "type": "object"
     },
+    "SolidColor": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ThemeColor",
+          "description": "A theme color by name."
+        },
+        {
+          "$ref": "#/$defs/Rgba",
+          "description": "CSS hex or the color object."
+        }
+      ],
+      "description": "One color: a theme color, CSS hex, or the project's color object."
+    },
     "SourceId": {
       "description": "A stable media-source identifier.",
       "minLength": 1,
@@ -8605,6 +9131,19 @@
         }
       ]
     },
+    "Stop": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OffsetStop",
+          "description": "A color at a set position."
+        },
+        {
+          "$ref": "#/$defs/SolidColor",
+          "description": "A color, spaced evenly with the others."
+        }
+      ],
+      "description": "One gradient color."
+    },
     "StreamTopology": {
       "additionalProperties": false,
       "description": "The streams a media file carries.",
@@ -8632,6 +9171,61 @@
           "description": "The primary video stream, if there is one."
         }
       },
+      "type": "object"
+    },
+    "Stroke": {
+      "additionalProperties": false,
+      "description": "A line along outlines.",
+      "properties": {
+        "cap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineCap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How open ends look. Default `butt`."
+        },
+        "dash": {
+          "description": "Dash and gap lengths, as fractions of the area's shorter side. Default: solid.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "join": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineJoin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How segments meet. Default `miter`."
+        },
+        "paint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PaintChoice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What covers it. Default: the theme's text color."
+        },
+        "width": {
+          "$ref": "#/$defs/Anim",
+          "description": "Width, as a fraction of the area's shorter side."
+        }
+      },
+      "required": [
+        "width"
+      ],
       "type": "object"
     },
     "Subpath": {
@@ -9568,6 +10162,58 @@
       ],
       "description": "A theme by name, or one built on a named theme."
     },
+    "ThemeColor": {
+      "additionalProperties": false,
+      "description": "A theme color, so a design follows whatever theme it is drawn with.",
+      "properties": {
+        "$theme": {
+          "$ref": "#/$defs/ThemeToken",
+          "description": "Which of the theme's colors."
+        },
+        "alpha": {
+          "description": "Opacity multiplied into it, 0..=1. Default 1.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "$theme"
+      ],
+      "type": "object"
+    },
+    "ThemeToken": {
+      "description": "A theme's named colors.",
+      "oneOf": [
+        {
+          "const": "text",
+          "description": "Text.",
+          "type": "string"
+        },
+        {
+          "const": "background",
+          "description": "The canvas behind everything.",
+          "type": "string"
+        },
+        {
+          "const": "surface",
+          "description": "Cards and title cards.",
+          "type": "string"
+        },
+        {
+          "const": "panel",
+          "description": "Bars behind text.",
+          "type": "string"
+        },
+        {
+          "const": "accent",
+          "description": "Highlights.",
+          "type": "string"
+        }
+      ]
+    },
     "TimeMap": {
       "description": "How a clip plays its source range over its timeline range.\n\n`forward` and `reverse` stretch the source range over the timeline range, so their speed\nis the ratio of the two. A loop plays the source range at its own speed for as long as the\ntimeline range lasts.",
       "oneOf": [
@@ -9920,6 +10566,46 @@
         }
       ],
       "description": "A sequence's transitions: none, the theme's, or one given."
+    },
+    "Trim": {
+      "additionalProperties": false,
+      "description": "The part of outlines' length that is kept, from `start` to `end`, shifted by `offset` turns.",
+      "properties": {
+        "end": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Anim"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default 1."
+        },
+        "offset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Anim"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default 0."
+        },
+        "start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Anim"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Default 0."
+        }
+      },
+      "type": "object"
     },
     "TrimMode": {
       "description": "What a trim measures.",

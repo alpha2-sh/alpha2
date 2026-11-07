@@ -161,6 +161,9 @@ REVEAL_UNIT_VALUES: tuple[RevealUnit, ...] = ("word", "line")
 TEXT_ROLE_VALUES: tuple[TextRole, ...] = ("title", "subtitle", "body", "label")
 """Every `TextRole`, in the model's order."""
 
+THEME_TOKEN_VALUES: tuple[ThemeToken, ...] = ("text", "background", "surface", "panel", "accent")
+"""Every `ThemeToken`, in the model's order."""
+
 
 class VideoSpec(TypedDict):
     """A whole video: a body, what is drawn over it, and what plays under it."""
@@ -270,6 +273,13 @@ class CaptionsNode(TypedDict):
     """
 
 
+class ConicPaint(TypedDict):
+    """`{"conic": gradient}`."""
+
+    conic: Gradient
+    """The gradient."""
+
+
 class Cue(TypedDict):
     """Text over an interval."""
 
@@ -333,6 +343,93 @@ FrameRateChoice: TypeAlias = "float | FrameRate"
 """A frame rate, as a number or exactly."""
 
 
+class GeometryRect(TypedDict):
+    """A rectangle, optionally with rounded corners."""
+
+    center: NotRequired[Anim2 | None]
+    """Centre. Default `[0.5, 0.5]`."""
+    corner_radius: NotRequired[Anim | None]
+    """Corner radius. Default 0."""
+    rotation: NotRequired[Anim | None]
+    """Clockwise turn in degrees. Default 0."""
+    shape: Literal["rect"]
+    size: NotRequired[Anim2 | None]
+    """Width and height. Default `[1, 1]`."""
+
+
+class GeometryEllipse(TypedDict):
+    """An ellipse."""
+
+    center: NotRequired[Anim2 | None]
+    """Centre. Default `[0.5, 0.5]`."""
+    rotation: NotRequired[Anim | None]
+    """Clockwise turn in degrees. Default 0."""
+    shape: Literal["ellipse"]
+    size: NotRequired[Anim2 | None]
+    """Width and height. Default `[1, 1]`."""
+
+
+class GeometryPolygon(TypedDict):
+    """A regular polygon."""
+
+    center: NotRequired[Anim2 | None]
+    """Centre. Default `[0.5, 0.5]`."""
+    points: int
+    """Corners, 3 or more."""
+    radius: NotRequired[Anim | None]
+    """Distance of the corners from the centre. Default 0.5."""
+    rotation: NotRequired[Anim | None]
+    """Clockwise turn in degrees. Default 0."""
+    roundness: NotRequired[Anim | None]
+    """How round the corners are, 0..=1. Default 0."""
+    shape: Literal["polygon"]
+
+
+class GeometryStar(TypedDict):
+    """A star."""
+
+    center: NotRequired[Anim2 | None]
+    """Centre. Default `[0.5, 0.5]`."""
+    inner_radius: NotRequired[Anim | None]
+    """Distance of the inner corners from the centre. Default 0.25."""
+    outer_radius: NotRequired[Anim | None]
+    """Distance of the tips from the centre. Default 0.5."""
+    points: int
+    """Tips, 3 or more."""
+    rotation: NotRequired[Anim | None]
+    """Clockwise turn in degrees. Default 0."""
+    shape: Literal["star"]
+
+
+class GeometryPath(TypedDict):
+    """An outline as SVG path data (`d`), in the area's unit square."""
+
+    d: str
+    """The path data: `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A` and `Z`, absolute or
+    relative.
+    """
+    shape: Literal["path"]
+
+
+Geometry: TypeAlias = "GeometryRect | GeometryEllipse | GeometryPolygon | GeometryStar | GeometryPath"
+"""One outline, in its area's unit square. Masks take the same outlines."""
+
+
+class Gradient(TypedDict):
+    """Colors spread over a gradient."""
+
+    angle: NotRequired[float | None]
+    """A linear gradient's direction in degrees, as CSS: 0 upward, 90 rightward. A conic one's
+    start. Default 180 for linear (downward), 0 for conic.
+    """
+    center: NotRequired[list[float] | None]
+    """A radial or conic gradient's centre. Default `[0.5, 0.5]`."""
+    radius: NotRequired[float | None]
+    """A radial gradient's radius. Default 0.5."""
+    stops: list[Stop]
+    """Two or more colors, evenly spaced unless each says its `offset` in 0..=1."""
+
+
 GridLength: TypeAlias = Literal["shortest", "longest_freeze", "longest_loop"]
 """How long a grid of clips of different lengths lasts."""
 
@@ -390,6 +487,13 @@ class Keys2(TypedDict):
 
     keys: list[Key2]
     """The keys, in increasing time; at least one."""
+
+
+class LinearPaint(TypedDict):
+    """`{"linear": gradient}`."""
+
+    linear: Gradient
+    """The gradient."""
 
 
 Loudness: TypeAlias = "float | LoudnessTarget"
@@ -1094,7 +1198,37 @@ class NodeGroup(TypedDict):
     type: Literal["group"]
 
 
-Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed | NodeCounter | NodeGroup"
+class NodeShape(TypedDict):
+    """Shapes drawn with one fill and one stroke: bars, frames, dividers, badges, icons."""
+
+    at: NotRequired[float | None]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    duration: NotRequired[float | None]
+    """Length in seconds. Default: what its parent gives it."""
+    enter: NotRequired[Motion | None]
+    """How it comes in at its start."""
+    exit: NotRequired[Motion | None]
+    """How it goes out, ending at its end."""
+    fill: NotRequired[PaintChoice | None]
+    """What covers their inside. Default: nothing, unless there is no stroke, then the theme's
+    accent.
+    """
+    id: NotRequired[str | None]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset | None]
+    """Pixels kept clear inside the parent's area: the shapes' area."""
+    opacity: NotRequired[float | None]
+    """Opacity, 0..=1. Default 1."""
+    shapes: list[Geometry]
+    """The outlines, at least one."""
+    stroke: NotRequired[Stroke | None]
+    """A line along the outlines."""
+    trim: NotRequired[Trim | None]
+    """Keeps part of the outlines' length: a line drawing itself is `{"end": {"from": 0, "to": 1}}`."""
+    type: Literal["shape"]
+
+
+Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed | NodeCounter | NodeGroup | NodeShape"
 """One part of a video."""
 
 
@@ -1111,6 +1245,26 @@ class NumberFormat(TypedDict):
     """Text after the number."""
     thousands: NotRequired[str | None]
     """Put between each group of three integer digits, as `,`. Default none."""
+
+
+class OffsetStop(TypedDict):
+    """A gradient color at a set position."""
+
+    color: SolidColor
+    """The color."""
+    offset: float
+    """Where along the gradient, 0..=1."""
+
+
+PaintChoice: TypeAlias = "ThemeColor | LinearPaint | RadialPaint | ConicPaint | Rgba"
+"""A color, a theme color, or a gradient."""
+
+
+class RadialPaint(TypedDict):
+    """`{"radial": gradient}`."""
+
+    radial: Gradient
+    """The gradient."""
 
 
 Ramp = TypedDict(
@@ -1162,6 +1316,10 @@ RevealUnit: TypeAlias = Literal["word", "line"]
 """The unit a text is revealed by."""
 
 
+SolidColor: TypeAlias = "ThemeColor | Rgba"
+"""One color: a theme color, CSS hex, or the project's color object."""
+
+
 class SpeakerLook(TypedDict):
     """How one speaker's captions look."""
 
@@ -1169,6 +1327,25 @@ class SpeakerLook(TypedDict):
     """Their text color."""
     position: NotRequired[Vec2 | None]
     """Where their text's middle lies, as fractions of the canvas, `(0, 0)` top-left."""
+
+
+Stop: TypeAlias = "OffsetStop | SolidColor"
+"""One gradient color."""
+
+
+class Stroke(TypedDict):
+    """A line along outlines."""
+
+    cap: NotRequired[LineCap | None]
+    """How open ends look. Default `butt`."""
+    dash: NotRequired[list[float]]
+    """Dash and gap lengths, as fractions of the area's shorter side. Default: solid."""
+    join: NotRequired[LineJoin | None]
+    """How segments meet. Default `miter`."""
+    paint: NotRequired[PaintChoice | None]
+    """What covers it. Default: the theme's text color."""
+    width: Anim
+    """Width, as a fraction of the area's shorter side."""
 
 
 class TextFit(TypedDict):
@@ -1231,6 +1408,20 @@ ThemeChoice: TypeAlias = "str | Theme"
 """A theme by name, or one built on a named theme."""
 
 
+ThemeColor = TypedDict(
+    "ThemeColor",
+    {
+        "$theme": ThemeToken,
+        "alpha": NotRequired[float | None],
+    },
+)
+ThemeColor.__doc__ = "A theme color, so a design follows whatever theme it is drawn with."
+
+
+ThemeToken: TypeAlias = Literal["text", "background", "surface", "panel", "accent"]
+"""A theme's named colors."""
+
+
 class Transition(TypedDict):
     """The transition between two neighbours of a sequence."""
 
@@ -1250,3 +1441,14 @@ class Transition(TypedDict):
 
 TransitionChoice: TypeAlias = "str | Transition"
 """A sequence's transitions: none, the theme's, or one given."""
+
+
+class Trim(TypedDict):
+    """The part of outlines' length that is kept, from `start` to `end`, shifted by `offset` turns."""
+
+    end: NotRequired[Anim | None]
+    """Default 1."""
+    offset: NotRequired[Anim | None]
+    """Default 0."""
+    start: NotRequired[Anim | None]
+    """Default 0."""

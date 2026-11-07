@@ -81,10 +81,12 @@ __all__ = [
     "Rise",
     "Scale",
     "Sequence",
+    "Shape",
     "Slide",
     "Slideshow",
     "Stack",
     "Text",
+    "ThemeColor",
     "Title",
     "TitleCard",
     "Transition",
@@ -205,6 +207,45 @@ def Group(
         duration=duration,
         inset=inset,
     )
+
+
+def Shape(
+    shapes: Iterable[Mapping[str, Any]],
+    *,
+    fill: str | Mapping[str, Any] | None = None,
+    stroke: Mapping[str, Any] | None = None,
+    trim: Mapping[str, Any] | None = None,
+    opacity: float | None = None,
+    enter: Mapping[str, Any] | None = None,
+    exit: Mapping[str, Any] | None = None,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+    inset: float | abc.Sequence[float] | None = None,
+) -> Node:
+    """Outlines (``{"shape": "rect" | "ellipse" | "polygon" | "star" | "path", ...}``) in the
+    node's unit square, filled and stroked as one path. Paints are colors, theme colors
+    (:func:`ThemeColor`) or gradients; without fill or stroke it fills with the theme's accent."""
+    return _node(
+        "shape",
+        shapes=[dict(shape) for shape in shapes],
+        fill=fill if fill is None or isinstance(fill, str) else dict(fill),
+        stroke=None if stroke is None else dict(stroke),
+        trim=None if trim is None else dict(trim),
+        opacity=opacity,
+        enter=enter,
+        exit=exit,
+        id=id,
+        at=at,
+        duration=duration,
+        inset=inset,
+    )
+
+
+def ThemeColor(token: str, alpha: float | None = None) -> dict[str, Any]:
+    """The theme's ``text``, ``background``, ``surface``, ``panel`` or ``accent`` color, its
+    opacity times ``alpha``."""
+    return cast("dict[str, Any]", _plain({"$theme": token, "alpha": alpha}))
 
 
 def Effect(effect: str, /, **params: Any) -> dict[str, Any]:

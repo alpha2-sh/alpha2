@@ -51,6 +51,11 @@ def test_constructors_write_the_spec_as_plain_dicts() -> None:
         "blend": "screen",
         "effects": [{"effect": "gaussian-blur", "radius": 0.1}],
     }
+    assert c.Shape([{"shape": "ellipse"}], fill=c.ThemeColor("accent", 0.5)) == {
+        "type": "shape",
+        "shapes": [{"shape": "ellipse"}],
+        "fill": {"$theme": "accent", "alpha": 0.5},
+    }
     assert c.Keys((0, 1), (2, 1.5, "ease-out")) == {
         "keys": [{"t": 0, "v": 1}, {"t": 2, "v": 1.5, "ease": "ease-out"}]
     }
