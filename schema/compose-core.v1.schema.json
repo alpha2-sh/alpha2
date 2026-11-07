@@ -705,29 +705,4861 @@
       ],
       "description": "A timing curve: `linear`, a CSS name (`ease`, `ease-in`, `ease-out`, `ease-in-out`) or a\nproject easing object."
     },
-    "EffectUse": {
-      "additionalProperties": true,
-      "description": "One effect: a built-in by its short name (`gaussian-blur`) or any effect by its full id, with\nits parameters by name. A parameter is a constant, a ramp or keys; a named image input is a\nnode.",
+    "EffectKeys_bool": {
+      "additionalProperties": false,
+      "description": "Values at seconds from the node's start.",
       "properties": {
-        "effect": {
-          "description": "The effect: a built-in's short name or a full id with its dots.",
-          "type": "string"
-        },
-        "version": {
-          "description": "The version a full id names. Default: the built-in's, else 1.",
-          "format": "uint32",
-          "maximum": 4294967295,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
+        "keys": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "ease": {
+                "$ref": "#/$defs/EasingChoice"
+              },
+              "t": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "v": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "t",
+              "v"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
         }
       },
       "required": [
-        "effect"
+        "keys"
       ],
       "type": "object"
+    },
+    "EffectKeys_choice": {
+      "additionalProperties": false,
+      "description": "Values at seconds from the node's start.",
+      "properties": {
+        "keys": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "ease": {
+                "$ref": "#/$defs/EasingChoice"
+              },
+              "t": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "v": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "t",
+              "v"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    },
+    "EffectKeys_color": {
+      "additionalProperties": false,
+      "description": "Values at seconds from the node's start.",
+      "properties": {
+        "keys": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "ease": {
+                "$ref": "#/$defs/EasingChoice"
+              },
+              "t": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "v": {
+                "$ref": "#/$defs/Rgba"
+              }
+            },
+            "required": [
+              "t",
+              "v"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    },
+    "EffectKeys_number": {
+      "additionalProperties": false,
+      "description": "Values at seconds from the node's start.",
+      "properties": {
+        "keys": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "ease": {
+                "$ref": "#/$defs/EasingChoice"
+              },
+              "t": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "v": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "t",
+              "v"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    },
+    "EffectKeys_vec2": {
+      "additionalProperties": false,
+      "description": "Values at seconds from the node's start.",
+      "properties": {
+        "keys": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "ease": {
+                "$ref": "#/$defs/EasingChoice"
+              },
+              "t": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "v": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              }
+            },
+            "required": [
+              "t",
+              "v"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    },
+    "EffectKeys_vec4": {
+      "additionalProperties": false,
+      "description": "Values at seconds from the node's start.",
+      "properties": {
+        "keys": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "ease": {
+                "$ref": "#/$defs/EasingChoice"
+              },
+              "t": {
+                "minimum": 0,
+                "type": "number"
+              },
+              "v": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 4,
+                "minItems": 4,
+                "type": "array"
+              }
+            },
+            "required": [
+              "t",
+              "v"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    },
+    "EffectRamp_bool": {
+      "additionalProperties": false,
+      "description": "A change from `from` to `to` over the node's time.",
+      "properties": {
+        "at": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "duration": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "ease": {
+          "$ref": "#/$defs/EasingChoice"
+        },
+        "from": {
+          "type": "boolean"
+        },
+        "to": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "EffectRamp_choice": {
+      "additionalProperties": false,
+      "description": "A change from `from` to `to` over the node's time.",
+      "properties": {
+        "at": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "duration": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "ease": {
+          "$ref": "#/$defs/EasingChoice"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "EffectRamp_color": {
+      "additionalProperties": false,
+      "description": "A change from `from` to `to` over the node's time.",
+      "properties": {
+        "at": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "duration": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "ease": {
+          "$ref": "#/$defs/EasingChoice"
+        },
+        "from": {
+          "$ref": "#/$defs/Rgba"
+        },
+        "to": {
+          "$ref": "#/$defs/Rgba"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "EffectRamp_number": {
+      "additionalProperties": false,
+      "description": "A change from `from` to `to` over the node's time.",
+      "properties": {
+        "at": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "duration": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "ease": {
+          "$ref": "#/$defs/EasingChoice"
+        },
+        "from": {
+          "type": "number"
+        },
+        "to": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "EffectRamp_vec2": {
+      "additionalProperties": false,
+      "description": "A change from `from` to `to` over the node's time.",
+      "properties": {
+        "at": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "duration": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "ease": {
+          "$ref": "#/$defs/EasingChoice"
+        },
+        "from": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "to": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "EffectRamp_vec4": {
+      "additionalProperties": false,
+      "description": "A change from `from` to `to` over the node's time.",
+      "properties": {
+        "at": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "duration": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "ease": {
+          "$ref": "#/$defs/EasingChoice"
+        },
+        "from": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "to": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "EffectUse": {
+      "description": "One effect: a built-in by its short name, or any effect by its full id, with its parameters by name. A parameter is a constant, a ramp or keys; a named image input is a node.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "contrast": {
+              "anyOf": [
+                {
+                  "maximum": 2.0,
+                  "minimum": 0.0,
+                  "title": "Contrast",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "color-controls"
+            },
+            "exposure": {
+              "anyOf": [
+                {
+                  "maximum": 3.0,
+                  "minimum": -3.0,
+                  "title": "Exposure",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "saturation": {
+              "anyOf": [
+                {
+                  "maximum": 2.0,
+                  "minimum": 0.0,
+                  "title": "Saturation",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "temperature": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": -1.0,
+                  "title": "Temperature",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "tint": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": -1.0,
+                  "title": "Tint",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Color Controls",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "lut-3d"
+            },
+            "strength": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Strength",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "3D LUT",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "invert"
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Invert",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "blue": {
+              "anyOf": [
+                {
+                  "maximum": 3.0,
+                  "minimum": -2.0,
+                  "title": "Blue",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "black-and-white"
+            },
+            "green": {
+              "anyOf": [
+                {
+                  "maximum": 3.0,
+                  "minimum": -2.0,
+                  "title": "Green",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "red": {
+              "anyOf": [
+                {
+                  "maximum": 3.0,
+                  "minimum": -2.0,
+                  "title": "Red",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Black & White",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "sepia"
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Sepia",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "duotone"
+            },
+            "highlights": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba",
+                  "title": "Highlights"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_color"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_color"
+                }
+              ]
+            },
+            "shadows": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba",
+                  "title": "Shadows"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_color"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_color"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Duotone",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "gradient-map"
+            },
+            "highlights": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba",
+                  "title": "Highlights"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_color"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_color"
+                }
+              ]
+            },
+            "midpoint": {
+              "anyOf": [
+                {
+                  "maximum": 0.949999988079071,
+                  "minimum": 0.05000000074505806,
+                  "title": "Midpoint",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "midtones": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba",
+                  "title": "Midtones"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_color"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_color"
+                }
+              ]
+            },
+            "shadows": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba",
+                  "title": "Shadows"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_color"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_color"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Gradient Map",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "posterize"
+            },
+            "levels": {
+              "anyOf": [
+                {
+                  "maximum": 64.0,
+                  "minimum": 2.0,
+                  "title": "Levels",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Posterize",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "threshold"
+            },
+            "level": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Level",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "softness": {
+              "anyOf": [
+                {
+                  "maximum": 0.5,
+                  "minimum": 0.0,
+                  "title": "Softness",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Threshold",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "all",
+                    "red",
+                    "green",
+                    "blue"
+                  ],
+                  "title": "Channel"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "levels"
+            },
+            "gamma": {
+              "anyOf": [
+                {
+                  "maximum": 10.0,
+                  "minimum": 0.10000000149011612,
+                  "title": "Gamma",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "input_black": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Input Black",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "input_white": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Input White",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "output_black": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Output Black",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "output_white": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Output White",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Levels",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "hue-saturation"
+            },
+            "hue": {
+              "anyOf": [
+                {
+                  "maximum": 180.0,
+                  "minimum": -180.0,
+                  "title": "Hue",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "lightness": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": -1.0,
+                  "title": "Lightness",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "saturation": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": -1.0,
+                  "title": "Saturation",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Hue/Saturation",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": -1.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "vibrance"
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Vibrance",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "blue": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 2.0,
+                    "minimum": -2.0,
+                    "type": "number"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "title": "Blue",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec4"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec4"
+                }
+              ]
+            },
+            "effect": {
+              "const": "channel-mixer"
+            },
+            "green": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 2.0,
+                    "minimum": -2.0,
+                    "type": "number"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "title": "Green",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec4"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec4"
+                }
+              ]
+            },
+            "monochrome": {
+              "anyOf": [
+                {
+                  "title": "Monochrome",
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_bool"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_bool"
+                }
+              ]
+            },
+            "red": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 2.0,
+                    "minimum": -2.0,
+                    "type": "number"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "title": "Red",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec4"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec4"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Channel Mixer",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "lift-gamma-gain"
+            },
+            "gain": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": -1.0,
+                    "type": "number"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "title": "Gain",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec4"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec4"
+                }
+              ]
+            },
+            "gamma": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": -1.0,
+                    "type": "number"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "title": "Gamma",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec4"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec4"
+                }
+              ]
+            },
+            "lift": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": -1.0,
+                    "type": "number"
+                  },
+                  "maxItems": 4,
+                  "minItems": 4,
+                  "title": "Lift",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec4"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec4"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Lift Gamma Gain",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "color-isolate"
+            },
+            "hue": {
+              "anyOf": [
+                {
+                  "maximum": 360.0,
+                  "minimum": 0.0,
+                  "title": "Hue",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "range": {
+              "anyOf": [
+                {
+                  "maximum": 180.0,
+                  "minimum": 0.0,
+                  "title": "Range",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "softness": {
+              "anyOf": [
+                {
+                  "maximum": 180.0,
+                  "minimum": 0.0,
+                  "title": "Softness",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Color Isolate",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "solarize"
+            },
+            "threshold": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Threshold",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Solarize",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba",
+                  "title": "Color"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_color"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_color"
+                }
+              ]
+            },
+            "effect": {
+              "const": "fill"
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Fill",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "distance_mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "rgb",
+                    "chroma"
+                  ],
+                  "title": "Distance Mode"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "chroma-key"
+            },
+            "key_color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba",
+                  "title": "Key Color"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_color"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_color"
+                }
+              ]
+            },
+            "softness": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 1.1920928955078125e-7,
+                  "title": "Softness",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "spill_suppression": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Spill Suppression",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "threshold": {
+              "anyOf": [
+                {
+                  "maximum": 1.7320507764816284,
+                  "minimum": 0.0,
+                  "title": "Threshold",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Chroma Key",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "luma-key"
+            },
+            "key_out": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "dark",
+                    "bright"
+                  ],
+                  "title": "Key Out"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "softness": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Softness",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "threshold": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Threshold",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Luma Key",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "spill-suppress"
+            },
+            "screen": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "green",
+                    "blue"
+                  ],
+                  "title": "Screen"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Spill Suppress",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "black": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Black",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "alpha-adjust"
+            },
+            "gamma": {
+              "anyOf": [
+                {
+                  "maximum": 10.0,
+                  "minimum": 0.10000000149011612,
+                  "title": "Gamma",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "invert": {
+              "anyOf": [
+                {
+                  "title": "Invert",
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_bool"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_bool"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            },
+            "white": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "White",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Alpha Adjust",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "choke": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": -1.0,
+                  "title": "Choke",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "matte-choker"
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "maximum": 0.029999999329447746,
+                  "minimum": 0.0,
+                  "title": "Radius",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Matte Choker",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "set-matte"
+            },
+            "invert": {
+              "anyOf": [
+                {
+                  "title": "Invert",
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_bool"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_bool"
+                }
+              ]
+            },
+            "matte": {
+              "$ref": "#/$defs/Node",
+              "description": "A node drawn as this image."
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "alpha",
+                    "luma"
+                  ],
+                  "title": "Mode"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect",
+            "matte"
+          ],
+          "title": "Set Matte",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "gaussian-blur"
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Radius",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Gaussian Blur",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 3.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "sharpen"
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Sharpen",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "angle": {
+              "anyOf": [
+                {
+                  "maximum": 360.0,
+                  "minimum": -360.0,
+                  "title": "Angle",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "directional-blur"
+            },
+            "length": {
+              "anyOf": [
+                {
+                  "maximum": 0.5,
+                  "minimum": 0.0,
+                  "title": "Length",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Directional Blur",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "angle": {
+              "anyOf": [
+                {
+                  "maximum": 90.0,
+                  "minimum": 0.0,
+                  "title": "Angle",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "center": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Center",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "effect": {
+              "const": "radial-blur"
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "zoom",
+                    "spin"
+                  ],
+                  "title": "Mode"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Radial Blur",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 5.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "unsharp-mask"
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "maximum": 0.10000000149011612,
+                  "minimum": 0.0,
+                  "title": "Radius",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "threshold": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Threshold",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Unsharp Mask",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "angle": {
+              "anyOf": [
+                {
+                  "maximum": 90.0,
+                  "minimum": -90.0,
+                  "title": "Angle",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "blur": {
+              "anyOf": [
+                {
+                  "maximum": 0.20000000298023224,
+                  "minimum": 0.0,
+                  "title": "Blur",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "tilt-shift"
+            },
+            "falloff": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0010000000474974513,
+                  "title": "Falloff",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "focus": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Focus",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "position": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Position",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Tilt Shift",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "lens-blur"
+            },
+            "highlights": {
+              "anyOf": [
+                {
+                  "maximum": 10.0,
+                  "minimum": 0.0,
+                  "title": "Highlights",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "maximum": 0.019999999552965164,
+                  "minimum": 0.0,
+                  "title": "Radius",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Lens Blur",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "surface-blur"
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "maximum": 0.019999999552965164,
+                  "minimum": 0.0,
+                  "title": "Radius",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "threshold": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0010000000474974513,
+                  "title": "Threshold",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Surface Blur",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "vignette"
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "maximum": 1.5,
+                  "minimum": 0.0,
+                  "title": "Radius",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "softness": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.009999999776482582,
+                  "title": "Softness",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Vignette",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "glow"
+            },
+            "intensity": {
+              "anyOf": [
+                {
+                  "maximum": 3.0,
+                  "minimum": 0.0,
+                  "title": "Intensity",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "maximum": 0.05999999865889549,
+                  "minimum": 0.0,
+                  "title": "Radius",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "threshold": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Threshold",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Glow",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "film-grain"
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "maximum": 6.0,
+                  "minimum": 0.5,
+                  "title": "Size",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Film Grain",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 0.05000000074505806,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "angle": {
+              "anyOf": [
+                {
+                  "maximum": 360.0,
+                  "minimum": -360.0,
+                  "title": "Angle",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "rgb-split"
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "linear",
+                    "radial"
+                  ],
+                  "title": "Mode"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "RGB Split",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "block_size": {
+              "anyOf": [
+                {
+                  "maximum": 0.5,
+                  "minimum": 0.004999999888241291,
+                  "title": "Block Size",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "color_split": {
+              "anyOf": [
+                {
+                  "maximum": 0.05000000074505806,
+                  "minimum": 0.0,
+                  "title": "Color Split",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "glitch"
+            },
+            "seed": {
+              "anyOf": [
+                {
+                  "maximum": 1000.0,
+                  "minimum": 0.0,
+                  "title": "Seed",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "speed": {
+              "anyOf": [
+                {
+                  "maximum": 60.0,
+                  "minimum": 0.0,
+                  "title": "Speed",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Glitch",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "curvature": {
+              "anyOf": [
+                {
+                  "maximum": 0.5,
+                  "minimum": 0.0,
+                  "title": "Curvature",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "crt"
+            },
+            "line_count": {
+              "anyOf": [
+                {
+                  "maximum": 1080.0,
+                  "minimum": 50.0,
+                  "title": "Line Count",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "mask": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Mask",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "scanlines": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Scanlines",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            },
+            "vignette": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Vignette",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "CRT",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "bleed": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Bleed",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "vhs"
+            },
+            "noise": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Noise",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "seed": {
+              "anyOf": [
+                {
+                  "maximum": 1000.0,
+                  "minimum": 0.0,
+                  "title": "Seed",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "speed": {
+              "anyOf": [
+                {
+                  "maximum": 10.0,
+                  "minimum": 0.0,
+                  "title": "Speed",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "VHS",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "angle": {
+              "anyOf": [
+                {
+                  "maximum": 90.0,
+                  "minimum": -90.0,
+                  "title": "Angle",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "cells": {
+              "anyOf": [
+                {
+                  "maximum": 400.0,
+                  "minimum": 10.0,
+                  "title": "Cells",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "halftone"
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "mono",
+                    "color"
+                  ],
+                  "title": "Mode"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Halftone",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "angle": {
+              "anyOf": [
+                {
+                  "maximum": 360.0,
+                  "minimum": -360.0,
+                  "title": "Angle",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "distance": {
+              "anyOf": [
+                {
+                  "maximum": 0.009999999776482582,
+                  "minimum": 0.0,
+                  "title": "Distance",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "emboss"
+            },
+            "keep_color": {
+              "anyOf": [
+                {
+                  "title": "Keep Color",
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_bool"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_bool"
+                }
+              ]
+            },
+            "strength": {
+              "anyOf": [
+                {
+                  "maximum": 5.0,
+                  "minimum": 0.0,
+                  "title": "Strength",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Emboss",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "colored": {
+              "anyOf": [
+                {
+                  "title": "Colored",
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_bool"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_bool"
+                }
+              ]
+            },
+            "effect": {
+              "const": "edge-detect"
+            },
+            "invert": {
+              "anyOf": [
+                {
+                  "title": "Invert",
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_bool"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_bool"
+                }
+              ]
+            },
+            "strength": {
+              "anyOf": [
+                {
+                  "maximum": 5.0,
+                  "minimum": 0.0,
+                  "title": "Strength",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "maximum": 0.009999999776482582,
+                  "minimum": 0.00019999999494757503,
+                  "title": "Width",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Edge Detect",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "angle": {
+              "anyOf": [
+                {
+                  "maximum": 360.0,
+                  "minimum": -360.0,
+                  "title": "Angle",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba",
+                  "title": "Color"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_color"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_color"
+                }
+              ]
+            },
+            "distance": {
+              "anyOf": [
+                {
+                  "maximum": 0.20000000298023224,
+                  "minimum": 0.0,
+                  "title": "Distance",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "drop-shadow"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Opacity",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "shadow_only": {
+              "anyOf": [
+                {
+                  "title": "Shadow Only",
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_bool"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_bool"
+                }
+              ]
+            },
+            "softness": {
+              "anyOf": [
+                {
+                  "maximum": 0.20000000298023224,
+                  "minimum": 0.0,
+                  "title": "Softness",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Drop Shadow",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba",
+                  "title": "Color"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_color"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_color"
+                }
+              ]
+            },
+            "effect": {
+              "const": "outline"
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "maximum": 0.029999999329447746,
+                  "minimum": 0.0,
+                  "title": "Width",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Outline",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba",
+                  "title": "Color"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_color"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_color"
+                }
+              ]
+            },
+            "effect": {
+              "const": "light-leak"
+            },
+            "intensity": {
+              "anyOf": [
+                {
+                  "maximum": 2.0,
+                  "minimum": 0.0,
+                  "title": "Intensity",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "position": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.5,
+                    "minimum": -0.5,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Position",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "seed": {
+              "anyOf": [
+                {
+                  "maximum": 1000.0,
+                  "minimum": 0.0,
+                  "title": "Seed",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "maximum": 2.0,
+                  "minimum": 0.05000000074505806,
+                  "title": "Size",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "speed": {
+              "anyOf": [
+                {
+                  "maximum": 5.0,
+                  "minimum": 0.0,
+                  "title": "Speed",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Light Leak",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "aspect": {
+              "anyOf": [
+                {
+                  "maximum": 4.0,
+                  "minimum": 1.0,
+                  "title": "Aspect",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "color": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Rgba",
+                  "title": "Color"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_color"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_color"
+                }
+              ]
+            },
+            "effect": {
+              "const": "letterbox"
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Letterbox",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "oil-paint"
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "maximum": 0.014999999664723873,
+                  "minimum": 0.0,
+                  "title": "Radius",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Oil Paint",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "blocks": {
+              "anyOf": [
+                {
+                  "maximum": 400.0,
+                  "minimum": 2.0,
+                  "title": "Blocks",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "effect": {
+              "const": "pixelate"
+            },
+            "shape": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "square",
+                    "hexagon"
+                  ],
+                  "title": "Shape"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Pixelate",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bottom_right": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Bottom Right",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "effect": {
+              "const": "crop"
+            },
+            "feather": {
+              "anyOf": [
+                {
+                  "maximum": 0.20000000298023224,
+                  "minimum": 0.0,
+                  "title": "Feather",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "top_left": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Top Left",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Crop",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "axis": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "horizontal",
+                    "vertical"
+                  ],
+                  "title": "Axis"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "mirror"
+            },
+            "keep_second_half": {
+              "anyOf": [
+                {
+                  "title": "Keep Second Half",
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_bool"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_bool"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Mirror",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "angle": {
+              "anyOf": [
+                {
+                  "maximum": 1080.0,
+                  "minimum": -1080.0,
+                  "title": "Angle",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "center": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Center",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "edge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "clamp",
+                    "repeat",
+                    "mirror"
+                  ],
+                  "title": "Edge"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "swirl"
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "maximum": 2.0,
+                  "minimum": 0.0,
+                  "title": "Radius",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Swirl",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "center": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Center",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "edge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "clamp",
+                    "repeat",
+                    "mirror"
+                  ],
+                  "title": "Edge"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "bulge"
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "maximum": 2.0,
+                  "minimum": 0.0,
+                  "title": "Radius",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "strength": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": -1.0,
+                  "title": "Strength",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Bulge",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amplitude": {
+              "anyOf": [
+                {
+                  "maximum": 0.20000000298023224,
+                  "minimum": 0.0,
+                  "title": "Amplitude",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "angle": {
+              "anyOf": [
+                {
+                  "maximum": 360.0,
+                  "minimum": -360.0,
+                  "title": "Angle",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "edge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "clamp",
+                    "repeat",
+                    "mirror"
+                  ],
+                  "title": "Edge"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "wave-warp"
+            },
+            "phase": {
+              "anyOf": [
+                {
+                  "maximum": 360.0,
+                  "minimum": -360.0,
+                  "title": "Phase",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "speed": {
+              "anyOf": [
+                {
+                  "maximum": 10.0,
+                  "minimum": -10.0,
+                  "title": "Speed",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            },
+            "wavelength": {
+              "anyOf": [
+                {
+                  "maximum": 2.0,
+                  "minimum": 0.009999999776482582,
+                  "title": "Wavelength",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Wave Warp",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amplitude": {
+              "anyOf": [
+                {
+                  "maximum": 0.10000000149011612,
+                  "minimum": 0.0,
+                  "title": "Amplitude",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "center": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Center",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "decay": {
+              "anyOf": [
+                {
+                  "maximum": 10.0,
+                  "minimum": 0.0,
+                  "title": "Decay",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "edge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "clamp",
+                    "repeat",
+                    "mirror"
+                  ],
+                  "title": "Edge"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "ripple"
+            },
+            "speed": {
+              "anyOf": [
+                {
+                  "maximum": 10.0,
+                  "minimum": -10.0,
+                  "title": "Speed",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            },
+            "wavelength": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.004999999888241291,
+                  "title": "Wavelength",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Ripple",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "edge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "clamp",
+                    "repeat",
+                    "mirror"
+                  ],
+                  "title": "Edge"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "lens-distortion"
+            },
+            "k1": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": -1.0,
+                  "title": "K1",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "k2": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": -1.0,
+                  "title": "K2",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            },
+            "zoom": {
+              "anyOf": [
+                {
+                  "maximum": 2.0,
+                  "minimum": 0.5,
+                  "title": "Zoom",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Lens Distortion",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "edge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "clamp",
+                    "repeat",
+                    "mirror"
+                  ],
+                  "title": "Edge"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "polar-coordinates"
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "rect_to_polar",
+                    "polar_to_rect"
+                  ],
+                  "title": "Mode"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Polar Coordinates",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "edge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "clamp",
+                    "repeat",
+                    "mirror"
+                  ],
+                  "title": "Edge"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "offset"
+            },
+            "shift": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": -1.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Shift",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Offset",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bottom_left": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 2.0,
+                    "minimum": -1.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Bottom Left",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "bottom_right": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 2.0,
+                    "minimum": -1.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Bottom Right",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "effect": {
+              "const": "corner-pin"
+            },
+            "top_left": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 2.0,
+                    "minimum": -1.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Top Left",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "top_right": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 2.0,
+                    "minimum": -1.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Top Right",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Corner Pin",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amplitude": {
+              "anyOf": [
+                {
+                  "maximum": 0.20000000298023224,
+                  "minimum": 0.0,
+                  "title": "Amplitude",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "edge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "clamp",
+                    "repeat",
+                    "mirror"
+                  ],
+                  "title": "Edge"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "shake"
+            },
+            "frequency": {
+              "anyOf": [
+                {
+                  "maximum": 30.0,
+                  "minimum": 0.10000000149011612,
+                  "title": "Frequency",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "rotation": {
+              "anyOf": [
+                {
+                  "maximum": 30.0,
+                  "minimum": 0.0,
+                  "title": "Rotation",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "seed": {
+              "anyOf": [
+                {
+                  "maximum": 1000.0,
+                  "minimum": 0.0,
+                  "title": "Seed",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            },
+            "zoom": {
+              "anyOf": [
+                {
+                  "maximum": 2.0,
+                  "minimum": 1.0,
+                  "title": "Zoom",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Shake",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "anyOf": [
+                {
+                  "maximum": 0.20000000298023224,
+                  "minimum": 0.0,
+                  "title": "Amount",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "complexity": {
+              "anyOf": [
+                {
+                  "maximum": 4.0,
+                  "minimum": 1.0,
+                  "title": "Complexity",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "edge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "clamp",
+                    "repeat",
+                    "mirror"
+                  ],
+                  "title": "Edge"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "turbulent-displace"
+            },
+            "evolution": {
+              "anyOf": [
+                {
+                  "maximum": 5.0,
+                  "minimum": 0.0,
+                  "title": "Evolution",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "seed": {
+              "anyOf": [
+                {
+                  "maximum": 1000.0,
+                  "minimum": 0.0,
+                  "title": "Seed",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "maximum": 2.0,
+                  "minimum": 0.009999999776482582,
+                  "title": "Size",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Turbulent Displace",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "amount_x": {
+              "anyOf": [
+                {
+                  "maximum": 0.20000000298023224,
+                  "minimum": -0.20000000298023224,
+                  "title": "Amount X",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "amount_y": {
+              "anyOf": [
+                {
+                  "maximum": 0.20000000298023224,
+                  "minimum": -0.20000000298023224,
+                  "title": "Amount Y",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "channel_x": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "red",
+                    "green",
+                    "blue",
+                    "alpha",
+                    "luma"
+                  ],
+                  "title": "Channel X"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "channel_y": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "red",
+                    "green",
+                    "blue",
+                    "alpha",
+                    "luma"
+                  ],
+                  "title": "Channel Y"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "edge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "clamp",
+                    "repeat",
+                    "mirror"
+                  ],
+                  "title": "Edge"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "displacement-map"
+            },
+            "map": {
+              "$ref": "#/$defs/Node",
+              "description": "A node drawn as this image."
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect",
+            "map"
+          ],
+          "title": "Displacement Map",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "angle": {
+              "anyOf": [
+                {
+                  "maximum": 360.0,
+                  "minimum": -360.0,
+                  "title": "Angle",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "center": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": 0.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Center",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "edge": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "transparent",
+                    "clamp",
+                    "repeat",
+                    "mirror"
+                  ],
+                  "title": "Edge"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_choice"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_choice"
+                }
+              ]
+            },
+            "effect": {
+              "const": "kaleidoscope"
+            },
+            "segments": {
+              "anyOf": [
+                {
+                  "maximum": 32.0,
+                  "minimum": 2.0,
+                  "title": "Segments",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_number"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_number"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Kaleidoscope",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "effect": {
+              "const": "tile"
+            },
+            "mirror": {
+              "anyOf": [
+                {
+                  "title": "Mirror",
+                  "type": "boolean"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_bool"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_bool"
+                }
+              ]
+            },
+            "offset": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 1.0,
+                    "minimum": -1.0,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Offset",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "tiles": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 32.0,
+                    "minimum": 0.10000000149011612,
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "title": "Tiles",
+                  "type": "array"
+                },
+                {
+                  "$ref": "#/$defs/EffectRamp_vec2"
+                },
+                {
+                  "$ref": "#/$defs/EffectKeys_vec2"
+                }
+              ]
+            },
+            "version": {
+              "const": 1,
+              "description": "The built-in's version."
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "title": "Tile",
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "description": "A host's effect by its full id, with its parameters by name.",
+          "properties": {
+            "effect": {
+              "pattern": "^[^.]+\\..+$",
+              "type": "string"
+            },
+            "version": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "effect"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "EffectValue": {
       "description": "Serializable value supplied to one runtime effect parameter.",

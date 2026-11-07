@@ -336,11 +336,737 @@ project easing object.
 """
 
 
-EffectUse: TypeAlias = dict[str, Any]
-"""One effect: a built-in by its short name (`gaussian-blur`) or any effect by its full id, with
-its parameters by name. A parameter is a constant, a ramp or keys; a named image input is a
-node.
-"""
+class EffectKeys_boolKeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: bool
+
+
+class EffectKeys_bool(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_boolKeysItem]
+
+
+class EffectKeys_choiceKeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: str
+
+
+class EffectKeys_choice(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_choiceKeysItem]
+
+
+class EffectKeys_colorKeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: Rgba
+
+
+class EffectKeys_color(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_colorKeysItem]
+
+
+class EffectKeys_numberKeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: float
+
+
+class EffectKeys_number(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_numberKeysItem]
+
+
+class EffectKeys_vec2KeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: list[float]
+
+
+class EffectKeys_vec2(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_vec2KeysItem]
+
+
+class EffectKeys_vec4KeysItem(TypedDict):
+    ease: NotRequired[EasingChoice]
+    t: float
+    v: list[float]
+
+
+class EffectKeys_vec4(TypedDict):
+    """Values at seconds from the node's start."""
+
+    keys: list[EffectKeys_vec4KeysItem]
+
+
+EffectRamp_bool = TypedDict(
+    "EffectRamp_bool",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "bool",
+        "to": "bool",
+    },
+)
+EffectRamp_bool.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+EffectRamp_choice = TypedDict(
+    "EffectRamp_choice",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "str",
+        "to": "str",
+    },
+)
+EffectRamp_choice.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+EffectRamp_color = TypedDict(
+    "EffectRamp_color",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "Rgba",
+        "to": "Rgba",
+    },
+)
+EffectRamp_color.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+EffectRamp_number = TypedDict(
+    "EffectRamp_number",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "float",
+        "to": "float",
+    },
+)
+EffectRamp_number.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+EffectRamp_vec2 = TypedDict(
+    "EffectRamp_vec2",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "list[float]",
+        "to": "list[float]",
+    },
+)
+EffectRamp_vec2.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+EffectRamp_vec4 = TypedDict(
+    "EffectRamp_vec4",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "ease": "NotRequired[EasingChoice]",
+        "from": "list[float]",
+        "to": "list[float]",
+    },
+)
+EffectRamp_vec4.__doc__ = "A change from `from` to `to` over the node's time."
+
+
+class EffectUseColorControls(TypedDict):
+    contrast: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["color-controls"]
+    exposure: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    saturation: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    temperature: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    tint: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLut3d(TypedDict):
+    effect: Literal["lut-3d"]
+    strength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseInvert(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["invert"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseBlackAndWhite(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    blue: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["black-and-white"]
+    green: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    red: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSepia(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["sepia"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseDuotone(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["duotone"]
+    highlights: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    shadows: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseGradientMap(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["gradient-map"]
+    highlights: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    midpoint: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    midtones: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    shadows: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUsePosterize(TypedDict):
+    effect: Literal["posterize"]
+    levels: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseThreshold(TypedDict):
+    effect: Literal["threshold"]
+    level: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLevels(TypedDict):
+    channel: NotRequired[Literal["all", "red", "green", "blue"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["levels"]
+    gamma: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    input_black: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    input_white: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    output_black: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    output_white: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseHueSaturation(TypedDict):
+    effect: Literal["hue-saturation"]
+    hue: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    lightness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    saturation: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseVibrance(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["vibrance"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseChannelMixer(TypedDict):
+    blue: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    effect: Literal["channel-mixer"]
+    green: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    monochrome: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    red: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLiftGammaGain(TypedDict):
+    effect: Literal["lift-gamma-gain"]
+    gain: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    gamma: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    lift: NotRequired[list[float] | EffectRamp_vec4 | EffectKeys_vec4]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseColorIsolate(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["color-isolate"]
+    hue: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    range: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSolarize(TypedDict):
+    effect: Literal["solarize"]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseFill(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    effect: Literal["fill"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseChromaKey(TypedDict):
+    distance_mode: NotRequired[Literal["rgb", "chroma"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["chroma-key"]
+    key_color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    spill_suppression: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLumaKey(TypedDict):
+    effect: Literal["luma-key"]
+    key_out: NotRequired[Literal["dark", "bright"] | EffectRamp_choice | EffectKeys_choice]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSpillSuppress(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["spill-suppress"]
+    screen: NotRequired[Literal["green", "blue"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseAlphaAdjust(TypedDict):
+    black: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["alpha-adjust"]
+    gamma: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    invert: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    white: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseMatteChoker(TypedDict):
+    choke: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["matte-choker"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSetMatte(TypedDict):
+    effect: Literal["set-matte"]
+    invert: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    matte: Node
+    """A node drawn as this image."""
+    mode: NotRequired[Literal["alpha", "luma"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseGaussianBlur(TypedDict):
+    effect: Literal["gaussian-blur"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSharpen(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["sharpen"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseDirectionalBlur(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["directional-blur"]
+    length: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseRadialBlur(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    center: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    effect: Literal["radial-blur"]
+    mode: NotRequired[Literal["zoom", "spin"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseUnsharpMask(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["unsharp-mask"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseTiltShift(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    blur: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["tilt-shift"]
+    falloff: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    focus: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    position: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLensBlur(TypedDict):
+    effect: Literal["lens-blur"]
+    highlights: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSurfaceBlur(TypedDict):
+    effect: Literal["surface-blur"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseVignette(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["vignette"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseGlow(TypedDict):
+    effect: Literal["glow"]
+    intensity: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    threshold: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseFilmGrain(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["film-grain"]
+    size: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseRgbSplit(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["rgb-split"]
+    mode: NotRequired[Literal["linear", "radial"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseGlitch(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    block_size: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    color_split: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["glitch"]
+    seed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    speed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseCrt(TypedDict):
+    curvature: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["crt"]
+    line_count: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    mask: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    scanlines: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    vignette: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseVhs(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    bleed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["vhs"]
+    noise: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    seed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    speed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseHalftone(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    cells: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["halftone"]
+    mode: NotRequired[Literal["mono", "color"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseEmboss(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    distance: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["emboss"]
+    keep_color: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    strength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseEdgeDetect(TypedDict):
+    colored: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    effect: Literal["edge-detect"]
+    invert: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    strength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    width: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseDropShadow(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    distance: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["drop-shadow"]
+    opacity: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    shadow_only: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    softness: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseOutline(TypedDict):
+    color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    effect: Literal["outline"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    width: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseLightLeak(TypedDict):
+    color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    effect: Literal["light-leak"]
+    intensity: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    position: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    seed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    size: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    speed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseLetterbox(TypedDict):
+    aspect: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    color: NotRequired[Rgba | EffectRamp_color | EffectKeys_color]
+    effect: Literal["letterbox"]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseOilPaint(TypedDict):
+    effect: Literal["oil-paint"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUsePixelate(TypedDict):
+    blocks: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    effect: Literal["pixelate"]
+    shape: NotRequired[Literal["square", "hexagon"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseCrop(TypedDict):
+    bottom_right: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    effect: Literal["crop"]
+    feather: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    top_left: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseMirror(TypedDict):
+    axis: NotRequired[Literal["horizontal", "vertical"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["mirror"]
+    keep_second_half: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseSwirl(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    center: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["swirl"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseBulge(TypedDict):
+    center: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["bulge"]
+    radius: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    strength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseWaveWarp(TypedDict):
+    amplitude: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["wave-warp"]
+    phase: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    speed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    wavelength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseRipple(TypedDict):
+    amplitude: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    center: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    decay: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["ripple"]
+    speed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    wavelength: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseLensDistortion(TypedDict):
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["lens-distortion"]
+    k1: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    k2: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    zoom: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUsePolarCoordinates(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["polar-coordinates"]
+    mode: NotRequired[Literal["rect_to_polar", "polar_to_rect"] | EffectRamp_choice | EffectKeys_choice]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseOffset(TypedDict):
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["offset"]
+    shift: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseCornerPin(TypedDict):
+    bottom_left: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    bottom_right: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    effect: Literal["corner-pin"]
+    top_left: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    top_right: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseShake(TypedDict):
+    amplitude: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["shake"]
+    frequency: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    rotation: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    seed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+    zoom: NotRequired[float | EffectRamp_number | EffectKeys_number]
+
+
+class EffectUseTurbulentDisplace(TypedDict):
+    amount: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    complexity: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["turbulent-displace"]
+    evolution: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    seed: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    size: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseDisplacementMap(TypedDict):
+    amount_x: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    amount_y: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    channel_x: NotRequired[Literal["red", "green", "blue", "alpha", "luma"] | EffectRamp_choice | EffectKeys_choice]
+    channel_y: NotRequired[Literal["red", "green", "blue", "alpha", "luma"] | EffectRamp_choice | EffectKeys_choice]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["displacement-map"]
+    map: Node
+    """A node drawn as this image."""
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseKaleidoscope(TypedDict):
+    angle: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    center: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    edge: NotRequired[Literal["transparent", "clamp", "repeat", "mirror"] | EffectRamp_choice | EffectKeys_choice]
+    effect: Literal["kaleidoscope"]
+    segments: NotRequired[float | EffectRamp_number | EffectKeys_number]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+class EffectUseTile(TypedDict):
+    effect: Literal["tile"]
+    mirror: NotRequired[bool | EffectRamp_bool | EffectKeys_bool]
+    offset: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    tiles: NotRequired[list[float] | EffectRamp_vec2 | EffectKeys_vec2]
+    version: NotRequired[Literal[1]]
+    """The built-in's version."""
+
+
+EffectUse: TypeAlias = "EffectUseColorControls | EffectUseLut3d | EffectUseInvert | EffectUseBlackAndWhite | EffectUseSepia | EffectUseDuotone | EffectUseGradientMap | EffectUsePosterize | EffectUseThreshold | EffectUseLevels | EffectUseHueSaturation | EffectUseVibrance | EffectUseChannelMixer | EffectUseLiftGammaGain | EffectUseColorIsolate | EffectUseSolarize | EffectUseFill | EffectUseChromaKey | EffectUseLumaKey | EffectUseSpillSuppress | EffectUseAlphaAdjust | EffectUseMatteChoker | EffectUseSetMatte | EffectUseGaussianBlur | EffectUseSharpen | EffectUseDirectionalBlur | EffectUseRadialBlur | EffectUseUnsharpMask | EffectUseTiltShift | EffectUseLensBlur | EffectUseSurfaceBlur | EffectUseVignette | EffectUseGlow | EffectUseFilmGrain | EffectUseRgbSplit | EffectUseGlitch | EffectUseCrt | EffectUseVhs | EffectUseHalftone | EffectUseEmboss | EffectUseEdgeDetect | EffectUseDropShadow | EffectUseOutline | EffectUseLightLeak | EffectUseLetterbox | EffectUseOilPaint | EffectUsePixelate | EffectUseCrop | EffectUseMirror | EffectUseSwirl | EffectUseBulge | EffectUseWaveWarp | EffectUseRipple | EffectUseLensDistortion | EffectUsePolarCoordinates | EffectUseOffset | EffectUseCornerPin | EffectUseShake | EffectUseTurbulentDisplace | EffectUseDisplacementMap | EffectUseKaleidoscope | EffectUseTile | dict[str, Any]"
+"""One effect: a built-in by its short name, or any effect by its full id, with its parameters by name. A parameter is a constant, a ramp or keys; a named image input is a node."""
 
 
 Ellipsis: TypeAlias = "bool | str"

@@ -10,7 +10,10 @@ fn main() -> std::io::Result<()> {
         .map_or_else(|| PathBuf::from("schema"), PathBuf::from);
     std::fs::create_dir_all(&dir)?;
     for (name, schema) in [
-        ("compose.v1.schema.json", alpha2_compose::compose_json_schema()),
+        (
+            "compose.v1.schema.json",
+            alpha2_compose::compose_json_schema(),
+        ),
         (
             "compose-core.v1.schema.json",
             alpha2_compose::compose_core_json_schema(),
