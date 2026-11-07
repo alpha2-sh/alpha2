@@ -402,37 +402,22 @@ TRIM_MODE_VALUES: tuple[TrimMode, ...] = ("together", "individually")
 """Every `TrimMode`, in the model's order."""
 
 
-class Project(TypedDict):
-    """The deserialized shape of a `Project` before its invariants are checked.
-
-    This is the wire contract the published JSON Schema is derived from; `Project::validate`
-    then decides whether a well-shaped document is valid.
-    """
-
-    audio: NotRequired[MasterAudio]
-    """Master bus applied to the summed track audio."""
-    compositions: NotRequired[list[Composition]]
-    """Composition graphs that clips show.
-
-    Default: `[]`.
-    """
-    effect_resources: NotRequired[list[EffectResource]]
-    """Non-media resources referenced by effect invocations.
-
-    Default: `[]`.
-    """
-    id: ProjectId
-    """Stable identity of this project."""
-    name: str
-    """Human-readable project name. It has no semantic meaning."""
-    schema_version: Literal[1]
-    """Document version. This build reads and writes only `CURRENT_SCHEMA_VERSION`."""
-    settings: ProjectSettings
-    """Output-wide timeline settings."""
-    sources: list[MediaSource]
-    """Media resources referenced by clips."""
-    timeline: Timeline
-    """Ordered visual and audio tracks."""
+Project = TypedDict(
+    "Project",
+    {
+        "$schema": "NotRequired[str | None]",
+        "audio": "NotRequired[MasterAudio]",
+        "compositions": "NotRequired[list[Composition]]",
+        "effect_resources": "NotRequired[list[EffectResource]]",
+        "id": "ProjectId",
+        "name": "str",
+        "schema_version": "Literal[1]",
+        "settings": "ProjectSettings",
+        "sources": "list[MediaSource]",
+        "timeline": "Timeline",
+    },
+)
+Project.__doc__ = "The deserialized shape of a `Project` before its invariants are checked.\n\nThis is the wire contract the published JSON Schema is derived from; `Project::validate`\nthen decides whether a well-shaped document is valid."
 
 
 AlignContent: TypeAlias = Literal["start", "center", "end", "space_between", "space_around", "space_evenly", "stretch"]

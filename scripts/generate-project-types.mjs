@@ -372,7 +372,8 @@ function shapeOnly(node, key) {
     } else if (
       name !== "description" &&
       name !== "title" &&
-      name !== "$schema"
+      name !== "$schema" &&
+      name !== "$id"
     ) {
       throw new Error(`unsupported schema keyword ${name}`);
     }

@@ -31471,5 +31471,23 @@
         ]
       }
     }
+  },
+  {
+    "name": "a-document-naming-its-schema-ok",
+    "valid": true,
+    "project": {
+      "$schema": "https://alpha2.sh/schema/project.v1.json",
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [],
+      "timeline": { "tracks": [] }
+    }
   }
 ]

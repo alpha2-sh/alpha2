@@ -22,6 +22,10 @@ pub const COMPOSE_VERSION: u32 = 1;
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct VideoSpec {
+    /// The schema the spec follows (`https://alpha2.sh/schema/compose.v1.json`), for editors and
+    /// validators. The compiler does not read it.
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     /// Spec version. This build reads only [`COMPOSE_VERSION`].
     #[serde(default = "compose_version")]
     #[cfg_attr(feature = "schema", schemars(extend("const" = COMPOSE_VERSION)))]

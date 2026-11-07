@@ -19,6 +19,10 @@ pub fn project_json_schema() -> Value {
         .into_generator()
         .into_root_schema_for::<ProjectWire>();
     schema.insert(
+        "$id".to_owned(),
+        Value::String(PROJECT_SCHEMA_ID.to_owned()),
+    );
+    schema.insert(
         "title".to_owned(),
         Value::String(format!(
             "alpha2 project document, schema version {}",
@@ -29,6 +33,9 @@ pub fn project_json_schema() -> Value {
     finish_json_schema(&mut value);
     value
 }
+
+/// Where the project schema is published.
+pub const PROJECT_SCHEMA_ID: &str = "https://alpha2.sh/schema/project.v1.json";
 
 /// Post-processes a schemars schema the way the project schema is: every `uint32` bounded and
 /// every default spelled as the engine writes it. Used by schemas that embed model types.

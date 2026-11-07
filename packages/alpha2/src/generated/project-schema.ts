@@ -537,6 +537,13 @@ export const TRIM_MODE_VALUES: readonly TrimMode[] = [
  */
 export interface Project {
   /**
+   * The schema the document follows (`https://alpha2.sh/schema/project.v1.json`), for editors
+   * and validators. The engine does not read or keep it.
+   *
+   * @defaultValue `null`
+   */
+  readonly $schema?: string | null;
+  /**
    * Master bus applied to the summed track audio.
    */
   readonly audio?: MasterAudio;

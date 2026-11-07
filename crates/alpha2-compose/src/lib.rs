@@ -34,7 +34,9 @@ use serde::{Deserialize, Serialize};
 
 pub use facts::{Facts, MediaFacts, RequiredMedia, Requirements, kind_of_path, requirements};
 #[cfg(feature = "schema")]
-pub use schema::compose_json_schema;
+pub use schema::{
+    COMPOSE_CORE_SCHEMA_ID, COMPOSE_SCHEMA_ID, compose_core_json_schema, compose_json_schema,
+};
 pub use spec::{COMPOSE_VERSION, VideoSpec};
 pub use theme::THEMES;
 

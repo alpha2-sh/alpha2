@@ -96,7 +96,7 @@ pub use provider::{
 };
 pub use resource::{EffectResource, EffectResourceKind};
 #[cfg(feature = "schema")]
-pub use schema::{finish_json_schema, project_json_schema, project_limits_json};
+pub use schema::{PROJECT_SCHEMA_ID, finish_json_schema, project_json_schema, project_limits_json};
 pub use shapes::{
     Dash, EllipseGeometry, FillRule, LineCap, LineJoin, MAX_DASH_ENTRIES, MAX_PATH_SUBPATHS,
     MAX_PATH_VERTICES, MAX_POLYSTAR_POINTS, MAX_SHAPE_DEPTH, MAX_SHAPE_ITEMS, MIN_POLYSTAR_POINTS,

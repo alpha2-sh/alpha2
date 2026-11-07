@@ -13,7 +13,7 @@ cargo run --quiet --manifest-path "$root/Cargo.toml" -p alpha2-compose \
 cargo run --quiet --manifest-path "$root/Cargo.toml" -p alpha2-render \
   --example emit-effect-catalog -- "$fresh" "$fresh/builtin-effects.json"
 status=0
-for name in project.v1.schema.json project-limits.v1.json compose.v1.schema.json effects.v1.json; do
+for name in project.v1.schema.json project-limits.v1.json compose.v1.schema.json compose-core.v1.schema.json effects.v1.json; do
   if ! diff -u "$root/schema/$name" "$fresh/$name"; then
     echo "schema/$name is stale; run \`npm run generate:schema\` and commit the result" >&2
     status=1

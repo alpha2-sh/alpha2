@@ -116,8 +116,49 @@ export function pythonProjectTypes(schema, limits) {
   return pythonTypes(schema, { root: "Project", header, limits });
 }
 
+/** The compose schema with its `$ref`s into the project schema made local, with every project
+ * type they reach copied in. */
+function withProjectTypes(schema, projectSchema) {
+  const external = `${projectSchema.$id}#/$defs/`;
+  const projectDefs = projectSchema.$defs ?? {};
+  const copy = structuredClone(schema);
+  const defs = copy.$defs ?? {};
+  const pending = [];
+  const localize = (node) => {
+    if (Array.isArray(node)) return node.forEach(localize);
+    if (node === null || typeof node !== "object") return;
+    if (typeof node.$ref === "string" && node.$ref.startsWith(external)) {
+      const name = node.$ref.slice(external.length);
+      node.$ref = `#/$defs/${name}`;
+      if (!(name in defs)) pending.push(name);
+    }
+    Object.values(node).forEach(localize);
+  };
+  localize(copy);
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (name in defs) continue;
+    if (!(name in projectDefs))
+      throw new Error(`the project schema has no type ${name}`);
+    defs[name] = structuredClone(projectDefs[name]);
+    const reach = (node) => {
+      if (Array.isArray(node)) return node.forEach(reach);
+      if (node === null || typeof node !== "object") return;
+      if (typeof node.$ref === "string" && node.$ref.startsWith("#/$defs/")) {
+        const inner = node.$ref.slice("#/$defs/".length);
+        if (!(inner in defs)) pending.push(inner);
+      }
+      Object.values(node).forEach(reach);
+    };
+    reach(defs[name]);
+  }
+  copy.$defs = defs;
+  return copy;
+}
+
 /** Model types the compose spec embeds are imported from `alpha2.types`, not redeclared. */
-export function pythonComposeTypes(schema, projectSchema) {
+export function pythonComposeTypes(composeSchema, projectSchema) {
+  const schema = withProjectTypes(composeSchema, projectSchema);
   const projectDefs = projectSchema.$defs ?? {};
   const defs = schema.$defs ?? {};
   const shared = new Set();

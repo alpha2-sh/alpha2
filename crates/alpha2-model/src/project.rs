@@ -64,6 +64,11 @@ pub struct Project {
 #[cfg_attr(feature = "schema", schemars(rename = "Project"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProjectWire {
+    /// The schema the document follows (`https://alpha2.sh/schema/project.v1.json`), for editors
+    /// and validators. The engine does not read or keep it.
+    #[serde(rename = "$schema", default)]
+    #[allow(dead_code)]
+    pub(crate) schema_url: Option<String>,
     /// Document version. This build reads and writes only [`CURRENT_SCHEMA_VERSION`].
     #[cfg_attr(feature = "schema", schemars(extend("const" = CURRENT_SCHEMA_VERSION)))]
     pub(crate) schema_version: u32,

@@ -174,42 +174,22 @@ WHEN_SHORT_VALUES: tuple[WhenShort, ...] = ("freeze", "loop", "stretch", "blank"
 """Every `WhenShort`, in the model's order."""
 
 
-class VideoSpec(TypedDict):
-    """A whole video: a body, what is drawn over it, and what plays under it."""
-
-    audio: NotRequired[list[Node]]
-    """Sound beside the body's: `audio` and `music_bed` nodes, placed as overlays are."""
-    body: Node
-    """The main picture, from time zero. Its length is the video's unless `duration` says
-    otherwise.
-    """
-    canvas: NotRequired[Canvas]
-    """Size, rate and background. Default `youtube-1080p`.
-
-    Default: `"youtube-1080p"`.
-    """
-    compose_version: NotRequired[Literal[1]]
-    """Spec version. This build reads only `COMPOSE_VERSION`.
-
-    Default: `1`.
-    """
-    duration: NotRequired[float | None]
-    """The video's length in seconds. Default: the body's."""
-    loudness: NotRequired[Loudness | None]
-    """The loudness an export normalizes the mix to. Returned as an export option, not stored
-    in the project.
-    """
-    name: NotRequired[str | None]
-    """The project's name. Default `video`."""
-    overlays: NotRequired[list[Node]]
-    """Nodes drawn over the body in order, placed by their own `at` (default 0) and lasting to
-    the end unless they say otherwise.
-    """
-    theme: NotRequired[ThemeChoice]
-    """Fonts, colors, sizes and default timings. Default `clean-dark`.
-
-    Default: `"clean-dark"`.
-    """
+VideoSpec = TypedDict(
+    "VideoSpec",
+    {
+        "$schema": "NotRequired[str | None]",
+        "audio": "NotRequired[list[Node]]",
+        "body": "Node",
+        "canvas": "NotRequired[Canvas]",
+        "compose_version": "NotRequired[Literal[1]]",
+        "duration": "NotRequired[float | None]",
+        "loudness": "NotRequired[Loudness | None]",
+        "name": "NotRequired[str | None]",
+        "overlays": "NotRequired[list[Node]]",
+        "theme": "NotRequired[ThemeChoice]",
+    },
+)
+VideoSpec.__doc__ = "A whole video: a body, what is drawn over it, and what plays under it."
 
 
 Align: TypeAlias = Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]
