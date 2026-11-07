@@ -528,20 +528,33 @@ fn a_faster_video_keeps_its_pitch_unless_told_not_to() {
     );
 }
 
-/// Specs that use no motion field, compiled before motion presets existed.
+/// Specs that use no motion field compile to pinned bytes. Set `ALPHA2_UPDATE_GOLDENS=1` to
+/// re-pin after an intended change.
 #[test]
 fn old_specs_compile_to_the_same_bytes() {
-    let cases: Vec<Value> =
-        serde_json::from_str(include_str!("../tests/old-specs.golden.json")).expect("JSON");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/old-specs.golden.json");
+    let mut cases: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
+    let update =
+        std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"));
     let facts = facts().to_string();
-    for case in cases {
+    for case in &mut cases {
         let compiled = compile_json(&case["spec"].to_string(), &facts, &[]).expect("compiles");
+        if update {
+            case["compiled"] = Value::String(compiled);
+            continue;
+        }
         assert_eq!(
             compiled,
             case["compiled"].as_str().expect("a string"),
             "{}",
             case["spec"]
         );
+    }
+    if update {
+        let mut text = serde_json::to_string_pretty(&cases).expect("serializes");
+        text.push('\n');
+        std::fs::write(path, text).expect("writes the golden");
     }
 }
 
@@ -693,4 +706,70 @@ fn motion_fields_are_checked() {
         "body": {"type": "color", "enter": {"type": "fade", "easing": "bouncy"}},
     }));
     assert!(error.contains("unknown easing"), "{error}");
+}
+
+fn text_style(spec: &Value) -> Value {
+    let compiled = compile(spec);
+    compiled["project"]["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .find_map(|source| source["generator"].get("style").cloned())
+        .expect("a text source")
+}
+
+#[test]
+fn a_text_fits_and_clamps_in_its_area_as_the_engine_draws_it() {
+    let text = |fields: Value| {
+        let mut node =
+            json!({"type": "text", "text": "A headline long enough to wrap", "font_size": 100});
+        node.as_object_mut()
+            .expect("object")
+            .extend(fields.as_object().expect("object").clone());
+        text_style(&json!({"canvas": "youtube-1080p", "duration": 2, "body": node}))
+    };
+    // 1080 px is the shorter side.
+    let style = text(json!({"max_lines": 2}));
+    assert_eq!(
+        style["line_clamp"],
+        json!({"max_lines": 2, "block_ellipsis": "ellipsis"})
+    );
+    let fit = &style["font_size_fit"];
+    assert!(
+        (fit["min"].as_f64().unwrap() - 30.0 / 1080.0).abs() < 1e-6,
+        "{fit}"
+    );
+    assert!(
+        (fit["max"].as_f64().unwrap() - 100.0 / 1080.0).abs() < 1e-6,
+        "{fit}"
+    );
+    assert!(style["max_height"].as_f64().is_some());
+
+    let style = text(json!({"fit": {"min": 40, "max": 120}, "ellipsis": "..."}));
+    assert_eq!(
+        style["line_clamp"],
+        json!({"block_ellipsis": {"string": "..."}})
+    );
+    assert!((style["font_size_fit"]["max"].as_f64().unwrap() - 120.0 / 1080.0).abs() < 1e-6);
+
+    let style = text(json!({"max_lines": 1, "ellipsis": false}));
+    assert_eq!(style["line_clamp"]["block_ellipsis"], json!("no_ellipsis"));
+
+    let style = text(json!({}));
+    assert!(style.get("font_size_fit").is_none_or(Value::is_null));
+    assert!(style.get("line_clamp").is_none_or(Value::is_null));
+}
+
+#[test]
+fn a_text_fit_and_line_count_are_checked() {
+    let error = |fields: Value| {
+        let mut node = json!({"type": "text", "text": "Hi", "font_size": 100});
+        node.as_object_mut()
+            .expect("object")
+            .extend(fields.as_object().expect("object").clone());
+        compile_error(&json!({"duration": 1, "body": node}))
+    };
+    assert!(error(json!({"max_lines": 0})).contains("at least one line"));
+    assert!(error(json!({"fit": {"min": 0}})).contains("fit"));
+    assert!(error(json!({"fit": {"min": 120}})).contains("fit"));
 }

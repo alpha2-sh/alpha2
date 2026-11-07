@@ -617,10 +617,19 @@ pub struct Text {
     /// text style's `shadows`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shadows: Vec<TextShadow>,
-    /// The most lines it may take; with fonts to measure by, longer text shrinks until it fits.
-    /// Default: no limit.
+    /// The most lines it may take. It first shrinks within `fit`; text still longer is cut after
+    /// its last line, ended by `ellipsis`. Default: no limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lines: Option<u32>,
+    /// The font sizes in pixels it is fitted between, the largest at which it fits its area and
+    /// `max_lines`. Default with `max_lines`: 0.3 times its font size up to its font size;
+    /// otherwise its font size alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit: Option<TextFit>,
+    /// What ends a line `max_lines` cuts: `true` an ellipsis, `false` nothing, or this text.
+    /// Default `true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ellipsis: Option<Ellipsis>,
     /// Opacity, 0..=1. Default 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opacity: Option<f32>,
@@ -648,6 +657,29 @@ pub struct Text {
     /// Reveals the text a word or a line at a time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reveal: Option<Reveal>,
+}
+
+/// The font sizes a text is fitted between, in pixels.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TextFit {
+    /// Smallest font size; when nothing larger fits, the text draws at this size.
+    pub min: f32,
+    /// Largest font size. Default: the text's font size, so it only shrinks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f32>,
+}
+
+/// What ends a cut line: an ellipsis or nothing (`true`, `false`), or a text.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum Ellipsis {
+    /// An ellipsis, or nothing.
+    Shown(bool),
+    /// This text, 1 to 64 bytes without line breaks or control characters.
+    Text(String),
 }
 
 /// A theme text style.

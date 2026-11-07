@@ -2121,6 +2121,19 @@
         }
       ]
     },
+    "Ellipsis": {
+      "anyOf": [
+        {
+          "description": "An ellipsis, or nothing.",
+          "type": "boolean"
+        },
+        {
+          "description": "This text, 1 to 64 bytes without line breaks or control characters.",
+          "type": "string"
+        }
+      ],
+      "description": "What ends a cut line: an ellipsis or nothing (`true`, `false`), or a text."
+    },
     "EqBand": {
       "additionalProperties": false,
       "description": "A single equalizer section stored independently from its DSP implementation.",
@@ -4807,6 +4820,17 @@
                 "null"
               ]
             },
+            "ellipsis": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Ellipsis"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What ends a line `max_lines` cuts: `true` an ellipsis, `false` nothing, or this text.\nDefault `true`."
+            },
             "enter": {
               "anyOf": [
                 {
@@ -4836,6 +4860,17 @@
                 "number",
                 "null"
               ]
+            },
+            "fit": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TextFit"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The font sizes in pixels it is fitted between, the largest at which it fits its area and\n`max_lines`. Default with `max_lines`: 0.3 times its font size up to its font size;\notherwise its font size alone."
             },
             "font_family": {
               "description": "Family. Default: the theme's.",
@@ -4871,7 +4906,7 @@
               "description": "Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."
             },
             "max_lines": {
-              "description": "The most lines it may take; with fonts to measure by, longer text shrinks until it fits.\nDefault: no limit.",
+              "description": "The most lines it may take. It first shrinks within `fit`; text still longer is cut after\nits last line, ended by `ellipsis`. Default: no limit.",
               "format": "uint32",
               "maximum": 4294967295,
               "minimum": 0,
@@ -8336,6 +8371,29 @@
         }
       ],
       "description": "A text: one string, or runs whose texts joined are the text.\n\nWritten as `\"Hello\"` or `[{ \"text\": \"Hel\" }, { \"text\": \"lo\", \"class\": [\"key\"] }]`."
+    },
+    "TextFit": {
+      "additionalProperties": false,
+      "description": "The font sizes a text is fitted between, in pixels.",
+      "properties": {
+        "max": {
+          "description": "Largest font size. Default: the text's font size, so it only shrinks.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "min": {
+          "description": "Smallest font size; when nothing larger fits, the text draws at this size.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "min"
+      ],
+      "type": "object"
     },
     "TextRole": {
       "description": "A theme text style.",

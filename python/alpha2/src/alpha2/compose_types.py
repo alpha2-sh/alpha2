@@ -298,6 +298,10 @@ project easing object.
 """
 
 
+Ellipsis: TypeAlias = "bool | str"
+"""What ends a cut line: an ellipsis or nothing (`true`, `false`), or a text."""
+
+
 FileKind: TypeAlias = Literal["video", "image", "audio"]
 """What a media file holds, when its extension does not say."""
 
@@ -517,12 +521,21 @@ class NodeText(TypedDict):
     """Color. Default: the theme's text color."""
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
+    ellipsis: NotRequired[Ellipsis | None]
+    """What ends a line `max_lines` cuts: `true` an ellipsis, `false` nothing, or this text.
+    Default `true`.
+    """
     enter: NotRequired[Motion | None]
     """How it comes in at its start."""
     exit: NotRequired[Motion | None]
     """How it goes out, ending at its end."""
     fade: NotRequired[float | None]
     """Seconds of fade in and out. Default none."""
+    fit: NotRequired[TextFit | None]
+    """The font sizes in pixels it is fitted between, the largest at which it fits its area and
+    `max_lines`. Default with `max_lines`: 0.3 times its font size up to its font size;
+    otherwise its font size alone.
+    """
     font_family: NotRequired[str | None]
     """Family. Default: the theme's."""
     font_size: NotRequired[float | None]
@@ -532,8 +545,8 @@ class NodeText(TypedDict):
     inset: NotRequired[Inset | None]
     """Pixels kept clear inside the parent's area: one number, or `[top, right, bottom, left]`."""
     max_lines: NotRequired[int | None]
-    """The most lines it may take; with fonts to measure by, longer text shrinks until it fits.
-    Default: no limit.
+    """The most lines it may take. It first shrinks within `fit`; text still longer is cut after
+    its last line, ended by `ellipsis`. Default: no limit.
     """
     opacity: NotRequired[float | None]
     """Opacity, 0..=1. Default 1."""
@@ -1028,6 +1041,15 @@ class SpeakerLook(TypedDict):
     """Their text color."""
     position: NotRequired[Vec2 | None]
     """Where their text's middle lies, as fractions of the canvas, `(0, 0)` top-left."""
+
+
+class TextFit(TypedDict):
+    """The font sizes a text is fitted between, in pixels."""
+
+    max: NotRequired[float | None]
+    """Largest font size. Default: the text's font size, so it only shrinks."""
+    min: float
+    """Smallest font size; when nothing larger fits, the text draws at this size."""
 
 
 TextRole: TypeAlias = Literal["title", "subtitle", "body", "label"]

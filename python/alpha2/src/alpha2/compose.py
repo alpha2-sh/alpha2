@@ -274,6 +274,8 @@ def Text(
     strokes: abc.Sequence[TextStroke] | None = None,
     shadows: abc.Sequence[TextShadow] | None = None,
     max_lines: int | None = None,
+    fit: Mapping[str, float] | None = None,
+    ellipsis: bool | str | None = None,
     opacity: float | None = None,
     fade: float | None = None,
     align: Align | None = None,
@@ -285,9 +287,10 @@ def Text(
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
-    """Text in a theme style (``title``, ``subtitle``, ``body``, ``label``). With fonts to
-    measure by, text longer than ``max_lines`` shrinks until it fits. ``reveal``
-    (:func:`Reveal`) shows it a word or line at a time."""
+    """Text in a theme style (``title``, ``subtitle``, ``body``, ``label``). It shrinks within
+    ``fit`` (``{"min": px, "max": px}``) to fit its area and ``max_lines``, then lines past
+    ``max_lines`` are cut and end with ``ellipsis``. ``reveal`` (:func:`Reveal`) shows it a word
+    or line at a time."""
     return _node(
         "text",
         text=text,
@@ -299,6 +302,8 @@ def Text(
         strokes=None if strokes is None else list(strokes),
         shadows=None if shadows is None else list(shadows),
         max_lines=max_lines,
+        fit=None if fit is None else dict(fit),
+        ellipsis=ellipsis,
         opacity=opacity,
         fade=fade,
         align=align,

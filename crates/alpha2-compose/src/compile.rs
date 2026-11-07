@@ -8,11 +8,11 @@ use alpha2_media::SourceId;
 use alpha2_model::{
     Animated, AnimatedPoint, CaptionCue, Captions, Clip, ClipComposition, ClipEffect, ClipId,
     ClipTransition, Composition, CompositionId, CompositionNode, Ducking, Easing, EffectValue,
-    Generator, Interpolation, Keyframe, LayoutNode, LoopMode, MediaKind as ModelKind, MediaSource,
-    NodeId, NodeOp, Paint, Project, ProjectId, ProjectSettings, RangeShape, RangeUnits,
-    RectangleGeometry, Rgb, Rgba, ShapeGeometry, ShapeMask, TextAlign, TextAnimator,
-    TextAnimatorProperties, TextBackground, TextSelector, TextStyle, TimeMap, Timeline, Track,
-    TrackId, TrackKind, Vec2, VisualProperties,
+    FontSizeFit, Generator, Interpolation, Keyframe, LayoutNode, LineClamp, LoopMode,
+    MediaKind as ModelKind, MediaSource, NodeId, NodeOp, Paint, Project, ProjectId,
+    ProjectSettings, RangeShape, RangeUnits, RectangleGeometry, Rgb, Rgba, ShapeGeometry,
+    ShapeMask, TextAlign, TextAnimator, TextAnimatorProperties, TextBackground, TextSelector,
+    TextStyle, TimeMap, Timeline, Track, TrackId, TrackKind, Vec2, VisualProperties,
 };
 use alpha2_text::{TextFont, TextRasterizer};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
@@ -1011,20 +1011,23 @@ impl<'a> Context<'a> {
             Content::Text(text) => {
                 let (width, height) = self.canvas_px();
                 let (x, y) = align_point(visual.align);
-                let font_px = match text.max_lines {
-                    Some(lines) => self.fit_font(
-                        &visual.head.path,
-                        &text.text,
-                        text.font_px,
-                        rect.width,
-                        lines,
-                    ),
-                    None => text.font_px,
+                let font_px = text.font_px;
+                let font_size = |px: f32| {
+                    (px / self.short_side()).min(alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE)
                 };
                 let style = TextStyle {
                     font_family: text.family.clone(),
-                    font_size: (font_px / self.short_side())
-                        .min(alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE),
+                    font_size: font_size(font_px),
+                    font_size_fit: text.fit.map(|(min, max)| FontSizeFit {
+                        min: font_size(min),
+                        max: Some(font_size(max)),
+                    }),
+                    line_clamp: text.ellipsis.clone().map(|block_ellipsis| LineClamp {
+                        max_lines: text.max_lines,
+                        block_ellipsis,
+                    }),
+                    max_height: (text.fit.is_some() || text.ellipsis.is_some())
+                        .then(|| (rect.height / height).clamp(0.001, 1.0)),
                     fill: Paint::Solid { color: text.color },
                     align: match x {
                         x if x < 0.25 => TextAlign::Start,

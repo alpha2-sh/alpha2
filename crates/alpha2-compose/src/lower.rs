@@ -11,9 +11,9 @@ use crate::ComposeError;
 use crate::compile::Context;
 use crate::spec::{
     Align, Audio, CaptionStyle, Captions, ComparisonGrid, Counter, Cue, Direction, EasingChoice,
-    EndCard, FileKind, Fit, GridLength, Inset, LowerThird, Media, MediaItem, Motion, MotionKind,
-    MusicBed, Node, Raw, RevealKind, RevealUnit, Slideshow, Text, TextRole, Title, Transition,
-    TransitionChoice,
+    Ellipsis, EndCard, FileKind, Fit, GridLength, Inset, LowerThird, Media, MediaItem, Motion,
+    MotionKind, MusicBed, Node, Raw, RevealKind, RevealUnit, Slideshow, Text, TextRole, Title,
+    Transition, TransitionChoice,
 };
 
 /// A node, ready to place.
@@ -164,8 +164,15 @@ pub(crate) struct TextContent {
     pub strokes: Vec<TextStroke>,
     pub shadows: Vec<TextShadow>,
     pub max_lines: Option<u32>,
+    /// Font sizes in pixels the text is fitted between.
+    pub fit: Option<(f32, f32)>,
+    /// What ends a cut line, when lines are cut.
+    pub ellipsis: Option<alpha2_model::BlockEllipsis>,
     pub reveal: Option<RevealPrim>,
 }
+
+/// The font sizes in pixels a text is fitted between, and what ends a line it cuts.
+type TextFitting = (Option<(f32, f32)>, Option<alpha2_model::BlockEllipsis>);
 
 /// A text revealed a unit at a time: unit `i` changes over
 /// `i * stagger..i * stagger + duration` of the clip's picture time.
@@ -909,6 +916,43 @@ impl Context<'_> {
         self.theme_px(fraction)
     }
 
+    /// The font sizes in pixels `text` is fitted between, and what ends a line it cuts.
+    fn text_fit(
+        text: &Text,
+        font_px: f32,
+        path: &str,
+    ) -> Result<TextFitting, ComposeError> {
+        if text.max_lines == Some(0) {
+            return Err(Self::error(
+                &format!("{path}.max_lines"),
+                "a text takes at least one line",
+            ));
+        }
+        let fit = match text.fit {
+            Some(fit) => {
+                let max = fit.max.unwrap_or(font_px);
+                let valid = |size: f32| size.is_finite() && size > 0.0;
+                if !valid(fit.min) || !valid(max) || fit.min > max {
+                    return Err(Self::error(
+                        &format!("{path}.fit"),
+                        "a fit is from a positive font size up to one at least as large",
+                    ));
+                }
+                Some((fit.min, max))
+            }
+            None => text.max_lines.map(|_| (0.3 * font_px, font_px)),
+        };
+        let ellipsis = match &text.ellipsis {
+            None | Some(Ellipsis::Shown(true)) => alpha2_model::BlockEllipsis::Ellipsis,
+            Some(Ellipsis::Shown(false)) => alpha2_model::BlockEllipsis::NoEllipsis,
+            Some(Ellipsis::Text(mark)) => alpha2_model::BlockEllipsis::String(mark.clone()),
+        };
+        Ok((
+            fit,
+            (text.max_lines.is_some() || text.ellipsis.is_some()).then_some(ellipsis),
+        ))
+    }
+
     fn lower_text(&mut self, text: &Text, path: &str) -> Result<Prim, ComposeError> {
         if text.text.is_empty() {
             return Err(Self::error(&format!("{path}.text"), "text is not empty"));
@@ -924,6 +968,7 @@ impl Context<'_> {
             None => self.role_size(text.style),
         };
         let fade = Self::optional_time(path, "fade", text.fade)?.unwrap_or(0);
+        let (fit, ellipsis) = Self::text_fit(text, font_px, path)?;
         let reveal = text
             .reveal
             .as_ref()
@@ -997,6 +1042,8 @@ impl Context<'_> {
                 strokes: text.strokes.clone(),
                 shadows: text.shadows.clone(),
                 max_lines: text.max_lines,
+                fit,
+                ellipsis,
                 reveal,
             }),
         })))
@@ -1475,6 +1522,8 @@ impl Context<'_> {
                 strokes: Vec::new(),
                 shadows: Vec::new(),
                 max_lines,
+                fit: max_lines.map(|_| (0.3 * font_px, font_px)),
+                ellipsis: max_lines.map(|_| alpha2_model::BlockEllipsis::Ellipsis),
                 reveal: None,
             }),
         }))
@@ -1774,6 +1823,8 @@ impl Context<'_> {
                     && let Content::Text(content) = &mut visual.content
                 {
                     content.max_lines = None;
+                    content.fit = None;
+                    content.ellipsis = None;
                 }
                 children.push(text);
             }
