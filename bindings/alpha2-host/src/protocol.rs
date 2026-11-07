@@ -31,6 +31,34 @@ pub enum Request {
     Export(Box<ExportRequest>),
     Conform(ConformRequest),
     Still(Box<StillRequest>),
+    Compose(Box<ComposeRequest>),
+}
+
+/// A compose or template request: no GPU, no media read.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposeRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    /// `compile`, `bind`, `dataSchema`, `lint`, `requirements` or `templates`.
+    pub action: String,
+    /// The spec `compile` and `requirements` read.
+    #[serde(default)]
+    pub spec: Option<serde_json::Value>,
+    /// The template `bind`, `dataSchema` and `lint` read.
+    #[serde(default)]
+    pub template: Option<serde_json::Value>,
+    #[serde(default)]
+    pub data: Option<serde_json::Value>,
+    #[serde(default)]
+    pub facts: Option<serde_json::Value>,
+    /// Font files `compile` measures text with.
+    #[serde(default)]
+    pub fonts: Vec<PathBuf>,
+    #[serde(default)]
+    pub theme: Option<serde_json::Value>,
+    #[serde(default)]
+    pub templates: Vec<serde_json::Value>,
 }
 
 /// Kept as text so the engine checks its size before parsing; the host never holds a tree of a
@@ -542,6 +570,7 @@ impl Request {
             Self::Export(export) => &export.request_id,
             Self::Conform(conform) => &conform.request_id,
             Self::Still(still) => &still.request_id,
+            Self::Compose(compose) => &compose.request_id,
         }
     }
 
@@ -553,6 +582,7 @@ impl Request {
             Self::Export(export) => export.protocol_version,
             Self::Conform(conform) => conform.protocol_version,
             Self::Still(still) => still.protocol_version,
+            Self::Compose(compose) => compose.protocol_version,
         }
     }
 }
@@ -622,6 +652,7 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             Request::Export(Box::new(export))
         }
         Some("conform") => Request::Conform(serde_json::from_str(line).map_err(invalid)?),
+        Some("compose") => Request::Compose(Box::new(serde_json::from_str(line).map_err(invalid)?)),
         Some("still") => {
             let still: StillRequest = serde_json::from_str(line).map_err(invalid)?;
             still.check()?;
@@ -638,7 +669,7 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             return Err(HostError::new(
                 "INVALID_REQUEST",
                 format!(
-                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`, `cancel`"
+                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`, `compose`, `cancel`"
                 ),
             ));
         }

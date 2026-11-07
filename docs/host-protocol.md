@@ -8,7 +8,7 @@ Every message, both ways, is one JSON object on one line of UTF-8 text, and has 
 
 The first line the host writes, before it reads any input, is `{"protocolVersion":1,"type":"ready"}`. A host that writes nothing for long is held before it runs (a Gatekeeper check on macOS, an antivirus scan or an App Control policy on Windows, a stopped process); `@alpha2-sh/node` and the Python client end it after 30 seconds and fail with `HOST_START_TIMEOUT`. A host that dies of `SIGKILL` while its cgroup's `oom_kill` count (cgroup v2 `memory.events`, Linux) rises fails with `HOST_OOM_KILLED` in both clients.
 
-A request has a `requestId`, a string that is not empty, and an `operation`: `capabilities`, `conform`, `export`, `still` or `cancel`.
+A request has a `requestId`, a string that is not empty, and an `operation`: `capabilities`, `conform`, `export`, `still`, `compose` or `cancel`.
 
 ```json
 {"protocolVersion":1,"requestId":"1","operation":"capabilities"}
@@ -124,6 +124,21 @@ Renders frames of a project to PNG files, each the frame an export of it draws t
 Each PNG is 8-bit RGBA: the renderer's picture before any video encoding, display-encoded (sRGB) with straight alpha. Every frame is opaque over the project's `background`. Every output is SDR BT.709. The PNG is written beside its output as a partial file and moved into place, like an export's file, and a PNG that cannot be moved is kept the same way (`OUTPUT_PUBLISH_FAILED`). An output that is one of the request's inputs is refused with `INVALID_REQUEST`, and an empty list, more than 256 frames, two frames to one file, a negative time or a size out of range with `INVALID_INPUT`, before anything renders.
 
 The result is `{ "stills": [{ "output", "frameTime", "width", "height", "publish" }], "renderer", "renderMs", "timings": { "decodeMs", "renderMs", "writeMs" }, "media", "decodeDiagnostics" }`, the frames in the order they were asked for. `output` is the absolute path written and `frameTime` the time of the frame drawn, in ticks. A still writes no progress lines.
+
+## `compose`
+
+Compiles compose specs and binds templates, without a GPU and without reading media; the same functions as `alpha2.compose` in Python and `alpha2/compose` in the browser. `action` picks one:
+
+| `action` | Fields | Result |
+| --- | --- | --- |
+| `compile` | `spec`, `facts` (`{}`), `fonts` (font file paths, `[]`), `templates` (`[]`) | `{project, assets, loudness, warnings}` |
+| `bind` | `template`, `data` (`{}`), `theme`, `templates` (`[]`) | `{spec}`: the template bound to its data, or a spec with its template nodes expanded |
+| `dataSchema` | `template` | `{schema}`: the JSON Schema of the template's data |
+| `lint` | `template`, `data`, `templates` (`[]`) | `{issues}`: `{path, code, message, severity}` each |
+| `requirements` | `spec` | `{media, texts}`: the files to gather `facts` about with `conform` |
+| `templates` | none | `{templates}`: the built-in `alpha2/` templates |
+
+`facts` describes the files a spec names (`{"media": {path: {width, height, frame_rate, duration_ticks, has_audio}}, "texts": {path: text}}`). A spec or data that does not compile or bind fails with `INVALID_INPUT`, its `details` `{path, problem}` naming where in the spec, template or data (`spec.body.children[2].path`, `data.title`).
 
 ## Cancelling
 

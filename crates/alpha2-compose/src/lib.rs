@@ -195,7 +195,10 @@ fn json_value(json: &str, root: &str) -> Result<serde_json::Value, ComposeError>
 fn bind_options(options: &str) -> Result<template::BindOptions, ComposeError> {
     let options = json_value(options, "options")?;
     Ok(template::BindOptions {
-        theme: options.get("theme").cloned(),
+        theme: options
+            .get("theme")
+            .filter(|theme| !theme.is_null())
+            .cloned(),
         templates: options
             .get("templates")
             .and_then(serde_json::Value::as_array)

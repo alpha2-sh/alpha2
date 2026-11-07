@@ -616,6 +616,7 @@ impl Host {
             Request::Conform(request) => return conform_answer(request, self.decode_policy),
             Request::Export(export) => return self.handle_export(*export, progress),
             Request::Still(still) => return self.handle_still(*still),
+            Request::Compose(compose) => return crate::compose_request::answer(&compose),
         };
         result.map_err(HostError::classify)
     }
