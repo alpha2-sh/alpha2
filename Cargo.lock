@@ -459,6 +459,7 @@ version = "0.6.0"
 dependencies = [
  "alpha2-android-media",
  "alpha2-apple-media",
+ "alpha2-compose",
  "alpha2-container",
  "alpha2-engine",
  "alpha2-extensions",

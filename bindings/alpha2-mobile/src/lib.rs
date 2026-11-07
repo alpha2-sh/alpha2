@@ -20,6 +20,8 @@
 
 uniffi::setup_scaffolding!();
 
+#[cfg(feature = "compose")]
+mod compose;
 mod error;
 // The media pipeline is built everywhere so desktop tests compile it; only platforms with a media
 // backend run it.
