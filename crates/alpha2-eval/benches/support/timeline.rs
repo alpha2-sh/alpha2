@@ -169,7 +169,7 @@ fn chain(id: CompositionId, effects: Vec<ClipEffect>) -> Composition {
 }
 
 fn effects() -> Vec<ClipEffect> {
-    ["alpha2.effect.gaussian-blur", "alpha2.effect.chroma-key"]
+    ["test.blur", "test.key"]
         .into_iter()
         .map(|id| ClipEffect {
             id: id.into(),

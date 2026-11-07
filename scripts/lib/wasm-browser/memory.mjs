@@ -51,7 +51,7 @@ await init();
 const engine = await gpuEngine(WebEffectRegistry);
 // Two compositions of about 170 MiB of compiled steps each: within the 256 MiB plan budget alone,
 // past it together.
-const keyframes = Array.from({ length: 180000 }, (_, time) => ({ time, value: { type: "float", value: 2 }, interpolation: { type: "hold" } }));
+const keyframes = Array.from({ length: 180000 }, (_, time) => ({ time, value: { type: "float", value: 0.5 }, interpolation: { type: "hold" } }));
 const drawing = (id) => ({
   id,
   nodes: [

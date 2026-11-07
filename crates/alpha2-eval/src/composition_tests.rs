@@ -20,7 +20,7 @@ fn effect(input: &str) -> NodeOp {
         input: Some(node_id(input)),
         inputs: BTreeMap::new(),
         effect: ClipEffect {
-            id: "alpha2.effect.gaussian-blur".into(),
+            id: "test.blur".into(),
             version: 1,
             params: BTreeMap::new(),
             resources: BTreeMap::new(),
@@ -1049,7 +1049,7 @@ fn an_unconnected_input_inside_a_group_is_named_by_its_path() {
         input: None,
         inputs: BTreeMap::new(),
         effect: ClipEffect {
-            id: "alpha2.effect.gaussian-blur".into(),
+            id: "test.blur".into(),
             version: 1,
             params: BTreeMap::new(),
             resources: BTreeMap::new(),
@@ -1163,7 +1163,7 @@ fn reads_and_effects_of_a_shared_composition_are_counted_per_clip_and_walked_onc
             .effects()
             .map(|effect| effect.id.as_str())
             .collect::<Vec<_>>(),
-        ["alpha2.effect.gaussian-blur"]
+        ["test.blur"]
     );
 }
 

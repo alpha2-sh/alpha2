@@ -403,7 +403,9 @@ function builtinEffectRules(catalog) {
             type: param.type,
             ...(param.min === null ? {} : { min: param.min }),
             ...(param.max === null ? {} : { max: param.max }),
-            ...(param.type === "enum" ? { choices: param.enumValues.length } : {}),
+            ...(param.type === "enum"
+              ? { choices: param.enumValues.length }
+              : {}),
           },
         ]),
       ),
