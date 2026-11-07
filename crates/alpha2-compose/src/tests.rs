@@ -1085,3 +1085,138 @@ fn shape_values_are_checked() {
             .contains("size")
     );
 }
+
+fn visual_clips(project: &Value) -> Vec<Value> {
+    tracks(project)
+        .iter()
+        .filter(|track| track["kind"] == "video")
+        .flat_map(|track| track["clips"].as_array().cloned().unwrap_or_default())
+        .collect()
+}
+
+#[test]
+fn a_matte_shows_its_content_through_its_by_pictures_alpha_or_luma() {
+    let compiled = compile(&json!({
+        "duration": 3,
+        "body": {
+            "type": "matte",
+            "content": {"type": "media", "path": "talk.mp4"},
+            "by": {"type": "text", "text": "WINDOW", "style": "title"},
+        },
+    }));
+    let clips = visual_clips(&compiled);
+    let shown = clips
+        .iter()
+        .find(|clip| !clip["matte"].is_null())
+        .expect("a matted clip");
+    let by = clips
+        .iter()
+        .find(|clip| clip["id"] == shown["matte"]["source"])
+        .expect("the matte clip");
+    assert_eq!(shown["matte"]["mode"], "alpha");
+    assert_eq!(by["audio"]["muted"], true);
+    let inverted = compile(&json!({
+        "duration": 1,
+        "body": {
+            "type": "matte", "use": "luma", "invert": true,
+            "content": {"type": "color", "color": "#ff0000"},
+            "by": {"type": "media", "path": "logo.png"},
+        },
+    }));
+    let matted = visual_clips(&inverted)
+        .into_iter()
+        .find(|clip| !clip["matte"].is_null())
+        .expect("a matted clip");
+    assert_eq!(matted["matte"]["mode"], "luma_inverted");
+}
+
+#[test]
+fn a_mask_over_a_crossfading_slideshow_mattes_every_slide_by_one_masked_fill() {
+    let compiled = compile(&json!({
+        "body": {
+            "type": "mask",
+            "inset": 100,
+            "shapes": [{"shape": "rect", "corner_radius": 0.1, "feather": 0.01}],
+            "content": {
+                "type": "slideshow",
+                "items": ["slides/01.jpg", "slides/02.jpg", "slides/03.jpg"],
+                "seconds": 2,
+                "transition": {"type": "crossfade", "duration": 0.5},
+            },
+        },
+    }));
+    let clips = visual_clips(&compiled);
+    let slides = clips
+        .iter()
+        .filter(|clip| !clip["matte"].is_null())
+        .collect::<Vec<_>>();
+    assert_eq!(slides.len(), 3);
+    let source = &slides[0]["matte"]["source"];
+    assert!(
+        slides
+            .iter()
+            .all(|slide| &slide["matte"]["source"] == source)
+    );
+    let fill = clips
+        .iter()
+        .find(|clip| &clip["id"] == source)
+        .expect("the masked fill");
+    let mask = &fill["masks"][0];
+    assert_eq!(mask["shape"]["type"], "rectangle");
+    assert!(mask["feather"]["value"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn a_matte_or_mask_isolates_layered_content_and_refuses_moving_transitions() {
+    // Two layers at once are drawn as one picture first, then matted.
+    let layered = compile(&json!({
+        "duration": 2,
+        "body": {
+            "type": "mask",
+            "shapes": [{"shape": "ellipse"}],
+            "content": {"type": "stack", "children": [
+                {"type": "color", "color": "#ff0000"},
+                {"type": "text", "text": "Over"},
+            ]},
+        },
+    }));
+    let matted = visual_clips(&layered)
+        .into_iter()
+        .filter(|clip| !clip["matte"].is_null())
+        .collect::<Vec<_>>();
+    assert_eq!(matted.len(), 1);
+    assert!(ops(composition(&layered, &matted[0])).contains(&"merge".to_owned()));
+    // A mask over a matte nests by isolating the matte.
+    let nested = compile(&json!({
+        "duration": 2,
+        "body": {
+            "type": "mask",
+            "shapes": [{"shape": "rect", "size": [0.5, 0.5]}],
+            "content": {
+                "type": "matte",
+                "content": {"type": "media", "path": "logo.png"},
+                "by": {"type": "text", "text": "IN"},
+            },
+        },
+    }));
+    let group = visual_clips(&nested)
+        .into_iter()
+        .find(|clip| !clip["matte"].is_null())
+        .expect("the isolated matte");
+    assert!(ops(composition(&nested, &group)).contains(&"matte".to_owned()));
+    let moving = compile_error(&json!({
+        "body": {
+            "type": "mask",
+            "shapes": [{"shape": "ellipse"}],
+            "content": {
+                "type": "sequence",
+                "transition": {"type": "directional", "duration": 0.5},
+                "children": [
+                    {"type": "color", "color": "#ff0000", "duration": 1},
+                    {"type": "color", "color": "#0000ff", "duration": 1},
+                ],
+            },
+        },
+    }));
+    assert!(moving.contains("cuts and crossfades"), "{moving}");
+}

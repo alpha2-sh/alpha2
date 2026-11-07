@@ -351,6 +351,10 @@ pub enum Node {
     Group(Group),
     /// Shapes drawn with one fill and one stroke: bars, frames, dividers, badges, icons.
     Shape(Shape),
+    /// A node shown only where another node's picture is.
+    Matte(Matte),
+    /// A node shown only inside outlines.
+    Mask(Mask),
 }
 
 /// Children drawn together as one layer. Unlike a stack, whose children each meet what is under
@@ -825,6 +829,90 @@ pub struct Shape {
     /// How it goes out, ending at its end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit: Option<Motion>,
+}
+
+/// `content` shown where `by`'s picture is: by its alpha (text as a window onto video) or its
+/// luminance. `by` is never drawn itself. Both are placed in the node's area.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Matte {
+    /// The node's name, for other nodes to refer to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// What is shown.
+    pub content: Box<Node>,
+    /// Where it is shown. One picture: not a sequence.
+    pub by: Box<Node>,
+    /// What of `by` counts: `alpha` (default) or `luma`.
+    #[serde(rename = "use", default, skip_serializing_if = "Option::is_none")]
+    pub uses: Option<MatteUse>,
+    /// Shows `content` where `by` is not instead.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert: bool,
+    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<f64>,
+    /// Length in seconds. Default: the content's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    /// Pixels kept clear inside the parent's area.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inset: Option<Inset>,
+}
+
+/// What of a matte's picture is coverage.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum MatteUse {
+    /// Its opacity.
+    #[default]
+    Alpha,
+    /// Its brightness.
+    Luma,
+}
+
+/// `content` shown only inside outlines, combined in order. Outlines are in the node's area as a
+/// shape's are, and stay put while the content moves.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Mask {
+    /// The node's name, for other nodes to refer to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// What is shown.
+    pub content: Box<Node>,
+    /// The outlines, at least one.
+    pub shapes: Vec<MaskShape>,
+    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<f64>,
+    /// Length in seconds. Default: the content's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    /// Pixels kept clear inside the parent's area.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inset: Option<Inset>,
+}
+
+/// One mask outline and how it combines with those before it.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct MaskShape {
+    /// The outline.
+    #[serde(flatten)]
+    pub geometry: Geometry,
+    /// `add` (default; the first adds to nothing), `subtract` or `intersect`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<alpha2_model::MaskMode>,
+    /// Edge softness, as a fraction of the area's shorter side. Default 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feather: Option<Anim<f32>>,
+    /// Keeps the outside of the outline instead.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub invert: bool,
 }
 
 /// One outline, in its area's unit square. Masks take the same outlines.

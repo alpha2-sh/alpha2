@@ -4457,6 +4457,291 @@
         }
       ]
     },
+    "MaskShape": {
+      "description": "One mask outline and how it combines with those before it.",
+      "oneOf": [
+        {
+          "description": "A rectangle, optionally with rounded corners.",
+          "properties": {
+            "center": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Centre. Default `[0.5, 0.5]`."
+            },
+            "corner_radius": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Corner radius. Default 0."
+            },
+            "rotation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Clockwise turn in degrees. Default 0."
+            },
+            "shape": {
+              "const": "rect",
+              "type": "string"
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Width and height. Default `[1, 1]`."
+            }
+          },
+          "required": [
+            "shape"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An ellipse.",
+          "properties": {
+            "center": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Centre. Default `[0.5, 0.5]`."
+            },
+            "rotation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Clockwise turn in degrees. Default 0."
+            },
+            "shape": {
+              "const": "ellipse",
+              "type": "string"
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Width and height. Default `[1, 1]`."
+            }
+          },
+          "required": [
+            "shape"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A regular polygon.",
+          "properties": {
+            "center": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Centre. Default `[0.5, 0.5]`."
+            },
+            "points": {
+              "description": "Corners, 3 or more.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distance of the corners from the centre. Default 0.5."
+            },
+            "rotation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Clockwise turn in degrees. Default 0."
+            },
+            "roundness": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "How round the corners are, 0..=1. Default 0."
+            },
+            "shape": {
+              "const": "polygon",
+              "type": "string"
+            }
+          },
+          "required": [
+            "shape",
+            "points"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A star.",
+          "properties": {
+            "center": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim2"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Centre. Default `[0.5, 0.5]`."
+            },
+            "inner_radius": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distance of the inner corners from the centre. Default 0.25."
+            },
+            "outer_radius": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distance of the tips from the centre. Default 0.5."
+            },
+            "points": {
+              "description": "Tips, 3 or more.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rotation": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Anim"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Clockwise turn in degrees. Default 0."
+            },
+            "shape": {
+              "const": "star",
+              "type": "string"
+            }
+          },
+          "required": [
+            "shape",
+            "points"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "An outline as SVG path data (`d`), in the area's unit square.",
+          "properties": {
+            "d": {
+              "description": "The path data: `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A` and `Z`, absolute or\nrelative.",
+              "type": "string"
+            },
+            "shape": {
+              "const": "path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "shape",
+            "d"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "feather": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Anim"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Edge softness, as a fraction of the area's shorter side. Default 0."
+        },
+        "invert": {
+          "description": "Keeps the outside of the outline instead.",
+          "type": "boolean"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MaskMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`add` (default; the first adds to nothing), `subtract` or `intersect`."
+        }
+      },
+      "type": "object"
+    },
     "Matte": {
       "additionalProperties": false,
       "description": "Another visual clip whose picture sets where this clip is visible.\n\nThe matte clip is drawn, with its own transform and effects, only into the matte and is\nnever composited itself. Where it is not active, coverage is zero.",
@@ -4497,6 +4782,21 @@
         {
           "const": "luma_inverted",
           "description": "One minus that luminance.",
+          "type": "string"
+        }
+      ]
+    },
+    "MatteUse": {
+      "description": "What of a matte's picture is coverage.",
+      "oneOf": [
+        {
+          "const": "alpha",
+          "description": "Its opacity.",
+          "type": "string"
+        },
+        {
+          "const": "luma",
+          "description": "Its brightness.",
           "type": "string"
         }
       ]
@@ -7192,6 +7492,140 @@
           },
           "required": [
             "type",
+            "shapes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A node shown only where another node's picture is.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "by": {
+              "$ref": "#/$defs/Node",
+              "description": "Where it is shown. One picture: not a sequence."
+            },
+            "content": {
+              "$ref": "#/$defs/Node",
+              "description": "What is shown."
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the content's.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "inset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Inset"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pixels kept clear inside the parent's area."
+            },
+            "invert": {
+              "description": "Shows `content` where `by` is not instead.",
+              "type": "boolean"
+            },
+            "type": {
+              "const": "matte",
+              "type": "string"
+            },
+            "use": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MatteUse"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What of `by` counts: `alpha` (default) or `luma`."
+            }
+          },
+          "required": [
+            "type",
+            "content",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A node shown only inside outlines.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "content": {
+              "$ref": "#/$defs/Node",
+              "description": "What is shown."
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the content's.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "inset": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Inset"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pixels kept clear inside the parent's area."
+            },
+            "shapes": {
+              "description": "The outlines, at least one.",
+              "items": {
+                "$ref": "#/$defs/MaskShape"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "mask",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "content",
             "shapes"
           ],
           "type": "object"

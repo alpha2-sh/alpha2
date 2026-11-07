@@ -72,6 +72,8 @@ __all__ = [
     "Layout",
     "Logo",
     "LowerThird",
+    "Mask",
+    "Matte",
     "Media",
     "MusicBed",
     "Ramp",
@@ -235,6 +237,54 @@ def Shape(
         opacity=opacity,
         enter=enter,
         exit=exit,
+        id=id,
+        at=at,
+        duration=duration,
+        inset=inset,
+    )
+
+
+def Matte(
+    content: Node,
+    by: Node,
+    *,
+    use: str | None = None,
+    invert: bool | None = None,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+    inset: float | abc.Sequence[float] | None = None,
+) -> Node:
+    """``content`` shown where ``by``'s picture is, by its ``alpha`` (default) or ``luma``;
+    ``invert`` shows it where ``by`` is not. ``by`` is never drawn itself."""
+    return _node(
+        "matte",
+        content=content,
+        by=by,
+        use=use,
+        invert=invert or None,
+        id=id,
+        at=at,
+        duration=duration,
+        inset=inset,
+    )
+
+
+def Mask(
+    content: Node,
+    shapes: Iterable[Mapping[str, Any]],
+    *,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+    inset: float | abc.Sequence[float] | None = None,
+) -> Node:
+    """``content`` shown only inside ``shapes`` (outlines as :func:`Shape` takes, each with an
+    optional ``mode``, ``feather`` and ``invert``), which stay put while the content moves."""
+    return _node(
+        "mask",
+        content=content,
+        shapes=[dict(shape) for shape in shapes],
         id=id,
         at=at,
         duration=duration,

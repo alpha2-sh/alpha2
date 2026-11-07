@@ -149,6 +149,9 @@ FIT_VALUES: tuple[Fit, ...] = ("contain", "cover", "fill", "none")
 GRID_LENGTH_VALUES: tuple[GridLength, ...] = ("shortest", "longest_freeze", "longest_loop")
 """Every `GridLength`, in the model's order."""
 
+MATTE_USE_VALUES: tuple[MatteUse, ...] = ("alpha", "luma")
+"""Every `MatteUse`, in the model's order."""
+
 MOTION_KIND_VALUES: tuple[MotionKind, ...] = ("fade", "rise", "slide", "scale")
 """Every `MotionKind`, in the model's order."""
 
@@ -510,6 +513,14 @@ class LoudnessTarget(TypedDict):
 
     Default: `-1`.
     """
+
+
+MaskShape: TypeAlias = dict[str, Any]
+"""One mask outline and how it combines with those before it."""
+
+
+MatteUse: TypeAlias = Literal["alpha", "luma"]
+"""What of a matte's picture is coverage."""
 
 
 MediaItem: TypeAlias = "str | Node"
@@ -1228,7 +1239,47 @@ class NodeShape(TypedDict):
     type: Literal["shape"]
 
 
-Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed | NodeCounter | NodeGroup | NodeShape"
+class NodeMatte(TypedDict):
+    """A node shown only where another node's picture is."""
+
+    at: NotRequired[float | None]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    by: Node
+    """Where it is shown. One picture: not a sequence."""
+    content: Node
+    """What is shown."""
+    duration: NotRequired[float | None]
+    """Length in seconds. Default: the content's."""
+    id: NotRequired[str | None]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset | None]
+    """Pixels kept clear inside the parent's area."""
+    invert: NotRequired[bool]
+    """Shows `content` where `by` is not instead."""
+    type: Literal["matte"]
+    use: NotRequired[MatteUse | None]
+    """What of `by` counts: `alpha` (default) or `luma`."""
+
+
+class NodeMask(TypedDict):
+    """A node shown only inside outlines."""
+
+    at: NotRequired[float | None]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    content: Node
+    """What is shown."""
+    duration: NotRequired[float | None]
+    """Length in seconds. Default: the content's."""
+    id: NotRequired[str | None]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset | None]
+    """Pixels kept clear inside the parent's area."""
+    shapes: list[MaskShape]
+    """The outlines, at least one."""
+    type: Literal["mask"]
+
+
+Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed | NodeCounter | NodeGroup | NodeShape | NodeMatte | NodeMask"
 """One part of a video."""
 
 

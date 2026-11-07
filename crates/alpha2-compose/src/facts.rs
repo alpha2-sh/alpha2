@@ -138,6 +138,11 @@ fn walk(node: &Node, found: &mut Requirements) {
             .iter()
             .for_each(|child| walk(child, found)),
         Node::Stack(stack) => stack.children.iter().for_each(|child| walk(child, found)),
+        Node::Matte(matte) => {
+            walk(&matte.content, found);
+            walk(&matte.by, found);
+        }
+        Node::Mask(mask) => walk(&mask.content, found),
         Node::Group(group) => {
             group.children.iter().for_each(|child| walk(child, found));
             for effect in &group.effects {

@@ -14,10 +14,10 @@ use crate::compile::Context;
 use crate::spec::{
     Align, Anim, Audio, CaptionStyle, Captions, ComparisonGrid, ConicPaint, Counter, Cue,
     Direction, EasingChoice, EffectUse, Ellipsis, EndCard, FileKind, Fit, Geometry, Gradient,
-    GridLength, Group, Inset, Key, Keys, LinearPaint, LowerThird, Media, MediaItem, Motion,
-    MotionKind, MusicBed, Node, PaintChoice, RadialPaint, Ramp, Raw, RevealKind, RevealUnit, Shape,
-    Slideshow, SolidColor, Stop, Text, TextRole, ThemeColor, ThemeToken, Title, Transition,
-    TransitionChoice,
+    GridLength, Group, Inset, Key, Keys, LinearPaint, LowerThird, MatteUse, Media, MediaItem,
+    Motion, MotionKind, MusicBed, Node, PaintChoice, RadialPaint, Ramp, Raw, RevealKind,
+    RevealUnit, Shape, Slideshow, SolidColor, Stop, Text, TextRole, ThemeColor, ThemeToken, Title,
+    Transition, TransitionChoice,
 };
 
 /// A node, ready to place.
@@ -26,6 +26,7 @@ pub(crate) enum Prim {
     Sequence(SequencePrim),
     Stack(StackPrim),
     Group(Box<GroupPrim>),
+    Coverage(Box<CoveragePrim>),
     Visual(Box<Visual>),
     Captions(Box<CaptionsPrim>),
     Audio(Box<AudioPrim>),
@@ -88,6 +89,32 @@ pub(crate) struct GroupPrim {
     pub blend: alpha2_model::ClipBlendMode,
     pub effects: Vec<EffectPrim>,
     pub transform: TransformPrim,
+}
+
+/// A node shown only where a matte's picture or mask outlines say.
+#[derive(Clone, Debug)]
+pub(crate) struct CoveragePrim {
+    pub head: Head,
+    pub inset: [f32; 4],
+    pub content: Prim,
+    pub by: Coverage,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum Coverage {
+    Matte {
+        by: Prim,
+        mode: alpha2_model::MatteMode,
+    },
+    Mask(Vec<MaskShapePrim>),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MaskShapePrim {
+    pub geometry: GeometryPrim,
+    pub mode: alpha2_model::MaskMode,
+    pub feather: AnimPrim<f32>,
+    pub invert: bool,
 }
 
 /// One effect on a group, checked against its definition when it is a built-in.
@@ -348,6 +375,7 @@ impl Prim {
             Self::Sequence(sequence) => &sequence.head,
             Self::Stack(stack) => &stack.head,
             Self::Group(group) => &group.stack.head,
+            Self::Coverage(coverage) => &coverage.head,
             Self::Visual(visual) => &visual.head,
             Self::Captions(captions) => &captions.head,
             Self::Audio(audio) => &audio.head,
@@ -360,6 +388,7 @@ impl Prim {
             Self::Sequence(sequence) => &mut sequence.head,
             Self::Stack(stack) => &mut stack.head,
             Self::Group(group) => &mut group.stack.head,
+            Self::Coverage(coverage) => &mut coverage.head,
             Self::Visual(visual) => &mut visual.head,
             Self::Captions(captions) => &mut captions.head,
             Self::Audio(audio) => &mut audio.head,
@@ -404,7 +433,9 @@ fn motion_fields(node: &Node) -> (Option<&Motion>, Option<&Motion>, Option<f64>)
         Node::Counter(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Group(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Shape(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
-        Node::Captions(_)
+        Node::Matte(_)
+        | Node::Mask(_)
+        | Node::Captions(_)
         | Node::Audio(_)
         | Node::Raw(_)
         | Node::Slideshow(_)
@@ -768,6 +799,55 @@ impl Context<'_> {
             Node::Media(media) => self.lower_media(media, path),
             Node::Group(group) => self.lower_group(group, path),
             Node::Shape(shape) => self.lower_shape(shape, path),
+            Node::Matte(matte) => Ok(Prim::Coverage(Box::new(CoveragePrim {
+                head: Self::head(path, matte.id.as_ref(), matte.at, matte.duration)?,
+                inset: inset_sides(matte.inset),
+                content: self.lower(&matte.content, &format!("{path}.content"))?,
+                by: Coverage::Matte {
+                    by: self.lower(&matte.by, &format!("{path}.by"))?,
+                    mode: match (matte.uses.unwrap_or_default(), matte.invert) {
+                        (MatteUse::Alpha, false) => alpha2_model::MatteMode::Alpha,
+                        (MatteUse::Alpha, true) => alpha2_model::MatteMode::AlphaInverted,
+                        (MatteUse::Luma, false) => alpha2_model::MatteMode::Luma,
+                        (MatteUse::Luma, true) => alpha2_model::MatteMode::LumaInverted,
+                    },
+                },
+            }))),
+            Node::Mask(mask) => {
+                if mask.shapes.is_empty() || mask.shapes.len() > alpha2_model::MAX_CLIP_MASKS {
+                    return Err(Self::error(
+                        &format!("{path}.shapes"),
+                        format!("a mask has 1 to {} outlines", alpha2_model::MAX_CLIP_MASKS),
+                    ));
+                }
+                let shapes = mask
+                    .shapes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, shape)| {
+                        let at = format!("{path}.shapes[{index}]");
+                        Ok(MaskShapePrim {
+                            geometry: Self::geometry(&shape.geometry, &at)?,
+                            mode: shape.mode.unwrap_or_default(),
+                            feather: match &shape.feather {
+                                Some(feather) => {
+                                    Self::anim(&format!("{at}.feather"), feather, |value| {
+                                        value.is_finite() && *value >= 0.0
+                                    })?
+                                }
+                                None => AnimPrim::Value(0.0),
+                            },
+                            invert: shape.invert,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, ComposeError>>()?;
+                Ok(Prim::Coverage(Box::new(CoveragePrim {
+                    head: Self::head(path, mask.id.as_ref(), mask.at, mask.duration)?,
+                    inset: inset_sides(mask.inset),
+                    content: self.lower(&mask.content, &format!("{path}.content"))?,
+                    by: Coverage::Mask(shapes),
+                })))
+            }
             Node::Text(text) => self.lower_text(text, path),
             Node::Color(color) => Ok(Prim::Visual(Box::new(Visual {
                 head: Self::head(path, color.id.as_ref(), color.at, color.duration)?,

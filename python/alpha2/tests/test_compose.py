@@ -56,6 +56,9 @@ def test_constructors_write_the_spec_as_plain_dicts() -> None:
         "shapes": [{"shape": "ellipse"}],
         "fill": {"$theme": "accent", "alpha": 0.5},
     }
+    window = c.Matte(c.Media("a.mp4"), c.Text("HI"), use="luma")
+    assert window["by"] == {"type": "text", "text": "HI"} and window["use"] == "luma"
+    assert c.Mask(c.Media("a.mp4"), [{"shape": "ellipse"}])["shapes"] == [{"shape": "ellipse"}]
     assert c.Keys((0, 1), (2, 1.5, "ease-out")) == {
         "keys": [{"t": 0, "v": 1}, {"t": 2, "v": 1.5, "ease": "ease-out"}]
     }

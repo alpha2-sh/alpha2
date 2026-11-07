@@ -22,9 +22,9 @@ use alpha2_text::{TextFont, TextRasterizer};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 
 use crate::lower::{
-    AnimPrim, AudioPrim, CaptionsPrim, Content, CounterContent, EffectPrim, GeometryPrim,
-    GridLayout, GroupPrim, Head, KeyPrim, KeyTime, NodeMotion, PaintPrim, Preset, Prim, RevealPrim,
-    SequencePrim, ShapeContent, StackPrim, Visual, align_point, ticks_scaled,
+    AnimPrim, AudioPrim, CaptionsPrim, Content, CounterContent, Coverage, CoveragePrim, EffectPrim,
+    GeometryPrim, GridLayout, GroupPrim, Head, KeyPrim, KeyTime, NodeMotion, PaintPrim, Preset,
+    Prim, RevealPrim, SequencePrim, ShapeContent, StackPrim, Visual, align_point, ticks_scaled,
 };
 use crate::spec::{
     Canvas, CustomCanvas, Fit, FrameRateChoice, GridLength, Loudness, Transition, VideoSpec,
@@ -599,6 +599,7 @@ impl<'a> Context<'a> {
             }
             Prim::Stack(stack) => self.stack_length(stack),
             Prim::Group(group) => self.stack_length(&group.stack),
+            Prim::Coverage(coverage) => self.length(&coverage.content),
             Prim::Visual(visual) => match &visual.content {
                 Content::Video(video) if video.looped => Length::Flexible(video.natural()),
                 Content::Video(video) => Length::Fixed(video.natural()),
@@ -672,6 +673,7 @@ impl<'a> Context<'a> {
             Prim::Sequence(sequence) => self.emit_sequence(sequence, &slot, out),
             Prim::Stack(stack) => self.emit_stack(stack, &slot, out),
             Prim::Group(group) => self.emit_group(group, &slot, out),
+            Prim::Coverage(coverage) => self.emit_coverage(coverage, &slot, out),
             Prim::Visual(visual) => {
                 self.emit_visual(visual, &slot, out);
                 Ok(())
@@ -960,6 +962,205 @@ impl<'a> Context<'a> {
         lane.clips.push(clip);
         out.visual.push(lane);
         Ok(())
+    }
+
+    /// Places a matte's or mask's content with every visual clip of it matted by one coverage
+    /// clip. Content that layers pictures over each other is first drawn as one picture.
+    fn emit_coverage(
+        &mut self,
+        coverage: &CoveragePrim,
+        slot: &Slot,
+        out: &mut Lanes,
+    ) -> Result<(), ComposeError> {
+        let path = &coverage.head.path;
+        let rect = slot.rect.inset(coverage.inset);
+        let inner = Slot {
+            rect,
+            ..slot.clone()
+        };
+        let mut content = Lanes::default();
+        self.emit(&coverage.content, &inner, &mut content)?;
+        if !Self::takes_one_matte(&content, path)? {
+            content = self.isolate(&coverage.content, &inner)?;
+        }
+        // Coverage moves with its node but does not fade: the content already does.
+        let still = Slot {
+            rect,
+            ramp: None,
+            motions: slot
+                .motions
+                .iter()
+                .map(|ramp| Ramp {
+                    opacity: [1.0, 1.0],
+                    ..*ramp
+                })
+                .collect(),
+            ..slot.clone()
+        };
+        let (matte, mode) = match &coverage.by {
+            Coverage::Matte { by, mode } => {
+                let mut lanes = Lanes::default();
+                self.emit(by, &still, &mut lanes)?;
+                if !Self::one_picture(&lanes) {
+                    lanes = self.isolate(by, &still)?;
+                }
+                let lane = lanes
+                    .visual
+                    .iter_mut()
+                    .find(|lane| !lane.clips.is_empty())
+                    .ok_or_else(|| ComposeError::new(path, "a matte's `by` draws a picture"))?;
+                let clip = &mut lane.clips[0];
+                clip.audio.muted = true;
+                let id = clip.id.clone();
+                out.visual.extend(lanes.visual);
+                (id, *mode)
+            }
+            Coverage::Mask(shapes) => {
+                let (start, end) = (still.start, still.start + still.len);
+                let source = self.generated_source(Generator::Fill {
+                    paint: Paint::Solid {
+                        color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+                    },
+                });
+                let mut clip = Clip::new(
+                    self.clip_id(),
+                    source,
+                    range(start, end),
+                    range(0, still.len),
+                );
+                let place = Placement::new(rect, self.canvas_px());
+                clip.masks = shapes
+                    .iter()
+                    .map(|shape| ShapeMask {
+                        shape: place.geometry(&shape.geometry, clip.timeline_range),
+                        feather: map_animated(
+                            animated(&shape.feather, clip.timeline_range),
+                            |feather| place.length(feather),
+                        ),
+                        invert: shape.invert,
+                        mode: shape.mode,
+                        fill_rule: alpha2_model::FillRule::default(),
+                    })
+                    .collect();
+                if !still.motions.is_empty() {
+                    let opacity = Opacity {
+                        base: 1.0,
+                        start,
+                        end,
+                        fade_in: 0,
+                        fade_out: 0,
+                        ramp: None,
+                    };
+                    let whole = clip.timeline_range;
+                    self.apply_motion(&mut clip.visual, &opacity, &still.motions, whole);
+                }
+                let id = clip.id.clone();
+                let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+                lane.clips.push(clip);
+                out.visual.push(lane);
+                (id, alpha2_model::MatteMode::Alpha)
+            }
+        };
+        for clip in content.visual.iter_mut().flat_map(|lane| &mut lane.clips) {
+            clip.matte = Some(alpha2_model::Matte {
+                source: matte.clone(),
+                mode,
+            });
+        }
+        out.stack(content);
+        Ok(())
+    }
+
+    /// Whether every visual clip of `lanes` can take the same matte with the result the whole
+    /// would: pictures one at a time, joined by cuts or crossfades, none matted already.
+    fn takes_one_matte(lanes: &Lanes, path: &str) -> Result<bool, ComposeError> {
+        if lanes
+            .visual
+            .iter()
+            .any(|lane| lane.captions.is_some() || lane.raw.is_some())
+        {
+            return Err(ComposeError::new(
+                path,
+                "captions and raw fragments go outside a matte or mask",
+            ));
+        }
+        let transitions = lanes.visual.iter().flat_map(|lane| &lane.transitions);
+        if transitions
+            .clone()
+            .any(|transition| !is_crossfade_effect(&transition.effect))
+        {
+            return Err(ComposeError::new(
+                path,
+                "a matte or mask over a sequence takes cuts and crossfades only; other \
+                 transitions move the picture under it",
+            ));
+        }
+        let filled = lanes
+            .visual
+            .iter()
+            .filter(|lane| !lane.clips.is_empty())
+            .collect::<Vec<_>>();
+        let matted = filled
+            .iter()
+            .flat_map(|lane| &lane.clips)
+            .any(|clip| clip.matte.is_some());
+        if matted {
+            return Ok(false);
+        }
+        // Lanes that never show at once are one picture at a time.
+        let overlaps = filled.iter().enumerate().any(|(index, lane)| {
+            filled[index + 1..].iter().any(|other| {
+                lane.clips.iter().any(|a| {
+                    other.clips.iter().any(|b| {
+                        a.timeline_range.start() < b.timeline_range.end()
+                            && b.timeline_range.start() < a.timeline_range.end()
+                    })
+                })
+            })
+        });
+        Ok(!overlaps)
+    }
+
+    /// Whether `lanes` hold exactly one visual clip that can be a matte.
+    fn one_picture(lanes: &Lanes) -> bool {
+        let clips = lanes
+            .visual
+            .iter()
+            .flat_map(|lane| &lane.clips)
+            .collect::<Vec<_>>();
+        clips.len() == 1
+            && clips[0].matte.is_none()
+            && lanes
+                .visual
+                .iter()
+                .all(|lane| lane.transitions.is_empty() && lane.captions.is_none())
+    }
+
+    /// `prim` drawn as one picture: a group of it alone.
+    fn isolate(&mut self, prim: &Prim, slot: &Slot) -> Result<Lanes, ComposeError> {
+        let group = GroupPrim {
+            stack: StackPrim {
+                head: Head {
+                    path: prim.head().path.clone(),
+                    ..Head::default()
+                },
+                children: vec![prim.clone()],
+                inset: [0.0; 4],
+                grid: None,
+            },
+            opacity: None,
+            blend: alpha2_model::ClipBlendMode::Normal,
+            effects: Vec::new(),
+            transform: crate::lower::TransformPrim {
+                position: None,
+                scale: None,
+                rotation: None,
+                anchor: [0.5, 0.5],
+            },
+        };
+        let mut lanes = Lanes::default();
+        self.emit_group(&group, slot, &mut lanes)?;
+        Ok(lanes)
     }
 
     /// The merged picture of `lanes`, placed over `0..len`, as nodes of `graph`.
@@ -1483,63 +1684,17 @@ impl<'a> Context<'a> {
     fn shape_items(&self, shape: &ShapeContent, rect: Rect, len: i64) -> Vec<ShapeItem> {
         let place = Placement::new(rect, self.canvas_px());
         let whole = range(0, len);
-        let point = |anim: &AnimPrim<[f32; 2]>| {
-            AnimatedPoint::from(map_animated(animated(anim, whole), |value| {
-                place.point(value)
-            }))
-        };
-        let size = |anim: &AnimPrim<[f32; 2]>| {
-            map_animated(animated(anim, whole), |value| place.size(value))
-        };
         let length =
             |anim: &AnimPrim<f32>| map_animated(animated(anim, whole), |value| place.length(value));
         let plain = |anim: &AnimPrim<f32>| animated(anim, whole);
         let mut items = shape
             .geometry
             .iter()
-            .map(|geometry| match geometry {
-                GeometryPrim::Rect {
-                    center,
-                    size: extent,
-                    corner,
-                    rotation,
-                } => ShapeItem::Rectangle(RectangleGeometry {
-                    center: point(center),
-                    size: size(extent),
-                    corner_radius: length(corner),
-                    rotation_degrees: plain(rotation),
-                }),
-                GeometryPrim::Ellipse {
-                    center,
-                    size: extent,
-                    rotation,
-                } => ShapeItem::Ellipse(EllipseGeometry {
-                    center: point(center),
-                    size: size(extent),
-                    rotation_degrees: plain(rotation),
-                }),
-                #[allow(clippy::cast_precision_loss)]
-                GeometryPrim::Polystar {
-                    kind,
-                    center,
-                    points,
-                    outer,
-                    inner,
-                    roundness,
-                    rotation,
-                } => ShapeItem::Polystar(PolystarGeometry {
-                    kind: *kind,
-                    center: point(center),
-                    points: constant(*points as f32),
-                    outer_radius: length(outer),
-                    inner_radius: length(inner),
-                    outer_roundness: plain(roundness),
-                    inner_roundness: constant(0.0),
-                    rotation_degrees: plain(rotation),
-                }),
-                GeometryPrim::Path(path) => ShapeItem::Path(PathGeometry {
-                    path: constant(place.path(path)),
-                }),
+            .map(|geometry| match place.geometry(geometry, whole) {
+                ShapeGeometry::Rectangle(rectangle) => ShapeItem::Rectangle(rectangle),
+                ShapeGeometry::Ellipse(ellipse) => ShapeItem::Ellipse(ellipse),
+                ShapeGeometry::Polystar(polystar) => ShapeItem::Polystar(polystar),
+                ShapeGeometry::Path(path) => ShapeItem::Path(path),
             })
             .collect::<Vec<_>>();
         if let Some(trim) = &shape.trim {
@@ -2012,6 +2167,12 @@ fn is_crossfade(transition: &Transition) -> bool {
     )
 }
 
+/// Whether `effect` mixes its two pictures pixel by pixel at one rate, so a matte over each is a
+/// matte over the mix.
+fn is_crossfade_effect(effect: &ClipEffect) -> bool {
+    effect.id == "alpha2.transition.fade"
+}
+
 fn transition_effect_id(kind: &str) -> String {
     match kind {
         "crossfade" | "fade" => "alpha2.transition.fade".to_owned(),
@@ -2279,6 +2440,64 @@ impl Placement {
             vertex.out_tangent = self.size([vertex.out_tangent.x, vertex.out_tangent.y]);
         }
         placed
+    }
+
+    /// An outline placed on the canvas, animated over `clip`.
+    fn geometry(self, geometry: &GeometryPrim, clip: TimeRange) -> ShapeGeometry {
+        let point = |anim: &AnimPrim<[f32; 2]>| {
+            AnimatedPoint::from(map_animated(animated(anim, clip), |value| {
+                self.point(value)
+            }))
+        };
+        let size = |anim: &AnimPrim<[f32; 2]>| {
+            map_animated(animated(anim, clip), |value| self.size(value))
+        };
+        let length =
+            |anim: &AnimPrim<f32>| map_animated(animated(anim, clip), |value| self.length(value));
+        match geometry {
+            GeometryPrim::Rect {
+                center,
+                size: extent,
+                corner,
+                rotation,
+            } => ShapeGeometry::Rectangle(RectangleGeometry {
+                center: point(center),
+                size: size(extent),
+                corner_radius: length(corner),
+                rotation_degrees: animated(rotation, clip),
+            }),
+            GeometryPrim::Ellipse {
+                center,
+                size: extent,
+                rotation,
+            } => ShapeGeometry::Ellipse(EllipseGeometry {
+                center: point(center),
+                size: size(extent),
+                rotation_degrees: animated(rotation, clip),
+            }),
+            #[allow(clippy::cast_precision_loss)]
+            GeometryPrim::Polystar {
+                kind,
+                center,
+                points,
+                outer,
+                inner,
+                roundness,
+                rotation,
+            } => ShapeGeometry::Polystar(PolystarGeometry {
+                kind: *kind,
+                center: point(center),
+                points: constant(*points as f32),
+                outer_radius: length(outer),
+                inner_radius: length(inner),
+                outer_roundness: animated(roundness, clip),
+                inner_roundness: constant(0.0),
+                rotation_degrees: animated(rotation, clip),
+            }),
+            GeometryPrim::Path(path) => ShapeGeometry::Path(PathGeometry {
+                path: constant(self.path(path)),
+            }),
+        }
     }
 
     fn paint(self, paint: &PaintPrim) -> Paint {
