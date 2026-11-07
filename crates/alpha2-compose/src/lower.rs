@@ -12,7 +12,7 @@ use alpha2_time::MediaTime;
 use crate::ComposeError;
 use crate::compile::Context;
 use crate::spec::{
-    Align, Anim, Audio, CaptionStyle, Captions, ComparisonGrid, ConicPaint, Counter, Cue,
+    Align, Anim, Audio, BoxNode, CaptionStyle, Captions, ComparisonGrid, ConicPaint, Counter, Cue,
     Direction, EasingChoice, EffectUse, Ellipsis, EndCard, FileKind, Fit, Geometry, Gradient,
     GridLength, Group, Inset, Key, Keys, LinearPaint, LowerThird, MatteUse, Media, MediaItem,
     Motion, MotionKind, MusicBed, Node, PaintChoice, RadialPaint, Ramp, Raw, RevealKind,
@@ -27,6 +27,7 @@ pub(crate) enum Prim {
     Stack(StackPrim),
     Group(Box<GroupPrim>),
     Coverage(Box<CoveragePrim>),
+    Box(Box<BoxPrim>),
     Visual(Box<Visual>),
     Captions(Box<CaptionsPrim>),
     Audio(Box<AudioPrim>),
@@ -89,6 +90,40 @@ pub(crate) struct GroupPrim {
     pub blend: alpha2_model::ClipBlendMode,
     pub effects: Vec<EffectPrim>,
     pub transform: TransformPrim,
+}
+
+/// A box layout in the node's area.
+#[derive(Clone, Debug)]
+pub(crate) struct BoxPrim {
+    pub head: Head,
+    pub inset: [f32; 4],
+    pub tree: BoxTree,
+}
+
+/// One layout box: its container fields as written, its paints, and its children.
+#[derive(Clone, Debug)]
+pub(crate) struct BoxTree {
+    pub css: BTreeMap<String, serde_json::Value>,
+    pub background: Option<PaintPrim>,
+    pub border: Option<(serde_json::Value, PaintPrim)>,
+    pub children: Vec<BoxKid>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BoxKid {
+    /// Item fields as written.
+    pub item: BTreeMap<String, serde_json::Value>,
+    pub content: BoxContent,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum BoxContent {
+    /// A nested box.
+    Tree(BoxTree),
+    /// Text, a shape or a color, drawn by the layout.
+    Native(Box<Visual>),
+    /// Anything else, drawn in its place.
+    Foreign(Prim),
 }
 
 /// A node shown only where a matte's picture or mask outlines say.
@@ -376,6 +411,7 @@ impl Prim {
             Self::Stack(stack) => &stack.head,
             Self::Group(group) => &group.stack.head,
             Self::Coverage(coverage) => &coverage.head,
+            Self::Box(node) => &node.head,
             Self::Visual(visual) => &visual.head,
             Self::Captions(captions) => &captions.head,
             Self::Audio(audio) => &audio.head,
@@ -389,6 +425,7 @@ impl Prim {
             Self::Stack(stack) => &mut stack.head,
             Self::Group(group) => &mut group.stack.head,
             Self::Coverage(coverage) => &mut coverage.head,
+            Self::Box(node) => &mut node.head,
             Self::Visual(visual) => &mut visual.head,
             Self::Captions(captions) => &mut captions.head,
             Self::Audio(audio) => &mut audio.head,
@@ -435,6 +472,7 @@ fn motion_fields(node: &Node) -> (Option<&Motion>, Option<&Motion>, Option<f64>)
         Node::Shape(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Matte(_)
         | Node::Mask(_)
+        | Node::Box(_)
         | Node::Captions(_)
         | Node::Audio(_)
         | Node::Raw(_)
@@ -601,9 +639,8 @@ impl Context<'_> {
         Ok(prim)
     }
 
-    /// A curve from `choice`: linear when absent.
     /// Lowers `anim`, each of whose values `valid` accepts.
-    pub(crate) fn anim<T: Copy>(
+    pub(crate) fn anim<T: Clone>(
         path: &str,
         anim: &Anim<T>,
         valid: impl Fn(&T) -> bool,
@@ -615,7 +652,7 @@ impl Context<'_> {
                 .map_err(|error| Self::error(&format!("{path}.ease"), error.message))
         };
         match anim {
-            Anim::Value(value) if valid(value) => Ok(AnimPrim::Value(*value)),
+            Anim::Value(value) if valid(value) => Ok(AnimPrim::Value(value.clone())),
             Anim::Value(_) => Err(invalid(path)),
             Anim::Ramp(ramp) => {
                 if !valid(&ramp.from) || !valid(&ramp.to) {
@@ -629,12 +666,12 @@ impl Context<'_> {
                 Ok(AnimPrim::Keys(vec![
                     KeyPrim {
                         at: KeyTime::Ticks(at),
-                        value: ramp.from,
+                        value: ramp.from.clone(),
                         easing: ease(path, ramp.ease.as_ref())?,
                     },
                     KeyPrim {
                         at: end,
-                        value: ramp.to,
+                        value: ramp.to.clone(),
                         easing: Easing::Linear,
                     },
                 ]))
@@ -661,7 +698,7 @@ impl Context<'_> {
                     }
                     lowered.push(KeyPrim {
                         at: KeyTime::Ticks(ticks),
-                        value: key.v,
+                        value: key.v.clone(),
                         easing: ease(&at, key.ease.as_ref())?,
                     });
                 }
@@ -670,6 +707,7 @@ impl Context<'_> {
         }
     }
 
+    /// A curve from `choice`: linear when absent.
     pub(crate) fn easing(
         path: &str,
         choice: Option<&EasingChoice>,
@@ -799,6 +837,11 @@ impl Context<'_> {
             Node::Media(media) => self.lower_media(media, path),
             Node::Group(group) => self.lower_group(group, path),
             Node::Shape(shape) => self.lower_shape(shape, path),
+            Node::Box(node) => Ok(Prim::Box(Box::new(BoxPrim {
+                head: Self::head(path, node.id.as_ref(), node.at, node.duration)?,
+                inset: inset_sides(node.inset),
+                tree: self.box_tree(node, path)?,
+            }))),
             Node::Matte(matte) => Ok(Prim::Coverage(Box::new(CoveragePrim {
                 head: Self::head(path, matte.id.as_ref(), matte.at, matte.duration)?,
                 inset: inset_sides(matte.inset),
@@ -1278,6 +1321,63 @@ impl Context<'_> {
                 center: center(conic),
                 angle: conic.angle.unwrap_or(0.0),
             },
+        })
+    }
+
+    /// A box and its children: nested boxes, what the layout draws, and the rest.
+    fn box_tree(&mut self, node: &BoxNode, path: &str) -> Result<BoxTree, ComposeError> {
+        const OWN: [&str; 6] = ["children", "text", "shape", "position", "inset", "type"];
+        if let Some(field) = node.css.keys().find(|field| OWN.contains(&field.as_str())) {
+            return Err(Self::error(
+                &format!("{path}.{field}"),
+                format!("a box sets `{field}` itself"),
+            ));
+        }
+        let mut children = Vec::with_capacity(node.children.len());
+        for (index, child) in node.children.iter().enumerate() {
+            let at = format!("{path}.children[{index}]");
+            let content = match child.node() {
+                Node::Box(inner) => {
+                    if inner.at.is_some() || inner.duration.is_some() || inner.inset.is_some() {
+                        return Err(Self::error(
+                            &at,
+                            "a box in a box shares its time and takes its place from its item \
+                             fields, so it has no `at`, `duration` or `inset`",
+                        ));
+                    }
+                    BoxContent::Tree(self.box_tree(inner, &at)?)
+                }
+                Node::Text(_) | Node::Shape(_) | Node::Color(_) => {
+                    match self.lower(child.node(), &at)? {
+                        Prim::Visual(visual) => BoxContent::Native(visual),
+                        other => BoxContent::Foreign(other),
+                    }
+                }
+                other => BoxContent::Foreign(self.lower(other, &at)?),
+            };
+            children.push(BoxKid {
+                item: child.item(),
+                content,
+            });
+        }
+        Ok(BoxTree {
+            css: node.css.clone(),
+            background: node
+                .background
+                .as_ref()
+                .map(|paint| self.paint(paint, &format!("{path}.background")))
+                .transpose()?,
+            border: node
+                .border
+                .as_ref()
+                .map(|border| {
+                    Ok::<_, ComposeError>((
+                        serde_json::to_value(&border.width).expect("a size serializes"),
+                        self.paint(&border.paint, &format!("{path}.border.paint"))?,
+                    ))
+                })
+                .transpose()?,
+            children,
         })
     }
 

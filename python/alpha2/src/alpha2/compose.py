@@ -56,6 +56,7 @@ __all__ = [
     "COMPOSE_VERSION",
     "THEMES",
     "Audio",
+    "Box",
     "CaptionedVideo",
     "Captions",
     "Color",
@@ -68,6 +69,7 @@ __all__ = [
     "Fade",
     "Grid",
     "Group",
+    "Item",
     "Keys",
     "Layout",
     "Logo",
@@ -290,6 +292,43 @@ def Mask(
         duration=duration,
         inset=inset,
     )
+
+
+def Box(
+    children: Iterable[Node],
+    *,
+    background: str | Mapping[str, Any] | None = None,
+    border: Mapping[str, Any] | None = None,
+    id: str | None = None,
+    at: float | None = None,
+    duration: float | None = None,
+    inset: float | abc.Sequence[float] | None = None,
+    **css: Any,
+) -> Node:
+    """A CSS flexbox (or ``display="grid"``) box filling the node's area: ``css`` are the engine
+    layout's container fields (``flex_direction="column"``, ``gap="8px"``,
+    ``padding="12px 16px"``). Text, shapes, colors and boxes are laid out by it; any other child
+    (a video, a group) is drawn in its place, clipped to its ``border_radius``. A child's item
+    fields go with it through :func:`Item`."""
+    return _node(
+        "box",
+        children=list(children),
+        background=background
+        if background is None or isinstance(background, str)
+        else dict(background),
+        border=None if border is None else dict(border),
+        id=id,
+        at=at,
+        duration=duration,
+        inset=inset,
+        **css,
+    )
+
+
+def Item(node: Node, /, **item: Any) -> Node:
+    """``node`` with box item fields (``flex_grow=1``, ``width="200px"``, ``aspect_ratio=1``,
+    ``border_radius="12px"``) for the box it is in."""
+    return cast("Node", {"box": _plain(item), "node": node})
 
 
 def ThemeColor(token: str, alpha: float | None = None) -> dict[str, Any]:

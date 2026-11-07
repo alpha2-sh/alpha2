@@ -143,6 +143,10 @@ fn walk(node: &Node, found: &mut Requirements) {
             walk(&matte.by, found);
         }
         Node::Mask(mask) => walk(&mask.content, found),
+        Node::Box(node) => node
+            .children
+            .iter()
+            .for_each(|child| walk(child.node(), found)),
         Node::Group(group) => {
             group.children.iter().for_each(|child| walk(child, found));
             for effect in &group.effects {

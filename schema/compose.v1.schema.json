@@ -943,6 +943,108 @@
         }
       ]
     },
+    "BoxBorder": {
+      "additionalProperties": false,
+      "description": "A box border.",
+      "properties": {
+        "paint": {
+          "$ref": "#/$defs/PaintChoice",
+          "description": "What covers it."
+        },
+        "width": {
+          "$ref": "#/$defs/LayoutSize2",
+          "description": "Width, as a layout size: a fraction of the picture's shorter side or `\"<n>px\"`."
+        }
+      },
+      "required": [
+        "width",
+        "paint"
+      ],
+      "type": "object"
+    },
+    "BoxChild": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PlacedChild",
+          "description": "A node with its item fields."
+        },
+        {
+          "$ref": "#/$defs/Node",
+          "description": "A node."
+        }
+      ],
+      "description": "A box's child: a node, or `{\"box\": item fields, \"node\": node}` when it has item fields (size,\nflex or grid placement, `aspect_ratio`, `border_radius`, `margin`)."
+    },
+    "BoxNode": {
+      "additionalProperties": true,
+      "description": "A box laid out by CSS flexbox (the default) or grid, filling the node's area. Its fields are\nthe engine layout's container fields as CSS writes them (`flex_direction`, `gap`,\n`\"8px 16px\"` paddings, `\"repeat(3, 1fr)\"` tracks); `background` and `border` take theme\ncolors.\n\nText, shapes, colors and boxes among its children are drawn by the layout itself. Any other\nchild (a video, a group, a sequence) gets a place in the layout and is drawn there, clipped to\nits rounded corners; such a place keeps still.",
+      "properties": {
+        "at": {
+          "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "background": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PaintChoice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What covers the box, rounded by `border_radius`."
+        },
+        "border": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoxBorder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A border inside the box."
+        },
+        "children": {
+          "description": "The children, in paint order.",
+          "items": {
+            "$ref": "#/$defs/BoxChild"
+          },
+          "type": "array"
+        },
+        "duration": {
+          "description": "Length in seconds. Default: the longest picture child's, else what its parent gives it.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The node's name, for other nodes to refer to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Inset"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Pixels kept clear inside the parent's area. A nested box places itself by its item fields."
+        }
+      },
+      "type": "object"
+    },
     "CacheIntent": {
       "description": "Whether a runtime may keep and reuse a clip's rendered picture.",
       "oneOf": [
@@ -4280,6 +4382,20 @@
         }
       ],
       "description": "A length that may not be a percent: a number is a fraction of the layout picture's shorter side, \"<n>px\" pixels of the project canvas."
+    },
+    "LayoutSize2": {
+      "anyOf": [
+        {
+          "description": "A fraction of the picture's shorter side.",
+          "format": "float",
+          "type": "number"
+        },
+        {
+          "description": "Pixels, `\"<n>px\"`.",
+          "type": "string"
+        }
+      ],
+      "description": "A layout size: a number is a fraction of the picture's shorter side, `\"<n>px\"` canvas pixels."
     },
     "LineCap": {
       "description": "How an open stroke ends.",
@@ -7629,6 +7745,20 @@
             "shapes"
           ],
           "type": "object"
+        },
+        {
+          "$ref": "#/$defs/BoxNode",
+          "description": "Boxes laid out by CSS flexbox or grid around text, shapes and any other node.",
+          "properties": {
+            "type": {
+              "const": "box",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -8297,6 +8427,26 @@
       },
       "required": [
         "point"
+      ],
+      "type": "object"
+    },
+    "PlacedChild": {
+      "additionalProperties": false,
+      "description": "A box child with item fields.",
+      "properties": {
+        "box": {
+          "additionalProperties": true,
+          "description": "Item fields of an engine layout box, as it writes them.",
+          "type": "object"
+        },
+        "node": {
+          "$ref": "#/$defs/Node",
+          "description": "The node."
+        }
+      },
+      "required": [
+        "box",
+        "node"
       ],
       "type": "object"
     },

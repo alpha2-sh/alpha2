@@ -1220,3 +1220,120 @@ fn a_matte_or_mask_isolates_layered_content_and_refuses_moving_transitions() {
     }));
     assert!(moving.contains("cuts and crossfades"), "{moving}");
 }
+
+fn compile_with_font(spec: &Value) -> Result<Value, String> {
+    let font: std::sync::Arc<[u8]> =
+        std::sync::Arc::from(&include_bytes!("../../../tests/fonts/Alpha2Fixture.ttf")[..]);
+    compile_json(&spec.to_string(), &facts().to_string(), &[font])
+        .map(|text| serde_json::from_str(&text).expect("JSON"))
+        .map_err(|error| error.to_string())
+}
+
+fn layout_roots(project: &Value) -> Vec<Value> {
+    project["project"]["sources"]
+        .as_array()
+        .expect("sources")
+        .iter()
+        .filter_map(|source| source["generator"].get("root").cloned())
+        .collect()
+}
+
+#[test]
+fn a_box_lays_out_text_shapes_and_colors_in_one_layout_in_its_area() {
+    let compiled = compile(&json!({
+        "canvas": {"width": 1000, "height": 500},
+        "duration": 2,
+        "body": {
+            "type": "box",
+            "inset": 50,
+            "flex_direction": "column",
+            "gap": "10px",
+            "padding": "20px",
+            "background": {"$theme": "surface"},
+            "border_radius": "12px",
+            "children": [
+                {"box": {"flex_grow": 1}, "node": {"type": "text", "text": "Title", "font_size": 40}},
+                {"box": {"height": "20px"}, "node": {"type": "shape", "shapes": [{"shape": "ellipse"}]}},
+                {"box": {"height": "4px"}, "node": {"type": "color", "color": "#ff0000"}},
+            ],
+        },
+    }));
+    let roots = layout_roots(&compiled);
+    assert_eq!(roots.len(), 1);
+    let root = &roots[0];
+    // The root's padding puts the box 50 px inside the canvas.
+    assert_eq!(
+        root["padding"]["value"]["top"], "50px",
+        "{}",
+        root["padding"]
+    );
+    let card = &root["children"][0];
+    assert_eq!(card["flex_direction"], "column");
+    assert!(card["background"].is_object());
+    let kids = card["children"].as_array().unwrap();
+    assert_eq!(kids[0]["text"]["value"], "Title");
+    assert_eq!(kids[0]["flex_grow"]["value"], 1.0);
+    assert!(kids[1]["shape"]["items"].is_array());
+    assert!(kids[2]["background"].is_object());
+}
+
+#[test]
+fn a_box_places_a_picture_in_its_measured_box_between_the_layout_under_and_over_it() {
+    let compiled = compile_with_font(&json!({
+        "canvas": {"width": 1000, "height": 500},
+        "duration": 2,
+        "body": {
+            "type": "box",
+            "flex_direction": "column",
+            "padding": "20px",
+            "background": "#202020",
+            "children": [
+                {"box": {"border_radius": "16px", "width": "200px"}, "node": {"type": "media", "path": "logo.png", "fit": "cover"}},
+                {"type": "text", "text": "Caption", "font_size": 30},
+            ],
+        },
+    }))
+    .expect("compiles");
+    // The card's background under the picture, the caption over it.
+    let roots = layout_roots(&compiled);
+    assert_eq!(roots.len(), 2, "{roots:?}");
+    let clips = visual_clips(&compiled);
+    let picture = clips
+        .iter()
+        .find(|clip| {
+            compiled["project"]["sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|source| source["id"] == clip["source_id"] && source["locator"] == "logo.png")
+        })
+        .expect("the picture");
+    // Its rounded corners come from a masked matte.
+    assert!(!picture["matte"].is_null());
+    // The picture keeps its aspect ratio in a 200 px wide place: 200 x 200 at the padding.
+    let position = &picture["visual"]["position"]["value"];
+    assert!(
+        (position["x"].as_f64().unwrap() - 0.12).abs() < 1e-3,
+        "{position}"
+    );
+}
+
+#[test]
+fn a_boxed_picture_needs_fonts_and_a_still_place() {
+    let spec = json!({
+        "duration": 1,
+        "body": {"type": "box", "children": [{"type": "media", "path": "logo.png"}]},
+    });
+    assert!(compile_error(&spec).contains("fonts"));
+    let moving = compile_with_font(&json!({
+        "duration": 1,
+        "body": {"type": "box", "padding": {"mode": "keyframes", "keyframes": [
+            {"time": 0, "value": "0px", "interpolation": {"type": "linear"}},
+            {"time": SECOND, "value": "40px", "interpolation": {"type": "linear"}},
+        ]}, "children": [{"type": "media", "path": "logo.png"}]},
+    }))
+    .expect_err("a moving place");
+    assert!(moving.contains("keeps still"), "{moving}");
+    let own = compile_error(&json!({"duration": 1, "body": {"type": "box", "text": "x"}}));
+    assert!(own.contains("sets `text` itself"), "{own}");
+}

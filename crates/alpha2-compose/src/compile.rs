@@ -20,11 +20,13 @@ use alpha2_model::{
 };
 use alpha2_text::{TextFont, TextRasterizer};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
+use serde_json::json;
 
 use crate::lower::{
-    AnimPrim, AudioPrim, CaptionsPrim, Content, CounterContent, Coverage, CoveragePrim, EffectPrim,
-    GeometryPrim, GridLayout, GroupPrim, Head, KeyPrim, KeyTime, NodeMotion, PaintPrim, Preset,
-    Prim, RevealPrim, SequencePrim, ShapeContent, StackPrim, Visual, align_point, ticks_scaled,
+    AnimPrim, AudioPrim, BoxContent, BoxPrim, BoxTree, CaptionsPrim, Content, CounterContent,
+    Coverage, CoveragePrim, EffectPrim, GeometryPrim, GridLayout, GroupPrim, Head, KeyPrim,
+    KeyTime, MaskShapePrim, NodeMotion, PaintPrim, Preset, Prim, RevealPrim, SequencePrim,
+    ShapeContent, StackPrim, Visual, align_point, ticks_scaled,
 };
 use crate::spec::{
     Canvas, CustomCanvas, Fit, FrameRateChoice, GridLength, Loudness, Transition, VideoSpec,
@@ -600,6 +602,12 @@ impl<'a> Context<'a> {
             Prim::Stack(stack) => self.stack_length(stack),
             Prim::Group(group) => self.stack_length(&group.stack),
             Prim::Coverage(coverage) => self.length(&coverage.content),
+            Prim::Box(node) => self.stack_length(&StackPrim {
+                head: Head::default(),
+                children: box_prims(&node.tree),
+                inset: [0.0; 4],
+                grid: None,
+            }),
             Prim::Visual(visual) => match &visual.content {
                 Content::Video(video) if video.looped => Length::Flexible(video.natural()),
                 Content::Video(video) => Length::Fixed(video.natural()),
@@ -674,6 +682,7 @@ impl<'a> Context<'a> {
             Prim::Stack(stack) => self.emit_stack(stack, &slot, out),
             Prim::Group(group) => self.emit_group(group, &slot, out),
             Prim::Coverage(coverage) => self.emit_coverage(coverage, &slot, out),
+            Prim::Box(node) => self.emit_box(node, &slot, out),
             Prim::Visual(visual) => {
                 self.emit_visual(visual, &slot, out);
                 Ok(())
@@ -1069,6 +1078,479 @@ impl<'a> Context<'a> {
         }
         out.stack(content);
         Ok(())
+    }
+
+    /// Draws a box: the layout in paint-order segments, with each placed child drawn in its
+    /// measured place between the segment under it and the one over it.
+    fn emit_box(
+        &mut self,
+        node: &BoxPrim,
+        slot: &Slot,
+        out: &mut Lanes,
+    ) -> Result<(), ComposeError> {
+        let path = node.head.path.clone();
+        let rect = slot.rect.inset(node.inset);
+        let (width, height) = self.canvas_px();
+        let mut build = BoxBuild::default();
+        let mut inner = self.box_json(&node.tree, slot.len, &mut build, &[0])?;
+        inner["flex_grow"] = json!(1);
+        // The layout picture is the canvas; the root's padding puts the box in `rect`.
+        let root = json!({
+            "padding": format!(
+                "{}px {}px {}px {}px",
+                rect.y,
+                width - rect.x - rect.width,
+                height - rect.y - rect.height,
+                rect.x
+            ),
+            "children": [inner],
+        });
+        let mut root = root;
+        normalize_layout(&mut root, slot.len, &path)?;
+        let root: LayoutNode = serde_json::from_value(root).map_err(|error| {
+            ComposeError::new(&path, format!("a box field is invalid: {error}"))
+        })?;
+        if build.places.is_empty() {
+            self.box_clip(root, rect, slot, out);
+            return Ok(());
+        }
+        if slot.motions.iter().any(Ramp::scales) {
+            return Err(ComposeError::new(
+                &path,
+                "a box with pictures in it scales as one in a group",
+            ));
+        }
+        let bounds = self.measure_box(&root, slot.len, &build, &path)?;
+        let painted = preorder(&root)
+            .iter()
+            .map(|node| {
+                node.background.is_some()
+                    || node.border.is_some()
+                    || node.text.is_some()
+                    || node.shape.is_some()
+            })
+            .collect::<Vec<_>>();
+        let marks = build
+            .places
+            .iter()
+            .map(|place| place.index)
+            .collect::<Vec<_>>();
+        for segment in 0..=marks.len() {
+            let low = segment.checked_sub(1).map_or(0, |index| marks[index] + 1);
+            let high = marks.get(segment).copied().unwrap_or(painted.len());
+            if painted[low.min(high)..high].iter().any(|paints| *paints) {
+                let mut layer = root.clone();
+                hide_outside(&mut layer, &mut 0, low..high);
+                self.box_clip(layer, rect, slot, out);
+            }
+            if let Some(place) = build.places.get(segment) {
+                self.emit_place(place, &bounds, slot, out)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// One layout generator over the whole canvas, with the box's opacity and motion.
+    fn box_clip(&mut self, root: LayoutNode, rect: Rect, slot: &Slot, out: &mut Lanes) {
+        let (start, end) = (slot.start, slot.start + slot.len);
+        let source = self.generated_source(Generator::Layout {
+            root: Box::new(root),
+        });
+        let mut clip = Clip::new(
+            self.clip_id(),
+            source,
+            range(start, end),
+            range(0, slot.len),
+        );
+        let opacity = Opacity {
+            base: 1.0,
+            start,
+            end,
+            fade_in: 0,
+            fade_out: 0,
+            ramp: slot.ramp,
+        };
+        clip.visual.opacity = opacity.animation(clip.timeline_range);
+        if !slot.motions.is_empty() {
+            let (width, height) = self.canvas_px();
+            let center = Vec2::new(
+                (rect.x + rect.width / 2.0) / width,
+                (rect.y + rect.height / 2.0) / height,
+            );
+            clip.visual.position = AnimatedPoint::Constant { value: center };
+            clip.visual.anchor = center;
+            let whole = clip.timeline_range;
+            self.apply_motion(&mut clip.visual, &opacity, &slot.motions, whole);
+        }
+        let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+        lane.clips.push(clip);
+        out.visual.push(lane);
+    }
+
+    /// Every node's place at the box's start, refusing a placed child or an ancestor of one that
+    /// moves, resizes or is drawn changed.
+    fn measure_box(
+        &self,
+        root: &LayoutNode,
+        len: i64,
+        build: &BoxBuild,
+        path: &str,
+    ) -> Result<Vec<alpha2_layout::NodeBounds>, ComposeError> {
+        let measurer = self.measurer.as_ref().ok_or_else(|| {
+            ComposeError::new(
+                path,
+                "a box with pictures in it is measured with fonts; pass them",
+            )
+        })?;
+        let size = alpha2_layout::PictureSize::new(self.width, self.height)
+            .map_err(|_| ComposeError::new(path, "the canvas is too large for a layout"))?;
+        let at = |ticks: i64| {
+            alpha2_layout::measure_layout(
+                measurer,
+                root,
+                MediaTime::from_ticks(ticks),
+                size,
+                (self.width, self.height),
+            )
+            .map(|bounds| bounds.nodes)
+            .map_err(|error| ComposeError::new(path, error.to_string()))
+        };
+        let first = at(0)?;
+        let last = at((len - 1).max(0))?;
+        let nodes = preorder(root);
+        for place in &build.places {
+            for &index in place.ancestors.iter().chain([&place.index]) {
+                let node = nodes[index];
+                let drawn_as_laid = node.opacity.is_none()
+                    && node.translate.is_none()
+                    && node.scale.is_none()
+                    && node.rotation_degrees.is_none();
+                if first[index].border != last[index].border
+                    || (index != place.index && !drawn_as_laid)
+                {
+                    return Err(ComposeError::new(
+                        &place.path,
+                        "a picture's place in a box keeps still: its size, position, and its \
+                         boxes' opacity and transforms do not change",
+                    ));
+                }
+            }
+        }
+        Ok(first)
+    }
+
+    /// A placed child, drawn in its measured border box and clipped to its rounded corners and
+    /// to the boxes around it that hide their overflow.
+    fn emit_place(
+        &mut self,
+        place: &Place,
+        bounds: &[alpha2_layout::NodeBounds],
+        slot: &Slot,
+        out: &mut Lanes,
+    ) -> Result<(), ComposeError> {
+        let (width, height) = self.canvas_px();
+        let px = |rect: &alpha2_layout::CanvasRect| Rect {
+            x: rect.left * width,
+            y: rect.top * height,
+            width: (rect.right - rect.left) * width,
+            height: (rect.bottom - rect.top) * height,
+        };
+        let own = px(&bounds[place.index].border);
+        let shorter = own.width.min(own.height).max(1.0);
+        let mut shapes = Vec::new();
+        if place.radius > 0.0 || !place.clips.is_empty() {
+            shapes.push(MaskShapePrim {
+                geometry: GeometryPrim::Rect {
+                    center: AnimPrim::Value([0.5, 0.5]),
+                    size: AnimPrim::Value([1.0, 1.0]),
+                    corner: AnimPrim::Value(place.radius / shorter),
+                    rotation: AnimPrim::Value(0.0),
+                },
+                mode: alpha2_model::MaskMode::Add,
+                feather: AnimPrim::Value(0.0),
+                invert: false,
+            });
+        }
+        for (index, radius) in &place.clips {
+            let clip = px(&bounds[*index].border);
+            shapes.push(MaskShapePrim {
+                geometry: GeometryPrim::Rect {
+                    center: AnimPrim::Value([
+                        (clip.x + clip.width / 2.0 - own.x) / own.width.max(1.0),
+                        (clip.y + clip.height / 2.0 - own.y) / own.height.max(1.0),
+                    ]),
+                    size: AnimPrim::Value([
+                        clip.width / own.width.max(1.0),
+                        clip.height / own.height.max(1.0),
+                    ]),
+                    corner: AnimPrim::Value(radius / shorter),
+                    rotation: AnimPrim::Value(0.0),
+                },
+                mode: alpha2_model::MaskMode::Intersect,
+                feather: AnimPrim::Value(0.0),
+                invert: false,
+            });
+        }
+        let child = if shapes.is_empty() {
+            place.prim.clone()
+        } else {
+            Prim::Coverage(Box::new(CoveragePrim {
+                head: Head {
+                    path: place.path.clone(),
+                    at: place.prim.head().at,
+                    duration: place.prim.head().duration,
+                    ..Head::default()
+                },
+                inset: [0.0; 4],
+                content: place.prim.clone(),
+                by: Coverage::Mask(shapes),
+            }))
+        };
+        let stack = StackPrim {
+            head: Head {
+                path: place.path.clone(),
+                ..Head::default()
+            },
+            children: vec![child],
+            inset: [0.0; 4],
+            grid: None,
+        };
+        let placed = Slot {
+            rect: own,
+            ..slot.clone()
+        };
+        self.emit_stack(&stack, &placed, out)
+    }
+
+    /// A box as layout JSON, numbering its nodes in paint order and noting placed children.
+    fn box_json(
+        &mut self,
+        tree: &BoxTree,
+        len: i64,
+        build: &mut BoxBuild,
+        ancestors: &[usize],
+    ) -> Result<serde_json::Value, ComposeError> {
+        let index = build.next();
+        let mut node = serde_json::Map::from_iter(tree.css.clone());
+        let unit = Placement::new(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            (1.0, 1.0),
+        );
+        if let Some(paint) = &tree.background {
+            node.insert("background".to_owned(), to_json(&unit.paint(paint)));
+        }
+        if let Some((width, paint)) = &tree.border {
+            node.insert(
+                "border".to_owned(),
+                json!({"width": width, "paint": to_json(&unit.paint(paint))}),
+            );
+        }
+        let mut lineage = ancestors.to_vec();
+        lineage.push(index);
+        let hides = tree.css.get("overflow").and_then(serde_json::Value::as_str) == Some("hidden");
+        let radius = self.layout_px(tree.css.get("border_radius"));
+        let mut children = Vec::with_capacity(tree.children.len());
+        for kid in &tree.children {
+            let mut child = match &kid.content {
+                BoxContent::Tree(inner) => self.box_json(inner, len, build, &lineage)?,
+                BoxContent::Native(visual) => {
+                    build.next();
+                    self.native_json(visual, len)
+                }
+                BoxContent::Foreign(prim) => {
+                    let place = build.next();
+                    let mut placeholder = json!({});
+                    if let Prim::Visual(visual) = prim
+                        && let Some((w, h)) = self.picture_size(visual)
+                        && !kid.item.contains_key("width")
+                        && !kid.item.contains_key("height")
+                        && !kid.item.contains_key("aspect_ratio")
+                    {
+                        #[allow(clippy::cast_precision_loss)]
+                        let ratio = w as f32 / h.max(1) as f32;
+                        placeholder["aspect_ratio"] = json!(ratio);
+                    }
+                    let mut clips = build.clips.clone();
+                    if hides {
+                        clips.push((index, radius));
+                    }
+                    build.places.push(Place {
+                        index: place,
+                        ancestors: lineage.clone(),
+                        path: prim.head().path.clone(),
+                        prim: prim.clone(),
+                        radius: self.layout_px(kid.item.get("border_radius")),
+                        clips,
+                    });
+                    placeholder
+                }
+            };
+            if let Some(object) = child.as_object_mut() {
+                object.extend(kid.item.clone());
+            }
+            children.push(child);
+        }
+        if hides {
+            build.clips.push((index, radius));
+        }
+        node.insert("children".to_owned(), serde_json::Value::Array(children));
+        if hides {
+            build.clips.pop();
+        }
+        Ok(serde_json::Value::Object(node))
+    }
+
+    /// A layout size in canvas pixels: a number is a fraction of the canvas's shorter side.
+    fn layout_px(&self, value: Option<&serde_json::Value>) -> f32 {
+        #[allow(clippy::cast_possible_truncation)]
+        match value {
+            Some(serde_json::Value::Number(number)) => {
+                number.as_f64().unwrap_or(0.0) as f32 * self.short_side()
+            }
+            Some(serde_json::Value::String(text)) => text
+                .trim()
+                .trim_end_matches("px")
+                .trim()
+                .parse::<f32>()
+                .unwrap_or(0.0),
+            _ => 0.0,
+        }
+    }
+
+    /// The pixel size of a picture node's file, if it shows one.
+    fn picture_size(&self, visual: &Visual) -> Option<(u32, u32)> {
+        match &visual.content {
+            Content::Video(video) => self
+                .facts
+                .media
+                .get(&video.file)
+                .and_then(|facts| Some((facts.width?, facts.height?))),
+            Content::Image { size, .. } => Some(*size),
+            _ => None,
+        }
+    }
+
+    /// What a text, shape or color leaf draws, as layout fields.
+    fn leaf_json(visual: &Visual, len: i64) -> serde_json::Value {
+        match &visual.content {
+            Content::Text(text) => {
+                let (x, _) = align_point(visual.align);
+                json!({
+                    "text": text.text,
+                    "font_size": format!("{}px", text.font_px),
+                    "font_family": text.family,
+                    "fill": to_json(&Paint::Solid { color: text.color }),
+                    "text_align": if x < 0.25 { "start" } else if x > 0.75 { "end" } else { "center" },
+                    "strokes": to_json(&text.strokes),
+                    "shadows": to_json(&text.shadows),
+                    "line_clamp": text.ellipsis.clone().map(|block_ellipsis| to_json(&LineClamp {
+                        max_lines: text.max_lines,
+                        block_ellipsis,
+                    })),
+                    "font_size_fit": text.fit.map(|(min, max)| json!({
+                        "min": format!("{min}px"),
+                        "max": format!("{max}px"),
+                    })),
+                    "background": text.background.map(|color| to_json(&Paint::Solid { color })),
+                    "text_animators": text.reveal.map(|reveal| vec![to_json(&reveal_animator(reveal, text.font_px, len))]),
+                })
+            }
+            Content::Shape(shape) => {
+                let unit = Placement::new(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                    },
+                    (1.0, 1.0),
+                );
+                json!({"shape": {"items": to_json(&shape_items_placed(shape, unit, len))}})
+            }
+            Content::Color(color) => {
+                json!({"background": to_json(&Paint::Solid { color: *color })})
+            }
+            _ => json!({}),
+        }
+    }
+
+    /// Text, a shape or a color as a layout leaf, shown over its own time of the box with its
+    /// fades and motions as the leaf's opacity, translation and scale.
+    fn native_json(&mut self, visual: &Visual, len: i64) -> serde_json::Value {
+        let mut node = Self::leaf_json(visual, len);
+        if let Some(object) = node.as_object_mut() {
+            object.retain(|_, value| !value.is_null());
+        }
+        let start = visual.head.at.unwrap_or(0).clamp(0, len);
+        let end = visual
+            .head
+            .duration
+            .map_or(len, |duration| (start + duration).min(len));
+        let mut timing = Slot {
+            start,
+            len: end - start,
+            rect: self.canvas_rect(),
+            hold: Hold::None,
+            ramp: None,
+            owners: BTreeSet::new(),
+            motions: Vec::new(),
+            pending: Vec::new(),
+            delay: 0,
+        };
+        self.resolve_motion(&visual.head, &mut timing);
+        let opacity = Opacity {
+            base: visual.opacity,
+            start,
+            end,
+            fade_in: visual.fade_in,
+            fade_out: visual.fade_out,
+            ramp: None,
+        };
+        let center = Vec2::new(0.5, 0.5);
+        let mut moved = VisualProperties {
+            position: AnimatedPoint::Constant { value: center },
+            anchor: center,
+            ..VisualProperties::default()
+        };
+        let shown = range(start, end);
+        moved.opacity = opacity.animation(shown);
+        if !timing.motions.is_empty() {
+            self.apply_motion(&mut moved, &opacity, &timing.motions, shown);
+        }
+        let visible = windowed(&moved.opacity, start, end, len);
+        if visible != constant(1.0) {
+            node["opacity"] = to_json(&visible);
+        }
+        let (width, height) = self.canvas_px();
+        let position = match &moved.position {
+            AnimatedPoint::Constant { value } => Animated::Constant { value: *value },
+            AnimatedPoint::Keyframes { keyframes } => Animated::Keyframes {
+                keyframes: keyframes
+                    .iter()
+                    .map(|keyframe| Keyframe {
+                        time: keyframe.time,
+                        value: keyframe.value,
+                        interpolation: keyframe.interpolation,
+                    })
+                    .collect(),
+            },
+        };
+        let travel = map_animated(
+            position,
+            |point: Vec2| json!({"x": format!("{}px", (point.x - 0.5) * width), "y": format!("{}px", (point.y - 0.5) * height)}),
+        );
+        if !matches!(&moved.position, AnimatedPoint::Constant { value } if *value == center) {
+            node["translate"] = to_json(&travel);
+        }
+        if moved.scale != constant(Vec2::new(1.0, 1.0)) {
+            node["scale"] = to_json(&moved.scale);
+        }
+        node
     }
 
     /// Whether every visual clip of `lanes` can take the same matte with the result the whole
@@ -1679,58 +2161,9 @@ impl<'a> Context<'a> {
         out.visual.push(lane);
     }
 
-    /// A shape's outlines, trim, stroke and fill as shape items in canvas fractions, placed in
-    /// `rect`, animated over `0..len` of the picture's time.
+    /// A shape's items placed in `rect`, animated over `0..len` of the picture's time.
     fn shape_items(&self, shape: &ShapeContent, rect: Rect, len: i64) -> Vec<ShapeItem> {
-        let place = Placement::new(rect, self.canvas_px());
-        let whole = range(0, len);
-        let length =
-            |anim: &AnimPrim<f32>| map_animated(animated(anim, whole), |value| place.length(value));
-        let plain = |anim: &AnimPrim<f32>| animated(anim, whole);
-        let mut items = shape
-            .geometry
-            .iter()
-            .map(|geometry| match place.geometry(geometry, whole) {
-                ShapeGeometry::Rectangle(rectangle) => ShapeItem::Rectangle(rectangle),
-                ShapeGeometry::Ellipse(ellipse) => ShapeItem::Ellipse(ellipse),
-                ShapeGeometry::Polystar(polystar) => ShapeItem::Polystar(polystar),
-                ShapeGeometry::Path(path) => ShapeItem::Path(path),
-            })
-            .collect::<Vec<_>>();
-        if let Some(trim) = &shape.trim {
-            items.push(ShapeItem::Trim(TrimItem {
-                start: plain(&trim.start),
-                end: plain(&trim.end),
-                offset: plain(&trim.offset),
-                mode: TrimMode::default(),
-            }));
-        }
-        if let Some(stroke) = &shape.stroke {
-            items.push(ShapeItem::Stroke(StrokeItem {
-                paint: constant(place.paint(&stroke.paint)),
-                width: length(&stroke.width),
-                cap: stroke.cap,
-                join: stroke.join,
-                dash: (!stroke.dash.is_empty()).then(|| Dash {
-                    pattern: stroke
-                        .dash
-                        .iter()
-                        .map(|dash| constant(place.length(*dash)))
-                        .collect(),
-                    offset: constant(0.0),
-                }),
-                opacity: constant(1.0),
-                miter_limit: 4.0,
-            }));
-        }
-        if let Some(fill) = &shape.fill {
-            items.push(ShapeItem::Fill {
-                paint: constant(place.paint(fill)),
-                opacity: constant(1.0),
-                rule: FillRule::default(),
-            });
-        }
-        items
+        shape_items_placed(shape, Placement::new(rect, self.canvas_px()), len)
     }
 
     /// Multiplies the entrances' and exits' opacity and scale into `visual` and adds their
@@ -2255,7 +2688,7 @@ impl Fitted {
 
 /// `keys` placed on `clip`: each key's timeline time, value and curve to the next. A key at the
 /// node's end that would not follow the key before it falls one tick after it.
-fn resolve_keys<T: Copy>(keys: &[KeyPrim<T>], clip: TimeRange) -> Vec<(MediaTime, T, Easing)> {
+fn resolve_keys<T: Clone>(keys: &[KeyPrim<T>], clip: TimeRange) -> Vec<(MediaTime, T, Easing)> {
     let length = clip.end().ticks() - clip.start().ticks();
     let mut previous = None;
     keys.iter()
@@ -2272,7 +2705,7 @@ fn resolve_keys<T: Copy>(keys: &[KeyPrim<T>], clip: TimeRange) -> Vec<(MediaTime
             previous = Some(ticks);
             (
                 MediaTime::from_ticks(clip.start().ticks() + ticks),
-                key.value,
+                key.value.clone(),
                 key.easing,
             )
         })
@@ -2396,6 +2829,236 @@ fn still_source(source: &MediaSource) -> bool {
         }
         _ => false,
     }
+}
+
+/// A shape's outlines, trim, stroke and fill as shape items, placed by `place`, animated over
+/// `0..len` of the picture's time.
+fn shape_items_placed(shape: &ShapeContent, place: Placement, len: i64) -> Vec<ShapeItem> {
+    let whole = range(0, len);
+    let length =
+        |anim: &AnimPrim<f32>| map_animated(animated(anim, whole), |value| place.length(value));
+    let plain = |anim: &AnimPrim<f32>| animated(anim, whole);
+    let mut items = shape
+        .geometry
+        .iter()
+        .map(|geometry| match place.geometry(geometry, whole) {
+            ShapeGeometry::Rectangle(rectangle) => ShapeItem::Rectangle(rectangle),
+            ShapeGeometry::Ellipse(ellipse) => ShapeItem::Ellipse(ellipse),
+            ShapeGeometry::Polystar(polystar) => ShapeItem::Polystar(polystar),
+            ShapeGeometry::Path(path) => ShapeItem::Path(path),
+        })
+        .collect::<Vec<_>>();
+    if let Some(trim) = &shape.trim {
+        items.push(ShapeItem::Trim(TrimItem {
+            start: plain(&trim.start),
+            end: plain(&trim.end),
+            offset: plain(&trim.offset),
+            mode: TrimMode::default(),
+        }));
+    }
+    if let Some(stroke) = &shape.stroke {
+        items.push(ShapeItem::Stroke(StrokeItem {
+            paint: constant(place.paint(&stroke.paint)),
+            width: length(&stroke.width),
+            cap: stroke.cap,
+            join: stroke.join,
+            dash: (!stroke.dash.is_empty()).then(|| Dash {
+                pattern: stroke
+                    .dash
+                    .iter()
+                    .map(|dash| constant(place.length(*dash)))
+                    .collect(),
+                offset: constant(0.0),
+            }),
+            opacity: constant(1.0),
+            miter_limit: 4.0,
+        }));
+    }
+    if let Some(fill) = &shape.fill {
+        items.push(ShapeItem::Fill {
+            paint: constant(place.paint(fill)),
+            opacity: constant(1.0),
+            rule: FillRule::default(),
+        });
+    }
+    items
+}
+
+/// What a box build collects: node numbers in paint order, placed children, and the boxes
+/// around the current one that hide their overflow.
+#[derive(Default)]
+struct BoxBuild {
+    count: usize,
+    places: Vec<Place>,
+    /// Boxes that hide their overflow, by number, with their corner radius in pixels.
+    clips: Vec<(usize, f32)>,
+}
+
+impl BoxBuild {
+    /// The next node's number; the root is 0 and the box 1.
+    fn next(&mut self) -> usize {
+        self.count += 1;
+        self.count
+    }
+}
+
+/// A child a box places and draws in its measured box.
+struct Place {
+    index: usize,
+    ancestors: Vec<usize>,
+    path: String,
+    prim: Prim,
+    /// Its corner radius in pixels.
+    radius: f32,
+    /// The boxes around it that hide their overflow.
+    clips: Vec<(usize, f32)>,
+}
+
+/// A layout tree's nodes in paint order.
+fn preorder(root: &LayoutNode) -> Vec<&LayoutNode> {
+    let mut nodes = vec![root];
+    let mut index = 0;
+    while index < nodes.len() {
+        let node = nodes[index];
+        let at = index + 1;
+        let mut children = node.children.iter().collect::<Vec<_>>();
+        // Depth first: a node's children come right after it.
+        let tail = nodes.split_off(at);
+        nodes.append(&mut children);
+        nodes.extend(tail);
+        index += 1;
+    }
+    nodes
+}
+
+/// Makes every node outside `keep` paint nothing without moving anything: leaves turn
+/// transparent, boxes drop their background and border paint.
+fn hide_outside(node: &mut LayoutNode, counter: &mut usize, keep: std::ops::Range<usize>) {
+    let index = *counter;
+    *counter += 1;
+    if !keep.contains(&index) {
+        if node.children.is_empty() {
+            node.opacity = Some(constant(0.0));
+        } else {
+            node.background = None;
+            if let Some(border) = &mut node.border {
+                border.paint = constant(Paint::Solid {
+                    color: Rgba::new(0.0, 0.0, 0.0, 0.0),
+                });
+            }
+        }
+    }
+    for child in &mut node.children {
+        hide_outside(child, counter, keep.clone());
+    }
+}
+
+/// The layout box fields that animate.
+const ANIMATED_LAYOUT_FIELDS: [&str; 22] = [
+    "background",
+    "border_radius",
+    "column_gap",
+    "flex_basis",
+    "flex_grow",
+    "flex_shrink",
+    "font_size",
+    "gap",
+    "height",
+    "margin",
+    "max_height",
+    "max_width",
+    "min_height",
+    "min_width",
+    "opacity",
+    "padding",
+    "rotation_degrees",
+    "row_gap",
+    "scale",
+    "text",
+    "translate",
+    "width",
+];
+
+/// Writes every animated field of a layout tree as the engine reads it: a bare value as a
+/// constant, a compose ramp or keys as keyframes over `0..len`, an engine animation as it is.
+fn normalize_layout(
+    node: &mut serde_json::Value,
+    len: i64,
+    path: &str,
+) -> Result<(), ComposeError> {
+    let Some(object) = node.as_object_mut() else {
+        return Ok(());
+    };
+    for field in ANIMATED_LAYOUT_FIELDS {
+        if let Some(value) = object.get_mut(field) {
+            *value = layout_animation(value.take(), len, &format!("{path}.{field}"))?;
+        }
+    }
+    if let Some(border) = object
+        .get_mut("border")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for field in ["width", "paint"] {
+            if let Some(value) = border.get_mut(field) {
+                *value = layout_animation(value.take(), len, &format!("{path}.border.{field}"))?;
+            }
+        }
+    }
+    if let Some(children) = object
+        .get_mut("children")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for (index, child) in children.iter_mut().enumerate() {
+            normalize_layout(child, len, &format!("{path}.children[{index}]"))?;
+        }
+    }
+    Ok(())
+}
+
+fn layout_animation(
+    value: serde_json::Value,
+    len: i64,
+    path: &str,
+) -> Result<serde_json::Value, ComposeError> {
+    let object = value.as_object();
+    if value.is_null() || object.is_some_and(|object| object.contains_key("mode")) {
+        return Ok(value);
+    }
+    if !object.is_some_and(|object| object.contains_key("from") || object.contains_key("keys")) {
+        return Ok(json!({"mode": "constant", "value": value}));
+    }
+    let anim: crate::spec::Anim<serde_json::Value> = serde_json::from_value(value)
+        .map_err(|error| ComposeError::new(path, error.to_string()))?;
+    Ok(match Context::anim(path, &anim, |_| true)? {
+        AnimPrim::Value(value) => json!({"mode": "constant", "value": value}),
+        AnimPrim::Keys(keys) => json!({
+            "mode": "keyframes",
+            "keyframes": resolve_keys(&keys, range(0, len))
+                .into_iter()
+                .map(|(time, value, easing)| json!({
+                    "time": time.ticks(),
+                    "value": value,
+                    "interpolation": to_json(&interpolation(easing)),
+                }))
+                .collect::<Vec<_>>(),
+        }),
+    })
+}
+
+/// The primitives a box's length depends on: its placed children and its leaves.
+fn box_prims(tree: &BoxTree) -> Vec<Prim> {
+    tree.children
+        .iter()
+        .flat_map(|kid| match &kid.content {
+            BoxContent::Tree(inner) => box_prims(inner),
+            BoxContent::Native(visual) => vec![Prim::Visual(visual.clone())],
+            BoxContent::Foreign(prim) => vec![prim.clone()],
+        })
+        .collect()
+}
+
+fn to_json<T: serde::Serialize>(value: &T) -> serde_json::Value {
+    serde_json::to_value(value).expect("a model value serializes")
 }
 
 /// Maps an area's unit square, and lengths in its shorter side, to canvas fractions.

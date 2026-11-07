@@ -222,6 +222,33 @@ seconds from the node's start.
 """
 
 
+class BoxBorder(TypedDict):
+    """A box border."""
+
+    paint: PaintChoice
+    """What covers it."""
+    width: LayoutSize2
+    """Width, as a layout size: a fraction of the picture's shorter side or `"<n>px"`."""
+
+
+BoxChild: TypeAlias = "PlacedChild | Node"
+"""A box's child: a node, or `{"box": item fields, "node": node}` when it has item fields (size,
+flex or grid placement, `aspect_ratio`, `border_radius`, `margin`).
+"""
+
+
+BoxNode: TypeAlias = dict[str, Any]
+"""A box laid out by CSS flexbox (the default) or grid, filling the node's area. Its fields are
+the engine layout's container fields as CSS writes them (`flex_direction`, `gap`,
+`"8px 16px"` paddings, `"repeat(3, 1fr)"` tracks); `background` and `border` take theme
+colors.
+
+Text, shapes, colors and boxes among its children are drawn by the layout itself. Any other
+child (a video, a group, a sequence) gets a place in the layout and is drawn there, clipped to
+its rounded corners; such a place keeps still.
+"""
+
+
 Canvas: TypeAlias = "str | CustomCanvas"
 """The canvas: a preset name, or its parts."""
 
@@ -490,6 +517,10 @@ class Keys2(TypedDict):
 
     keys: list[Key2]
     """The keys, in increasing time; at least one."""
+
+
+LayoutSize2: TypeAlias = "float | str"
+"""A layout size: a number is a fraction of the picture's shorter side, `"<n>px"` canvas pixels."""
 
 
 class LinearPaint(TypedDict):
@@ -1279,7 +1310,7 @@ class NodeMask(TypedDict):
     type: Literal["mask"]
 
 
-Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed | NodeCounter | NodeGroup | NodeShape | NodeMatte | NodeMask"
+Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed | NodeCounter | NodeGroup | NodeShape | NodeMatte | NodeMask | dict[str, Any]"
 """One part of a video."""
 
 
@@ -1309,6 +1340,15 @@ class OffsetStop(TypedDict):
 
 PaintChoice: TypeAlias = "ThemeColor | LinearPaint | RadialPaint | ConicPaint | Rgba"
 """A color, a theme color, or a gradient."""
+
+
+class PlacedChild(TypedDict):
+    """A box child with item fields."""
+
+    box: dict[str, Never]
+    """Item fields of an engine layout box, as it writes them."""
+    node: Node
+    """The node."""
 
 
 class RadialPaint(TypedDict):

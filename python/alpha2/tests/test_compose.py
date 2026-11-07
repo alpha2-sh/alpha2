@@ -56,6 +56,13 @@ def test_constructors_write_the_spec_as_plain_dicts() -> None:
         "shapes": [{"shape": "ellipse"}],
         "fill": {"$theme": "accent", "alpha": 0.5},
     }
+    card = c.Box([c.Item(c.Text("Hi"), flex_grow=1)], flex_direction="column", gap="8px")
+    assert card == {
+        "type": "box",
+        "children": [{"box": {"flex_grow": 1}, "node": {"type": "text", "text": "Hi"}}],
+        "flex_direction": "column",
+        "gap": "8px",
+    }
     window = c.Matte(c.Media("a.mp4"), c.Text("HI"), use="luma")
     assert window["by"] == {"type": "text", "text": "HI"} and window["use"] == "luma"
     assert c.Mask(c.Media("a.mp4"), [{"shape": "ellipse"}])["shapes"] == [{"shape": "ellipse"}]

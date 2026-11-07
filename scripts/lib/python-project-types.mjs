@@ -250,6 +250,7 @@ function pythonTypes(
     function member(variant, owner, index) {
       if (variant.type !== "object" || variant.properties === undefined)
         return type(variant, owner);
+      if (variant.additionalProperties !== false) return object(variant, owner);
       const tag = Object.entries(variant.properties).find(
         ([, property]) => typeof property.const === "string",
       );
@@ -263,6 +264,12 @@ function pythonTypes(
 
     function object(node, owner) {
       const properties = node.properties ?? {};
+      // Open objects (a box's CSS fields) are plain mappings, as in `declareDef`.
+      if (
+        Object.keys(properties).length > 0 &&
+        node.additionalProperties !== false
+      )
+        return "dict[str, Any]";
       if (Object.keys(properties).length === 0) {
         const values = node.additionalProperties;
         if (typeof values === "object" && values !== null)

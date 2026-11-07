@@ -355,6 +355,8 @@ pub enum Node {
     Matte(Matte),
     /// A node shown only inside outlines.
     Mask(Mask),
+    /// Boxes laid out by CSS flexbox or grid around text, shapes and any other node.
+    Box(BoxNode),
 }
 
 /// Children drawn together as one layer. Unlike a stack, whose children each meet what is under
@@ -913,6 +915,130 @@ pub struct MaskShape {
     /// Keeps the outside of the outline instead.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub invert: bool,
+}
+
+/// A box laid out by CSS flexbox (the default) or grid, filling the node's area. Its fields are
+/// the engine layout's container fields as CSS writes them (`flex_direction`, `gap`,
+/// `"8px 16px"` paddings, `"repeat(3, 1fr)"` tracks); `background` and `border` take theme
+/// colors.
+///
+/// Text, shapes, colors and boxes among its children are drawn by the layout itself. Any other
+/// child (a video, a group, a sequence) gets a place in the layout and is drawn there, clipped to
+/// its rounded corners; such a place keeps still.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct BoxNode {
+    /// The node's name, for other nodes to refer to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The children, in paint order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<BoxChild>,
+    /// What covers the box, rounded by `border_radius`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<PaintChoice>,
+    /// A border inside the box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<BoxBorder>,
+    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<f64>,
+    /// Length in seconds. Default: the longest picture child's, else what its parent gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    /// Pixels kept clear inside the parent's area. A nested box places itself by its item fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inset: Option<Inset>,
+    /// The other container fields of an engine layout box, by name.
+    #[serde(flatten)]
+    pub css: BTreeMap<String, serde_json::Value>,
+}
+
+/// A box border.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct BoxBorder {
+    /// Width, as a layout size: a fraction of the picture's shorter side or `"<n>px"`.
+    pub width: LayoutSize,
+    /// What covers it.
+    pub paint: PaintChoice,
+}
+
+/// A layout size: a number is a fraction of the picture's shorter side, `"<n>px"` canvas pixels.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum LayoutSize {
+    /// A fraction of the picture's shorter side.
+    Fraction(f32),
+    /// Pixels, `"<n>px"`.
+    Pixels(String),
+}
+
+/// A box's child: a node, or `{"box": item fields, "node": node}` when it has item fields (size,
+/// flex or grid placement, `aspect_ratio`, `border_radius`, `margin`).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum BoxChild {
+    /// A node with its item fields.
+    Placed(PlacedChild),
+    /// A node.
+    Plain(Node),
+}
+
+/// A box child with item fields.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PlacedChild {
+    /// Item fields of an engine layout box, as it writes them.
+    #[serde(rename = "box")]
+    pub item: BTreeMap<String, serde_json::Value>,
+    /// The node.
+    pub node: Node,
+}
+
+impl BoxChild {
+    /// The node.
+    #[must_use]
+    pub const fn node(&self) -> &Node {
+        match self {
+            Self::Placed(placed) => &placed.node,
+            Self::Plain(node) => node,
+        }
+    }
+
+    /// Its item fields; none for a plain node.
+    #[must_use]
+    pub fn item(&self) -> BTreeMap<String, serde_json::Value> {
+        match self {
+            Self::Placed(placed) => placed.item.clone(),
+            Self::Plain(_) => BTreeMap::new(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BoxChild {
+    // An object with `node` is a placed child; anything else is a node, so a node's own errors
+    // are reported as they are.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if value
+            .as_object()
+            .is_some_and(|object| object.contains_key("node"))
+        {
+            serde_json::from_value(value)
+                .map(Self::Placed)
+                .map_err(D::Error::custom)
+        } else {
+            Node::deserialize(value)
+                .map(Self::Plain)
+                .map_err(D::Error::custom)
+        }
+    }
 }
 
 /// One outline, in its area's unit square. Masks take the same outlines.
