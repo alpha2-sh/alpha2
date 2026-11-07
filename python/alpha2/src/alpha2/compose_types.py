@@ -167,6 +167,12 @@ TEXT_ROLE_VALUES: tuple[TextRole, ...] = ("title", "subtitle", "body", "label")
 THEME_TOKEN_VALUES: tuple[ThemeToken, ...] = ("text", "background", "surface", "panel", "accent")
 """Every `ThemeToken`, in the model's order."""
 
+WHEN_LONG_VALUES: tuple[WhenLong, ...] = ("trim", "stretch", "error")
+"""Every `WhenLong`, in the model's order."""
+
+WHEN_SHORT_VALUES: tuple[WhenShort, ...] = ("freeze", "loop", "stretch", "blank", "error")
+"""Every `WhenShort`, in the model's order."""
+
 
 class VideoSpec(TypedDict):
     """A whole video: a body, what is drawn over it, and what plays under it."""
@@ -720,6 +726,12 @@ class NodeMedia(TypedDict):
     type: Literal["media"]
     volume: NotRequired[float | None]
     """Linear gain of a video's sound. Default 1."""
+    when_long: NotRequired[WhenLong | None]
+    """What a video does when it outlasts the node. Default `trim`."""
+    when_short: NotRequired[WhenShort | None]
+    """What a video does when the node outlasts it. Default: what its parent asks (a grid's
+    length rule), else `freeze`.
+    """
     zoom: NotRequired[Anim | None]
     """How large it shows, as a multiple of its fitted size: a constant, a ramp
     (`{"from": 1, "to": 1.2}` is a slow zoom over the node), or keys. Default 1.
@@ -1543,3 +1555,11 @@ class Trim(TypedDict):
     """Default 0."""
     start: NotRequired[Anim | None]
     """Default 0."""
+
+
+WhenLong: TypeAlias = Literal["trim", "stretch", "error"]
+"""What a video longer than its node does."""
+
+
+WhenShort: TypeAlias = Literal["freeze", "loop", "stretch", "blank", "error"]
+"""What a video shorter than its node does once it ends."""

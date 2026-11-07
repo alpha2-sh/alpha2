@@ -1337,3 +1337,48 @@ fn a_boxed_picture_needs_fonts_and_a_still_place() {
     let own = compile_error(&json!({"duration": 1, "body": {"type": "box", "text": "x"}}));
     assert!(own.contains("sets `text` itself"), "{own}");
 }
+
+fn video_clips(fields: &Value) -> Result<Vec<Value>, String> {
+    let mut node = json!({"type": "media", "path": "grid1.mp4"});
+    node.as_object_mut()
+        .expect("object")
+        .extend(fields.as_object().expect("object").clone());
+    compile_json(
+        &json!({"body": node}).to_string(),
+        &facts().to_string(),
+        &[],
+    )
+    .map(|text| {
+        let compiled: Value = serde_json::from_str(&text).expect("JSON");
+        visual_clips(&compiled)
+    })
+    .map_err(|error| error.to_string())
+}
+
+#[test]
+fn a_video_shorter_or_longer_than_its_node_does_what_it_says() {
+    let span = |clip: &Value, field: &str| {
+        clip[field]["end"].as_i64().unwrap() - clip[field]["start"].as_i64().unwrap()
+    };
+    // grid1.mp4 lasts 31 s.
+    let frozen = video_clips(&json!({"duration": 40})).expect("compiles");
+    assert_eq!(frozen.len(), 2);
+    assert_eq!(frozen[1]["time_map"]["type"], "freeze");
+    let looped = video_clips(&json!({"duration": 40, "when_short": "loop"})).expect("compiles");
+    assert_eq!(looped[0]["time_map"]["type"], "loop");
+    let slowed = video_clips(&json!({"duration": 40, "when_short": "stretch"})).expect("compiles");
+    assert_eq!(slowed.len(), 1);
+    assert_eq!(span(&slowed[0], "timeline_range"), 40 * SECOND);
+    assert_eq!(span(&slowed[0], "source_range"), 31 * SECOND);
+    let blank = video_clips(&json!({"duration": 40, "when_short": "blank"})).expect("compiles");
+    assert_eq!(blank.len(), 1);
+    assert_eq!(span(&blank[0], "timeline_range"), 31 * SECOND);
+    assert!(video_clips(&json!({"duration": 40, "when_short": "error"})).is_err());
+
+    let trimmed = video_clips(&json!({"duration": 10})).expect("compiles");
+    assert_eq!(span(&trimmed[0], "source_range"), 10 * SECOND);
+    let hurried = video_clips(&json!({"duration": 10, "when_long": "stretch"})).expect("compiles");
+    assert_eq!(span(&hurried[0], "source_range"), 31 * SECOND);
+    let refused = video_clips(&json!({"duration": 10, "when_long": "error"})).expect_err("refused");
+    assert!(refused.contains("longer"), "{refused}");
+}

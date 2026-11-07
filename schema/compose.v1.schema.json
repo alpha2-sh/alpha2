@@ -5719,6 +5719,28 @@
                 "null"
               ]
             },
+            "when_long": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WhenLong"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What a video does when it outlasts the node. Default `trim`."
+            },
+            "when_short": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WhenShort"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What a video does when the node outlasts it. Default: what its parent asks (a grid's\nlength rule), else `freeze`."
+            },
             "zoom": {
               "anyOf": [
                 {
@@ -11315,6 +11337,56 @@
         }
       },
       "type": "object"
+    },
+    "WhenLong": {
+      "description": "What a video longer than its node does.",
+      "oneOf": [
+        {
+          "const": "trim",
+          "description": "Ends with the node.",
+          "type": "string"
+        },
+        {
+          "const": "stretch",
+          "description": "Speeds up to fit the node.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "The spec does not compile.",
+          "type": "string"
+        }
+      ]
+    },
+    "WhenShort": {
+      "description": "What a video shorter than its node does once it ends.",
+      "oneOf": [
+        {
+          "const": "freeze",
+          "description": "Holds its last frame.",
+          "type": "string"
+        },
+        {
+          "const": "loop",
+          "description": "Plays again from its start.",
+          "type": "string"
+        },
+        {
+          "const": "stretch",
+          "description": "Slows to fill the node.",
+          "type": "string"
+        },
+        {
+          "const": "blank",
+          "description": "Shows nothing.",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "The spec does not compile.",
+          "type": "string"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

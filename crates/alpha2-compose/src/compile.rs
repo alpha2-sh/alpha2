@@ -30,6 +30,7 @@ use crate::lower::{
 };
 use crate::spec::{
     Canvas, CustomCanvas, Fit, FrameRateChoice, GridLength, Loudness, Transition, VideoSpec,
+    WhenLong, WhenShort,
 };
 use crate::theme::Resolved;
 use crate::{Compiled, ComposeError, Facts, LoudnessTarget};
@@ -683,10 +684,7 @@ impl<'a> Context<'a> {
             Prim::Group(group) => self.emit_group(group, &slot, out),
             Prim::Coverage(coverage) => self.emit_coverage(coverage, &slot, out),
             Prim::Box(node) => self.emit_box(node, &slot, out),
-            Prim::Visual(visual) => {
-                self.emit_visual(visual, &slot, out);
-                Ok(())
-            }
+            Prim::Visual(visual) => self.emit_visual(visual, &slot, out),
             Prim::Captions(captions) => {
                 self.emit_captions(captions, &slot, out);
                 Ok(())
@@ -1907,7 +1905,12 @@ impl<'a> Context<'a> {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn emit_visual(&mut self, visual: &Visual, slot: &Slot, out: &mut Lanes) {
+    fn emit_visual(
+        &mut self,
+        visual: &Visual,
+        slot: &Slot,
+        out: &mut Lanes,
+    ) -> Result<(), ComposeError> {
         let rect = slot.rect.inset(visual.inset);
         let (start, end) = (slot.start, slot.start + slot.len);
         let opacity = Opacity {
@@ -1923,9 +1926,38 @@ impl<'a> Context<'a> {
             Content::Video(video) => {
                 let source = self.media_source(&video.file, ModelKind::Video, video.has_audio);
                 let natural = video.natural();
-                let looped = video.looped || (slot.hold == Hold::Loop && slot.len > natural);
+                let short = match video.when_short {
+                    Some(policy) => policy,
+                    None => match slot.hold {
+                        Hold::Loop => WhenShort::Loop,
+                        Hold::Freeze | Hold::None => WhenShort::Freeze,
+                    },
+                };
+                let refuse = |what: &str| {
+                    ComposeError::new(
+                        &visual.head.path,
+                        format!("the video is {what} than its node, and it says to refuse that"),
+                    )
+                };
+                if slot.len > natural && !video.looped && short == WhenShort::Error {
+                    return Err(refuse("shorter"));
+                }
+                if slot.len < natural && video.when_long == WhenLong::Error {
+                    return Err(refuse("longer"));
+                }
+                let stretches = !video.looped
+                    && ((slot.len > natural && short == WhenShort::Stretch)
+                        || (slot.len < natural && video.when_long == WhenLong::Stretch));
+                let looped = video.looped || (short == WhenShort::Loop && slot.len > natural);
                 let mut clips = Vec::new();
-                if looped {
+                if stretches {
+                    clips.push(Clip::new(
+                        self.clip_id(),
+                        source.clone(),
+                        range(start, end),
+                        range(video.trim_start, video.trim_end),
+                    ));
+                } else if looped {
                     let mut clip = Clip::new(
                         self.clip_id(),
                         source,
@@ -1946,7 +1978,7 @@ impl<'a> Context<'a> {
                         range(start, start + play),
                         range(video.trim_start, source_end.max(video.trim_start + 1)),
                     ));
-                    if slot.hold == Hold::Freeze && slot.len > play {
+                    if short == WhenShort::Freeze && slot.len > play {
                         let last = (video.trim_end - video.frame_ticks).max(video.trim_start);
                         let mut freeze = Clip::new(
                             self.clip_id(),
@@ -2159,6 +2191,7 @@ impl<'a> Context<'a> {
             }
         }
         out.visual.push(lane);
+        Ok(())
     }
 
     /// A shape's items placed in `rect`, animated over `0..len` of the picture's time.

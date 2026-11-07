@@ -298,6 +298,36 @@ pub enum FileKind {
     Audio,
 }
 
+/// What a video shorter than its node does once it ends.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum WhenShort {
+    /// Holds its last frame.
+    Freeze,
+    /// Plays again from its start.
+    Loop,
+    /// Slows to fill the node.
+    Stretch,
+    /// Shows nothing.
+    Blank,
+    /// The spec does not compile.
+    Error,
+}
+
+/// What a video longer than its node does.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum WhenLong {
+    /// Ends with the node.
+    Trim,
+    /// Speeds up to fit the node.
+    Stretch,
+    /// The spec does not compile.
+    Error,
+}
+
 /// One part of a video.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -586,6 +616,13 @@ pub struct Media {
     /// Plays a video again from its start while the node lasts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub r#loop: bool,
+    /// What a video does when the node outlasts it. Default: what its parent asks (a grid's
+    /// length rule), else `freeze`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_short: Option<WhenShort>,
+    /// What a video does when it outlasts the node. Default `trim`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_long: Option<WhenLong>,
     /// Linear gain of a video's sound. Default 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume: Option<f32>,
@@ -653,6 +690,8 @@ impl Media {
             fade_in: None,
             fade_out: None,
             zoom: None,
+            when_short: None,
+            when_long: None,
             blur: None,
             label: None,
             at: None,

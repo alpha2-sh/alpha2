@@ -336,6 +336,9 @@ pub(crate) struct VideoContent {
     pub blur: Option<f32>,
     /// One frame of the file, for a hold on its last.
     pub frame_ticks: i64,
+    /// What it does past its end; `None` follows the parent.
+    pub when_short: Option<crate::spec::WhenShort>,
+    pub when_long: crate::spec::WhenLong,
 }
 
 impl VideoContent {
@@ -1589,6 +1592,8 @@ impl Context<'_> {
                     speed,
                     preserve_pitch: media.preserve_pitch.unwrap_or(true),
                     looped: media.r#loop,
+                    when_short: media.when_short,
+                    when_long: media.when_long.unwrap_or(crate::spec::WhenLong::Trim),
                     volume: media
                         .volume
                         .map_or(Ok(1.0), |volume| Self::gain(path, "volume", volume))?,

@@ -390,6 +390,8 @@ def Media(
     fade_in: float | None = None,
     fade_out: float | None = None,
     zoom: float | Mapping[str, Any] | None = None,
+    when_short: str | None = None,
+    when_long: str | None = None,
     blur: float | None = None,
     label: str | None = None,
     fit: Fit | None = None,
@@ -403,7 +405,9 @@ def Media(
 ) -> Node:
     """A video or still file. ``fit`` is ``contain`` (default), ``cover``, ``fill`` or ``none``;
     ``zoom`` is a multiple or its change (:func:`Ramp`, :func:`Keys`); ``label`` names its cell
-    in a comparison grid. At a
+    in a comparison grid. ``when_short`` (``freeze``, ``loop``, ``stretch``, ``blank``,
+    ``error``) and ``when_long`` (``trim``, ``stretch``, ``error``) say what a video does when its
+    node outlasts it or it outlasts its node. At a
     ``speed`` other than 1 its sound keeps its pitch unless ``preserve_pitch`` is false."""
     return _node(
         "media",
@@ -422,6 +426,8 @@ def Media(
                 "fade_in": fade_in,
                 "fade_out": fade_out,
                 "zoom": zoom,
+                "when_short": when_short,
+                "when_long": when_long,
                 "blur": blur,
                 "label": label,
                 "fit": fit,
