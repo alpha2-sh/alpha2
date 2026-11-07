@@ -1,0 +1,52 @@
+{
+  "compose_version": 1,
+  "template": {
+    "id": "alpha2/reframe",
+    "version": 1,
+    "kind": "node",
+    "title": "Reframe",
+    "description": "A video whole in the area, over a blurred copy of itself that covers it: a clip of another shape on this canvas."
+  },
+  "params": [
+    {
+      "name": "video",
+      "type": "media",
+      "accept": [
+        "video",
+        "image"
+      ],
+      "title": "The video"
+    },
+    {
+      "name": "blur",
+      "type": "number",
+      "min": 0,
+      "max": 1,
+      "default": 0.05,
+      "title": "The background's blur radius, as a fraction of its shorter side"
+    }
+  ],
+  "node": {
+    "type": "stack",
+    "children": [
+      {
+        "type": "media",
+        "path": {
+          "$param": "video"
+        },
+        "fit": "cover",
+        "blur": {
+          "$param": "blur"
+        },
+        "muted": true
+      },
+      {
+        "type": "media",
+        "path": {
+          "$param": "video"
+        },
+        "fit": "contain"
+      }
+    ]
+  }
+}

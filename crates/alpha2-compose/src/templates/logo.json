@@ -1,0 +1,123 @@
+{
+  "compose_version": 1,
+  "template": {
+    "id": "alpha2/logo",
+    "version": 1,
+    "kind": "node",
+    "title": "Logo",
+    "description": "An image or video in a corner, inside a margin, at a size relative to the canvas."
+  },
+  "params": [
+    {
+      "name": "path",
+      "type": "media",
+      "accept": [
+        "image",
+        "video"
+      ],
+      "title": "The logo"
+    },
+    {
+      "name": "corner",
+      "type": "enum",
+      "values": [
+        "center",
+        "top",
+        "bottom",
+        "left",
+        "right",
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right"
+      ],
+      "default": "top-right",
+      "title": "Where it lies"
+    },
+    {
+      "name": "size",
+      "type": "number",
+      "min": 0.001,
+      "max": 1,
+      "default": 0.15,
+      "title": "Its box's side, as a fraction of the canvas's shorter side"
+    },
+    {
+      "name": "margin",
+      "type": "number",
+      "min": 0,
+      "max": 0.5,
+      "required": false,
+      "title": "Space kept from the edges, as a fraction of the shorter side. Default: the theme's margin"
+    },
+    {
+      "name": "opacity",
+      "type": "number",
+      "min": 0,
+      "max": 1,
+      "default": 1
+    }
+  ],
+  "node": {
+    "type": "box",
+    "flex_direction": "column",
+    "justify_content": {
+      "$switch": "corner",
+      "cases": {
+        "top": "start",
+        "top-left": "start",
+        "top-right": "start",
+        "bottom": "end",
+        "bottom-left": "end",
+        "bottom-right": "end"
+      },
+      "default": "center"
+    },
+    "align_items": {
+      "$switch": "corner",
+      "cases": {
+        "left": "start",
+        "top-left": "start",
+        "bottom-left": "start",
+        "right": "end",
+        "top-right": "end",
+        "bottom-right": "end"
+      },
+      "default": "center"
+    },
+    "padding": {
+      "$if": "margin",
+      "then": {
+        "$param": "margin"
+      },
+      "else": {
+        "$theme": "margin"
+      }
+    },
+    "children": [
+      {
+        "box": {
+          "width": {
+            "$param": "size"
+          },
+          "height": {
+            "$param": "size"
+          }
+        },
+        "node": {
+          "type": "media",
+          "path": {
+            "$param": "path"
+          },
+          "fit": "contain",
+          "align": {
+            "$param": "corner"
+          },
+          "opacity": {
+            "$param": "opacity"
+          }
+        }
+      }
+    ]
+  }
+}

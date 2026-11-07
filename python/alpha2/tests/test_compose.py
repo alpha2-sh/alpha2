@@ -339,3 +339,15 @@ def test_a_template_binds_its_data_and_says_what_it_takes() -> None:
         "alpha2/circle-reveal",
         "alpha2/wipe-reveal",
     }
+
+
+def test_a_comparison_grid_takes_paths_or_labeled_items_and_hears_one() -> None:
+    grid = c.ComparisonGrid(["talk.mp4", {"path": "talk.mp4", "label": "B"}], audio_from=1)
+    assert grid["items"] == [
+        {"path": "talk.mp4"},
+        {"path": "talk.mp4", "label": "B", "audio": True},
+    ]
+    compiled = c.Video(grid).compile(facts=FACTS, fonts=[FONT])
+    assert alpha2.validate_project(compiled.project) == []
+    with pytest.raises(ValueError, match="no item 2"):
+        c.ComparisonGrid(["talk.mp4"], audio_from=2)

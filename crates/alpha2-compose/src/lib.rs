@@ -173,11 +173,8 @@ pub fn requirements_json(spec: &str) -> Result<String, ComposeError> {
     Ok(serde_json::to_string(&requirements(&spec)).expect("requirements serialize"))
 }
 
-/// `spec` with its `alpha2/` template nodes expanded; text without one is returned as it is.
+/// `spec` with its 1st-party template nodes expanded (`alpha2/` ids and their bare names).
 fn expand_builtins(spec: &str) -> Result<String, ComposeError> {
-    if !spec.contains("alpha2/") {
-        return Ok(spec.to_owned());
-    }
     let value: serde_json::Value =
         serde_json::from_str(spec).map_err(|error| ComposeError::new("spec", error.to_string()))?;
     Ok(template::bind(

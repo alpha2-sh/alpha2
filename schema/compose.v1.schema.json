@@ -292,12 +292,15 @@
           ]
         },
         "font_size": {
-          "description": "Font size in pixels. Default: the theme's caption size.",
-          "format": "float",
-          "type": [
-            "number",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Size"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Font size in pixels. Default: the theme's caption size."
         },
         "highlight": {
           "anyOf": [
@@ -5957,6 +5960,41 @@
       ],
       "description": "A layout size: a number is a fraction of the picture's shorter side, `\"<n>px\"` canvas pixels."
     },
+    "LengthToken": {
+      "description": "A theme's named lengths.",
+      "oneOf": [
+        {
+          "const": "margin",
+          "description": "Space kept from the edges.",
+          "type": "string"
+        },
+        {
+          "const": "title_size",
+          "description": "The title style's font size.",
+          "type": "string"
+        },
+        {
+          "const": "subtitle_size",
+          "description": "The subtitle style's font size.",
+          "type": "string"
+        },
+        {
+          "const": "body_size",
+          "description": "The body style's font size.",
+          "type": "string"
+        },
+        {
+          "const": "caption_size",
+          "description": "Captions' font size.",
+          "type": "string"
+        },
+        {
+          "const": "label_size",
+          "description": "The label style's font size.",
+          "type": "string"
+        }
+      ]
+    },
     "LinearPaint": {
       "additionalProperties": false,
       "description": "`{\"linear\": gradient}`.",
@@ -6343,7 +6381,7 @@
           ]
         },
         "duration": {
-          "description": "Length in seconds. Default: the theme's fade length.",
+          "description": "Length in seconds; 0 is no motion. Default: the theme's fade length.",
           "format": "double",
           "type": [
             "number",
@@ -7025,12 +7063,15 @@
               ]
             },
             "font_size": {
-              "description": "Font size in pixels. Default: the style's.",
-              "format": "float",
-              "type": [
-                "number",
-                "null"
-              ]
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Size"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Font size in pixels, or a theme length. Default: the style's."
             },
             "id": {
               "description": "The node's name, for other nodes to refer to.",
@@ -7240,12 +7281,15 @@
               ]
             },
             "font_size": {
-              "description": "Font size in pixels. Default: the theme's caption size.",
-              "format": "float",
-              "type": [
-                "number",
-                "null"
-              ]
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Size"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Font size in pixels. Default: the theme's caption size."
             },
             "highlight": {
               "anyOf": [
@@ -7689,601 +7733,6 @@
         },
         {
           "additionalProperties": false,
-          "description": "A title (and subtitle) over what is under it, laid out on the whole canvas.",
-          "properties": {
-            "align": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Align"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Where it lies. Default `center`."
-            },
-            "at": {
-              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "background": {
-              "anyOf": [
-                {
-                  "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A card's color. Default: the theme's surface."
-            },
-            "duration": {
-              "description": "Length in seconds. Default: the node's own length, else what its parent gives it.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "enter": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Motion"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "How it comes in at its start."
-            },
-            "exit": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Motion"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "How it goes out, ending at its end."
-            },
-            "fade": {
-              "description": "Seconds of fade in and out. Default: the theme's.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "id": {
-              "description": "The node's name, for other nodes to refer to.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "subtitle": {
-              "description": "A smaller line under it.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "text": {
-              "description": "The title.",
-              "type": "string"
-            },
-            "type": {
-              "const": "title",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "text"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "A title (and subtitle) on the theme's surface, over the whole canvas.",
-          "properties": {
-            "align": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Align"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Where it lies. Default `center`."
-            },
-            "at": {
-              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "background": {
-              "anyOf": [
-                {
-                  "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "A card's color. Default: the theme's surface."
-            },
-            "duration": {
-              "description": "Length in seconds. Default: the node's own length, else what its parent gives it.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "enter": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Motion"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "How it comes in at its start."
-            },
-            "exit": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Motion"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "How it goes out, ending at its end."
-            },
-            "fade": {
-              "description": "Seconds of fade in and out. Default: the theme's.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "id": {
-              "description": "The node's name, for other nodes to refer to.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "subtitle": {
-              "description": "A smaller line under it.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "text": {
-              "description": "The title.",
-              "type": "string"
-            },
-            "type": {
-              "const": "title_card",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "text"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "A name and role in the canvas's lower left.",
-          "properties": {
-            "at": {
-              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "duration": {
-              "description": "Length in seconds. Default: the node's own length, else what its parent gives it.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "enter": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Motion"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "How it comes in at its start."
-            },
-            "exit": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Motion"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "How it goes out, ending at its end."
-            },
-            "fade": {
-              "description": "Seconds of fade in and out. Default: the theme's.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "id": {
-              "description": "The node's name, for other nodes to refer to.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "subtitle": {
-              "description": "The role, under it.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "text": {
-              "description": "The name.",
-              "type": "string"
-            },
-            "type": {
-              "const": "lower_third",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "text"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "A closing card over the whole canvas: a logo, a title and a subtitle on the theme's\nsurface.",
-          "properties": {
-            "at": {
-              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "background": {
-              "anyOf": [
-                {
-                  "$ref": "https://alpha2.sh/schema/project.v1.json#/$defs/Rgba"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The card's color. Default: the theme's surface."
-            },
-            "duration": {
-              "description": "Length in seconds. Default: the node's own length, else what its parent gives it.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "enter": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Motion"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "How it comes in at its start."
-            },
-            "exit": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Motion"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "How it goes out, ending at its end."
-            },
-            "fade": {
-              "description": "Seconds of fade in and out. Default: the theme's.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "id": {
-              "description": "The node's name, for other nodes to refer to.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "logo": {
-              "description": "A picture above the title.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "subtitle": {
-              "description": "A smaller line under it.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "text": {
-              "description": "The title.",
-              "type": "string"
-            },
-            "type": {
-              "const": "end_card",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "text"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Clips side by side in a grid, each labeled.",
-          "properties": {
-            "at": {
-              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "audio_from": {
-              "description": "Which item's sound plays, by index. Default: none.",
-              "format": "uint32",
-              "maximum": 4294967295,
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "columns": {
-              "description": "Columns. Default: as square a grid as the items make.",
-              "format": "uint32",
-              "maximum": 4294967295,
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
-            },
-            "duration": {
-              "description": "Length in seconds. Default: the node's own length, else what its parent gives it.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "gap": {
-              "default": 0.0,
-              "description": "Pixels between cells.",
-              "format": "float",
-              "type": "number"
-            },
-            "id": {
-              "description": "The node's name, for other nodes to refer to.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "items": {
-              "description": "The clips, row by row; each one's `label` names its cell.",
-              "items": {
-                "$ref": "#/$defs/MediaItem"
-              },
-              "type": "array"
-            },
-            "length": {
-              "$ref": "#/$defs/GridLength",
-              "default": "shortest",
-              "description": "How long the grid lasts when its clips differ. Default `shortest`."
-            },
-            "type": {
-              "const": "comparison_grid",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "items"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "A video fitted to a canvas of another shape, over a blurred copy of itself.",
-          "properties": {
-            "at": {
-              "description": "When it starts in its parent; its length is the video's.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "blur": {
-              "description": "The background's blur radius, as a fraction of its shorter side. Default 0.05.",
-              "format": "float",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "id": {
-              "description": "The node's name, for other nodes to refer to. Its sound is the video's.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "const": "reframe",
-              "type": "string"
-            },
-            "video": {
-              "$ref": "#/$defs/MediaItem",
-              "description": "The video."
-            }
-          },
-          "required": [
-            "type",
-            "video"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "A picture in a corner.",
-          "properties": {
-            "at": {
-              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "corner": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Align"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The corner. Default `top-right`."
-            },
-            "duration": {
-              "description": "Length in seconds. Default: the node's own length, else what its parent gives it.",
-              "format": "double",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "enter": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Motion"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "How it comes in at its start."
-            },
-            "exit": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Motion"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "How it goes out, ending at its end."
-            },
-            "id": {
-              "description": "The node's name, for other nodes to refer to.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "margin": {
-              "description": "Pixels from the edges. Default: the theme's margin.",
-              "format": "float",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "opacity": {
-              "description": "Opacity, 0..=1. Default 1.",
-              "format": "float",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "path": {
-              "description": "The picture.",
-              "type": "string"
-            },
-            "size": {
-              "description": "Its longer side, in pixels. Default: 15% of the canvas's shorter side.",
-              "format": "float",
-              "type": [
-                "number",
-                "null"
-              ]
-            },
-            "type": {
-              "const": "logo",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "path"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
           "description": "Music under the video, faded in and out and ducked under speech.",
           "properties": {
             "at": {
@@ -8464,12 +7913,15 @@
               ]
             },
             "font_size": {
-              "description": "Font size in pixels. Default: the style's.",
-              "format": "float",
-              "type": [
-                "number",
-                "null"
-              ]
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Size"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Font size in pixels, or a theme length. Default: the style's."
             },
             "format": {
               "anyOf": [
@@ -8934,6 +8386,1229 @@
             "type"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Shows a node through a circle that grows from the middle of its area until it covers it.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "type": {
+              "const": "alpha2/circle-reveal"
+            },
+            "version": {
+              "const": 1
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "content": {
+                  "$ref": "#/$defs/Node",
+                  "title": "What is revealed"
+                },
+                "ease": {
+                  "default": "ease-out",
+                  "enum": [
+                    "linear",
+                    "ease",
+                    "ease-in",
+                    "ease-out",
+                    "ease-in-out"
+                  ],
+                  "title": "Timing curve"
+                },
+                "seconds": {
+                  "default": 0.8,
+                  "maximum": 10.0,
+                  "minimum": 0.05,
+                  "title": "How long the circle grows",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "content"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "with"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Shows a node as an edge sweeps across its area.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "type": {
+              "const": "alpha2/wipe-reveal"
+            },
+            "version": {
+              "const": 1
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "content": {
+                  "$ref": "#/$defs/Node",
+                  "title": "What is revealed"
+                },
+                "ease": {
+                  "default": "ease-in-out",
+                  "enum": [
+                    "linear",
+                    "ease",
+                    "ease-in",
+                    "ease-out",
+                    "ease-in-out"
+                  ],
+                  "title": "Timing curve"
+                },
+                "from": {
+                  "default": "left",
+                  "enum": [
+                    "left",
+                    "right",
+                    "top",
+                    "bottom"
+                  ],
+                  "title": "The side the edge starts at"
+                },
+                "seconds": {
+                  "default": 0.6,
+                  "maximum": 10.0,
+                  "minimum": 0.05,
+                  "title": "How long the sweep takes",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "content"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "with"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A title and an optional subtitle over what is under it, fading in and out.",
+          "properties": {
+            "align": {
+              "default": "center",
+              "enum": [
+                "center",
+                "top",
+                "bottom",
+                "left",
+                "right",
+                "top-left",
+                "top-right",
+                "bottom-left",
+                "bottom-right"
+              ],
+              "title": "Where it lies, inside twice the theme's margin"
+            },
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "fade": {
+              "maximum": 60.0,
+              "minimum": 0.0,
+              "title": "Seconds of fade in and out; 0 for none. Default: the theme's",
+              "type": "number"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "subtitle": {
+              "title": "A line under it",
+              "type": "string"
+            },
+            "text": {
+              "minLength": 1,
+              "title": "The title",
+              "type": "string"
+            },
+            "type": {
+              "const": "title"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A title and an optional subtitle over what is under it, fading in and out.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "type": {
+              "const": "alpha2/title"
+            },
+            "version": {
+              "const": 1
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "align": {
+                  "default": "center",
+                  "enum": [
+                    "center",
+                    "top",
+                    "bottom",
+                    "left",
+                    "right",
+                    "top-left",
+                    "top-right",
+                    "bottom-left",
+                    "bottom-right"
+                  ],
+                  "title": "Where it lies, inside twice the theme's margin"
+                },
+                "fade": {
+                  "maximum": 60.0,
+                  "minimum": 0.0,
+                  "title": "Seconds of fade in and out; 0 for none. Default: the theme's",
+                  "type": "number"
+                },
+                "subtitle": {
+                  "title": "A line under it",
+                  "type": "string"
+                },
+                "text": {
+                  "minLength": 1,
+                  "title": "The title",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "with"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A title and an optional subtitle on a background of their own, fading in and out as one picture.",
+          "properties": {
+            "align": {
+              "default": "center",
+              "enum": [
+                "center",
+                "top",
+                "bottom",
+                "left",
+                "right",
+                "top-left",
+                "top-right",
+                "bottom-left",
+                "bottom-right"
+              ],
+              "title": "Where it lies, inside twice the theme's margin"
+            },
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "background": {
+              "$ref": "#/$defs/SolidColor",
+              "title": "The card's color. Default: the theme's surface"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "fade": {
+              "maximum": 60.0,
+              "minimum": 0.0,
+              "title": "Seconds of fade in and out; 0 for none. Default: the theme's",
+              "type": "number"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "subtitle": {
+              "title": "A line under it",
+              "type": "string"
+            },
+            "text": {
+              "minLength": 1,
+              "title": "The title",
+              "type": "string"
+            },
+            "type": {
+              "const": "title_card"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A title and an optional subtitle on a background of their own, fading in and out as one picture.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "type": {
+              "const": "alpha2/title-card"
+            },
+            "version": {
+              "const": 1
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "align": {
+                  "default": "center",
+                  "enum": [
+                    "center",
+                    "top",
+                    "bottom",
+                    "left",
+                    "right",
+                    "top-left",
+                    "top-right",
+                    "bottom-left",
+                    "bottom-right"
+                  ],
+                  "title": "Where it lies, inside twice the theme's margin"
+                },
+                "background": {
+                  "$ref": "#/$defs/SolidColor",
+                  "title": "The card's color. Default: the theme's surface"
+                },
+                "fade": {
+                  "maximum": 60.0,
+                  "minimum": 0.0,
+                  "title": "Seconds of fade in and out; 0 for none. Default: the theme's",
+                  "type": "number"
+                },
+                "subtitle": {
+                  "title": "A line under it",
+                  "type": "string"
+                },
+                "text": {
+                  "minLength": 1,
+                  "title": "The title",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "with"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A name and an optional role in the lower left, on panels beside an accent bar.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "fade": {
+              "maximum": 60.0,
+              "minimum": 0.0,
+              "title": "Seconds of fade in and out; 0 for none. Default: the theme's",
+              "type": "number"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "subtitle": {
+              "title": "The role",
+              "type": "string"
+            },
+            "text": {
+              "minLength": 1,
+              "title": "The name",
+              "type": "string"
+            },
+            "type": {
+              "const": "lower_third"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A name and an optional role in the lower left, on panels beside an accent bar.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "type": {
+              "const": "alpha2/lower-third"
+            },
+            "version": {
+              "const": 1
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "fade": {
+                  "maximum": 60.0,
+                  "minimum": 0.0,
+                  "title": "Seconds of fade in and out; 0 for none. Default: the theme's",
+                  "type": "number"
+                },
+                "subtitle": {
+                  "title": "The role",
+                  "type": "string"
+                },
+                "text": {
+                  "minLength": 1,
+                  "title": "The name",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "with"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A closing title, an optional subtitle and an optional logo on a background, fading in and out as one picture.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "background": {
+              "$ref": "#/$defs/SolidColor",
+              "title": "The card's color. Default: the theme's surface"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "fade": {
+              "maximum": 60.0,
+              "minimum": 0.0,
+              "title": "Seconds of fade in and out; 0 for none. Default: the theme's",
+              "type": "number"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "logo": {
+              "format": "uri-reference",
+              "title": "A logo above the title",
+              "type": "string",
+              "x-alpha2-media": {
+                "accept": [
+                  "image",
+                  "video"
+                ]
+              }
+            },
+            "subtitle": {
+              "title": "A line under it",
+              "type": "string"
+            },
+            "text": {
+              "minLength": 1,
+              "title": "The title",
+              "type": "string"
+            },
+            "type": {
+              "const": "end_card"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A closing title, an optional subtitle and an optional logo on a background, fading in and out as one picture.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "type": {
+              "const": "alpha2/end-card"
+            },
+            "version": {
+              "const": 1
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "background": {
+                  "$ref": "#/$defs/SolidColor",
+                  "title": "The card's color. Default: the theme's surface"
+                },
+                "fade": {
+                  "maximum": 60.0,
+                  "minimum": 0.0,
+                  "title": "Seconds of fade in and out; 0 for none. Default: the theme's",
+                  "type": "number"
+                },
+                "logo": {
+                  "format": "uri-reference",
+                  "title": "A logo above the title",
+                  "type": "string",
+                  "x-alpha2-media": {
+                    "accept": [
+                      "image",
+                      "video"
+                    ]
+                  }
+                },
+                "subtitle": {
+                  "title": "A line under it",
+                  "type": "string"
+                },
+                "text": {
+                  "minLength": 1,
+                  "title": "The title",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "with"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An image or video in a corner, inside a margin, at a size relative to the canvas.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "corner": {
+              "default": "top-right",
+              "enum": [
+                "center",
+                "top",
+                "bottom",
+                "left",
+                "right",
+                "top-left",
+                "top-right",
+                "bottom-left",
+                "bottom-right"
+              ],
+              "title": "Where it lies"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "margin": {
+              "maximum": 0.5,
+              "minimum": 0.0,
+              "title": "Space kept from the edges, as a fraction of the shorter side. Default: the theme's margin",
+              "type": "number"
+            },
+            "opacity": {
+              "default": 1,
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            "path": {
+              "format": "uri-reference",
+              "title": "The logo",
+              "type": "string",
+              "x-alpha2-media": {
+                "accept": [
+                  "image",
+                  "video"
+                ]
+              }
+            },
+            "size": {
+              "default": 0.15,
+              "maximum": 1.0,
+              "minimum": 0.001,
+              "title": "Its box's side, as a fraction of the canvas's shorter side",
+              "type": "number"
+            },
+            "type": {
+              "const": "logo"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An image or video in a corner, inside a margin, at a size relative to the canvas.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "type": {
+              "const": "alpha2/logo"
+            },
+            "version": {
+              "const": 1
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "corner": {
+                  "default": "top-right",
+                  "enum": [
+                    "center",
+                    "top",
+                    "bottom",
+                    "left",
+                    "right",
+                    "top-left",
+                    "top-right",
+                    "bottom-left",
+                    "bottom-right"
+                  ],
+                  "title": "Where it lies"
+                },
+                "margin": {
+                  "maximum": 0.5,
+                  "minimum": 0.0,
+                  "title": "Space kept from the edges, as a fraction of the shorter side. Default: the theme's margin",
+                  "type": "number"
+                },
+                "opacity": {
+                  "default": 1,
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                "path": {
+                  "format": "uri-reference",
+                  "title": "The logo",
+                  "type": "string",
+                  "x-alpha2-media": {
+                    "accept": [
+                      "image",
+                      "video"
+                    ]
+                  }
+                },
+                "size": {
+                  "default": 0.15,
+                  "maximum": 1.0,
+                  "minimum": 0.001,
+                  "title": "Its box's side, as a fraction of the canvas's shorter side",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "with"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A video whole in the area, over a blurred copy of itself that covers it: a clip of another shape on this canvas.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "blur": {
+              "default": 0.05,
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "The background's blur radius, as a fraction of its shorter side",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "type": {
+              "const": "reframe"
+            },
+            "video": {
+              "format": "uri-reference",
+              "title": "The video",
+              "type": "string",
+              "x-alpha2-media": {
+                "accept": [
+                  "video",
+                  "image"
+                ]
+              }
+            }
+          },
+          "required": [
+            "type",
+            "video"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A video whole in the area, over a blurred copy of itself that covers it: a clip of another shape on this canvas.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "type": {
+              "const": "alpha2/reframe"
+            },
+            "version": {
+              "const": 1
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "blur": {
+                  "default": 0.05,
+                  "maximum": 1.0,
+                  "minimum": 0.0,
+                  "title": "The background's blur radius, as a fraction of its shorter side",
+                  "type": "number"
+                },
+                "video": {
+                  "format": "uri-reference",
+                  "title": "The video",
+                  "type": "string",
+                  "x-alpha2-media": {
+                    "accept": [
+                      "video",
+                      "image"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "video"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "with"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Clips side by side in a grid, each with an optional label; one of them may be heard.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "columns": {
+              "maximum": 64.0,
+              "minimum": 1.0,
+              "title": "Columns. Default: as square a grid as the items make",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "gap": {
+              "default": 0,
+              "minimum": 0.0,
+              "title": "Pixels between cells",
+              "type": "number"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "audio": {
+                    "default": false,
+                    "title": "Whether its sound plays",
+                    "type": "boolean"
+                  },
+                  "label": {
+                    "title": "Its cell's label",
+                    "type": "string"
+                  },
+                  "path": {
+                    "format": "uri-reference",
+                    "title": "The clip",
+                    "type": "string",
+                    "x-alpha2-media": {
+                      "accept": [
+                        "video",
+                        "image"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "type": "object"
+              },
+              "minItems": 1,
+              "title": "The clips, row by row",
+              "type": "array"
+            },
+            "length": {
+              "default": "shortest",
+              "enum": [
+                "shortest",
+                "longest_freeze",
+                "longest_loop"
+              ],
+              "title": "How long the grid lasts when its clips differ"
+            },
+            "type": {
+              "const": "comparison_grid"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Clips side by side in a grid, each with an optional label; one of them may be heard.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "type": {
+              "const": "alpha2/comparison-grid"
+            },
+            "version": {
+              "const": 1
+            },
+            "with": {
+              "additionalProperties": false,
+              "properties": {
+                "columns": {
+                  "maximum": 64.0,
+                  "minimum": 1.0,
+                  "title": "Columns. Default: as square a grid as the items make",
+                  "type": "number"
+                },
+                "gap": {
+                  "default": 0,
+                  "minimum": 0.0,
+                  "title": "Pixels between cells",
+                  "type": "number"
+                },
+                "items": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "audio": {
+                        "default": false,
+                        "title": "Whether its sound plays",
+                        "type": "boolean"
+                      },
+                      "label": {
+                        "title": "Its cell's label",
+                        "type": "string"
+                      },
+                      "path": {
+                        "format": "uri-reference",
+                        "title": "The clip",
+                        "type": "string",
+                        "x-alpha2-media": {
+                          "accept": [
+                            "video",
+                            "image"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "path"
+                    ],
+                    "type": "object"
+                  },
+                  "minItems": 1,
+                  "title": "The clips, row by row",
+                  "type": "array"
+                },
+                "length": {
+                  "default": "shortest",
+                  "enum": [
+                    "shortest",
+                    "longest_freeze",
+                    "longest_loop"
+                  ],
+                  "title": "How long the grid lasts when its clips differ"
+                }
+              },
+              "required": [
+                "items"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "type",
+            "with"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A node template by its id, bound to `with`.",
+          "properties": {
+            "at": {
+              "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.",
+              "type": "number"
+            },
+            "duration": {
+              "description": "Length in seconds. Default: the template's own, else what its parent gives it.",
+              "type": "number"
+            },
+            "enter": {
+              "$ref": "#/$defs/Motion"
+            },
+            "exit": {
+              "$ref": "#/$defs/Motion"
+            },
+            "id": {
+              "description": "The node's name, for other nodes to refer to.",
+              "type": "string"
+            },
+            "inset": {
+              "$ref": "#/$defs/Inset"
+            },
+            "type": {
+              "description": "A template's `owner/name` id; the spec is compiled with it.",
+              "not": {
+                "pattern": "^alpha2/"
+              },
+              "pattern": "^[a-z0-9_-]+/[a-z0-9_-]+$",
+              "type": "string"
+            },
+            "version": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "with": {
+              "description": "The template's data.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -9245,6 +9920,20 @@
           "type": "string"
         }
       ]
+    },
+    "Size": {
+      "anyOf": [
+        {
+          "description": "Pixels of the canvas.",
+          "format": "float",
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/ThemeLength",
+          "description": "A theme length."
+        }
+      ],
+      "description": "A size in pixels, or one of the theme's lengths."
     },
     "SolidColor": {
       "anyOf": [
@@ -9586,6 +10275,28 @@
         },
         "alpha": {
           "description": "Opacity multiplied into it, 0..=1. Default 1.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "$theme"
+      ],
+      "type": "object"
+    },
+    "ThemeLength": {
+      "additionalProperties": false,
+      "description": "One of the theme's lengths times `scale`, so a design follows the theme it is drawn with: a\nfraction of the picture's shorter side.",
+      "properties": {
+        "$theme": {
+          "$ref": "#/$defs/LengthToken",
+          "description": "Which of the theme's lengths."
+        },
+        "scale": {
+          "description": "What it is multiplied by. Default 1.",
           "format": "float",
           "type": [
             "number",

@@ -149,6 +149,9 @@ FIT_VALUES: tuple[Fit, ...] = ("contain", "cover", "fill", "none")
 GRID_LENGTH_VALUES: tuple[GridLength, ...] = ("shortest", "longest_freeze", "longest_loop")
 """Every `GridLength`, in the model's order."""
 
+LENGTH_TOKEN_VALUES: tuple[LengthToken, ...] = ("margin", "title_size", "subtitle_size", "body_size", "caption_size", "label_size")
+"""Every `LengthToken`, in the model's order."""
+
 MATTE_USE_VALUES: tuple[MatteUse, ...] = ("alpha", "luma")
 """Every `MatteUse`, in the model's order."""
 
@@ -256,7 +259,7 @@ class CaptionsNode(TypedDict):
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
     file: NotRequired[str | None]
     """A SubRip (`.srt`) or WebVTT (`.vtt`) file, read by the binding."""
-    font_size: NotRequired[float | None]
+    font_size: NotRequired[Size | None]
     """Font size in pixels. Default: the theme's caption size."""
     highlight: NotRequired[SolidColor | None]
     """The color `karaoke` and `pop` give the word being said. Default: the theme's accent."""
@@ -1235,6 +1238,10 @@ LayoutSize2: TypeAlias = "float | str"
 """A layout size: a number is a fraction of the picture's shorter side, `"<n>px"` canvas pixels."""
 
 
+LengthToken: TypeAlias = Literal["margin", "title_size", "subtitle_size", "body_size", "caption_size", "label_size"]
+"""A theme's named lengths."""
+
+
 class LinearPaint(TypedDict):
     """`{"linear": gradient}`."""
 
@@ -1278,7 +1285,7 @@ class Motion(TypedDict):
     distance: NotRequired[float | None]
     """How far a `rise` or `slide` travels, in pixels. Default: the theme's margin."""
     duration: NotRequired[float | None]
-    """Length in seconds. Default: the theme's fade length."""
+    """Length in seconds; 0 is no motion. Default: the theme's fade length."""
     easing: NotRequired[EasingChoice | None]
     """The timing curve. Default linear."""
     fade: NotRequired[bool | None]
@@ -1474,8 +1481,8 @@ class NodeText(TypedDict):
     """
     font_family: NotRequired[str | None]
     """Family. Default: the theme's."""
-    font_size: NotRequired[float | None]
-    """Font size in pixels. Default: the style's."""
+    font_size: NotRequired[Size | None]
+    """Font size in pixels, or a theme length. Default: the style's."""
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     inset: NotRequired[Inset | None]
@@ -1539,7 +1546,7 @@ class NodeCaptions(TypedDict):
     """Length in seconds. Default: the node's own length, else what its parent gives it."""
     file: NotRequired[str | None]
     """A SubRip (`.srt`) or WebVTT (`.vtt`) file, read by the binding."""
-    font_size: NotRequired[float | None]
+    font_size: NotRequired[Size | None]
     """Font size in pixels. Default: the theme's caption size."""
     highlight: NotRequired[SolidColor | None]
     """The color `karaoke` and `pop` give the word being said. Default: the theme's accent."""
@@ -1683,176 +1690,6 @@ class NodeCaptionedVideo(TypedDict):
     """The video."""
 
 
-class NodeTitle(TypedDict):
-    """A title (and subtitle) over what is under it, laid out on the whole canvas."""
-
-    align: NotRequired[Align | None]
-    """Where it lies. Default `center`."""
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    background: NotRequired[Rgba | None]
-    """A card's color. Default: the theme's surface."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    enter: NotRequired[Motion | None]
-    """How it comes in at its start."""
-    exit: NotRequired[Motion | None]
-    """How it goes out, ending at its end."""
-    fade: NotRequired[float | None]
-    """Seconds of fade in and out. Default: the theme's."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    subtitle: NotRequired[str | None]
-    """A smaller line under it."""
-    text: str
-    """The title."""
-    type: Literal["title"]
-
-
-class NodeTitleCard(TypedDict):
-    """A title (and subtitle) on the theme's surface, over the whole canvas."""
-
-    align: NotRequired[Align | None]
-    """Where it lies. Default `center`."""
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    background: NotRequired[Rgba | None]
-    """A card's color. Default: the theme's surface."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    enter: NotRequired[Motion | None]
-    """How it comes in at its start."""
-    exit: NotRequired[Motion | None]
-    """How it goes out, ending at its end."""
-    fade: NotRequired[float | None]
-    """Seconds of fade in and out. Default: the theme's."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    subtitle: NotRequired[str | None]
-    """A smaller line under it."""
-    text: str
-    """The title."""
-    type: Literal["title_card"]
-
-
-class NodeLowerThird(TypedDict):
-    """A name and role in the canvas's lower left."""
-
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    enter: NotRequired[Motion | None]
-    """How it comes in at its start."""
-    exit: NotRequired[Motion | None]
-    """How it goes out, ending at its end."""
-    fade: NotRequired[float | None]
-    """Seconds of fade in and out. Default: the theme's."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    subtitle: NotRequired[str | None]
-    """The role, under it."""
-    text: str
-    """The name."""
-    type: Literal["lower_third"]
-
-
-class NodeEndCard(TypedDict):
-    """A closing card over the whole canvas: a logo, a title and a subtitle on the theme's
-    surface.
-    """
-
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    background: NotRequired[Rgba | None]
-    """The card's color. Default: the theme's surface."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    enter: NotRequired[Motion | None]
-    """How it comes in at its start."""
-    exit: NotRequired[Motion | None]
-    """How it goes out, ending at its end."""
-    fade: NotRequired[float | None]
-    """Seconds of fade in and out. Default: the theme's."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    logo: NotRequired[str | None]
-    """A picture above the title."""
-    subtitle: NotRequired[str | None]
-    """A smaller line under it."""
-    text: str
-    """The title."""
-    type: Literal["end_card"]
-
-
-class NodeComparisonGrid(TypedDict):
-    """Clips side by side in a grid, each labeled."""
-
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    audio_from: NotRequired[int | None]
-    """Which item's sound plays, by index. Default: none."""
-    columns: NotRequired[int | None]
-    """Columns. Default: as square a grid as the items make."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    gap: NotRequired[float]
-    """Pixels between cells.
-
-    Default: `0`.
-    """
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    items: list[MediaItem]
-    """The clips, row by row; each one's `label` names its cell."""
-    length: NotRequired[GridLength]
-    """How long the grid lasts when its clips differ. Default `shortest`.
-
-    Default: `"shortest"`.
-    """
-    type: Literal["comparison_grid"]
-
-
-class NodeReframe(TypedDict):
-    """A video fitted to a canvas of another shape, over a blurred copy of itself."""
-
-    at: NotRequired[float | None]
-    """When it starts in its parent; its length is the video's."""
-    blur: NotRequired[float | None]
-    """The background's blur radius, as a fraction of its shorter side. Default 0.05."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to. Its sound is the video's."""
-    type: Literal["reframe"]
-    video: MediaItem
-    """The video."""
-
-
-class NodeLogo(TypedDict):
-    """A picture in a corner."""
-
-    at: NotRequired[float | None]
-    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
-    corner: NotRequired[Align | None]
-    """The corner. Default `top-right`."""
-    duration: NotRequired[float | None]
-    """Length in seconds. Default: the node's own length, else what its parent gives it."""
-    enter: NotRequired[Motion | None]
-    """How it comes in at its start."""
-    exit: NotRequired[Motion | None]
-    """How it goes out, ending at its end."""
-    id: NotRequired[str | None]
-    """The node's name, for other nodes to refer to."""
-    margin: NotRequired[float | None]
-    """Pixels from the edges. Default: the theme's margin."""
-    opacity: NotRequired[float | None]
-    """Opacity, 0..=1. Default 1."""
-    path: str
-    """The picture."""
-    size: NotRequired[float | None]
-    """Its longer side, in pixels. Default: 15% of the canvas's shorter side."""
-    type: Literal["logo"]
-
-
 class NodeMusicBed(TypedDict):
     """Music under the video, faded in and out and ducked under speech."""
 
@@ -1907,8 +1744,8 @@ class NodeCounter(TypedDict):
     """How it goes out, ending at its end."""
     font_family: NotRequired[str | None]
     """Family. Default: the theme's."""
-    font_size: NotRequired[float | None]
-    """Font size in pixels. Default: the style's."""
+    font_size: NotRequired[Size | None]
+    """Font size in pixels, or a theme length. Default: the style's."""
     format: NotRequired[NumberFormat | None]
     """How the number is written."""
     id: NotRequired[str | None]
@@ -2028,7 +1865,408 @@ class NodeMask(TypedDict):
     type: Literal["mask"]
 
 
-Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed | NodeCounter | NodeGroup | NodeShape | NodeMatte | NodeMask | dict[str, Any]"
+class NodeAlpha2CircleRevealWith(TypedDict):
+    content: Node
+    ease: NotRequired[Literal["linear", "ease", "ease-in", "ease-out", "ease-in-out"]]
+    """Default: `"ease-out"`."""
+    seconds: NotRequired[float]
+    """Default: `0.8`."""
+
+
+NodeAlpha2CircleReveal = TypedDict(
+    "NodeAlpha2CircleReveal",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/circle-reveal\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2CircleRevealWith",
+    },
+)
+NodeAlpha2CircleReveal.__doc__ = "Shows a node through a circle that grows from the middle of its area until it covers it."
+
+
+NodeAlpha2WipeRevealWith = TypedDict(
+    "NodeAlpha2WipeRevealWith",
+    {
+        "content": "Node",
+        "ease": "NotRequired[Literal[\"linear\", \"ease\", \"ease-in\", \"ease-out\", \"ease-in-out\"]]",
+        "from": "NotRequired[Literal[\"left\", \"right\", \"top\", \"bottom\"]]",
+        "seconds": "NotRequired[float]",
+    },
+)
+
+
+NodeAlpha2WipeReveal = TypedDict(
+    "NodeAlpha2WipeReveal",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/wipe-reveal\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2WipeRevealWith",
+    },
+)
+NodeAlpha2WipeReveal.__doc__ = "Shows a node as an edge sweeps across its area."
+
+
+class NodeTitle(TypedDict):
+    """A title and an optional subtitle over what is under it, fading in and out."""
+
+    align: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"center"`."""
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    fade: NotRequired[float]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    subtitle: NotRequired[str]
+    text: str
+    type: Literal["title"]
+
+
+class NodeAlpha2TitleWith(TypedDict):
+    align: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"center"`."""
+    fade: NotRequired[float]
+    subtitle: NotRequired[str]
+    text: str
+
+
+NodeAlpha2Title = TypedDict(
+    "NodeAlpha2Title",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/title\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2TitleWith",
+    },
+)
+NodeAlpha2Title.__doc__ = "A title and an optional subtitle over what is under it, fading in and out."
+
+
+class NodeTitleCard(TypedDict):
+    """A title and an optional subtitle on a background of their own, fading in and out as one picture."""
+
+    align: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"center"`."""
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    background: NotRequired[SolidColor]
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    fade: NotRequired[float]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    subtitle: NotRequired[str]
+    text: str
+    type: Literal["title_card"]
+
+
+class NodeAlpha2TitleCardWith(TypedDict):
+    align: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"center"`."""
+    background: NotRequired[SolidColor]
+    fade: NotRequired[float]
+    subtitle: NotRequired[str]
+    text: str
+
+
+NodeAlpha2TitleCard = TypedDict(
+    "NodeAlpha2TitleCard",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/title-card\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2TitleCardWith",
+    },
+)
+NodeAlpha2TitleCard.__doc__ = "A title and an optional subtitle on a background of their own, fading in and out as one picture."
+
+
+class NodeLowerThird(TypedDict):
+    """A name and an optional role in the lower left, on panels beside an accent bar."""
+
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    fade: NotRequired[float]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    subtitle: NotRequired[str]
+    text: str
+    type: Literal["lower_third"]
+
+
+class NodeAlpha2LowerThirdWith(TypedDict):
+    fade: NotRequired[float]
+    subtitle: NotRequired[str]
+    text: str
+
+
+NodeAlpha2LowerThird = TypedDict(
+    "NodeAlpha2LowerThird",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/lower-third\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2LowerThirdWith",
+    },
+)
+NodeAlpha2LowerThird.__doc__ = "A name and an optional role in the lower left, on panels beside an accent bar."
+
+
+class NodeEndCard(TypedDict):
+    """A closing title, an optional subtitle and an optional logo on a background, fading in and out as one picture."""
+
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    background: NotRequired[SolidColor]
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    fade: NotRequired[float]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    logo: NotRequired[str]
+    subtitle: NotRequired[str]
+    text: str
+    type: Literal["end_card"]
+
+
+class NodeAlpha2EndCardWith(TypedDict):
+    background: NotRequired[SolidColor]
+    fade: NotRequired[float]
+    logo: NotRequired[str]
+    subtitle: NotRequired[str]
+    text: str
+
+
+NodeAlpha2EndCard = TypedDict(
+    "NodeAlpha2EndCard",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/end-card\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2EndCardWith",
+    },
+)
+NodeAlpha2EndCard.__doc__ = "A closing title, an optional subtitle and an optional logo on a background, fading in and out as one picture."
+
+
+class NodeLogo(TypedDict):
+    """An image or video in a corner, inside a margin, at a size relative to the canvas."""
+
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    corner: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"top-right"`."""
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    margin: NotRequired[float]
+    opacity: NotRequired[float]
+    """Default: `1`."""
+    path: str
+    size: NotRequired[float]
+    """Default: `0.15`."""
+    type: Literal["logo"]
+
+
+class NodeAlpha2LogoWith(TypedDict):
+    corner: NotRequired[Literal["center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right"]]
+    """Default: `"top-right"`."""
+    margin: NotRequired[float]
+    opacity: NotRequired[float]
+    """Default: `1`."""
+    path: str
+    size: NotRequired[float]
+    """Default: `0.15`."""
+
+
+NodeAlpha2Logo = TypedDict(
+    "NodeAlpha2Logo",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/logo\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2LogoWith",
+    },
+)
+NodeAlpha2Logo.__doc__ = "An image or video in a corner, inside a margin, at a size relative to the canvas."
+
+
+class NodeReframe(TypedDict):
+    """A video whole in the area, over a blurred copy of itself that covers it: a clip of another shape on this canvas."""
+
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    blur: NotRequired[float]
+    """Default: `0.05`."""
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    type: Literal["reframe"]
+    video: str
+
+
+class NodeAlpha2ReframeWith(TypedDict):
+    blur: NotRequired[float]
+    """Default: `0.05`."""
+    video: str
+
+
+NodeAlpha2Reframe = TypedDict(
+    "NodeAlpha2Reframe",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/reframe\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2ReframeWith",
+    },
+)
+NodeAlpha2Reframe.__doc__ = "A video whole in the area, over a blurred copy of itself that covers it: a clip of another shape on this canvas."
+
+
+class NodeComparisonGridItemsItem(TypedDict):
+    audio: NotRequired[bool]
+    """Default: `false`."""
+    label: NotRequired[str]
+    path: str
+
+
+class NodeComparisonGrid(TypedDict):
+    """Clips side by side in a grid, each with an optional label; one of them may be heard."""
+
+    at: NotRequired[float]
+    """Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."""
+    columns: NotRequired[float]
+    duration: NotRequired[float]
+    """Length in seconds. Default: the template's own, else what its parent gives it."""
+    enter: NotRequired[Motion]
+    exit: NotRequired[Motion]
+    gap: NotRequired[float]
+    """Default: `0`."""
+    id: NotRequired[str]
+    """The node's name, for other nodes to refer to."""
+    inset: NotRequired[Inset]
+    items: list[NodeComparisonGridItemsItem]
+    length: NotRequired[Literal["shortest", "longest_freeze", "longest_loop"]]
+    """Default: `"shortest"`."""
+    type: Literal["comparison_grid"]
+
+
+class NodeAlpha2ComparisonGridWithItemsItem(TypedDict):
+    audio: NotRequired[bool]
+    """Default: `false`."""
+    label: NotRequired[str]
+    path: str
+
+
+class NodeAlpha2ComparisonGridWith(TypedDict):
+    columns: NotRequired[float]
+    gap: NotRequired[float]
+    """Default: `0`."""
+    items: list[NodeAlpha2ComparisonGridWithItemsItem]
+    length: NotRequired[Literal["shortest", "longest_freeze", "longest_loop"]]
+    """Default: `"shortest"`."""
+
+
+NodeAlpha2ComparisonGrid = TypedDict(
+    "NodeAlpha2ComparisonGrid",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "Literal[\"alpha2/comparison-grid\"]",
+        "version": "NotRequired[Literal[1]]",
+        "with": "NodeAlpha2ComparisonGridWith",
+    },
+)
+NodeAlpha2ComparisonGrid.__doc__ = "Clips side by side in a grid, each with an optional label; one of them may be heard."
+
+
+NodeVariant36 = TypedDict(
+    "NodeVariant36",
+    {
+        "at": "NotRequired[float]",
+        "duration": "NotRequired[float]",
+        "enter": "NotRequired[Motion]",
+        "exit": "NotRequired[Motion]",
+        "id": "NotRequired[str]",
+        "inset": "NotRequired[Inset]",
+        "type": "str",
+        "version": "NotRequired[int]",
+        "with": "NotRequired[dict[str, Never]]",
+    },
+)
+NodeVariant36.__doc__ = "A node template by its id, bound to `with`."
+
+
+Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeMusicBed | NodeCounter | NodeGroup | NodeShape | NodeMatte | NodeMask | dict[str, Any] | NodeAlpha2CircleReveal | NodeAlpha2WipeReveal | NodeTitle | NodeAlpha2Title | NodeTitleCard | NodeAlpha2TitleCard | NodeLowerThird | NodeAlpha2LowerThird | NodeEndCard | NodeAlpha2EndCard | NodeLogo | NodeAlpha2Logo | NodeReframe | NodeAlpha2Reframe | NodeComparisonGrid | NodeAlpha2ComparisonGrid | NodeVariant36"
 """One part of a video."""
 
 
@@ -2123,6 +2361,10 @@ RevealKind: TypeAlias = Literal["fade", "rise"]
 
 RevealUnit: TypeAlias = Literal["word", "line"]
 """The unit a text is revealed by."""
+
+
+Size: TypeAlias = "float | ThemeLength"
+"""A size in pixels, or one of the theme's lengths."""
 
 
 SolidColor: TypeAlias = "ThemeColor | Rgba"
@@ -2225,6 +2467,16 @@ ThemeColor = TypedDict(
     },
 )
 ThemeColor.__doc__ = "A theme color, so a design follows whatever theme it is drawn with."
+
+
+ThemeLength = TypedDict(
+    "ThemeLength",
+    {
+        "$theme": "LengthToken",
+        "scale": "NotRequired[float | None]",
+    },
+)
+ThemeLength.__doc__ = "One of the theme's lengths times `scale`, so a design follows the theme it is drawn with: a\nfraction of the picture's shorter side."
 
 
 ThemeToken: TypeAlias = Literal["text", "background", "surface", "panel", "accent"]

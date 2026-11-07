@@ -170,7 +170,6 @@ fn walk(node: &Node, found: &mut Requirements) {
         Node::Media(media) => add_media(found, &media.path, media.kind),
         Node::Audio(audio) => add_media(found, &audio.path, Some(FileKind::Audio)),
         Node::MusicBed(music) => add_media(found, &music.path, Some(FileKind::Audio)),
-        Node::Logo(logo) => add_media(found, &logo.path, None),
         Node::Captions(captions) => {
             if let Some(file) = &captions.file
                 && !found.texts.contains(file)
@@ -191,21 +190,11 @@ fn walk(node: &Node, found: &mut Requirements) {
             add_item(found, &captioned.video);
             walk(&Node::Captions((*captioned.captions).clone()), found);
         }
-        Node::ComparisonGrid(grid) => grid.items.iter().for_each(|item| add_item(found, item)),
-        Node::Reframe(reframe) => add_item(found, &reframe.video),
-        Node::EndCard(card) => {
-            if let Some(logo) = &card.logo {
-                add_media(found, logo, None);
-            }
-        }
         Node::Text(_)
         | Node::Shape(_)
         | Node::Color(_)
         | Node::Layout(_)
         | Node::Raw(_)
-        | Node::Title(_)
-        | Node::TitleCard(_)
-        | Node::LowerThird(_)
         | Node::Counter(_) => {}
     }
 }

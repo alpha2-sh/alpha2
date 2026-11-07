@@ -12,12 +12,12 @@ use alpha2_time::MediaTime;
 use crate::ComposeError;
 use crate::compile::Context;
 use crate::spec::{
-    Align, Anim, Audio, BoxNode, CaptionStyle, Captions, ComparisonGrid, ConicPaint, Counter, Cue,
-    Direction, EasingChoice, EffectUse, Ellipsis, EndCard, FileKind, Fit, Geometry, Gradient,
-    GridLength, Group, Inset, Key, Keys, LinearPaint, LowerThird, MatteUse, Media, MediaItem,
-    Motion, MotionKind, MusicBed, Node, PaintChoice, RadialPaint, Ramp, Raw, RevealKind,
-    RevealUnit, Shape, Slideshow, SolidColor, Stop, Text, TextRole, ThemeColor, ThemeToken, Title,
-    Transition, TransitionChoice,
+    Align, Anim, Audio, BoxNode, CaptionStyle, Captions, ConicPaint, Counter, Cue, Direction,
+    EasingChoice, EffectUse, Ellipsis, FileKind, Fit, Geometry, Gradient, GridLength, Group, Inset,
+    Key, Keys, LengthToken, LinearPaint, MatteUse, Media, MediaItem, Motion, MotionKind, MusicBed,
+    Node, PaintChoice, RadialPaint, Ramp, Raw, RevealKind, RevealUnit, Shape, Size, Slideshow,
+    SolidColor, Stop, Text, TextRole, ThemeColor, ThemeLength, ThemeToken, Transition,
+    TransitionChoice,
 };
 
 /// A node, ready to place.
@@ -464,12 +464,6 @@ fn motion_fields(node: &Node) -> (Option<&Motion>, Option<&Motion>, Option<f64>)
         Node::Text(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Color(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Layout(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
-        Node::Title(node) | Node::TitleCard(node) => {
-            (node.enter.as_ref(), node.exit.as_ref(), None)
-        }
-        Node::LowerThird(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
-        Node::EndCard(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
-        Node::Logo(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Counter(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Group(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
         Node::Shape(node) => (node.enter.as_ref(), node.exit.as_ref(), None),
@@ -481,8 +475,6 @@ fn motion_fields(node: &Node) -> (Option<&Motion>, Option<&Motion>, Option<f64>)
         | Node::Raw(_)
         | Node::Slideshow(_)
         | Node::CaptionedVideo(_)
-        | Node::ComparisonGrid(_)
-        | Node::Reframe(_)
         | Node::MusicBed(_) => (None, None, None),
     }
 }
@@ -625,6 +617,9 @@ impl Context<'_> {
     pub(crate) fn lower(&mut self, node: &Node, path: &str) -> Result<Prim, ComposeError> {
         let mut prim = self.lower_node(node, path)?;
         let (enter, exit, stagger) = motion_fields(node);
+        // A motion of zero seconds is none.
+        let moves = |motion: &&Motion| motion.duration != Some(0.0);
+        let (enter, exit) = (enter.filter(moves), exit.filter(moves));
         if enter.is_some() || exit.is_some() {
             let motion = NodeMotion {
                 enter: enter
@@ -944,61 +939,6 @@ impl Context<'_> {
                     inset: [0.0; 4],
                     grid: None,
                 }))
-            }
-            Node::Title(title) => self.lower_title(title, path, false),
-            Node::TitleCard(title) => self.lower_title(title, path, true),
-            Node::LowerThird(lower) => self.lower_lower_third(lower, path),
-            Node::EndCard(card) => self.lower_end_card(card, path),
-            Node::ComparisonGrid(grid) => self.lower_comparison_grid(grid, path),
-            Node::Reframe(reframe) => {
-                let item = format!("{path}.video");
-                let video = Self::item_media(&reframe.video, &item)?;
-                let blur = Self::unit(path, "blur", reframe.blur, 0.05)?;
-                let mut background = video.clone();
-                background.fit = Some(Fit::Cover);
-                background.blur = Some(blur);
-                background.muted = true;
-                let mut front = video;
-                front.fit = Some(Fit::Contain);
-                Ok(Prim::Stack(StackPrim {
-                    head: Self::head(path, reframe.id.as_ref(), reframe.at, None)?,
-                    children: vec![
-                        self.lower_media(&background, &item)?,
-                        self.lower_media(&front, &item)?,
-                    ],
-                    inset: [0.0; 4],
-                    grid: None,
-                }))
-            }
-            Node::Logo(logo) => {
-                let (width, height) = self.canvas_px();
-                let size = match logo.size {
-                    Some(size) => Self::pixels(path, "size", size)?,
-                    None => 0.15 * self.short_side(),
-                };
-                let margin = match logo.margin {
-                    Some(margin) => Self::pixels(path, "margin", margin)?,
-                    None => self.theme_px(self.theme.margin),
-                };
-                let corner = logo.corner.unwrap_or(Align::TopRight);
-                let (x, y) = align_point(corner);
-                // The square box of `size` at the corner, `margin` from its edges.
-                let left = margin + x * (width - size - 2.0 * margin);
-                let top = margin + y * (height - size - 2.0 * margin);
-                let mut media = Media::new(logo.path.clone());
-                media.id.clone_from(&logo.id);
-                media.at = logo.at;
-                media.duration = logo.duration;
-                media.opacity = logo.opacity;
-                media.fit = Some(Fit::Contain);
-                media.align = Some(corner);
-                media.inset = Some(Inset::Sides([
-                    top,
-                    width - left - size,
-                    height - top - size,
-                    left,
-                ]));
-                self.lower_media(&media, path)
             }
             Node::MusicBed(music) => self.lower_music_bed(music, path),
             Node::Counter(counter) => self.lower_counter(counter, path),
@@ -1394,48 +1334,45 @@ impl Context<'_> {
         })
     }
 
-    /// `value` with each `{"$theme": length, "scale"?: k}` in it replaced by that theme length,
-    /// a fraction of the picture's shorter side, times `k`.
+    /// A theme length, as a fraction of the picture's shorter side.
+    fn theme_length(&self, length: &ThemeLength) -> f32 {
+        let token = match length.token {
+            LengthToken::Margin => self.theme.margin,
+            LengthToken::TitleSize => self.theme.title_size,
+            LengthToken::SubtitleSize => self.theme.subtitle_size,
+            LengthToken::BodySize => self.theme.body_size,
+            LengthToken::CaptionSize => self.theme.caption_size,
+            LengthToken::LabelSize => self.theme.label_size,
+        };
+        token * length.scale.unwrap_or(1.0)
+    }
+
+    /// `size` in pixels, above zero.
+    fn size_px(&self, path: &str, size: &Size) -> Result<f32, ComposeError> {
+        let pixels = match size {
+            Size::Pixels(pixels) => *pixels,
+            Size::Theme(length) => self.theme_px(self.theme_length(length)),
+        };
+        if pixels.is_finite() && pixels > 0.0 {
+            Ok(pixels)
+        } else {
+            Err(Self::error(
+                path,
+                format!("{pixels} is not a size above zero in pixels"),
+            ))
+        }
+    }
+
+    /// `value` with each theme length in it, `{"$theme": "margin", "scale": 2}`, replaced by its
+    /// fraction of the picture's shorter side.
     fn theme_lengths(&self, value: &mut serde_json::Value, path: &str) -> Result<(), ComposeError> {
         match value {
             serde_json::Value::Object(object) if object.contains_key("$theme") => {
-                if let Some(field) = object
-                    .keys()
-                    .find(|field| !["$theme", "scale"].contains(&field.as_str()))
-                {
-                    return Err(Self::error(
-                        &format!("{path}.{field}"),
-                        "a theme length takes `$theme` and `scale`",
-                    ));
-                }
-                let token = object["$theme"].as_str().unwrap_or_default();
-                let length = match token {
-                    "margin" => self.theme.margin,
-                    "title_size" => self.theme.title_size,
-                    "subtitle_size" => self.theme.subtitle_size,
-                    "body_size" => self.theme.body_size,
-                    "caption_size" => self.theme.caption_size,
-                    "label_size" => self.theme.label_size,
-                    _ => {
-                        return Err(Self::error(
-                            &format!("{path}.$theme"),
-                            format!(
-                                "\"{token}\" is not a theme length; the lengths are margin, \
-                                 title_size, subtitle_size, body_size, caption_size, label_size"
-                            ),
-                        ));
-                    }
-                };
-                let scale = match object.get("scale") {
-                    None => 1.0,
-                    #[allow(clippy::cast_possible_truncation)]
-                    Some(scale) => scale
-                        .as_f64()
-                        .filter(|scale| scale.is_finite())
-                        .ok_or_else(|| Self::error(&format!("{path}.scale"), "scale is a number"))?
-                        as f32,
-                };
-                *value = serde_json::json!(length * scale);
+                let length: ThemeLength =
+                    crate::de::from_value(value.clone()).map_err(|error| {
+                        Self::error(&crate::de::join(path, &error.path), error.message)
+                    })?;
+                *value = serde_json::json!(self.theme_length(&length));
             }
             serde_json::Value::Object(object) => {
                 for (field, inner) in object {
@@ -1734,14 +1671,8 @@ impl Context<'_> {
                 format!("{decimals} decimals: at most 6"),
             ));
         }
-        let font_px = match counter.font_size {
-            Some(size) if size.is_finite() && size > 0.0 => size,
-            Some(size) => {
-                return Err(Self::error(
-                    &format!("{path}.font_size"),
-                    format!("{size} is not a font size in pixels"),
-                ));
-            }
+        let font_px = match &counter.font_size {
+            Some(size) => self.size_px(&format!("{path}.font_size"), size)?,
             None => self.role_size(counter.style.unwrap_or(TextRole::Title)),
         };
         Ok(Prim::Visual(Box::new(Visual {
@@ -1825,14 +1756,8 @@ impl Context<'_> {
         if text.text.is_empty() {
             return Err(Self::error(&format!("{path}.text"), "text is not empty"));
         }
-        let font_px = match text.font_size {
-            Some(size) if size.is_finite() && size > 0.0 => size,
-            Some(size) => {
-                return Err(Self::error(
-                    &format!("{path}.font_size"),
-                    format!("{size} is not a font size in pixels"),
-                ));
-            }
+        let font_px = match &text.font_size {
+            Some(size) => self.size_px(&format!("{path}.font_size"), size)?,
             None => self.role_size(text.style),
         };
         let fade = Self::optional_time(path, "fade", text.fade)?.unwrap_or(0);
@@ -1975,14 +1900,8 @@ impl Context<'_> {
             return Err(Self::error(path, "the captions have no cues"));
         }
         let (width, height) = self.canvas_px();
-        let mut font_px = match captions.font_size {
-            Some(size) if size.is_finite() && size > 0.0 => size,
-            Some(size) => {
-                return Err(Self::error(
-                    &format!("{path}.font_size"),
-                    format!("{size} is not a font size in pixels"),
-                ));
-            }
+        let mut font_px = match &captions.font_size {
+            Some(size) => self.size_px(&format!("{path}.font_size"), size)?,
             None => self.theme_px(self.theme.caption_size),
         };
         let position = match captions.position {
@@ -2373,368 +2292,6 @@ impl Context<'_> {
             head: Self::head(path, slideshow.id.as_ref(), slideshow.at, None)?,
             children,
             transition,
-        }))
-    }
-
-    /// A text primitive at `inset` in the canvas, aligned to `align`.
-    #[allow(clippy::too_many_arguments)]
-    fn text_prim(
-        &self,
-        path: &str,
-        text: &str,
-        font_px: f32,
-        inset: [f32; 4],
-        align: Align,
-        fade: i64,
-        max_lines: Option<u32>,
-        background: Option<Rgba>,
-    ) -> Prim {
-        Prim::Visual(Box::new(Visual {
-            head: Head {
-                path: path.to_owned(),
-                ..Head::default()
-            },
-            inset,
-            fit: Fit::None,
-            align,
-            opacity: 1.0,
-            fade_in: fade,
-            fade_out: fade,
-            zoom: None,
-            content: Content::Text(TextContent {
-                text: text.to_owned(),
-                font_px,
-                family: self.theme.font_family.clone(),
-                color: self.theme.text,
-                background,
-                strokes: Vec::new(),
-                shadows: Vec::new(),
-                max_lines,
-                fit: max_lines.map(|_| (0.3 * font_px, font_px)),
-                ellipsis: max_lines.map(|_| alpha2_model::BlockEllipsis::Ellipsis),
-                reveal: None,
-            }),
-        }))
-    }
-
-    /// A title and an optional subtitle as one group at `align` on the canvas. Returns its
-    /// children and its top.
-    fn title_group(
-        &mut self,
-        path: &str,
-        text: &str,
-        subtitle: Option<&str>,
-        align: Align,
-        fade: i64,
-        top_offset: f32,
-    ) -> Vec<Prim> {
-        let (width, height) = self.canvas_px();
-        let margin = self.theme_px(self.theme.margin) * 2.0;
-        let (title_px, sub_px) = (
-            self.role_size(TextRole::Title),
-            self.role_size(TextRole::Subtitle),
-        );
-        let max_width = width - 2.0 * margin;
-        let title_px = self.fit_font(path, text, title_px, max_width, 2);
-        let title_height = self.text_height(text, title_px, max_width);
-        let gap = 0.5 * sub_px;
-        let sub_height = subtitle.map_or(0.0, |subtitle| {
-            gap + self.text_height(subtitle, sub_px, max_width)
-        });
-        let group = title_height + sub_height;
-        let (x, y) = align_point(align);
-        let top = top_offset + margin + y * (height - top_offset - 2.0 * margin - group);
-        let horizontal = match x {
-            x if x < 0.25 => Align::TopLeft,
-            x if x > 0.75 => Align::TopRight,
-            _ => Align::Top,
-        };
-        let inset = |top: f32, height_used: f32| [top, margin, height - top - height_used, margin];
-        let mut children = vec![self.text_prim(
-            &format!("{path}.text"),
-            text,
-            title_px,
-            inset(top, title_height),
-            horizontal,
-            fade,
-            Some(2),
-            None,
-        )];
-        if let Some(subtitle) = subtitle {
-            let sub_top = top + title_height + gap;
-            children.push(self.text_prim(
-                &format!("{path}.subtitle"),
-                subtitle,
-                sub_px,
-                inset(sub_top, sub_height - gap),
-                horizontal,
-                fade,
-                None,
-                None,
-            ));
-        }
-        children
-    }
-
-    fn lower_title(&mut self, title: &Title, path: &str, card: bool) -> Result<Prim, ComposeError> {
-        if title.text.is_empty() {
-            return Err(Self::error(&format!("{path}.text"), "a title is not empty"));
-        }
-        let head = Self::head(path, title.id.as_ref(), title.at, title.duration)?;
-        let fade = Self::time(path, "fade", title.fade.unwrap_or(self.theme.fade_seconds))?;
-        let mut children = Vec::new();
-        if card {
-            children.push(Prim::Visual(Box::new(Visual {
-                head: Head {
-                    path: path.to_owned(),
-                    ..Head::default()
-                },
-                inset: [0.0; 4],
-                fit: Fit::Fill,
-                align: Align::Center,
-                opacity: 1.0,
-                fade_in: 0,
-                fade_out: 0,
-                zoom: None,
-                content: Content::Color(title.background.unwrap_or(self.theme.surface)),
-            })));
-        }
-        let text_fade = if card { 0 } else { fade };
-        children.extend(self.title_group(
-            path,
-            &title.text,
-            title.subtitle.as_deref(),
-            title.align.unwrap_or_default(),
-            text_fade,
-            0.0,
-        ));
-        let mut stack = StackPrim {
-            head,
-            children,
-            inset: [0.0; 4],
-            grid: None,
-        };
-        if card && fade > 0 {
-            // A card fades as a whole: each of its pictures by the same ramp.
-            for child in &mut stack.children {
-                if let Prim::Visual(visual) = child {
-                    visual.fade_in = fade;
-                    visual.fade_out = fade;
-                }
-            }
-        }
-        Ok(Prim::Stack(stack))
-    }
-
-    fn lower_lower_third(&mut self, lower: &LowerThird, path: &str) -> Result<Prim, ComposeError> {
-        if lower.text.is_empty() {
-            return Err(Self::error(
-                &format!("{path}.text"),
-                "a lower third has a name",
-            ));
-        }
-        let head = Self::head(path, lower.id.as_ref(), lower.at, lower.duration)?;
-        let fade = Self::time(path, "fade", lower.fade.unwrap_or(self.theme.fade_seconds))?;
-        let (width, height) = self.canvas_px();
-        let margin = self.theme_px(self.theme.margin) * 1.5;
-        let name_px = self.theme_px(self.theme.subtitle_size) * 1.2;
-        let role_px = self.theme_px(self.theme.body_size);
-        let bar_width = (0.008 * self.short_side()).max(2.0);
-        let left = margin + bar_width * 2.5;
-        let max_width = width * 0.6;
-        let name_px = self.fit_font(&format!("{path}.text"), &lower.text, name_px, max_width, 1);
-        let name_height = self.text_height(&lower.text, name_px, max_width);
-        let gap = 0.6 * role_px;
-        let role_height = lower
-            .subtitle
-            .as_deref()
-            .map_or(0.0, |role| gap + self.text_height(role, role_px, max_width));
-        let bottom = height - margin * 1.5;
-        let top = bottom - name_height - role_height;
-        let inset =
-            |top: f32, used: f32| [top, width - left - max_width, height - top - used, left];
-        let mut children = vec![
-            Prim::Visual(Box::new(Visual {
-                head: Head {
-                    path: path.to_owned(),
-                    ..Head::default()
-                },
-                inset: [
-                    top - 0.2 * name_px,
-                    width - margin - bar_width,
-                    height - bottom - 0.2 * name_px,
-                    margin,
-                ],
-                fit: Fit::Fill,
-                align: Align::Center,
-                opacity: 1.0,
-                fade_in: fade,
-                fade_out: fade,
-                zoom: None,
-                content: Content::Color(self.theme.accent),
-            })),
-            self.text_prim(
-                &format!("{path}.text"),
-                &lower.text,
-                name_px,
-                inset(top, name_height),
-                Align::TopLeft,
-                fade,
-                Some(1),
-                Some(self.theme.panel),
-            ),
-        ];
-        if let Some(role) = &lower.subtitle {
-            let role_top = top + name_height + gap;
-            children.push(self.text_prim(
-                &format!("{path}.subtitle"),
-                role,
-                role_px,
-                inset(role_top, role_height - gap),
-                Align::TopLeft,
-                fade,
-                None,
-                Some(self.theme.panel),
-            ));
-        }
-        Ok(Prim::Stack(StackPrim {
-            head,
-            children,
-            inset: [0.0; 4],
-            grid: None,
-        }))
-    }
-
-    fn lower_end_card(&mut self, card: &EndCard, path: &str) -> Result<Prim, ComposeError> {
-        if card.text.is_empty() {
-            return Err(Self::error(
-                &format!("{path}.text"),
-                "an end card has a title",
-            ));
-        }
-        let head = Self::head(path, card.id.as_ref(), card.at, card.duration)?;
-        let fade = Self::time(path, "fade", card.fade.unwrap_or(self.theme.fade_seconds))?;
-        let (width, height) = self.canvas_px();
-        let mut children = vec![Prim::Visual(Box::new(Visual {
-            head: Head {
-                path: path.to_owned(),
-                ..Head::default()
-            },
-            inset: [0.0; 4],
-            fit: Fit::Fill,
-            align: Align::Center,
-            opacity: 1.0,
-            fade_in: fade,
-            fade_out: fade,
-            zoom: None,
-            content: Content::Color(card.background.unwrap_or(self.theme.surface)),
-        }))];
-        let mut top_offset = 0.0;
-        if let Some(logo) = &card.logo {
-            let size = 0.22 * self.short_side();
-            let top = 0.5 * height - size - 0.04 * self.short_side();
-            let mut media = Media::new(logo.clone());
-            media.fit = Some(Fit::Contain);
-            media.align = Some(Align::Bottom);
-            media.inset = Some(Inset::Sides([
-                top,
-                0.5 * (width - size),
-                height - top - size,
-                0.5 * (width - size),
-            ]));
-            media.fade_in = Some(crate::compile::seconds(fade));
-            media.fade_out = Some(crate::compile::seconds(fade));
-            children.push(self.lower_media(&media, &format!("{path}.logo"))?);
-            top_offset = 0.5 * height;
-        }
-        let align = if card.logo.is_some() {
-            Align::Top
-        } else {
-            Align::Center
-        };
-        children.extend(self.title_group(
-            path,
-            &card.text,
-            card.subtitle.as_deref(),
-            align,
-            fade,
-            top_offset,
-        ));
-        Ok(Prim::Stack(StackPrim {
-            head,
-            children,
-            inset: [0.0; 4],
-            grid: None,
-        }))
-    }
-
-    fn lower_comparison_grid(
-        &mut self,
-        grid: &ComparisonGrid,
-        path: &str,
-    ) -> Result<Prim, ComposeError> {
-        if grid.items.is_empty() {
-            return Err(Self::error(
-                &format!("{path}.items"),
-                "a comparison grid has at least one item",
-            ));
-        }
-        if let Some(index) = grid.audio_from
-            && index as usize >= grid.items.len()
-        {
-            return Err(Self::error(
-                &format!("{path}.audio_from"),
-                format!("there is no item {index}"),
-            ));
-        }
-        let label_px = self.role_size(TextRole::Label);
-        let pad = 0.8 * label_px;
-        let mut cells = Vec::with_capacity(grid.items.len());
-        for (index, item) in grid.items.iter().enumerate() {
-            let at = format!("{path}.items[{index}]");
-            let mut media = Self::item_media(item, &at)?;
-            media.muted |= grid.audio_from != Some(u32::try_from(index).unwrap_or(u32::MAX));
-            let label = media.label.take();
-            let mut children = vec![self.lower_media(&media, &at)?];
-            if let Some(label) = label.filter(|label| !label.is_empty()) {
-                let mut text = self.text_prim(
-                    &format!("{at}.label"),
-                    &label,
-                    label_px,
-                    [pad; 4],
-                    Align::TopLeft,
-                    0,
-                    Some(1),
-                    Some(self.theme.panel),
-                );
-                if let Prim::Visual(visual) = &mut text
-                    && let Content::Text(content) = &mut visual.content
-                {
-                    content.max_lines = None;
-                    content.fit = None;
-                    content.ellipsis = None;
-                }
-                children.push(text);
-            }
-            cells.push(Prim::Stack(StackPrim {
-                head: Head {
-                    path: at,
-                    ..Head::default()
-                },
-                children,
-                inset: [0.0; 4],
-                grid: None,
-            }));
-        }
-        Ok(Prim::Stack(StackPrim {
-            head: Self::head(path, grid.id.as_ref(), grid.at, grid.duration)?,
-            inset: [0.0; 4],
-            grid: Some(GridLayout {
-                columns: Self::columns(path, grid.columns, cells.len())?,
-                gap: Self::pixels(path, "gap", grid.gap)?,
-                length: grid.length,
-            }),
-            children: cells,
         }))
     }
 }

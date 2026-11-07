@@ -847,7 +847,7 @@ def EndCard(
 
 
 def ComparisonGrid(
-    items: Iterable[PathLike | Node],
+    items: Iterable[PathLike | Mapping[str, Any]],
     *,
     columns: int | None = None,
     gap: float | None = None,
@@ -857,15 +857,21 @@ def ComparisonGrid(
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
-    """Clips side by side, each labeled by its :func:`Media` ``label``. Silent unless
-    ``audio_from`` names an item by index."""
+    """Clips side by side: each a path, or ``{"path", "label", "audio"}`` to label its cell or
+    hear it. ``audio_from`` hears the item at that index."""
+    cells: list[dict[str, Any]] = [
+        dict(item) if isinstance(item, Mapping) else {"path": os.fspath(item)} for item in items
+    ]
+    if audio_from is not None:
+        if not 0 <= audio_from < len(cells):
+            raise ValueError(f"audio_from: there is no item {audio_from}")
+        cells[audio_from]["audio"] = True
     return _node(
         "comparison_grid",
-        items=list(items),
+        items=cells,
         columns=columns,
         gap=gap,
         length=length,
-        audio_from=audio_from,
         id=id,
         at=at,
         duration=duration,
@@ -873,13 +879,14 @@ def ComparisonGrid(
 
 
 def Reframe(
-    video: PathLike | Node,
+    video: PathLike,
     *,
     blur: float | None = None,
     id: str | None = None,
     at: float | None = None,
 ) -> Node:
-    """A video fitted to the canvas over a blurred, cropped copy of itself."""
+    """A video whole in its area over a blurred copy of itself that covers it. ``blur`` is the
+    copy's blur radius as a fraction of its shorter side (default 0.05)."""
     return _node("reframe", video=video, blur=blur, id=id, at=at)
 
 
@@ -896,7 +903,8 @@ def Logo(
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
-    """A picture ``size`` pixels on its longer side in a corner (default ``top-right``)."""
+    """A picture in a corner (default ``top-right``), in a square box ``size`` (default 0.15) of
+    the canvas's shorter side, ``margin`` (default the theme's) from the edges."""
     return _node(
         "logo",
         path=path,

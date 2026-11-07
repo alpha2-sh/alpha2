@@ -674,10 +674,13 @@ impl Binder<'_> {
             }
             return Ok(Eval::Splice(out));
         }
-        if let Some(kind) = object.get("type").and_then(Value::as_str)
-            && kind.contains('/')
-        {
-            return self.instance(kind, object, scope, path).map(Eval::Value);
+        if let Some(kind) = object.get("type").and_then(Value::as_str) {
+            if kind.contains('/') {
+                return self.instance(kind, object, scope, path).map(Eval::Value);
+            }
+            if let Some(id) = bare_template(kind) {
+                return self.bare(id, object, scope, path).map(Eval::Value);
+            }
         }
         let mut out = Map::with_capacity(object.len());
         for (field, value) in object {
@@ -702,7 +705,37 @@ impl Binder<'_> {
         scope: &Scope,
         path: &str,
     ) -> Result<Value, ComposeError> {
-        const PLACEMENT: [&str; 6] = ["id", "at", "duration", "inset", "enter", "exit"];
+        self.reference(id, object, scope, &format!("{path}.with"), path)
+    }
+
+    /// A 1st-party template named by its bare type: its own fields are the template's data,
+    /// beside its placement.
+    fn bare(
+        &mut self,
+        id: &str,
+        object: &Map<String, Value>,
+        scope: &Scope,
+        path: &str,
+    ) -> Result<Value, ComposeError> {
+        let (mut reference, data): (Map<_, _>, Map<_, _>) = object
+            .iter()
+            .filter(|(field, _)| field.as_str() != "type")
+            .map(|(field, value)| (field.clone(), value.clone()))
+            .partition(|(field, _)| PLACEMENT.contains(&field.as_str()));
+        reference.insert("type".to_owned(), json!(id));
+        reference.insert("with".to_owned(), Value::Object(data));
+        self.reference(id, &reference, scope, path, path)
+    }
+
+    /// [`Self::instance`], its data's errors named from `data_path`.
+    fn reference(
+        &mut self,
+        id: &str,
+        object: &Map<String, Value>,
+        scope: &Scope,
+        data_path: &str,
+        path: &str,
+    ) -> Result<Value, ComposeError> {
         if let Some(field) = object.keys().find(|field| {
             !["type", "with", "version"].contains(&field.as_str())
                 && !PLACEMENT.contains(&field.as_str())
@@ -749,7 +782,13 @@ impl Binder<'_> {
             None => Value::Null,
         };
         self.stack.push(id.to_owned());
-        let bound = self.bind_body(template, &header, &data, &format!("{path}<{id}>"));
+        let bound = self.bind_body(
+            template,
+            &header,
+            &data,
+            data_path,
+            &format!("{path}<{id}>"),
+        );
         self.stack.pop();
         let node = bound?;
         let mut stack = Map::new();
@@ -772,10 +811,11 @@ impl Binder<'_> {
         template: &Value,
         header: &Header,
         data: &Value,
+        data_path: &str,
         path: &str,
     ) -> Result<Value, ComposeError> {
         let params = params(template.get("params"), &format!("{path}.params"))?;
-        let values = resolve(&params, data, "data")?;
+        let values = resolve(&params, data, data_path)?;
         let scope = Scope { values };
         match header.kind {
             Kind::Node => {
@@ -889,7 +929,7 @@ pub fn bind(document: &Value, data: &Value, options: &BindOptions) -> Result<Val
     let mut bound = match &header {
         Some(header) => {
             binder.stack.push(header.id.clone());
-            binder.bind_body(document, header, data, "template")?
+            binder.bind_body(document, header, data, "data", "template")?
         }
         None => match binder.eval(document, &Scope::default(), None, "spec")? {
             Eval::Value(value) => value,
@@ -905,6 +945,26 @@ pub fn bind(document: &Value, data: &Value, options: &BindOptions) -> Result<Val
         object.insert("theme".to_owned(), theme.clone());
     }
     Ok(bound)
+}
+
+/// Fields of a template node that place it, beside its template's data.
+const PLACEMENT: [&str; 6] = ["id", "at", "duration", "inset", "enter", "exit"];
+
+/// Node types that name a 1st-party template without its `alpha2/` owner.
+pub(crate) const BARE: [(&str, &str); 7] = [
+    ("title", "alpha2/title"),
+    ("title_card", "alpha2/title-card"),
+    ("lower_third", "alpha2/lower-third"),
+    ("end_card", "alpha2/end-card"),
+    ("logo", "alpha2/logo"),
+    ("reframe", "alpha2/reframe"),
+    ("comparison_grid", "alpha2/comparison-grid"),
+];
+
+fn bare_template(kind: &str) -> Option<&'static str> {
+    BARE.iter()
+        .find(|(name, _)| *name == kind)
+        .map(|(_, id)| *id)
 }
 
 /// Whether `$if` takes its `then`: a bool that is true, or any other value that is given and not
@@ -954,10 +1014,122 @@ pub fn data_schema(template: &Value) -> Result<Value, ComposeError> {
     Ok(schema)
 }
 
+/// Where a data schema's references to compose types point.
+#[derive(Clone, Copy)]
+enum Refs {
+    /// The published compose schema, for a data schema of its own.
+    Published,
+    /// `#/$defs`, inside the compose schema.
+    #[cfg_attr(not(feature = "schema"), allow(dead_code))]
+    Local,
+}
+
+impl Refs {
+    fn to(self, name: &str) -> Value {
+        match self {
+            Self::Published => {
+                json!({"$ref": format!("{}#/$defs/{name}", crate::spec::COMPOSE_SCHEMA_ID)})
+            }
+            Self::Local => json!({"$ref": format!("#/$defs/{name}")}),
+        }
+    }
+}
+
+/// The compose schema's variants for template nodes: each 1st-party template by its `alpha2/`
+/// id and, when it has one, its bare name, its data typed; and any other template by its
+/// `owner/name`.
+#[cfg(feature = "schema")]
+pub(crate) fn node_schemas() -> Vec<Value> {
+    let placement = |properties: &mut Map<String, Value>| {
+        properties.insert("id".to_owned(), json!({"type": "string", "description": "The node's name, for other nodes to refer to."}));
+        properties.insert("at".to_owned(), json!({"type": "number", "description": "Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence."}));
+        properties.insert("duration".to_owned(), json!({"type": "number", "description": "Length in seconds. Default: the template's own, else what its parent gives it."}));
+        properties.insert("inset".to_owned(), Refs::Local.to("Inset"));
+        properties.insert("enter".to_owned(), Refs::Local.to("Motion"));
+        properties.insert("exit".to_owned(), Refs::Local.to("Motion"));
+    };
+    let mut variants = Vec::new();
+    for template in crate::library::TEMPLATES.iter() {
+        let header = header(template)
+            .ok()
+            .flatten()
+            .expect("a built-in template has a header");
+        let params = params(template.get("params"), "template.params")
+            .expect("a built-in template's parameters parse");
+        let data = object_schema_with(&params, Refs::Local);
+        let description = header.description.clone().unwrap_or_default();
+        if let Some((name, _)) = BARE.iter().find(|(_, id)| *id == header.id) {
+            let mut properties = data["properties"].as_object().cloned().unwrap_or_default();
+            properties.insert("type".to_owned(), json!({"const": name}));
+            placement(&mut properties);
+            let mut required = data["required"].as_array().cloned().unwrap_or_default();
+            required.insert(0, json!("type"));
+            variants.push(json!({
+                "type": "object",
+                "description": description,
+                "properties": properties,
+                "required": required,
+                "additionalProperties": false,
+            }));
+        }
+        let mut properties = Map::new();
+        properties.insert("type".to_owned(), json!({"const": header.id}));
+        properties.insert("version".to_owned(), json!({"const": header.version}));
+        properties.insert("with".to_owned(), data.clone());
+        placement(&mut properties);
+        let required = if data["required"]
+            .as_array()
+            .is_some_and(|list| !list.is_empty())
+        {
+            json!(["type", "with"])
+        } else {
+            json!(["type"])
+        };
+        variants.push(json!({
+            "type": "object",
+            "description": description,
+            "properties": properties,
+            "required": required,
+            "additionalProperties": false,
+        }));
+    }
+    let mut properties = Map::new();
+    properties.insert(
+        "type".to_owned(),
+        json!({
+            "type": "string",
+            "pattern": "^[a-z0-9_-]+/[a-z0-9_-]+$",
+            "not": {"pattern": "^alpha2/"},
+            "description": "A template's `owner/name` id; the spec is compiled with it.",
+        }),
+    );
+    properties.insert(
+        "version".to_owned(),
+        json!({"type": "integer", "minimum": 1}),
+    );
+    properties.insert(
+        "with".to_owned(),
+        json!({"type": "object", "description": "The template's data."}),
+    );
+    placement(&mut properties);
+    variants.push(json!({
+        "type": "object",
+        "description": "A node template by its id, bound to `with`.",
+        "properties": properties,
+        "required": ["type"],
+        "additionalProperties": false,
+    }));
+    variants
+}
+
 fn object_schema(params: &[Param]) -> Value {
+    object_schema_with(params, Refs::Published)
+}
+
+fn object_schema_with(params: &[Param], refs: Refs) -> Value {
     let properties = params
         .iter()
-        .map(|param| (param.name.clone(), param_schema(param)))
+        .map(|param| (param.name.clone(), param_schema(param, refs)))
         .collect::<Map<_, _>>();
     let required = params
         .iter()
@@ -972,7 +1144,7 @@ fn object_schema(params: &[Param]) -> Value {
     })
 }
 
-fn param_schema(param: &Param) -> Value {
+fn param_schema(param: &Param, refs: Refs) -> Value {
     let mut schema = match &param.kind {
         ParamKind::Text {
             min_chars,
@@ -990,19 +1162,16 @@ fn param_schema(param: &Param) -> Value {
         ParamKind::Number { min, max } => json!({"type": "number", "minimum": min, "maximum": max}),
         ParamKind::Bool => json!({"type": "boolean"}),
         ParamKind::Enum(values) => json!({"enum": values}),
-        ParamKind::Color => json!({
-            "description": "A CSS hex color, the color object, or a theme color {\"$theme\": name}.",
-            "anyOf": [{"type": "string"}, {"type": "object"}],
-        }),
+        ParamKind::Color => refs.to("SolidColor"),
         ParamKind::Font => json!({"type": "string", "description": "A font family the host has."}),
-        ParamKind::Node => json!({"$ref": "https://alpha2.sh/schema/compose.v1.json#/$defs/Node"}),
+        ParamKind::Node => refs.to("Node"),
         ParamKind::List {
             min_items,
             max_items,
             item,
         } => json!({
             "type": "array",
-            "items": object_schema(item),
+            "items": object_schema_with(item, refs),
             "minItems": min_items,
             "maxItems": max_items,
         }),

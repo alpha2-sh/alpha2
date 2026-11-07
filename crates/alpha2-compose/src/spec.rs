@@ -361,21 +361,6 @@ pub enum Node {
     Slideshow(Slideshow),
     /// A video under its captions.
     CaptionedVideo(CaptionedVideo),
-    /// A title (and subtitle) over what is under it, laid out on the whole canvas.
-    Title(Title),
-    /// A title (and subtitle) on the theme's surface, over the whole canvas.
-    TitleCard(Title),
-    /// A name and role in the canvas's lower left.
-    LowerThird(LowerThird),
-    /// A closing card over the whole canvas: a logo, a title and a subtitle on the theme's
-    /// surface.
-    EndCard(EndCard),
-    /// Clips side by side in a grid, each labeled.
-    ComparisonGrid(ComparisonGrid),
-    /// A video fitted to a canvas of another shape, over a blurred copy of itself.
-    Reframe(Reframe),
-    /// A picture in a corner.
-    Logo(Logo),
     /// Music under the video, faded in and out and ducked under speech.
     MusicBed(MusicBed),
     /// A number counting from one value to another, as text.
@@ -733,9 +718,9 @@ pub struct Text {
     /// The theme style it starts from. Default `body`.
     #[serde(default)]
     pub style: TextRole,
-    /// Font size in pixels. Default: the style's.
+    /// Font size in pixels, or a theme length. Default: the style's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub font_size: Option<f32>,
+    pub font_size: Option<Size>,
     /// Family. Default: the theme's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_family: Option<String>,
@@ -1204,6 +1189,53 @@ pub struct ConicPaint {
     pub conic: Gradient,
 }
 
+/// Where the compose schema is published.
+pub const COMPOSE_SCHEMA_ID: &str = "https://alpha2.sh/schema/compose.v1.json";
+
+/// A size in pixels, or one of the theme's lengths.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum Size {
+    /// Pixels of the canvas.
+    Pixels(f32),
+    /// A theme length.
+    Theme(ThemeLength),
+}
+
+/// One of the theme's lengths times `scale`, so a design follows the theme it is drawn with: a
+/// fraction of the picture's shorter side.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ThemeLength {
+    /// Which of the theme's lengths.
+    #[serde(rename = "$theme")]
+    pub token: LengthToken,
+    /// What it is multiplied by. Default 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
+}
+
+/// A theme's named lengths.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum LengthToken {
+    /// Space kept from the edges.
+    Margin,
+    /// The title style's font size.
+    TitleSize,
+    /// The subtitle style's font size.
+    SubtitleSize,
+    /// The body style's font size.
+    BodySize,
+    /// Captions' font size.
+    CaptionSize,
+    /// The label style's font size.
+    LabelSize,
+}
+
 /// A theme color, so a design follows whatever theme it is drawn with.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1385,7 +1417,7 @@ pub struct Captions {
     pub max_chars: Option<u32>,
     /// Font size in pixels. Default: the theme's caption size.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub font_size: Option<f32>,
+    pub font_size: Option<Size>,
     /// Text color. Default: the theme's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<SolidColor>,
@@ -1605,192 +1637,6 @@ pub struct CaptionedVideo {
     pub at: Option<f64>,
 }
 
-/// A title and subtitle.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct Title {
-    /// The node's name, for other nodes to refer to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// The title.
-    pub text: String,
-    /// A smaller line under it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subtitle: Option<String>,
-    /// Where it lies. Default `center`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub align: Option<Align>,
-    /// Seconds of fade in and out. Default: the theme's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fade: Option<f64>,
-    /// A card's color. Default: the theme's surface.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub background: Option<Rgba>,
-    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub at: Option<f64>,
-    /// Length in seconds. Default: the node's own length, else what its parent gives it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub duration: Option<f64>,
-    /// How it comes in at its start.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enter: Option<Motion>,
-    /// How it goes out, ending at its end.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit: Option<Motion>,
-}
-
-/// A name and role in the lower left.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct LowerThird {
-    /// The node's name, for other nodes to refer to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// The name.
-    pub text: String,
-    /// The role, under it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subtitle: Option<String>,
-    /// Seconds of fade in and out. Default: the theme's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fade: Option<f64>,
-    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub at: Option<f64>,
-    /// Length in seconds. Default: the node's own length, else what its parent gives it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub duration: Option<f64>,
-    /// How it comes in at its start.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enter: Option<Motion>,
-    /// How it goes out, ending at its end.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit: Option<Motion>,
-}
-
-/// A closing card.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct EndCard {
-    /// The node's name, for other nodes to refer to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// The title.
-    pub text: String,
-    /// A smaller line under it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subtitle: Option<String>,
-    /// A picture above the title.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub logo: Option<String>,
-    /// The card's color. Default: the theme's surface.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub background: Option<Rgba>,
-    /// Seconds of fade in and out. Default: the theme's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fade: Option<f64>,
-    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub at: Option<f64>,
-    /// Length in seconds. Default: the node's own length, else what its parent gives it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub duration: Option<f64>,
-    /// How it comes in at its start.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enter: Option<Motion>,
-    /// How it goes out, ending at its end.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit: Option<Motion>,
-}
-
-/// Clips in a labeled grid.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct ComparisonGrid {
-    /// The node's name, for other nodes to refer to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// The clips, row by row; each one's `label` names its cell.
-    pub items: Vec<MediaItem>,
-    /// Columns. Default: as square a grid as the items make.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub columns: Option<u32>,
-    /// Pixels between cells.
-    #[serde(default)]
-    pub gap: f32,
-    /// How long the grid lasts when its clips differ. Default `shortest`.
-    #[serde(default)]
-    pub length: GridLength,
-    /// Which item's sound plays, by index. Default: none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audio_from: Option<u32>,
-    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub at: Option<f64>,
-    /// Length in seconds. Default: the node's own length, else what its parent gives it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub duration: Option<f64>,
-}
-
-/// A video over a blurred copy of itself.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct Reframe {
-    /// The node's name, for other nodes to refer to. Its sound is the video's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// The video.
-    pub video: MediaItem,
-    /// The background's blur radius, as a fraction of its shorter side. Default 0.05.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blur: Option<f32>,
-    /// When it starts in its parent; its length is the video's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub at: Option<f64>,
-}
-
-/// A picture in a corner.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct Logo {
-    /// The node's name, for other nodes to refer to.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// The picture.
-    pub path: String,
-    /// The corner. Default `top-right`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub corner: Option<Align>,
-    /// Its longer side, in pixels. Default: 15% of the canvas's shorter side.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size: Option<f32>,
-    /// Pixels from the edges. Default: the theme's margin.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub margin: Option<f32>,
-    /// Opacity, 0..=1. Default 1.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub opacity: Option<f32>,
-    /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub at: Option<f64>,
-    /// Length in seconds. Default: the node's own length, else what its parent gives it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub duration: Option<f64>,
-    /// How it comes in at its start.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub enter: Option<Motion>,
-    /// How it goes out, ending at its end.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit: Option<Motion>,
-}
-
 /// Music under the video.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -1938,7 +1784,7 @@ pub struct Motion {
     /// is false.
     #[serde(rename = "type")]
     pub kind: MotionKind,
-    /// Length in seconds. Default: the theme's fade length.
+    /// Length in seconds; 0 is no motion. Default: the theme's fade length.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration: Option<f64>,
     /// The timing curve. Default linear.
@@ -2057,9 +1903,9 @@ pub struct Counter {
     /// The theme style it starts from. Default `title`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<TextRole>,
-    /// Font size in pixels. Default: the style's.
+    /// Font size in pixels, or a theme length. Default: the style's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub font_size: Option<f32>,
+    pub font_size: Option<Size>,
     /// Family. Default: the theme's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_family: Option<String>,

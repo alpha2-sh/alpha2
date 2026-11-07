@@ -262,7 +262,6 @@ pub(crate) struct Context<'a> {
     next_clip: u32,
     next_composition: u32,
     warnings: Vec<String>,
-    fit_warned: bool,
 }
 
 /// A canvas preset: width, height.
@@ -394,7 +393,6 @@ impl<'a> Context<'a> {
                 next_clip: 0,
                 next_composition: 0,
                 warnings: Vec::new(),
-                fit_warned: false,
             },
             Rgb::new(background.red, background.green, background.blue),
         ))
@@ -513,73 +511,6 @@ impl<'a> Context<'a> {
         self.compositions.push(composition);
         self.blur_compositions.insert(radius.to_bits(), id.clone());
         id
-    }
-
-    /// Line count and height in pixels of `text` at `font_px`, wrapped at `max_width`, measured
-    /// the way the engine draws a text generator's text. `None` without fonts.
-    fn measure(&self, text: &str, font_px: f32, max_width: f32) -> Option<(u32, f32)> {
-        let measurer = self.measurer.as_ref()?;
-        let (width, _) = self.canvas_px();
-        let style = TextStyle {
-            font_family: self.theme.font_family.clone(),
-            font_size: font_px / self.short_side(),
-            align: TextAlign::Center,
-            max_width: max_width / width,
-            ..TextStyle::default()
-        };
-        let canvas = alpha2_layout::PictureSize::new(self.width, self.height).ok()?;
-        let request = alpha2_layout::text_request(text, &style, canvas, 1);
-        #[allow(clippy::cast_precision_loss)]
-        measurer
-            .measure(&request)
-            .ok()
-            .map(|measure| (measure.line_count, measure.box_height as f32))
-    }
-
-    /// The largest font size up to `font_px` at which `text` takes at most `max_lines` lines
-    /// `max_width` pixels wide. `font_px` without fonts.
-    pub(crate) fn fit_font(
-        &mut self,
-        path: &str,
-        text: &str,
-        font_px: f32,
-        max_width: f32,
-        max_lines: u32,
-    ) -> f32 {
-        if self.measurer.is_none() {
-            if !self.fit_warned {
-                self.fit_warned = true;
-                self.warn(format!(
-                    "{path}: no fonts to measure text by, so text is not shrunk to fit"
-                ));
-            }
-            return font_px;
-        }
-        let floor = 0.3 * font_px;
-        let mut size = font_px;
-        while size > floor {
-            match self.measure(text, size, max_width) {
-                Some((lines, _)) if lines > max_lines => size *= 0.92,
-                _ => return size,
-            }
-        }
-        self.warn(format!(
-            "{path}: the text does not fit in {max_lines} lines even at {floor:.0} px"
-        ));
-        floor
-    }
-
-    /// The height in pixels `text` takes: measured with fonts, else one line per `\n` line.
-    #[allow(clippy::cast_precision_loss)]
-    pub(crate) fn text_height(&self, text: &str, font_px: f32, max_width: f32) -> f32 {
-        let line_height = TextStyle::default().line_height;
-        self.measure(text, font_px, max_width).map_or_else(
-            || {
-                (text.split('\n').count() as f32 - 1.0) * font_px * line_height
-                    + font_px * line_height.max(1.0)
-            },
-            |(_, height)| height,
-        )
     }
 
     /// `prim`'s own length, or the one it takes by default.
@@ -1194,12 +1125,14 @@ impl<'a> Context<'a> {
         build: &BoxBuild,
         path: &str,
     ) -> Result<Vec<alpha2_layout::NodeBounds>, ComposeError> {
-        let measurer = self.measurer.as_ref().ok_or_else(|| {
-            ComposeError::new(
-                path,
-                "a box with pictures in it is measured with fonts; pass them",
-            )
-        })?;
+        // Without fonts, a box without text is still measured; its text, if any, is refused.
+        let empty;
+        let measurer = if let Some(measurer) = &self.measurer {
+            measurer
+        } else {
+            empty = TextRasterizer::empty();
+            &empty
+        };
         let size = alpha2_layout::PictureSize::new(self.width, self.height)
             .map_err(|_| ComposeError::new(path, "the canvas is too large for a layout"))?;
         let at = |ticks: i64| {
@@ -1211,7 +1144,16 @@ impl<'a> Context<'a> {
                 (self.width, self.height),
             )
             .map(|bounds| bounds.nodes)
-            .map_err(|error| ComposeError::new(path, error.to_string()))
+            .map_err(|error| {
+                if self.measurer.is_none() {
+                    ComposeError::new(
+                        path,
+                        "a box with text and pictures in it is measured with fonts; pass them",
+                    )
+                } else {
+                    ComposeError::new(path, error.to_string())
+                }
+            })
         };
         let first = at(0)?;
         let last = at((len - 1).max(0))?;
@@ -1455,6 +1397,13 @@ impl<'a> Context<'a> {
                         "max": format!("{max}px"),
                     })),
                     "background": text.background.map(|color| to_json(&Paint::Solid { color })),
+                    // As a text style's background: 0.3 em beside the text; its line box
+                    // already leaves room above and below.
+                    "padding": text.background.map(|_| format!(
+                        "{}px {}px",
+                        0.05 * text.font_px,
+                        0.3 * text.font_px
+                    )),
                     "text_animators": text.reveal.map(|reveal| vec![to_json(&reveal_animator(reveal, text.font_px, len))]),
                 })
             }

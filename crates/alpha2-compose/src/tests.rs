@@ -116,9 +116,16 @@ fn a_title_fades_in_and_out_over_its_time() {
         clip["timeline_range"],
         json!({"start": SECOND / 2, "end": 9 * SECOND / 2})
     );
-    let opacity = clip["visual"]["opacity"]["keyframes"]
+    let source = clip["source_id"].as_str().expect("a source");
+    let layout = compiled["project"]["sources"]
         .as_array()
-        .expect("keyframes");
+        .expect("sources")
+        .iter()
+        .find(|entry| entry["id"] == source)
+        .expect("the title's layout");
+    let text = &layout["generator"]["root"]["children"][0]["children"][0];
+    assert_eq!(text["text"]["value"], "Summer 2026");
+    let opacity = text["opacity"]["keyframes"].as_array().expect("keyframes");
     let values = opacity
         .iter()
         .map(|keyframe| keyframe["value"].as_f64().unwrap())
@@ -141,7 +148,7 @@ fn captions_on_a_bar_with_a_logo_and_loudness() {
         "body": {"type": "media", "path": "talk.mp4"},
         "overlays": [
             {"type": "captions", "file": "talk.srt", "style": "bar-bottom"},
-            {"type": "logo", "path": "logo.png", "corner": "top-right", "size": 180, "opacity": 0.85},
+            {"type": "logo", "path": "logo.png", "corner": "top-right", "size": 0.166_666_67, "opacity": 0.85},
         ],
         "loudness": -14,
     }));
@@ -159,7 +166,8 @@ fn captions_on_a_bar_with_a_logo_and_loudness() {
         tracks[2]["captions"]["cues"].as_array().map(Vec::len),
         Some(30)
     );
-    // The logo is 180 px at the top-right corner, 40 px (the theme's margin) in.
+    // The logo is a sixth of the shorter side, 180 px, at the top-right corner, the theme's margin
+    // in.
     let logo = &tracks[3]["clips"][0]["visual"];
     let scale = logo["scale"]["value"]["x"].as_f64().unwrap();
     assert!((scale * 1080.0 - 180.0).abs() < 1e-3, "{scale}");
@@ -184,7 +192,7 @@ fn a_comparison_grid_lasts_as_its_shortest_clip_and_labels_each_cell() {
     let compiled = compile(&json!({
         "body": {
             "type": "comparison_grid",
-            "items": labels.iter().enumerate().map(|(index, label)| json!({"type": "media", "path": format!("grid{}.mp4", index + 1), "label": label})).collect::<Vec<_>>(),
+            "items": labels.iter().enumerate().map(|(index, label)| json!({"path": format!("grid{}.mp4", index + 1), "label": label})).collect::<Vec<_>>(),
         },
     }));
     let tracks = tracks(&compiled);
@@ -199,9 +207,9 @@ fn a_comparison_grid_lasts_as_its_shortest_clip_and_labels_each_cell() {
         video["visual"]["scale"]["value"],
         json!({"x": 0.5, "y": 0.5})
     );
-    let label = &compiled["project"]["sources"][3]["generator"];
-    assert_eq!(label["text"], "Model A");
-    assert_eq!(label["style"]["anchor"], json!({"x": 0.0, "y": 0.0}));
+    let label = &compiled["project"]["sources"][3]["generator"]["root"]["children"][0];
+    assert_eq!(label["align_items"], "start");
+    assert_eq!(label["children"][0]["text"]["value"], "Model A");
 }
 
 #[test]
@@ -1343,12 +1351,14 @@ fn a_box_places_a_picture_in_its_measured_box_between_the_layout_under_and_over_
 }
 
 #[test]
-fn a_boxed_picture_needs_fonts_and_a_still_place() {
-    let spec = json!({
+fn a_boxed_picture_needs_fonts_only_beside_text_and_a_still_place() {
+    let picture = json!({"type": "media", "path": "logo.png"});
+    compile(&json!({"duration": 1, "body": {"type": "box", "children": [picture]}}));
+    let beside_text = compile_error(&json!({
         "duration": 1,
-        "body": {"type": "box", "children": [{"type": "media", "path": "logo.png"}]},
-    });
-    assert!(compile_error(&spec).contains("fonts"));
+        "body": {"type": "box", "children": [picture, {"type": "text", "text": "Hi"}]},
+    }));
+    assert!(beside_text.contains("fonts"), "{beside_text}");
     let moving = compile_with_font(&json!({
         "duration": 1,
         "body": {"type": "box", "padding": {"mode": "keyframes", "keyframes": [

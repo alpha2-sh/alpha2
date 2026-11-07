@@ -1,0 +1,153 @@
+{
+  "compose_version": 1,
+  "template": {
+    "id": "alpha2/title",
+    "version": 1,
+    "kind": "node",
+    "title": "Title",
+    "description": "A title and an optional subtitle over what is under it, fading in and out."
+  },
+  "params": [
+    {
+      "name": "text",
+      "type": "text",
+      "min_chars": 1,
+      "title": "The title"
+    },
+    {
+      "name": "subtitle",
+      "type": "text",
+      "required": false,
+      "title": "A line under it"
+    },
+    {
+      "name": "align",
+      "type": "enum",
+      "values": [
+        "center",
+        "top",
+        "bottom",
+        "left",
+        "right",
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right"
+      ],
+      "default": "center",
+      "title": "Where it lies, inside twice the theme's margin"
+    },
+    {
+      "name": "fade",
+      "type": "number",
+      "min": 0,
+      "max": 60,
+      "required": false,
+      "title": "Seconds of fade in and out; 0 for none. Default: the theme's"
+    }
+  ],
+  "node": {
+    "type": "box",
+    "flex_direction": "column",
+    "padding": {
+      "$theme": "margin",
+      "scale": 2
+    },
+    "gap": {
+      "$theme": "subtitle_size",
+      "scale": 0.5
+    },
+    "justify_content": {
+      "$switch": "align",
+      "cases": {
+        "top": "start",
+        "top-left": "start",
+        "top-right": "start",
+        "bottom": "end",
+        "bottom-left": "end",
+        "bottom-right": "end"
+      },
+      "default": "center"
+    },
+    "align_items": {
+      "$switch": "align",
+      "cases": {
+        "left": "start",
+        "top-left": "start",
+        "bottom-left": "start",
+        "right": "end",
+        "top-right": "end",
+        "bottom-right": "end"
+      },
+      "default": "center"
+    },
+    "children": [
+      {
+        "type": "text",
+        "text": "{{text}}",
+        "style": "title",
+        "max_lines": 2,
+        "align": {
+          "$switch": "align",
+          "cases": {
+            "left": "left",
+            "top-left": "top-left",
+            "bottom-left": "bottom-left",
+            "right": "right",
+            "top-right": "top-right",
+            "bottom-right": "bottom-right",
+            "top": "top",
+            "bottom": "bottom"
+          },
+          "default": "center"
+        },
+        "enter": {
+          "type": "fade",
+          "duration": {
+            "$param": "fade"
+          }
+        },
+        "exit": {
+          "type": "fade",
+          "duration": {
+            "$param": "fade"
+          }
+        }
+      },
+      {
+        "$if": "subtitle",
+        "then": {
+          "type": "text",
+          "text": "{{subtitle}}",
+          "style": "subtitle",
+          "align": {
+            "$switch": "align",
+            "cases": {
+              "left": "left",
+              "top-left": "top-left",
+              "bottom-left": "bottom-left",
+              "right": "right",
+              "top-right": "top-right",
+              "bottom-right": "bottom-right",
+              "top": "top",
+              "bottom": "bottom"
+            },
+            "default": "center"
+          },
+          "enter": {
+            "type": "fade",
+            "duration": {
+              "$param": "fade"
+            }
+          },
+          "exit": {
+            "type": "fade",
+            "duration": {
+              "$param": "fade"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

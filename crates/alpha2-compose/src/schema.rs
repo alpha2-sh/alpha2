@@ -7,8 +7,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
 
-/// Where the compose schema is published.
-pub const COMPOSE_SCHEMA_ID: &str = "https://alpha2.sh/schema/compose.v1.json";
+pub use crate::spec::COMPOSE_SCHEMA_ID;
 
 /// Where the core compose schema, the one without the engine-level nodes, is published.
 pub const COMPOSE_CORE_SCHEMA_ID: &str = "https://alpha2.sh/schema/compose-core.v1.json";
@@ -32,6 +31,9 @@ fn generated() -> Value {
     let mut value = schema.to_value();
     alpha2_model::finish_json_schema(&mut value);
     value["$defs"]["EffectUse"] = effect_use_schema();
+    if let Some(nodes) = value["$defs"]["Node"]["oneOf"].as_array_mut() {
+        nodes.extend(crate::template::node_schemas());
+    }
     if let Some(defs) = value["$defs"].as_object_mut() {
         defs.extend(animation_defs());
     }

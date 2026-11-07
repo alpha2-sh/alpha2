@@ -131,7 +131,11 @@ def _with_definitions(value: Any) -> dict[str, Any]:
 
 def _node_variants() -> dict[str, dict[str, Any]]:
     variants = _core_schema()["$defs"]["Node"]["oneOf"]
-    return {variant["properties"]["type"]["const"]: variant for variant in variants}
+    return {
+        variant["properties"]["type"]["const"]: variant
+        for variant in variants
+        if "const" in variant["properties"]["type"]
+    }
 
 
 def _effect_variants() -> dict[str, dict[str, Any]]:
