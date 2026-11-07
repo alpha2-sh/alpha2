@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["video", "timeline", "project", "json-schema"]
 categories = ["multimedia::video"]
-# Tests, test-only modules, benches and fixtures stay out of the published package.
 include = [
   "/src/**",
   "/README.md",
@@ -33,7 +32,6 @@ alpha2-scaling-support.workspace = true
 workspace = true
 
 [features]
-# Derives `schemars::JsonSchema` for the document and exposes `project_json_schema`.
 schema = ["dep:schemars", "alpha2-media/schema", "alpha2-time/schema"]
 
 [[example]]

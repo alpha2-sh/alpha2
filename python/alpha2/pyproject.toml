@@ -10,8 +10,6 @@ license = "MIT"
 license-files = ["LICENSE.md"]
 # 3.11 for NotRequired and generic TypedDicts; 3.11.4 for tarfile extraction filters.
 requires-python = ">=3.11.4"
-# alpha2-host exists only for the release targets; elsewhere `python -m alpha2 install` or
-# ALPHA2_HOST_PATH provides the host. certifi covers Linux systems without a CA store.
 dependencies = [
   "alpha2-host==0.6.0; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
   "truststore>=0.10; sys_platform == 'darwin' or sys_platform == 'win32'",
@@ -48,7 +46,6 @@ dev = [
 ]
 
 [tool.maturin]
-# The version comes from the Cargo workspace.
 manifest-path = "../../bindings/alpha2-python/Cargo.toml"
 module-name = "alpha2._native"
 python-source = "src"
@@ -67,11 +64,9 @@ extend-exclude = ["src/alpha2/types.py", "src/alpha2/compose_types.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "A", "BLE", "RUF"]
-# Builder arguments mirror document fields, including `id`.
 ignore = ["A002"]
 
 [tool.ruff.lint.per-file-ignores]
-# Fake hosts are Python source in strings.
 "tests/*" = ["E501"]
 
 [tool.mypy]

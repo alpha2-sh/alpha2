@@ -6,5 +6,4 @@ __pycache__/
 dist/
 *.so
 *.pyd
-# Written by the release job before it builds the wheel.
 alpha2/src/alpha2/_host_archives.json

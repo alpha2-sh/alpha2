@@ -1,7 +1,6 @@
 [advisories]
 version = 2
 yanked = "deny"
-# Unmaintained, not vulnerable, and with no drop-in maintained replacement.
 ignore = [
   { id = "RUSTSEC-2024-0436", reason = "paste, a proc-macro dependency of rsmpeg; goes when rsmpeg drops it" },
   { id = "RUSTSEC-2026-0206", reason = "rustybuzz, native text shaping; goes with a move to harfrust" },
@@ -24,10 +23,8 @@ allow = [
   "Zlib",
 ]
 exceptions = [
-  # Build-script dependency of pyo3-build-config; linked into nothing.
   { allow = ["Apache-2.0 WITH LLVM-exception"], crate = "target-lexicon" },
-  # The mobile bindings' generator and runtime, used unmodified; the notice ships with the
-  # mobile packages. File-level copyleft only, and no other crate may bring MPL-2.0.
+  # Only uniffi may bring MPL-2.0; its notice ships with the mobile packages.
   { allow = ["MPL-2.0"], crate = "uniffi" },
   { allow = ["MPL-2.0"], crate = "uniffi_bindgen" },
   { allow = ["MPL-2.0"], crate = "uniffi_core" },
@@ -41,7 +38,6 @@ exceptions = [
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# For the versionless path dev-dependencies on unpublished test crates.
 allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"

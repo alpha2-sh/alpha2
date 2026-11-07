@@ -3,8 +3,6 @@ name = "openh264-cisco-binary"
 # Never bundled: Cisco's patent licence covers the binary only when the end user downloads it from
 # Cisco, so the installers fetch it on request.
 version = "2.7.0"
-# The FFI's API. An unverified library must report this or 2.6 (same `.8` ABI) via
-# `WelsGetCodecVersionEx`.
 api_version = "2.7"
 source_tag = "v2.7.0"
 source_url = "https://github.com/cisco/openh264/archive/refs/tags/v2.7.0.tar.gz"
@@ -14,8 +12,6 @@ license_url = "https://www.openh264.org/BINARY_LICENSE.txt"
 # Cisco's binary licence requires this text wherever the user controls the codec.
 notice = "OpenH264 Video Codec provided by Cisco Systems, Inc."
 
-# `library_sha256` equals Cisco's `<library>.signed.sha256.txt`. `system_library` is the distro
-# package name tried last; Windows has none.
 [targets.linux-x64]
 archive = "libopenh264-2.7.0-linux64.8.so.bz2"
 archive_sha256 = "44ad0dd2c5af2bac84d26f89f2eb4e268708b8739323d15d33837f7221ce4980"

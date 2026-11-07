@@ -6,7 +6,6 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-# An npm artifact (`alpha2/compose-wasm`), not a crate.
 publish = false
 
 [lib]

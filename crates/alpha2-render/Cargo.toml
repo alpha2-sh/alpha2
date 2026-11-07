@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["wgpu", "rendering", "video", "effects", "compositing"]
 categories = ["rendering::engine", "multimedia::video", "graphics"]
-# The package excludes tests, benches and fixtures; `cargo test` runs from the repository.
 include = [
   "/src/**",
   "/README.md",
@@ -19,7 +18,6 @@ include = [
 ]
 
 [features]
-# Documents the items that take or return `wgpu` types; their semver follows wgpu's major.
 wgpu-interop = ["alpha2-gpu/wgpu-interop"]
 
 [dependencies]
@@ -35,7 +33,6 @@ bytemuck = "1.25.2"
 web-time = "1.1.0"
 serde_json.workspace = true
 
-# The CPU renderer's thread pool; wasm draws on one thread.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = "1.11.0"
 
@@ -43,14 +40,12 @@ rayon = "1.11.0"
 alpha2-test-support.workspace = true
 alpha2-os.workspace = true
 alpha2-model.workspace = true
-# Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
 alpha2-golden-support.workspace = true
 png.workspace = true
 pollster.workspace = true
 
 [lints.rust]
-# Allowed in one place: the CPU renderer's AVX2 dispatch (`cpu/workers.rs`).
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "warn"

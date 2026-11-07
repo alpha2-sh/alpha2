@@ -1,6 +1,6 @@
 name: scheduled
 
-# Weekly checks too slow for every change. Benchmarks run only on a quiet fixed machine.
+# Weekly checks too slow for every change.
 on:
   schedule:
     - cron: "41 2 * * 1"

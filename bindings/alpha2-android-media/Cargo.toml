@@ -23,7 +23,6 @@ ndk-sys = { version = "=0.6.0", features = ["media", "nativewindow"] }
 alpha2-backend-conformance.workspace = true
 alpha2-test-support.workspace = true
 
-# Workspace lints, but `unsafe_code` is deny (not forbid): the NDK calls are FFI.
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"

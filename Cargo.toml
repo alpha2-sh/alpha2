@@ -65,8 +65,7 @@ schemars = "1.2.2"
 wasm-bindgen = "=0.2.128"
 js-sys = "=0.3.105"
 wasm-bindgen-futures = "=0.4.78"
-# `npm run version:set` rewrites these versions. Test crates have no version, so `cargo publish`
-# drops them from dev-dependencies.
+# Test crates have no version, so `cargo publish` drops them from dev-dependencies.
 alpha2 = { version = "0.6.0", path = "crates/alpha2" }
 alpha2-assets = { version = "0.6.0", path = "crates/alpha2-assets" }
 alpha2-audio = { version = "0.6.0", path = "crates/alpha2-audio" }
@@ -110,8 +109,7 @@ pedantic = { level = "warn", priority = -1 }
 [profile.release]
 overflow-checks = true
 
-# Every host process hashes its own binary at start, which unoptimized takes seconds in a debug
-# build of several hundred megabytes.
+# Every host process hashes its own binary at start; unoptimized, that takes seconds.
 [profile.dev.package.sha2]
 opt-level = 3
 

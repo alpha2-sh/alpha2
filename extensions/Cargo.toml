@@ -19,15 +19,11 @@ include = [
 
 [features]
 default = ["svg", "animated-image", "image-sequence", "lottie", "exr", "latex", "pdf"]
-# Uses only host-registered fonts, never system fonts. Pixels can still differ by a code value
-# between CPU families and wasm.
 svg = ["dep:resvg", "dep:imagesize", "dep:flate2", "dep:simplecss", "dep:svgtypes", "dep:kurbo"]
 animated-image = ["dep:gif", "dep:image-webp", "dep:png"]
 image-sequence = ["dep:png"]
 exr = ["dep:exr", "dep:half"]
-# Typesets with the bundled STIX Two Math font only.
 latex = ["svg", "dep:latex-rust"]
-# Draws fonts a PDF does not embed with hayro's bundled standard 14 and reports any it substitutes.
 pdf = ["svg", "dep:hayro-svg"]
 lottie = ["dep:velato", "dep:kurbo", "dep:peniko", "dep:resvg", "dep:zip", "dep:serde_json", "dep:png", "dep:base64"]
 
@@ -57,7 +53,6 @@ zip = { version = "9.0.5", optional = true, default-features = false, features =
 [dev-dependencies]
 alpha2-scaling-support.workspace = true
 serde_json.workspace = true
-# Tests encode their own fixtures, so each format's tests build with that format alone.
 base64 = "0.22.1"
 gif = { version = "0.14.2", default-features = false, features = ["std", "color_quant"] }
 png.workspace = true

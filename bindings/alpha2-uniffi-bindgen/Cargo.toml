@@ -8,9 +8,7 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-# Its own package, not a binary of alpha2-mobile: generating bindings reads the metadata a built
-# mobile library carries, so the mobile runtime (and its platform audio and GPU dependencies)
-# never has to build for the machine that runs the tool.
+# Its own package so the mobile runtime never builds for the machine that runs the tool.
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/main.rs"

@@ -1,6 +1,4 @@
-# The `ffmpeg` and `ffprobe` executables tests compare alpha2's media against, pinned like the
-# runtime in ../ffmpeg-lgpl. Nothing ships them: they never reach a package or an archive.
-# scripts/fetch-ffmpeg-tools.sh fetches and verifies them.
+# Test-only `ffmpeg` and `ffprobe`; nothing ships them.
 repository = "alpha2-sh/ffmpeg-builds"
 release_tag = "ffmpeg-8.1.3-build1"
 ffmpeg_version = "8.1.3"

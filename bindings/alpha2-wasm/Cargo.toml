@@ -48,7 +48,6 @@ wgpu = { workspace = true, features = ["webgl"] }
 
 [dev-dependencies]
 alpha2-scaling-support.workspace = true
-# Audio contract only; the default visual feature turns the extension providers on.
 alpha2-provider-contract = { workspace = true, default-features = false }
 
 [lints]

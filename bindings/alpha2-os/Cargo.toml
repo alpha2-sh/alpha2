@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["process", "file-lock", "memory", "signal"]
 categories = ["os"]
-# Tests stay in the repository; the package ships sources only.
 include = [
   "/src/**",
   "/README.md",

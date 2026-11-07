@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["video", "render", "ffmpeg", "sidecar", "cli"]
 categories = ["multimedia::video", "command-line-utilities"]
-# Tests, test-only modules and fixtures stay out of the package.
 include = [
   "/build.rs",
   "/src/**",
@@ -21,7 +20,6 @@ include = [
 
 [features]
 default = ["hwdecode", "hwencode", "extensions"]
-# Without it, SVG, animated images and image sequences are reported as unsupported.
 extensions = ["alpha2-extensions/default"]
 # Internal; enable `hwdecode` and/or `hwencode` instead.
 hwdevice = [
@@ -31,7 +29,6 @@ hwdevice = [
   "dep:alpha2-ffmpeg-bridge",
 ]
 hwdecode = ["hwdevice", "alpha2-native/hwdecode"]
-# The GPU-resident export: renderer-packed planes into a hardware encoder.
 hwencode = ["hwdevice", "alpha2-native/hwencode"]
 
 [[bin]]
@@ -70,7 +67,6 @@ wgpu.workspace = true
 [dev-dependencies]
 alpha2-test-support.workspace = true
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
-# The visual contract (a default feature) would turn the extension providers on.
 alpha2-provider-contract = { workspace = true, default-features = false }
 alpha2-text.workspace = true
 

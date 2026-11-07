@@ -10,7 +10,6 @@ publish = false
 
 [features]
 default = ["lottie", "pdf"]
-# Features so feature unification does not enable these providers for every crate.
 lottie = ["dep:alpha2-extensions", "alpha2-extensions/lottie"]
 pdf = ["dep:alpha2-extensions", "alpha2-extensions/pdf"]
 
@@ -35,7 +34,6 @@ wgpu.workspace = true
 [build-dependencies]
 alpha2-build-support.workspace = true
 
-# Not `workspace = true`: the counting `GlobalAlloc` needs unsafe code, which the workspace forbids.
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"

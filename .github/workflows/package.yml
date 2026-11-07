@@ -17,7 +17,6 @@ permissions:
   contents: read
 
 env:
-  # Oldest macOS the archives and wheels support.
   MACOSX_DEPLOYMENT_TARGET: "11.0"
 
 jobs:
@@ -49,7 +48,6 @@ jobs:
 
       - run: cargo install cargo-about --version 0.9.2 --locked --features cli
 
-      # Ubuntu runners or a manylinux (AlmaLinux) container, where bindgen also needs libclang.
       - name: Install Linux packaging tools
         if: startsWith(matrix.target, 'linux-')
         run: |
@@ -71,7 +69,6 @@ jobs:
       - name: Build the native archive
         run: scripts/build-native-release.sh bundled "${{ matrix.target }}"
 
-      # Builds and checks the wheels the same way the release's distribute job does.
       - name: Build Python wheels, install them and find the host
         run: |
           pipx install uv==0.9.17

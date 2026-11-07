@@ -19,14 +19,12 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: 0
-  # Oldest macOS the archives and wheels support (ignored elsewhere).
   MACOSX_DEPLOYMENT_TARGET: "11.0"
   # Runners have no GPU, so `auto` would pick the CPU renderer; GPU jobs run on lavapipe.
   ALPHA2_RENDERER: gpu
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   SAVE_RUST_CACHE: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/prerelease-v') }}
-  # Pull requests skip the heavy legs. Jobs cannot read env in their own `if`, so job conditions
-  # repeat this.
+  # Jobs cannot read env in their own `if`, so job conditions repeat this.
   HEAVY: ${{ github.event_name != 'pull_request' }}
 
 concurrency:
@@ -185,7 +183,6 @@ jobs:
             echo "FFMPEG_LINK_MODE=dynamic"
             echo "LD_LIBRARY_PATH=$sdk_root/lib"
           } >> "$GITHUB_ENV"
-      # The ffmpeg and ffprobe the container tests compare against; tests never take them from PATH.
       - name: Pin the FFmpeg tools the container tests compare against
         run: |
           tools="$(scripts/fetch-ffmpeg-tools.sh linux-x64)"
@@ -708,7 +705,6 @@ jobs:
               echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
             fi
           fi
-      # The Windows host refuses to start without the pinned DXC.
       - if: runner.os == 'Windows'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -768,7 +764,6 @@ jobs:
           - platform: android
             runner: ubuntu-24.04
             targets: aarch64-linux-android x86_64-linux-android
-          # Crates with Apple SDK build steps need Xcode's iOS SDKs.
           - platform: ios
             runner: macos-26
             targets: aarch64-apple-ios aarch64-apple-ios-sim
@@ -836,12 +831,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The oldest supported release, whose emulator image has GL only, and a current one.
         include:
           - api: 29
             test-env: ""
-          # Debug builds name GPU objects, which this image's Vulkan driver crashes on. The
-          # library's instrumentation tests (audio output, a real Surface) run here.
+          # Debug builds name GPU objects, which this image's Vulkan driver crashes on.
           - api: 36
             test-env: WGPU_DEBUG=0
             instrumentation: true
@@ -902,8 +895,6 @@ jobs:
             sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      # The suites test the backends' logic on the emulator's software codecs and GPU; hardware
-      # codecs are covered on devices.
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: ${{ matrix.api }}
@@ -952,7 +943,6 @@ jobs:
           echo "SIMULATOR=$device" >> "$GITHUB_ENV"
           xcrun simctl boot "$device"
           xcrun simctl bootstatus "$device"
-      # The simulator's codecs are software; hardware codecs are covered on devices.
       - name: The Apple media and session suites in the simulator
         run: |
           cargo test --locked --no-run --target aarch64-apple-ios-sim \
@@ -1075,7 +1065,6 @@ jobs:
               echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
             fi
           fi
-      # The Windows host refuses to start without the pinned DXC.
       - if: runner.os == 'Windows'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1084,7 +1073,6 @@ jobs:
       - name: Fetch the pinned DXC
         if: runner.os == 'Windows'
         run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
-      # Downloaded from Cisco for tests only.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/openh264
@@ -1211,7 +1199,6 @@ jobs:
               echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
             fi
           fi
-      # The Windows host refuses to start without the pinned DXC.
       - if: runner.os == 'Windows'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1284,8 +1271,7 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
-      # The abi3 module targets 3.11 (the oldest supported) and is tested on the newest too. uv
-      # 0.13.3 is the first uv that installs CPython 3.15.0.
+      # uv 0.13.3 is the first uv that installs CPython 3.15.0.
       - name: Build the package into a Python ${{ matrix.python }} environment
         run: |
           pipx install uv==0.13.3
@@ -1300,7 +1286,6 @@ jobs:
           "$PY/mypy"
           "$PY/mypy" --platform win32
           "$PY/mypy" --platform darwin
-      # No host here, so the end-to-end tests skip; the host job runs them.
       - run: '"$PY/pytest"'
       - name: Skips this run recorded
         if: always()
@@ -1440,7 +1425,6 @@ jobs:
             runner: ubuntu-24.04
           - backend: dx12
             runner: windows-2025
-            # Debug builds compile the same optimized HLSL as release, so this covers release too.
             strict: "1"
           - backend: metal
             runner: macos-26
@@ -1450,7 +1434,6 @@ jobs:
       WGPU_VALIDATION: "1"
       MTL_DEBUG_LAYER: "1"
       ALPHA2_GPU_STRICT: ${{ matrix.strict || '0' }}
-      # Reports wgpu-hal validation output without failing.
       ALPHA2_VALIDATION_REPORT: ${{ github.workspace }}/target/validation-report.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1543,7 +1526,6 @@ jobs:
       - run: npm run test:editor:package
       - name: The wasm-browser cases in Firefox (the image's Firefox and geckodriver)
         if: ${{ !cancelled() }}
-        # This Firefox has no WebGPU, WebGL2 or H.264 here, so those cases skip.
         env:
           ALPHA2_REQUIRE: browser,wasm
         run: node scripts/test-wasm-browser.mjs --browser firefox
@@ -1574,7 +1556,6 @@ jobs:
           if-no-files-found: ignore
 
   browser-platforms:
-    # Software adapters only (paravirtual Metal on macOS, WARP on Windows), not real-GPU runs.
     if: >-
       ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser-platforms,')) &&
       github.event_name != 'pull_request' }}
@@ -1649,7 +1630,6 @@ jobs:
           if-no-files-found: ignore
 
   gpu-validation:
-    # GPU suites under each backend's validation layer; reports only, does not fail yet.
     if: >-
       ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',gpu-validation,')) &&
       github.event_name != 'pull_request' }}
@@ -1727,7 +1707,6 @@ jobs:
               echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
             fi
           fi
-      # The Windows host refuses to start without the pinned DXC.
       - if: runner.os == 'Windows'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1748,8 +1727,7 @@ jobs:
           if-no-files-found: ignore
 
   package:
-    # Skipped under release.yml, which runs package.yml itself. Pull requests package one target
-    # per OS.
+    # Skipped under release.yml, which runs package.yml itself.
     if: >-
       ${{ github.workflow == 'ci' && needs.changes.outputs.packaging == 'true' &&
       (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',package,')) }}

@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["vector", "bezier", "rasterizer", "shapes", "animation"]
 categories = ["graphics", "multimedia::video"]
-# Tests, benches and fixtures stay out of the published crate.
 include = [
   "/src/**",
   "/README.md",
@@ -20,8 +19,7 @@ include = [
 
 [dependencies]
 alpha2-model.workspace = true
-# libm keeps trigonometry identical across targets. Linking peniko or svgtypes switches kurbo to
-# `std` math, so goldens pin outline bits and scene keys only for libm builds.
+# Linking peniko or svgtypes switches kurbo to `std` math; goldens pin outline bits for libm only.
 kurbo = { version = "0.13.1", default-features = false, features = ["libm"] }
 libm = "0.2.16"
 

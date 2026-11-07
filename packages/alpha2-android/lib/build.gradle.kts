@@ -1,6 +1,4 @@
-// The alpha2 Android library: the Rust library for arm64-v8a and x86_64, its uniffi Kotlin
-// bindings, and the JNI entry points uniffi cannot express. `scripts/build-android.sh` builds the
-// native libraries and bindings into `build/` before Gradle runs.
+// `scripts/build-android.sh` builds the native libraries and bindings into `build/` first.
 plugins {
     id("com.android.library")
     kotlin("android")
@@ -16,9 +14,7 @@ android {
     }
     sourceSets["main"].kotlin.srcDir("build/generated/uniffi")
     sourceSets["main"].jniLibs.srcDir("build/jniLibs")
-    // License notices, which apps merge into their META-INF.
     sourceSets["main"].resources.srcDir("build/notices")
-    // The instrumentation tests read the repository's fixtures.
     sourceSets["androidTest"].assets.srcDirs("../../../tests/cases", "../../../tests/fonts")
     sourceSets["androidTest"].assets.srcDir("build/test-corpus")
     compileOptions {

@@ -1,5 +1,3 @@
-# Platform math libraries round transcendentals differently; `libm` gives the same bits everywhere.
-# `sqrt` is correctly rounded by IEEE 754 and stays allowed.
 disallowed-methods = [
   { path = "f32::sin", reason = "platform math library; use `libm::sinf`" },
   { path = "f32::cos", reason = "platform math library; use `libm::cosf`" },
@@ -59,5 +57,4 @@ disallowed-methods = [
   { path = "kurbo::flatten", reason = "use the raster's own flattening, which uses only `sqrt`" },
 ]
 
-# Format names, not code.
 doc-valid-idents = ["SubRip", "WebVTT", "OpenEXR", "ACEScg", ".."]

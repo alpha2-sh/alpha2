@@ -8,8 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["video", "timeline", "animation", "keyframes"]
 categories = ["multimedia::video"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
 include = [
   "/src/**",
   "/README.md",

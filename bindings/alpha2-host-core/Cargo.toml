@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["video", "audio", "host", "mobile"]
 categories = ["multimedia::video", "multimedia::audio"]
-# Tests stay in the repository; the package ships sources only.
 include = [
   "/src/**",
   "/README.md",
@@ -20,12 +19,8 @@ include = [
 
 [features]
 default = ["engine"]
-# Project audio rendering and the export loop; the part that links the engine.
 engine = ["dep:alpha2-engine", "dep:alpha2-eval", "dep:alpha2-model", "dep:alpha2-render", "dep:wgpu"]
-# Frames of extension sources (SVG, Lottie, animated images, EXR, LaTeX, PDF, image sequences).
-# The formats are the ones the dependent enables on `alpha2-extensions`.
 providers = ["engine", "dep:alpha2-extensions", "dep:bytemuck", "dep:serde_json"]
-# Real-time audio output through cpal.
 cpal-host = ["dep:cpal"]
 # Thread-local decode budget overrides for dependents' tests. Never enable in a product build.
 test-hooks = []

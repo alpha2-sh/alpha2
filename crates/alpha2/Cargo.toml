@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["video", "video-editing", "rendering", "timeline", "webgpu"]
 categories = ["multimedia::video", "rendering::engine", "graphics"]
-# Tests, benches and fixtures stay out of the published crate.
 include = [
   "/src/**",
   "/README.md",
@@ -19,7 +18,6 @@ include = [
 ]
 
 [features]
-# Exposes the `wgpu` interop surface and `alpha2::gpu::wgpu`; its semver follows wgpu's major.
 wgpu-interop = ["alpha2-engine/wgpu-interop"]
 
 [dependencies]

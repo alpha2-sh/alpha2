@@ -3,7 +3,6 @@ accepted = ["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", 
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 
-# The mobile bindings' runtime, accepted for these crates only, as in deny.toml.
 [uniffi]
 accepted = ["MPL-2.0"]
 

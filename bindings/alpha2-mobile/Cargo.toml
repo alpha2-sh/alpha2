@@ -14,7 +14,6 @@ publish = false
 crate-type = ["lib", "staticlib", "cdylib"]
 
 [features]
-# The compose compiler and templates: specs written and bound on the device.
 default = ["compose"]
 compose = ["dep:alpha2-compose"]
 
@@ -54,9 +53,6 @@ jni = "0.21"
 ndk-context = "0.1"
 ndk-sys = { version = "=0.6.0", features = ["media", "nativewindow"] }
 
-# Workspace lints, but `unsafe_code` is deny (not forbid): the scaffolding uniffi generates at the
-# crate root and at every exported item needs it, so lib.rs allows it crate-wide; the hand-written
-# unsafe code (JNI exports, native windows, decoder buffer import) carries SAFETY comments.
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
