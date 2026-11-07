@@ -40,7 +40,7 @@ pub const TEXT_FIT_PROJECT_JSON: &str = include_str!("../../cases/text-fit-proje
 /// The font [`text_fit_hash`] draws with.
 const FIXTURE_FONT: &[u8] = include_bytes!("../../fonts/Alpha2Fixture.ttf");
 
-/// The times [`text_fit_hash`] draws, in ticks; the layout's font size animates between them.
+/// The times [`text_fit_hash`] draws, in ticks. The layout's font size animates between them.
 pub const TEXT_FIT_TIMES: [i64; 3] = [0, 36_000, 108_000];
 
 /// The host parity project [`project_hash`] renders.
@@ -286,7 +286,7 @@ impl FrameProvider for Cards {
     }
 }
 
-/// No source frames: the text fit project draws generators and captions only.
+/// Supplies no source frames, since the text fit project draws only generators and captions.
 struct NoFrames;
 
 impl FrameProvider for NoFrames {

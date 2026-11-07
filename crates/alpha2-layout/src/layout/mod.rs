@@ -47,7 +47,7 @@ pub struct NodeRects {
     /// The unrounded content height a text fits and is clamped in, before the slack.
     pub text_height: f32,
     /// A text node's font size as a fraction of the picture's shorter side, fitted when it
-    /// has a `font_size_fit` ([`fit_texts`]); zero for other nodes.
+    /// has a `font_size_fit` ([`fit_texts`]). Zero for other nodes.
     pub font_size: f32,
     /// A text node's font size in pixels, as the text host draws it.
     pub font_pixels: f32,
@@ -85,13 +85,13 @@ pub struct NodeBounds {
     pub border: CanvasRect,
     /// The content box, as fractions of the picture.
     pub content: CanvasRect,
-    /// Whether it overflows: its text (at its fitted size, once clamped) is taller than its
-    /// content box or splits a word, or an in-flow child reaches past its padding box.
+    /// Whether its text, at its fitted size once clamped, is taller than its content box or
+    /// splits a word, or an in-flow child reaches past its padding box.
     pub overflow: bool,
     /// A text node's line count; `None` for other nodes.
     pub line_count: Option<u32>,
-    /// A text node's font size as drawn, a fraction of the picture's shorter side; `None` for
-    /// other nodes.
+    /// A text node's font size as drawn, a fraction of the picture's shorter side. `None`
+    /// for other nodes.
     pub font_size: Option<f32>,
     /// Whether a text node's `line_clamp` discarded lines.
     pub truncated: bool,
@@ -132,9 +132,8 @@ pub(crate) fn text_request(
     }
 }
 
-/// How `shaped` lies in a text node's content box `width` by `height` unrounded pixels,
-/// cut by its clamp. Lines break at the width plus the slack and fit in the height plus the
-/// slack.
+/// How `shaped` lies in a text node's content box `width` by `height` unrounded pixels, cut
+/// by its clamp. Both sides take [`LAYOUT_WRAP_SLACK`] more.
 pub(crate) fn node_lines(
     text: &EvaluatedText,
     shaped: &ShapedText,

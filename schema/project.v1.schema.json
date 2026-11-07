@@ -844,7 +844,7 @@
       "oneOf": [
         {
           "const": "no_ellipsis",
-          "description": "No mark; the cut line keeps its own end.",
+          "description": "No mark. The cut line keeps its own end.",
           "type": "string"
         },
         {
@@ -854,7 +854,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "This text: 1 to [`MAX_BLOCK_ELLIPSIS_BYTES`] bytes with no control characters or line\nand paragraph separators.",
+          "description": "This text, 1 to [`MAX_BLOCK_ELLIPSIS_BYTES`] bytes with no control characters or line\nand paragraph separators.",
           "properties": {
             "string": {
               "type": "string"
@@ -1959,7 +1959,7 @@
     },
     "FontSizeFit": {
       "additionalProperties": false,
-      "description": "The font sizes a text is fitted between, as fractions of the canvas's shorter side.\n\nThe text draws at the largest size in `[min, max]` at which it fits its box: no line\nbreaks inside a word at the wrapping width, the lines fit in the box's height (when it has\none), and there are no more lines than `line_clamp.max_lines` allows. When it fits at no\nsize, it draws at `min` and the clamp, if any, cuts it. A `min` above `max` wins, as CSS\n`min-width` wins over `max-width`.\n\nCandidate sizes are `max`, `min`, and the multiples of `1 / FONT_SIZE_FIT_STEPS` between\nthem, searched by bisection; smaller sizes are taken to fit at least as well. Text animators\nnever change the fit.",
+      "description": "The font sizes a text is fitted between, as fractions of the canvas's shorter side.\n\nThe text draws at the largest size in `[min, max]` at which no line breaks inside a word,\nthe lines fit the box's height, and there are no more lines than `line_clamp.max_lines`.\nWhen no size fits, it draws at `min`. A `min` above `max` wins, as CSS `min-width` does.\nSizes are tried by bisection over `max`, `min` and the multiples of `1 / 8192` between.",
       "properties": {
         "max": {
           "description": "Largest font size, at least `min` and at most the holder's largest font size. `None`\nis `font_size`, so the text only shrinks.",
@@ -2626,11 +2626,11 @@
               "type": "null"
             }
           ],
-          "description": "Largest font size, with the same limits. `None` is the box's `font_size`, so the text\nonly shrinks."
+          "description": "Largest font size, with the same limits. `None` is `font_size`, so the text only shrinks."
         },
         "min": {
           "$ref": "#/$defs/LayoutSize",
-          "description": "Smallest font size: positive, at most [`MAX_LAYOUT_FONT_SIZE`] of the picture's shorter\nside."
+          "description": "Smallest font size, positive and at most [`MAX_LAYOUT_FONT_SIZE`] of the shorter side."
         }
       },
       "required": [
@@ -2902,7 +2902,7 @@
               "type": "null"
             }
           ],
-          "description": "The range the font size of the box's own text is fitted in so the text fits its content\nbox, as a text style's `font_size_fit`. The box is laid out at `font_size` first; the\nfit never changes its size. Not inherited."
+          "description": "The range the font size of the box's own text is fitted in so the text fits its content\nbox, as a text style's `font_size_fit`. The box is laid out at `font_size` first, and\nthe fit never changes its size. Not inherited."
         },
         "font_weight": {
           "description": "The weight in `[1, 1000]` used to match the family's faces, as a text style's\n`font_weight`. Not animated. Inherited; the root's is 400.",
@@ -3399,12 +3399,12 @@
     },
     "LineClamp": {
       "additionalProperties": false,
-      "description": "Lines past a clamp point are discarded, as CSS Overflow 4 `line-clamp` discards them.\n\nThe clamp point is after the last line within `max_lines` that fits in the text's box\nheight, and never before the first line. CSS clamps at the height only for\n`max-lines: auto`; here the height always takes part, so clamped text stays within a box\nthat has a height. When text is cut, the last kept line is shortened to its last soft wrap\nopportunity at which the ellipsis fits after it (to its last character that does when none\ndoes), and the ellipsis is drawn at the line's end in the text's style. The ellipsis is not\ncounted by text animators and moves with the character before it.",
+      "description": "Lines past a clamp point are discarded, as CSS Overflow 4 `line-clamp` discards them.\n\nThe clamp point is after the last line within `max_lines` that fits the box's height, and\nnever before the first line. Unlike CSS, the height counts without `max-lines: auto`, so\nclamped text stays inside a box that has one. A cut line is shortened to its last word end,\nelse its last character, at which the ellipsis fits after it. Text animators count no unit\nfor the ellipsis, which moves with the character before it.",
       "properties": {
         "block_ellipsis": {
           "$ref": "#/$defs/BlockEllipsis",
           "default": "ellipsis",
-          "description": "What ends the last kept line when text is cut. Default `ellipsis`, as in the CSS\n`line-clamp` shorthand."
+          "description": "What ends the last kept line of cut text. Default `ellipsis`, as CSS `line-clamp` sets it."
         },
         "max_lines": {
           "description": "Most lines, at least 1, as CSS `max-lines`. `None` cuts at the box's height alone.",
@@ -5991,7 +5991,7 @@
               "type": "null"
             }
           ],
-          "description": "The range the font size is fitted in so the text fits its box; `None` draws at\n`font_size`."
+          "description": "The range the font size is fitted in so the text fits its box. `None` draws at the\nfont size as set."
         },
         "font_weight": {
           "default": 400,
@@ -6016,7 +6016,7 @@
               "type": "null"
             }
           ],
-          "description": "Where lines are cut and what ends the cut line, as CSS `line-clamp`; `None` keeps every\nline."
+          "description": "Where lines are cut and what ends a cut line, as CSS `line-clamp`. `None` cuts nothing."
         },
         "line_height": {
           "default": 1.2,
@@ -6025,7 +6025,7 @@
           "type": "number"
         },
         "max_height": {
-          "description": "Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for\n`font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS\n`max-height` lets a box with visible overflow; `None` sets no height.",
+          "description": "Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for\n`font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS\n`max-height` lets a box with visible overflow. `None` sets no height.",
           "format": "float",
           "type": [
             "number",

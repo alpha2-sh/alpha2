@@ -6,7 +6,7 @@
 //! pixels), or, for sizes and insets, `"<n>%"` of the parent's content box (see
 //! [`crate::layout_values`]). Boxes are `border-box`. Text style fields (`font_family`,
 //! `font_size`, `fill`, `font_weight`, `line_height`, `letter_spacing`, `text_align`,
-//! `strokes`, `shadows`) may be set on any box and inherit as in CSS; `font_size_fit`,
+//! `strokes`, `shadows`) may be set on any box and inherit as in CSS. `font_size_fit`,
 //! `line_clamp` and `text_animators` apply to the box's own text only.
 
 use crate::animation::visit_keyed;
@@ -264,8 +264,8 @@ pub struct LayoutNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadows: Option<Vec<TextShadow>>,
     /// The range the font size of the box's own text is fitted in so the text fits its content
-    /// box, as a text style's `font_size_fit`. The box is laid out at `font_size` first; the
-    /// fit never changes its size. Not inherited.
+    /// box, as a text style's `font_size_fit`. The box is laid out at `font_size` first, and
+    /// the fit never changes its size. Not inherited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_fit: Option<LayoutFontSizeFit>,
     /// Where the lines of the box's own text are cut and what ends the cut line, as CSS
@@ -301,11 +301,9 @@ pub struct LayoutNode {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct LayoutFontSizeFit {
-    /// Smallest font size: positive, at most [`MAX_LAYOUT_FONT_SIZE`] of the picture's shorter
-    /// side.
+    /// Smallest font size, positive and at most [`MAX_LAYOUT_FONT_SIZE`] of the shorter side.
     pub min: LayoutSize,
-    /// Largest font size, with the same limits. `None` is the box's `font_size`, so the text
-    /// only shrinks.
+    /// Largest font size, with the same limits. `None` is `font_size`, so the text only shrinks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<LayoutSize>,
 }

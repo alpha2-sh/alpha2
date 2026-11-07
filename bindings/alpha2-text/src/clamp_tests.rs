@@ -58,7 +58,7 @@ fn ellipsis(layout: &TextLayout) -> &ClusterInfo {
 
 #[test]
 fn a_line_limit_counts_lines_and_the_height_and_keeps_one_line() {
-    // Lines are 24 * 1.2 = 28.8 apart; one line's box is 28.8 tall.
+    // Lines are 24 * 1.2 = 28.8 pixels apart, and one line's box is 28.8 tall.
     assert_eq!(line_limit(24.0, 1.2, None, 0.0), None);
     assert_eq!(line_limit(24.0, 1.2, Some(3), 0.0), Some(3));
     assert_eq!(line_limit(24.0, 1.2, Some(0), 0.0), Some(1));
@@ -68,7 +68,7 @@ fn a_line_limit_counts_lines_and_the_height_and_keeps_one_line() {
     assert_eq!(line_limit(24.0, 1.2, None, 1.0), Some(1));
     assert_eq!(line_limit(24.0, 1.2, Some(1), 1_000.0), Some(1));
     assert_eq!(line_limit(24.0, 1.2, Some(9), 86.5), Some(3));
-    // Lines closer than an em still need an em for the last line.
+    // At a line height of 0.5, n lines take 12 (n - 1) + 24 pixels.
     assert_eq!(line_limit(24.0, 0.5, None, 24.0 + 12.0), Some(2));
     assert_eq!(line_limit(24.0, 0.5, None, 24.0 + 11.9), Some(1));
 }
@@ -108,7 +108,6 @@ fn a_clamp_keeps_its_lines_and_ends_the_last_with_the_ellipsis() {
     assert_eq!(mark.line, 1);
     assert_eq!(mark.word, None);
     assert!(mark.bytes.is_empty());
-    // It follows the last kept word, cut at a word's end, and the line still fits.
     let kept = &QUICK[..mark.bytes.start];
     assert!(kept.ends_with(' ') || QUICK[mark.bytes.start..].starts_with(' '));
     let line = &layout.lines[1];
@@ -166,7 +165,6 @@ fn blank_lines_after_the_clamp_point_cut_nothing_but_text_after_them_does() {
         .measure(&request("one\n\nthree", 0.0, Some(lines(2))))
         .expect("measures");
     assert_eq!((measure.line_count, measure.truncated), (2, true));
-    // The kept blank line holds only the ellipsis.
     let layout = rasterizer
         .layout(&request("one\n\nthree", 0.0, Some(lines(2))))
         .expect("lays out");
@@ -205,7 +203,7 @@ fn a_word_wider_than_the_line_is_cut_between_clusters() {
 #[test]
 fn a_cut_line_keeps_whole_words_when_one_fits() {
     let rasterizer = fixture();
-    // The second line is "three four"; " (more)" fits after "three" but not after "four".
+    // The second line is "three four", and " (more)" fits after "three" but not "four".
     let text = "one two three four five six seven eight";
     for (width, ellipsis_text) in [(160.0, " (more)"), (200.0, "\u{2026}")] {
         let clamp = Some(TextClamp {
@@ -237,7 +235,6 @@ fn a_clamp_by_height_keeps_the_lines_that_fit() {
         .expect("measures");
     assert_eq!((measure.line_count, measure.truncated), (2, true));
     assert!(measure.box_height <= 60);
-    // No ellipsis: the kept lines are laid out as they broke.
     let free = rasterizer
         .layout(&request(QUICK, 200.0, None))
         .expect("lays out");
@@ -258,7 +255,6 @@ fn right_to_left_text_ends_with_the_ellipsis_at_its_left() {
     let mark = ellipsis(&layout);
     let line = &layout.lines[0];
     assert!((mark.x - line.left).abs() < 1.0e-3, "{mark:?} {line:?}");
-    // The first letter stays rightmost.
     assert!(
         layout.clusters[..layout.clusters.len() - 1]
             .iter()
@@ -342,7 +338,6 @@ fn shaped_lines_agree_with_the_clamped_layout() {
             );
         }
     }
-    // A kept line that splits a word splits it; words cut away do not count.
     let long = rasterizer
         .shape(&request("short Internationalization", 0.0, None))
         .expect("shapes");

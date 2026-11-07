@@ -1,12 +1,10 @@
-//! Fitted font sizes and clamped lines in captions, text generators and a layout card.
-
 use super::*;
 use crate::{EngineProject, FramesWithText, TextTextures};
 
 const W: u32 = 320;
 const H: u32 = 180;
 
-/// The card's font size animates, so each moment fits again; the karaoke runs move the ellipsis.
+/// The card's font size animates between these times, and the karaoke runs move the ellipsis.
 const TIMES: [i64; 3] = [0, 36_000, 108_000];
 
 fn project() -> EngineProject {

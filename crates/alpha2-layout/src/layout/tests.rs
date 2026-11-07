@@ -728,7 +728,6 @@ fn a_fit_fills_a_fixed_box_without_changing_it() {
     assert!(!fitted_text.overflow);
     let font_size = fitted_text.font_size.expect("a text");
     assert!(font_size < 0.1 && font_size > 0.02, "{font_size}");
-    // The fitted lines, drawn, fit the box.
     let picture = size(1280, 720);
     let root = card(json!({ "min": 0.02 }));
     let evaluated = LayoutPlan::new(&root, (1280, 720)).evaluate(MediaTime::ZERO);
@@ -763,7 +762,6 @@ fn an_animated_font_size_is_fitted_at_each_time() {
             .font_size
             .expect("a text")
     };
-    // Below the fit the text follows its keyframes; above it, the box caps it.
     assert_eq!(at(0), 0.03);
     let (late, later) = (at(100_000), at(120_000));
     assert!(late < 0.03 + 0.27 * 100.0 / 120.0);

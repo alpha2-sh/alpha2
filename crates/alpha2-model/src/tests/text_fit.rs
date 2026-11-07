@@ -69,7 +69,6 @@ fn a_text_style_holds_its_box_fit_and_clamp_to_their_ranges() {
             },
             true,
         ),
-        // A minimum above `font_size` is valid: it wins over the default maximum.
         (
             TextStyle {
                 font_size_fit: Some(fit(0.2, None)),

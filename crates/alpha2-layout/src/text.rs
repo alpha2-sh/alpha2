@@ -35,13 +35,11 @@ pub struct TextBounds {
     pub line_count: u32,
     /// The first and last lines' alphabetic baselines.
     pub baselines: Baselines,
-    /// The font size drawn, as a fraction of the canvas's shorter side: the style's, or the
-    /// one its `font_size_fit` found.
+    /// The font size drawn after any `font_size_fit`, a fraction of the canvas's shorter side.
     pub font_size: f32,
     /// Whether the style's `line_clamp` discarded lines.
     pub truncated: bool,
-    /// Whether the drawn text still does not fit its box: a line splits a word, or the lines
-    /// are taller than `max_height`.
+    /// Whether the drawn text still splits a word or is taller than `max_height`.
     pub overflow: bool,
 }
 
@@ -255,7 +253,7 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
         }
         None => feed(&[0]),
     }
-    // Nothing for a style without a box height, fit or clamp, so its key stays the same.
+    // Only fields that are set are fed.
     if let Some(height) = style.max_height {
         feed(&[0xf0]);
         feed(&height.to_bits().to_le_bytes());

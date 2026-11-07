@@ -227,8 +227,8 @@ fn timing(
 /// and a hash of the states. The hash is 0 when every state is identity, so the text draws as
 /// it would without animators. `base_fill` and `base_stroke` are where color mixes start.
 ///
-/// The ellipsis of a clamped text is no unit of any selector: it takes the state of the
-/// cluster before it, so it moves and fades with the text it ends.
+/// No selector counts the ellipsis of a clamped text. It takes the state of the cluster before
+/// it, so it moves and fades with the text it ends.
 #[must_use]
 pub fn cluster_states(
     layout: &TextLayout,

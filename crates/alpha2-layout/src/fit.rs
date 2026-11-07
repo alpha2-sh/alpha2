@@ -19,8 +19,8 @@ pub(crate) fn pixels(font_size: f32, unit: f32) -> f32 {
     (font_size * unit).clamp(1.0, MAX_FONT_PIXELS)
 }
 
-/// The largest candidate size in `fit`'s range at which `fits` holds, else its `min`; `base`
-/// alone without a fit. See [`FontSizeFit`] for the candidates.
+/// The largest candidate size in `fit`'s range at which `fits` holds, else its `min`. Without
+/// a fit it is `base`. See [`FontSizeFit`] for the candidates.
 ///
 /// Bisection compares only exact multiples of `1 / FONT_SIZE_FIT_STEPS`, so the sizes tried,
 /// and the size found, are the same on every platform.
@@ -49,7 +49,7 @@ pub(crate) fn fit_font_size<E>(
     if low >= high || !fits(pixels(low, unit))? {
         return Ok(size(low));
     }
-    // Candidates are `low`, the steps strictly between, then `high`: `low` fits, `high` not.
+    // Index 0 is `low`, which fits, and the last is `high`, which does not.
     let first = (low * FONT_SIZE_FIT_STEPS).floor() as i64 + 1;
     let last = (high * FONT_SIZE_FIT_STEPS).ceil() as i64 - 1;
     let candidate = |index: i64| {
@@ -74,13 +74,13 @@ pub(crate) fn fit_font_size<E>(
 /// Lines of `shaped` in a box `max_width` by `max_height` pixels (non-positive for none).
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) struct BoxedLines {
-    /// The lines drawn: cut at the clamp point when `clamp`.
+    /// The lines drawn, cut at the clamp point when `clamp`.
     pub lines: alpha2_text::LineMetrics,
     /// Whether the clamp discarded lines.
     pub truncated: bool,
     /// Whether the drawn lines split a word or are taller than the box.
     pub overflow: bool,
-    /// Whether every line fits the box uncut: within `max_lines`, the height and the width.
+    /// Whether every line fits the box uncut, within `max_lines`, the height and the width.
     pub fits: bool,
 }
 

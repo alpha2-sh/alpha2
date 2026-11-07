@@ -100,13 +100,8 @@ pub struct TextRasterRequest {
 /// Most bytes in a [`TextClamp::ellipsis`].
 pub const MAX_ELLIPSIS_BYTES: usize = 256;
 
-/// Lines past a clamp point are discarded, as CSS Overflow 4 `line-clamp` discards them.
-///
-/// The clamp point is after the last line within both limits, and never before the first line.
-/// When text is cut, the kept part of the last line is shortened to its last soft wrap
-/// opportunity at which the ellipsis fits, else to its last cluster at which it fits, and the
-/// ellipsis is drawn at the line's inline end in the text's style. The ellipsis is one cluster
-/// of [`TextLayout`], marked [`ClusterInfo::ellipsis`].
+/// Lines past the clamp point ([`line_limit`]) are discarded, as CSS `line-clamp` discards them.
+/// A cut text's last line ends with the ellipsis, one more cluster ([`ClusterInfo::ellipsis`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextClamp {
     /// Most lines, at least 1, as CSS `max-lines`; `None` sets no count.
@@ -367,8 +362,8 @@ pub struct ClampedLines {
     pub lines: LineMetrics,
     /// Whether lines with content were cut off.
     pub truncated: bool,
-    /// Whether a kept line breaks inside a word: for text that is not cut, whether its
-    /// min-content width exceeds the wrapping width.
+    /// Whether a kept line breaks inside a word. Uncut text breaks one when its min-content
+    /// width exceeds the wrapping width.
     pub splits_word: bool,
 }
 

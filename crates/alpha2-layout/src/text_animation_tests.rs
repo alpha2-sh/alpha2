@@ -341,7 +341,6 @@ fn cut_row(count: usize) -> TextLayout {
 
 #[test]
 fn an_ellipsis_counts_as_no_unit_and_takes_the_state_before_it() {
-    // A ramp over every character reaches its end at the last character, not the ellipsis.
     let fade = SampledAnimator {
         opacity: Some(0.0),
         ..animator(range(RangeShape::RampUp, RangeUnits::Percent, 0.0, 100.0))
@@ -358,7 +357,6 @@ fn an_ellipsis_counts_as_no_unit_and_takes_the_state_before_it() {
     assert_eq!(cut[..4], plain[..]);
     assert_eq!(cut[4], cut[3]);
     assert_eq!(cut_hash, plain_hash);
-    // With nothing before it, the ellipsis keeps its own look.
     let mut alone = cut_row(0);
     alone.lines[0].clusters = 0..1;
     let (states, _) = cluster_states(

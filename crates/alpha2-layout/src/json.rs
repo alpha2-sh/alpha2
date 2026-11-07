@@ -47,9 +47,9 @@ fn rect(rect: CanvasRect) -> serde_json::Value {
 /// Returns JSON `{ layout, content, ink, lineCount, baselines, fontSize, truncated, overflow }`.
 /// Rectangles are `{ left, top, right, bottom }` in fractions of the canvas, `ink` is `null`
 /// when the text draws nothing, and `baselines` is `{ first, last }` in fractions of the canvas
-/// height. `fontSize` is the size drawn (fitted by `font_size_fit`), a fraction of the canvas's
-/// shorter side; `truncated` says `line_clamp` cut lines; `overflow` says the drawn text still
-/// splits a word or is taller than `max_height`.
+/// height. `fontSize` is the size drawn after `font_size_fit`, a fraction of the canvas's
+/// shorter side. `truncated` says `line_clamp` cut lines, and `overflow` that the drawn text
+/// still splits a word or is taller than `max_height`.
 ///
 /// # Errors
 /// Returns [`MeasureError::Input`] for invalid generator JSON or an empty canvas, and
@@ -95,10 +95,10 @@ pub fn measure_text_json(
 /// Returns JSON `{ nodes }`, each node in preorder as
 /// `{ at, border, content, overflow, lineCount, baselines, fontSize, truncated }` with boxes in
 /// fractions of the picture. `lineCount` and `fontSize` (the size drawn, a fraction of the
-/// picture's shorter side) are `null` for non-text nodes; `baselines` (`{ first, last }`,
-/// fractions of the picture height) is `null` for non-text nodes and empty text; `truncated`
-/// says `line_clamp` cut the node's lines. `canvas` is the project canvas the generator's
-/// pixel lengths refer to, the picture's size when `None`.
+/// picture's shorter side) are `null` for non-text nodes, and `baselines` (`{ first, last }`,
+/// fractions of the picture height) also for empty text. `truncated` says `line_clamp` cut the
+/// node's lines. `canvas` is the project canvas the generator's pixel lengths refer to, the
+/// picture's size when `None`.
 ///
 /// # Errors
 /// Returns [`MeasureError::Input`] for an invalid layout generator on that canvas or an empty
