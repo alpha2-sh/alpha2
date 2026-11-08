@@ -246,4 +246,5 @@ fn the_silence_plugin_finds_the_inserted_silences_and_its_cuts_keep_the_speech()
             "kept time {tick}"
         );
     }
+    let _ = std::fs::remove_dir_all(packed());
 }
