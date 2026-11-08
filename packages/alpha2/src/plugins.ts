@@ -345,28 +345,50 @@ interface Exports {
   alpha2_end(): number;
 }
 
-/** One run of the module: an instance, its host functions and what they collected. */
+/**
+ * One run of the module: an instance, its host functions and what they collected. Instantiated
+ * asynchronously, since browsers refuse to instantiate large modules synchronously on the main
+ * thread.
+ */
 class Run {
-  readonly #exports: Exports;
+  #exports!: Exports;
   readonly #descriptor: ExtractorDescriptor;
   readonly #memoryBytes: number;
   #records: PluginRecord[] = [];
   #undecodable: PluginError | undefined;
   #failure: string | undefined;
 
-  constructor(
+  private constructor(descriptor: ExtractorDescriptor, memoryBytes: number) {
+    this.#descriptor = descriptor;
+    this.#memoryBytes = memoryBytes;
+  }
+
+  static async start(
     module: WebAssembly.Module,
     descriptor: ExtractorDescriptor,
     resources: ReadonlyMap<string, Uint8Array>,
     memoryBytes: number,
-  ) {
-    this.#descriptor = descriptor;
-    this.#memoryBytes = memoryBytes;
+  ): Promise<Run> {
+    const run = new Run(descriptor, memoryBytes);
+    const instance = await WebAssembly.instantiate(
+      module,
+      run.#imports(resources),
+    );
+    run.#exports = instance.exports as unknown as Exports;
+    if (run.#exports.alpha2_abi() !== 1)
+      throw new PluginError(
+        "PLUGIN_ABI_UNSUPPORTED",
+        `the module implements alpha2-plugin/${run.#exports.alpha2_abi()}`,
+      );
+    return run;
+  }
+
+  #imports(resources: ReadonlyMap<string, Uint8Array>): WebAssembly.Imports {
     const bytes = (ptr: number, len: number): Uint8Array =>
       new Uint8Array(this.#exports.memory.buffer, ptr, len);
     const utf8 = (ptr: number, len: number): string =>
       new TextDecoder().decode(bytes(ptr, len));
-    const instance = new WebAssembly.Instance(module, {
+    return {
       alpha2: {
         emit: (ptr: number, len: number): number => {
           try {
@@ -402,13 +424,7 @@ class Run {
           console.warn(`plugin: ${utf8(ptr, len).slice(0, 2048)}`);
         },
       },
-    });
-    this.#exports = instance.exports as unknown as Exports;
-    if (this.#exports.alpha2_abi() !== 1)
-      throw new PluginError(
-        "PLUGIN_ABI_UNSUPPORTED",
-        `the module implements alpha2-plugin/${this.#exports.alpha2_abi()}`,
-      );
+    };
   }
 
   /** The descriptor JSON the module itself returns. */
@@ -602,11 +618,8 @@ export async function loadPlugin(
   }
   checkModule(module, bytes);
   const memoryBytes = options.memoryBytes ?? DEFAULT_PLUGIN_MEMORY_BYTES;
-  const described = new Run(
-    module,
-    parsed.descriptor,
-    resources,
-    memoryBytes,
+  const described = (
+    await Run.start(module, parsed.descriptor, resources, memoryBytes)
   ).describe();
   if (!sameJson(JSON.parse(described), parsed.descriptor))
     throw new PluginError(
@@ -628,8 +641,8 @@ export async function loadPlugin(
       };
       return {
         describe: () => descriptor,
-        begin(context: ExtractContext) {
-          run = new Run(module, descriptor, resources, memoryBytes);
+        async begin(context: ExtractContext) {
+          run = await Run.start(module, descriptor, resources, memoryBytes);
           const live = run;
           const json = new TextEncoder().encode(abiContext(context, params));
           const records = live.withBytes(json, 1, (ptr) =>
