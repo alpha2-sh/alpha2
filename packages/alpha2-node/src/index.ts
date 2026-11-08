@@ -1,9 +1,8 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants, existsSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { delimiter, dirname, extname, join, resolve } from "node:path";
-import { createInterface, type Interface } from "node:readline";
-import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import type {
@@ -29,17 +28,17 @@ import {
 } from "alpha2/project";
 
 import {
-  PROTOCOL_VERSION,
   type HostMessage,
   type ProgressMessage,
   type ProgressPhase,
   type ProtocolError,
+  type ResponseMessage,
   createRequest,
   describeExit,
   loaderRefused,
-  parseHostMessage,
   windowsPolicyBlocked,
 } from "./protocol.js";
+import { type Frame, HostWire, encodeMessage } from "./host-wire.js";
 import {
   glibcHint,
   hostBlockedMessage,
@@ -93,7 +92,7 @@ export interface ResolveHostBinaryOptions {
 
 /** Options of an {@link Alpha2NodeClient}. */
 export interface Alpha2NodeOptions extends ResolveHostBinaryOptions {
-  /** Maximum simultaneous sidecars. Defaults to one. */
+  /** Most host processes the client runs at once, each running one request. Defaults to one. */
   readonly concurrency?: number;
   /**
    * Video decode path for every request. Unset uses the host default: "auto" on Linux and macOS,
@@ -107,9 +106,9 @@ export interface Alpha2NodeOptions extends ResolveHostBinaryOptions {
    */
   readonly renderer?: RendererMode;
   /**
-   * Milliseconds a started host has to write its first line. Defaults to 30000; `Infinity` waits
-   * forever. On timeout the host is killed and the request fails with `HOST_START_TIMEOUT`. Values
-   * not above zero are `INVALID_INPUT`.
+   * Milliseconds a started host has to report that it is ready. Defaults to 30000; `Infinity`
+   * waits forever. On timeout the host is killed and the request fails with `HOST_START_TIMEOUT`.
+   * Values not above zero are `INVALID_INPUT`.
    */
   readonly hostStartTimeoutMs?: number;
 }
@@ -1264,15 +1263,16 @@ const MAX_STILLS = 256;
 const MAX_STILL_DIMENSION = 16_384;
 
 /**
- * Runs requests on `alpha2-host` sidecar processes, one process per request, at most
- * `concurrency` at a time. Every rejection is an {@link Alpha2HostError}.
+ * Runs requests on `alpha2-host` sidecar processes that it keeps between requests, at most
+ * `concurrency` of them, each running one request at a time. A host serves only requests that
+ * would start a host with the same environment: decode mode, renderer and the rest of
+ * `process.env` as it is when the request is made. A host that drains or exits is replaced by a
+ * new one. Idle hosts do not keep this process alive. Every rejection is an {@link Alpha2HostError}.
  */
 export class Alpha2NodeClient {
-  readonly #binary: string;
-  readonly #slots: Semaphore;
+  readonly #pool: HostPool;
   readonly #videoDecode: VideoDecodeMode | undefined;
   readonly #renderer: RendererMode | undefined;
-  readonly #hostStartTimeoutMs: number;
   /** Capability probes, running or answered, keyed by decode mode and renderer. */
   readonly #probes = new Map<string, CapabilityProbe>();
 
@@ -1287,19 +1287,19 @@ export class Alpha2NodeClient {
     }
     checkVideoDecode("videoDecode", options.videoDecode);
     checkRenderer("renderer", options.renderer);
-    this.#hostStartTimeoutMs = checkHostStartTimeout(
-      options.hostStartTimeoutMs,
+    this.#pool = new HostPool(
+      resolveHostBinary(options),
+      concurrency,
+      checkHostStartTimeout(options.hostStartTimeoutMs),
     );
-    this.#binary = resolveHostBinary(options);
-    this.#slots = new Semaphore(concurrency);
     this.#videoDecode = options.videoDecode;
     this.#renderer = options.renderer;
   }
 
   /**
    * What the host can decode, render and encode for the given (or the client's) modes. The first
-   * call per mode pair starts a host; concurrent calls share it and the report is cached for later
-   * calls. A failed probe is not cached.
+   * call per host environment (the modes over `process.env`) asks a host; concurrent calls share
+   * the probe and the report is cached for later calls. A failed probe is not cached.
    *
    * `options.signal` rejects this call with `Alpha2AbortError`; the probe is cancelled only when no
    * other call is waiting for it.
@@ -1313,32 +1313,16 @@ export class Alpha2NodeClient {
     if (signal?.aborted) throw new Alpha2AbortError();
     const videoDecode = options.videoDecode ?? this.#videoDecode;
     const renderer = options.renderer ?? this.#renderer;
-    // Unset modes come from this process's environment.
-    const key = [
-      videoDecode ?? `environment:${process.env.ALPHA2_VIDEO_DECODE ?? ""}`,
-      renderer ?? `environment:${process.env.ALPHA2_RENDERER ?? ""}`,
-    ].join("\0");
+    const key = environmentKey(hostEnvironment({ videoDecode, renderer }));
     let probe = this.#probes.get(key);
     if (probe === undefined) {
       const controller = new AbortController();
-      const result = (async () => {
-        const release = await this.#slots.acquire(controller.signal);
-        try {
-          return (await requestHost(
-            this.#binary,
-            "capabilities",
-            {},
-            {
-              videoDecode,
-              renderer,
-              hostStartTimeoutMs: this.#hostStartTimeoutMs,
-            },
-            controller.signal,
-          )) as HostCapabilities;
-        } finally {
-          release();
-        }
-      })();
+      const result = this.#request(
+        "capabilities",
+        {},
+        { videoDecode, renderer },
+        controller.signal,
+      ) as Promise<HostCapabilities>;
       const started: CapabilityProbe = {
         result,
         controller,
@@ -1397,28 +1381,18 @@ export class Alpha2NodeClient {
     const problems = projectProblems(request.project);
     if (problems.length > 0) throw new Alpha2ProjectValidationError(problems);
     validateMediaPaths(request, false);
-    const release = await this.#slots.acquire(request.signal);
-    try {
-      return (await requestHost(
-        this.#binary,
-        "conform",
-        {
-          project: request.project,
-          assets: request.assets ?? {},
-          proxies: proxiesPayload(request.proxies),
-          frames: request.frames ?? {},
-          purpose: (request.purpose ?? "export_original").replace(/_/g, "-"),
-        },
-        {
-          videoDecode: this.#videoDecode,
-          renderer: this.#renderer,
-          hostStartTimeoutMs: this.#hostStartTimeoutMs,
-        },
-        request.signal,
-      )) as ConformResult;
-    } finally {
-      release();
-    }
+    return (await this.#request(
+      "conform",
+      {
+        project: request.project,
+        assets: request.assets ?? {},
+        proxies: proxiesPayload(request.proxies),
+        frames: request.frames ?? {},
+        purpose: (request.purpose ?? "export_original").replace(/_/g, "-"),
+      },
+      { videoDecode: this.#videoDecode, renderer: this.#renderer },
+      request.signal,
+    )) as ConformResult;
   }
 
   /**
@@ -1434,22 +1408,12 @@ export class Alpha2NodeClient {
     fields: Readonly<Record<string, unknown>> = {},
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
-    const release = await this.#slots.acquire(signal);
-    try {
-      return (await requestHost(
-        this.#binary,
-        "compose",
-        { ...fields, action },
-        {
-          videoDecode: this.#videoDecode,
-          renderer: this.#renderer,
-          hostStartTimeoutMs: this.#hostStartTimeoutMs,
-        },
-        signal,
-      )) as Record<string, unknown>;
-    } finally {
-      release();
-    }
+    return (await this.#request(
+      "compose",
+      { ...fields, action },
+      { videoDecode: this.#videoDecode, renderer: this.#renderer },
+      signal,
+    )) as Record<string, unknown>;
   }
 
   /**
@@ -1465,78 +1429,67 @@ export class Alpha2NodeClient {
     const problems = projectProblems(request.project);
     if (problems.length > 0) throw new Alpha2ProjectValidationError(problems);
     validateExportRequest(request);
-    const release = await this.#slots.acquire(request.signal);
     const videoDecode = request.videoDecode ?? this.#videoDecode;
     const renderer = request.renderer ?? this.#renderer;
+    const run = (mode: VideoDecodeMode | undefined) =>
+      this.#request(
+        "export",
+        {
+          ...renderInputsPayload(request),
+          startTicks: request.startTicks,
+          endTicks: request.endTicks,
+          frameRate: request.frameRate,
+          includeAudio: request.includeAudio ?? true,
+          // Omitted fields are resolved by the host from the container.
+          ...(request.container === undefined
+            ? {}
+            : { container: request.container }),
+          ...(request.videoCodec === undefined
+            ? {}
+            : { videoCodec: request.videoCodec }),
+          ...(request.alpha === true ? { alpha: true } : {}),
+          ...(request.bitDepth === undefined
+            ? {}
+            : { bitDepth: request.bitDepth }),
+          videoEncoder: request.videoEncoder,
+          inputPolicy: request.inputPolicy ?? "auto",
+          strategy: request.strategy ?? "render",
+          videoQuality: request.videoQuality,
+          ...(request.audioCodec === undefined
+            ? {}
+            : { audioCodec: request.audioCodec }),
+          audioQuality: request.audioQuality,
+          loudness: request.loudness,
+          renderCache: request.renderCache,
+          ...(request.memory === undefined ? {} : { memory: request.memory }),
+          output: request.output,
+          overwrite: request.overwrite ?? false,
+        },
+        { videoDecode: mode, renderer },
+        request.signal,
+        request.onProgress,
+      );
+    let result: NativeExportResult;
     try {
-      const run = (mode: VideoDecodeMode | undefined) =>
-        requestHost(
-          this.#binary,
-          "export",
-          {
-            ...renderInputsPayload(request),
-            startTicks: request.startTicks,
-            endTicks: request.endTicks,
-            frameRate: request.frameRate,
-            includeAudio: request.includeAudio ?? true,
-            // Omitted fields are resolved by the host from the container.
-            ...(request.container === undefined
-              ? {}
-              : { container: request.container }),
-            ...(request.videoCodec === undefined
-              ? {}
-              : { videoCodec: request.videoCodec }),
-            ...(request.alpha === true ? { alpha: true } : {}),
-            ...(request.bitDepth === undefined
-              ? {}
-              : { bitDepth: request.bitDepth }),
-            videoEncoder: request.videoEncoder,
-            inputPolicy: request.inputPolicy ?? "auto",
-            strategy: request.strategy ?? "render",
-            videoQuality: request.videoQuality,
-            ...(request.audioCodec === undefined
-              ? {}
-              : { audioCodec: request.audioCodec }),
-            audioQuality: request.audioQuality,
-            loudness: request.loudness,
-            renderCache: request.renderCache,
-            ...(request.memory === undefined ? {} : { memory: request.memory }),
-            output: request.output,
-            overwrite: request.overwrite ?? false,
-          },
-          {
-            videoDecode: mode,
-            renderer,
-            hostStartTimeoutMs: this.#hostStartTimeoutMs,
-          },
-          request.signal,
-          request.onProgress,
-        );
-      let result: NativeExportResult;
+      result = (await run(videoDecode)) as NativeExportResult;
+    } catch (error) {
+      // A decoder stuck in the driver cannot be recovered in-process, so rerun on a software
+      // decode host. Software stalls would recur and `hardware-required` forbids the fallback.
+      if (
+        !(error instanceof Alpha2HostError) ||
+        error.code !== "DECODE_STALLED" ||
+        error.failure?.resource !== "gpu" ||
+        (videoDecode ?? process.env.ALPHA2_VIDEO_DECODE) === "hardware-required"
+      )
+        throw error;
       try {
-        result = (await run(videoDecode)) as NativeExportResult;
-      } catch (error) {
-        // A decoder stuck in the driver cannot be recovered in-process, so rerun in a new host on
-        // the CPU. Software stalls would recur and `hardware-required` forbids the fallback.
-        if (
-          !(error instanceof Alpha2HostError) ||
-          error.code !== "DECODE_STALLED" ||
-          error.failure?.resource !== "gpu" ||
-          (videoDecode ?? process.env.ALPHA2_VIDEO_DECODE) ===
-            "hardware-required"
-        )
-          throw error;
-        try {
-          result = (await run("software")) as NativeExportResult;
-        } catch (retryError) {
-          throw recordDecodeStall(retryError, error);
-        }
+        result = (await run("software")) as NativeExportResult;
+      } catch (retryError) {
+        throw recordDecodeStall(retryError, error);
       }
-      await request.onResult?.(result);
-      return request.output;
-    } finally {
-      release();
     }
+    await request.onResult?.(result);
+    return request.output;
   }
 
   /**
@@ -1549,41 +1502,71 @@ export class Alpha2NodeClient {
     const problems = projectProblems(request.project);
     if (problems.length > 0) throw new Alpha2ProjectValidationError(problems);
     validateStillsRequest(request);
-    const release = await this.#slots.acquire(request.signal);
-    try {
-      return (await requestHost(
-        this.#binary,
-        "still",
-        {
-          ...renderInputsPayload(request),
-          stills: request.stills.map(({ time, output }) => ({ time, output })),
-          overwrite: request.overwrite ?? false,
-          ...(request.alpha === true ? { alpha: true } : {}),
-          ...(request.size === undefined
-            ? {}
-            : {
-                size: {
-                  width: request.size.width,
-                  height: request.size.height,
-                },
-              }),
-        },
-        {
-          videoDecode: request.videoDecode ?? this.#videoDecode,
-          renderer: request.renderer ?? this.#renderer,
-          hostStartTimeoutMs: this.#hostStartTimeoutMs,
-        },
-        request.signal,
-      )) as StillResult;
-    } finally {
-      release();
-    }
+    return (await this.#request(
+      "still",
+      {
+        ...renderInputsPayload(request),
+        stills: request.stills.map(({ time, output }) => ({ time, output })),
+        overwrite: request.overwrite ?? false,
+        ...(request.alpha === true ? { alpha: true } : {}),
+        ...(request.size === undefined
+          ? {}
+          : {
+              size: {
+                width: request.size.width,
+                height: request.size.height,
+              },
+            }),
+      },
+      {
+        videoDecode: request.videoDecode ?? this.#videoDecode,
+        renderer: request.renderer ?? this.#renderer,
+      },
+      request.signal,
+    )) as StillResult;
   }
 
   /** Renders one frame; {@link stills} with a single entry. */
   async still(request: StillRequest): Promise<StillResult> {
     const { time, output, ...rest } = request;
     return this.stills({ ...rest, stills: [{ time, output }] });
+  }
+
+  /**
+   * Ends every host this client has started: each finishes the request it runs, then its standard
+   * input closes. Resolves once they have exited. Later requests start new hosts.
+   */
+  async close(): Promise<void> {
+    await this.#pool.close();
+  }
+
+  async #request(
+    operation: "capabilities" | "export" | "conform" | "still" | "compose",
+    payload: Readonly<Record<string, unknown>>,
+    modes: HostModes,
+    signal?: AbortSignal,
+    onProgress?: ExportProgressCallback,
+  ): Promise<unknown> {
+    if (signal?.aborted) throw new Alpha2AbortError();
+    const requestId = `node-${process.pid}-${Date.now()}-${nextRequestSequence++}`;
+    // Serialize before a host is taken so unserializable values (BigInt, cycles) start nothing.
+    let frame: Frame;
+    try {
+      frame = encodeMessage(createRequest(operation, requestId, payload));
+    } catch (cause) {
+      throw new Alpha2HostError(
+        "INVALID_INPUT",
+        `the ${operation} request cannot be written as JSON: ${cause instanceof Error ? cause.message : String(cause)}`,
+        { cause },
+      );
+    }
+    // The host would create its GPU device before refusing an oversized request.
+    if (frame.bodyBytes > MAX_REQUEST_LINE_BYTES)
+      throw new Alpha2HostError(
+        "INVALID_INPUT",
+        `the ${operation} request is ${frame.bodyBytes} bytes of JSON; the host reads at most ${MAX_REQUEST_LINE_BYTES}`,
+      );
+    return this.#pool.request(frame, requestId, modes, signal, onProgress);
   }
 }
 
@@ -2135,64 +2118,452 @@ function validateQuality(
 export type ComposeAction =
   "compile" | "bind" | "dataSchema" | "lint" | "requirements" | "templates";
 
-async function requestHost(
-  binary: string,
-  operation: "capabilities" | "export" | "conform" | "still" | "compose",
-  payload: Readonly<Record<string, unknown>>,
-  settings: {
-    readonly videoDecode?: VideoDecodeMode | undefined;
-    readonly renderer?: RendererMode | undefined;
-    readonly hostStartTimeoutMs: number;
-  },
-  signal?: AbortSignal,
-  onProgress?: ExportProgressCallback,
-): Promise<unknown> {
-  if (signal?.aborted) throw new Alpha2AbortError();
-  // Node on Windows runs batch files only through a shell, so the spawn would fail with EINVAL.
-  if (process.platform === "win32" && /\.(bat|cmd)$/i.test(binary))
-    throw new Alpha2HostError(
-      "HOST_NOT_EXECUTABLE",
-      `alpha2-host must be the executable, not a batch file: ${binary}`,
-    );
-  await access(
-    binary,
-    process.platform === "win32" ? constants.F_OK : constants.X_OK,
-  ).catch((cause: unknown) => {
-    throw new Alpha2HostError(
-      "HOST_NOT_EXECUTABLE",
-      `cannot execute alpha2-host: ${binary}`,
-      {
-        cause,
-      },
-    );
-  });
-  const requestId = `node-${process.pid}-${Date.now()}-${nextRequestSequence++}`;
-  // Serialize before spawning so unserializable values (BigInt, cycles) start nothing.
-  let requestLine: string;
-  try {
-    requestLine = `${JSON.stringify(createRequest(operation, requestId, payload))}\n`;
-  } catch (cause) {
-    throw new Alpha2HostError(
-      "INVALID_INPUT",
-      `the ${operation} request cannot be written as JSON: ${cause instanceof Error ? cause.message : String(cause)}`,
-      { cause },
-    );
+/** Modes a request sets over this process's environment. */
+interface HostModes {
+  readonly videoDecode?: VideoDecodeMode | undefined;
+  readonly renderer?: RendererMode | undefined;
+}
+
+/**
+ * The environment a host would start with now. The host reads its modes and every `ALPHA2_*`
+ * setting at startup, so the modes go in the environment.
+ */
+function hostEnvironment(modes: HostModes): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...(modes.videoDecode === undefined
+      ? {}
+      : { ALPHA2_VIDEO_DECODE: modes.videoDecode }),
+    ...(modes.renderer === undefined
+      ? {}
+      : { ALPHA2_RENDERER: modes.renderer }),
+  };
+}
+
+/** Hosts started with one environment are interchangeable, so the whole of it is their key. */
+function environmentKey(environment: NodeJS.ProcessEnv): string {
+  const entries = Object.entries(environment)
+    .filter(([, value]) => value !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+}
+
+/** Times a request answered `HOST_RETIRING` is sent to another host before it fails. */
+const MAX_RETIRING_RESENDS = 3;
+
+/** How long a failed answer waits for stderr, which arrives on its own pipe. */
+const STDERR_SETTLE_MS = 50;
+
+interface HostWaiter {
+  readonly key: string;
+  readonly environment: NodeJS.ProcessEnv;
+  /** Runs the request on the host at once, so nothing the host writes comes in between. */
+  readonly grant: (host: Host) => void;
+  readonly refuse: (error: Error) => void;
+  /** The idle host of other modes ended to make room for this request. */
+  evicted?: Host;
+}
+
+type RunOutcome =
+  | { readonly kind: "result"; readonly result: unknown }
+  | { readonly kind: "unsent" }
+  | { readonly kind: "retiring"; readonly error: Alpha2HostError };
+
+/** Builds a request's error once the host's stderr for it is complete. */
+type FailureBuilder = (stderr: string, phase: ExportPhase) => Error;
+
+interface ActiveRun {
+  readonly progress: (message: ProgressMessage) => void;
+  readonly answer: (message: ResponseMessage) => void;
+  /** The host is ending; the request settles with this error when it exits. */
+  readonly fail: (error: FailureBuilder) => void;
+  readonly exited: (code: number | null, signal: string | null) => void;
+  readonly phase: () => ExportPhase;
+}
+
+/**
+ * The hosts of one client, kept between requests and sent one request at a time, as the host
+ * protocol's "Keeping hosts" describes.
+ */
+class HostPool {
+  readonly binary: string;
+  readonly startTimeoutMs: number;
+  readonly #limit: number;
+  /** Every host until its process exits, which is what the limit counts. */
+  readonly #hosts = new Set<Host>();
+  readonly #waiting: HostWaiter[] = [];
+
+  constructor(binary: string, limit: number, startTimeoutMs: number) {
+    this.binary = binary;
+    this.#limit = limit;
+    this.startTimeoutMs = startTimeoutMs;
   }
-  // The host would create its GPU device before refusing an oversized line.
-  const lineBytes = Buffer.byteLength(requestLine) - 1;
-  if (lineBytes > MAX_REQUEST_LINE_BYTES)
-    throw new Alpha2HostError(
-      "INVALID_INPUT",
-      `the ${operation} request is ${lineBytes} bytes of JSON; the host reads at most ${MAX_REQUEST_LINE_BYTES}`,
-    );
-  // macOS would hold a quarantined host on an approval prompt nobody can answer.
-  if (process.platform === "darwin") {
-    const refusal = await quarantineCheck(binary);
-    if (refusal !== undefined)
-      throw new Alpha2HostError("HOST_QUARANTINED", refusal);
-    if (signal?.aborted) throw new Alpha2AbortError();
+
+  async request(
+    frame: Frame,
+    requestId: string,
+    modes: HostModes,
+    signal?: AbortSignal,
+    onProgress?: ExportProgressCallback,
+  ): Promise<unknown> {
+    for (let resends = 0; ;) {
+      const outcome = await this.#acquire(modes, signal, (host) =>
+        host.run(frame, requestId, signal, onProgress),
+      );
+      if (outcome.kind === "result") return outcome.result;
+      if (outcome.kind === "retiring") {
+        if (resends === MAX_RETIRING_RESENDS) throw outcome.error;
+        resends += 1;
+      }
+    }
   }
-  return new Promise((resolvePromise, rejectPromise) => {
+
+  async close(): Promise<void> {
+    const hosts = [...this.#hosts];
+    for (const host of hosts) host.retire();
+    await Promise.all(hosts.map((host) => host.exited));
+  }
+
+  /** Gives each waiting request an idle host of its modes, a new host, or room for one. */
+  dispatch(): void {
+    for (const waiter of [...this.#waiting]) {
+      const host = [...this.#hosts].find(
+        (candidate) => candidate.idle && candidate.key === waiter.key,
+      );
+      if (host === undefined || !this.#dequeue(waiter)) continue;
+      host.lease();
+      waiter.grant(host);
+    }
+    for (const waiter of [...this.#waiting]) {
+      if (!this.#waiting.includes(waiter)) continue;
+      if (this.#hosts.size < this.#limit) {
+        this.#dequeue(waiter);
+        const host = new Host(this, waiter);
+        this.#hosts.add(host);
+        void host.start();
+        continue;
+      }
+      if (waiter.evicted !== undefined && this.#hosts.has(waiter.evicted))
+        continue;
+      // Idle hosts left after the first pass serve no waiting request.
+      const idle = [...this.#hosts].find((candidate) => candidate.idle);
+      if (idle === undefined) return;
+      waiter.evicted = idle;
+      idle.retire();
+    }
+  }
+
+  removed(host: Host): void {
+    this.#hosts.delete(host);
+    this.dispatch();
+  }
+
+  /** Puts back a request whose host started draining before it was ready. */
+  requeue(waiter: HostWaiter): void {
+    this.#waiting.unshift(waiter);
+    this.dispatch();
+  }
+
+  #acquire(
+    modes: HostModes,
+    signal: AbortSignal | undefined,
+    run: (host: Host) => Promise<RunOutcome>,
+  ): Promise<RunOutcome> {
+    if (signal?.aborted) return Promise.reject(new Alpha2AbortError());
+    return new Promise((resolveRun, rejectRun) => {
+      let settled = false;
+      const leave = (): boolean => {
+        if (settled) return false;
+        settled = true;
+        signal?.removeEventListener("abort", abort);
+        return true;
+      };
+      const environment = hostEnvironment(modes);
+      const waiter: HostWaiter = {
+        key: environmentKey(environment),
+        environment,
+        grant: (host) => {
+          if (leave()) resolveRun(run(host));
+          else host.release();
+        },
+        refuse: (error) => {
+          if (leave()) rejectRun(error);
+        },
+      };
+      const abort = (): void => {
+        this.#dequeue(waiter);
+        for (const host of this.#hosts) host.withdraw(waiter);
+        waiter.refuse(new Alpha2AbortError());
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      this.#waiting.push(waiter);
+      this.dispatch();
+    });
+  }
+
+  #dequeue(waiter: HostWaiter): boolean {
+    const index = this.#waiting.indexOf(waiter);
+    if (index < 0) return false;
+    this.#waiting.splice(index, 1);
+    return true;
+  }
+}
+
+/** One `alpha2-host serve` process. */
+class Host {
+  readonly key: string;
+  /** Resolves once the process has exited, or failed to start. */
+  readonly exited: Promise<void>;
+  readonly #pool: HostPool;
+  readonly #environment: NodeJS.ProcessEnv;
+  /** The request that started this host, until it is ready. */
+  #waiter: HostWaiter | undefined;
+  #markExited: () => void = () => {};
+  #child: ChildProcess | undefined;
+  #wire: HostWire | undefined;
+  #ready = false;
+  /** Sent no more requests: draining, failed, ending or exited. */
+  #retired = false;
+  #leased = false;
+  #inputClosed = false;
+  #gone = false;
+  #held = true;
+  #run: ActiveRun | undefined;
+  #startError: FailureBuilder | undefined;
+  #startTimedOut = false;
+  #startTimer: NodeJS.Timeout | undefined;
+  #terminateTimer: NodeJS.Timeout | undefined;
+  #killTimer: NodeJS.Timeout | undefined;
+  #oomKillsAtStart: number | undefined;
+  /** The last bytes of stderr, and how many were written in all. */
+  #stderr = Buffer.alloc(0);
+  #stderrTotal = 0;
+
+  constructor(pool: HostPool, waiter: HostWaiter) {
+    this.#pool = pool;
+    this.#waiter = waiter;
+    this.key = waiter.key;
+    this.#environment = waiter.environment;
+    this.exited = new Promise((resolveExit) => {
+      this.#markExited = resolveExit;
+    });
+  }
+
+  get idle(): boolean {
+    return this.#ready && !this.#leased && !this.#retired;
+  }
+
+  lease(): void {
+    this.#leased = true;
+    this.#updateRef();
+  }
+
+  withdraw(waiter: HostWaiter): void {
+    if (this.#waiter === waiter) this.#waiter = undefined;
+  }
+
+  async start(): Promise<void> {
+    const binary = this.#pool.binary;
+    try {
+      // Node on Windows runs batch files only through a shell, so the spawn would fail with EINVAL.
+      if (process.platform === "win32" && /\.(bat|cmd)$/i.test(binary))
+        throw new Alpha2HostError(
+          "HOST_NOT_EXECUTABLE",
+          `alpha2-host must be the executable, not a batch file: ${binary}`,
+        );
+      await access(
+        binary,
+        process.platform === "win32" ? constants.F_OK : constants.X_OK,
+      ).catch((cause: unknown) => {
+        throw new Alpha2HostError(
+          "HOST_NOT_EXECUTABLE",
+          `cannot execute alpha2-host: ${binary}`,
+          { cause },
+        );
+      });
+      // macOS would hold a quarantined host on an approval prompt nobody can answer.
+      if (process.platform === "darwin") {
+        const refusal = await quarantineCheck(binary);
+        if (refusal !== undefined)
+          throw new Alpha2HostError("HOST_QUARANTINED", refusal);
+      }
+    } catch (error) {
+      this.#startError = () => error as Error;
+      this.#exit(null, null);
+      return;
+    }
+    if (this.#retired) this.#exit(null, null);
+    else this.#spawn();
+  }
+
+  /** Stops sending requests here, and closes stdin once no request runs. */
+  retire(): void {
+    if (this.#retired) return;
+    this.#retired = true;
+    const waiter = this.#waiter;
+    if (!this.#ready && waiter !== undefined) {
+      this.#waiter = undefined;
+      this.#pool.requeue(waiter);
+    }
+    if (!this.#leased) this.#closeInput();
+    this.#updateRef();
+  }
+
+  /** Writes the request and settles with its answer; the host must be leased. */
+  run(
+    frame: Frame,
+    requestId: string,
+    signal: AbortSignal | undefined,
+    onProgress: ExportProgressCallback | undefined,
+  ): Promise<RunOutcome> {
+    const wire = this.#wire;
+    if (this.#retired || wire === undefined) {
+      this.release();
+      return Promise.resolve({ kind: "unsent" });
+    }
+    if (signal?.aborted) {
+      this.release();
+      return Promise.reject(new Alpha2AbortError());
+    }
+    return new Promise((resolveRun, rejectRun) => {
+      const stderrMark = this.#stderrTotal;
+      // Baseline for detecting an OOM kill while the request runs.
+      const oomKillsBefore = oomKillCount();
+      let lastPhase: ProgressPhase | undefined;
+      let answer: ResponseMessage | undefined;
+      let failure: FailureBuilder | undefined;
+      let written = false;
+      let settled = false;
+      let cancelTimer: NodeJS.Timeout | undefined;
+      let writeFailedTimer: NodeJS.Timeout | undefined;
+      let settleTimer: NodeJS.Timeout | undefined;
+      // Unsettled onProgress promises; the request settles only after them.
+      const pendingCallbacks = new Set<Promise<void>>();
+      let callbackFailure: Error | undefined;
+      const phase = (): ExportPhase =>
+        lastPhase === "finalizing"
+          ? "mux"
+          : lastPhase === "frames"
+            ? "render"
+            : "prepare";
+      const stderrTail = (): string => this.#stderrSince(stderrMark);
+      const settle = (decide: () => RunOutcome | Error): void => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", abort);
+        for (const timer of [cancelTimer, writeFailedTimer, settleTimer])
+          clearTimeout(timer);
+        this.#run = undefined;
+        const decided = decide();
+        if (!this.#gone) this.release();
+        void Promise.allSettled([...pendingCallbacks]).then(() => {
+          if (decided instanceof Error) rejectRun(decided);
+          else if (callbackFailure !== undefined) rejectRun(callbackFailure);
+          else resolveRun(decided);
+        });
+      };
+      const fromAnswer = (message: ResponseMessage): RunOutcome | Error => {
+        if (failure !== undefined) return failure(stderrTail(), phase());
+        if (message.ok) return { kind: "result", result: message.result };
+        const error = errorFromHost(message.error, stderrTail(), phase());
+        return message.error.code === "HOST_RETIRING"
+          ? { kind: "retiring", error }
+          : error;
+      };
+      // A running request gets a cancel line so the host removes its partial file; the host is
+      // ended if it does not answer in time, or at once when the request is not fully written.
+      const cancel = (error: Error): void => {
+        if (settled || answer !== undefined || failure !== undefined) return;
+        failure = () => error;
+        if (!written || this.#inputClosed || !this.#alive()) {
+          this.#kill();
+          return;
+        }
+        wire.write(
+          encodeMessage(
+            createRequest("cancel", `${requestId}:cancel`, {
+              target: requestId,
+            }),
+          ),
+        );
+        cancelTimer = setTimeout(() => this.#kill(), HOST_CANCEL_TIMEOUT_MS);
+      };
+      const abort = (): void => cancel(new Alpha2AbortError());
+      const callbackFailed = (error: Error): void => {
+        callbackFailure ??= error;
+        cancel(error);
+      };
+      const track = (returned: unknown): void => {
+        if (!isThenable(returned)) return;
+        const pending = Promise.resolve(returned).then(
+          () => undefined,
+          (cause: unknown) =>
+            callbackFailed(
+              new Alpha2HostError(
+                "PROGRESS_CALLBACK_FAILED",
+                "onProgress callback rejected",
+                { cause, phase: phase() },
+              ),
+            ),
+        );
+        pendingCallbacks.add(pending);
+        void pending.then(() => pendingCallbacks.delete(pending));
+      };
+      this.#run = {
+        phase,
+        progress: (message) => {
+          if (message.requestId !== requestId) return;
+          lastPhase = message.phase ?? "frames";
+          notifyProgress(message, onProgress, callbackFailed, track, phase());
+        },
+        answer: (message) => {
+          // One request at a time, so an answer to an unreadable line is this request's answer.
+          if (
+            answer !== undefined ||
+            (message.requestId !== requestId &&
+              message.requestId !== UNREAD_REQUEST_ID)
+          )
+            return;
+          answer = message;
+          if (message.hostState === "draining") this.retire();
+          if (message.ok) settle(() => fromAnswer(message));
+          else
+            settleTimer = setTimeout(
+              () => settle(() => fromAnswer(message)),
+              STDERR_SETTLE_MS,
+            );
+        },
+        fail: (error) => {
+          failure ??= error;
+        },
+        exited: (code, exitSignal) =>
+          settle(() => {
+            if (answer !== undefined) return fromAnswer(answer);
+            const tail = stderrTail();
+            if (failure !== undefined) return failure(tail, phase());
+            return exitError(code, exitSignal, tail, oomKillsBefore, phase());
+          }),
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      wire.write(frame, (error) => {
+        if (!error) {
+          written = true;
+          return;
+        }
+        // Give the host's fatal message or exit time to name the cause first.
+        writeFailedTimer = setTimeout(() => {
+          failure ??= () =>
+            new Alpha2HostError("HOST_WRITE_FAILED", error.message, {
+              cause: error,
+            });
+          this.#kill();
+        }, HOST_SHUTDOWN_TIMEOUT_MS);
+      });
+    });
+  }
+
+  #spawn(): void {
+    const binary = this.#pool.binary;
     const startFailed = (cause: unknown): Alpha2HostError => {
       const refusal = spawnRefusal(binary, cause);
       return refusal === undefined
@@ -2203,274 +2574,34 @@ async function requestHost(
           )
         : new Alpha2HostError(refusal.code, refusal.message, { cause });
     };
-    // Baseline for detecting an OOM kill while the host runs.
-    const oomKillsBefore = oomKillCount();
+    this.#oomKillsAtStart = oomKillCount();
     let child: ChildProcess;
     try {
       child = spawn(binary, ["serve"], {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
-        // The host picks renderer and decode path at startup, so the modes go in the environment.
-        env:
-          settings.videoDecode === undefined && settings.renderer === undefined
-            ? process.env
-            : {
-                ...process.env,
-                ...(settings.videoDecode === undefined
-                  ? {}
-                  : { ALPHA2_VIDEO_DECODE: settings.videoDecode }),
-                ...(settings.renderer === undefined
-                  ? {}
-                  : { ALPHA2_RENDERER: settings.renderer }),
-              },
+        env: this.#environment,
       });
     } catch (cause) {
-      rejectPromise(startFailed(cause));
+      this.#startError = () => startFailed(cause);
+      this.#exit(null, null);
       return;
     }
-    let settled = false;
-    let outcome: HostOutcome | undefined;
-    let forceKillTimer: NodeJS.Timeout | undefined;
-    let writeFailedTimer: NodeJS.Timeout | undefined;
-    let startTimer: NodeJS.Timeout | undefined;
-    let cancelTimer: NodeJS.Timeout | undefined;
-    // Until the host writes a line it may be held by the OS before running.
-    let started = false;
-    let startTimedOut = false;
-    let requestWritten = false;
-    let ending = false;
-    let quarantined: string | undefined;
-    let stderr = Buffer.alloc(0);
-    let lastPhase: ProgressPhase | undefined;
-    let reader: Interface | undefined;
-    let requestPipe: Writable | undefined;
-    // Unsettled onProgress promises; the request settles only after them.
-    const pendingCallbacks = new Set<Promise<void>>();
-    let callbackFailure: Error | undefined;
-    const stderrTail = (): string => utf8Tail(stderr, STDERR_TAIL_BYTES);
-    const phaseNow = (): ExportPhase =>
-      lastPhase === "finalizing"
-        ? "mux"
-        : lastPhase === "frames"
-          ? "render"
-          : "prepare";
-    const alive = (): boolean =>
-      child.exitCode === null && child.signalCode === null;
-    /** Returns `false` when the outcome was already set. */
-    const settle = (nextOutcome: HostOutcome): boolean => {
-      if (settled || outcome !== undefined) return false;
-      outcome = nextOutcome;
-      signal?.removeEventListener("abort", abort);
-      return true;
-    };
-    // Close stdin, then SIGTERM, then SIGKILL after the shutdown timeout.
-    const endHost = (): void => {
-      if (ending) return;
-      ending = true;
-      if (startTimer !== undefined) clearTimeout(startTimer);
-      if (cancelTimer !== undefined) clearTimeout(cancelTimer);
-      reader?.close();
-      requestPipe?.end();
-      if (alive()) child.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => {
-        if (alive()) child.kill("SIGKILL");
-      }, HOST_SHUTDOWN_TIMEOUT_MS);
-    };
-    const finish = (nextOutcome: HostOutcome): void => {
-      settle(nextOutcome);
-      endHost();
-    };
-    const fail = (error: Error): void => finish({ ok: false, error });
-    // Build the error after the host ends: stderr written before the answer may arrive after it.
-    const failFromHost = (error: ProtocolError): void => {
-      const phase = phaseNow();
-      finish({
-        ok: false,
-        error: () => errorFromHost(error, stderrTail(), phase),
-      });
-    };
-    // A running host with the request gets a cancel line so it removes its partial file; it is
-    // ended after answering or after the cancel timeout. Any other host is ended at once.
-    const cancelRequest = (error: Error): void => {
-      if (!settle({ ok: false, error })) return;
-      if (!requestWritten || !started || ending || !alive()) {
-        endHost();
-        return;
-      }
-      requestPipe?.write(
-        `${JSON.stringify({
-          protocolVersion: PROTOCOL_VERSION,
-          requestId: `${requestId}:cancel`,
-          operation: "cancel",
-          target: requestId,
-        })}\n`,
-      );
-      cancelTimer = setTimeout(endHost, HOST_CANCEL_TIMEOUT_MS);
-    };
-    const abort = (): void => cancelRequest(new Alpha2AbortError());
-    const callbackFailed = (error: Error): void => {
-      callbackFailure ??= error;
-      cancelRequest(error);
-    };
-    const track = (returned: unknown): void => {
-      if (!isThenable(returned)) return;
-      const pending = Promise.resolve(returned).then(
-        () => undefined,
-        (cause: unknown) =>
-          callbackFailed(
-            new Alpha2HostError(
-              "PROGRESS_CALLBACK_FAILED",
-              "onProgress callback rejected",
-              { cause, phase: phaseNow() },
-            ),
-          ),
-      );
-      pendingCallbacks.add(pending);
-      void pending.then(() => pendingCallbacks.delete(pending));
-    };
-    const conclude = (code: number | null, exitSignal: string | null): void => {
-      if (quarantined !== undefined) {
-        rejectPromise(new Alpha2HostError("HOST_QUARANTINED", quarantined));
-      } else if (outcome?.ok === true && callbackFailure !== undefined) {
-        rejectPromise(callbackFailure);
-      } else if (outcome?.ok === true) {
-        resolvePromise(outcome.result);
-      } else if (outcome?.ok === false) {
-        rejectPromise(
-          typeof outcome.error === "function" ? outcome.error() : outcome.error,
-        );
-      } else {
-        const tail = stderrTail();
-        const ended = describeExit(code, exitSignal);
-        const detail = tail.trim() || ended;
-        if (code === 70 || detail.includes("GPU_INIT_FAILED")) {
-          rejectPromise(
-            new Alpha2GpuInitializationError(detail, {
-              stderr: tail,
-              exitCode: code,
-              signal: exitSignal,
-            }),
-          );
-        } else if (code !== null && windowsPolicyBlocked(code)) {
-          // A policy refused the executable or a library; retrying would fail the same way.
-          rejectPromise(
-            new Alpha2HostError(
-              "HOST_BLOCKED",
-              hostBlockedMessage(windowsStatus(code)),
-              { stderr: tail, exitCode: code, signal: exitSignal },
-            ),
-          );
-        } else if (loaderRefused(code, tail)) {
-          // The loader refused the executable (missing or mismatched FFmpeg); not retryable.
-          rejectPromise(
-            new Alpha2HostError(
-              "HOST_LOAD_FAILED",
-              `alpha2-host could not be loaded: ${detail}${glibcHint(tail)}`,
-              { stderr: tail, exitCode: code, signal: exitSignal },
-            ),
-          );
-        } else if (
-          exitSignal === "SIGKILL" &&
-          oomKillsBefore !== undefined &&
-          (oomKillCount() ?? oomKillsBefore) > oomKillsBefore
-        ) {
-          // An OOM kill in this cgroup while the host ran; a smaller `memory.scale` may help.
-          const failure: ExportFailure = {
-            code: "OUT_OF_MEMORY",
-            message: `the kernel's out-of-memory killer ended alpha2-host (${ended})`,
-            origin: "node",
-            operation: "export",
-            backend: "native",
-            phase: phaseNow(),
-            resource: "cpu",
-            stderr: tail,
-            exitCode: code,
-            signal: exitSignal,
-          };
-          rejectPromise(
-            new Alpha2HostError(
-              "HOST_OOM_KILLED",
-              `the kernel's out-of-memory killer ended alpha2-host: ${detail}`,
-              {
-                failure,
-                stderr: tail,
-                exitCode: code,
-                signal: exitSignal,
-              },
-            ),
-          );
-        } else {
-          // No known cause; a SIGKILL without an OOM count rise may be an external kill.
-          const failure: ExportFailure = {
-            code: "HOST_EXITED",
-            message: `alpha2-host exited before responding (${ended})`,
-            origin: "node",
-            operation: "export",
-            backend: "native",
-            phase: phaseNow(),
-            resource: "unknown",
-            stderr: tail,
-            exitCode: code,
-            signal: exitSignal,
-          };
-          rejectPromise(
-            new Alpha2HostError(
-              "HOST_EXITED",
-              `alpha2-host exited before responding: ${detail}`,
-              {
-                failure,
-                stderr: tail,
-                exitCode: code,
-                signal: exitSignal,
-              },
-            ),
-          );
-        }
-      }
-    };
-    // A spawn without standard streams (EMFILE, ENFILE) may never emit close, so settle now.
-    const failWithoutHost = (error: Error): void => {
-      if (settled) return;
-      settled = true;
+    this.#child = child;
+    const { stdin, stdout, stderr } = child;
+    const streamsMissing = !stdin || !stdout || !stderr;
+    // A spawn without standard streams (EMFILE, ENFILE) may never emit close, so end it now.
+    const failWithoutHost = (error: Alpha2HostError): void => {
+      this.#startError ??= () => error;
       if (child.pid !== undefined) child.kill("SIGKILL");
-      rejectPromise(error);
+      this.#exit(null, null);
     };
-    const { stdin, stdout, stderr: errorPipe } = child;
-    const streamsMissing = !stdin || !stdout || !errorPipe;
     // Register first: an unhandled spawn `error` event would crash this process.
     child.on("error", (cause) => {
       if (streamsMissing) failWithoutHost(startFailed(cause));
-      else fail(startFailed(cause));
+      else this.#fail(() => startFailed(cause));
     });
-    child.on("close", (code, exitSignal) => {
-      if (settled) return;
-      settled = true;
-      signal?.removeEventListener("abort", abort);
-      reader?.close();
-      for (const timer of [
-        forceKillTimer,
-        writeFailedTimer,
-        startTimer,
-        cancelTimer,
-      ])
-        if (timer !== undefined) clearTimeout(timer);
-      const waits: Promise<unknown>[] = [...pendingCallbacks];
-      // A macOS host killed before its first line (start timeout or dismissed approval prompt) is
-      // checked for quarantine again.
-      if (
-        process.platform === "darwin" &&
-        !started &&
-        (startTimedOut || (outcome === undefined && exitSignal === "SIGKILL"))
-      )
-        waits.push(
-          quarantineCheck(binary, true).then((refusal) => {
-            quarantined = refusal;
-          }),
-        );
-      if (waits.length === 0) conclude(code, exitSignal);
-      else
-        void Promise.allSettled(waits).then(() => conclude(code, exitSignal));
-    });
+    child.on("close", (code, exitSignal) => this.#exit(code, exitSignal));
     if (streamsMissing) {
       // Fallback in case Node does not report the cause on the next tick.
       setImmediate(() =>
@@ -2480,106 +2611,273 @@ async function requestHost(
       );
       return;
     }
-    try {
-      requestPipe = stdin;
-      // Pipe errors when the host exits would crash this process if unhandled; the exit decides.
-      const ignore = (): void => {};
-      stdin.on("error", ignore);
-      stdout.on("error", ignore);
-      errorPipe.on("error", ignore);
-      errorPipe.on("data", (chunk: Buffer) => {
-        stderr = Buffer.concat([stderr, chunk]);
-        if (stderr.length > STDERR_TAIL_BYTES)
-          stderr = stderr.subarray(stderr.length - STDERR_TAIL_BYTES);
-      });
-      // A host held before running (approval prompt, scan, stopped process) writes nothing.
-      if (settings.hostStartTimeoutMs <= MAX_TIMER_MS)
-        startTimer = setTimeout(() => {
-          startTimedOut = true;
-          child.kill("SIGKILL");
-          fail(
-            new Alpha2HostError(
-              "HOST_START_TIMEOUT",
-              hostStartTimeoutMessage(binary, settings.hostStartTimeoutMs),
-            ),
-          );
-        }, settings.hostStartTimeoutMs);
-      reader = createInterface({ input: stdout });
-      reader.on("line", (line) => {
-        if (!started) {
-          started = true;
-          if (startTimer !== undefined) clearTimeout(startTimer);
-        }
-        // Non-JSON lines come from loaded libraries (a Vulkan validation layer prints to stdout);
-        // keep them with stderr.
-        if (!line.startsWith("{")) {
-          stderr = Buffer.concat([stderr, Buffer.from(`${line}\n`)]);
-          if (stderr.length > STDERR_TAIL_BYTES)
-            stderr = stderr.subarray(stderr.length - STDERR_TAIL_BYTES);
-          return;
-        }
-        let message: HostMessage;
-        try {
-          message = parseHostMessage(line);
-        } catch (cause) {
-          fail(
+    // Pipe errors when the host exits would crash this process if unhandled; the exit decides.
+    const ignore = (): void => {};
+    stdin.on("error", ignore);
+    stdout.on("error", ignore);
+    stderr.on("error", ignore);
+    stderr.on("data", (chunk: Buffer) => this.#appendStderr(chunk));
+    this.#wire = new HostWire(stdin, stdout, {
+      message: (message) => this.#receive(message),
+      invalid: (cause) =>
+        this.#fail(
+          (_stderr, phase) =>
             new Alpha2HostError(
               "INVALID_RESPONSE",
               "alpha2-host returned invalid JSON",
-              { cause, phase: phaseNow() },
+              { cause, phase },
             ),
+        ),
+      diagnostic: (text) => this.#appendStderr(Buffer.from(text)),
+    });
+    // A host held before running (approval prompt, scan, stopped process) writes nothing.
+    const timeoutMs = this.#pool.startTimeoutMs;
+    if (timeoutMs <= MAX_TIMER_MS)
+      this.#startTimer = setTimeout(() => {
+        this.#startTimedOut = true;
+        this.#startError ??= () =>
+          new Alpha2HostError(
+            "HOST_START_TIMEOUT",
+            hostStartTimeoutMessage(binary, timeoutMs),
           );
-          return;
-        }
-        if ("type" in message) {
-          if (message.type === "ready") return;
-          if (message.type === "fatal") {
-            failFromHost(message.error);
-            return;
-          }
-          if (message.requestId === requestId) {
-            lastPhase = message.phase ?? "frames";
-            notifyProgress(
-              message,
-              onProgress,
-              callbackFailed,
-              track,
-              phaseNow(),
-            );
-          }
-          return;
-        }
-        // One request per process, so an answer to an unreadable line is this request's answer.
-        if (
-          message.requestId !== requestId &&
-          message.requestId !== UNREAD_REQUEST_ID
-        )
-          return;
-        if (message.ok) finish({ ok: true, result: message.result });
-        else failFromHost(message.error);
-      });
-      if (signal?.aborted) {
-        abort();
-        return;
-      }
-      signal?.addEventListener("abort", abort, { once: true });
-      // Keep stdin open for a possible cancel line.
-      requestWritten = true;
-      stdin.write(requestLine, (error) => {
-        if (!error) return;
-        // Give the host's fatal line or exit time to name the cause first.
-        writeFailedTimer = setTimeout(() => {
-          fail(
-            new Alpha2HostError("HOST_WRITE_FAILED", error.message, {
-              cause: error,
-            }),
-          );
-        }, HOST_SHUTDOWN_TIMEOUT_MS);
-      });
-    } catch (cause) {
-      fail(startFailed(cause));
+        this.#retired = true;
+        child.kill("SIGKILL");
+      }, timeoutMs);
+  }
+
+  #receive(message: HostMessage): void {
+    if ("type" in message && message.type === "state") {
+      if (message.state === "draining") this.retire();
+      else if (!this.#ready && !this.#retired) this.#becomeReady();
+      return;
     }
-  });
+    if ("type" in message && message.type === "fatal") {
+      const error = message.error;
+      const fatal: FailureBuilder = (stderr, phase) =>
+        errorFromHost(error, stderr, phase);
+      if (!this.#ready) this.#startError ??= fatal;
+      else this.#run?.fail(fatal);
+      // The host exits after a fatal message; nothing is left to cancel.
+      this.#retired = true;
+      this.#closeInput();
+      this.#updateRef();
+      return;
+    }
+    if (!this.#ready) {
+      this.#fail(
+        () =>
+          new Alpha2HostError(
+            "INVALID_RESPONSE",
+            "alpha2-host wrote a message before its ready state",
+          ),
+      );
+      return;
+    }
+    if ("type" in message) this.#run?.progress(message);
+    else this.#run?.answer(message);
+  }
+
+  #becomeReady(): void {
+    this.#ready = true;
+    clearTimeout(this.#startTimer);
+    const waiter = this.#waiter;
+    this.#waiter = undefined;
+    if (waiter === undefined) {
+      this.#updateRef();
+      this.#pool.dispatch();
+      return;
+    }
+    this.lease();
+    waiter.grant(this);
+  }
+
+  /** A failure that ends the host; the request it starts or runs fails with it. */
+  #fail(error: FailureBuilder): void {
+    if (!this.#ready) this.#startError ??= error;
+    else this.#run?.fail(error);
+    this.#kill();
+  }
+
+  release(): void {
+    this.#leased = false;
+    this.#updateRef();
+    if (this.#retired) this.#closeInput();
+    else this.#pool.dispatch();
+  }
+
+  #closeInput(): void {
+    if (this.#inputClosed || this.#gone) return;
+    this.#inputClosed = true;
+    this.#wire?.end();
+    // A host that stays up once its input ends is terminated, then killed.
+    this.#terminateTimer = setTimeout(
+      () => this.#kill(),
+      HOST_SHUTDOWN_TIMEOUT_MS,
+    );
+  }
+
+  /** Closes stdin, then SIGTERM, then SIGKILL after the shutdown timeout. */
+  #kill(): void {
+    if (this.#gone) return;
+    this.#retired = true;
+    this.#closeInput();
+    clearTimeout(this.#terminateTimer);
+    if (this.#alive()) this.#child?.kill("SIGTERM");
+    this.#killTimer ??= setTimeout(() => {
+      if (this.#alive()) this.#child?.kill("SIGKILL");
+    }, HOST_SHUTDOWN_TIMEOUT_MS);
+    this.#updateRef();
+  }
+
+  #exit(code: number | null, exitSignal: string | null): void {
+    if (this.#gone) return;
+    this.#gone = true;
+    this.#retired = true;
+    for (const timer of [
+      this.#startTimer,
+      this.#terminateTimer,
+      this.#killTimer,
+    ])
+      clearTimeout(timer);
+    this.#wire?.close();
+    const waiter = this.#waiter;
+    this.#waiter = undefined;
+    const run = this.#run;
+    this.#pool.removed(this);
+    this.#markExited();
+    if (run !== undefined) run.exited(code, exitSignal);
+    else if (!this.#ready && waiter !== undefined)
+      void this.#startFailure(code, exitSignal).then(waiter.refuse);
+  }
+
+  async #startFailure(
+    code: number | null,
+    exitSignal: string | null,
+  ): Promise<Error> {
+    // A macOS host killed before it was ready (start timeout or dismissed approval prompt) is
+    // checked for quarantine again.
+    if (
+      process.platform === "darwin" &&
+      (this.#startTimedOut ||
+        (this.#startError === undefined && exitSignal === "SIGKILL"))
+    ) {
+      const refusal = await quarantineCheck(this.#pool.binary, true);
+      if (refusal !== undefined)
+        return new Alpha2HostError("HOST_QUARANTINED", refusal);
+    }
+    const tail = this.#stderrSince(0);
+    return (
+      this.#startError?.(tail, "prepare") ??
+      exitError(code, exitSignal, tail, this.#oomKillsAtStart, "prepare")
+    );
+  }
+
+  #alive(): boolean {
+    const child = this.#child;
+    return (
+      child !== undefined &&
+      child.exitCode === null &&
+      child.signalCode === null
+    );
+  }
+
+  /** Only an idle host lets this process exit; the host exits when its stdin closes with it. */
+  #updateRef(): void {
+    const child = this.#child;
+    const hold = !this.idle;
+    if (child === undefined || hold === this.#held) return;
+    this.#held = hold;
+    for (const handle of [child, child.stdin, child.stdout, child.stderr]) {
+      const counted = handle as { ref?: () => void; unref?: () => void } | null;
+      if (hold) counted?.ref?.();
+      else counted?.unref?.();
+    }
+  }
+
+  #appendStderr(chunk: Buffer): void {
+    this.#stderrTotal += chunk.length;
+    this.#stderr = Buffer.concat([this.#stderr, chunk]);
+    if (this.#stderr.length > STDERR_TAIL_BYTES)
+      this.#stderr = this.#stderr.subarray(
+        this.#stderr.length - STDERR_TAIL_BYTES,
+      );
+  }
+
+  /** What the host wrote to stderr since `mark` bytes, at most {@link STDERR_TAIL_BYTES}. */
+  #stderrSince(mark: number): string {
+    const written = this.#stderrTotal - mark;
+    return utf8Tail(
+      this.#stderr.subarray(Math.max(0, this.#stderr.length - written)),
+      STDERR_TAIL_BYTES,
+    );
+  }
+}
+
+/** Classifies a host that exited before answering. */
+function exitError(
+  code: number | null,
+  exitSignal: string | null,
+  tail: string,
+  oomKillsBefore: number | undefined,
+  phase: ExportPhase,
+): Alpha2HostError {
+  const ended = describeExit(code, exitSignal);
+  const detail = tail.trim() || ended;
+  const exit = { stderr: tail, exitCode: code, signal: exitSignal };
+  if (code === 70 || detail.includes("GPU_INIT_FAILED"))
+    return new Alpha2GpuInitializationError(detail, exit);
+  // A policy refused the executable or a library; retrying would fail the same way.
+  if (code !== null && windowsPolicyBlocked(code))
+    return new Alpha2HostError(
+      "HOST_BLOCKED",
+      hostBlockedMessage(windowsStatus(code)),
+      exit,
+    );
+  // The loader refused the executable (missing or mismatched FFmpeg); not retryable.
+  if (loaderRefused(code, tail))
+    return new Alpha2HostError(
+      "HOST_LOAD_FAILED",
+      `alpha2-host could not be loaded: ${detail}${glibcHint(tail)}`,
+      exit,
+    );
+  if (
+    exitSignal === "SIGKILL" &&
+    oomKillsBefore !== undefined &&
+    (oomKillCount() ?? oomKillsBefore) > oomKillsBefore
+  ) {
+    // An OOM kill in this cgroup while the host ran; a smaller `memory.scale` may help.
+    const failure: ExportFailure = {
+      code: "OUT_OF_MEMORY",
+      message: `the kernel's out-of-memory killer ended alpha2-host (${ended})`,
+      origin: "node",
+      operation: "export",
+      backend: "native",
+      phase,
+      resource: "cpu",
+      ...exit,
+    };
+    return new Alpha2HostError(
+      "HOST_OOM_KILLED",
+      `the kernel's out-of-memory killer ended alpha2-host: ${detail}`,
+      { failure, ...exit },
+    );
+  }
+  // No known cause; a SIGKILL without an OOM count rise may be an external kill.
+  const failure: ExportFailure = {
+    code: "HOST_EXITED",
+    message: `alpha2-host exited before responding (${ended})`,
+    origin: "node",
+    operation: "export",
+    backend: "native",
+    phase,
+    resource: "unknown",
+    ...exit,
+  };
+  return new Alpha2HostError(
+    "HOST_EXITED",
+    `alpha2-host exited before responding: ${detail}`,
+    { failure, ...exit },
+  );
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {
@@ -2686,12 +2984,6 @@ function isFile(path: string): boolean {
   }
 }
 
-type Release = () => void;
-/** A function error is built after the host exits, once stderr is complete. */
-type HostOutcome =
-  | { readonly ok: true; readonly result: unknown }
-  | { readonly ok: false; readonly error: Error | (() => Error) };
-
 /** The last at most `limit` bytes as text, starting at a whole character. */
 function utf8Tail(bytes: Buffer, limit: number): string {
   let start = Math.max(0, bytes.length - limit);
@@ -2737,62 +3029,5 @@ const MAX_REQUEST_LINE_BYTES = 2 * MAX_PROJECT_JSON_BYTES;
 
 /** The `requestId` the host uses when it could not read the request's own. */
 const UNREAD_REQUEST_ID = "unknown";
-
-interface Waiter {
-  readonly resolve: (release: Release) => void;
-  readonly reject: (error: unknown) => void;
-  readonly signal?: AbortSignal;
-  abort?: () => void;
-}
-
-class Semaphore {
-  #available: number;
-  readonly #waiting: Waiter[] = [];
-
-  constructor(limit: number) {
-    this.#available = limit;
-  }
-
-  acquire(signal?: AbortSignal): Promise<Release> {
-    if (signal?.aborted) return Promise.reject(new Alpha2AbortError());
-    if (this.#available > 0) {
-      this.#available -= 1;
-      return Promise.resolve(this.#release());
-    }
-    return new Promise((resolveWaiter, reject) => {
-      const waiter: Waiter = {
-        resolve: resolveWaiter,
-        reject,
-        signal,
-        abort: undefined,
-      };
-      const abort = (): void => {
-        const index = this.#waiting.indexOf(waiter);
-        if (index >= 0) this.#waiting.splice(index, 1);
-        reject(new Alpha2AbortError());
-      };
-      waiter.abort = abort;
-      this.#waiting.push(waiter);
-      signal?.addEventListener("abort", abort, { once: true });
-      if (signal?.aborted) abort();
-    });
-  }
-
-  #release(): Release {
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      const waiter = this.#waiting.shift();
-      if (waiter) {
-        if (waiter.abort)
-          waiter.signal?.removeEventListener("abort", waiter.abort);
-        waiter.resolve(this.#release());
-      } else {
-        this.#available += 1;
-      }
-    };
-  }
-}
 
 let nextRequestSequence = 0;

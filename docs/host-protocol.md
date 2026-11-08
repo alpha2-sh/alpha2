@@ -80,7 +80,7 @@ Starting a host costs a process, a GPU device and its probes, so a client keeps 
 
 - Run at most `concurrency` hosts, and send each one request at a time.
 - Send a request to an idle `ready` host. With none, start a new host, which counts as started once its `ready` message arrives; at the limit, end an idle host of other modes to make room, or wait for a host to come free.
-- The renderer and decode modes are read when the host starts (`ALPHA2_RENDERER`, `ALPHA2_VIDEO_DECODE`), so hosts are kept apart by them.
+- A host reads its environment as it starts, the renderer and decode modes (`ALPHA2_RENDERER`, `ALPHA2_VIDEO_DECODE`) among it, so hosts are kept apart by the whole environment they start with: a request goes only to a host started with the environment it would start one with now.
 - Stop sending to a host when it reports `draining`, in a `state` message or a response's `hostState`, or when it exits. Close its standard input once it runs nothing.
 - Send a request answered `HOST_RETIRING` again, to another host.
 - A request whose host exits before answering fails with what the exit says (`HOST_EXITED`, `HOST_OOM_KILLED`, ...) and is never sent again: an export writes files, and only its caller knows whether running it again is safe.
@@ -204,7 +204,7 @@ To cancel a request, write a `cancel` line naming it in `target`:
 {"protocolVersion":1,"requestId":"1:cancel","operation":"cancel","target":"1"}
 ```
 
-It is answered at once, whatever the host is doing, with `{"protocolVersion":1,"requestId":"1:cancel","ok":true,"result":{"target":"1","state":"running"}}`:
+It is answered at once, whatever the host is doing, with `{"protocolVersion":1,"requestId":"1:cancel","ok":true,"result":{"target":"1","state":"running"},"hostState":"ready"}`:
 
 - `running`: `target` is the request being handled. An export or still stops, removes its partial file and is answered `CANCELLED`; `capabilities` and `conform` have nothing to stop and are answered as usual. The host goes on serving.
 - `pending`: no request with that id is being handled. When a request with that id is read or starts later, it is answered `CANCELLED` without running. A cancel for a request that has already been answered is kept until 1024 newer ones push it out.

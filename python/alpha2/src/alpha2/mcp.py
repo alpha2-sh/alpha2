@@ -195,14 +195,18 @@ class Server:
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
         if self._frames is not None:
             shutil.rmtree(self._frames, ignore_errors=True)
             self._frames = None
 
     def client(self) -> HostClient:
-        if self._client is None:
-            self._client = HostClient(host_path=self.host_path)
-        return self._client
+        """The one client every tool call runs on, so calls reuse its hosts."""
+        with self._lock:
+            if self._client is None:
+                self._client = HostClient(host_path=self.host_path)
+            return self._client
 
     def all_templates(self) -> list[dict[str, Any]]:
         return [*self.templates, *_compose.TEMPLATES]

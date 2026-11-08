@@ -7,9 +7,12 @@ import re
 from typing import Any
 
 __all__ = [
+    "HOST_STATES",
     "PROTOCOL_VERSION",
     "UNREAD_REQUEST_ID",
+    "create_cancel",
     "create_request",
+    "create_status",
     "describe_exit",
     "loader_refused",
     "ntstatus_name",
@@ -22,6 +25,9 @@ PROTOCOL_VERSION = 1
 # The requestId the host uses when it could not read the line's own.
 UNREAD_REQUEST_ID = "unknown"
 
+HOST_STATES = ("ready", "draining")
+"""A host takes requests while ``ready``; ``draining`` takes none and exits."""
+
 
 def create_request(
     operation: str, request_id: str, payload: dict[str, Any] | None = None
@@ -33,6 +39,16 @@ def create_request(
         "requestId": request_id,
         **(payload or {}),
     }
+
+
+def create_cancel(target: str) -> dict[str, Any]:
+    """A cancel of the request ``target``."""
+    return create_request("cancel", f"{target}:cancel", {"target": target})
+
+
+def create_status(request_id: str) -> dict[str, Any]:
+    """A ``status`` request, answered at once with the host's state."""
+    return create_request("status", request_id)
 
 
 def _safe_count(value: object) -> bool:
@@ -56,8 +72,8 @@ def _protocol_error(value: object) -> bool:
 def parse_host_message(line: str) -> dict[str, Any]:
     """Parses and checks one line the host wrote.
 
-    A message is ``ready``, ``progress``, ``fatal``, or an answer (``ok``). Raises ``ValueError``
-    for non-JSON, another protocol version, or a malformed message.
+    A message is ``state``, ``progress``, ``fatal``, or a response (``ok``, with ``hostState``).
+    Raises ``ValueError`` for non-JSON, another protocol version, or a malformed message.
     """
     value = json.loads(line)
     if not isinstance(value, dict):
@@ -66,7 +82,13 @@ def parse_host_message(line: str) -> dict[str, Any]:
     if version != PROTOCOL_VERSION or isinstance(version, bool):
         raise ValueError(f"unsupported host protocol {version}; expected {PROTOCOL_VERSION}")
     kind = value.get("type")
-    if kind == "ready":
+    if kind == "state":
+        if (
+            value.get("state") not in HOST_STATES
+            or not isinstance(value.get("reason"), str)
+            or not isinstance(value.get("details"), dict)
+        ):
+            raise ValueError("invalid state message")
         return value
     if kind == "progress":
         if (
@@ -88,6 +110,8 @@ def parse_host_message(line: str) -> dict[str, Any]:
         raise ValueError("invalid error response")
     if value["ok"] and "result" not in value:
         raise ValueError("successful response is missing result")
+    if value.get("hostState") not in HOST_STATES:
+        raise ValueError("response is missing hostState")
     return value
 
 

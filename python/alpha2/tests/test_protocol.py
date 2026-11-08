@@ -12,7 +12,13 @@ from conftest import corpus
 import alpha2
 from alpha2 import _native
 from alpha2.errors import Alpha2HostError, failure_class_of_code
-from alpha2.protocol import create_request, loader_refused, parse_host_message
+from alpha2.protocol import (
+    create_cancel,
+    create_request,
+    create_status,
+    loader_refused,
+    parse_host_message,
+)
 
 
 def test_the_shared_protocol_corpus_parses_as_the_host_and_node_read_it() -> None:
@@ -42,9 +48,10 @@ def test_the_shared_protocol_corpus_parses_as_the_host_and_node_read_it() -> Non
         '{"protocolVersion": 1, "type": "progress", "requestId": "r", "completed": 2, "total": 1}',
         '{"protocolVersion": 1, "type": "progress", "requestId": "r", "completed": -1, "total": 1}',
         '{"protocolVersion": 1, "type": "fatal", "error": {"code": "", "message": "m"}}',
-        '{"protocolVersion": 1, "requestId": "r", "ok": false, "error": {"code": "X"}}',
-        '{"protocolVersion": 1, "requestId": "r", "ok": true}',
-        '{"protocolVersion": 1, "requestId": 3, "ok": true, "result": {}}',
+        '{"protocolVersion": 1, "requestId": "r", "ok": false, "error": {"code": "X"}, '
+        '"hostState": "ready"}',
+        '{"protocolVersion": 1, "requestId": "r", "ok": true, "hostState": "ready"}',
+        '{"protocolVersion": 1, "requestId": 3, "ok": true, "result": {}, "hostState": "ready"}',
     ],
 )
 def test_a_malformed_host_message_is_refused(message: str) -> None:
@@ -158,6 +165,43 @@ def test_the_native_module_is_the_packages_version_and_the_engines_constants() -
     assert limits["MAX_PROJECT_JSON_BYTES"] == _native.MAX_PROJECT_JSON_BYTES
 
 
-def test_the_ready_line_parses() -> None:
-    ready = {"protocolVersion": 1, "type": "ready"}
-    assert parse_host_message('{"protocolVersion":1,"type":"ready"}') == ready
+def test_state_messages_responses_and_status_have_the_protocols_shapes() -> None:
+    draining = {
+        "protocolVersion": 1,
+        "type": "state",
+        "state": "draining",
+        "reason": "memory",
+        "details": {"activity": "idle", "requestsServed": 3},
+    }
+    assert parse_host_message(json.dumps(draining)) == draining
+    status = {
+        "protocolVersion": 1,
+        "requestId": "s",
+        "ok": True,
+        "result": {"state": "ready", "reason": "started", "details": {}},
+        "hostState": "ready",
+    }
+    assert parse_host_message(json.dumps(status)) == status
+    assert create_status("s") == {"protocolVersion": 1, "operation": "status", "requestId": "s"}
+    assert create_cancel("r") == {
+        "protocolVersion": 1,
+        "operation": "cancel",
+        "requestId": "r:cancel",
+        "target": "r",
+    }
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        '{"protocolVersion": 1, "type": "ready"}',
+        '{"protocolVersion": 1, "type": "state", "state": "stopped", "reason": "x", "details": {}}',
+        '{"protocolVersion": 1, "type": "state", "state": "ready", "details": {}}',
+        '{"protocolVersion": 1, "type": "state", "state": "ready", "reason": "started"}',
+        '{"protocolVersion": 1, "requestId": "r", "ok": true, "result": {}}',
+        '{"protocolVersion": 1, "requestId": "r", "ok": true, "result": {}, "hostState": "idle"}',
+    ],
+)
+def test_a_message_of_another_shape_than_the_host_state_protocol_is_refused(message: str) -> None:
+    with pytest.raises(ValueError):
+        parse_host_message(message)

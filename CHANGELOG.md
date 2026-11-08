@@ -30,6 +30,10 @@ All notable changes to this project are documented in this file.
   memory growth, requests served, open handles, a lost device or encoder path, idle time), with
   soft limits set by `serve` flags. Requests it did not start are answered `HOST_RETIRING`, and a
   `status` operation reports the state at once.
+- `@alpha2-sh/node` and the Python client keep their hosts between requests, up to `concurrency`,
+  one request at a time each, and replace a host that drains or exits. Hosts are kept apart by the
+  environment they start with. `Alpha2NodeClient.close()` and `HostClient.close()` end them; idle
+  hosts keep no Node or Python process alive. The MCP server reuses hosts across tool calls.
 
 ### Changed
 
