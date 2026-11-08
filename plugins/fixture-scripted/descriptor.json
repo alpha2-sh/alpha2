@@ -13,7 +13,11 @@
       "per_delivery": { "type": "array" },
       "at_end": { "type": "array" },
       "fail_at": { "type": "integer" },
-      "panic_at": { "type": "integer" }
+      "panic_at": { "type": "integer" },
+      "spin_at": { "type": "integer" },
+      "hog_at": { "type": "integer" },
+      "abort_at": { "type": "integer" },
+      "resource": { "type": "string" }
     },
     "additionalProperties": false
   },

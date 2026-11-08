@@ -1,7 +1,10 @@
 //! The `scripted` test extractor as a plugin. Its params hold the script: `per_delivery`, one list
 //! of emits per delivered frame in order, and `at_end`, emitted by `end`. Emits are spelled as in
-//! the host protocol's acknowledgements. `fail_at` and `panic_at` make that delivery fail or
-//! panic, for loader tests.
+//! the host protocol's acknowledgements.
+//!
+//! For loader tests, a delivery index in `fail_at`, `panic_at`, `spin_at`, `hog_at` or `abort_at`
+//! makes that delivery fail, panic, never return, allocate without bound, or end the process; and
+//! `resource` names a resource whose UTF-8 text `end` emits as a word of `words`.
 
 use alpha2_plugin_sdk::{Context, Emitter, Error, Extractor, Frame, Host};
 use serde_json::Value;
@@ -12,6 +15,10 @@ pub struct Scripted {
     at_end: Vec<Value>,
     fail_at: Option<u64>,
     panic_at: Option<u64>,
+    spin_at: Option<u64>,
+    hog_at: Option<u64>,
+    abort_at: Option<u64>,
+    resource: Option<String>,
     delivered: u64,
 }
 
@@ -54,13 +61,26 @@ fn emit(out: &mut Emitter, item: &Value) -> Result<(), Error> {
 impl Extractor for Scripted {
     const DESCRIPTOR: &'static str = include_str!("../descriptor.json");
 
-    fn begin(context: &Context, _host: &Host) -> Result<Self, Error> {
+    fn begin(context: &Context, host: &Host) -> Result<Self, Error> {
         let index = |key: &str| context.params.get(key).and_then(Value::as_u64);
+        let resource = match context.params.get("resource").and_then(Value::as_str) {
+            None => None,
+            Some(name) => {
+                let bytes = host
+                    .resource(name)
+                    .ok_or_else(|| Error::from(format!("no resource named {name}")))?;
+                Some(String::from_utf8(bytes).map_err(|_| "the resource is not UTF-8")?)
+            }
+        };
         Ok(Self {
             per_delivery: list(context, "per_delivery")?,
             at_end: list(context, "at_end")?,
             fail_at: index("fail_at"),
             panic_at: index("panic_at"),
+            spin_at: index("spin_at"),
+            hog_at: index("hog_at"),
+            abort_at: index("abort_at"),
+            resource,
             delivered: 0,
         })
     }
@@ -75,6 +95,20 @@ impl Extractor for Scripted {
         if self.fail_at == Some(delivery) {
             return Err(format!("scripted failure at delivery {delivery}").into());
         }
+        if self.abort_at == Some(delivery) {
+            std::process::abort();
+        }
+        if self.spin_at == Some(delivery) {
+            loop {
+                std::hint::black_box(delivery);
+            }
+        }
+        if self.hog_at == Some(delivery) {
+            let mut held = Vec::new();
+            loop {
+                held.push(std::hint::black_box(vec![1_u8; 16 << 20]));
+            }
+        }
         let items = usize::try_from(delivery)
             .ok()
             .and_then(|delivery| self.per_delivery.get(delivery))
@@ -85,6 +119,9 @@ impl Extractor for Scripted {
     }
 
     fn end(&mut self, out: &mut Emitter) -> Result<(), Error> {
+        if let Some(text) = &self.resource {
+            out.word("words", 0, 1, text, None);
+        }
         self.at_end.iter().try_for_each(|item| emit(out, item))
     }
 }

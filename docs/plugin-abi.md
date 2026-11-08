@@ -2,7 +2,7 @@
 
 A plugin is a package an alpha2 host loads at run time: a manifest, one or more code artifacts and the resources they read. This page is `alpha2-plugin/1`, the ABI every artifact implements, as a core wasm module or as a C-ABI library. Plugins written in Rust use `plugins/sdk`, which builds both from one `Extractor` implementation. In C, C++, Zig or Go, implement [`plugins/sdk/include/alpha2_plugin.h`](../plugins/sdk/include/alpha2_plugin.h) directly.
 
-A plugin of kind `extractor` provides one extractor: the host runs the extraction session, decodes the input and calls the plugin step by step, exactly as it drives an extractor written in the host's own language (see [`host-protocol.md`](host-protocol.md#extract)). Every value the plugin emits is validated by the session, so a plugin cannot write invalid project data.
+A plugin of kind `extractor` provides one extractor: the host runs the extraction session, decodes the input and calls the plugin step by step, exactly as it drives an extractor written in the host's own language. `alpha2-host` runs one named in an `extract` request's `plugin` (see [`host-protocol.md`](host-protocol.md#plugins)), and Rust programs load one with `alpha2_host_core::plugins` (feature `plugins`). Every value the plugin emits is validated by the session, so a plugin cannot write invalid project data.
 
 ## Manifest
 

@@ -28,6 +28,8 @@ pub mod extract;
 pub mod host_frames;
 pub mod parameter_sets;
 pub mod partial;
+#[cfg(feature = "plugins")]
+pub mod plugins;
 #[cfg(all(feature = "engine", feature = "cpal-host"))]
 pub mod preview_audio;
 pub mod probe_cache;

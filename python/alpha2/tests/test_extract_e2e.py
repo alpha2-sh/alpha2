@@ -6,6 +6,7 @@ skipped.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -21,6 +22,7 @@ import pytest
 from conftest import ROOT, require_or_skip
 
 from alpha2 import Alpha2AbortError, Alpha2HostError, HostClient
+from alpha2.client import ExtractPlugin
 from alpha2.extract import Emitter, ExtractAudio, ExtractFrame, ExtractProgress
 
 HOST = Path(
@@ -279,3 +281,140 @@ def test_the_python_scripted_fixture_lists_become_data_sets(client: HostClient) 
     for found in result["dataSets"]:
         assert found["anchor"] == {"type": "source", "source_id": "v"}
         assert found["made_by"]["extractor"] == "alpha2.test.scripted"
+
+
+def host_triple() -> str:
+    output = subprocess.run(["rustc", "-vV"], capture_output=True, text=True, check=True).stdout
+    return next(line[6:] for line in output.splitlines() if line.startswith("host: "))
+
+
+def plugin_dir(tmp: Path, name: str, *, wasm: bool = True, native: bool = False) -> tuple[str, str]:
+    """Builds fixture ``name`` and writes it as a plugin directory: the manifest's path and hash."""
+    plugins = ROOT / "plugins"
+    triple = host_triple()
+    for target in ("wasm32-unknown-unknown", triple):
+        subprocess.run(
+            [
+                "cargo", "build", "--release", "--target", target,
+                "--manifest-path", str(plugins / "Cargo.toml"),
+                "--target-dir", str(plugins / "target"),
+                "-p", f"alpha2-plugin-fixture-{name}",
+            ],
+            check=True,
+            env={**os.environ, "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS": "-Ctarget-feature=-relaxed-simd"},
+        )  # fmt: skip
+    library = f"alpha2_plugin_fixture_{name}"
+    artifacts = []
+
+    def place(source: Path, url: str, target: str, kind: str) -> None:
+        data = source.read_bytes()
+        (tmp / url).parent.mkdir(parents=True, exist_ok=True)
+        (tmp / url).write_bytes(data)
+        digest = hashlib.sha256(data).hexdigest()
+        artifacts.append(
+            {"target": target, "type": kind, "url": url, "sha256": digest, "bytes": len(data)}
+        )
+
+    release = plugins / "target"
+    if wasm:
+        place(
+            release / "wasm32-unknown-unknown/release" / f"{library}.wasm",
+            f"{library}.wasm",
+            "wasm32",
+            "wasm",
+        )
+    if native:
+        if "windows" in triple:
+            file = f"{library}.dll"
+        elif "apple" in triple:
+            file = f"lib{library}.dylib"
+        else:
+            file = f"lib{library}.so"
+        place(release / triple / "release" / file, f"{triple}/{file}", triple, "cdylib")
+    descriptor = json.loads((plugins / f"fixture-{name}" / "descriptor.json").read_text())
+    text = json.dumps(
+        {"id": descriptor["id"], "version": "0.1.0", "abi": "alpha2-plugin/1", "kind": "extractor",
+         "artifacts": artifacts, "descriptor": descriptor}
+    )  # fmt: skip
+    (tmp / "manifest.json").write_text(text)
+    return str(tmp / "manifest.json"), hashlib.sha256(text.encode()).hexdigest()
+
+
+def plugin_request(
+    extractor: str, outputs: dict[str, str], params: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "extractor": extractor,
+        "version": 1,
+        "params": params,
+        "input": {
+            "from": "source",
+            "source_id": "v",
+            "range": {"start": 0, "end": 40_000},
+            "size": 96,
+        },
+        "outputs": outputs,
+    }
+
+
+def test_a_plugin_the_host_runs_records_the_bytes_the_rust_reader_pins(
+    client: HostClient, tmp_path: Path
+) -> None:
+    pinned = json.loads((ROOT / "tests/golden/extract-recipe.json").read_text())
+    manifest, sha256 = plugin_dir(tmp_path, "digest")
+    result = client.extract(
+        PROJECT,
+        plugin_request("alpha2.test.digest", {"digest": "frames"}, {}),
+        plugin={"manifest": manifest, "sha256": sha256},
+        assets=video(),
+    )
+    (found,) = result["dataSets"]
+    values = found["values"]
+    hashes = [
+        [time, f"{round(values[i * 2] * 65536) * 65536 + round(values[i * 2 + 1] * 65536):08x}"]
+        for i, time in enumerate(found["times"])
+    ]
+    assert hashes == pinned["h264-bt709-copy.mp4"]
+    assert found["made_by"]["plugin"]["version"] == "0.1.0"
+    with pytest.raises(Alpha2HostError) as raised:
+        client.extract(
+            PROJECT,
+            plugin_request("alpha2.test.digest", {"digest": "frames"}, {}),
+            plugin={"manifest": manifest, "sha256": "0" * 64},
+            assets=video(),
+        )
+    assert raised.value.code == "PLUGIN_HASH_MISMATCH"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="the crash is an abort, which Windows reports by dialog"
+)
+def test_a_native_plugin_that_ends_the_host_fails_and_the_pool_starts_another(
+    client: HostClient, tmp_path: Path
+) -> None:
+    manifest, sha256 = plugin_dir(tmp_path, "scripted", wasm=False, native=True)
+    outputs = {"track": "t", "levels": "l", "correction": "c", "words": "w", "quiet": "q"}
+    with pytest.raises(Alpha2HostError) as refused:
+        client.extract(
+            PROJECT,
+            plugin_request("alpha2.test.scripted", outputs, {"abort_at": 1}),
+            plugin={"manifest": manifest, "sha256": sha256},
+            assets=video(),
+        )
+    assert refused.value.code == "PLUGIN_NATIVE_REFUSED"
+    allowed: ExtractPlugin = {"manifest": manifest, "sha256": sha256, "allow_native": True}
+    with pytest.raises(Alpha2HostError) as ended:
+        client.extract(
+            PROJECT,
+            plugin_request("alpha2.test.scripted", outputs, {"abort_at": 1}),
+            plugin=allowed,
+            assets=video(),
+        )
+    assert ended.value.code == "HOST_EXITED"
+    after = client.extract(
+        PROJECT,
+        plugin_request("alpha2.test.scripted", outputs, {}),
+        plugin=allowed,
+        assets=video(),
+    )
+    assert len(after["dataSets"]) == 5

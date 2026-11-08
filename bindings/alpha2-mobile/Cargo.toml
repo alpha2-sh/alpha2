@@ -16,6 +16,8 @@ crate-type = ["lib", "staticlib", "cdylib"]
 [features]
 default = ["compose"]
 compose = ["dep:alpha2-compose"]
+# Extractor plugins through wasmtime and the platform loader; adds megabytes, so apps opt in.
+plugins = ["alpha2-host-core/plugins"]
 
 [dependencies]
 alpha2-compose = { workspace = true, optional = true }

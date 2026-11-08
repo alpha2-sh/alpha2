@@ -28,6 +28,48 @@ use crate::serve_io::Responder;
 /// How long a client may take to acknowledge a `pass`, `video` or `audio` step by default.
 pub const DEFAULT_STEP_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// `serve`'s extraction flags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExtractOptions {
+    /// How long a client may take to acknowledge a step; `None` waits forever.
+    pub step_timeout: Option<Duration>,
+    /// The most linear memory a wasm plugin may have.
+    pub plugin_memory_bytes: u64,
+    /// The longest one wasm plugin call may run.
+    pub plugin_call_deadline: Duration,
+}
+
+impl ExtractOptions {
+    /// The flags' defaults.
+    pub const DEFAULT: Self = Self {
+        step_timeout: Some(DEFAULT_STEP_TIMEOUT),
+        plugin_memory_bytes: alpha2_host_core::plugins::DEFAULT_MEMORY_BYTES,
+        plugin_call_deadline: alpha2_host_core::plugins::DEFAULT_CALL_DEADLINE,
+    };
+}
+
+impl Default for ExtractOptions {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// The `plugin` of an `extract` request: a manifest the host fetches and runs.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginRequest {
+    /// An `https:` URL, a `file:` URL or a local path.
+    pub manifest: String,
+    /// SHA-256 of the manifest's bytes.
+    pub sha256: String,
+    /// Native artifacts run with the host's rights; refused unless allowed.
+    #[serde(default)]
+    pub allow_native: bool,
+    /// The wasm artifact even where a native one is allowed.
+    #[serde(default)]
+    pub force_wasm: bool,
+}
+
 /// An `extract` request.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -58,7 +100,7 @@ pub struct ExtractHostRequest {
     pub descriptor: Option<Descriptor>,
     /// A plugin the host runs itself.
     #[serde(default)]
-    pub plugin: Option<Value>,
+    pub plugin: Option<PluginRequest>,
 }
 
 impl ExtractHostRequest {
@@ -528,7 +570,7 @@ pub fn handle(
     host: &mut Host,
     request: ExtractHostRequest,
     out: &Responder,
-    timeout: Option<Duration>,
+    options: ExtractOptions,
 ) -> Result<Value, HostError> {
     let started = Instant::now();
     request.check()?;
@@ -545,13 +587,20 @@ pub fn handle(
         effects,
         request,
         descriptor,
+        plugin,
         ..
     } = request;
-    let Some(descriptor) = descriptor else {
-        return Err(HostError::new(
-            "INVALID_REQUEST",
-            "this host runs plugins only through the `plugin` field it supports",
-        ));
+    // A plugin is fetched, checked and loaded before any media is read.
+    let (descriptor, mut plugin) = match (descriptor, plugin) {
+        (Some(descriptor), _) => (descriptor, None),
+        (None, Some(plugin)) => {
+            let loaded = load_plugin(&plugin, &request, options)?;
+            (
+                alpha2_engine::extract::Extractor::describe(&loaded).clone(),
+                Some(loaded),
+            )
+        }
+        (None, None) => unreachable!("checked: one of descriptor and plugin"),
     };
     let parsed = Project::from_json(project.text())
         .map_err(|error| HostError::classify(crate::error_message(error)))?;
@@ -621,11 +670,26 @@ pub fn handle(
         reader: alpha2_host_core::extract::ReaderSupplier::new(&renderer, video, audio),
         timeline,
     };
-    let (mut sets, waited) =
-        run_client(session, &mut supplier, out, &request_id, timeout, &cancel)?;
+    let (mut sets, waited) = match plugin.as_mut() {
+        Some(plugin) => (
+            run_plugin(session, &mut supplier, plugin, out, &request_id, &cancel)?,
+            Duration::ZERO,
+        ),
+        None => run_client(
+            session,
+            &mut supplier,
+            out,
+            &request_id,
+            options.step_timeout,
+            &cancel,
+        )?,
+    };
     for set in &mut sets {
         if set.anchor.source().is_some() {
             set.made_from.clone_from(&original);
+        }
+        if let (Some(plugin), Some(made_by)) = (&plugin, set.made_by.as_mut()) {
+            made_by.plugin = Some(plugin.made_by().clone());
         }
     }
     let total = started.elapsed();
@@ -636,6 +700,107 @@ pub fn handle(
             "clientMs": waited.as_secs_f64() * 1_000.0,
         },
     }))
+}
+
+fn plugin_error(error: alpha2_host_core::plugins::PluginError) -> HostError {
+    HostError::new(error.code, error.message)
+}
+
+/// Fetches the manifest, checks it against its pinned hash and loads the artifact the request's
+/// policy picks.
+fn load_plugin(
+    plugin: &PluginRequest,
+    request: &ExtractRequest,
+    options: ExtractOptions,
+) -> Result<alpha2_host_core::plugins::PluginExtractor, HostError> {
+    use alpha2_host_core::plugins;
+    let (text, base) =
+        crate::plugin_fetch::manifest(&plugin.manifest, &plugin.sha256).map_err(plugin_error)?;
+    let manifest = plugins::parse_manifest(&text).map_err(plugin_error)?;
+    let policy = plugins::Policy {
+        allow_native: plugin.allow_native,
+        force_wasm: plugin.force_wasm,
+        memory_bytes: options.plugin_memory_bytes,
+        call_deadline: options.plugin_call_deadline,
+    };
+    let mut fetcher =
+        crate::plugin_fetch::Fetcher::new(base, crate::plugin_fetch::cache_directory());
+    plugins::load(&manifest, request.params.clone(), &policy, &mut fetcher).map_err(plugin_error)
+}
+
+/// Runs a plugin the host loaded through the session, with progress and cancel as for a client.
+fn run_plugin(
+    mut session: ExtractSession,
+    supplier: &mut dyn Supplier,
+    extractor: &mut dyn alpha2_engine::extract::Extractor,
+    out: &Responder,
+    request_id: &str,
+    cancel: &CancelToken,
+) -> Result<Vec<alpha2_model::DataSet>, HostError> {
+    use alpha2_engine::extract::{Emitter, ExtractorError, PassInfo};
+    let failed = |error: ExtractorError| match error.code {
+        Some(code) => HostError::new(code, error.message),
+        None => HostError::new(
+            "EXTRACTOR_FAILED",
+            format!("the extractor failed: {}", error.message),
+        ),
+    };
+    let internal = |error: SessionError| HostError::new("INTERNAL", error.to_string());
+    extractor.begin(&session.context()).map_err(failed)?;
+    let mut pass = 0;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(HostError::new(
+                "CANCELLED",
+                crate::protocol::cancelled("the extraction was cancelled"),
+            ));
+        }
+        match session.next() {
+            Step::Need(need) => match &need {
+                Need::SourceFrame { .. } | Need::TimelineFrame { .. } => {
+                    match supplier.frame(&need).map_err(HostError::classify)? {
+                        Some(frame) => session.supply_video(frame).map_err(internal)?,
+                        None => session.supply_end().map_err(internal)?,
+                    }
+                }
+                Need::SourceAudio { .. } | Need::TimelineAudio { .. } => {
+                    let block = supplier.audio(&need).map_err(HostError::classify)?;
+                    session.supply_audio(block).map_err(internal)?;
+                }
+            },
+            Step::PassBoundary {
+                pass: index,
+                direction,
+            } => {
+                pass = index;
+                extractor
+                    .pass(&PassInfo {
+                        pass: index,
+                        direction,
+                    })
+                    .map_err(failed)?;
+            }
+            Step::Deliver(delivery) => {
+                let mut emitter = Emitter::default();
+                match &delivery {
+                    Delivery::Video(frame) => extractor.video(frame, &mut emitter),
+                    Delivery::Audio(block) => extractor.audio(block, &mut emitter),
+                }
+                .map_err(failed)?;
+                emit_into(&mut session, emitter.emits())?;
+                if let Some(progress) = session.progress().get(pass) {
+                    out.send(&progress_message(request_id, pass, *progress))?;
+                }
+            }
+            Step::Done => break,
+        }
+    }
+    let mut emitter = Emitter::default();
+    extractor.end(&mut emitter).map_err(failed)?;
+    emit_into(&mut session, emitter.emits())?;
+    session
+        .finish()
+        .map_err(|error| HostError::new("INVALID_EMIT", error.to_string()))
 }
 
 /// The fingerprint `made_from` records: the conformed original's.

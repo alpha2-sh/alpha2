@@ -1579,26 +1579,58 @@ export class Alpha2NodeClient {
   }
 
   /**
-   * Runs `extractor` over `request.request`: the host decodes and presents the input and hands it
-   * over step by step, and resolves with the data sets the session validated, `made_from` set to
-   * the conformed original. `request.request.params` are checked against the descriptor's
-   * `params_schema` first. Rejects with `INVALID_EMIT` for output the session refuses,
-   * `EXTRACTOR_FAILED` when a callback throws, `EXTRACTOR_TIMEOUT` when one takes longer than the
-   * host's step timeout (begin and end have none), and `Alpha2AbortError` on `signal`.
+   * Runs `extractor`, or the plugin `request.plugin` names, over `request.request`. The host
+   * decodes and presents the input; a client-side extractor gets it step by step, while a plugin
+   * runs inside the host, which fetches its manifest and files, checks them against their pinned
+   * hashes and runs wasm sandboxed (native code only with `allowNative`). Resolves with the data
+   * sets the session validated, `made_from` set to the conformed original and, for a plugin,
+   * `made_by.plugin` naming the artifact that ran.
+   *
+   * A client-side extractor's `request.request.params` are checked against its `params_schema`
+   * first. Rejects with `INVALID_EMIT` for output the session refuses, `EXTRACTOR_FAILED` when a
+   * step fails, `EXTRACTOR_TIMEOUT` when a client step takes longer than the host's step timeout
+   * (begin and end have none), a `PLUGIN_*` code when a plugin is refused, does not load, traps or
+   * runs past its limits, and `Alpha2AbortError` on `signal`.
    */
   async extract(
     request: ExtractRequest,
-    extractor: Extractor,
+    extractor?: Extractor,
   ): Promise<ExtractResult> {
-    const descriptor = extractor.describe();
+    const plugin = request.plugin;
+    if ((extractor === undefined) === (plugin === undefined))
+      throw new Alpha2HostError(
+        "INVALID_INPUT",
+        "extract runs either a client-side extractor or request.plugin",
+      );
     const problems = projectProblems(request.project);
     if (problems.length > 0) throw new Alpha2ProjectValidationError(problems);
-    const problem = schemaProblem(
-      descriptor.params_schema,
-      request.request.params ?? {},
-    );
-    if (problem !== undefined)
-      throw new Alpha2HostError("INVALID_INPUT", `invalid params: ${problem}`);
+    let runs: Readonly<Record<string, unknown>>;
+    if (extractor !== undefined) {
+      const descriptor = extractor.describe();
+      const problem = schemaProblem(
+        descriptor.params_schema,
+        request.request.params ?? {},
+      );
+      if (problem !== undefined)
+        throw new Alpha2HostError(
+          "INVALID_INPUT",
+          `invalid params: ${problem}`,
+        );
+      runs = { descriptor };
+    } else {
+      if (!nonEmptyString(plugin?.manifest) || !nonEmptyString(plugin?.sha256))
+        invalidShape(
+          "request.plugin needs its manifest and the manifest's sha256",
+        );
+      runs = {
+        plugin: {
+          manifest: plugin.manifest,
+          sha256: plugin.sha256,
+          allow_native: plugin.allowNative ?? false,
+          force_wasm: plugin.forceWasm ?? false,
+        },
+      };
+    }
     const onProgress = request.onProgress;
     const answer = await this.#request(
       "extract",
@@ -1609,14 +1641,20 @@ export class Alpha2NodeClient {
         media: request.media ?? "original",
         fonts: request.fonts ?? [],
         request: request.request,
-        descriptor,
+        ...runs,
       },
       { videoDecode: this.#videoDecode, renderer: this.#renderer },
       request.signal,
       undefined,
       {
         step: (message, attachments) =>
-          takeStep(extractor, message, attachments),
+          extractor === undefined
+            ? Promise.resolve({
+                error: {
+                  message: "this request runs no client-side extractor",
+                },
+              })
+            : takeStep(extractor, message, attachments),
         progress: (progress) => onProgress?.(progress),
       },
     );
@@ -1673,8 +1711,22 @@ export interface ExtractRequest {
   /** Fonts for timeline input that draws text. */
   readonly fonts?: readonly string[];
   readonly request: ExtractRun;
+  /** A plugin the host fetches and runs, instead of a client-side extractor. */
+  readonly plugin?: ExtractPlugin;
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: ExtractProgress) => void | Promise<void>;
+}
+
+/** A plugin for {@link Alpha2NodeClient.extract}, by manifest. */
+export interface ExtractPlugin {
+  /** An `https:` URL, a `file:` URL or a path on the host's file system. */
+  readonly manifest: string;
+  /** SHA-256 of the manifest's bytes, 64 hexadecimal digits. */
+  readonly sha256: string;
+  /** Lets a native artifact run, with the host process's rights. */
+  readonly allowNative?: boolean;
+  /** The wasm artifact even where a native one is allowed. */
+  readonly forceWasm?: boolean;
 }
 
 export type {

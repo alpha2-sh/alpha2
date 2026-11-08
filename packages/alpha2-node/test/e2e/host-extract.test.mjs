@@ -1,7 +1,10 @@
 // Client-side extractors against a real alpha2-host; `npm run test:node-e2e` builds it first.
 
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
@@ -339,5 +342,199 @@ test("the JS scripted fixture's lists become the data sets the session builds", 
     assert.deepEqual(set.anchor, { type: "source", source_id: "v" });
     assert.equal(set.made_by.extractor, "alpha2.test.scripted");
     assert.equal(set.made_by.plugin, undefined);
+  }
+});
+
+/** The Rust target triple of this machine, as manifests name native artifacts. */
+function hostTriple() {
+  const output = spawnSync("rustc", ["-vV"], { encoding: "utf8" }).stdout;
+  return /^host: (.+)$/m.exec(output)[1];
+}
+
+/** Builds fixture `name` and writes it as a plugin directory; returns the manifest's path and hash. */
+async function pluginDir(name, { wasm = true, native = false } = {}) {
+  const plugins = join(root, "plugins");
+  const triple = hostTriple();
+  for (const target of ["wasm32-unknown-unknown", triple]) {
+    const built = spawnSync(
+      "cargo",
+      [
+        "build",
+        "--release",
+        "--target",
+        target,
+        "--manifest-path",
+        join(plugins, "Cargo.toml"),
+        "--target-dir",
+        join(plugins, "target"),
+        "-p",
+        `alpha2-plugin-fixture-${name}`,
+      ],
+      {
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:
+            "-Ctarget-feature=-relaxed-simd",
+        },
+      },
+    );
+    assert.equal(built.status, 0, `fixture ${name} builds for ${target}`);
+  }
+  const dir = await mkdtemp(join(tmpdir(), `alpha2-plugin-${name}-`));
+  const library = `alpha2_plugin_fixture_${name}`;
+  const artifacts = [];
+  const place = async (from, url, target, type) => {
+    const bytes = await readFile(from);
+    await mkdir(join(dir, url, ".."), { recursive: true });
+    await writeFile(join(dir, url), bytes);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    artifacts.push({ target, type, url, sha256, bytes: bytes.length });
+  };
+  const release = (target) => join(plugins, "target", target, "release");
+  if (wasm)
+    await place(
+      join(release("wasm32-unknown-unknown"), `${library}.wasm`),
+      `${library}.wasm`,
+      "wasm32",
+      "wasm",
+    );
+  if (native) {
+    const file = triple.includes("windows")
+      ? `${library}.dll`
+      : triple.includes("apple")
+        ? `lib${library}.dylib`
+        : `lib${library}.so`;
+    await place(
+      join(release(triple), file),
+      `${triple}/${file}`,
+      triple,
+      "cdylib",
+    );
+  }
+  const descriptor = JSON.parse(
+    await readFile(join(plugins, `fixture-${name}`, "descriptor.json"), "utf8"),
+  );
+  const text = JSON.stringify({
+    id: descriptor.id,
+    version: "0.1.0",
+    abi: "alpha2-plugin/1",
+    kind: "extractor",
+    artifacts,
+    descriptor,
+  });
+  await writeFile(join(dir, "manifest.json"), text);
+  return {
+    dir,
+    manifest: join(dir, "manifest.json"),
+    sha256: createHash("sha256").update(text).digest("hex"),
+  };
+}
+
+function pluginRequest(plugin, extractor, outputs, params = {}) {
+  return {
+    project,
+    assets: { v: join(root, "tests", "corpus", "h264-bt709-copy.mp4") },
+    plugin,
+    request: {
+      extractor,
+      version: 1,
+      params,
+      input: {
+        from: "source",
+        source_id: "v",
+        range: { start: 0, end: 40_000 },
+        size: 96,
+      },
+      outputs,
+    },
+  };
+}
+
+test("a plugin the host runs records the bytes the Rust reader pins", async () => {
+  const pinned = JSON.parse(
+    await readFile(
+      join(root, "tests", "golden", "extract-recipe.json"),
+      "utf8",
+    ),
+  );
+  const { dir, manifest, sha256 } = await pluginDir("digest");
+  try {
+    const progress = [];
+    const result = await client.extract({
+      ...pluginRequest({ manifest, sha256 }, "alpha2.test.digest", {
+        digest: "frames",
+      }),
+      onProgress: (step) => progress.push(step),
+    });
+    const [set] = result.dataSets;
+    const found = set.times.map((time, index) => {
+      const hi = Math.round(set.values[index * 2] * 65536);
+      const lo = Math.round(set.values[index * 2 + 1] * 65536);
+      return [time, (hi * 65536 + lo).toString(16).padStart(8, "0")];
+    });
+    assert.deepEqual(found, pinned["h264-bt709-copy.mp4"]);
+    assert.equal(set.made_by.plugin.version, "0.1.0");
+    assert.ok(progress.length > 0);
+    await assert.rejects(
+      client.extract(
+        pluginRequest(
+          { manifest, sha256: "0".repeat(64) },
+          "alpha2.test.digest",
+          { digest: "frames" },
+        ),
+      ),
+      (error) => error.code === "PLUGIN_HASH_MISMATCH",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a native plugin that ends the host fails the request and the pool starts another", async () => {
+  const { dir, manifest, sha256 } = await pluginDir("scripted", {
+    wasm: false,
+    native: true,
+  });
+  const outputs = {
+    track: "t",
+    levels: "l",
+    correction: "c",
+    words: "w",
+    quiet: "q",
+  };
+  try {
+    await assert.rejects(
+      client.extract(
+        pluginRequest({ manifest, sha256 }, "alpha2.test.scripted", outputs, {
+          abort_at: 1,
+        }),
+      ),
+      (error) => error.code === "PLUGIN_NATIVE_REFUSED",
+    );
+    await assert.rejects(
+      client.extract(
+        pluginRequest(
+          { manifest, sha256, allowNative: true },
+          "alpha2.test.scripted",
+          outputs,
+          { abort_at: 1 },
+        ),
+      ),
+      (error) => {
+        assert.equal(error.code, "HOST_EXITED");
+        return true;
+      },
+    );
+    const after = await client.extract(
+      pluginRequest(
+        { manifest, sha256, allowNative: true },
+        "alpha2.test.scripted",
+        outputs,
+      ),
+    );
+    assert.equal(after.dataSets.length, 5);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

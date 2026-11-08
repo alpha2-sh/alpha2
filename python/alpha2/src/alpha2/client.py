@@ -120,6 +120,19 @@ class ProxyFile(TypedDict, total=False):
     """The color pipeline baked into it, when it was tone-mapped."""
 
 
+class ExtractPlugin(TypedDict, total=False):
+    """A plugin for :meth:`HostClient.extract`, by manifest."""
+
+    manifest: str
+    """An ``https:`` URL, a ``file:`` URL or a path on the host's file system."""
+    sha256: str
+    """SHA-256 of the manifest's bytes."""
+    allow_native: bool
+    """Lets a native artifact run, with the host process's rights."""
+    force_wasm: bool
+    """The wasm artifact even where a native one is allowed."""
+
+
 class LoudnessTarget(TypedDict):
     """Normalizes an export's audio to an integrated loudness under a true-peak ceiling."""
 
@@ -1043,8 +1056,9 @@ class HostClient:
         self,
         project: Mapping[str, Any],
         request: Mapping[str, Any],
-        extractor: Any,
+        extractor: Any = None,
         *,
+        plugin: ExtractPlugin | None = None,
         assets: Mapping[str, PathLike] | None = None,
         proxies: Mapping[str, Sequence[ProxyFile]] | None = None,
         media: Literal["original", "proxies"] = "original",
@@ -1052,25 +1066,50 @@ class HostClient:
         on_progress: Callable[[ExtractProgress], object] | None = None,
         cancel: threading.Event | None = None,
     ) -> dict[str, Any]:
-        """Runs ``extractor`` (see :class:`alpha2.extract.Extractor`) over ``request``.
+        """Runs ``extractor`` (see :class:`alpha2.extract.Extractor`), or the plugin ``plugin``
+        names, over ``request``.
 
-        The host decodes and presents the input and hands it over step by step; this call returns
-        ``{"dataSets", "timings"}`` with the data sets the session validated, ``made_from`` set to
-        the conformed original. ``request["params"]`` is checked against the descriptor's
+        The host decodes and presents the input. A client-side extractor gets it step by step; a
+        plugin runs inside the host, which fetches its manifest and files, checks them against
+        their pinned hashes and runs wasm sandboxed (native code only with ``allow_native``).
+        Returns ``{"dataSets", "timings"}`` with the data sets the session validated,
+        ``made_from`` set to the conformed original and, for a plugin, ``made_by.plugin`` naming
+        the artifact that ran.
+
+        A client-side extractor's ``request["params"]`` is checked against its
         ``params_schema`` first. Raises with ``INVALID_EMIT`` for output the session refuses,
-        ``EXTRACTOR_FAILED`` when a step raises, ``EXTRACTOR_TIMEOUT`` when one takes longer than
-        the host's step timeout (begin and end have none), and
+        ``EXTRACTOR_FAILED`` when a step fails, ``EXTRACTOR_TIMEOUT`` when a client step takes
+        longer than the host's step timeout (begin and end have none), a ``PLUGIN_*`` code when
+        a plugin is refused, does not load, traps or runs past its limits, and
         :class:`~alpha2.Alpha2AbortError` on ``cancel``.
         """
-        descriptor = extractor.describe()
+        if (extractor is None) == (plugin is None):
+            raise _invalid("extract runs either a client-side extractor or a plugin")
         problems = _project_problems(project)
         if problems:
             raise Alpha2ProjectValidationError(problems)
-        problem = schema_problem(descriptor.get("params_schema"), request.get("params", {}))
-        if problem is not None:
-            raise _invalid(f"invalid params: {problem}")
+        runs: dict[str, Any]
+        if extractor is not None:
+            descriptor = extractor.describe()
+            problem = schema_problem(descriptor.get("params_schema"), request.get("params", {}))
+            if problem is not None:
+                raise _invalid(f"invalid params: {problem}")
+            runs = {"descriptor": descriptor}
+        else:
+            assert plugin is not None
+            manifest, sha256 = plugin.get("manifest"), plugin.get("sha256")
+            if not isinstance(manifest, str) or not manifest or not isinstance(sha256, str):
+                raise _invalid("plugin needs its manifest and the manifest's sha256")
+            runs = {
+                "plugin": {
+                    "manifest": manifest,
+                    "sha256": sha256,
+                    "allow_native": bool(plugin.get("allow_native", False)),
+                    "force_wasm": bool(plugin.get("force_wasm", False)),
+                }
+            }
         inputs = _request_inputs(project, assets, proxies, None, None, media, None, fonts, None)
-        payload = {**inputs, "request": dict(request), "descriptor": descriptor}
+        payload = {**inputs, "request": dict(request), **runs}
         return self._pool.request(  # type: ignore[no-any-return]
             "extract",
             payload,

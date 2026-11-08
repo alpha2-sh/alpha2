@@ -211,14 +211,15 @@ Compiles compose specs and binds templates, without a GPU and without reading me
 
 ## `extract`
 
-Runs an extractor the client holds over a source or the timeline and answers with the data sets it made, validated as the project validates data. The host decodes and presents the input; the client's extractor sees it step by step and sends its values back. Any language can be a client this way: `@alpha2-sh/node` has `extract(request, extractor)` and the Python client `HostClient.extract(project, request, extractor)`.
+Runs an extractor over a source or the timeline and answers with the data sets it made, validated as the project validates data. The extractor is the client's own, which sees the input step by step and sends its values back, or a [plugin](plugin-abi.md) the host fetches and runs itself, so frames never cross the pipe. Any language can be a client this way: `@alpha2-sh/node` has `extract(request, extractor)` and the Python client `HostClient.extract(project, request, extractor)`; both take a plugin instead of an extractor.
 
 | Field | Type | Default | |
 | --- | --- | --- | --- |
 | `project` | project document | required | |
 | `assets` | `{ "<source-id>": "<path>" }` | required | As for `export`. A source input reads only its own source, whether or not the timeline uses it. |
 | `request` | extract request | required | `{ "extractor", "version", "params"?, "input", "outputs" }`: the descriptor's id and version, its parameters, what to read (`input.from` is `source` with `source_id`, or `timeline`; `range` in ticks on that clock; for video `size`, the longer side, and for the timeline `frame_rate`; `passes` as `[{ "start", "direction" }]`) and the data set id of each output by name. |
-| `descriptor` | extractor descriptor | required | What the extractor reads and emits, as its `describe()` returns: `id`, `version`, `input` (`media` `video` with `format` `rgba8` or `luma8`, or `audio` with `format` `f32`), `params_schema` and `outputs` (`name`, `kind`, `channels`, `interpolation`). |
+| `descriptor` | extractor descriptor | | For a client-side extractor: what it reads and emits, as its `describe()` returns: `id`, `version`, `input` (`media` `video` with `format` `rgba8` or `luma8`, or `audio` with `format` `f32`), `params_schema` and `outputs` (`name`, `kind`, `channels`, `interpolation`). |
+| `plugin` | `{ "manifest", "sha256", "allow_native"?, "force_wasm"? }` | | Instead of `descriptor`: the plugin to run (see [Plugins](#plugins)). A request has exactly one of the two. |
 | `proxies`, `media`, `fonts` | as for `export` | | `made_from` is the original's fingerprint even when proxies are read. |
 
 The host answers a request the session refuses (an unknown output, a range outside the source, a source the descriptor cannot read) with `INVALID_REQUEST` before anything is decoded. Then it sends steps, one at a time, and waits for the acknowledgement of each before the next:
@@ -249,7 +250,17 @@ Times are ticks on the input's clock, inside the range. During a pass an emit re
 - Progress messages have `"phase": "extract"`, the `pass`, and its `completed` and `total` deliveries; `total` is `null` for a source pass, whose frame count is not known ahead.
 - A `cancel` ends the request with `CANCELLED` between steps; a client that exits ends it with the host.
 
-The result is `{ "dataSets": [...], "timings": { "totalMs", "clientMs" } }`: one data set per output, in descriptor order, each anchored to the source read (`made_from` its original's fingerprint) or to the timeline, with `made_by` recording the extractor, version and params. `clientMs` is the time spent waiting for acknowledgements. Putting the data sets in the project, replacing older ones with the same id, is the caller's edit.
+The result is `{ "dataSets": [...], "timings": { "totalMs", "clientMs" } }`: one data set per output, in descriptor order, each anchored to the source read (`made_from` its original's fingerprint) or to the timeline, with `made_by` recording the extractor, version and params, and for a plugin `made_by.plugin` (the package `version` and the `artifact_sha256` that ran). `clientMs` is the time spent waiting for acknowledgements, 0 for a plugin. Putting the data sets in the project, replacing older ones with the same id, is the caller's edit.
+
+### Plugins
+
+With `plugin`, the host runs the extractor itself; no steps go to the client, and progress and `cancel` work as above.
+
+- `manifest` is an `https:` URL, a `file:` URL or a path on the host's file system, and `sha256` the SHA-256 of its bytes; a manifest with another hash is refused with `PLUGIN_HASH_MISMATCH`. Its artifact and resource URLs are relative to it, or absolute; only `https:` URLs (through the platform's certificate verifier and `HTTPS_PROXY` / `NO_PROXY`), `file:` URLs and paths are read.
+- Downloaded files are kept under their SHA-256 in `ALPHA2_PLUGIN_CACHE`, else the platform's cache directory (`~/.cache/alpha2/plugins`, `~/Library/Caches/alpha2/plugins`, `%LOCALAPPDATA%\alpha2\plugins`). Every file is checked against the hash and length its manifest pins before it is used, cached or not.
+- The host takes the native artifact for its own target when `allow_native` is true and `force_wasm` is not, else the wasm artifact. A native artifact runs with the host's rights, inside this host process: if it crashes, the host exits and the request gets no response. A wasm artifact is sandboxed, its memory capped by `--plugin-memory-limit <bytes>` (a `serve` flag, 1 GiB by default) and each call bounded by `--plugin-call-timeout <ms>` (300000 by default); past either it fails with `PLUGIN_LIMIT` and the host goes on serving.
+- The artifact's descriptor must equal the manifest's. The request's `params` go to the plugin as they are; the plugin checks them.
+- The `PLUGIN_*` codes below say why a plugin did not load or run. A plugin call that fails is `EXTRACTOR_FAILED` with the plugin's message, and output the session refuses is `INVALID_EMIT`, as for a client.
 
 ## Cancelling
 
@@ -298,6 +309,16 @@ A `cancel` without a `target` is answered `INVALID_REQUEST`. The host reads canc
 | `INVALID_EMIT` | An `extract` client emitted a value the session refuses; `details` is `{ "index", "reason" }`. |
 | `EXTRACTOR_FAILED` | An `extract` client acknowledged a step with an `error`. |
 | `EXTRACTOR_TIMEOUT` | An `extract` client did not acknowledge a step within `--extract-step-timeout`. |
+| `PLUGIN_FETCH_FAILED` | A plugin's manifest, artifact or resource could not be read or downloaded. |
+| `PLUGIN_HASH_MISMATCH` | A plugin file's SHA-256 or length differs from what the request or the manifest pins. |
+| `PLUGIN_ABI_UNSUPPORTED` | The plugin implements an ABI this host does not. |
+| `PLUGIN_NO_ARTIFACT` | The manifest has no artifact this host runs; the message lists the targets it offers. |
+| `PLUGIN_NATIVE_REFUSED` | Only a native artifact runs here, and the request does not allow native code. |
+| `PLUGIN_DESCRIPTOR_MISMATCH` | The artifact describes another extractor than the manifest. |
+| `PLUGIN_UNSUPPORTED_FEATURE` | The wasm module uses relaxed SIMD, threads or shared memory, or imports something other than the host functions. |
+| `PLUGIN_LOAD_FAILED` | The manifest is not one, or the artifact did not load. |
+| `PLUGIN_TRAPPED` | The wasm module trapped, or the native plugin caught a panic at its boundary. |
+| `PLUGIN_LIMIT` | A wasm plugin ran past its memory cap or a call past its deadline. |
 | `HOST_RETIRING` | The host is `draining` and did not start the request; send it to another host. |
 | `INTERNAL` | A defect in the host failed the request. The host answers the requests after it. |
 | `ALPHA2_ERROR` | A failure no other code describes. |

@@ -99,6 +99,8 @@ const { dataSets } = await client.extract(
 
 `begin`, `pass`, `audio` and `end` are the other steps; any may return a promise. `request.params` is checked against the descriptor's `params_schema` first. Output the project would refuse fails with `INVALID_EMIT`, a step that throws with `EXTRACTOR_FAILED`, and a step slower than the host's `--extract-step-timeout` with `EXTRACTOR_TIMEOUT`. `signal` and `onProgress` work as for exports.
 
+A [plugin](../../docs/plugin-abi.md) runs inside the host instead: pass `plugin: { manifest, sha256 }` in the request and no extractor. The host fetches the manifest (an `https:` URL or a path), checks every file against its pinned SHA-256 and runs the wasm artifact sandboxed; `allowNative: true` lets a native artifact run with the host's rights. A plugin that is refused, does not load, traps or runs past its limits fails with a `PLUGIN_*` code.
+
 ## Software H.264 (OpenH264)
 
 Where no hardware H.264 encoder is available, `alpha2-host` can encode H.264 in software with Cisco's OpenH264 library, which it loads at run time. Neither this package nor the native archives include that library, and nothing downloads it unless you ask: Cisco's patent licence covers its binary only when the user fetches it from Cisco.

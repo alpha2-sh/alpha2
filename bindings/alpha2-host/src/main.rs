@@ -71,6 +71,7 @@ mod memory;
 mod metrics;
 mod packet_copy;
 mod paths;
+mod plugin_fetch;
 mod protocol;
 mod providers;
 mod recovery;
@@ -1346,7 +1347,7 @@ fn serve(host: &mut Option<Host>, options: ServeOptions) -> Result<(), HostError
     }
     let requests = serve_io::start_reader(Arc::clone(&out), Arc::clone(&lifecycle))?;
     let mut serving = Serving::with_lifecycle(policy, lifecycle, options.max_running);
-    serving.extract_step_timeout = options.extract_step_timeout;
+    serving.extract = options.extract;
     let served = serve_requests(&mut serving, &requests, &out, &unusable_reason);
     exit_if_retired(&served);
     // Released by `main` once the outcome is out.
@@ -1379,8 +1380,8 @@ struct Serving {
     lifecycle: Arc<Lifecycle>,
     /// How many requests run at once at most.
     max_running: usize,
-    /// How long a client may take to acknowledge an extraction step.
-    extract_step_timeout: Option<std::time::Duration>,
+    /// Extraction's step timeout and plugin limits.
+    extract: crate::extract_request::ExtractOptions,
 }
 
 impl Serving {
@@ -1395,7 +1396,7 @@ impl Serving {
             create: create_host,
             lifecycle,
             max_running,
-            extract_step_timeout: Some(crate::extract_request::DEFAULT_STEP_TIMEOUT),
+            extract: crate::extract_request::ExtractOptions::DEFAULT,
         }
     }
 
@@ -1579,7 +1580,7 @@ fn dispatch<'scope>(
             device,
             policy: serving.policy,
             lifecycle: Arc::clone(&lifecycle),
-            extract_step_timeout: serving.extract_step_timeout,
+            extract: serving.extract,
         };
         let spawned = std::thread::Builder::new()
             .name("alpha2-request".to_owned())
@@ -1610,7 +1611,7 @@ struct RequestWork {
     device: Option<Arc<HostDevice>>,
     policy: VideoDecodePolicy,
     lifecycle: Arc<Lifecycle>,
-    extract_step_timeout: Option<std::time::Duration>,
+    extract: crate::extract_request::ExtractOptions,
 }
 
 impl RequestWork {
@@ -1624,7 +1625,7 @@ impl RequestWork {
             device,
             policy,
             lifecycle,
-            extract_step_timeout,
+            extract,
         } = self;
         #[cfg(test)]
         if matches!(envelope, Ok(crate::protocol::Request::Export(_)))
@@ -1651,7 +1652,7 @@ impl RequestWork {
             Ok(crate::protocol::Request::Extract(request)) => match host.as_mut() {
                 Some(host) => {
                     let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        crate::extract_request::handle(host, *request, out, extract_step_timeout)
+                        crate::extract_request::handle(host, *request, out, extract)
                     }))
                     .unwrap_or_else(|payload| {
                         Err(HostError::new(

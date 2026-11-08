@@ -57,6 +57,7 @@ mod hardware_decode;
 mod openh264;
 mod outputs;
 mod paths;
+mod plugins;
 mod providers;
 mod render_cache;
 mod rendering;

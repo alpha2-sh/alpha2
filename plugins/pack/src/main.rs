@@ -113,10 +113,10 @@ fn build(manifest: &Path, target: &str, wasm: bool) -> Result<(), String> {
     command.args(["build", "--release", "--target", target, "--manifest-path"]);
     command.arg(manifest);
     if wasm {
-        // Results must not depend on the runtime, and modules run on one thread.
+        // Relaxed SIMD results differ between runtimes; the target never enables threads.
         command.env(
             "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS",
-            "-Ctarget-feature=-relaxed-simd,-atomics",
+            "-Ctarget-feature=-relaxed-simd",
         );
     }
     run(&mut command).map(drop)

@@ -20,11 +20,34 @@ pub struct PassInfo {
 
 /// An extractor's own failure, carried to the caller as is.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ExtractorError(pub String);
+pub struct ExtractorError {
+    /// Why it failed.
+    pub message: String,
+    /// The error code a host reports instead of `EXTRACTOR_FAILED`, such as `PLUGIN_TRAPPED`.
+    pub code: Option<&'static str>,
+}
+
+impl ExtractorError {
+    /// A failure the host reports as `EXTRACTOR_FAILED`.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            code: None,
+        }
+    }
+
+    /// A failure the host reports with `code`.
+    pub fn with_code(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            code: Some(code),
+        }
+    }
+}
 
 impl fmt::Display for ExtractorError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        formatter.write_str(&self.message)
     }
 }
 

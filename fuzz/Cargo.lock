@@ -76,6 +76,7 @@ dependencies = [
  "alpha2-layout",
  "alpha2-media",
  "alpha2-model",
+ "alpha2-plugin-abi",
  "alpha2-render",
  "alpha2-shaders",
  "alpha2-text",
@@ -225,6 +226,10 @@ dependencies = [
  "libc",
  "windows-sys",
 ]
+
+[[package]]
+name = "alpha2-plugin-abi"
+version = "0.6.0"
 
 [[package]]
 name = "alpha2-render"
