@@ -17,8 +17,18 @@ use alpha2_model::{DataSet, MediaFingerprint, Project};
 use alpha2_render::CpuRenderer;
 use alpha2_time::MediaTime;
 
+use crate::reverse_window::ReverseWindow;
+
 /// Decoded frames kept for backward reads, at most.
 pub const REVERSE_WINDOW_BYTES: u64 = 128 * 1024 * 1024;
+
+fn frame_bytes(frame: &DecodedVideoFrame) -> u64 {
+    frame
+        .planes
+        .iter()
+        .map(|plane| plane.bytes.len() as u64)
+        .sum()
+}
 /// How far before a frame a backward read first looks for earlier frames, in ticks (1 s).
 const FIRST_WINDOW_TICKS: i64 = 120_000;
 
@@ -32,8 +42,8 @@ pub struct VideoReader<D> {
     source: SourceId,
     cancel: CancelToken,
     generation: u64,
-    /// Frames before the last backward answer, ascending by pts.
-    window: Vec<Arc<DecodedVideoFrame>>,
+    /// Frames before the last backward answer, by pts.
+    window: ReverseWindow<DecodedVideoFrame>,
     /// Whether the decoder sits just after the last forward answer.
     forward_ready: bool,
 }
@@ -46,7 +56,7 @@ impl<D: Decoder> VideoReader<D> {
             source,
             cancel,
             generation: 0,
-            window: Vec::new(),
+            window: ReverseWindow::new(REVERSE_WINDOW_BYTES),
             forward_ready: false,
         }
     }
@@ -98,7 +108,7 @@ impl<D: Decoder> VideoReader<D> {
     ) -> Result<Option<Arc<DecodedVideoFrame>>, DecodeError> {
         match (from, direction) {
             (FrameFrom::Start(time), _) => {
-                self.window.clear();
+                self.window = ReverseWindow::new(REVERSE_WINDOW_BYTES);
                 let frame = self.seek(time)?;
                 self.forward_ready = frame.is_some();
                 Ok(frame.map(Arc::new))
@@ -121,12 +131,11 @@ impl<D: Decoder> VideoReader<D> {
             }
             (FrameFrom::After(pts), Direction::Backward) => {
                 self.forward_ready = false;
-                if let Some(index) = self.window.iter().rposition(|frame| frame.pts < pts) {
-                    self.window.truncate(index + 1);
-                    return Ok(self.window.pop());
+                if let Some(frame) = self.window.take_before(pts, frame_bytes) {
+                    return Ok(Some(frame));
                 }
                 self.fill_window(pts)?;
-                Ok(self.window.pop())
+                Ok(self.window.take_before(pts, frame_bytes))
             }
         }
     }
@@ -137,28 +146,13 @@ impl<D: Decoder> VideoReader<D> {
         let mut back = FIRST_WINDOW_TICKS;
         loop {
             let start = MediaTime(pts.ticks().saturating_sub(back));
-            let mut frames: Vec<Arc<DecodedVideoFrame>> = Vec::new();
-            let mut bytes = 0_u64;
+            let mut frames = ReverseWindow::new(REVERSE_WINDOW_BYTES);
             let mut current = self.seek(start)?;
             while let Some(frame) = current {
                 if frame.pts >= pts {
                     break;
                 }
-                bytes += frame
-                    .planes
-                    .iter()
-                    .map(|plane| plane.bytes.len() as u64)
-                    .sum::<u64>();
-                frames.push(Arc::new(frame));
-                // Keep the latest frames that fit; earlier ones are decoded again later.
-                while bytes > REVERSE_WINDOW_BYTES && frames.len() > 1 {
-                    let dropped = frames.remove(0);
-                    bytes -= dropped
-                        .planes
-                        .iter()
-                        .map(|plane| plane.bytes.len() as u64)
-                        .sum::<u64>();
-                }
+                frames.push(frame.pts, Arc::new(frame), frame_bytes);
                 current = self.next_decoded()?;
             }
             if !frames.is_empty() || start.ticks() <= 0 {

@@ -37,6 +37,7 @@ pub mod probe_cache;
 pub mod providers;
 pub mod rate_control;
 pub mod recovery;
+pub mod reverse_window;
 pub mod stills;
 mod threads;
 pub mod tools;
