@@ -173,6 +173,10 @@
       "types": "./dist/extract.d.ts",
       "import": "./dist/extract.js"
     },
+    "./plugins": {
+      "types": "./dist/plugins.d.ts",
+      "import": "./dist/plugins.js"
+    },
     "./effects": {
       "types": "./dist/effects.d.ts",
       "import": "./dist/effects.js"

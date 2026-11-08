@@ -4,6 +4,7 @@
 // edge|safari|firefox` overrides Chrome, `--case <name>` selects one case (perf cases run only
 // this way), and `--serve[=port]` serves pages for manual runs.
 
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -65,6 +66,31 @@ if (!existsSync(join(root, "packages/alpha2/wasm/alpha2_wasm_bg.wasm"))) {
     "FAIL the packaged wasm is missing; run npm run build\n",
   );
   process.exit(1);
+}
+
+// Plugin cases load a fixture plugin packed for the browser, wasm only.
+if (names.some((name) => name.startsWith("plugin-"))) {
+  const packed = spawnSync(
+    "cargo",
+    [
+      "run",
+      "--quiet",
+      "--manifest-path",
+      join(root, "plugins", "Cargo.toml"),
+      "-p",
+      "alpha2-plugin-pack",
+      "--",
+      join(root, "plugins", "fixture-digest"),
+      "--out",
+      join(root, "plugins", "target", "browser-fixtures", "digest"),
+      "--no-native",
+    ],
+    { stdio: "inherit" },
+  );
+  if (packed.status !== 0) {
+    process.stdout.write("FAIL the fixture plugin did not pack\n");
+    process.exit(1);
+  }
 }
 
 const server = createServer(async (request, response) => {

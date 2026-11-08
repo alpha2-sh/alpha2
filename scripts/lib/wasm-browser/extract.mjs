@@ -139,3 +139,42 @@ const set = dataSets[0];
 report({ ok: set.times.length === 10 && set.values.every((value) => value === 1), times: set.times, values: set.values });
 `;
 }
+
+// The digest fixture plugin's wasm artifact, loaded from its manifest, gives the native bytes.
+export function pluginDigest() {
+  return `${prelude}
+const { loadPlugin } = await import("alpha2/plugins");
+const manifestUrl = "/plugins/target/browser-fixtures/digest/manifest.json";
+const manifestBytes = await (await fetch(manifestUrl)).arrayBuffer();
+const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", manifestBytes))]
+  .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+let refused;
+try {
+  await loadPlugin(manifestUrl, "0".repeat(64));
+} catch (error) {
+  refused = error.code;
+}
+const plugin = await loadPlugin(manifestUrl, sha256);
+const pinned = await (await fetch("/tests/golden/extract-recipe.json")).json();
+const name = "h264-bt709-copy.mp4";
+const { dataSets } = await runExtractor({
+  binding: wasm, project, media: { v: await media(name) }, plugin,
+  request: {
+    extractor: "alpha2.test.digest", version: 1,
+    input: { from: "source", source_id: "v", range: { start: 0, end: 40000 }, size: 96 },
+    outputs: { digest: "frames" },
+  },
+}, plugin.extractor());
+const set = dataSets[0];
+const found = set.times.map((time, index) => [
+  time,
+  (Math.round(set.values[index * 2] * 65536) * 65536 + Math.round(set.values[index * 2 + 1] * 65536))
+    .toString(16).padStart(8, "0"),
+]);
+report({
+  ok: refused === "PLUGIN_HASH_MISMATCH" && JSON.stringify(found) === JSON.stringify(pinned[name])
+    && set.made_by.plugin?.artifact_sha256 === plugin.artifactSha256,
+  refused, found, madeBy: set.made_by,
+});
+`;
+}

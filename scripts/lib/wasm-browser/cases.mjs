@@ -4,6 +4,7 @@ import {
   extractDigest,
   extractInvalidEmit,
   extractTimeline,
+  pluginDigest,
 } from "./extract.mjs";
 import {
   aacLayoutRefusal,
@@ -108,6 +109,7 @@ export const cases = {
   "extract-digest": extractDigest,
   "extract-invalid-emit": extractInvalidEmit,
   "extract-timeline": extractTimeline,
+  "plugin-digest": pluginDigest,
   "webgpu-smoke": () => smoke(false),
   "webgl2-smoke": () => smoke(true),
   "webgl-context-loss": webglContextLoss,

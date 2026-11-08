@@ -357,6 +357,11 @@ export interface RunExtractorRequest {
   ) => Promise<TimelineFrame> | TimelineFrame;
   /** The original source's fingerprint, recorded as `made_from` on source-anchored data. */
   readonly madeFrom?: unknown;
+  /** The plugin `extractor` came from (`loadPlugin`), recorded as `made_by.plugin`. */
+  readonly plugin?: {
+    readonly version: string;
+    readonly artifactSha256: string;
+  };
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: ExtractProgress) => void;
 }
@@ -498,6 +503,12 @@ async function step<T>(call: () => T | Promise<T>): Promise<T> {
   try {
     return await call();
   } catch (cause) {
+    // A plugin's failure already carries the code every surface reports it with.
+    if (
+      cause instanceof Error &&
+      typeof (cause as { code?: unknown }).code === "string"
+    )
+      throw cause;
     const message = cause instanceof Error ? cause.message : String(cause);
     throw coded("EXTRACTOR_FAILED", `the extractor failed: ${message}`, cause);
   }
@@ -723,8 +734,22 @@ export async function runExtractor(
           : JSON.stringify(request.madeFrom),
       ),
     ) as DataSet[];
+    const plugin = request.plugin;
+    const recorded =
+      plugin === undefined
+        ? dataSets
+        : dataSets.map((set) => ({
+            ...set,
+            made_by: {
+              ...set.made_by,
+              plugin: {
+                version: plugin.version,
+                artifact_sha256: plugin.artifactSha256,
+              },
+            },
+          }));
     return {
-      dataSets,
+      dataSets: recorded as DataSet[],
       timings: { totalMs: performance.now() - started },
     };
   } finally {
