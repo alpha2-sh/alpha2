@@ -92,7 +92,7 @@
       "description": "A value over a node's time: a constant, a ramp from one value to another, or keys. Times are\nseconds from the node's start."
     },
     "Animated_EffectValue": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "description": "A value that is constant, controlled by sorted keyframes, or following a data set.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -132,6 +132,76 @@
           "required": [
             "mode",
             "keyframes"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A channel of a data set, followed at render time.",
+          "properties": {
+            "channel": {
+              "description": "The channel followed.",
+              "type": "string"
+            },
+            "data": {
+              "$ref": "#/$defs/DataSetId",
+              "description": "The data set, a `points` or `scalars` one."
+            },
+            "mode": {
+              "const": "data",
+              "type": "string"
+            },
+            "offset": {
+              "description": "`[x, y]` added after the space mapping, in that space's normalized units (points only).",
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "remap": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataRemap"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A linear map of the value (scalars only)."
+            },
+            "space": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataSpace"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where a point is read (points with `via` only, where it is required)."
+            },
+            "via": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataVia"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The reader whose time map gives source time: required for a source-anchored set,\nforbidden for a timeline-anchored one."
+            }
+          },
+          "required": [
+            "mode",
+            "data",
+            "channel"
           ],
           "type": "object"
         }
@@ -510,6 +580,11 @@
         }
       ]
     },
+    "ClipId": {
+      "description": "A stable timeline-clip identifier.",
+      "minLength": 1,
+      "type": "string"
+    },
     "ConicPaint": {
       "additionalProperties": false,
       "description": "`{\"conic\": gradient}`.",
@@ -612,6 +687,88 @@
         }
       },
       "type": "object"
+    },
+    "DataRemap": {
+      "additionalProperties": false,
+      "description": "A linear map from `input` to `output`, clamped to `output`.",
+      "properties": {
+        "input": {
+          "description": "The input values mapped to `output[0]` and `output[1]`; distinct and finite.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "output": {
+          "description": "The output range; finite.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ],
+      "type": "object"
+    },
+    "DataSetId": {
+      "description": "A stable data-set identifier.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "DataSpace": {
+      "description": "Where a bound point is read.",
+      "oneOf": [
+        {
+          "const": "picture",
+          "description": "The normalized source picture, unchanged: effect params and the clip's own masks.",
+          "type": "string"
+        },
+        {
+          "const": "canvas",
+          "description": "Normalized canvas coordinates through the `via` clip's presentation and evaluated\nvisual: another clip's position.",
+          "type": "string"
+        }
+      ]
+    },
+    "DataVia": {
+      "description": "The reader whose clock maps time onto a source-anchored data set.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A timeline clip showing the anchor's source; its picture time map gives source time.",
+          "properties": {
+            "clip": {
+              "$ref": "#/$defs/ClipId"
+            }
+          },
+          "required": [
+            "clip"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A `media` node of the same composition reading the anchor's source; its start plus the\ncomposition time gives source time.",
+          "properties": {
+            "node": {
+              "$ref": "#/$defs/NodeId"
+            }
+          },
+          "required": [
+            "node"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "Direction": {
       "description": "A direction of travel on the canvas.",
@@ -9998,6 +10155,12 @@
           "type": "object"
         }
       ]
+    },
+    "NodeId": {
+      "description": "A stable identifier of a node within one composition graph. It has no `/`, which joins the IDs of the group and media nodes a step was drawn through.",
+      "minLength": 1,
+      "pattern": "^[^/]*$",
+      "type": "string"
     },
     "NumberFormat": {
       "additionalProperties": false,

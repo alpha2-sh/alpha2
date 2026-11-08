@@ -250,6 +250,7 @@ dependencies = [
  "alpha2-model",
  "alpha2-scaling-support",
  "alpha2-time",
+ "libm",
  "serde_json",
 ]
 

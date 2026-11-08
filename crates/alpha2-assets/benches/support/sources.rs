@@ -34,6 +34,7 @@ pub fn many_sources(count: usize) -> (Project, AssetCatalog) {
         })
         .collect();
     let project = Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: ProjectId::new("many-sources").expect("ID"),
         name: "many sources".into(),

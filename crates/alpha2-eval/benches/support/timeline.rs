@@ -120,6 +120,7 @@ pub fn project(tracks: usize, load: Load) -> Project {
         })
         .collect();
     Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: ProjectId::new("benchmark").expect("ID"),
         name: "timeline benchmark".into(),

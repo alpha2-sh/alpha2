@@ -44,6 +44,7 @@ if TYPE_CHECKING:
         AnimatedPoint,
         FillRule,
         GeneratorShapes,
+        Keyframed,
         LineCap,
         LineJoin,
         Paint,
@@ -220,11 +221,11 @@ def subpath(*vertices: Point | Vec2 | PathVertex, closed: bool = False) -> Subpa
     return cast("Subpath", result)
 
 
-def path(*subpaths: Subpath | Animated[PathValue]) -> ShapeItemPath:
+def path(*subpaths: Subpath | Keyframed[PathValue]) -> ShapeItemPath:
     """A Bezier path of ``subpaths`` (:func:`subpath`), or one keyframed path: an ``Animated`` whose
     values are ``{"subpaths": [...]}``."""
     if len(subpaths) == 1 and is_animated(subpaths[0]):
-        return {"type": "path", "path": cast("Animated[PathValue]", subpaths[0])}
+        return {"type": "path", "path": cast("Keyframed[PathValue]", subpaths[0])}
     return cast(
         "ShapeItemPath",
         {"type": "path", "path": {"mode": "constant", "value": {"subpaths": list(subpaths)}}},

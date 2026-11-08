@@ -40,6 +40,7 @@ pub(crate) fn project() -> Project {
         cache: crate::CacheIntent::Auto,
     };
     Project {
+        data: Vec::new(),
         schema_version: crate::CURRENT_SCHEMA_VERSION,
         id: id(ProjectId::new, "project-a"),
         name: "A project".into(),

@@ -44,6 +44,21 @@ pub fn finish_json_schema(value: &mut Value) {
     shortest_defaults(value);
 }
 
+/// Removes the `data` variant from an `Animated` schema whose value type takes no data.
+pub(crate) fn drop_data_mode(schema: &mut schemars::Schema) {
+    let is_data = |variant: &Value| {
+        variant
+            .pointer("/properties/mode/const")
+            .and_then(Value::as_str)
+            == Some("data")
+    };
+    for union in ["oneOf", "anyOf"] {
+        if let Some(variants) = schema.get_mut(union).and_then(Value::as_array_mut) {
+            variants.retain(|variant| !is_data(variant));
+        }
+    }
+}
+
 /// What a CSS hex color string looks like.
 const HEX_COLOR_PATTERN: &str = "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$";
 
@@ -277,6 +292,20 @@ pub fn project_limits_json() -> Value {
         ),
         ("MAX_PDF_PAGES", json!(crate::MAX_PDF_PAGES)),
         ("TICKS_PER_SECOND", json!(alpha2_time::TICKS_PER_SECOND)),
+        ("MAX_DATA_SETS", json!(crate::MAX_DATA_SETS)),
+        ("MAX_DATA_CHANNELS", json!(crate::MAX_DATA_CHANNELS)),
+        ("MAX_DATA_VALUES", json!(crate::MAX_DATA_VALUES)),
+        ("MAX_DATA_WORDS", json!(crate::MAX_DATA_WORDS)),
+        ("MAX_DATA_INTERVALS", json!(crate::MAX_DATA_INTERVALS)),
+        ("MAX_DATA_LABEL_BYTES", json!(crate::MAX_DATA_LABEL_BYTES)),
+        ("MAX_DATA_ID_BYTES", json!(crate::MAX_DATA_ID_BYTES)),
+        ("MAX_DATA_COORDINATE", json!(crate::MAX_DATA_COORDINATE)),
+        ("MAX_DATA_SCALAR", json!(crate::MAX_DATA_SCALAR)),
+        (
+            "MAX_DATA_ROTATION_DEGREES",
+            json!(crate::MAX_DATA_ROTATION_DEGREES),
+        ),
+        ("MAX_DATA_SCALE", json!(crate::MAX_DATA_SCALE)),
     ];
     let mut value = Value::Object(
         limits

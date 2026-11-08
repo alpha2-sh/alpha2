@@ -4,6 +4,7 @@ use super::*;
 
 fn white_clip(opacity: f32, scale: Vec2) -> ActiveClip<'static> {
     ActiveClip {
+        data: alpha2_eval::SampleContext::NONE,
         clip_id: leak(ClipId::new("clip").expect("valid ID")),
         source_id: leak(SourceId::new("source").expect("valid ID")),
         track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -186,6 +187,7 @@ fn an_odd_canvas_previews_even_though_it_cannot_be_exported() {
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            data: alpha2_eval::SampleContext::NONE,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
             source_id: leak(source.clone()),
             track_id: leak(TrackId::new("track").expect("valid ID")),

@@ -121,4 +121,10 @@ impl EngineProject {
     pub fn project(&self) -> &Project {
         &self.project
     }
+
+    /// What the project's timeline-time values read their data bindings through.
+    #[must_use]
+    pub fn sample_context(&self) -> alpha2_eval::SampleContext<'_> {
+        self.index.sample_context(&self.project)
+    }
 }

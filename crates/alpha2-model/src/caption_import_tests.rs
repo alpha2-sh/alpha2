@@ -131,6 +131,7 @@ fn a_cue_later_than_a_project_holds_is_skipped() {
                 crate::TrackKind::Caption,
             );
             track.captions = Some(crate::Captions {
+                from_words: None,
                 style: crate::TextStyle::default(),
                 styles: std::collections::BTreeMap::new(),
                 cues: row,
@@ -279,6 +280,7 @@ fn a_row_holds_no_more_cues_than_a_caption_track() {
             crate::TrackKind::Caption,
         );
         track.captions = Some(crate::Captions {
+            from_words: None,
             style: crate::TextStyle::default(),
             styles: std::collections::BTreeMap::new(),
             cues: row,

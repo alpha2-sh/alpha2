@@ -1,4 +1,4 @@
-use crate::{ClipId, CompositionId, EffectProblem, EffectResourceId, NodeId, TrackId};
+use crate::{ClipId, CompositionId, DataSetId, EffectProblem, EffectResourceId, NodeId, TrackId};
 use alpha2_media::SourceId;
 use std::fmt;
 
@@ -27,6 +27,52 @@ impl fmt::Display for ShapeOwner {
             Self::Node { composition, node } => {
                 write!(formatter, "composition {composition} node {node}")
             }
+        }
+    }
+}
+
+/// What holds the value a [`ModelError::InvalidDataBinding`] names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataOwner {
+    /// A clip's visual, masks or audio.
+    Clip(ClipId),
+    /// A track's bus or caption track.
+    Track(TrackId),
+    /// The master bus.
+    Master,
+    /// A timeline transition's effect.
+    Transition {
+        /// Its track.
+        track: TrackId,
+        /// Its first clip.
+        from: ClipId,
+        /// Its second clip.
+        to: ClipId,
+    },
+    /// A composition node's settings.
+    Node {
+        /// The composition.
+        composition: CompositionId,
+        /// The node.
+        node: NodeId,
+    },
+    /// A generated source's tree.
+    Source(SourceId),
+}
+
+impl fmt::Display for DataOwner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Clip(clip) => write!(formatter, "clip {clip}"),
+            Self::Track(track) => write!(formatter, "track {track}"),
+            Self::Master => formatter.write_str("the master bus"),
+            Self::Transition { track, from, to } => {
+                write!(formatter, "track {track} transition {from} to {to}")
+            }
+            Self::Node { composition, node } => {
+                write!(formatter, "composition {composition} node {node}")
+            }
+            Self::Source(source) => write!(formatter, "source {source}"),
         }
     }
 }
@@ -95,6 +141,32 @@ pub enum ModelError {
     UnsupportedSchemaVersion {
         /// Version found in the decoded document.
         found: u32,
+    },
+    /// The project has more than [`crate::MAX_DATA_SETS`] data sets.
+    TooManyDataSets {
+        /// Data sets in the document.
+        found: usize,
+        /// Largest accepted count.
+        maximum: usize,
+    },
+    /// Two data sets share one ID.
+    DuplicateDataSetId(DataSetId),
+    /// A data set breaks a rule of its kind.
+    InvalidDataSet {
+        /// The data set.
+        data: DataSetId,
+        /// What is wrong.
+        problem: crate::DataProblem,
+    },
+    /// A data binding, correction or caption words reference is unusable where it sits.
+    InvalidDataBinding {
+        /// What holds it.
+        owner: DataOwner,
+        /// The property, like `visual.position`, `masks[0].feather`, `effect.params.radius`,
+        /// `visual.correction` or `captions.from_words`.
+        at: String,
+        /// What is wrong.
+        problem: crate::BindingProblem,
     },
     /// At least one ID was empty.
     EmptyIdentifier,
@@ -869,6 +941,17 @@ impl fmt::Display for ModelError {
             }
             Self::InvalidColorPipeline => {
                 formatter.write_str("the HDR peak must be within 100..=10000 nits")
+            }
+            Self::TooManyDataSets { found, maximum } => write!(
+                formatter,
+                "project has {found} data sets; the maximum is {maximum}"
+            ),
+            Self::DuplicateDataSetId(data) => write!(formatter, "duplicate data set id {data}"),
+            Self::InvalidDataSet { data, problem } => {
+                write!(formatter, "data set {data} {problem}")
+            }
+            Self::InvalidDataBinding { owner, at, problem } => {
+                write!(formatter, "{owner} {at} {problem}")
             }
             Self::UnsupportedSampleRate {
                 found,

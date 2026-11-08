@@ -18,6 +18,7 @@ fn a_caption_track_holds_as_many_cues_as_a_track_holds_clips() {
             TrackKind::Caption,
         );
         track.captions = Some(Captions {
+            from_words: None,
             style: TextStyle::default(),
             styles: std::collections::BTreeMap::new(),
             cues,
@@ -67,6 +68,7 @@ fn caption_tracks_hold_ordered_cues_and_nothing_else() {
     };
     let captions = |cues| {
         Some(Captions {
+            from_words: None,
             style: TextStyle::default(),
             styles: std::collections::BTreeMap::new(),
             cues,
@@ -154,6 +156,7 @@ fn a_caption_look_is_held_to_its_limits() {
         TrackKind::Caption,
     );
     track.captions = Some(Captions {
+        from_words: None,
         style: TextStyle::default(),
         styles: std::collections::BTreeMap::new(),
         cues: vec![CaptionCue {
@@ -208,6 +211,7 @@ fn styled_captions(
     cues: &[(i64, i64, Option<&str>, Option<&str>)],
 ) -> (Project, crate::Captions) {
     let captions = crate::Captions {
+        from_words: None,
         style: crate::TextStyle::default(),
         styles: styles
             .iter()

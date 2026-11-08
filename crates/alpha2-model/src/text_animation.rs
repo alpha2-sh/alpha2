@@ -360,12 +360,14 @@ impl TextAnimatorProperties {
                         .iter()
                         .all(|keyframe| check(keyframe.value.x) && check(keyframe.value.y))
             }
+            Animated::Data(_) => true,
         };
         let color = |animation: &Animated<Rgba>| match animation {
             Animated::Constant { value } => value.is_valid(),
             Animated::Keyframes { keyframes } => {
                 valid_keyframes(keyframes) && keyframes.iter().all(|key| key.value.is_valid())
             }
+            Animated::Data(_) => false,
         };
         self.offset
             .as_ref()
@@ -429,7 +431,7 @@ pub(crate) fn valid_animators(animators: &[TextAnimator], range_only: bool) -> b
         })
 }
 
-/// Whether any value of `animators` has keyframes.
+/// Whether any value of `animators` has keyframes or data.
 pub(crate) fn animators_have_keyframes(animators: &[TextAnimator]) -> bool {
     let mut keyed = false;
     for_each_keyed_animator(animators, "", &mut |_, _| keyed = true);
@@ -441,7 +443,7 @@ pub(crate) fn animators_have_keyframes(animators: &[TextAnimator]) -> bool {
 pub(crate) fn for_each_keyed_animator(
     animators: &[TextAnimator],
     at: &str,
-    visit: &mut impl FnMut(&str, &[MediaTime]),
+    visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>),
 ) {
     use crate::animation::visit_keyed;
     for (index, animator) in animators.iter().enumerate() {

@@ -1259,7 +1259,7 @@ impl LayoutNode {
     pub(crate) fn for_each_keyed(
         &self,
         at: &str,
-        visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+        visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>),
     ) {
         let field = |name: &str| format!("{at}.{name}");
         if let Some(text) = &self.text {
@@ -1402,10 +1402,10 @@ impl LayoutNode {
     }
 }
 
-fn visit_option<T>(
+fn visit_option<T: crate::animation::Placed>(
     at: &str,
     animation: Option<&Animated<T>>,
-    visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+    visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>),
 ) {
     if let Some(animation) = animation {
         visit_keyed(at, animation, visit);

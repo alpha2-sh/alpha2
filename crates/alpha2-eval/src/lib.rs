@@ -3,6 +3,9 @@
 mod animation;
 mod audio;
 mod composition;
+mod data;
+#[cfg(test)]
+mod data_tests;
 mod error;
 mod evaluate;
 mod frame;
@@ -27,6 +30,10 @@ pub use composition::{
     ActiveComposition, CompositionPlan, MAX_PLAN_BYTES, PlanError, Step, StepLayer, StepOp,
     plan_composition, plan_source_composition,
 };
+pub use data::{
+    Correction, DataIndex, SampleContext, bound_kind, bound_scalar, bound_vec2, contained_picture,
+    correction_at, next_data_change, sample_channel,
+};
 pub use error::EvalError;
 pub(crate) use error::{IndexedCaptions, IndexedClip, IndexedTransition};
 pub(crate) use evaluate::ensure_index_matches;
@@ -43,8 +50,8 @@ pub use layout::{
     EvaluatedLayout, EvaluatedNode, EvaluatedText, GeneratorPlan, LayoutPlan, NodeContent,
     NodeLayout, NodePaint, NodeVisual, Sides,
 };
-pub use retime::picture_source_time;
 pub(crate) use retime::{Mirror, map_source_time};
+pub use retime::{picture_source_time, source_instant_to_timeline, source_range_to_timeline};
 pub use shapes::{ShapesPlan, evaluate_geometry, evaluate_item, evaluate_items};
 pub use text_animation::{
     SampledAnimator, SampledSelector, hash_sampled_animators, sample_text_animators,

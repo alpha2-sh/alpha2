@@ -22,6 +22,7 @@ alpha2-geometry.workspace = true
 alpha2-media.workspace = true
 alpha2-model.workspace = true
 alpha2-time.workspace = true
+libm = "0.2.16"
 
 [dev-dependencies]
 alpha2-scaling-support.workspace = true

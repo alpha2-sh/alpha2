@@ -19,9 +19,27 @@ pub struct ActiveIndex {
     pub(crate) captions: Vec<IndexedCaptions>,
     /// The most clips active at any one instant.
     pub(crate) max_active: usize,
+    /// The project's data sets and clips by id, for data bindings.
+    pub(crate) data: crate::DataIndex,
 }
 
 impl ActiveIndex {
+    /// The data index for sampling `project`'s timeline-time values; `project` must be the one
+    /// this index was built from.
+    #[must_use]
+    pub fn sample_context<'a>(
+        &'a self,
+        project: &'a alpha2_model::Project,
+    ) -> crate::SampleContext<'a> {
+        crate::SampleContext::timeline(project, &self.data)
+    }
+
+    /// The project's data sets and clips by id.
+    #[must_use]
+    pub const fn data(&self) -> &crate::DataIndex {
+        &self.data
+    }
+
     /// Builds an immutable interval tree from a structurally valid project.
     ///
     /// # Errors
@@ -135,6 +153,7 @@ impl ActiveIndex {
             transitions,
             captions,
             max_active,
+            data: crate::DataIndex::new(project),
         })
     }
 

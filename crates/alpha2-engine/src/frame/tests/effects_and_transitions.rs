@@ -16,6 +16,7 @@ fn evaluated_frame_executes_the_clip_effect_chain() {
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            data: alpha2_eval::SampleContext::NONE,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
             source_id: leak(source.clone()),
             track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -118,6 +119,7 @@ fn keyframed_effect_parameters_render_at_the_frame_time_and_clamp_only_overshoot
             blend_space: alpha2_model::BlendSpace::LinearLight,
             time: MediaTime(time),
             visual: vec![ActiveClip {
+                data: alpha2_eval::SampleContext::NONE,
                 clip_id: leak(ClipId::new("clip").expect("valid ID")),
                 source_id: leak(source.clone()),
                 track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -196,6 +198,7 @@ fn evaluated_frame_executes_active_transition_nodes() {
     let from_clip = ClipId::new("from").expect("valid ID");
     let to_clip = ClipId::new("to").expect("valid ID");
     let active = |clip_id: ClipId, source_time: MediaTime| ActiveClip {
+        data: alpha2_eval::SampleContext::NONE,
         clip_id: leak(clip_id),
         source_id: leak(source.clone()),
         track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -232,6 +235,7 @@ fn evaluated_frame_executes_active_transition_nodes() {
                     params: BTreeMap::new(),
                 }),
                 MediaTime::ZERO,
+                alpha2_eval::SampleContext::NONE,
             ),
             progress: 0.5,
         }],

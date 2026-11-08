@@ -10,6 +10,10 @@ mod caption;
 mod caption_import;
 mod checks;
 mod composition;
+mod data;
+mod data_places;
+#[cfg(test)]
+mod data_tests;
 mod easing;
 mod effect;
 mod effect_spec;
@@ -36,7 +40,8 @@ mod time_map;
 mod timeline;
 
 pub use animation::{
-    Animated, AnimatedPoint, Interpolation, Keyframe, PointKeyframe, Vec2, VisualProperties,
+    Animated, AnimatedPoint, AnimatedValue, Interpolation, Keyframe, PointKeyframe, Vec2,
+    VisualProperties,
 };
 pub use audio::{
     AUDIO_EFFECT_STATE_MARGIN_MS, AudioEffect, AudioProperties, Ducking, EQ_FREQUENCY_RANGE_HZ,
@@ -60,16 +65,24 @@ pub use composition::{
     MAX_EFFECT_INPUTS, MAX_FRAME_INLINED_NODES, MAX_GROUP_INPUTS, MAX_INLINED_NODES,
     MAX_MERGE_LAYERS, MergeLayer, NodeInput, NodeOp, TimeScale,
 };
+pub use data::{
+    BindingProblem, CaptionsFromWords, CorrectionRef, DataAnchor, DataBinding, DataInterpolation,
+    DataInterval, DataKind, DataProblem, DataRemap, DataSamples, DataSet, DataSpace, DataValues,
+    DataVia, DataWord, MAX_DATA_CHANNELS, MAX_DATA_COORDINATE, MAX_DATA_ID_BYTES,
+    MAX_DATA_INTERVALS, MAX_DATA_LABEL_BYTES, MAX_DATA_ROTATION_DEGREES, MAX_DATA_SCALAR,
+    MAX_DATA_SCALE, MAX_DATA_SETS, MAX_DATA_VALUES, MAX_DATA_WORDS, MadeBy, MadeByPlugin,
+    SIMILARITY_ARITY, valid_interval, valid_word, value_in_bounds,
+};
 pub use easing::{CubicBezier, Easing};
 pub use effect::{ClipBlendMode, ClipEffect, EffectValue};
 pub use effect_spec::{
     BUILTIN_EFFECT_PREFIX, EffectKind, EffectParamSpec, EffectParamType, EffectParamUnit,
     EffectProblem, EffectSpec, builtin_effect, builtin_effects, builtin_effects_json,
 };
-pub use error::{EffectOwner, ModelError, ProjectLoadError, ShapeOwner};
+pub use error::{DataOwner, EffectOwner, ModelError, ProjectLoadError, ShapeOwner};
 pub use fingerprint::{AudioStreamShape, MediaFingerprint, StreamTopology, VideoStreamShape};
 pub use generator::{Generator, GradientStop, MAX_GRADIENT_STOPS, Paint, Rgba, Spread};
-pub use ids::{ClipId, CompositionId, EffectResourceId, NodeId, ProjectId, TrackId};
+pub use ids::{ClipId, CompositionId, DataSetId, EffectResourceId, NodeId, ProjectId, TrackId};
 pub use layout::{
     AlignContent, AlignItems, Display, FlexDirection, FlexWrap, GeneratorIssue, GridAutoFlow,
     JustifyContent, LAYOUT_TEXT_DEFAULTS, LayoutBorder, LayoutFontSizeFit, LayoutInset,

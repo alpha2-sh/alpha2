@@ -95,6 +95,7 @@ dependencies = [
  "alpha2-media",
  "alpha2-model",
  "alpha2-time",
+ "libm",
 ]
 
 [[package]]

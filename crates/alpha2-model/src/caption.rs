@@ -29,8 +29,13 @@ pub struct Captions {
     /// [`MAX_CAPTION_STYLES`], names 1 to 64 bytes.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub styles: BTreeMap<String, TextStylePatch>,
-    /// Cues in timeline order, none overlapping; a track shows one cue at a time.
+    /// Cues in timeline order, none overlapping; a track shows one cue at a time. Empty when
+    /// `from_words` gives the cues.
+    #[serde(default)]
     pub cues: Vec<CaptionCue>,
+    /// Cues built at evaluation from a `words` data set, instead of `cues`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_words: Option<crate::CaptionsFromWords>,
 }
 
 /// Text shown over one timeline interval.
@@ -249,7 +254,8 @@ impl Captions {
 
     pub(crate) fn validate(&self) -> Result<(), CaptionIssue> {
         let name = |name: &str| !name.is_empty() && name.len() <= MAX_CAPTION_NAME_BYTES;
-        let valid = self.style.is_valid(MAX_CAPTION_FONT_SIZE)
+        let valid = (self.from_words.is_none() || self.cues.is_empty())
+            && self.style.is_valid(MAX_CAPTION_FONT_SIZE)
             && self.styles.len() <= MAX_CAPTION_STYLES
             && self.styles.keys().all(|key| name(key))
             && self.cues.iter().all(|cue| {

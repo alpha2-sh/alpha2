@@ -24,6 +24,7 @@ import type {
   AlignContent,
   AlignItems,
   Animated,
+  Keyframed,
   Display,
   FlexDirection,
   FlexWrap,
@@ -130,7 +131,7 @@ export function measureLayout(
   ) as LayoutBounds;
 }
 
-export type Value<T> = T | Animated<T>;
+export type Value<T> = T | Keyframed<T>;
 
 /** A fraction of the picture's shorter side, or `"12px"`. No percent. */
 export type Size = number | `${number}px`;
@@ -288,7 +289,7 @@ type ContainerField =
   | "align_content"
   | "justify_items";
 
-function isAnimated(value: unknown): value is Animated<unknown> {
+function isAnimated(value: unknown): value is Keyframed<unknown> {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -297,7 +298,7 @@ function isAnimated(value: unknown): value is Animated<unknown> {
   );
 }
 
-function animated<T>(value: Value<T>): Animated<T> {
+function animated<T>(value: Value<T>): Keyframed<T> {
   return isAnimated(value) ? value : { mode: "constant", value };
 }
 

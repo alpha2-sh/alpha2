@@ -5785,7 +5785,7 @@
     "name": "effect-param-bare-value",
     "valid": false,
     "rejected_by": "schema",
-    "problems": ["project.compositions[0].nodes[1].op.effect.params.radius.mode must be one of \"constant\", \"keyframes\""],
+    "problems": ["project.compositions[0].nodes[1].op.effect.params.radius.mode must be one of \"constant\", \"keyframes\", \"data\""],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -31488,6 +31488,4469 @@
       },
       "sources": [],
       "timeline": { "tracks": [] }
+    }
+  },
+  {
+    "name": "data-every-kind",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        },
+        {
+          "id": "s",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        },
+        {
+          "id": "m",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "similarity",
+          "interpolation": "hold",
+          "times": [0],
+          "values": [0, 0, 0, 1]
+        },
+        {
+          "id": "w",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "words",
+          "words": [{ "start": 0, "end": 6000, "text": "hi" }]
+        },
+        {
+          "id": "i",
+          "anchor": { "type": "timeline" },
+          "kind": "intervals",
+          "intervals": [
+            { "start": 0, "end": 0 },
+            { "start": 10, "end": 900, "score": 0.5 }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-duplicate-id",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["duplicate data set id p"],
+    "error": "duplicate data set id p",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        },
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-id-too-long",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "data set xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx has an id over 64 bytes"
+    ],
+    "error": "data set xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx has an id over 64 bytes",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-unknown-source",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set p is anchored to unknown source nope"],
+    "error": "data set p is anchored to unknown source nope",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "nope" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-too-many-sets",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["project has 257 data sets; the maximum is 256"],
+    "error": "project has 257 data sets; the maximum is 256",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "$repeat": 257,
+          "item": {
+            "id": "s{i}",
+            "anchor": { "type": "timeline" },
+            "kind": "scalars",
+            "interpolation": "linear",
+            "channels": ["rms"],
+            "times": [0, 4000],
+            "values": [0.1, 0.2]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-no-channels",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set s needs 1 to 64 channels"],
+    "error": "data set s needs 1 to 64 channels",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "timeline" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": [],
+          "times": [0, 4000],
+          "values": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-repeated-channel",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set p has an empty, overlong or repeated channel name"],
+    "error": "data set p has an empty, overlong or repeated channel name",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "timeline" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["a", "a"],
+          "times": [0, 4000],
+          "values": [0, 0, 0, 0, 0, 0, 0, 0]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-value-count",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set p does not have times * channels * arity values"],
+    "error": "data set p does not have times * channels * arity values",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "timeline" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-times-not-ascending",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set s has times that are not strictly ascending"],
+    "error": "data set s has times that are not strictly ascending",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "timeline" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [5, 5],
+          "values": [0.1, 0.2]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-negative-time",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set s has a negative time"],
+    "error": "data set s has a negative time",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "timeline" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [-1, 5],
+          "values": [0.1, 0.2]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-past-source-end",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set s has a time past its source's duration"],
+    "error": "data set s has a time past its source's duration",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        {
+          "id": "a1",
+          "kind": "audio",
+          "locator": "c.m4a",
+          "fingerprint": { "duration_ticks": 1000 }
+        },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-point-out-of-bounds",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set p has an invalid value at values[0]"],
+    "error": "data set p has an invalid value at values[0]",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "timeline" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [16.5, 0, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-partial-lost",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set p has an invalid value at values[1]"],
+    "error": "data set p has an invalid value at values[1]",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "timeline" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.1, null, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-similarity-scale-zero",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set m has an invalid value at values[3]"],
+    "error": "data set m has an invalid value at values[3]",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "m",
+          "anchor": { "type": "timeline" },
+          "kind": "similarity",
+          "interpolation": "hold",
+          "times": [0],
+          "values": [0, 0, 0, 0]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-similarity-rotation-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set m has an invalid value at values[2]"],
+    "error": "data set m has an invalid value at values[2]",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "m",
+          "anchor": { "type": "timeline" },
+          "kind": "similarity",
+          "interpolation": "hold",
+          "times": [0],
+          "values": [0, 0, 40000, 1]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-word-empty-text",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set w has an invalid item at [0]"],
+    "error": "data set w has an invalid item at [0]",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "w",
+          "anchor": { "type": "timeline" },
+          "kind": "words",
+          "words": [{ "start": 0, "end": 5, "text": "" }]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-word-zero-length",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set w has an invalid item at [0]"],
+    "error": "data set w has an invalid item at [0]",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "w",
+          "anchor": { "type": "timeline" },
+          "kind": "words",
+          "words": [{ "start": 5, "end": 5, "text": "a" }]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-interval-reversed",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set i has an invalid item at [0]"],
+    "error": "data set i has an invalid item at [0]",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "i",
+          "anchor": { "type": "timeline" },
+          "kind": "intervals",
+          "intervals": [{ "start": 9, "end": 5 }]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-intervals-unsorted",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set i has an invalid item at [1]"],
+    "error": "data set i has an invalid item at [1]",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "i",
+          "anchor": { "type": "timeline" },
+          "kind": "intervals",
+          "intervals": [
+            { "start": 5, "end": 9 },
+            { "start": 0, "end": 9 }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-interval-score-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set i has an invalid item at [0]"],
+    "error": "data set i has an invalid item at [0]",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "i",
+          "anchor": { "type": "timeline" },
+          "kind": "intervals",
+          "intervals": [{ "start": 0, "end": 9, "score": 2000000000.0 }]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-made-from-on-timeline",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set p has an invalid made_from.anchor"],
+    "error": "data set p has an invalid made_from.anchor",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "timeline" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null],
+          "made_from": { "duration_ticks": 5 }
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-made-by-empty",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["data set p has an invalid made_by"],
+    "error": "data set p has an invalid made_by",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null],
+          "made_by": { "extractor": "", "version": 1 }
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-provenance",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null],
+          "made_by": {
+            "extractor": "com.example.x",
+            "version": 3,
+            "params": { "k": 1 },
+            "plugin": {
+              "version": "1.0.0",
+              "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          },
+          "made_from": { "byte_length": 100 }
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-position-follows-picture",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "p",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "picture",
+                    "offset": [0, -0.1]
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-unknown-data",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["clip c1 visual.position names an unknown data set"],
+    "error": "clip c1 visual.position names an unknown data set",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "nope",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "picture",
+                    "offset": [0, -0.1]
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-unknown-channel",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["clip c1 visual.position names an unknown channel"],
+    "error": "clip c1 visual.position names an unknown channel",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "p",
+                    "channel": "ear",
+                    "via": { "clip": "c1" },
+                    "space": "picture",
+                    "offset": [0, -0.1]
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-via-required",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c1 visual.position needs `via` for a source-anchored data set"
+    ],
+    "error": "clip c1 visual.position needs `via` for a source-anchored data set",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "p",
+                    "channel": "nose",
+                    "space": "picture",
+                    "offset": [0, -0.1]
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-space-required",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c1 visual.position needs `space` for a point read through `via`"
+    ],
+    "error": "clip c1 visual.position needs `space` for a point read through `via`",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "p",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "offset": [0, -0.1]
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-via-other-source",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c1 visual.position reads through a reader of another source"
+    ],
+    "error": "clip c1 visual.position reads through a reader of another source",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "p",
+                    "channel": "nose",
+                    "via": { "clip": "c2" },
+                    "space": "picture",
+                    "offset": [0, -0.1]
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-via-unknown-clip",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["clip c1 visual.position reads through an unknown clip"],
+    "error": "clip c1 visual.position reads through an unknown clip",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "p",
+                    "channel": "nose",
+                    "via": { "clip": "zz" },
+                    "space": "picture",
+                    "offset": [0, -0.1]
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-canvas-self-cycle",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c1 visual.position follows clips in canvas space in a cycle"
+    ],
+    "error": "clip c1 visual.position follows clips in canvas space in a cycle",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "p",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "canvas",
+                    "offset": [0, -0.1]
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-timeline-no-via",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": { "mode": "data", "data": "p", "channel": "nose" }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "timeline" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-timeline-with-via",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c1 visual.position takes no `via` for a timeline-anchored data set"
+    ],
+    "error": "clip c1 visual.position takes no `via` for a timeline-anchored data set",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "p",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "picture",
+                    "offset": [0, -0.1]
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "timeline" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-opacity-refuses-points",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["clip c1 visual.opacity cannot follow points data"],
+    "error": "clip c1 visual.opacity cannot follow points data",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "opacity": {
+                    "mode": "data",
+                    "data": "p",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "picture"
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-gain-follows-scalars",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "audio": {
+                  "gain": {
+                    "mode": "data",
+                    "data": "s",
+                    "channel": "rms",
+                    "via": { "clip": "c3" },
+                    "remap": { "input": [0, 0.3], "output": [0.4, 1] }
+                  }
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        }
+      ],
+      "audio": {
+        "gain": {
+          "mode": "data",
+          "data": "s",
+          "channel": "rms",
+          "via": { "clip": "c3" }
+        }
+      }
+    }
+  },
+  {
+    "name": "data-remap-equal-inputs",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c3 audio.gain has a non-finite offset or remap, or a remap with equal inputs"
+    ],
+    "error": "clip c3 audio.gain has a non-finite offset or remap, or a remap with equal inputs",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "audio": {
+                  "gain": {
+                    "mode": "data",
+                    "data": "s",
+                    "channel": "rms",
+                    "via": { "clip": "c3" },
+                    "remap": { "input": [1, 1], "output": [0, 1] }
+                  }
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-canvas-through-audio-clip",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c1 visual.position names a reader of the wrong kind for its clock"
+    ],
+    "error": "clip c1 visual.position names a reader of the wrong kind for its clock",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "p",
+                    "channel": "nose",
+                    "via": { "clip": "c3" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-canvas-cycle",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c1 visual.position follows clips in canvas space in a cycle"
+    ],
+    "error": "clip c1 visual.position follows clips in canvas space in a cycle",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "b",
+                    "channel": "nose",
+                    "via": { "clip": "c2" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "canvas"
+                  }
+                }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "a",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        },
+        {
+          "id": "b",
+          "anchor": { "type": "source", "source_id": "v2" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-canvas-follow",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "canvas"
+                  }
+                }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "a",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-correction",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": { "correction": { "data": "m" } }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "m",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "similarity",
+          "interpolation": "hold",
+          "times": [0],
+          "values": [0, 0, 0, 1]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-correction-other-source",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c1 visual.correction corrects with data anchored to another source"
+    ],
+    "error": "clip c1 visual.correction corrects with data anchored to another source",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": { "correction": { "data": "m" } }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "m",
+          "anchor": { "type": "source", "source_id": "v2" },
+          "kind": "similarity",
+          "interpolation": "hold",
+          "times": [0],
+          "values": [0, 0, 0, 1]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-correction-wrong-kind",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["clip c1 visual.correction cannot follow points data"],
+    "error": "clip c1 visual.correction cannot follow points data",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": { "correction": { "data": "m" } }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "m",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-node-param-follows",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "k" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        }
+      ],
+      "compositions": [
+        {
+          "id": "k",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            { "id": "media", "op": { "type": "media", "source_id": "v1" } },
+            {
+              "id": "n",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1,
+                  "params": {
+                    "radius": {
+                      "mode": "data",
+                      "data": "s",
+                      "channel": "rms",
+                      "via": { "node": "media" }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "output": "n"
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-node-param-timeline-anchor",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "composition k node n effect.params.radius is keyed on a clock that refuses this anchor"
+    ],
+    "error": "composition k node n effect.params.radius is keyed on a clock that refuses this anchor",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "k" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "timeline" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        }
+      ],
+      "compositions": [
+        {
+          "id": "k",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            { "id": "media", "op": { "type": "media", "source_id": "v1" } },
+            {
+              "id": "n",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1,
+                  "params": {
+                    "radius": { "mode": "data", "data": "s", "channel": "rms" }
+                  }
+                }
+              }
+            }
+          ],
+          "output": "n"
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-node-param-via-clip",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "composition k node n effect.params.radius names a reader of the wrong kind for its clock"
+    ],
+    "error": "composition k node n effect.params.radius names a reader of the wrong kind for its clock",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "k" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        }
+      ],
+      "compositions": [
+        {
+          "id": "k",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            { "id": "media", "op": { "type": "media", "source_id": "v1" } },
+            {
+              "id": "n",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1,
+                  "params": {
+                    "radius": {
+                      "mode": "data",
+                      "data": "s",
+                      "channel": "rms",
+                      "via": { "clip": "c1" }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "output": "n"
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-node-param-via-non-media",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "composition k node n effect.params.radius reads through a node that is not a media node of its composition"
+    ],
+    "error": "composition k node n effect.params.radius reads through a node that is not a media node of its composition",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "k" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        }
+      ],
+      "compositions": [
+        {
+          "id": "k",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            { "id": "media", "op": { "type": "media", "source_id": "v1" } },
+            {
+              "id": "n",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1,
+                  "params": {
+                    "radius": {
+                      "mode": "data",
+                      "data": "s",
+                      "channel": "rms",
+                      "via": { "node": "clip" }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "output": "n"
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-node-param-wrong-kind",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "composition k node n effect.params.radius cannot follow points data"
+    ],
+    "error": "composition k node n effect.params.radius cannot follow points data",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "k" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ],
+      "compositions": [
+        {
+          "id": "k",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            { "id": "media", "op": { "type": "media", "source_id": "v1" } },
+            {
+              "id": "n",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1,
+                  "params": {
+                    "radius": {
+                      "mode": "data",
+                      "data": "s",
+                      "channel": "nose",
+                      "via": { "node": "media" },
+                      "space": "picture"
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "output": "n"
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-node-canvas-refused",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "composition k node n transform.position has `space` where it does not apply"
+    ],
+    "error": "composition k node n transform.position has `space` where it does not apply",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "k" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "p",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ],
+      "compositions": [
+        {
+          "id": "k",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            { "id": "media", "op": { "type": "media", "source_id": "v1" } },
+            {
+              "id": "n",
+              "op": {
+                "type": "transform",
+                "input": "clip",
+                "transform": {
+                  "position": {
+                    "mode": "data",
+                    "data": "p",
+                    "channel": "nose",
+                    "via": { "node": "media" },
+                    "space": "canvas"
+                  }
+                }
+              }
+            }
+          ],
+          "output": "n"
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-generator-refuses-data",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g items[0].size is keyed on a clock that refuses this anchor"
+    ],
+    "error": "source g items[0].size is keyed on a clock that refuses this anchor",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" },
+        {
+          "id": "g",
+          "kind": "generated",
+          "locator": "",
+          "generator": {
+            "type": "shapes",
+            "items": [
+              {
+                "type": "rectangle",
+                "center": {
+                  "mode": "constant",
+                  "value": { "x": 0.5, "y": 0.5 }
+                },
+                "size": { "mode": "data", "data": "s", "channel": "rms" }
+              }
+            ]
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "timeline" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-captions-from-words",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "from_words": { "data": "w", "track": "t2", "max_chars": 42 }
+            }
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "w",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "words",
+          "words": [{ "start": 0, "end": 6000, "text": "hi" }]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-captions-words-and-cues",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["track subs has invalid captions"],
+    "error": "track subs has invalid captions",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "from_words": { "data": "w", "track": "t2", "max_chars": 42 },
+              "cues": [
+                { "timeline_range": { "start": 0, "end": 10 }, "text": "x" }
+              ]
+            }
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "w",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "words",
+          "words": [{ "start": 0, "end": 6000, "text": "hi" }]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-captions-words-no-track",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "track subs captions.from_words has an invalid words track or max_chars"
+    ],
+    "error": "track subs captions.from_words has an invalid words track or max_chars",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": { "from_words": { "data": "w", "max_chars": 42 } }
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "w",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "words",
+          "words": [{ "start": 0, "end": 6000, "text": "hi" }]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-captions-words-zero-chars",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "track subs captions.from_words has an invalid words track or max_chars"
+    ],
+    "error": "track subs captions.from_words has an invalid words track or max_chars",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "from_words": { "data": "w", "track": "t2", "max_chars": 0 }
+            }
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "w",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "words",
+          "words": [{ "start": 0, "end": 6000, "text": "hi" }]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-captions-words-wrong-kind",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["track subs captions.from_words cannot follow intervals data"],
+    "error": "track subs captions.from_words cannot follow intervals data",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": {
+              "from_words": { "data": "w", "track": "t2", "max_chars": 42 }
+            }
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "w",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "intervals",
+          "intervals": [
+            { "start": 0, "end": 0 },
+            { "start": 10, "end": 900, "score": 0.5 }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-captions-timeline-words",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "subs",
+            "name": "Subs",
+            "kind": "caption",
+            "captions": { "from_words": { "data": "w", "max_chars": 42 } }
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "w",
+          "anchor": { "type": "timeline" },
+          "kind": "words",
+          "words": [{ "start": 0, "end": 6000, "text": "hi" }]
+        }
+      ]
     }
   }
 ]

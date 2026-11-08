@@ -53,6 +53,10 @@ pub struct Project {
     /// Master bus applied to the summed track audio.
     #[serde(default)]
     pub audio: MasterAudio,
+    /// Values derived from media, which properties and caption tracks can follow. At most
+    /// [`crate::MAX_DATA_SETS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data: Vec<crate::DataSet>,
 }
 
 /// The deserialized shape of a [`Project`] before its invariants are checked.
@@ -91,6 +95,9 @@ pub(crate) struct ProjectWire {
     /// Master bus applied to the summed track audio.
     #[serde(default)]
     pub(crate) audio: MasterAudio,
+    /// Values derived from media, which properties and caption tracks can follow. At most 256.
+    #[serde(default)]
+    pub(crate) data: Vec<crate::DataSet>,
 }
 
 impl TryFrom<ProjectWire> for Project {
@@ -107,6 +114,7 @@ impl TryFrom<ProjectWire> for Project {
             compositions: wire.compositions,
             timeline: wire.timeline,
             audio: wire.audio,
+            data: wire.data,
         };
         project.validate()?;
         Ok(project)
@@ -295,6 +303,7 @@ impl Project {
             compositions: Vec::new(),
             timeline: Timeline { tracks: Vec::new() },
             audio: MasterAudio::default(),
+            data: Vec::new(),
         }
     }
 
@@ -400,6 +409,7 @@ impl Project {
             ensure_overlaps_have_transitions(track)?;
         }
         self.ensure_audio_effects_fit()?;
+        crate::data_places::validate_data(self, &index.sources)?;
         ensure_ducking_is_acyclic(&self.timeline)?;
         ensure_mattes_are_usable(&self.timeline)?;
         ensure_frames_fit(&self.timeline, &index.sources, &inlined)?;

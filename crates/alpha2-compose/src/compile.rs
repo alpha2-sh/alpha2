@@ -1476,6 +1476,7 @@ impl<'a> Context<'a> {
         let (width, height) = self.canvas_px();
         let position = match &moved.position {
             AnimatedPoint::Constant { value } => Animated::Constant { value: *value },
+            AnimatedPoint::Data(binding) => Animated::Data(binding.clone()),
             AnimatedPoint::Keyframes { keyframes } => Animated::Keyframes {
                 keyframes: keyframes
                     .iter()
@@ -1836,6 +1837,7 @@ impl<'a> Context<'a> {
             },
         );
         VisualProperties {
+            correction: None,
             position,
             anchor,
             scale: group
@@ -2012,6 +2014,7 @@ impl<'a> Context<'a> {
                     range(0, slot.len),
                 );
                 clip.visual = VisualProperties {
+                    correction: None,
                     position: AnimatedPoint::Constant {
                         value: Vec2::new(
                             (rect.x + 0.5 * rect.width) / width,
@@ -2037,6 +2040,7 @@ impl<'a> Context<'a> {
                 let (x, y) = align_point(visual.align);
                 let scale = (rect.width / width).min(rect.height / height);
                 clip.visual = VisualProperties {
+                    correction: None,
                     position: AnimatedPoint::Constant {
                         value: Vec2::new(
                             (rect.x + x * rect.width) / width,
@@ -2236,7 +2240,7 @@ impl<'a> Context<'a> {
                 Vec2::new(value.x * factor, value.y * factor)
             };
             let breakpoints = match &base {
-                Animated::Constant { .. } => Vec::new(),
+                Animated::Constant { .. } | Animated::Data(_) => Vec::new(),
                 Animated::Keyframes { keyframes } => keyframes
                     .iter()
                     .map(|keyframe| keyframe.time.ticks())
@@ -2378,6 +2382,7 @@ impl<'a> Context<'a> {
             },
         };
         VisualProperties {
+            correction: None,
             position: AnimatedPoint::Constant {
                 value: Vec2::new(
                     (rect.x + x * rect.width) / width,
@@ -2510,6 +2515,7 @@ impl<'a> Context<'a> {
                 range(0, slot.len),
             );
             clip.visual = VisualProperties {
+                correction: None,
                 position: AnimatedPoint::Constant {
                     value: Vec2::new(0.5, center),
                 },
@@ -2528,6 +2534,7 @@ impl<'a> Context<'a> {
         for row in rows {
             let mut lane = Lane::new(TrackKind::Caption, &slot.owners);
             lane.captions = Some(Captions {
+                from_words: None,
                 style: captions.style.clone(),
                 styles: captions.styles.clone(),
                 cues: row,
@@ -2718,6 +2725,7 @@ fn animated<T: Copy>(anim: &AnimPrim<T>, clip: TimeRange) -> Animated<T> {
 fn map_animated<T, U>(animation: Animated<T>, map: impl Fn(T) -> U) -> Animated<U> {
     match animation {
         Animated::Constant { value } => Animated::Constant { value: map(value) },
+        Animated::Data(binding) => Animated::Data(binding),
         Animated::Keyframes { keyframes } => Animated::Keyframes {
             keyframes: keyframes
                 .into_iter()
@@ -2747,6 +2755,7 @@ fn windowed(opacity: &Animated<f32>, start: i64, end: i64, len: i64) -> Animated
     }
     match opacity {
         Animated::Constant { value } => keyframes.push(hold(start, *value)),
+        Animated::Data(_) => keyframes.push(hold(start, sample_scalar(opacity, start))),
         Animated::Keyframes { keyframes: own } => {
             let inside = own
                 .iter()
@@ -2776,6 +2785,7 @@ fn windowed(opacity: &Animated<f32>, start: i64, end: i64, len: i64) -> Animated
 fn sample_scalar(animation: &Animated<f32>, time: i64) -> f32 {
     match animation {
         Animated::Constant { value } => *value,
+        Animated::Data(_) => 0.0,
         Animated::Keyframes { keyframes } => {
             let after = keyframes.partition_point(|keyframe| keyframe.time.ticks() <= time);
             match (
@@ -3353,6 +3363,7 @@ fn keyed<T: Clone + PartialEq>(
 fn sample_linear(animation: &Animated<Vec2>, time: i64) -> Vec2 {
     match animation {
         Animated::Constant { value } => *value,
+        Animated::Data(_) => Vec2::default(),
         Animated::Keyframes { keyframes } => {
             let after = keyframes.partition_point(|keyframe| keyframe.time.ticks() <= time);
             match (
@@ -3848,6 +3859,7 @@ fn assemble(
     let mut compositions = std::mem::take(&mut context.compositions);
     compositions.extend(raw_compositions);
     let project = Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: project_id(&name),
         name,

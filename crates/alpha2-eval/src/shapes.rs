@@ -3,6 +3,7 @@
 //! A [`ShapesPlan`] is built with the index and pre-evaluates every subtree without keyframes,
 //! so each frame evaluates only what animates.
 
+use crate::SampleContext;
 use crate::animation::{sample_paint, sample_path, sample_point, sample_scalar, sample_vec2};
 use alpha2_geometry::kurbo::{Point, Vec2};
 use alpha2_geometry::{EvaluatedGeometry, EvaluatedItem, EvaluatedTransform};
@@ -116,17 +117,29 @@ pub fn evaluate_items(items: &[ShapeItem], time: MediaTime, aspect: f64) -> Arc<
         .collect()
 }
 
-fn scalar(animation: &Animated<f32>, time: MediaTime) -> f64 {
-    f64::from(sample_scalar(animation, time))
+/// Generator trees are keyed in picture time, where no data binds.
+const NO_DATA: &SampleContext<'static> = &SampleContext::NONE;
+
+fn scalar(animation: &Animated<f32>, time: MediaTime, context: &SampleContext<'_>) -> f64 {
+    f64::from(sample_scalar(animation, time, context))
 }
 
-fn point(animation: &AnimatedPoint, time: MediaTime, aspect: f64) -> Point {
-    let value = sample_point(animation, time, aspect);
+fn point(
+    animation: &AnimatedPoint,
+    time: MediaTime,
+    aspect: f64,
+    context: &SampleContext<'_>,
+) -> Point {
+    let value = sample_point(animation, time, aspect, context);
     Point::new(f64::from(value.x), f64::from(value.y))
 }
 
-fn vector(animation: &Animated<alpha2_model::Vec2>, time: MediaTime) -> Vec2 {
-    let value = sample_vec2(animation, time);
+fn vector(
+    animation: &Animated<alpha2_model::Vec2>,
+    time: MediaTime,
+    context: &SampleContext<'_>,
+) -> Vec2 {
+    let value = sample_vec2(animation, time, context);
     Vec2::new(f64::from(value.x), f64::from(value.y))
 }
 
@@ -134,6 +147,7 @@ fn vector(animation: &Animated<alpha2_model::Vec2>, time: MediaTime) -> Vec2 {
 /// since an overshooting curve can carry them past.
 #[must_use]
 pub fn evaluate_item(item: &ShapeItem, time: MediaTime, aspect: f64) -> EvaluatedItem {
+    let context = NO_DATA;
     let unit = |value: f64| value.clamp(0.0, 1.0);
     match item {
         ShapeItem::Group { items, transform } => EvaluatedItem::Group {
@@ -144,9 +158,14 @@ pub fn evaluate_item(item: &ShapeItem, time: MediaTime, aspect: f64) -> Evaluate
             &ShapeGeometry::Rectangle(geometry.clone()),
             time,
             aspect,
+            context,
         )),
-        ShapeItem::Ellipse(geometry) => EvaluatedItem::Geometry(ellipse(geometry, time, aspect)),
-        ShapeItem::Polystar(geometry) => EvaluatedItem::Geometry(polystar(geometry, time, aspect)),
+        ShapeItem::Ellipse(geometry) => {
+            EvaluatedItem::Geometry(ellipse(geometry, time, aspect, context))
+        }
+        ShapeItem::Polystar(geometry) => {
+            EvaluatedItem::Geometry(polystar(geometry, time, aspect, context))
+        }
         ShapeItem::Path(geometry) => EvaluatedItem::Geometry(path(geometry, time)),
         ShapeItem::Fill {
             paint,
@@ -154,42 +173,44 @@ pub fn evaluate_item(item: &ShapeItem, time: MediaTime, aspect: f64) -> Evaluate
             rule,
         } => EvaluatedItem::Fill {
             paint: sample_paint(paint, time),
-            opacity: unit(scalar(opacity, time)),
+            opacity: unit(scalar(opacity, time, context)),
             rule: *rule,
         },
         ShapeItem::Stroke(stroke) => EvaluatedItem::Stroke {
             paint: sample_paint(&stroke.paint, time),
-            width: scalar(&stroke.width, time).max(0.0),
-            opacity: unit(scalar(&stroke.opacity, time)),
+            width: scalar(&stroke.width, time, context).max(0.0),
+            opacity: unit(scalar(&stroke.opacity, time, context)),
             join: stroke.join,
             miter_limit: f64::from(stroke.miter_limit),
             cap: stroke.cap,
             dash: stroke.dash.as_ref().map_or_else(Vec::new, |dash| {
                 dash.pattern
                     .iter()
-                    .map(|entry| scalar(entry, time).max(0.0))
+                    .map(|entry| scalar(entry, time, context).max(0.0))
                     .collect()
             }),
             dash_offset: stroke
                 .dash
                 .as_ref()
-                .map_or(0.0, |dash| scalar(&dash.offset, time)),
+                .map_or(0.0, |dash| scalar(&dash.offset, time, context)),
         },
         ShapeItem::Trim(trim) => EvaluatedItem::Trim {
-            start: unit(scalar(&trim.start, time)),
-            end: unit(scalar(&trim.end, time)),
-            offset: scalar(&trim.offset, time),
+            start: unit(scalar(&trim.start, time, context)),
+            end: unit(scalar(&trim.end, time, context)),
+            offset: scalar(&trim.offset, time, context),
             mode: trim.mode,
         },
     }
 }
 
-/// A geometry at `time`: a mask's outline, or a content tree's.
+/// A geometry at `time`: a mask's outline, or a content tree's. `context` resolves a mask's
+/// data bindings.
 #[must_use]
 pub fn evaluate_geometry(
     geometry: &ShapeGeometry,
     time: MediaTime,
     aspect: f64,
+    context: &SampleContext<'_>,
 ) -> EvaluatedGeometry {
     match geometry {
         ShapeGeometry::Rectangle(RectangleGeometry {
@@ -198,38 +219,48 @@ pub fn evaluate_geometry(
             corner_radius,
             rotation_degrees,
         }) => EvaluatedGeometry::Rectangle {
-            center: point(center, time, aspect),
-            size: vector(size, time),
-            corner_radius: scalar(corner_radius, time).max(0.0),
-            rotation_degrees: scalar(rotation_degrees, time),
+            center: point(center, time, aspect, context),
+            size: vector(size, time, context),
+            corner_radius: scalar(corner_radius, time, context).max(0.0),
+            rotation_degrees: scalar(rotation_degrees, time, context),
         },
-        ShapeGeometry::Ellipse(geometry) => ellipse(geometry, time, aspect),
-        ShapeGeometry::Polystar(geometry) => polystar(geometry, time, aspect),
+        ShapeGeometry::Ellipse(geometry) => ellipse(geometry, time, aspect, context),
+        ShapeGeometry::Polystar(geometry) => polystar(geometry, time, aspect, context),
         ShapeGeometry::Path(geometry) => path(geometry, time),
     }
 }
 
-fn ellipse(geometry: &EllipseGeometry, time: MediaTime, aspect: f64) -> EvaluatedGeometry {
+fn ellipse(
+    geometry: &EllipseGeometry,
+    time: MediaTime,
+    aspect: f64,
+    context: &SampleContext<'_>,
+) -> EvaluatedGeometry {
     EvaluatedGeometry::Ellipse {
-        center: point(&geometry.center, time, aspect),
-        size: vector(&geometry.size, time),
-        rotation_degrees: scalar(&geometry.rotation_degrees, time),
+        center: point(&geometry.center, time, aspect, context),
+        size: vector(&geometry.size, time, context),
+        rotation_degrees: scalar(&geometry.rotation_degrees, time, context),
     }
 }
 
-fn polystar(geometry: &PolystarGeometry, time: MediaTime, aspect: f64) -> EvaluatedGeometry {
+fn polystar(
+    geometry: &PolystarGeometry,
+    time: MediaTime,
+    aspect: f64,
+    context: &SampleContext<'_>,
+) -> EvaluatedGeometry {
     EvaluatedGeometry::Polystar {
         kind: geometry.kind,
-        center: point(&geometry.center, time, aspect),
-        points: scalar(&geometry.points, time).clamp(
+        center: point(&geometry.center, time, aspect, context),
+        points: scalar(&geometry.points, time, context).clamp(
             f64::from(alpha2_model::MIN_POLYSTAR_POINTS),
             f64::from(alpha2_model::MAX_POLYSTAR_POINTS),
         ),
-        outer_radius: scalar(&geometry.outer_radius, time).max(0.0),
-        inner_radius: scalar(&geometry.inner_radius, time).max(0.0),
-        outer_roundness: scalar(&geometry.outer_roundness, time).clamp(0.0, 1.0),
-        inner_roundness: scalar(&geometry.inner_roundness, time).clamp(0.0, 1.0),
-        rotation_degrees: scalar(&geometry.rotation_degrees, time),
+        outer_radius: scalar(&geometry.outer_radius, time, context).max(0.0),
+        inner_radius: scalar(&geometry.inner_radius, time, context).max(0.0),
+        outer_roundness: scalar(&geometry.outer_roundness, time, context).clamp(0.0, 1.0),
+        inner_roundness: scalar(&geometry.inner_roundness, time, context).clamp(0.0, 1.0),
+        rotation_degrees: scalar(&geometry.rotation_degrees, time, context),
     }
 }
 
@@ -242,13 +273,14 @@ fn evaluate_transform(
     time: MediaTime,
     aspect: f64,
 ) -> EvaluatedTransform {
-    let anchor = vector(&transform.anchor, time);
+    let context = NO_DATA;
+    let anchor = vector(&transform.anchor, time, context);
     EvaluatedTransform {
         anchor: Point::new(anchor.x, anchor.y),
-        position: point(&transform.position, time, aspect),
-        scale: vector(&transform.scale, time),
-        rotation_degrees: scalar(&transform.rotation_degrees, time),
-        opacity: scalar(&transform.opacity, time).clamp(0.0, 1.0),
+        position: point(&transform.position, time, aspect, context),
+        scale: vector(&transform.scale, time, context),
+        rotation_degrees: scalar(&transform.rotation_degrees, time, context),
+        opacity: scalar(&transform.opacity, time, context).clamp(0.0, 1.0),
     }
 }
 

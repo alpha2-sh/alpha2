@@ -1,4 +1,4 @@
-use crate::{CubicBezier, Easing};
+use crate::{CubicBezier, DataBinding, Easing};
 use serde::{Deserialize, Serialize};
 
 /// A two-dimensional value in normalized output coordinates.
@@ -30,12 +30,13 @@ impl Vec2 {
     }
 }
 
-/// A value that is either constant or controlled by sorted keyframes.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
+/// A value that is constant, controlled by sorted keyframes, or following a data set.
+///
+/// Only value types whose [`AnimatedValue::ACCEPTS_DATA`] is true (`f32`, [`Vec2`] and
+/// [`crate::EffectValue`]) read or offer the `data` mode; for the others it fails to
+/// deserialize and the schema leaves it out.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
-#[cfg_attr(feature = "schema", schemars(rename = "Animated_{T}"))]
 pub enum Animated<T> {
     /// A value without animation.
     Constant {
@@ -47,6 +48,111 @@ pub enum Animated<T> {
         /// Strictly ascending keyframes. The evaluator clamps outside the sequence.
         keyframes: Vec<Keyframe<T>>,
     },
+    /// A channel of a data set, followed at render time.
+    Data(Box<DataBinding>),
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// A type an [`Animated`] value can hold. Sealed: implemented for the model's animatable types.
+pub trait AnimatedValue: sealed::Sealed {
+    /// Whether the type takes the `data` value mode.
+    const ACCEPTS_DATA: bool;
+}
+
+macro_rules! animated_value {
+    ($accepts:literal: $($type:ty),+) => {
+        $(
+            impl sealed::Sealed for $type {}
+            impl AnimatedValue for $type {
+                const ACCEPTS_DATA: bool = $accepts;
+            }
+        )+
+    };
+}
+
+animated_value!(true: f32, Vec2, crate::EffectValue);
+animated_value!(
+    false: String,
+    crate::Paint,
+    crate::Rgba,
+    crate::Path,
+    crate::LayoutLength,
+    crate::LayoutSize,
+    crate::LayoutOffset,
+    crate::Insets
+);
+
+// The wire form of `Animated`, before the value type decides whether it takes data. Its doc
+// comment is the schema's description.
+/// A value that is constant, controlled by sorted keyframes, or following a data set.
+#[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg_attr(feature = "schema", schemars(rename = "Animated_{T}"))]
+enum AnimatedWire<T> {
+    /// A value without animation.
+    Constant {
+        /// Value used at every timestamp.
+        value: T,
+    },
+    /// Values evaluated from their keyframe sequence.
+    Keyframes {
+        /// Strictly ascending keyframes. The evaluator clamps outside the sequence.
+        keyframes: Vec<Keyframe<T>>,
+    },
+    /// A channel of a data set, followed at render time.
+    Data(DataBinding),
+}
+
+impl<'de, T: Deserialize<'de> + AnimatedValue> Deserialize<'de> for Animated<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match AnimatedWire::<T>::deserialize(deserializer)? {
+            AnimatedWire::Constant { value } => Self::Constant { value },
+            AnimatedWire::Keyframes { keyframes } => Self::Keyframes { keyframes },
+            AnimatedWire::Data(binding) if T::ACCEPTS_DATA => Self::Data(Box::new(binding)),
+            AnimatedWire::Data(_) => {
+                return Err(serde::de::Error::custom(
+                    "this value takes no `data` mode; use `constant` or `keyframes`",
+                ));
+            }
+        })
+    }
+}
+
+#[cfg(feature = "schema")]
+impl<T: schemars::JsonSchema + AnimatedValue> schemars::JsonSchema for Animated<T> {
+    // Types without the data mode are a separate generic, `Keyframed_{T}`, so each generic has
+    // one shape.
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        if T::ACCEPTS_DATA {
+            AnimatedWire::<T>::schema_name()
+        } else {
+            format!("Keyframed_{}", T::schema_name()).into()
+        }
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        if T::ACCEPTS_DATA {
+            AnimatedWire::<T>::schema_id()
+        } else {
+            format!("alpha2_model::Keyframed<{}>", T::schema_id()).into()
+        }
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = AnimatedWire::<T>::json_schema(generator);
+        if !T::ACCEPTS_DATA {
+            crate::schema::drop_data_mode(&mut schema);
+            schema.insert(
+                "description".to_owned(),
+                "A value that is constant or controlled by sorted keyframes.".into(),
+            );
+        }
+        schema
+    }
 }
 
 impl<T> Animated<T> {
@@ -65,7 +171,23 @@ impl<T> Animated<T> {
                     })
                     .collect(),
             },
+            Self::Data(binding) => Animated::Data(binding.clone()),
         }
+    }
+
+    /// The data binding, when the value follows a data set.
+    #[must_use]
+    pub const fn data(&self) -> Option<&DataBinding> {
+        match self {
+            Self::Data(binding) => Some(binding),
+            Self::Constant { .. } | Self::Keyframes { .. } => None,
+        }
+    }
+
+    /// Whether the value can change over time: keyframes or data.
+    #[must_use]
+    pub const fn varies(&self) -> bool {
+        !matches!(self, Self::Constant { .. })
     }
 }
 
@@ -90,6 +212,8 @@ pub enum AnimatedPoint {
         /// Strictly ascending keyframes. The evaluator clamps outside the sequence.
         keyframes: Vec<PointKeyframe>,
     },
+    /// A channel of a data set, followed at render time.
+    Data(Box<DataBinding>),
 }
 
 impl Default for AnimatedPoint {
@@ -116,15 +240,25 @@ impl From<Animated<Vec2>> for AnimatedPoint {
                     })
                     .collect(),
             },
+            Animated::Data(binding) => Self::Data(binding),
         }
     }
 }
 
 impl AnimatedPoint {
-    /// Whether the value changes over time.
+    /// Whether the value changes over time: keyframes or data.
     #[must_use]
     pub const fn is_animated(&self) -> bool {
-        matches!(self, Self::Keyframes { .. })
+        !matches!(self, Self::Constant { .. })
+    }
+
+    /// The data binding, when the value follows a data set.
+    #[must_use]
+    pub const fn data(&self) -> Option<&DataBinding> {
+        match self {
+            Self::Data(binding) => Some(binding),
+            Self::Constant { .. } | Self::Keyframes { .. } => None,
+        }
     }
 }
 
@@ -249,6 +383,10 @@ pub struct VisualProperties {
     /// Animated opacity constrained to `0..=1`.
     #[serde(default = "opaque")]
     pub opacity: Animated<f32>,
+    /// A `similarity` data set moving the clip's own picture, applied before this transform.
+    /// Clip visuals only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correction: Option<crate::CorrectionRef>,
 }
 
 impl Default for VisualProperties {
@@ -259,6 +397,7 @@ impl Default for VisualProperties {
             scale: unit_scale(),
             rotation_degrees: no_rotation(),
             opacity: opaque(),
+            correction: None,
         }
     }
 }
@@ -285,18 +424,72 @@ pub(crate) const fn opaque() -> Animated<f32> {
     Animated::Constant { value: 1.0 }
 }
 
-/// Calls `visit` with `at` and the times of `animated`'s keyframes, if any.
-pub(crate) fn visit_keyed<T>(
+/// What a walk over animated values meets at one value that is not constant.
+pub(crate) enum Keyed<'a> {
+    /// The times of its keyframes.
+    Times(&'a [alpha2_time::MediaTime]),
+    /// Its data binding, with the type of the value bound.
+    Data(&'a DataBinding, PlaceType),
+}
+
+/// The value type a data binding sits on, which decides the kinds it can follow.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlaceType {
+    /// A point along spatial curves.
+    Point,
+    /// A two-component value.
+    Vec2,
+    /// A number.
+    Scalar,
+    /// An effect parameter, whose type its definition gives.
+    Effect,
+    /// A type that takes no data.
+    Other,
+}
+
+/// The [`PlaceType`] of each animatable type.
+pub(crate) trait Placed {
+    const PLACE: PlaceType;
+}
+
+macro_rules! placed {
+    ($place:ident: $($type:ty),+) => {
+        $(impl Placed for $type {
+            const PLACE: PlaceType = PlaceType::$place;
+        })+
+    };
+}
+
+placed!(Scalar: f32);
+placed!(Vec2: Vec2);
+placed!(Effect: crate::EffectValue);
+placed!(
+    Other: String,
+    crate::Paint,
+    crate::Rgba,
+    crate::Path,
+    crate::LayoutLength,
+    crate::LayoutSize,
+    crate::LayoutOffset,
+    crate::Insets
+);
+
+/// Calls `visit` with `at` and the times of `animated`'s keyframes, or its data binding.
+pub(crate) fn visit_keyed<T: Placed>(
     at: &str,
     animated: &Animated<T>,
-    visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+    visit: &mut impl FnMut(&str, Keyed<'_>),
 ) {
-    if let Animated::Keyframes { keyframes } = animated {
-        let times = keyframes
-            .iter()
-            .map(|keyframe| keyframe.time)
-            .collect::<Vec<_>>();
-        visit(at, &times);
+    match animated {
+        Animated::Keyframes { keyframes } => {
+            let times = keyframes
+                .iter()
+                .map(|keyframe| keyframe.time)
+                .collect::<Vec<_>>();
+            visit(at, Keyed::Times(&times));
+        }
+        Animated::Data(binding) => visit(at, Keyed::Data(binding, T::PLACE)),
+        Animated::Constant { .. } => {}
     }
 }
 
@@ -304,14 +497,18 @@ pub(crate) fn visit_keyed<T>(
 pub(crate) fn visit_keyed_point(
     at: &str,
     animated: &AnimatedPoint,
-    visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+    visit: &mut impl FnMut(&str, Keyed<'_>),
 ) {
-    if let AnimatedPoint::Keyframes { keyframes } = animated {
-        let times = keyframes
-            .iter()
-            .map(|keyframe| keyframe.time)
-            .collect::<Vec<_>>();
-        visit(at, &times);
+    match animated {
+        AnimatedPoint::Keyframes { keyframes } => {
+            let times = keyframes
+                .iter()
+                .map(|keyframe| keyframe.time)
+                .collect::<Vec<_>>();
+            visit(at, Keyed::Times(&times));
+        }
+        AnimatedPoint::Data(binding) => visit(at, Keyed::Data(binding, PlaceType::Point)),
+        AnimatedPoint::Constant { .. } => {}
     }
 }
 
@@ -332,6 +529,7 @@ fn valid_vec2_animation(animation: &Animated<Vec2>) -> bool {
             valid_keyframes(keyframes)
                 && keyframes.iter().all(|keyframe| keyframe.value.is_finite())
         }
+        Animated::Data(_) => true,
     }
 }
 
@@ -339,6 +537,7 @@ fn valid_vec2_animation(animation: &Animated<Vec2>) -> bool {
 pub(crate) fn valid_point_animation(animation: &AnimatedPoint) -> bool {
     match animation {
         AnimatedPoint::Constant { value } => value.is_finite(),
+        AnimatedPoint::Data(_) => true,
         AnimatedPoint::Keyframes { keyframes } => {
             !keyframes.is_empty()
                 && keyframes.windows(2).all(|pair| pair[0].time < pair[1].time)
@@ -361,6 +560,7 @@ fn valid_scalar_animation(animation: &Animated<f32>, unit_interval: bool) -> boo
             valid_keyframes(keyframes)
                 && keyframes.iter().all(|keyframe| valid_value(keyframe.value))
         }
+        Animated::Data(_) => true,
     }
 }
 
@@ -372,6 +572,7 @@ pub(crate) fn valid_scalar_values(animation: &Animated<f32>, check: impl Fn(f32)
         Animated::Keyframes { keyframes } => {
             valid_keyframes(keyframes) && keyframes.iter().all(|keyframe| valid(keyframe.value))
         }
+        Animated::Data(_) => true,
     }
 }
 

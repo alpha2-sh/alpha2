@@ -34,6 +34,7 @@ fn project() -> Project {
         range(2_000, 2_100),
     ));
     Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: id(ProjectId::new, "project"),
         name: "test".into(),
@@ -237,7 +238,7 @@ fn output_effect<'a>(clip: &ActiveClip<'a>) -> ActiveEffect<'a> {
     let StepOp::Effect { effect, .. } = &plan.steps[plan.output].op else {
         panic!("an effect output");
     };
-    ActiveEffect::new(effect, composition.time())
+    ActiveEffect::new(effect, composition.time(), crate::SampleContext::NONE)
 }
 
 #[test]
@@ -294,11 +295,13 @@ fn colors_interpolate_premultiplied() {
     // Premultiplied: red keeps its value while alpha rises, instead of [0.5, 0, 0, 0.5].
     let fade = ramp([0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(
-        sample_effect_param(&fade, MediaTime(50)).value,
+        sample_effect_param(&fade, MediaTime(50), &crate::SampleContext::NONE).value,
         EffectValue::Color([1.0, 0.0, 0.0, 0.5])
     );
     let opaque = ramp([0.0, 0.2, 1.0, 1.0], [1.0, 0.6, 0.0, 1.0]);
-    let EffectValue::Color(mid) = sample_effect_param(&opaque, MediaTime(25)).value else {
+    let EffectValue::Color(mid) =
+        sample_effect_param(&opaque, MediaTime(25), &crate::SampleContext::NONE).value
+    else {
         panic!("a color");
     };
     for (actual, expected) in mid.into_iter().zip([0.25, 0.3, 0.75, 1.0]) {
@@ -330,7 +333,9 @@ fn vec4_parameters_interpolate_component_by_component() {
         (25, [0.15, 0.35, 0.55, 0.25]),
         (50, [0.3, 0.5, 0.7, 0.5]),
     ] {
-        let EffectValue::Vec4(value) = sample_effect_param(&steps, MediaTime(time)).value else {
+        let EffectValue::Vec4(value) =
+            sample_effect_param(&steps, MediaTime(time), &crate::SampleContext::NONE).value
+        else {
             panic!("a vec4");
         };
         for (actual, expected) in value.into_iter().zip(expected) {
@@ -431,7 +436,12 @@ fn effect_parameters_are_sampled_at_the_composition_time() {
         panic!("an effect node");
     };
     assert_eq!(
-        sample_effect_param(&effect.params["mode"], MediaTime(100)).value,
+        sample_effect_param(
+            &effect.params["mode"],
+            MediaTime(100),
+            &crate::SampleContext::NONE
+        )
+        .value,
         EffectValue::Enum(3)
     );
 }
@@ -752,7 +762,10 @@ fn direct_empty_keyframe_mutation_cannot_panic_the_scalar_sampler() {
     let animation = Animated::Keyframes {
         keyframes: Vec::<Keyframe<f32>>::new(),
     };
-    assert!(sample_scalar(&animation, MediaTime::ZERO).abs() <= f32::EPSILON);
+    assert!(
+        sample_scalar(&animation, MediaTime::ZERO, &crate::SampleContext::NONE).abs()
+            <= f32::EPSILON
+    );
 }
 
 #[test]
@@ -834,6 +847,7 @@ fn each_caption_track_shows_its_cue_over_the_tracks_before_it() {
     let mut project = project();
     let mut captions = Track::new(id(TrackId::new, "c1"), "captions", TrackKind::Caption);
     captions.captions = Some(Captions {
+        from_words: None,
         style: alpha2_model::TextStyle::default(),
         styles: std::collections::BTreeMap::new(),
         cues: vec![
@@ -1224,6 +1238,7 @@ fn a_speaker_style_applies_to_each_of_their_cues() {
     let mut project = project();
     let mut track = Track::new(id(TrackId::new, "c1"), "captions", TrackKind::Caption);
     track.captions = Some(Captions {
+        from_words: None,
         style: alpha2_model::TextStyle::default(),
         styles: [(
             "Ann".to_owned(),
@@ -1261,6 +1276,7 @@ fn animator_time_restarts_at_each_cue() {
     let mut project = project();
     let mut track = Track::new(id(TrackId::new, "c1"), "captions", TrackKind::Caption);
     track.captions = Some(Captions {
+        from_words: None,
         style: alpha2_model::TextStyle::default(),
         styles: std::collections::BTreeMap::new(),
         cues: vec![

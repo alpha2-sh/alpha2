@@ -341,7 +341,7 @@ fn heard_untouched(project: &Project, track: &Track, clip: &Clip) -> Result<(), 
 fn constant<T: Copy>(animated: &Animated<T>) -> Option<T> {
     match animated {
         Animated::Constant { value } => Some(*value),
-        Animated::Keyframes { .. } => None,
+        Animated::Keyframes { .. } | Animated::Data(_) => None,
     }
 }
 

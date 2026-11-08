@@ -150,6 +150,7 @@ pub(crate) fn valid_binding_name(name: &str) -> bool {
 
 pub(crate) fn valid_param(animation: &Animated<EffectValue>) -> bool {
     match animation {
+        Animated::Data(_) => true,
         Animated::Constant { value } => value.is_valid(),
         Animated::Keyframes { keyframes } => {
             let Some(first) = keyframes.first() else {

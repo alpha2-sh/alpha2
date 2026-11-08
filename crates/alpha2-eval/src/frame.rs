@@ -1,4 +1,4 @@
-use crate::{EffectParamValue, sample_effect_param};
+use crate::{EffectParamValue, SampleContext, sample_effect_param};
 use alpha2_media::SourceId;
 use alpha2_model::{
     BlendSpace, ClipBlendMode, ClipEffect, ClipId, EffectResourceId, Generator, Matte, Rgb,
@@ -90,6 +90,8 @@ pub struct ActiveClip<'a> {
     pub plan: Option<&'a crate::GeneratorPlan>,
     /// For a composition source, its composition at the clip's source time (no host frame).
     pub source_composition: Option<crate::ActiveComposition<'a>>,
+    /// What the clip's timeline-time values (its masks) read data through.
+    pub data: SampleContext<'a>,
 }
 
 impl ActiveClip<'_> {
@@ -156,13 +158,18 @@ pub struct ActiveTransition<'a> {
 pub struct ActiveEffect<'a> {
     effect: &'a ClipEffect,
     time: MediaTime,
+    context: SampleContext<'a>,
 }
 
 impl<'a> ActiveEffect<'a> {
-    /// The invocation `effect` sampled at `time`.
+    /// The invocation `effect` sampled at `time`, with data bindings read through `context`.
     #[must_use]
-    pub const fn new(effect: &'a ClipEffect, time: MediaTime) -> Self {
-        Self { effect, time }
+    pub const fn new(effect: &'a ClipEffect, time: MediaTime, context: SampleContext<'a>) -> Self {
+        Self {
+            effect,
+            time,
+            context,
+        }
     }
 
     /// Stable effect definition identifier.
@@ -180,10 +187,13 @@ impl<'a> ActiveEffect<'a> {
     /// Every authored parameter sampled at this timestamp. Omitted ones use definition defaults.
     pub fn params(&self) -> impl Iterator<Item = (&'a str, EffectParamValue)> + 'a {
         let time = self.time;
-        self.effect
-            .params
-            .iter()
-            .map(move |(name, animation)| (name.as_str(), sample_effect_param(animation, time)))
+        let context = self.context;
+        self.effect.params.iter().map(move |(name, animation)| {
+            (
+                name.as_str(),
+                sample_effect_param(animation, time, &context),
+            )
+        })
     }
 
     /// One parameter sampled at this timestamp, if the invocation sets it.
@@ -192,7 +202,7 @@ impl<'a> ActiveEffect<'a> {
         self.effect
             .params
             .get(name)
-            .map(|animation| sample_effect_param(animation, self.time))
+            .map(|animation| sample_effect_param(animation, self.time, &self.context))
     }
 
     /// Named external resources matched against the effect definition.

@@ -33,7 +33,7 @@ const pythonComposePath = join(
 );
 
 /** schemars names an instance `Name_Arg`; each becomes one TypeScript generic `Name<T>`. */
-const GENERICS = new Set(["Animated", "Keyframe"]);
+const GENERICS = new Set(["Animated", "Keyframed", "Keyframe"]);
 
 const PRIMITIVE_ARGUMENTS = new Map([
   ["float", "number"],
@@ -120,6 +120,11 @@ function documentedTag(variant) {
   return { ...variant, properties };
 }
 
+/** The `data` value mode reads a data set, so its fields do not depend on the value's type. */
+function isDataMode(variant) {
+  return variant?.properties?.mode?.const === "data";
+}
+
 function isIdentifier(name) {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name);
 }
@@ -151,7 +156,10 @@ function render(node, generic) {
   const variants = node.oneOf ?? node.anyOf;
   if (Array.isArray(variants)) {
     return variants
-      .map((variant) => `\n| ${render(documentedTag(variant), generic)}`)
+      .map(
+        (variant) =>
+          `\n| ${render(documentedTag(variant), isDataMode(variant) ? undefined : generic)}`,
+      )
       .join("");
   }
   if (Array.isArray(node.type)) {
