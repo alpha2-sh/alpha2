@@ -7,6 +7,7 @@ mod composition;
 mod data;
 #[cfg(test)]
 mod data_tests;
+pub mod edit;
 mod error;
 mod evaluate;
 mod frame;

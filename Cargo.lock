@@ -53,6 +53,7 @@ version = "0.6.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-engine",
+ "alpha2-eval",
  "alpha2-geometry",
  "alpha2-gpu",
  "alpha2-media",
@@ -251,6 +252,7 @@ dependencies = [
  "alpha2-scaling-support",
  "alpha2-time",
  "libm",
+ "serde",
  "serde_json",
 ]
 
