@@ -2732,6 +2732,8 @@ test("a host that exits while idle is replaced by a new one", async () => {
   });
   const first = await exported(client);
   await waitUntil(() => !alive(first.pid), "the host to exit");
+  // Windows reports the process gone before Node delivers its exit event to the client.
+  await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
   const second = await exported(client);
   assert.notEqual(second.pid, first.pid);
 });
