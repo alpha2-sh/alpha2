@@ -83,7 +83,8 @@ pub use color::{
 };
 pub use composite::{CompositeLayer, LayerTransform};
 pub use cpu::{
-    CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, pack_cpu_image,
+    CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, decoded,
+    pack_cpu_image,
 };
 pub use diagnostics::{
     AdapterDiagnostics, BenchmarkMetadata, GpuSubmissionStats, PassTiming, PipelineCreation,

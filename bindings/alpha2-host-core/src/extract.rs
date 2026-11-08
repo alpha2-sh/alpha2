@@ -6,17 +6,15 @@ use std::sync::Arc;
 
 use alpha2_engine::extract::{
     AudioChannels, Direction, DriveError, ExtractRequest, ExtractSession, Extractor, FrameFrom,
-    Need, RequestError, SuppliedAudio, SuppliedFrame, Supplier, delivered_size, mono_downmix,
+    Need, RequestError, SuppliedAudio, SuppliedFrame, Supplier, mono_downmix,
 };
+pub use alpha2_engine::extract::{displayed_size, present_for_extraction};
 use alpha2_media::{
     AudioBlock, CancelToken, DecodeError, DecodeEvent, DecodeRequest, DecodeRequestKind,
     DecodedVideoFrame, Decoder, SourceId,
 };
 use alpha2_model::{DataSet, MediaFingerprint, Project};
-use alpha2_render::{
-    BlendMode, ColorPolicy, CpuRenderer, GraphLayer, LayerTransform, RenderGraph, RenderSize,
-    SourceView,
-};
+use alpha2_render::CpuRenderer;
 use alpha2_time::MediaTime;
 
 /// Decoded frames kept for backward reads, at most.
@@ -345,88 +343,6 @@ impl<D: Decoder> AudioReader<D> {
             },
         })
     }
-}
-
-/// The displayed size of a decoded frame: its visible rectangle widened by the pixel aspect
-/// ratio (rounded half up) and turned upright.
-#[must_use]
-pub fn displayed_size(frame: &DecodedVideoFrame) -> (u32, u32) {
-    let sar = frame.sample_aspect_ratio;
-    let (num, den) = (u64::from(sar.num.max(1)), u64::from(sar.den.max(1)));
-    let width = (2 * u64::from(frame.visible_rect.width) * num + den) / (2 * den);
-    let width = u32::try_from(width).unwrap_or(u32::MAX).max(1);
-    let height = frame.visible_rect.height.max(1);
-    if frame.orientation.rotation.swaps_axes() {
-        (height, width)
-    } else {
-        (width, height)
-    }
-}
-
-/// A decoded frame presented on the CPU renderer as an extraction delivery: display-oriented,
-/// contain-fit to at most `size` on the long edge, straight-alpha sRGB RGBA8. HDR is tone-mapped
-/// with the default tone map.
-///
-/// # Errors
-/// A frame the renderer cannot present.
-pub fn present_for_extraction(
-    renderer: &CpuRenderer,
-    frame: Arc<DecodedVideoFrame>,
-    size: u32,
-) -> Result<SuppliedFrame, String> {
-    let (width, height) = delivered_size(displayed_size(&frame), size);
-    let target = RenderSize::new(width, height).map_err(|error| error.to_string())?;
-    let pts = frame.pts;
-    let source = crate::export::prepare_cpu(
-        renderer,
-        target,
-        ColorPolicy::ToneMapHdr(alpha2_render::hdr::HdrToneMap::default()),
-        frame,
-    )?;
-    let mut graph = RenderGraph::new(target);
-    let node = graph.add_source(SourceView::from(&source));
-    let output = graph
-        .add_composite(vec![GraphLayer {
-            source: node,
-            visual: LayerTransform {
-                position: [0.5, 0.5],
-                anchor: [0.5, 0.5],
-                scale: [1.0, 1.0],
-                rotation_degrees: 0.0,
-                opacity: 1.0,
-            },
-            blend_mode: BlendMode::Normal,
-        }])
-        .map_err(|error| error.to_string())?;
-    graph
-        .set_output(output)
-        .map_err(|error| error.to_string())?;
-    let image = renderer
-        .execute_graph(&graph)
-        .map_err(|error| error.to_string())?;
-    Ok(SuppliedFrame {
-        pts,
-        width,
-        height,
-        rgba: unpremultiply(image.read_rgba8()),
-    })
-}
-
-/// Straight alpha from premultiplied RGBA8, rounded half up.
-fn unpremultiply(mut rgba: Vec<u8>) -> Vec<u8> {
-    for pixel in rgba.as_chunks_mut::<4>().0 {
-        let alpha = u32::from(pixel[3]);
-        if alpha == 0 {
-            pixel[..3].fill(0);
-        } else if alpha < 255 {
-            for channel in &mut pixel[..3] {
-                *channel =
-                    u8::try_from(((u32::from(*channel) * 255 * 2 + alpha) / (2 * alpha)).min(255))
-                        .unwrap_or(u8::MAX);
-            }
-        }
-    }
-    rgba
 }
 
 /// Supplies a session's source needs from a video and an audio reader; timeline needs come from

@@ -34,7 +34,9 @@ pub use manifest::{
     PLUGIN_MANIFEST_SCHEMA_ID, PluginArtifact, PluginKind, PluginManifest, PluginResource,
     WASM_TARGET,
 };
-pub use pixels::{delivered_size, luma8_from_rgba8, mono_downmix};
+pub use pixels::{
+    delivered_size, displayed_size, luma8_from_rgba8, mono_downmix, present_for_extraction,
+};
 pub use session::{
     AudioInput, Delivery, Emit, ExtractSession, FrameFrom, Need, PassProgress, RequestError,
     RunContext, SessionError, Step, SuppliedAudio, SuppliedFrame, VideoInput,
