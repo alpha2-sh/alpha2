@@ -130,7 +130,11 @@ impl ActiveIndex {
             .enumerate()
             .filter_map(|(track_order, track)| {
                 track.captions.as_ref().map(|captions| {
-                    IndexedCaptions::new(track.id.clone(), track_order, captions.clone())
+                    let mut shown = captions.clone();
+                    if shown.from_words.is_some() {
+                        shown.cues = crate::caption_cues(project, captions);
+                    }
+                    IndexedCaptions::new(track.id.clone(), track_order, shown)
                 })
             })
             .collect();

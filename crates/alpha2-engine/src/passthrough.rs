@@ -177,8 +177,10 @@ fn tiling_clips(project: &Project, range: TimeRange) -> Result<Vec<(&Track, &Cli
     for track in &project.timeline.tracks {
         match track.kind {
             TrackKind::Caption => {
+                // Cues built from words are not resolved here, so a track with words may show text.
                 if track.captions.as_ref().is_some_and(|captions| {
-                    captions.cues.iter().any(|cue| overlaps(cue.timeline_range))
+                    captions.from_words.is_some()
+                        || captions.cues.iter().any(|cue| overlaps(cue.timeline_range))
                 }) {
                     return Err(format!(
                         "caption track {} shows text in the range",

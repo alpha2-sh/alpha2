@@ -31,7 +31,7 @@ fn validate_project_json(py: Python<'_>, json: &str) -> Vec<String> {
 #[pyfunction]
 fn project_end_ticks(py: Python<'_>, json: &str) -> PyResult<Option<i64>> {
     py.detach(|| Project::from_json(json))
-        .map(|project| project.timeline.extent().map(|extent| extent.end().ticks()))
+        .map(|project| project.extent().map(|extent| extent.end().ticks()))
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 

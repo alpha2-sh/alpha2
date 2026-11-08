@@ -87,7 +87,7 @@ impl EngineProject {
     /// ([`alpha2_model::Timeline::extent`]).
     #[must_use]
     pub fn timeline_range(&self) -> Option<TimeRange> {
-        self.project.timeline.extent()
+        self.project.extent()
     }
 
     /// Every effect the project can draw, by id and version, each once. Compositions that cannot

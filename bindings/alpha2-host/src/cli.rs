@@ -503,5 +503,5 @@ pub fn project_end_ticks(project: &[u8]) -> Result<Option<i64>, HostError> {
         .map_err(|error| HostError::invalid_input(format!("the project is not UTF-8: {error}")))?;
     let project = alpha2_model::Project::from_json(text)
         .map_err(|error| HostError::invalid_input(error.to_string()))?;
-    Ok(project.timeline.extent().map(|extent| extent.end().ticks()))
+    Ok(project.extent().map(|extent| extent.end().ticks()))
 }

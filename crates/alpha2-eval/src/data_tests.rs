@@ -423,3 +423,143 @@ fn a_gain_bound_to_data_changes_only_at_sample_times() {
         (1..48).map(|frame| frame * 5_000).collect::<Vec<i64>>()
     );
 }
+
+/// Words on source `a1` every 10000 ticks from 0, each 8000 long, `w0`, `w1`, ...; a sentence
+/// ends at `w5`; `w12` on is said by `B`.
+fn words_on_a1() -> Value {
+    let words = (0..24)
+        .map(|index: i64| {
+            let text = if index == 5 {
+                format!("w{index}.")
+            } else {
+                format!("w{index}")
+            };
+            let mut word =
+                json!({ "start": index * 10_000, "end": index * 10_000 + 8_000, "text": text });
+            if index >= 12 {
+                word["speaker"] = json!("B");
+            }
+            word
+        })
+        .collect::<Vec<_>>();
+    json!([{ "id": "speech", "anchor": { "type": "source", "source_id": "a1" }, "kind": "words", "words": words }])
+}
+
+fn with_subtitles(document: &mut Value, clips: Value) {
+    document["timeline"]["tracks"][2]["clips"] = clips;
+    document["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks")
+        .push(json!({
+        "id": "subs", "name": "Subs", "kind": "caption",
+        "captions": { "from_words": { "data": "speech", "track": "t3", "max_chars": 42 } } }));
+}
+
+fn audio_clip(id: &str, timeline: (i64, i64), source: (i64, i64), map: &Value) -> Value {
+    json!({ "id": id, "source_id": "a1", "timeline_range": { "start": timeline.0, "end": timeline.1 },
+            "source_range": { "start": source.0, "end": source.1 }, "time_map": map })
+}
+
+fn cue_texts(project: &Project) -> Vec<(i64, i64, String, Option<String>)> {
+    let captions = project.timeline.tracks[3]
+        .captions
+        .as_ref()
+        .expect("captions");
+    crate::caption_cues(project, captions)
+        .into_iter()
+        .map(|cue| {
+            (
+                cue.timeline_range.start().ticks(),
+                cue.timeline_range.end().ticks(),
+                cue.text.text().into_owned(),
+                cue.speaker,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn cues_from_a_source_cut_into_three_clips_never_span_a_cut() {
+    let forward = json!({ "type": "forward" });
+    let project = project((30, 1), &words_on_a1(), |document| {
+        with_subtitles(
+            document,
+            json!([
+                audio_clip("x", (0, 30_000), (0, 30_000), &forward),
+                audio_clip("y", (30_000, 60_000), (100_000, 130_000), &forward),
+                audio_clip("z", (60_000, 120_000), (150_000, 210_000), &forward),
+            ]),
+        );
+    });
+    let shown = cue_texts(&project);
+    for (from, to, ..) in &shown {
+        let cuts = [30_000, 60_000];
+        assert!(
+            cuts.iter().all(|cut| !(from < cut && cut < to)),
+            "cue {from}..{to} spans a cut"
+        );
+    }
+    // Clip x shows w0..w2; y shows w10..w12 (w12 by B); z shows w15..w20.
+    let texts = shown.iter().map(|cue| cue.2.as_str()).collect::<Vec<_>>();
+    assert_eq!(
+        texts,
+        vec!["w0 w1 w2", "w10 w11", "w12", "w15 w16 w17 w18 w19 w20"]
+    );
+    assert_eq!(shown[2].3.as_deref(), Some("B"));
+    // Each word keeps its own time as a run from the cue start.
+    let index = ActiveIndex::build(&project).expect("index");
+    let frame = crate::evaluate(&project, &index, MediaTime(35_000)).expect("frame");
+    assert_eq!(frame.captions.len(), 1);
+}
+
+#[test]
+fn reversed_and_frozen_clips_give_no_cues_and_loops_repeat() {
+    let project = project((30, 1), &words_on_a1(), |document| {
+        with_subtitles(
+            document,
+            json!([
+                audio_clip("r", (0, 30_000), (0, 30_000), &json!({ "type": "reverse" })),
+                audio_clip(
+                    "f",
+                    (30_000, 60_000),
+                    (0, 30_000),
+                    &json!({ "type": "freeze", "source_time": 5_000 })
+                ),
+                audio_clip(
+                    "l",
+                    (60_000, 150_000),
+                    (0, 30_000),
+                    &json!({ "type": "loop", "mode": "repeat" })
+                ),
+            ]),
+        );
+    });
+    let cues = cue_texts(&project);
+    let starts = cues.iter().map(|cue| cue.0).collect::<Vec<_>>();
+    assert_eq!(starts, vec![60_000, 90_000, 120_000]);
+    assert!(cues.iter().all(|cue| cue.2 == "w0 w1 w2"));
+}
+
+#[test]
+fn timeline_words_group_as_they_are() {
+    let words = json!([{ "id": "speech", "anchor": { "type": "timeline" }, "kind": "words", "words": [
+        { "start": 0, "end": 5_000, "text": "Hello" }, { "start": 6_000, "end": 9_000, "text": "there." },
+        { "start": 300_000, "end": 305_000, "text": "Later" } ] }]);
+    let project = project((30, 1), &words, |document| {
+        document["timeline"]["tracks"]
+            .as_array_mut()
+            .expect("tracks")
+            .push(json!({
+            "id": "subs", "name": "Subs", "kind": "caption",
+            "captions": { "from_words": { "data": "speech", "max_chars": 42 } } }));
+    });
+    let cues = cue_texts(&project);
+    assert_eq!(
+        cues.iter().map(|cue| cue.2.as_str()).collect::<Vec<_>>(),
+        vec!["Hello there.", "Later"]
+    );
+    assert_eq!(
+        project.extent().map(|range| range.end().ticks()),
+        Some(305_000)
+    );
+}

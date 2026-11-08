@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use alpha2_model::{
-    CaptionCue, CubicBezier, Easing, EffectValue, LayoutNode, Paint, Rgba, RunState, RunTime,
-    TextContent as CueText, TextRun, TextShadow, TextStroke, TextStyle, TextUnit,
+    CaptionCue, CubicBezier, Easing, EffectValue, LayoutNode, Paint, Rgba, RunState, TextShadow,
+    TextStroke, TextStyle, TextUnit,
 };
 use alpha2_time::MediaTime;
 
@@ -2056,92 +2056,22 @@ impl Context<'_> {
         Ok(out)
     }
 
-    /// Words grouped into cues that end at `max_chars` characters, a sentence's end, or a
-    /// pause. Each cue has one run per word (with its trailing space), timed from the cue's
-    /// start, so Timing selectors follow the speech.
+    /// Words grouped into cues by [`alpha2_model::group_words`], after the checks cues get.
     fn group_words(
         words: &[Cue],
         max_chars: u32,
         path: &str,
     ) -> Result<Vec<CaptionCue>, ComposeError> {
-        // Each cue being built: its start, end, speaker and words with their times.
-        type Words = (i64, i64, Option<String>, Vec<(String, i64, i64)>);
-        let pause = seconds_to_ticks(0.6);
-        let words = Self::cues(words, path)?;
-        let mut groups: Vec<Words> = Vec::new();
-        let mut current: Option<Words> = None;
-        for word in words {
-            let (start, end) = (
-                word.timeline_range.start().ticks(),
-                word.timeline_range.end().ticks(),
-            );
-            let text = word.text.text().trim().to_owned();
-            if let Some((_, cue_end, speaker, held)) = &mut current {
-                let length = held
-                    .iter()
-                    .map(|(word, ..)| word.chars().count() + 1)
-                    .sum::<usize>()
-                    + text.chars().count();
-                let sentence_end = held
-                    .last()
-                    .is_some_and(|(word, ..)| word.ends_with(['.', '?', '!', '\u{3002}']));
-                if length <= max_chars as usize
-                    && start - *cue_end <= pause
-                    && !sentence_end
-                    && *speaker == word.speaker
-                {
-                    held.push((text, start, end));
-                    *cue_end = (*cue_end).max(end);
-                    continue;
-                }
-                groups.extend(current.take());
-            }
-            current = Some((start, end, word.speaker.clone(), vec![(text, start, end)]));
-        }
-        groups.extend(current);
-        let mut cues = groups
+        let words = Self::cues(words, path)?
             .into_iter()
-            .map(|(start, end, speaker, held)| {
-                let count = held.len();
-                let runs = held
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, (mut text, from, to))| {
-                        if index + 1 < count {
-                            text.push(' ');
-                        }
-                        TextRun {
-                            text,
-                            class: Vec::new(),
-                            time: Some(RunTime {
-                                start: MediaTime(from - start),
-                                end: MediaTime(to - start),
-                            }),
-                        }
-                    })
-                    .collect();
-                CaptionCue {
-                    speaker,
-                    ..CaptionCue::new(
-                        alpha2_time::TimeRange::new(MediaTime(start), MediaTime(end))
-                            .expect("a word ends after it starts"),
-                        CueText::Runs(runs),
-                    )
-                }
+            .map(|word| alpha2_model::DataWord {
+                start: word.timeline_range.start(),
+                end: word.timeline_range.end(),
+                text: word.text.text().into_owned(),
+                speaker: word.speaker,
             })
             .collect::<Vec<_>>();
-        // Overlapping words would make overlapping cues, so each cue ends where the next starts.
-        for index in 1..cues.len() {
-            let next = cues[index].timeline_range.start();
-            let previous = &mut cues[index - 1];
-            if previous.timeline_range.end() > next && previous.timeline_range.start() < next {
-                previous.timeline_range =
-                    alpha2_time::TimeRange::new(previous.timeline_range.start(), next)
-                        .unwrap_or(previous.timeline_range);
-                clip_runs(previous);
-            }
-        }
-        Ok(cues)
+        Ok(alpha2_model::group_words(&words, max_chars))
     }
 
     fn lower_audio(&mut self, audio: &Audio, path: &str) -> Result<Prim, ComposeError> {
@@ -2334,22 +2264,7 @@ fn highlight_animator(
     }
 }
 
-/// Clamps a cue's run times to its range after the range was shortened. A run that would
-/// start at or after the end gets no time.
-pub(crate) fn clip_runs(cue: &mut CaptionCue) {
-    let duration = cue.timeline_range.duration().map_or(0, MediaTime::ticks);
-    if let CueText::Runs(runs) = &mut cue.text {
-        for run in runs {
-            run.time = run.time.and_then(|time| {
-                let end = time.end.ticks().min(duration);
-                (time.start.ticks() < end).then_some(RunTime {
-                    start: time.start,
-                    end: MediaTime(end),
-                })
-            });
-        }
-    }
-}
+pub(crate) use alpha2_model::clip_runs;
 
 /// A built-in's full id from its short name; a name with a dot is already an id.
 pub(crate) fn effect_id(name: &str) -> String {

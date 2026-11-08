@@ -2,6 +2,7 @@
 
 mod animation;
 mod audio;
+mod captions;
 mod composition;
 mod data;
 #[cfg(test)]
@@ -25,6 +26,7 @@ pub use animation::{
 pub use audio::{
     ActiveAudioClip, AudioSpan, AudioSpanDesc, AudioSpanScratch, evaluate_audio, evaluate_audio_in,
 };
+pub use captions::caption_cues;
 pub(crate) use composition::IndexedComposition;
 pub use composition::{
     ActiveComposition, CompositionPlan, MAX_PLAN_BYTES, PlanError, Step, StepLayer, StepOp,
