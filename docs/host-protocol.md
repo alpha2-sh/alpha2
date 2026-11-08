@@ -264,6 +264,23 @@ Times are ticks on the input's clock, inside the range. During a pass an emit re
 - Progress messages have `"phase": "extract"`, the `pass`, and its `completed` and `total` deliveries; `total` is `null` for a source pass, whose frame count is not known ahead.
 - A `cancel` ends the request with `CANCELLED` between steps; a client that exits ends it with the host.
 
+Limits, each by the constant that sets it:
+
+| Limit | Constant | Value |
+| --- | --- | --- |
+| Outputs per descriptor | `alpha2_engine::extract::MAX_EXTRACTOR_OUTPUTS` | 32 |
+| Passes per request | `alpha2_engine::extract::MAX_EXTRACTOR_PASSES` | 64 |
+| `size` when the descriptor names no `max_size` | `alpha2_engine::extract::DEFAULT_MAX_SIZE` | 960 |
+| Audio `block_frames` | `alpha2_engine::extract::BLOCK_FRAMES_RANGE`, default `DEFAULT_BLOCK_FRAMES` | 64 to 65536, default 1024 |
+| Data sets per project | `alpha2_model::MAX_DATA_SETS` | 256 |
+| Channels per output | `alpha2_model::MAX_DATA_CHANNELS` | 64 |
+| Values per sampled data set (numbers or `null`s) | `alpha2_model::MAX_DATA_VALUES` | 4,000,000 |
+| Words, intervals per data set | `alpha2_model::MAX_DATA_WORDS`, `MAX_DATA_INTERVALS` | 200,000 each |
+| Data set id; label, text, speaker or channel name | `alpha2_model::MAX_DATA_ID_BYTES`, `MAX_DATA_LABEL_BYTES` | 64, 256 bytes |
+| Points and similarity translation; scalars and interval scores | `alpha2_model::MAX_DATA_COORDINATE`, `MAX_DATA_SCALAR` | 16, 1e9 in magnitude |
+| Similarity rotation; scale | `alpha2_model::MAX_DATA_ROTATION_DEGREES`, `MAX_DATA_SCALE` | 36000 degrees, 1000 |
+| `--extract-step-timeout` default | `alpha2-host` `DEFAULT_STEP_TIMEOUT` | 60 s |
+
 The result is `{ "dataSets": [...], "timings": { "totalMs", "clientMs" } }`: one data set per output, in descriptor order, each anchored to the source read (`made_from` its original's fingerprint) or to the timeline, with `made_by` recording the extractor, version and params, and for a plugin `made_by.plugin` (the package `version` and the `artifact_sha256` that ran). `clientMs` is the time spent waiting for acknowledgements, 0 for a plugin. Putting the data sets in the project, replacing older ones with the same id, is the caller's edit.
 
 ### Plugins
@@ -274,6 +291,7 @@ With `plugin`, the host runs the extractor itself; no steps go to the client, an
 - Downloaded files are kept under their SHA-256 in `ALPHA2_PLUGIN_CACHE`, else the platform's cache directory (`~/.cache/alpha2/plugins`, `~/Library/Caches/alpha2/plugins`, `%LOCALAPPDATA%\alpha2\plugins`). Every file is checked against the hash and length its manifest pins before it is used, cached or not.
 - The host takes the native artifact for its own target when `allow_native` is true and `force_wasm` is not, else the wasm artifact. A native artifact runs with the host's rights, inside this host process: if it crashes, the host exits and the request gets no response. A wasm artifact is sandboxed, its memory capped by `--plugin-memory-limit <bytes>` (a `serve` flag, 1 GiB by default) and each call bounded by `--plugin-call-timeout <ms>` (300000 by default); past either it fails with `PLUGIN_LIMIT` and the host goes on serving.
 - The artifact's descriptor must equal the manifest's. The request's `params` go to the plugin as they are; the plugin checks them.
+- A manifest is at most `alpha2_engine::extract::MAX_MANIFEST_BYTES` (1 MiB) with at most `MAX_PLUGIN_ARTIFACTS` artifacts and `MAX_PLUGIN_RESOURCES` resources (64 each). The `--plugin-memory-limit` and `--plugin-call-timeout` defaults are `alpha2_host_core::plugins::DEFAULT_MEMORY_BYTES` and `DEFAULT_CALL_DEADLINE`.
 - The `PLUGIN_*` codes below say why a plugin did not load or run. A plugin call that fails is `EXTRACTOR_FAILED` with the plugin's message, and output the session refuses is `INVALID_EMIT`, as for a client.
 
 ## Cancelling

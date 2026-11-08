@@ -2,6 +2,25 @@
 //! frames and audio through the platform's decoders (in software, so frames carry planes and
 //! present alike on every surface) and timeline frames through the still path, and hands each
 //! delivery to the app's [`Extractor`].
+//!
+//! ```kotlin
+//! class Brightness : Extractor {
+//!     override fun describe() = """{"id":"com.example.brightness","version":1,
+//!         "input":{"media":"video","from":["source"],"format":"luma8"},
+//!         "outputs":[{"name":"level","kind":"scalars","channels":["y"]}]}"""
+//!     override fun begin(contextJson: String) {}
+//!     override fun pass(pass: UInt, backward: Boolean) {}
+//!     override fun video(frame: ExtractVideoFrame): String {
+//!         val mean = frame.data.sumOf { it.toInt() and 0xff } / (frame.data.size * 255.0)
+//!         return """[{"output":"level","time":${frame.time},"values":[$mean]}]"""
+//!     }
+//!     override fun audio(block: ExtractAudioBlock) = "[]"
+//!     override fun end() = "[]"
+//! }
+//!
+//! val sets = engine.extract(ExtractRequest(project, request, mapOf("v" to path), null),
+//!     Brightness()).outcome()
+//! ```
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};

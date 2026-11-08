@@ -17,6 +17,7 @@ alpha2-geometry = { path = "../crates/alpha2-geometry" }
 alpha2-host-core = { path = "../bindings/alpha2-host-core", default-features = false }
 alpha2-media = { path = "../crates/alpha2-media" }
 alpha2-model = { path = "../crates/alpha2-model" }
+alpha2-plugin-abi = { path = "../crates/alpha2-plugin-abi" }
 alpha2-text = { path = "../bindings/alpha2-text" }
 alpha2-time = { path = "../crates/alpha2-time" }
 libfuzzer-sys = "0.4"
@@ -163,6 +164,41 @@ bench = false
 [[bin]]
 name = "host_frames"
 path = "fuzz_targets/host_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "project_data"
+path = "fuzz_targets/project_data.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extract_emits"
+path = "fuzz_targets/extract_emits.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plugin_records"
+path = "fuzz_targets/plugin_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plugin_manifest"
+path = "fuzz_targets/plugin_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "edit_apply"
+path = "fuzz_targets/edit_apply.rs"
 test = false
 doc = false
 bench = false

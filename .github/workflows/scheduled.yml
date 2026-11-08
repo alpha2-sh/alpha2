@@ -45,6 +45,11 @@ jobs:
           - container_audio
           - container_matroska
           - host_frames
+          - project_data
+          - extract_emits
+          - plugin_records
+          - plugin_manifest
+          - edit_apply
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance

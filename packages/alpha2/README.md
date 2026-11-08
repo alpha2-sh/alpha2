@@ -75,6 +75,42 @@ The engine mixes the project's audio. The application uploads each source's deco
 
 For preview, `alpha2/audio-timeline` moves the mixed blocks to the audio thread through a ring in shared memory, which needs a cross-origin isolated page (`canShareAudioMemory()` says whether this page is one), and `alpha2/audio-worklet` plays them in an AudioWorklet. `alpha2/loudness` measures loudness (ITU-R BS.1770-4, EBU R128) and plans normalization; `alpha2/waveform` computes waveform summaries.
 
+## Extract data
+
+`runExtractor` in `alpha2/extract` runs an extractor of your own over a source or the timeline and resolves with data sets ready to put in `project.data`. The browser decodes the source in software (mediabunny), the engine's session in wasm presents and checks every step, and each value is validated as the project validates data:
+
+```js
+import { runExtractor } from "alpha2/extract";
+
+const { dataSets } = await runExtractor(
+  {
+    binding: wasm,
+    project,
+    media: { interview: file },
+    request: {
+      extractor: "com.example.brightness",
+      version: 1,
+      input: { from: "source", source_id: "interview", range: { start: 0, end: 600_000 }, size: 64 },
+      outputs: { level: "interview-brightness" },
+    },
+  },
+  {
+    describe: () => ({
+      id: "com.example.brightness",
+      version: 1,
+      input: { media: "video", from: ["source"], format: "luma8" },
+      outputs: [{ name: "level", kind: "scalars", channels: ["y"] }],
+    }),
+    video(frame, out) {
+      const sum = frame.data.reduce((total, value) => total + value, 0);
+      out.sample("level", frame.time, [sum / frame.data.length / 255]);
+    },
+  },
+);
+```
+
+A timeline input needs `timelineFrame(time, width, height)`, such as the CPU renderer's `readRgbaAt`, and an audio input `audioBinding: wasm`. `loadPlugin(manifest, sha256)` in `alpha2/plugins` loads an [extractor plugin](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md)'s wasm artifact, checked against its pinned hashes; pass it as `plugin` with `plugin.extractor(params)`. `applyEdit` in `alpha2/apply-edit` then applies data to the project, such as `remove_ranges` over silences.
+
 ## Preview in a worker
 
 `alpha2/worker` runs the engine in a worker that owns the GPU device and an `OffscreenCanvas` (`installRenderWorker`, `createWasmRenderWorkerHost`), and `WorkerRenderBackend` drives it from the page. The host's `renderer` option is `"auto"` (WebGPU, else WebGL2, on a hardware adapter, else the CPU renderer), `"gpu"` (any adapter, software ones included) or `"cpu"`; `WorkerRenderBackend.rendererChoice` says which renderer the worker made and why it draws on the CPU, as the native host's `renderer` and `rendererReason` do. `Alpha2Player` in `alpha2/player` presents times through such a backend: it serializes presentations, asks for the frames a presentation lacks and shows them once they arrive, and recovers a lost GPU through `GpuRecoveryLadder` (`alpha2/gpu-recovery`): the GPU again after a first external loss, the CPU renderer once the loss was the work's own (`GPU_DEVICE_HUNG`), recurred at the same frame, or the page has lost the GPU twice (the browser withdraws GPU access after its next reset). A recovery that needs a new canvas takes one from the player's `replaceSurface` option; `@alpha2-sh/react` supplies it.

@@ -141,6 +141,7 @@ dependencies = [
  "alpha2-host-core",
  "alpha2-media",
  "alpha2-model",
+ "alpha2-plugin-abi",
  "alpha2-text",
  "alpha2-time",
  "libfuzzer-sys",
