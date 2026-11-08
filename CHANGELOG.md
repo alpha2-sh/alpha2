@@ -26,9 +26,24 @@ All notable changes to this project are documented in this file.
   and specs.
 - The compose schema lists every built-in effect with its parameter types and ranges. Schemas carry
   their alpha2.sh ids, and a core compose schema leaves out engine nodes.
+- `serve` reports its state: `ready`, or `draining` once a new process would serve better (memory,
+  memory growth, requests served, open handles, a lost device or encoder path, idle time), with
+  soft limits set by `serve` flags. Requests it did not start are answered `HOST_RETIRING`, and a
+  `status` operation reports the state at once.
+- `@alpha2-sh/node` and the Python client keep their hosts between requests, up to `concurrency`,
+  one request at a time each, and replace a host that drains or exits. Hosts are kept apart by the
+  environment they start with. `Alpha2NodeClient.close()` and `HostClient.close()` end them; idle
+  hosts keep no Node or Python process alive. The MCP server reuses hosts across tool calls.
+- A `still` without an `output` returns its PNG in the response instead of a file.
+- `serve` runs up to `--max-running` requests at once on its one GPU device. Requests hold the
+  runtime effects and effect resources they define, so two that define one id differently take
+  turns, and the memory watchdog stops the newest export first.
 
 ### Changed
 
+- Host protocol version 2: every message is a length-prefixed frame, a JSON header and binary
+  attachments, instead of a JSON line. `serve` owns standard output: it writes a magic before its
+  first frame, and anything else the process prints goes to standard error.
 - Built-in effects and transitions are validated against their published definitions.
 - Mattes and masks spread over transitions that commute with coverage, such as wipes.
 - Builds link the pinned FFmpeg ahead of system library directories.

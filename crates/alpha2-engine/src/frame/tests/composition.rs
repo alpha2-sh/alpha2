@@ -8,7 +8,7 @@ const W: u32 = 4;
 const H: u32 = 2;
 
 fn renderer() -> Renderer {
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     for definition in [
         runtime_tint_effect("fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }"),
         EffectDef {

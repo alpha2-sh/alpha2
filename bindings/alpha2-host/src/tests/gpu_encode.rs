@@ -483,7 +483,7 @@ fn the_capability_lists_each_codec_the_path_takes() {
 #[cfg(feature = "hwencode")]
 fn rejection_request(directory: &std::path::Path, policy: &str) -> Value {
     let mut request = json!({
-        "protocolVersion": 1, "requestId": "rejected", "operation": "export",
+        "protocolVersion": 2, "requestId": "rejected", "operation": "export",
         "project": conform_project(&json!({})),
         "assets": {"video": corpus("parity-rgb.mov")},
         "startTicks": 0, "endTicks": 120_000,

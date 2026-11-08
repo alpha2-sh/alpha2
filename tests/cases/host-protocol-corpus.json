@@ -3,13 +3,13 @@
     "name": "capabilities success",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "capabilities",
       "requestId": "caps-1"
     },
     "messages": [
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "requestId": "caps-1",
         "ok": true,
         "result": {
@@ -45,7 +45,8 @@
               ]
             }
           }
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -53,7 +54,7 @@
     "name": "export progress and success",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-1",
       "project": {},
@@ -74,7 +75,7 @@
     },
     "messages": [
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "type": "progress",
         "requestId": "export-1",
         "phase": "frames",
@@ -82,7 +83,7 @@
         "total": 30
       },
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "type": "progress",
         "requestId": "export-1",
         "phase": "finalizing",
@@ -90,7 +91,7 @@
         "total": 30
       },
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "requestId": "export-1",
         "ok": true,
         "result": {
@@ -100,7 +101,8 @@
             "stagedLocally": false,
             "retries": 0
           }
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -108,7 +110,7 @@
     "name": "a finished export that cannot be published keeps its render",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-kept",
       "project": {},
@@ -128,7 +130,7 @@
     },
     "messages": [
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "type": "progress",
         "requestId": "export-kept",
         "phase": "finalizing",
@@ -136,7 +138,7 @@
         "total": 30
       },
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "requestId": "export-kept",
         "ok": false,
         "error": {
@@ -145,7 +147,8 @@
           "details": {
             "keptPath": "/staging/output.a2kept.mp4"
           }
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -154,19 +157,20 @@
     "requestValid": false,
     "expectedErrorCode": "UNSUPPORTED_PROTOCOL",
     "request": {
-      "protocolVersion": 2,
+      "protocolVersion": 3,
       "operation": "capabilities",
       "requestId": "future-1"
     },
     "messages": [
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "requestId": "future-1",
         "ok": false,
         "error": {
           "code": "UNSUPPORTED_PROTOCOL",
-          "message": "unsupported protocol major 2; this host supports 1"
-        }
+          "message": "unsupported protocol major 3; this host supports 2"
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -174,13 +178,13 @@
     "name": "startup GPU failure is distinct",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "capabilities",
       "requestId": "caps-gpu"
     },
     "messages": [
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "type": "fatal",
         "error": {
           "code": "GPU_INIT_FAILED",
@@ -193,7 +197,7 @@
     "name": "export with a quality level",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-with-a-quality-level",
       "project": {},
@@ -220,7 +224,7 @@
     "name": "export with an explicit constant rate",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-with-an-explicit-constant-rate",
       "project": {},
@@ -252,7 +256,7 @@
     "name": "an unknown quality level is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "an-unknown-quality-level-is-the-caller's-input",
       "project": {},
@@ -279,7 +283,7 @@
     "name": "a zero explicit bitrate is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "a-zero-explicit-bitrate-is-the-caller's-input",
       "project": {},
@@ -308,7 +312,7 @@
     "name": "an explicit rate with an unknown key is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "an-explicit-rate-with-an-unknown-key-is-the-caller's-input",
       "project": {},
@@ -338,7 +342,7 @@
     "name": "export normalized to a loudness target",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-normalized-to-a-loudness-target",
       "project": {},
@@ -367,7 +371,7 @@
     "name": "a loudness target above 0 LUFS is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "a-loudness-target-above-0-LUFS-is-the-callers-input",
       "project": {},
@@ -397,7 +401,7 @@
     "name": "loudness without audio is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "loudness-without-audio-is-the-callers-input",
       "project": {},
@@ -427,7 +431,7 @@
     "name": "export with caption fonts",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-captions",
       "project": {},
@@ -452,19 +456,20 @@
     },
     "messages": [
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "type": "progress",
         "requestId": "export-captions",
         "completed": 1,
         "total": 30
       },
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "requestId": "export-captions",
         "ok": true,
         "result": {
           "frames": 30
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -472,7 +477,7 @@
     "name": "fonts must be a list of paths",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-bad-fonts",
       "project": {},
@@ -499,7 +504,7 @@
     "name": "export replacing an existing output",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-overwrite",
       "project": {},
@@ -525,7 +530,7 @@
     "name": "overwrite must be a boolean",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-bad-overwrite",
       "project": {},
@@ -552,7 +557,7 @@
     "name": "export baking frames into a render cache",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-baking-frames-into-a-render-cache",
       "project": {},
@@ -581,7 +586,7 @@
     "name": "a render cache without a directory is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "a-render-cache-without-a-directory-is-the-callers-input",
       "project": {},
@@ -610,7 +615,7 @@
     "name": "a zero render cache quota is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "a-zero-render-cache-quota-is-the-callers-input",
       "project": {},
@@ -640,7 +645,7 @@
     "name": "export whose output extension names its container",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-whose-output-extension-names-its-container",
       "project": {},
@@ -663,7 +668,7 @@
     "name": "export naming its container and codecs",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-naming-its-container-and-codecs",
       "project": {},
@@ -689,7 +694,7 @@
     "name": "a container its output extension contradicts is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "a-container-its-output-extension-contradicts-is-the-callers-input",
       "project": {},
@@ -714,7 +719,7 @@
     "name": "a codec the container does not offer is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "a-codec-the-container-does-not-offer-is-the-callers-input",
       "project": {},
@@ -740,7 +745,7 @@
     "name": "an output extension that names no container is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "an-output-extension-that-names-no-container-is-the-callers-input",
       "project": {},
@@ -764,7 +769,7 @@
     "name": "still success",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "still",
       "requestId": "still-1",
       "project": {},
@@ -792,7 +797,7 @@
     },
     "messages": [
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "requestId": "still-1",
         "ok": true,
         "result": {
@@ -826,7 +831,8 @@
             "renderMs": 2.25,
             "writeMs": 1.5
           }
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -834,7 +840,7 @@
     "name": "a still request needs at least one still",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "still",
       "requestId": "still-none",
       "project": {},
@@ -853,7 +859,7 @@
     "name": "a still request renders at most 256 stills",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "still",
       "requestId": "still-257",
       "project": {},
@@ -1901,7 +1907,7 @@
     "name": "two stills may not write one output",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "still",
       "requestId": "still-twice",
       "project": {},
@@ -1929,7 +1935,7 @@
     "name": "two stills may not write one output spelled in two cases",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "still",
       "requestId": "still-case",
       "project": {},
@@ -1954,7 +1960,7 @@
     "name": "a still's time is an integer tick count",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "still",
       "requestId": "still-seconds",
       "project": {},
@@ -1978,7 +1984,7 @@
     "name": "export keeping alpha in WebM",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-keeping-alpha-in-WebM",
       "project": {},
@@ -2005,7 +2011,7 @@
     "name": "export in ProRes 4444 with alpha",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-in-ProRes-4444-with-alpha",
       "project": {},
@@ -2032,7 +2038,7 @@
     "name": "export at 10 bits",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-at-10-bits",
       "project": {},
@@ -2059,7 +2065,7 @@
     "name": "alpha a codec cannot keep is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "alpha-a-codec-cannot-keep-is-the-callers",
       "project": {},
@@ -2087,7 +2093,7 @@
     "name": "VP9 alpha in MP4 is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "VP9-alpha-in-MP4-is-the-callers-input",
       "project": {},
@@ -2115,7 +2121,7 @@
     "name": "a bit depth other than 8 or 10 is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "a-bit-depth-other-than-8-or-10-is-the-ca",
       "project": {},
@@ -2143,7 +2149,7 @@
     "name": "ProRes at 8 bits is the caller's input",
     "requestValid": false,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "ProRes-at-8-bits-is-the-callers-input",
       "project": {},
@@ -2171,7 +2177,7 @@
     "name": "still keeping alpha",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "still",
       "requestId": "still-alpha",
       "project": {},
@@ -2204,28 +2210,29 @@
     "name": "a cancel line is answered with the state of its target",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "cancel",
       "requestId": "export-1:cancel",
       "target": "export-1"
     },
     "messages": [
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "requestId": "export-1:cancel",
         "ok": true,
         "result": {
           "target": "export-1",
           "state": "running"
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
   {
-    "name": "a cancelled export is answered CANCELLED after the ready line and its progress",
+    "name": "a cancelled export is answered CANCELLED after the ready state and its progress",
     "requestValid": true,
     "request": {
-      "protocolVersion": 1,
+      "protocolVersion": 2,
       "operation": "export",
       "requestId": "export-cancelled",
       "project": {},
@@ -2246,11 +2253,36 @@
     },
     "messages": [
       {
-        "protocolVersion": 1,
-        "type": "ready"
+        "protocolVersion": 2,
+        "type": "state",
+        "state": "ready",
+        "reason": "started",
+        "details": {
+          "activity": "idle",
+          "runningRequests": 0,
+          "requestsServed": 0,
+          "memory": {
+            "residentBytes": 52428800,
+            "footprintBytes": 41943040,
+            "baselineBytes": null,
+            "capacityBytes": 17179869184
+          },
+          "openHandles": 12,
+          "renderer": null,
+          "rendererFallback": null,
+          "hardwareDecodeFallback": null,
+          "degradations": [],
+          "limits": {
+            "maxMemoryShare": 0.5,
+            "maxMemoryGrowthBytes": 1073741824,
+            "maxRequests": 1000,
+            "maxHandles": 4096,
+            "idleTimeoutMs": 120000
+          }
+        }
       },
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "type": "progress",
         "requestId": "export-cancelled",
         "phase": "frames",
@@ -2258,13 +2290,108 @@
         "total": 30
       },
       {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "requestId": "export-cancelled",
         "ok": false,
         "error": {
           "code": "CANCELLED",
           "message": "native export was cancelled: the client cancelled request export-cancelled"
+        },
+        "hostState": "ready"
+      }
+    ]
+  },
+  {
+    "name": "a request a draining host did not start is answered HOST_RETIRING",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 2,
+      "operation": "capabilities",
+      "requestId": "caps-late"
+    },
+    "messages": [
+      {
+        "protocolVersion": 2,
+        "type": "state",
+        "state": "draining",
+        "reason": "requests",
+        "details": {
+          "activity": "idle",
+          "runningRequests": 0,
+          "requestsServed": 1000,
+          "memory": {
+            "residentBytes": 52428800,
+            "footprintBytes": 41943040,
+            "baselineBytes": 41943040,
+            "capacityBytes": 17179869184
+          },
+          "openHandles": 12,
+          "renderer": "gpu",
+          "rendererFallback": null,
+          "hardwareDecodeFallback": null,
+          "degradations": [],
+          "limits": {
+            "maxMemoryShare": 0.5,
+            "maxMemoryGrowthBytes": 1073741824,
+            "maxRequests": 1000,
+            "maxHandles": 4096,
+            "idleTimeoutMs": 120000
+          }
         }
+      },
+      {
+        "protocolVersion": 2,
+        "requestId": "caps-late",
+        "ok": false,
+        "error": {
+          "code": "HOST_RETIRING",
+          "message": "the host is draining (requests) and did not start the request; send it to another host"
+        },
+        "hostState": "draining"
+      }
+    ]
+  },
+  {
+    "name": "a status request is answered with the host state",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 2,
+      "operation": "status",
+      "requestId": "status-1"
+    },
+    "messages": [
+      {
+        "protocolVersion": 2,
+        "requestId": "status-1",
+        "ok": true,
+        "result": {
+          "state": "ready",
+          "reason": "started",
+          "details": {
+            "activity": "busy",
+            "runningRequests": 1,
+            "requestsServed": 3,
+            "memory": {
+              "residentBytes": 52428800,
+              "footprintBytes": 41943040,
+              "baselineBytes": 41943040,
+              "capacityBytes": 17179869184
+            },
+            "openHandles": 12,
+            "renderer": "gpu",
+            "rendererFallback": null,
+            "hardwareDecodeFallback": null,
+            "degradations": [],
+            "limits": {
+              "maxMemoryShare": 0.5,
+              "maxMemoryGrowthBytes": 1073741824,
+              "maxRequests": 1000,
+              "maxHandles": 4096,
+              "idleTimeoutMs": 120000
+            }
+          }
+        },
+        "hostState": "ready"
       }
     ]
   }

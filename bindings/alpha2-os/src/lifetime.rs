@@ -57,6 +57,30 @@ pub fn stop_std_handle_inheritance() {
     }
 }
 
+/// Takes standard output for a protocol stream.
+///
+/// Returns a writer on the stream standard output was, which children do not inherit, and points
+/// standard output at standard error (a null device when that is closed), so text any library
+/// prints to standard output stays out of the stream. On Windows the C runtime's descriptor 1
+/// follows too.
+///
+/// # Errors
+/// When standard output is closed or cannot be duplicated.
+pub fn claim_stdout() -> io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        crate::platform::claim_stream(libc::STDOUT_FILENO, libc::STDERR_FILENO)
+    }
+    #[cfg(windows)]
+    {
+        crate::platform::claim_stdout()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+}
+
 /// Reported like `SIGTERM`.
 const PARENT_EXITED: Termination = Termination::new("PARENT_EXITED", 143, false);
 

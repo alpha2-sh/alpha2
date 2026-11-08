@@ -59,6 +59,7 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "ENCODE_STALLED": ("GPU_TIMEOUT", "unknown"),
     "IO_ERROR": ("OUTPUT_IO_FAILED", "unknown"),
     "OUTPUT_PUBLISH_FAILED": ("OUTPUT_IO_FAILED", "unknown"),
+    "HOST_RETIRING": ("HOST_EXITED", "unknown"),
     "CANCELLED": ("CANCELLED", "unknown"),
     "RESOURCE_LIMIT": ("RESOURCE_LIMIT", "unknown"),
     "GPU_INIT_FAILED": _UNKNOWN,

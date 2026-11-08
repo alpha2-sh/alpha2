@@ -13,7 +13,7 @@ fn assert_graph_pool_after_readback(renderer: &Renderer, base_available: usize) 
 #[test]
 fn render_graph_unifies_transition_effect_and_composition_nodes() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let tint = pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -122,7 +122,7 @@ fn render_graph_unifies_transition_effect_and_composition_nodes() {
 #[test]
 fn render_graph_rejects_an_effect_in_a_transition_node() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let effect = pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -153,7 +153,7 @@ fn render_graph_rejects_an_effect_in_a_transition_node() {
 #[allow(clippy::too_many_lines)]
 fn graphs_and_invocations_refuse_what_they_cannot_draw() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let effect = pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))

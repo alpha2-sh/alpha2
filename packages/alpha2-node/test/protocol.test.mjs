@@ -13,12 +13,12 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import test, { after } from "node:test";
+import test, { after, afterEach } from "node:test";
 
 import {
   Alpha2AbortError,
   Alpha2GpuInitializationError,
-  Alpha2NodeClient,
+  Alpha2NodeClient as KeptHostsClient,
   Alpha2ProjectValidationError,
   exportProject,
   getCapabilities,
@@ -36,6 +36,25 @@ import { failureOf } from "alpha2/export-failure";
 import { decideRetry, RETRY_PROFILES } from "alpha2/export-retry";
 
 const scratchDirectories = [];
+
+/** The module fake hosts import for their protocol I/O. */
+const IO = JSON.stringify(new URL("./fake-host-io.mjs", import.meta.url).href);
+
+const clients = new Set();
+
+/** Ends the hosts each test's clients keep, before the test's directory is removed. */
+class Alpha2NodeClient extends KeptHostsClient {
+  constructor(options) {
+    super(options);
+    clients.add(this);
+  }
+}
+
+afterEach(async () => {
+  const open = [...clients];
+  clients.clear();
+  await Promise.all(open.map((client) => client.close()));
+});
 
 async function scratch(prefix) {
   const directory = await mkdtemp(join(tmpdir(), prefix));
@@ -256,10 +275,11 @@ test("a CONFORM_FAILED error carries the host's report", async () => {
   };
   const message = parseHostMessage(
     JSON.stringify({
-      protocolVersion: 1,
+      protocolVersion: 2,
       requestId: "r",
       ok: false,
       error: { code: "CONFORM_FAILED", message: "not ready", details: report },
+      hostState: "ready",
     }),
   );
   assert.deepEqual(message.error.details, report);
@@ -399,10 +419,9 @@ test("cancellation settles only after the host process exits", async () => {
   const executable = await fakeHost(
     root,
     `import { writeFileSync } from "node:fs";
-import { createInterface } from "node:readline";
+import { progress, serve } from ${IO};
 const exitMarker = ${JSON.stringify(exitMarker)};
 writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-let keepAlive;
 // POSIX only: the host takes a while to exit after SIGTERM, and the client must wait for it. Windows has no SIGTERM; the client's kill ends the process at once.
 process.on("SIGTERM", () => {
   setTimeout(() => {
@@ -410,17 +429,9 @@ process.on("SIGTERM", () => {
     process.exit(0);
   }, 100);
 });
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
-  process.stdout.write(JSON.stringify({
-    protocolVersion: 1,
-    type: "progress",
-    requestId: request.requestId,
-    completed: 0,
-    total: 1,
-  }) + "\\n");
-  keepAlive = setInterval(() => {}, 1_000);
-});
+setInterval(() => {}, 1_000);
+// Ignores the cancel and the end of its input.
+serve((request) => progress(request, { completed: 0, total: 1 }), { onEnd: () => {} });
 `,
   );
 
@@ -443,23 +454,24 @@ createInterface({ input: process.stdin }).once("line", (line) => {
     assert.equal(await readFile(exitMarker, "utf8"), "exited");
 });
 
-/** Logs `start` and `request` lines, answers after `answerMs`, survives SIGTERM if `ignoreTerm`. */
+/**
+ * Logs `start` and `request` lines and answers after `answerMs`. With `ignoreTerm` it survives
+ * SIGTERM and the end of its input.
+ */
 const QUEUE_HOST = (
   log,
   { answerMs = 0, ignoreTerm = false } = {},
 ) => `import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
+import { progress, respond, serve } from ${IO};
 const record = (line) => appendFileSync(${JSON.stringify(log)}, line + "\\n");
 record("start " + process.pid);
 process.on("SIGTERM", () => { if (!${ignoreTerm}) process.exit(0); });
-const keepAlive = setInterval(() => {}, 1_000);
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
+if (${ignoreTerm}) setInterval(() => {}, 1_000);
+serve((request) => {
   record("request " + request.output);
-  const send = (message) => process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ...message }) + "\\n");
-  send({ type: "progress", phase: "frames", completed: 0, total: 1 });
-  setTimeout(() => { clearInterval(keepAlive); send({ ok: true, result: { output: request.output } }); }, ${answerMs});
-});
+  progress(request, { phase: "frames", completed: 0, total: 1 });
+  setTimeout(() => respond(request, { ok: true, result: { output: request.output } }), ${answerMs});
+}, ${ignoreTerm} ? { onEnd: () => {} } : {});
 `;
 
 test(
@@ -531,7 +543,7 @@ test(
   },
 );
 
-test("an abort seen only once the host has started ends it before the request is written", async () => {
+test("an abort seen only once the host is ready is refused before the request is written, and the host is kept", async () => {
   const root = await scratch("alpha2-node-abort-at-start-");
   const log = join(root, "log");
   const hostPath = await fakeHost(root, QUEUE_HOST(log));
@@ -544,10 +556,9 @@ test("an abort seen only once the host has started ends it before the request is
     addEventListener() {},
     removeEventListener() {},
   };
+  const client = new Alpha2NodeClient({ hostPath });
   await assert.rejects(
-    new Alpha2NodeClient({ hostPath }).exportProject(
-      exportRequest("out.mp4", { signal }),
-    ),
+    client.exportProject(exportRequest("out.mp4", { signal })),
     (error) => error instanceof Alpha2AbortError,
   );
   assert.equal(reads, 3);
@@ -555,6 +566,14 @@ test("an abort seen only once the host has started ends it before the request is
     (await startsIn(log)).filter((line) => line.startsWith("request")),
     [],
   );
+  assert.equal(
+    await client.exportProject(exportRequest("next.mp4")),
+    "next.mp4",
+  );
+  const lines = await startsIn(log);
+  assert.equal(lines.length, 2, lines.join());
+  assert.match(lines[0], /^start /);
+  assert.equal(lines[1], "request next.mp4");
 });
 
 test("module calls with the same host path and concurrency share one pool, whatever decode mode each asks for", async () => {
@@ -565,7 +584,7 @@ test("module calls with the same host path and concurrency share one pool, whate
   const executable = await fakeHost(
     root,
     `import { appendFileSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createInterface } from "node:readline";
+import { respond, serve } from ${IO};
 appendFileSync(${JSON.stringify(modes)}, (process.env.ALPHA2_VIDEO_DECODE ?? "unset") + "\\n");
 const lock = ${JSON.stringify(lock)};
 const overlap = ${JSON.stringify(overlap)};
@@ -590,24 +609,16 @@ try {
     ownsLock = true;
   }
 }
-const keepAlive = setInterval(() => {}, 1_000);
 const exit = () => {
-  clearInterval(keepAlive);
   if (ownsLock) rmSync(lock, { force: true });
   process.exit(0);
 };
 process.on("SIGTERM", () => setTimeout(exit, 50));
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
-  setTimeout(() => {
-    process.stdout.write(JSON.stringify({
-      protocolVersion: 1,
-      requestId: request.requestId,
-      ok: true,
-      result: { output: request.output },
-    }) + "\\n");
-  }, 100);
-});
+// Each host drains after one request, so every call starts a host of its own.
+serve((request) => {
+  const result = request.operation === "capabilities" ? { status: "ready", capabilities: {}, effectCatalog: {} } : { output: request.output };
+  setTimeout(() => respond(request, { ok: true, result, hostState: "draining" }), 100);
+}, { onEnd: exit });
 `,
   );
 
@@ -641,17 +652,11 @@ test("an export sends the files its SVG and Lottie sources name as resources", a
   const executable = await fakeHost(
     root,
     `import { writeFileSync } from "node:fs";
-import { createInterface } from "node:readline";
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
-  writeFileSync(${JSON.stringify(recorded)}, line);
-  process.stdout.write(JSON.stringify({
-    protocolVersion: 1,
-    requestId: request.requestId,
-    ok: true,
-    result: { output: request.output },
-  }) + "\\n");
-  process.exit(0);
+import { respond, serve } from ${IO};
+// Module calls share one client across tests, so this host takes no later test's request.
+serve((request) => {
+  writeFileSync(${JSON.stringify(recorded)}, JSON.stringify(request));
+  respond(request, { ok: true, result: { output: request.output }, hostState: "draining" });
 });
 `,
   );
@@ -674,13 +679,11 @@ test("a failed export keeps the host's failure report and its stderr", async () 
   const root = await scratch("alpha2-node-failure-");
   const executable = await fakeHost(
     root,
-    `import { createInterface } from "node:readline";
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
-  const send = (message) => process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ...message }) + "\\n");
+    `import { progress, respond, serve } from ${IO};
+serve((request) => {
   process.stderr.write("x".repeat(40_000) + "\\nalpha2-host uncaptured GPU out-of-memory error: staging\\n", () => {
-    send({ type: "progress", phase: "frames", completed: 3, total: 9 });
-    send({ ok: false, error: {
+    progress(request, { phase: "frames", completed: 3, total: 9 });
+    respond(request, { ok: false, error: {
       code: "ALPHA2_ERROR",
       message: "GPU texture readback failed: map-failed",
       failure: { code: "OUT_OF_MEMORY", origin: "native-host", operation: "export", backend: "native", phase: "readback", stage: "map-failed", frameIndex: 4, resource: "gpu", diagnostics: { videoPipeline: "readback" } },
@@ -716,11 +719,10 @@ test("the stderr an error keeps is at most 16 KiB of UTF-8, from a whole charact
   const line = "오류: /미디어/서울/촬영본.mov 를 읽을 수 없습니다 😀\n";
   const hostPath = await fakeHost(
     root,
-    `import { createInterface } from "node:readline";
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
+    `import { respond, serve } from ${IO};
+serve((request) => {
   process.stderr.write(${JSON.stringify(line)}.repeat(2000) + "the last line\\n", () => {
-    process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ok: false, error: { code: "ALPHA2_ERROR", message: "failed" } }) + "\\n");
+    respond(request, { ok: false, error: { code: "ALPHA2_ERROR", message: "failed" } });
   });
 });
 `,
@@ -739,71 +741,54 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   }
 });
 
-test(
-  "stderr the host wrote before answering is kept when it is read after the answer",
-  {
-    skip:
-      process.platform === "win32" &&
-      "the fixture writes its late stderr while it stays up through SIGTERM, and Windows ends a process at once on any kill",
-  },
-  async () => {
-    // On macOS stdout is often read before the last stderr chunk; this host writes it last.
-    const root = await scratch("alpha2-node-stderr-late-");
-    const hostPath = await fakeHost(
-      root,
-      `import { createInterface } from "node:readline";
-process.on("SIGTERM", () => {});
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
+test("stderr the host wrote before answering is kept when it is read after the answer", async () => {
+  // On macOS stdout is often read before the last stderr chunk; this host writes it last.
+  const root = await scratch("alpha2-node-stderr-late-");
+  const hostPath = await fakeHost(
+    root,
+    `import { respond, serve } from ${IO};
+serve((request) => {
   process.stderr.write("x".repeat(40_000) + "\\n");
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ok: false, error: { code: "ALPHA2_ERROR", message: "GPU texture readback failed: map-failed" } }) + "\\n", () => {
-    setTimeout(() => process.stderr.write("alpha2-host uncaptured GPU out-of-memory error: staging\\n", () => process.exit(1)), 100);
+  respond(request, { ok: false, error: { code: "ALPHA2_ERROR", message: "GPU texture readback failed: map-failed" } }, () => {
+    process.stderr.write("alpha2-host uncaptured GPU out-of-memory error: staging\\n");
   });
 });
 `,
+  );
+  const error = await new Alpha2NodeClient({ hostPath })
+    .exportProject(exportRequest(join(root, "out.mp4")))
+    .then(
+      () => assert.fail("the export resolved"),
+      (cause) => cause,
     );
-    const error = await new Alpha2NodeClient({ hostPath })
-      .exportProject(exportRequest(join(root, "out.mp4")))
-      .then(
-        () => assert.fail("the export resolved"),
-        (cause) => cause,
-      );
-    assert.equal(error.code, "ALPHA2_ERROR");
-    for (const stderr of [error.stderr, error.failure.stderr])
-      assert.ok(
-        stderr.endsWith("out-of-memory error: staging\n"),
-        `the tail ends ${JSON.stringify(stderr.slice(-80))}`,
-      );
-  },
-);
+  assert.equal(error.code, "ALPHA2_ERROR");
+  for (const stderr of [error.stderr, error.failure.stderr])
+    assert.ok(
+      stderr.endsWith("out-of-memory error: staging\n"),
+      `the tail ends ${JSON.stringify(stderr.slice(-80))}`,
+    );
+});
 
-test("a line on the host's stdout that is not a message is kept as its diagnostic output", async () => {
-  // A Vulkan validation layer prints to stdout, possibly before the answer.
-  const root = await scratch("alpha2-node-stdout-noise-");
+test("output before the magic is kept as diagnostics, and a host that never writes the magic is INVALID_RESPONSE", async () => {
+  // A library may print to stdout before the host takes it over.
+  const root = await scratch("alpha2-node-preamble-");
   const banner =
     "Validation Error: [ VUID-StandaloneSpirv-None-10684 ] vkCreateShaderModule";
-  const host = (answer) => `import { createInterface } from "node:readline";
-process.stdout.write(${JSON.stringify(banner)} + "\\n\\n");
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
-  process.stdout.write(" " + ${JSON.stringify(banner)} + "\\n" + ${JSON.stringify(answer)} .replace("REQUEST", request.requestId) + "\\n");
-});
-`;
   const ready = await new Alpha2NodeClient({
     hostPath: await fakeHost(
       join(root, "ready"),
-      host(
-        '{"protocolVersion":1,"requestId":"REQUEST","ok":true,"result":{"status":"ready"}}',
-      ),
+      `import { respond, serve } from ${IO};
+process.stdout.write(${JSON.stringify(banner)} + "\\n\\x89A2HOS");
+serve((request) => respond(request, { ok: true, result: { status: "ready" } }));
+`,
     ),
   }).getCapabilities();
   assert.equal(ready.status, "ready");
-  const failed = await new Alpha2NodeClient({
+  const exited = await new Alpha2NodeClient({
     hostPath: await fakeHost(
-      join(root, "failed"),
-      host(
-        '{"protocolVersion":1,"requestId":"REQUEST","ok":false,"error":{"code":"ALPHA2_ERROR","message":"failed"}}',
-      ),
+      join(root, "exited"),
+      `process.stdout.write(${JSON.stringify(banner)} + "\\n", () => process.exit(1));
+`,
     ),
   })
     .exportProject(exportRequest(join(root, "out.mp4")))
@@ -811,24 +796,131 @@ createInterface({ input: process.stdin }).once("line", (line) => {
       () => assert.fail("the export resolved"),
       (cause) => cause,
     );
-  assert.equal(failed.code, "ALPHA2_ERROR");
-  assert.ok(failed.stderr.includes(banner), failed.stderr);
-  const broken = new Alpha2NodeClient({
-    hostPath: await fakeHost(join(root, "broken"), host("{not json")),
+  assert.equal(exited.code, "HOST_EXITED");
+  assert.ok(exited.stderr.includes(banner), exited.stderr);
+  const flooded = new Alpha2NodeClient({
+    hostPath: await fakeHost(
+      join(root, "flooded"),
+      `process.stdout.write("x".repeat(1024 * 1024 + 16));
+setInterval(() => {}, 1_000);
+`,
+    ),
   });
-  await assert.rejects(broken.getCapabilities(), {
-    code: "INVALID_RESPONSE",
+  await assert.rejects(flooded.getCapabilities(), (error) => {
+    assert.equal(error.code, "INVALID_RESPONSE");
+    assert.match(error.message, /without the protocol's magic/);
+    return true;
   });
+});
+
+test("a frame the host writes in pieces is read whole", async () => {
+  const root = await scratch("alpha2-node-split-frames-");
+  const hostPath = await fakeHost(
+    root,
+    `import { MAGIC, frame, requests } from ${IO};
+const ready = frame({ protocolVersion: 2, type: "state", state: "ready", reason: "started", details: {} });
+const bytes = Buffer.concat([MAGIC, ready]);
+const trickle = (data, done) => {
+  if (data.length === 0) return done();
+  process.stdout.write(data.subarray(0, 3), () => setTimeout(() => trickle(data.subarray(3), done), 1));
+};
+trickle(bytes, () => {
+  requests((request) => {
+    const answer = frame({ protocolVersion: 2, requestId: request.requestId, ok: true, result: { status: "ready", note: "\u00e9".repeat(5000) }, hostState: "ready" });
+    // One write ends mid-header and the next carries the rest.
+    process.stdout.write(answer.subarray(0, 11), () => setTimeout(() => process.stdout.write(answer.subarray(11)), 20));
+  });
+});
+`,
+  );
+  const report = await new Alpha2NodeClient({ hostPath }).getCapabilities();
+  assert.equal(report.note, "\u00e9".repeat(5000));
+});
+
+test("a header whose attachment list does not match the frame is INVALID_RESPONSE", async () => {
+  const root = await scratch("alpha2-node-bad-attachments-");
+  const cases = [
+    [
+      `[{ type: "image/png", bytes: 3 }]`,
+      4,
+      /lists 3 attachment bytes and the frame has 4/,
+    ],
+    [`[{ type: "", bytes: 4 }]`, 4, /invalid attachment list/],
+    [`undefined`, 4, /lists 0 attachment bytes and the frame has 4/],
+  ];
+  for (const [index, [listed, bytes, message]] of cases.entries()) {
+    const hostPath = await fakeHost(
+      join(root, String(index)),
+      `import { frame, sendBytes, serve } from ${IO};
+serve((request) => {
+  const header = { protocolVersion: 2, requestId: request.requestId, ok: true, result: {}, hostState: "ready", attachments: ${listed} };
+  sendBytes(frame(header, [{ data: Buffer.alloc(${bytes}) }]));
+});
+`,
+    );
+    await assert.rejects(
+      new Alpha2NodeClient({ hostPath }).getCapabilities(),
+      (error) => {
+        assert.equal(error.code, "INVALID_RESPONSE", listed);
+        assert.match(error.message, message);
+        return true;
+      },
+    );
+  }
+});
+
+test("a still without an output comes back as the PNG bytes of its attachment", async () => {
+  const root = await scratch("alpha2-node-still-attachment-");
+  const recorded = join(root, "request.json");
+  const hostPath = await fakeHost(
+    root,
+    `import { writeFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+serve((request) => {
+  writeFileSync(${JSON.stringify(recorded)}, JSON.stringify(request));
+  const png = (time) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(String(time))]);
+  const attachments = [];
+  const stills = request.stills.map(({ time, output }) => {
+    if (output !== undefined) return { output, frameTime: time, width: 16, height: 16, publish: { method: "rename" } };
+    attachments.push({ type: "image/png", data: png(time) });
+    return { output: null, frameTime: time, width: 16, height: 16, attachment: attachments.length - 1 };
+  });
+  respond(request, { ok: true, result: { stills, renderer: "cpu" } }, undefined, attachments);
+});
+`,
+  );
+  const client = new Alpha2NodeClient({ hostPath });
+  const { project } = exportRequest("");
+  const written = join(root, "written.png");
+  const result = await client.stills({
+    project,
+    assets: {},
+    stills: [{ time: 4000 }, { time: 0, output: written }, { time: 8000 }],
+  });
+  assert.deepEqual(JSON.parse(await readFile(recorded, "utf8")).stills, [
+    { time: 4000 },
+    { time: 0, output: written },
+    { time: 8000 },
+  ]);
+  const [first, file, last] = result.stills;
+  assert.equal(first.output, null);
+  assert.ok(first.png instanceof Uint8Array);
+  assert.equal(Buffer.from(first.png).toString("latin1"), "\x89PNG4000");
+  assert.equal("attachment" in first, false);
+  assert.equal(file.output, written);
+  assert.equal(file.png, undefined);
+  assert.equal(Buffer.from(last.png).toString("latin1"), "\x89PNG8000");
+  const one = await client.still({ project, assets: {}, time: 0 });
+  assert.equal(Buffer.from(one.stills[0].png).toString("latin1"), "\x89PNG0");
 });
 
 test("a host that dies mid-export is HOST_EXITED, with no cause claimed", async () => {
   const root = await scratch("alpha2-node-exited-");
   const executable = await fakeHost(
     root,
-    `import { createInterface } from "node:readline";
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, type: "progress", requestId: request.requestId, phase: "finalizing", completed: 9, total: 9 }) + "\\n", () => {
+    `import { progress, serve } from ${IO};
+serve((request) => {
+  progress(request, { phase: "finalizing", completed: 9, total: 9 }, () => {
     process.stderr.write("last words\\n", () => process.kill(process.pid, "SIGKILL"));
   });
 });
@@ -865,11 +957,10 @@ test(
     );
     const executable = await fakeHost(
       root,
-      `import { createInterface } from "node:readline";
-import { readFileSync, writeFileSync } from "node:fs";
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, type: "progress", requestId: request.requestId, phase: "frames", completed: 3, total: 9 }) + "\\n", () => {
+      `import { readFileSync, writeFileSync } from "node:fs";
+import { progress, serve } from ${IO};
+serve((request) => {
+  progress(request, { phase: "frames", completed: 3, total: 9 }, () => {
     if (process.env.RAISE_OOM_KILL === "1") {
       const path = process.env.ALPHA2_TEST_MEMORY_EVENTS;
       writeFileSync(path, readFileSync(path, "utf8").replace("oom_kill 1", "oom_kill 2"));
@@ -1010,14 +1101,12 @@ async function stallingHost(root, { resource = "gpu" } = {}) {
   const executable = await fakeHost(
     root,
     `import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
+import { respond, serve } from ${IO};
+serve((request) => {
   const mode = process.env.ALPHA2_VIDEO_DECODE ?? "unset";
   appendFileSync(${JSON.stringify(runs)}, mode + "\\n");
-  const send = (message) => process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ...message }) + "\\n");
-  if (mode === "software") send({ ok: true, result: { frames: 9 } });
-  else send({ ok: false, error: {
+  if (mode === "software") respond(request, { ok: true, result: { frames: 9 } });
+  else respond(request, { ok: false, error: {
     code: "DECODE_STALLED",
     message: "decode shard 0 has been inside one decoder operation for 40001 ms",
     failure: { code: "GPU_TIMEOUT", origin: "native-host", operation: "export", backend: "native", phase: "decode", resource: ${JSON.stringify(resource)} },
@@ -1065,10 +1154,9 @@ test("a software run after a stall that fails too keeps the stall", async () => 
   const root = await scratch("alpha2-node-stall-then-fail-");
   const hostPath = await fakeHost(
     root,
-    `import { createInterface } from "node:readline";
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
-  const send = (message) => process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ...message }) + "\\n");
+    `import { respond, serve } from ${IO};
+serve((request) => {
+  const send = (message) => respond(request, message);
   if (process.env.ALPHA2_VIDEO_DECODE === "software") {
     process.stderr.write("second host\\n", () => send({ ok: false, error: { code: "RESOURCE_LIMIT", message: "decode queue budget too small", failure: { code: "RESOURCE_LIMIT", origin: "native-host", operation: "export", backend: "native", phase: "decode", resource: "cpu", diagnostics: { videoPipeline: "readback" } } } }));
   } else {
@@ -1152,16 +1240,14 @@ test("an encoder stall is reported, not run again in software", async () => {
   const executable = await fakeHost(
     root,
     `import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
+import { respond, serve } from ${IO};
+serve((request) => {
   appendFileSync(${JSON.stringify(runs)}, (process.env.ALPHA2_VIDEO_DECODE ?? "unset") + "\\n");
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ok: false, error: {
+  respond(request, { ok: false, hostState: "draining", error: {
     code: "ENCODE_STALLED",
     message: "the encode worker has been inside one encoder call for 40001 ms, past the 40000 ms limit, holding a hardware encode session",
     failure: { code: "GPU_TIMEOUT", origin: "native-host", operation: "export", backend: "native", phase: "encode", resource: "gpu" },
-  } }) + "\\n");
-  process.exit(1);
+  } });
 });
 `,
   );
@@ -1188,16 +1274,14 @@ test("a render kept after a failed publish is named on the error", async () => {
   const kept = join(root, "output.a2kept.mp4");
   const executable = await fakeHost(
     root,
-    `import { createInterface } from "node:readline";
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ok: false, error: {
+    `import { respond, serve } from ${IO};
+serve((request) => {
+  respond(request, { ok: false, error: {
     code: "OUTPUT_PUBLISH_FAILED",
     message: "cannot publish the output: denied; the finished render is kept at " + ${JSON.stringify(kept)},
     details: { keptPath: ${JSON.stringify(kept)} },
     failure: { code: "OUTPUT_IO_FAILED", origin: "native-host", operation: "export", backend: "native", phase: "mux", resource: "unknown" },
-  } }) + "\\n");
-  process.exit(1);
+  } });
 });
 `,
   );
@@ -1214,12 +1298,11 @@ createInterface({ input: process.stdin }).once("line", (line) => {
 });
 
 const STARTED_HOST = (starts) => `import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
+import { respond, serve } from ${IO};
 appendFileSync(${JSON.stringify(starts)}, (process.env.ALPHA2_VIDEO_DECODE ?? "unset") + "\\n");
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
+serve((request) => {
   const result = request.operation === "capabilities" ? { status: "ready", capabilities: {}, effectCatalog: {} } : { output: request.output };
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ok: true, result }) + "\\n", () => process.exit(0));
+  respond(request, { ok: true, result });
 });
 `;
 
@@ -1265,13 +1348,11 @@ const PROBED_HOST = (
   log,
   { exportMs = 0, failFirst = false } = {},
 ) => `import { appendFileSync, existsSync, writeFileSync } from "node:fs";
-import { createInterface } from "node:readline";
-process.on("SIGTERM", () => process.exit(0));
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
+import { respond, serve } from ${IO};
+serve((request) => {
   const mode = process.env.ALPHA2_VIDEO_DECODE ?? "unset";
   appendFileSync(${JSON.stringify(log)}, request.operation + " " + mode + "\\n");
-  const send = (message) => process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ...message }) + "\\n", () => process.exit(0));
+  const send = (message) => respond(request, message);
   if (request.operation === "export") {
     setTimeout(() => send({ ok: true, result: { output: request.output } }), ${exportMs});
     return;
@@ -1337,18 +1418,20 @@ test("one probe answers every capability call for a decode mode, and a failed on
   ]);
 });
 
-/** Logs `<operation> <decode mode> <renderer>` from its environment and answers at once. */
+/**
+ * Logs `<operation> <decode mode> <renderer>` from its environment and answers at once. It drains
+ * after one request: module calls share one client across tests.
+ */
 const RENDERER_HOST = (log) => `import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
+import { respond, serve } from ${IO};
+serve((request) => {
   const decode = process.env.ALPHA2_VIDEO_DECODE ?? "unset";
   const renderer = process.env.ALPHA2_RENDERER ?? "unset";
   appendFileSync(${JSON.stringify(log)}, request.operation + " " + decode + " " + renderer + "\\n");
   const result = request.operation === "capabilities"
     ? { status: "ready", renderer, rendererReason: null, capabilities: {}, effectCatalog: {} }
     : { output: request.output };
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ok: true, result }) + "\\n", () => process.exit(0));
+  respond(request, { ok: true, result, hostState: "draining" });
 });
 `;
 
@@ -1505,12 +1588,11 @@ test("an export that runs again in software after a decode stall keeps its rende
   const hostPath = await fakeHost(
     root,
     `import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
+import { respond, serve } from ${IO};
+serve((request) => {
   const mode = process.env.ALPHA2_VIDEO_DECODE ?? "unset";
   appendFileSync(${JSON.stringify(runs)}, mode + " " + (process.env.ALPHA2_RENDERER ?? "unset") + "\\n");
-  const send = (message) => process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ...message }) + "\\n");
+  const send = (message) => respond(request, message);
   if (mode === "software") send({ ok: true, result: { frames: 9 } });
   else send({ ok: false, error: {
     code: "DECODE_STALLED",
@@ -1529,8 +1611,8 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   assert.deepEqual(await startsIn(runs), ["auto cpu", "software cpu"]);
 });
 
-test("an answer to a line the host could not read is the request's answer", async () => {
-  // The host answers an unreadable line with requestId "unknown", then exits 0 when stdin ends.
+test("an answer to a request the host could not read is the request's answer", async () => {
+  // The host answers an unreadable request with requestId "unknown".
   const root = await scratch("alpha2-node-unread-");
   const hostPath = await fakeHost(
     root,
@@ -1539,7 +1621,8 @@ test("an answer to a line the host could not read is the request's answer", asyn
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: "the request line is 40000000 bytes; the maximum is 134217728",
+        message:
+          "the request header is 40000000 bytes; the maximum is 134217728",
       },
     }),
   );
@@ -1555,7 +1638,7 @@ test("an answer to a line the host could not read is the request's answer", asyn
   assert.equal(retried(error), false);
 });
 
-test("a request line longer than the host reads is refused before a host starts", async () => {
+test("a request header longer than the host reads is refused before a host starts", async () => {
   const root = await scratch("alpha2-node-long-line-");
   const starts = join(root, "starts");
   const hostPath = await fakeHost(root, STARTED_HOST(starts));
@@ -1629,7 +1712,7 @@ test("progress phases other than frames and finalizing are refused", () => {
   assert.throws(() =>
     parseHostMessage(
       JSON.stringify({
-        protocolVersion: 1,
+        protocolVersion: 2,
         type: "progress",
         requestId: "r",
         phase: "done",
@@ -1640,12 +1723,10 @@ test("progress phases other than frames and finalizing are refused", () => {
   );
 });
 
-/** A host that fails to start: it reports `fatal` and exits without reading its request. */
-const FAILING_HOST = `process.stdout.write(JSON.stringify({
-  protocolVersion: 1,
-  type: "fatal",
-  error: { code: "GPU_INIT_FAILED", message: "no adapter", fatal: true },
-}) + "\\n", () => process.exit(70));
+/** A host that cannot make its GPU device: once ready it reports `fatal` and exits unread. */
+const FAILING_HOST = `import { ready, send } from ${IO};
+ready();
+send({ type: "fatal", error: { code: "GPU_INIT_FAILED", message: "no adapter", fatal: true } }, () => process.exit(70));
 `;
 
 /** Larger than a pipe buffer, so it is still partly unwritten when the host exits. */
@@ -1675,10 +1756,12 @@ test("a host that exits before reading a large request reports why, without kill
 
 test("aborting while a large request is being written settles as an abort", async () => {
   const root = await scratch("alpha2-node-abort-start-");
-  // Starts slowly and never reads: the request stays half written until the abort ends the host.
+  // Never reads: the request stays half written until the abort ends the host.
   const executable = await fakeHost(
     root,
-    `setInterval(() => {}, 1_000);
+    `import { ready } from ${IO};
+ready();
+setInterval(() => {}, 1_000);
 `,
   );
   const controller = new AbortController();
@@ -1744,28 +1827,39 @@ function assertExited(pid) {
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
 }
 
-/** Records its pid, sends `progress` then success, and exits when stdin ends or told to. */
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitUntil(condition, what) {
+  const until = Date.now() + 5_000;
+  while (!condition()) {
+    if (Date.now() > until) assert.fail(`waited 5 s for ${what}`);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  }
+}
+
+/** Records its pid, sends `progress` then success, and exits when stdin ends. */
 const RECORDING_HOST = (pidFile) => `import { writeFileSync } from "node:fs";
-import { createInterface } from "node:readline";
+import { progress, respond, serve } from ${IO};
 writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-const keepAlive = setInterval(() => {}, 1_000);
-process.on("SIGTERM", () => process.exit(0));
-const lines = createInterface({ input: process.stdin });
-lines.once("line", (line) => {
-  const request = JSON.parse(line);
-  const send = (message) => process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ...message }) + "\\n");
-  send({ type: "progress", phase: "frames", completed: 1, total: 2 });
+serve((request) => {
+  progress(request, { phase: "frames", completed: 1, total: 2 });
   setTimeout(() => {
-    send({ type: "progress", phase: "frames", completed: 2, total: 2 });
-    send({ ok: true, result: { output: request.output, frames: 2 } });
+    progress(request, { phase: "frames", completed: 2, total: 2 });
+    respond(request, { ok: true, result: { output: request.output, frames: 2 } });
   }, 50);
 });
-lines.once("close", () => { clearInterval(keepAlive); });
 `;
 
 /**
  * Runs `body` in a separate Node process so an uncaught error cannot end the test runner, and
- * reports whether the spawned host is still alive afterwards.
+ * reports whether the spawned host is still alive once the client is closed.
  */
 async function runEmbedded(root, body, { fdLimit } = {}) {
   const pidFile = join(root, "host.pid");
@@ -1779,6 +1873,7 @@ const exportRequest = ${exportRequest.toString()};
 const client = new Alpha2NodeClient({ hostPath: ${JSON.stringify(executable)}, concurrency: 1 });
 const output = ${JSON.stringify(join(root, "output.mp4"))};
 const outcome = await (${body})({ client, exportRequest, output });
+await client.close();
 await new Promise((resolve) => setTimeout(resolve, 300));
 let hostAlive = false;
 if (existsSync(${JSON.stringify(pidFile)})) {
@@ -1939,7 +2034,7 @@ test("a request that cannot be written as JSON is refused before a host starts",
   assert.equal(outcome.hostAlive, false);
 });
 
-test("an async onProgress that rejects fails the export as PROGRESS_CALLBACK_FAILED and ends its host", async () => {
+test("an async onProgress that rejects fails the export as PROGRESS_CALLBACK_FAILED", async () => {
   const root = await scratch("alpha2-node-async-progress-");
   const outcome = await runEmbedded(
     root,
@@ -2021,18 +2116,13 @@ function retried(error) {
   ]).retry;
 }
 
-const ANSWERING_HOST = (
-  line,
-) => `import { createInterface } from "node:readline";
-const answer = ${JSON.stringify(line)};
-if (answer.type === "fatal") {
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, ...answer }) + "\\n", () => process.exit(70));
-} else {
-  createInterface({ input: process.stdin }).once("line", (request) => {
-    const { requestId } = JSON.parse(request);
-    process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId, ...answer }) + "\\n", () => process.exit(0));
-  });
-}
+/** Answers every request with `answer`, or for a `fatal` answer sends it and exits 70. */
+const ANSWERING_HOST = (answer) => `import { respond, send, serve } from ${IO};
+const answer = ${JSON.stringify(answer)};
+serve((request) => {
+  if (answer.type === "fatal") send(answer, () => process.exit(70));
+  else respond(request, answer);
+});
 `;
 
 test("a host that cannot make its GPU device is an Alpha2GpuInitializationError, whichever way it says so", async () => {
@@ -2040,13 +2130,15 @@ test("a host that cannot make its GPU device is an Alpha2GpuInitializationError,
   const cases = [
     {
       name: "fatal",
-      host: `process.stderr.write("alpha2-host: no adapter\\n", () => process.stdout.write(JSON.stringify({ protocolVersion: 1, type: "fatal", error: { code: "GPU_INIT_FAILED", message: "could not acquire a GPU adapter" } }) + "\\n", () => process.exit(70)));
+      host: `import { send, serve } from ${IO};
+serve(() => process.stderr.write("alpha2-host: no adapter\\n", () => send({ type: "fatal", error: { code: "GPU_INIT_FAILED", message: "could not acquire a GPU adapter" } }, () => process.exit(70))));
 `,
       message: /could not acquire a GPU adapter/,
     },
     {
       name: "exit 70",
-      host: `process.stderr.write("alpha2-host: no adapter\\n", () => process.exit(70));
+      host: `import { serve } from ${IO};
+serve(() => process.stderr.write("alpha2-host: no adapter\\n", () => process.exit(70)));
 `,
       message: /no adapter/,
       exitCode: 70,
@@ -2227,9 +2319,35 @@ test("every code the client makes is classified in the shared table", async () =
     );
 });
 
-test("parseHostMessage accepts the ready line", () => {
-  const ready = { protocolVersion: 1, type: "ready" };
-  assert.deepEqual(parseHostMessage(JSON.stringify(ready)), ready);
+test("parseHostMessage reads state messages and a response's host state", () => {
+  const draining = {
+    protocolVersion: 2,
+    type: "state",
+    state: "draining",
+    reason: "memory",
+    details: { activity: "idle", requestsServed: 3 },
+  };
+  assert.deepEqual(parseHostMessage(JSON.stringify(draining)), draining);
+  const answered = {
+    protocolVersion: 2,
+    requestId: "r",
+    ok: true,
+    result: { state: "ready", reason: "started", details: {} },
+    hostState: "ready",
+  };
+  assert.deepEqual(parseHostMessage(JSON.stringify(answered)), answered);
+  for (const message of [
+    { protocolVersion: 2, type: "ready" },
+    { ...draining, state: "stopped" },
+    { ...draining, reason: undefined },
+    { ...draining, details: [] },
+    { ...answered, hostState: "busy" },
+    { ...answered, hostState: undefined },
+  ])
+    assert.throws(
+      () => parseHostMessage(JSON.stringify(message)),
+      JSON.stringify(message),
+    );
 });
 
 test(
@@ -2267,15 +2385,10 @@ test("a slow host that writes ready in time is not timed out", async () => {
   const root = await scratch("alpha2-node-start-ready-");
   const hostPath = await fakeHost(
     root,
-    `import { createInterface } from "node:readline";
-const keepAlive = setInterval(() => {}, 1_000);
-setTimeout(() => process.stdout.write(JSON.stringify({ protocolVersion: 1, type: "ready" }) + "\\n"), 200);
-createInterface({ input: process.stdin }).once("line", (line) => {
-  const request = JSON.parse(line);
-  setTimeout(() => {
-    clearInterval(keepAlive);
-    process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ok: true, result: { output: request.output } }) + "\\n");
-  }, 1_500);
+    `import { ready, requests, respond } from ${IO};
+setTimeout(ready, 200);
+requests((request) => {
+  setTimeout(() => respond(request, { ok: true, result: { output: request.output } }), 1_500);
 });
 `,
   );
@@ -2288,15 +2401,25 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   );
 });
 
-test("a host that answers without a ready line still works", async () => {
+test("a host that answers before its ready state is INVALID_RESPONSE", async () => {
   const root = await scratch("alpha2-node-no-ready-");
-  const hostPath = await fakeHost(root, STARTED_HOST(join(root, "starts")));
-  assert.equal(
-    await new Alpha2NodeClient({
+  const hostPath = await fakeHost(
+    root,
+    `import { requests, respond } from ${IO};
+respond({ requestId: "unknown" }, { ok: true, result: {} });
+requests(() => {});
+`,
+  );
+  await assert.rejects(
+    new Alpha2NodeClient({
       hostPath,
       hostStartTimeoutMs: 5_000,
     }).exportProject(exportRequest("plain.mp4")),
-    "plain.mp4",
+    (error) => {
+      assert.equal(error.code, "INVALID_RESPONSE", error.message);
+      assert.match(error.message, /before its ready state/);
+      return true;
+    },
   );
 });
 
@@ -2322,38 +2445,34 @@ test("a start timeout that is not above zero is refused, and Infinity waits fore
   );
 });
 
-/** Logs every line, answers a cancel as `serve` does unless `answerCancel: false`. */
+/** Logs every request, answers a cancel as `serve` does unless `answerCancel: false`. */
 const CANCELLABLE_HOST = (
   log,
   { answerCancel = true } = {},
 ) => `import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
+import { progress, respond, serve } from ${IO};
 const record = (line) => appendFileSync(${JSON.stringify(log)}, line + "\\n");
 record("start " + process.pid);
-const keepAlive = setInterval(() => {}, 1_000);
-const send = (message) => process.stdout.write(JSON.stringify({ protocolVersion: 1, ...message }) + "\\n");
-send({ type: "ready" });
-let requestId;
-const lines = createInterface({ input: process.stdin });
-lines.on("line", (line) => {
-  const message = JSON.parse(line);
-  record(message.operation + " " + (message.target ?? ""));
-  if (message.operation === "export") {
-    requestId = message.requestId;
-    send({ type: "progress", requestId, phase: "frames", completed: 0, total: 100 });
-  } else if (message.operation === "cancel" && ${answerCancel}) {
-    send({ requestId: message.requestId, ok: true, result: { target: message.target, state: message.target === requestId ? "running" : "pending" } });
+let running;
+serve((request) => {
+  record(request.operation + " ");
+  running = request;
+  progress(request, { phase: "frames", completed: 0, total: 100 });
+}, {
+  onCancel: (cancel) => {
+    record("cancel " + cancel.target);
+    if (!${answerCancel}) return;
+    respond(cancel, { ok: true, result: { target: cancel.target, state: cancel.target === running?.requestId ? "running" : "pending" } });
     setTimeout(() => {
       record("partial removed");
-      send({ requestId, ok: false, error: { code: "CANCELLED", message: "native export was cancelled: the client cancelled request " + requestId } });
+      respond(running, { ok: false, error: { code: "CANCELLED", message: "native export was cancelled: the client cancelled request " + running.requestId } });
     }, 100);
-  }
+  },
 });
-lines.on("close", () => clearInterval(keepAlive));
 `;
 
 test(
-  "an abort writes a cancel line and settles after the host answers and exits",
+  "an abort sends a cancel, settles once the host answers, and keeps the host",
   { timeout: 10_000 },
   async () => {
     const root = await scratch("alpha2-node-cancel-line-");
@@ -2361,7 +2480,8 @@ test(
     const hostPath = await fakeHost(root, CANCELLABLE_HOST(log));
     const controller = new AbortController();
     let aborted;
-    const error = await new Alpha2NodeClient({ hostPath })
+    const client = new Alpha2NodeClient({ hostPath });
+    const error = await client
       .exportProject(
         exportRequest("out.mp4", {
           signal: controller.signal,
@@ -2380,9 +2500,12 @@ test(
     const lines = await startsIn(log);
     assert.equal(lines[1], "export ");
     assert.match(lines[2], /^cancel node-\d+-\d+-\d+$/);
-    // The host answered the request (having removed its partial file) before it was ended.
+    // The host answered the request, having removed its partial file.
     assert.equal(lines[3], "partial removed");
-    assertExited(Number(lines[0].split(" ")[1]));
+    const pid = Number(lines[0].split(" ")[1]);
+    assert.ok(alive(pid), "the host was ended");
+    await client.close();
+    assertExited(pid);
   },
 );
 
@@ -2496,4 +2619,263 @@ test("the glibc refusal names the floor", async () => {
     error.message,
     /GLIBC_2\.38.*; this alpha2-host needs glibc 2\.\d+ or later \(this system has /s,
   );
+});
+
+/**
+ * Logs `start`, `request` and `exit` lines with its pid and answers with its pid, modes and request
+ * count; `behavior` is code run first for each request, which may answer and return.
+ */
+const POOLED_HOST = (
+  log,
+  behavior = "",
+) => `import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { drain, respond, serve } from ${IO};
+const record = (line) => appendFileSync(${JSON.stringify(log)}, line + "\\n");
+record("start " + process.pid);
+process.on("exit", () => record("exit " + process.pid));
+let served = 0;
+serve((request) => {
+  served += 1;
+  record("request " + process.pid);
+  const result = { pid: process.pid, decode: process.env.ALPHA2_VIDEO_DECODE ?? "unset", renderer: process.env.ALPHA2_RENDERER ?? "unset", served };
+  ${behavior}
+  respond(request, { ok: true, result });
+});
+`;
+
+async function exported(client, overrides = {}) {
+  let result;
+  await client.exportProject(
+    exportRequest("out.mp4", {
+      ...overrides,
+      onResult: (value) => (result = value),
+    }),
+  );
+  return result;
+}
+
+test("a client sends its requests one after another to the host it keeps, and close ends it", async () => {
+  const root = await scratch("alpha2-node-pool-reuse-");
+  const log = join(root, "log");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(root, POOLED_HOST(log)),
+  });
+  const first = await exported(client);
+  const second = await exported(client);
+  assert.equal(second.pid, first.pid);
+  assert.equal(second.served, 2);
+  const [third, fourth] = await Promise.all([
+    exported(client),
+    exported(client),
+  ]);
+  assert.deepEqual(
+    [third.pid, fourth.pid, third.served + fourth.served],
+    [first.pid, first.pid, 7],
+  );
+  await client.close();
+  assertExited(first.pid);
+  const after = await exported(client);
+  assert.notEqual(after.pid, first.pid);
+  assert.equal(after.served, 1);
+});
+
+test("a host that reports draining in a state message is sent no more requests", async () => {
+  const root = await scratch("alpha2-node-pool-drain-state-");
+  const log = join(root, "log");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(
+      root,
+      POOLED_HOST(
+        log,
+        `if (served === 1) setTimeout(() => drain("idle"), 50);`,
+      ),
+    ),
+  });
+  const first = await exported(client);
+  // The host exits only once the client closes its stdin.
+  await waitUntil(() => !alive(first.pid), "the draining host to exit");
+  const second = await exported(client);
+  assert.notEqual(second.pid, first.pid);
+  assert.equal(second.served, 1);
+});
+
+test("a response whose host state is draining removes its host", async () => {
+  const root = await scratch("alpha2-node-pool-drain-answer-");
+  const log = join(root, "log");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(
+      root,
+      POOLED_HOST(
+        log,
+        `if (served === 1) return respond(request, { ok: true, result, hostState: "draining" });`,
+      ),
+    ),
+  });
+  const first = await exported(client);
+  const second = await exported(client);
+  assert.notEqual(second.pid, first.pid);
+  assert.equal(second.served, 1);
+  await waitUntil(() => !alive(first.pid), "the draining host to exit");
+});
+
+test("a host that exits while idle is replaced by a new one", async () => {
+  const root = await scratch("alpha2-node-pool-idle-exit-");
+  const log = join(root, "log");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(
+      root,
+      POOLED_HOST(
+        log,
+        `if (served === 1) setTimeout(() => process.exit(0), 50);`,
+      ),
+    ),
+  });
+  const first = await exported(client);
+  await waitUntil(() => !alive(first.pid), "the host to exit");
+  const second = await exported(client);
+  assert.notEqual(second.pid, first.pid);
+});
+
+test("a request answered HOST_RETIRING is sent again to another host, a few times at most", async () => {
+  const root = await scratch("alpha2-node-pool-retiring-");
+  const log = join(root, "log");
+  const marker = join(root, "retired");
+  const retiring = `respond(request, { ok: false, hostState: "draining", error: { code: "HOST_RETIRING", message: "the host is draining and did not start the request" } });`;
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(
+      root,
+      POOLED_HOST(
+        log,
+        `if (!existsSync(${JSON.stringify(marker)})) { writeFileSync(${JSON.stringify(marker)}, ""); return ${retiring} }`,
+      ),
+    ),
+  });
+  const result = await exported(client);
+  const lines = await startsIn(log);
+  const requests = lines.filter((line) => line.startsWith("request"));
+  assert.equal(requests.length, 2, lines.join());
+  assert.notEqual(requests[0], requests[1]);
+  assert.equal(requests[1], `request ${result.pid}`);
+
+  const always = join(root, "always");
+  const stubborn = new Alpha2NodeClient({
+    hostPath: await fakeHost(
+      always,
+      POOLED_HOST(join(always, "log"), `return ${retiring}`),
+    ),
+  });
+  await assert.rejects(stubborn.exportProject(exportRequest("out.mp4")), {
+    code: "HOST_RETIRING",
+  });
+  assert.equal(
+    (await startsIn(join(always, "log"))).filter((line) =>
+      line.startsWith("request"),
+    ).length,
+    4,
+  );
+});
+
+test("hosts are kept apart by decode mode and renderer", async () => {
+  const root = await scratch("alpha2-node-pool-modes-");
+  const log = join(root, "log");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(root, POOLED_HOST(log)),
+    concurrency: 2,
+    renderer: "cpu",
+  });
+  const software = await exported(client, { videoDecode: "software" });
+  const auto = await exported(client, { videoDecode: "auto" });
+  assert.notEqual(auto.pid, software.pid);
+  assert.deepEqual(
+    [software.decode, software.renderer, auto.decode, auto.renderer],
+    ["software", "cpu", "auto", "cpu"],
+  );
+  assert.equal(
+    (await exported(client, { videoDecode: "software" })).pid,
+    software.pid,
+  );
+  const gpu = await exported(client, {
+    videoDecode: "software",
+    renderer: "gpu",
+  });
+  assert.ok(![software.pid, auto.pid].includes(gpu.pid));
+  assert.equal(gpu.renderer, "gpu");
+});
+
+test("at the concurrency limit an idle host of other modes is ended before a new one starts", async () => {
+  const root = await scratch("alpha2-node-pool-limit-");
+  const log = join(root, "log");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(root, POOLED_HOST(log)),
+    concurrency: 1,
+  });
+  const software = await exported(client, { videoDecode: "software" });
+  const auto = await exported(client, { videoDecode: "auto" });
+  assert.notEqual(auto.pid, software.pid);
+  assert.deepEqual(
+    (await startsIn(log)).filter((line) => !line.startsWith("request")),
+    [`start ${software.pid}`, `exit ${software.pid}`, `start ${auto.pid}`],
+  );
+});
+
+test("an idle host does not keep the process that started it alive", async () => {
+  const root = await scratch("alpha2-node-pool-unref-");
+  const executable = await fakeHost(root, POOLED_HOST(join(root, "log")));
+  const script = join(root, "client.mjs");
+  await writeFile(
+    script,
+    `import { Alpha2NodeClient } from ${JSON.stringify(new URL("../dist/index.js", import.meta.url).href)};
+const exportRequest = ${exportRequest.toString()};
+const client = new Alpha2NodeClient({ hostPath: ${JSON.stringify(executable)} });
+let result;
+await client.exportProject(exportRequest("out.mp4", { onResult: (value) => (result = value) }));
+process.stdout.write(JSON.stringify(result) + "\\n");
+`,
+  );
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, [script], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  let stdout = "";
+  let answered;
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+    answered ??= Date.now();
+  });
+  const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  const [code] = await new Promise((resolveClose) =>
+    child.on("close", (...args) => resolveClose(args)),
+  );
+  clearTimeout(timer);
+  assert.equal(code, 0, stdout);
+  const waited = Date.now() - answered;
+  assert.ok(waited < 3_000, `exited ${waited} ms after the answer`);
+  const { pid } = JSON.parse(stdout);
+  // The host's stdin ends with its client.
+  await waitUntil(() => !alive(pid), "the host to exit after its client");
+});
+
+test("a request goes only to a host started with the environment it would start one with now", async () => {
+  const root = await scratch("alpha2-node-pool-environment-");
+  const log = join(root, "log");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(root, POOLED_HOST(log)),
+    concurrency: 2,
+  });
+  const saved = process.env.ALPHA2_NODE_TEST_SETTING;
+  delete process.env.ALPHA2_NODE_TEST_SETTING;
+  try {
+    const first = await exported(client);
+    assert.equal((await exported(client)).pid, first.pid);
+    process.env.ALPHA2_NODE_TEST_SETTING = "1";
+    const changed = await exported(client);
+    assert.notEqual(changed.pid, first.pid);
+    assert.equal((await exported(client)).pid, changed.pid);
+    delete process.env.ALPHA2_NODE_TEST_SETTING;
+    assert.equal((await exported(client)).pid, first.pid);
+  } finally {
+    if (saved === undefined) delete process.env.ALPHA2_NODE_TEST_SETTING;
+    else process.env.ALPHA2_NODE_TEST_SETTING = saved;
+  }
 });

@@ -1166,7 +1166,7 @@ fn the_decode_plan_sizes_software_decode_from_what_conform_probed() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("decode-plan-size");
     let mut request = json!({
-        "protocolVersion": 1, "requestId": "sized", "operation": "export",
+        "protocolVersion": 2, "requestId": "sized", "operation": "export",
         "project": conform_project(&json!({})),
         "assets": {"video": corpus("h264-bt709-copy.mp4")},
         "startTicks": 0, "endTicks": 120_000,

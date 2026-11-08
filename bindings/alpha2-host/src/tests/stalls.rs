@@ -569,7 +569,7 @@ fn dropping_a_worker_with_a_stuck_shard_returns_when_no_stall_was_reported() {
 fn encode_stall_request(output: &Path) -> Request {
     parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "encode-stall", "operation": "export",
+            "protocolVersion": 2, "requestId": "encode-stall", "operation": "export",
             "project": conform_project(&json!({})),
             "assets": {"video": corpus("parity-rgb.mov")},
             "startTicks": 0, "endTicks": 120_000,
@@ -638,7 +638,7 @@ fn a_cleanup_failure_after_the_output_is_written_does_not_fail_the_export() {
     if let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) {
         let output = directory.join("gpu.mp4");
         let mut request = json!({
-            "protocolVersion": 1, "requestId": "cleanup-gpu", "operation": "export",
+            "protocolVersion": 2, "requestId": "cleanup-gpu", "operation": "export",
             "project": conform_project(&json!({})),
             "assets": {"video": corpus("parity-rgb.mov")},
             "startTicks": 0, "endTicks": 120_000,
@@ -674,7 +674,7 @@ fn a_gpu_required_export_with_the_pipeline_off() {
     };
     let directory = scratch_directory("pipeline-off-gpu");
     let mut request = json!({
-        "protocolVersion": 1, "requestId": "pipeline-off", "operation": "export",
+        "protocolVersion": 2, "requestId": "pipeline-off", "operation": "export",
         "project": conform_project(&json!({})),
         "assets": {"video": corpus("parity-rgb.mov")},
         "startTicks": 0, "endTicks": 120_000,
@@ -789,7 +789,7 @@ fn a_gpu_resident_encoder_stuck_on_the_gpu_fails_the_export_on_the_gpu() {
     };
     let directory = scratch_directory("encode-stall-gpu");
     let mut request = json!({
-        "protocolVersion": 1, "requestId": "encode-stall-gpu", "operation": "export",
+        "protocolVersion": 2, "requestId": "encode-stall-gpu", "operation": "export",
         "project": conform_project(&json!({})),
         "assets": {"video": corpus("parity-rgb.mov")},
         "startTicks": 0, "endTicks": 120_000,
@@ -889,7 +889,7 @@ fn stalled_copy_request(output: &Path, strategy: &str) -> Request {
     let second = alpha2_time::TICKS_PER_SECOND;
     parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "copy-stall", "operation": "export",
+            "protocolVersion": 2, "requestId": "copy-stall", "operation": "export",
             "project": {
                 "schema_version": 1, "id": "copy", "name": "Copy",
                 "settings": {"width": 128, "height": 96, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 from collections.abc import Callable
@@ -14,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import corpus, export_args, lines_in, project_document
+from conftest import FakeHost, corpus, export_args, lines_in, project_document
 
 import alpha2
 from alpha2 import (
@@ -28,8 +30,6 @@ from alpha2.client import resolve_host_binary
 from alpha2.errors import failure_class_of_code
 from alpha2.install import host_executable_name
 from alpha2.protocol import describe_exit, windows_policy_blocked
-
-FakeHost = Callable[[Path, str], str]
 
 
 def pid_exited(pid: int) -> bool:
@@ -62,6 +62,13 @@ def pid_exited(pid: int) -> bool:
     return False
 
 
+def wait_until(condition: Callable[[], bool], seconds: float = 10) -> None:
+    deadline = time.monotonic() + seconds
+    while not condition():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.02)
+
+
 @pytest.fixture
 def started_pids(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     """Host pids as the client sees them; on Windows a venv's ``python.exe`` is a launcher, so the
@@ -92,8 +99,10 @@ def answering_host(answer: str) -> str:
     return f"""
     request, _ = read_request()
     message = {answer}
-    sys.stdout.write(json.dumps({{"protocolVersion": 1, "requestId": request["requestId"], **message}}) + "\\n")
-    sys.stdout.flush()
+    if "ok" in message:
+        send(request, **message)
+    else:
+        write_message(message)
     """
 
 
@@ -219,9 +228,10 @@ def test_options_written_in_python_reach_the_host_in_the_protocols_names(
     host_path = fake_host(
         tmp_path,
         f"""
-        request, line = read_request()
-        open({str(recorded)!r}, "w").write(line)
-        send(request, ok=True, result={{"output": request["output"]}})
+        def answer(request):
+            open({str(recorded)!r}, "w").write(json.dumps(request))
+            send(request, ok=True, result={{"output": request["output"]}})
+        serve(answer)
         """,
     )
     resources = {"label": {"art/badge.png": "/media/badge.png"}}
@@ -427,11 +437,12 @@ def queue_host(log: Path, answer_seconds: float = 0, ignore_term: bool = False) 
     record({str(log)!r}, "start " + str(os.getpid()))
     if {ignore_term}:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    request, _ = read_request()
-    record({str(log)!r}, "request " + request["output"])
-    send(request, type="progress", phase="frames", completed=0, total=1)
-    time.sleep({answer_seconds})
-    send(request, ok=True, result={{"output": request["output"]}})
+    def answer(request):
+        record({str(log)!r}, "request " + request["output"])
+        send(request, type="progress", phase="frames", completed=0, total=1)
+        time.sleep({answer_seconds})
+        send(request, ok=True, result={{"output": request["output"]}})
+    serve(answer)
     """
 
 
@@ -486,25 +497,18 @@ def test_a_host_that_stays_up_through_sigterm_is_killed(
     assert len(started_pids) == 1 and pid_exited(started_pids[0])
 
 
-def test_a_cancel_seen_once_the_host_has_started_ends_it_before_the_request_is_written(
-    tmp_path: Path, fake_host: FakeHost
+def test_a_cancel_while_the_host_starts_ends_it_before_the_request_is_written(
+    tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
 ) -> None:
     log = tmp_path / "log"
-    host_path = fake_host(tmp_path, queue_host(log))
-
-    class LateEvent(threading.Event):
-        """Set from the third check on, after the host has started."""
-
-        looks = 0
-
-        def is_set(self) -> bool:
-            self.looks += 1
-            return self.looks >= 3
-
-    cancel = LateEvent()
+    source = "time.sleep(0.5)\nbegin()\nstate()\n" + textwrap.dedent(queue_host(log))
+    host_path = fake_host(tmp_path, source, ready=False)
+    cancel = threading.Event()
+    threading.Timer(0.2, cancel.set).start()
     with pytest.raises(Alpha2AbortError):
         HostClient(host_path=host_path).export(**export_args("out.mp4", cancel=cancel))
-    assert cancel.looks == 3
+    assert len(started_pids) == 1
+    wait_until(lambda: pid_exited(started_pids[0]))
     assert [line for line in lines_in(log) if line.startswith("request")] == []
 
 
@@ -517,16 +521,17 @@ def test_module_calls_with_the_same_host_and_concurrency_share_one_pool(
     host_path = fake_host(
         tmp_path,
         f"""
-        record({str(modes)!r}, os.environ.get("ALPHA2_VIDEO_DECODE", "unset"))
         try:
             descriptor = os.open({str(lock)!r}, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.close(descriptor)
         except FileExistsError:
             open({str(overlap)!r}, "w").write("overlap")
-        request, _ = read_request()
-        time.sleep(0.1)
+        def answer(request):
+            record({str(modes)!r}, os.environ.get("ALPHA2_VIDEO_DECODE", "unset"))
+            time.sleep(0.1)
+            send(request, ok=True, result={{"output": request.get("output"), "status": "ready"}})
+        serve(answer)
         os.remove({str(lock)!r})
-        send(request, ok=True, result={{"output": request.get("output"), "status": "ready"}})
         """,
     )
     with ThreadPoolExecutor(5) as pool:
@@ -611,7 +616,7 @@ def test_the_stderr_an_error_keeps_is_at_most_16_kib_of_utf8_from_a_whole_charac
         assert stderr.endswith("the last line\n")
 
 
-def test_stderr_written_up_to_the_answer_is_kept_when_the_client_ends_the_host(
+def test_stderr_written_up_to_the_answer_is_kept_while_the_host_stays_up(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:
     # More than a pipe buffer, so the client is still reading when the answer arrives.
@@ -622,8 +627,7 @@ def test_stderr_written_up_to_the_answer_is_kept_when_the_client_ends_the_host(
         sys.stderr.write("x" * 40_000 + "\\n" + "the last line before the answer\\n")
         sys.stderr.flush()
         send(request, ok=False, error={"code": "ALPHA2_ERROR", "message": "readback failed"})
-        while True:
-            time.sleep(1)
+        read_request()
         """,
     )
     with pytest.raises(Alpha2HostError) as caught:
@@ -633,69 +637,142 @@ def test_stderr_written_up_to_the_answer_is_kept_when_the_client_ends_the_host(
         assert stderr is not None and stderr.endswith("the last line before the answer\n")
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="a host outlives its answer only where it can ignore the request to end (SIGTERM)",
-)
-def test_stderr_written_after_the_answer_is_kept(tmp_path: Path, fake_host: FakeHost) -> None:
+def test_an_error_keeps_only_the_stderr_its_own_request_wrote(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
     host_path = fake_host(
         tmp_path,
         """
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        request, _ = read_request()
-        sys.stderr.write("x" * 40_000 + "\\n")
-        sys.stderr.flush()
-        send(request, ok=False, error={"code": "ALPHA2_ERROR", "message": "readback failed"})
-        time.sleep(0.1)
-        sys.stderr.write("alpha2-host uncaptured GPU out-of-memory error: staging\\n")
-        sys.stderr.flush()
-        sys.exit(1)
+        def answer(request):
+            sys.stderr.write("while " + request["output"] + "\\n")
+            sys.stderr.flush()
+            send(request, ok=False, error={"code": "ALPHA2_ERROR", "message": "failed"})
+        serve(answer)
         """,
+    )
+    client = HostClient(host_path=host_path)
+    for name in ("first.mp4", "second.mp4"):
+        with pytest.raises(Alpha2HostError) as caught:
+            client.export(**export_args(name))
+        assert caught.value.stderr == f"while {name}\n"
+
+
+def test_what_a_host_prints_before_its_magic_is_kept_as_diagnostic_output(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    banner = "Validation Error: [ VUID-StandaloneSpirv-None-10684 ] vkCreateShaderModule"
+    host_path = fake_host(
+        tmp_path,
+        f"""
+        sys.stdout.write({banner!r} + "\\n")
+        begin()
+        state()
+        request, _ = read_request()
+        send(request, ok=False, error={{"code": "ALPHA2_ERROR", "message": "failed"}})
+        """,
+        ready=False,
     )
     with pytest.raises(Alpha2HostError) as caught:
         HostClient(host_path=host_path).export(**export_args(tmp_path / "out.mp4"))
     assert caught.value.code == "ALPHA2_ERROR"
-    for stderr in (caught.value.stderr, caught.value.failure["stderr"]):
-        assert stderr is not None and stderr.endswith("out-of-memory error: staging\n")
+    assert caught.value.stderr is not None and banner in caught.value.stderr
 
 
-def test_a_line_on_the_hosts_stdout_that_is_not_a_message_is_kept_as_diagnostic_output(
+def test_a_host_that_never_writes_its_magic_fails_to_start_with_invalid_response(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:
-    banner = "Validation Error: [ VUID-StandaloneSpirv-None-10684 ] vkCreateShaderModule"
-
-    def host(answer: str) -> str:
-        return f"""
-        sys.stdout.write({banner!r} + "\\n\\n")
-        sys.stdout.flush()
-        request, _ = read_request()
-        sys.stdout.write(" " + {banner!r} + "\\n" + {answer!r}.replace("REQUEST", request["requestId"]) + "\\n")
-        sys.stdout.flush()
+    # One byte past the client's bound on what may come before the magic.
+    host_path = fake_host(
+        tmp_path,
         """
+        sys.stdout.write("x" * (1 << 20) + "y" * 9)
+        sys.stdout.flush()
+        read_request()
+        """,
+        ready=False,
+    )
+    with pytest.raises(Alpha2HostError) as caught:
+        HostClient(host_path=host_path).capabilities()
+    assert caught.value.code == "INVALID_RESPONSE"
+    assert "without its protocol magic" in caught.value.message
 
-    ready = HostClient(
-        host_path=fake_host(
-            tmp_path / "ready",
-            host(
-                '{"protocolVersion":1,"requestId":"REQUEST","ok":true,"result":{"status":"ready"}}'
-            ),
+
+def test_a_frame_the_client_cannot_read_is_invalid_response(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    bodies = {
+        "json": 'b"{not json"',
+        # The header lists 4 bytes of attachments; the frame carries 3.
+        "attachments": 'json.dumps({"protocolVersion": 2, "requestId": request["requestId"], "ok": True, '
+        '"result": {}, "hostState": "ready", "attachments": [{"type": "image/png", "bytes": 4}]}).encode()',
+        "list": 'json.dumps({"protocolVersion": 2, "requestId": request["requestId"], "ok": True, '
+        '"result": {}, "hostState": "ready", "attachments": [{"type": "", "bytes": 3}]}).encode()',
+    }
+    for name, body in bodies.items():
+        host_path = fake_host(
+            tmp_path / name,
+            f"""
+            request, _ = read_request()
+            header = {body}
+            sys.stdout.buffer.write(struct.pack("<II", len(header), 3) + header + b"PNG")
+            sys.stdout.buffer.flush()
+            read_request()
+            """,
         )
-    ).capabilities()
-    assert ready["status"] == "ready"
+        with pytest.raises(Alpha2HostError) as caught:
+            HostClient(host_path=host_path).capabilities()
+        assert caught.value.code == "INVALID_RESPONSE", name
+
+
+def test_a_still_without_an_output_returns_its_png(tmp_path: Path, fake_host: FakeHost) -> None:
+    recorded = tmp_path / "request.json"
+    host_path = fake_host(
+        tmp_path,
+        f"""
+        request, header = read_request()
+        open({str(recorded)!r}, "w").write(header)
+        frames, attachments = [], []
+        for index, still in enumerate(request["stills"]):
+            frame = {{"frameTime": still["time"], "width": 1, "height": 1}}
+            if "output" in still:
+                frames.append({{**frame, "output": still["output"]}})
+            else:
+                frames.append({{**frame, "output": None, "attachment": len(attachments)}})
+                attachments.append(("image/png", b"PNG-" + str(index).encode()))
+        write_message({{"requestId": request["requestId"], "ok": True, "hostState": "ready",
+            "result": {{"stills": frames, "renderer": "cpu", "timings": {{}}}}}}, attachments)
+        read_request()
+        """,
+    )
+    result = HostClient(host_path=host_path).stills(
+        project_document(), [(0, None), (0.5, tmp_path / "b.png"), (1, None)]
+    )
+    request = json.loads(recorded.read_text())
+    assert request["stills"] == [
+        {"time": 0},
+        {"time": 60_000, "output": str(tmp_path / "b.png")},
+        {"time": 120_000},
+    ]
+    frames = result["stills"]
+    assert [frame.get("png") for frame in frames] == [b"PNG-0", None, b"PNG-2"]
+    assert [frame["output"] for frame in frames] == [None, str(tmp_path / "b.png"), None]
+
+
+def test_a_still_naming_an_attachment_the_response_lacks_is_invalid_response(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    host_path = fake_host(
+        tmp_path,
+        """
+        request, _ = read_request()
+        frame = {"frameTime": 0, "width": 1, "height": 1, "output": None, "attachment": 1}
+        write_message({"requestId": request["requestId"], "ok": True, "hostState": "ready",
+            "result": {"stills": [frame], "renderer": "cpu", "timings": {}}}, [("image/png", b"PNG")])
+        read_request()
+        """,
+    )
     with pytest.raises(Alpha2HostError) as caught:
-        HostClient(
-            host_path=fake_host(
-                tmp_path / "failed",
-                host(
-                    '{"protocolVersion":1,"requestId":"REQUEST","ok":false,'
-                    '"error":{"code":"ALPHA2_ERROR","message":"failed"}}'
-                ),
-            )
-        ).export(**export_args(tmp_path / "out.mp4"))
-    assert caught.value.code == "ALPHA2_ERROR"
-    assert caught.value.stderr is not None and banner in caught.value.stderr
-    with pytest.raises(Alpha2HostError) as caught:
-        HostClient(host_path=fake_host(tmp_path / "broken", host("{not json"))).capabilities()
+        HostClient(host_path=host_path).still(project_document(), 0)
     assert caught.value.code == "INVALID_RESPONSE"
 
 
@@ -789,7 +866,9 @@ def test_a_host_the_loader_refuses_to_start_is_host_load_failed(
         "cannot open shared object file: No such file or directory"
     )
     client = HostClient(
-        host_path=fake_host(tmp_path, f"sys.stderr.write({words + chr(10)!r})\nsys.exit(127)\n")
+        host_path=fake_host(
+            tmp_path, f"sys.stderr.write({words + chr(10)!r})\nsys.exit(127)\n", ready=False
+        )
     )
     calls: list[Callable[[], object]] = [
         lambda: client.export(**export_args(tmp_path / "out.mp4")),
@@ -967,19 +1046,20 @@ def test_a_decode_mode_that_is_not_one_is_refused_before_a_host_starts(
 
 def probed_host(log: Path, export_seconds: float = 0, fail_first: bool = False) -> str:
     return f"""
-    request, _ = read_request()
-    mode = os.environ.get("ALPHA2_VIDEO_DECODE", "unset")
-    record({str(log)!r}, request["operation"] + " " + mode)
-    if request["operation"] == "export":
-        time.sleep({export_seconds})
-        send(request, ok=True, result={{"output": request["output"]}})
-        sys.exit(0)
-    failed = {str(log)!r} + ".failed"
-    if {fail_first} and not os.path.exists(failed):
-        open(failed, "w").close()
-        send(request, ok=False, error={{"code": "ALPHA2_ERROR", "message": "probe failed"}})
-    else:
-        send(request, ok=True, result={{"status": "ready", "capabilities": {{"decode": {{"mode": mode}}}}, "effectCatalog": {{}}}})
+    def answer(request):
+        mode = os.environ.get("ALPHA2_VIDEO_DECODE", "unset")
+        record({str(log)!r}, request["operation"] + " " + mode)
+        if request["operation"] == "export":
+            time.sleep({export_seconds})
+            send(request, ok=True, result={{"output": request["output"]}})
+            return
+        failed = {str(log)!r} + ".failed"
+        if {fail_first} and not os.path.exists(failed):
+            open(failed, "w").close()
+            send(request, ok=False, error={{"code": "ALPHA2_ERROR", "message": "probe failed"}})
+        else:
+            send(request, ok=True, result={{"status": "ready", "capabilities": {{"decode": {{"mode": mode}}}}, "effectCatalog": {{}}}})
+    serve(answer)
     """
 
 
@@ -999,7 +1079,7 @@ def test_a_capability_probe_withdrawn_while_an_export_holds_the_slot_never_start
             probe.result()
         assert not exporting.done(), "the withdrawn call waited for the export"
         exporting.result()
-    # Slots are FIFO, so a probe still queued would have run before this export.
+    # Waiting requests are served in order, so a probe still queued would have run before this.
     client.export(**export_args(tmp_path / "after.mp4"))
     assert lines_in(log) == ["export unset", "export unset"]
 
@@ -1036,14 +1116,15 @@ def test_one_probe_answers_every_capability_call_for_a_mode_and_a_failed_one_is_
 
 def renderer_host(log: Path) -> str:
     return f"""
-    request, _ = read_request()
     decode = os.environ.get("ALPHA2_VIDEO_DECODE", "unset")
     renderer = os.environ.get("ALPHA2_RENDERER", "unset")
-    record({str(log)!r}, request["operation"] + " " + decode + " " + renderer)
-    if request["operation"] == "capabilities":
-        send(request, ok=True, result={{"status": "ready", "renderer": renderer, "rendererReason": None, "capabilities": {{}}, "effectCatalog": {{}}}})
-    else:
-        send(request, ok=True, result={{"output": request.get("output")}})
+    def answer(request):
+        record({str(log)!r}, request["operation"] + " " + decode + " " + renderer)
+        if request["operation"] == "capabilities":
+            send(request, ok=True, result={{"status": "ready", "renderer": renderer, "rendererReason": None, "capabilities": {{}}, "effectCatalog": {{}}}})
+        else:
+            send(request, ok=True, result={{"output": request.get("output")}})
+    serve(answer)
     """
 
 
@@ -1179,9 +1260,9 @@ def test_an_answer_to_a_line_the_host_could_not_read_is_the_requests_answer(
     host_path = fake_host(
         tmp_path,
         """
-        sys.stdin.readline()
-        sys.stdout.write(json.dumps({"protocolVersion": 1, "requestId": "unknown", "ok": False,
-            "error": {"code": "INVALID_REQUEST", "message": "the request line is 40000000 bytes; the maximum is 134217728"}}) + "\\n")
+        read_message()
+        send({"requestId": "unknown"}, ok=False,
+            error={"code": "INVALID_REQUEST", "message": "the request line is 40000000 bytes; the maximum is 134217728"})
         """,
     )
     with pytest.raises(Alpha2HostError) as caught:
@@ -1222,9 +1303,7 @@ def test_a_host_that_exits_before_reading_a_large_request_reports_why(
     host_path = fake_host(
         tmp_path,
         """
-        sys.stdout.write(json.dumps({"protocolVersion": 1, "type": "fatal",
-            "error": {"code": "GPU_INIT_FAILED", "message": "no adapter"}}) + "\\n")
-        sys.stdout.flush()
+        write_message({"type": "fatal", "error": {"code": "GPU_INIT_FAILED", "message": "no adapter"}})
         sys.exit(70)
         """,
     )
@@ -1283,8 +1362,7 @@ def test_a_host_that_cannot_make_its_gpu_device_is_a_gpu_initialization_error(
             "fatal",
             """
             sys.stderr.write("alpha2-host: no adapter\\n"); sys.stderr.flush()
-            sys.stdout.write(json.dumps({"protocolVersion": 1, "type": "fatal", "error": {"code": "GPU_INIT_FAILED", "message": "could not acquire a GPU adapter"}}) + "\\n")
-            sys.stdout.flush()
+            write_message({"type": "fatal", "error": {"code": "GPU_INIT_FAILED", "message": "could not acquire a GPU adapter"}})
             sys.exit(70)
             """,
             "could not acquire a GPU adapter",
@@ -1411,7 +1489,7 @@ def test_conform_sends_the_purpose_as_the_host_spells_it(
 def test_a_host_that_never_writes_is_host_start_timeout(
     tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
 ) -> None:
-    host_path = fake_host(tmp_path, "time.sleep(60)\n")
+    host_path = fake_host(tmp_path, "time.sleep(60)\n", ready=False)
     started = time.monotonic()
     with pytest.raises(Alpha2HostError) as caught:
         HostClient(host_path=host_path, host_start_timeout=0.3).export(
@@ -1431,33 +1509,30 @@ def test_a_host_that_writes_ready_late_but_in_time_is_not_timed_out(
         tmp_path,
         """
         time.sleep(0.2)
-        sys.stdout.write(json.dumps({"protocolVersion": 1, "type": "ready"}) + "\\n")
-        sys.stdout.flush()
+        begin()
+        state()
         request, _ = read_request()
         time.sleep(1.5)
         send(request, ok=True, result={"output": request["output"]})
         """,
+        ready=False,
     )
     client = HostClient(host_path=host_path, host_start_timeout=0.5)
     assert client.export(**export_args("slow.mp4")) == {"output": "slow.mp4"}
 
 
-def test_a_ready_line_is_not_an_answer(tmp_path: Path, fake_host: FakeHost) -> None:
+def test_a_state_message_is_not_an_answer(tmp_path: Path, fake_host: FakeHost) -> None:
     host_path = fake_host(
         tmp_path,
         """
-        sys.stdout.write(json.dumps({"protocolVersion": 1, "type": "ready"}) + "\\n")
-        sys.stdout.flush()
         request, _ = read_request()
+        state("ready", "started", activity="busy")
         send(request, ok=True, result={"output": request["output"]})
         """,
     )
     assert HostClient(host_path=host_path).export(**export_args("ready.mp4")) == {
         "output": "ready.mp4"
     }
-    # A host that answers without a ready line still works.
-    plain = fake_host(tmp_path / "plain", started_host(tmp_path / "starts"))
-    assert HostClient(host_path=plain).export(**export_args("plain.mp4")) == {"output": "plain.mp4"}
 
 
 def test_a_start_timeout_that_is_not_above_zero_is_refused(tmp_path: Path) -> None:
@@ -1468,27 +1543,31 @@ def test_a_start_timeout_that_is_not_above_zero_is_refused(tmp_path: Path) -> No
 
 
 def cancellable_host(log: Path, answer_cancel: bool = True) -> str:
-    """Answers a cancel as ``serve`` does; ``answer_cancel=False`` ignores it."""
+    """Answers a cancel as ``serve`` does and serves on; ``answer_cancel=False`` ignores it."""
     return f"""
     record({str(log)!r}, "start " + str(os.getpid()))
-    sys.stdout.write(json.dumps({{"protocolVersion": 1, "type": "ready"}}) + "\\n")
-    sys.stdout.flush()
-    request, _ = read_request()
-    record({str(log)!r}, "export")
-    send(request, type="progress", phase="frames", completed=0, total=100)
-    for line in sys.stdin:
-        message = json.loads(line)
-        record({str(log)!r}, message["operation"] + " " + message["target"])
-        if {answer_cancel}:
-            send(message, ok=True, result={{"target": message["target"], "state": "running"}})
-            time.sleep(0.1)
-            record({str(log)!r}, "partial removed")
-            send(request, ok=False, error={{"code": "CANCELLED", "message": "cancelled"}})
-    record({str(log)!r}, "input ended")
+    def answer(request):
+        record({str(log)!r}, request["operation"])
+        if request["operation"] != "export":
+            send(request, ok=True, result={{}})
+            return
+        send(request, type="progress", phase="frames", completed=0, total=100)
+        while (received := read_message()) is not None:
+            message, _ = received
+            record({str(log)!r}, message["operation"] + " " + message["target"])
+            if {answer_cancel}:
+                send(message, ok=True, result={{"target": message["target"], "state": "running"}})
+                time.sleep(0.1)
+                record({str(log)!r}, "partial removed")
+                send(request, ok=False, error={{"code": "CANCELLED", "message": "cancelled"}})
+                return
+        record({str(log)!r}, "input ended")
+        sys.exit(0)
+    serve(answer)
     """
 
 
-def test_an_abort_writes_a_cancel_line_and_returns_after_the_host_answers_and_exits(
+def test_an_abort_writes_a_cancel_line_returns_once_the_host_answers_and_the_host_serves_on(
     tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
 ) -> None:
     log = tmp_path / "log"
@@ -1500,16 +1579,19 @@ def test_an_abort_writes_a_cancel_line_and_returns_after_the_host_answers_and_ex
         cancelled.append(time.monotonic())
         cancel.set()
 
+    client = HostClient(host_path=host_path)
     with pytest.raises(Alpha2AbortError):
-        HostClient(host_path=host_path).export(
-            **export_args("out.mp4", cancel=cancel, on_progress=progress)
-        )
+        client.export(**export_args("out.mp4", cancel=cancel, on_progress=progress))
     assert time.monotonic() - cancelled[0] < 3
     lines = lines_in(log)
     assert lines[1] == "export"
     assert re.fullmatch(r"cancel python-\d+-\d+-\d+", lines[2]), lines
     assert lines[3] == "partial removed"
-    assert len(started_pids) == 1 and pid_exited(started_pids[0])
+    client.conform(project_document())
+    assert lines_in(log)[4] == "conform"
+    assert len(started_pids) == 1 and not pid_exited(started_pids[0])
+    client.close()
+    assert pid_exited(started_pids[0])
 
 
 def test_a_host_that_does_not_answer_a_cancel_within_the_timeout_is_ended(
@@ -1589,7 +1671,7 @@ def test_a_host_windows_blocks_by_policy_is_host_blocked(
     if sys.platform != "win32":
         return
     # STATUS_INVALID_IMAGE_HASH, as Code Integrity ends a process whose DLL it refused.
-    client = HostClient(host_path=fake_host(tmp_path, "os._exit(-1073740760)\n"))
+    client = HostClient(host_path=fake_host(tmp_path, "os._exit(-1073740760)\n", ready=False))
     with pytest.raises(Alpha2HostError) as caught:
         client.export(**export_args(tmp_path / "out.mp4"))
     assert caught.value.code == "HOST_BLOCKED", caught.value.message
@@ -1621,7 +1703,9 @@ def test_the_glibc_refusal_names_the_floor(tmp_path: Path, fake_host: FakeHost) 
         "found (required by /opt/alpha2/bin/alpha2-host)"
     )
     client = HostClient(
-        host_path=fake_host(tmp_path, f"sys.stderr.write({words + chr(10)!r})\nsys.exit(1)\n")
+        host_path=fake_host(
+            tmp_path, f"sys.stderr.write({words + chr(10)!r})\nsys.exit(1)\n", ready=False
+        )
     )
     with pytest.raises(Alpha2HostError) as caught:
         client.capabilities()
@@ -1644,3 +1728,187 @@ def test_a_lone_surrogate_in_a_project_is_an_alpha2_host_error(tmp_path: Path) -
     assert caught.value.code == "INVALID_INPUT"
     assert "project text is not valid Unicode" in str(caught.value)
     assert not never.exists()
+
+
+def pooled_host(
+    log: Path, answer: str = 'send(request, ok=True, result={"pid": os.getpid()})'
+) -> str:
+    """Records its start and each request, then runs ``answer`` for the request."""
+    return f"""
+    record({str(log)!r}, "start " + str(os.getpid()) + " " + os.environ.get("ALPHA2_VIDEO_DECODE", "unset"))
+    def answer(request):
+        record({str(log)!r}, "request " + str(os.getpid()))
+        {answer}
+    serve(answer)
+    """
+
+
+def starts_in(log: Path) -> list[int]:
+    return [int(line.split(" ")[1]) for line in lines_in(log) if line.startswith("start")]
+
+
+def test_requests_one_after_another_run_on_one_host(
+    tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
+) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log)))
+    first = client.capabilities()
+    client.conform(project_document())
+    client.export(**export_args("out.mp4"))
+    assert len(started_pids) == 1 and len(starts_in(log)) == 1
+    assert [line for line in lines_in(log) if line.startswith("request")] == [
+        f"request {first['pid']}"
+    ] * 3
+
+
+def test_a_host_that_reports_draining_while_idle_gets_no_more_requests(
+    tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
+) -> None:
+    log = tmp_path / "log"
+    answer = """send(request, ok=True, result={"pid": os.getpid()})
+        state("draining", "memory", activity="idle")"""
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log, answer)))
+    first = client.export(**export_args("first.mp4"))
+    # The host exits only once the client, having seen it drain, closes its input.
+    wait_until(lambda: pid_exited(started_pids[0]))
+    second = client.export(**export_args("second.mp4"))
+    assert first["pid"] != second["pid"]
+    assert len(started_pids) == 2
+
+
+def test_a_response_that_says_the_host_is_draining_ends_its_use(
+    tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
+) -> None:
+    log = tmp_path / "log"
+    answer = 'send(request, ok=True, result={"pid": os.getpid()}, hostState="draining")'
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log, answer)))
+    first = client.export(**export_args("first.mp4"))
+    second = client.export(**export_args("second.mp4"))
+    assert first["pid"] != second["pid"]
+    assert len(started_pids) == 2
+    wait_until(lambda: pid_exited(started_pids[0]))
+
+
+def test_a_host_that_exits_while_idle_is_replaced_by_a_new_one(
+    tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
+) -> None:
+    log = tmp_path / "log"
+    answer = """send(request, ok=True, result={"pid": os.getpid()})
+        time.sleep(0.2)
+        os._exit(0)"""
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log, answer)))
+    first = client.export(**export_args("first.mp4"))
+    wait_until(lambda: not client._pool._hosts)
+    second = client.export(**export_args("second.mp4"))
+    assert first["pid"] != second["pid"]
+    assert len(started_pids) == 2
+
+
+def test_a_request_answered_host_retiring_runs_again_on_another_host(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    log = tmp_path / "log"
+    marker = tmp_path / "first-host"
+    answer = f"""if not os.path.exists({str(marker)!r}):
+            open({str(marker)!r}, "w").write(str(os.getpid()))
+        if open({str(marker)!r}).read() == str(os.getpid()):
+            state("draining", "memory")
+            send(request, ok=False, error={{"code": "HOST_RETIRING", "message": "draining"}}, hostState="draining")
+        else:
+            send(request, ok=True, result={{"output": request["output"]}})"""
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log, answer)))
+    assert client.export(**export_args("out.mp4")) == {"output": "out.mp4"}
+    assert len(starts_in(log)) == 2
+
+
+def test_a_request_answered_host_retiring_by_every_host_fails_after_a_few_tries(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    log = tmp_path / "log"
+    answer = """send(request, ok=False, error={"code": "HOST_RETIRING", "message": "draining"}, hostState="draining")"""
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log, answer)), concurrency=2)
+    with pytest.raises(Alpha2HostError) as caught:
+        client.export(**export_args("out.mp4"))
+    assert caught.value.code == "HOST_RETIRING"
+    assert len(starts_in(log)) == 4
+
+
+def test_hosts_are_kept_apart_by_their_modes(
+    tmp_path: Path, fake_host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ALPHA2_VIDEO_DECODE", raising=False)
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log)), concurrency=2)
+    software = client.export(**export_args("a.mp4", video_decode="software"))
+    auto = client.export(**export_args("b.mp4", video_decode="auto"))
+    again = client.export(**export_args("c.mp4", video_decode="software"))
+    unset = client.export(**export_args("d.mp4"))
+    assert software["pid"] == again["pid"] != auto["pid"]
+    assert unset["pid"] not in (software["pid"], auto["pid"])
+    modes = [line.split(" ")[2] for line in lines_in(log) if line.startswith("start")]
+    assert modes == ["software", "auto", "unset"]
+
+
+def test_at_the_limit_an_idle_host_of_other_modes_is_ended_to_make_room(
+    tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
+) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log)), concurrency=1)
+    software = client.export(**export_args("a.mp4", video_decode="software"))
+    assert not pid_exited(started_pids[0])
+    auto = client.export(**export_args("b.mp4", video_decode="auto"))
+    assert software["pid"] != auto["pid"]
+    assert len(started_pids) == 2
+    assert pid_exited(started_pids[0])
+
+
+def test_concurrent_requests_share_at_most_concurrency_hosts(
+    tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
+) -> None:
+    log = tmp_path / "log"
+    running = tmp_path / "running"
+    answer = f"""record({str(running)!r}, "+")
+        time.sleep(0.2)
+        record({str(running)!r}, "-")
+        send(request, ok=True, result={{"pid": os.getpid()}})"""
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log, answer)), concurrency=2)
+    with ThreadPoolExecutor(6) as pool:
+        calls = [pool.submit(client.export, **export_args(f"{index}.mp4")) for index in range(6)]
+        pids = {call.result()["pid"] for call in calls}
+    assert len(started_pids) == 2 and len(pids) == 2
+    depth = 0
+    for mark in lines_in(running):
+        depth += 1 if mark == "+" else -1
+        assert depth <= 2
+
+
+def test_close_ends_the_hosts_and_a_later_request_starts_a_new_one(
+    tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
+) -> None:
+    log = tmp_path / "log"
+    host_path = fake_host(tmp_path, pooled_host(log))
+    with HostClient(host_path=host_path, concurrency=2) as client:
+        client.export(**export_args("a.mp4", video_decode="software"))
+        client.export(**export_args("b.mp4", video_decode="auto"))
+        assert len(started_pids) == 2 and not any(map(pid_exited, started_pids))
+    assert all(map(pid_exited, started_pids))
+    client.export(**export_args("c.mp4"))
+    assert len(started_pids) == 3
+    client.close()
+    assert pid_exited(started_pids[2])
+
+
+def test_a_change_to_the_environment_starts_a_new_host_and_no_change_reuses_one(
+    tmp_path: Path, fake_host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = tmp_path / "log"
+    answer = """send(request, ok=True, result={"pid": os.getpid(), "flag": os.environ.get("ALPHA2_TEST_FLAG")})"""
+    monkeypatch.setenv("ALPHA2_TEST_FLAG", "one")
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log, answer)), concurrency=2)
+    first = client.export(**export_args("a.mp4"))
+    same = client.export(**export_args("b.mp4"))
+    monkeypatch.setenv("ALPHA2_TEST_FLAG", "two")
+    changed = client.export(**export_args("c.mp4"))
+    assert first["pid"] == same["pid"] != changed["pid"]
+    assert (first["flag"], changed["flag"]) == ("one", "two")
+    assert len(starts_in(log)) == 2

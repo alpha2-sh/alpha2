@@ -258,7 +258,7 @@ fn a_texture_let_go_while_its_frame_is_encoded_lives_until_the_frame_is_submitte
 #[test]
 fn releasing_idle_memory_counts_only_what_it_destroys() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let tint = pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))

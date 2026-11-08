@@ -1,8 +1,22 @@
-/** The version of the line-delimited JSON protocol spoken with `alpha2-host` over stdio. */
-export const PROTOCOL_VERSION = 1 as const;
+/** The version of the framed protocol spoken with `alpha2-host` over stdio. */
+export const PROTOCOL_VERSION = 2 as const;
+
+/** An attachment as a frame's header lists it; the bytes follow the header in this order. */
+export interface AttachmentInfo {
+  /** A media type, such as `image/png`. */
+  readonly type: string;
+  readonly bytes: number;
+}
 
 export function createRequest(
-  operation: "capabilities" | "export" | "conform" | "still" | "compose",
+  operation:
+    | "capabilities"
+    | "export"
+    | "conform"
+    | "still"
+    | "compose"
+    | "cancel"
+    | "status",
   requestId: string,
   payload: Readonly<Record<string, unknown>> = {},
 ): Readonly<Record<string, unknown>> {
@@ -30,6 +44,7 @@ export type ProgressPhase = "frames" | "finalizing";
 /** Progress of the request `requestId`; `completed` never exceeds `total`. */
 export interface ProgressMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly attachments?: readonly AttachmentInfo[];
   readonly type: "progress";
   readonly requestId: string;
   readonly phase?: ProgressPhase;
@@ -37,46 +52,90 @@ export interface ProgressMessage {
   readonly total: number;
 }
 
-/** The first line `serve` writes, before reading input. */
-export interface ReadyMessage {
+/** `ready` takes requests; `draining` takes none and is about to exit. */
+export type HostState = "ready" | "draining";
+
+/** What a host reports about itself, for observation; it may gain fields. */
+export interface HostStateDetails {
+  readonly activity?: "idle" | "busy";
+  readonly requestsServed?: number;
+  readonly memory?: {
+    readonly residentBytes: number | null;
+    readonly footprintBytes: number | null;
+    readonly baselineBytes: number | null;
+    readonly capacityBytes: number | null;
+  };
+  readonly openHandles?: number | null;
+  readonly renderer?: "gpu" | "cpu" | null;
+  readonly rendererFallback?: string;
+  readonly hardwareDecodeFallback?: string;
+  readonly degradations?: readonly unknown[];
+  readonly limits?: Readonly<Record<string, number | null>>;
+  readonly [field: string]: unknown;
+}
+
+/** Sent when the host starts (`ready`, reason `started`) and whenever its state changes. */
+export interface StateMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
-  readonly type: "ready";
+  readonly attachments?: readonly AttachmentInfo[];
+  readonly type: "state";
+  readonly state: HostState;
+  /** Why, such as `started`, `memory`, `idle` or `device-lost`. */
+  readonly reason: string;
+  readonly details: HostStateDetails;
+}
+
+/** The result of a `status` request: what a `state` message would say now. */
+export interface StatusResult {
+  readonly state: HostState;
+  readonly reason: string;
+  readonly details: HostStateDetails;
 }
 
 /** A failure of the host process itself, not tied to a request. */
 export interface FatalMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly attachments?: readonly AttachmentInfo[];
   readonly type: "fatal";
   readonly error: ProtocolError;
 }
 
-/** The final answer to request `requestId`. */
+/** The final answer to request `requestId`; `hostState` is the host's state once it ended. */
 export type ResponseMessage =
   | {
       readonly protocolVersion: typeof PROTOCOL_VERSION;
+      readonly attachments?: readonly AttachmentInfo[];
       readonly requestId: string;
       readonly ok: true;
       readonly result: unknown;
+      readonly hostState: HostState;
     }
   | {
       readonly protocolVersion: typeof PROTOCOL_VERSION;
+      readonly attachments?: readonly AttachmentInfo[];
       readonly requestId: string;
       readonly ok: false;
       readonly error: ProtocolError;
+      readonly hostState: HostState;
     };
 
 export type HostMessage =
-  ReadyMessage | ProgressMessage | FatalMessage | ResponseMessage;
+  StateMessage | ProgressMessage | FatalMessage | ResponseMessage;
 
-/** Throws when the line is not JSON, has another protocol version, or is malformed. */
-export function parseHostMessage(line: string): HostMessage {
-  const value: unknown = JSON.parse(line);
+/** Throws when the header is not JSON, has another protocol version, or is malformed. */
+export function parseHostMessage(header: string): HostMessage {
+  const value: unknown = JSON.parse(header);
   if (!record(value)) throw new Error("host message must be an object");
   if (value.protocolVersion !== PROTOCOL_VERSION) {
     throw new Error(
       `unsupported host protocol ${String(value.protocolVersion)}; expected ${PROTOCOL_VERSION}`,
     );
   }
+  if (
+    value.attachments !== undefined &&
+    !(Array.isArray(value.attachments) && value.attachments.every(attachment))
+  )
+    throw new Error("invalid attachment list");
   if (value.type === "progress") {
     if (
       typeof value.requestId !== "string" ||
@@ -91,7 +150,15 @@ export function parseHostMessage(line: string): HostMessage {
     }
     return value as unknown as ProgressMessage;
   }
-  if (value.type === "ready") return value as unknown as ReadyMessage;
+  if (value.type === "state") {
+    if (
+      !hostState(value.state) ||
+      typeof value.reason !== "string" ||
+      !record(value.details)
+    )
+      throw new Error("invalid state message");
+    return value as unknown as StateMessage;
+  }
   if (value.type === "fatal") {
     if (!protocolError(value.error)) throw new Error("invalid fatal message");
     return value as unknown as FatalMessage;
@@ -104,6 +171,9 @@ export function parseHostMessage(line: string): HostMessage {
   }
   if (value.ok && !("result" in value)) {
     throw new Error("successful response is missing result");
+  }
+  if (!hostState(value.hostState)) {
+    throw new Error("invalid response hostState");
   }
   return value as unknown as ResponseMessage;
 }
@@ -195,6 +265,19 @@ export function loaderRefused(
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function attachment(value: unknown): value is AttachmentInfo {
+  return (
+    record(value) &&
+    typeof value.type === "string" &&
+    value.type.length > 0 &&
+    nonNegativeInteger(value.bytes)
+  );
+}
+
+function hostState(value: unknown): value is HostState {
+  return value === "ready" || value === "draining";
 }
 
 function protocolError(value: unknown): value is ProtocolError {

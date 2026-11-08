@@ -519,7 +519,7 @@ fn an_export_error_code_names_the_failure_and_not_the_words_in_its_paths_and_ids
                 json!([{"id": id, "kind": "lut3d", "locator": "asset://grade"}]);
         }
         let mut request = json!({
-            "protocolVersion": 1, "requestId": "export", "operation": "export",
+            "protocolVersion": 2, "requestId": "export", "operation": "export",
             "project": project,
             "assets": {"video": clip},
             "startTicks": 0, "endTicks": 30_000,
@@ -607,7 +607,7 @@ fn an_export_error_is_not_classified_by_tags_its_paths_spell() {
     let clip = corpus("parity-rgb.mov");
     let export = |output: &Path, extra: Value| {
         let mut request = json!({
-            "protocolVersion": 1, "requestId": "export", "operation": "export",
+            "protocolVersion": 2, "requestId": "export", "operation": "export",
             "project": conform_project(&json!({})),
             "assets": {"video": clip},
             "startTicks": 0, "endTicks": 30_000,
@@ -991,7 +991,7 @@ fn video_and_audio_request(output: &Path) -> Request {
     });
     parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "first-failure", "operation": "export",
+            "protocolVersion": 2, "requestId": "first-failure", "operation": "export",
             "project": project,
             "assets": {
                 "video": corpus("long-gop.mp4"),
@@ -1010,7 +1010,7 @@ fn video_and_audio_request(output: &Path) -> Request {
 fn damaged_media_request(video: &str, audio: &str, output: &Path) -> Request {
     parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "damaged", "operation": "export",
+            "protocolVersion": 2, "requestId": "damaged", "operation": "export",
             "project": {
                 "schema_version": 1, "id": "damaged", "name": "Damaged",
                 "settings": {"width": 64, "height": 48, "frame_rate": {"num": 10, "den": 1}, "sample_rate": 48_000},

@@ -347,6 +347,57 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
     Ok(())
 }
 
+/// Duplicates `stream` for the caller and points it at `diagnostics`, or at `/dev/null` when that
+/// is not open.
+pub(crate) fn claim_stream(
+    stream: std::os::fd::RawFd,
+    diagnostics: std::os::fd::RawFd,
+) -> io::Result<File> {
+    // SAFETY: `F_DUPFD_CLOEXEC` reads no memory; a closed `stream` fails with `EBADF`.
+    let claimed = unsafe { libc::fcntl(stream, libc::F_DUPFD_CLOEXEC, 3) };
+    if claimed < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `claimed` is a new descriptor nothing else owns.
+    let claimed = unsafe { File::from_raw_fd(claimed) };
+    // SAFETY: `dup2` reads no memory; a closed `diagnostics` fails with `EBADF`.
+    if unsafe { libc::dup2(diagnostics, stream) } < 0 {
+        let null = fs::OpenOptions::new().write(true).open("/dev/null")?;
+        // SAFETY: as above, with a descriptor `null` keeps open for the call.
+        if unsafe { libc::dup2(null.as_raw_fd(), stream) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(claimed)
+}
+
+/// Counts the entries of the descriptor directory, less the one the listing itself opens.
+pub(crate) fn open_handles() -> Option<u64> {
+    let directory = if cfg!(any(target_os = "linux", target_os = "android")) {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+    let entries = std::fs::read_dir(directory).ok()?.count();
+    u64::try_from(entries.saturating_sub(1)).ok()
+}
+
+pub(crate) fn open_file_limit() -> Option<u64> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is a valid `rlimit` the call fills.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) } != 0 {
+        return None;
+    }
+    // `rlim_t` is narrower than `u64` on some 32-bit targets.
+    #[allow(clippy::useless_conversion)]
+    (limit.rlim_cur != libc::RLIM_INFINITY)
+        .then(|| u64::try_from(limit.rlim_cur).ok())
+        .flatten()
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn process_memory() -> ProcessMemory {
     let status = fs::read_to_string("/proc/self/status").unwrap_or_default();

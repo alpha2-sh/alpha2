@@ -70,10 +70,10 @@ impl Renderer {
         uniforms: &mut UniformArenaLease,
     ) -> Result<Option<PendingEffectTiming>, RenderError> {
         let registered = self
-            .effects
+            .effects()
             .get(pass.id)
             .ok_or(RenderError::UnknownEffect)?;
-        self.encode_registered_pass(encoder, registered, pass, uniforms)
+        self.encode_registered_pass(encoder, &registered, pass, uniforms)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -119,6 +119,23 @@ impl Renderer {
             runtime,
             self.quality_controls().max_filter_samples,
         ));
+        // Held until the bind group is made, whatever another thread registers meanwhile.
+        let bound = registered
+            .definition
+            .resources
+            .iter()
+            .map(|spec| {
+                let resource = resources
+                    .get(&spec.name)
+                    .and_then(|id| self.effect_resource(id))
+                    .ok_or(RenderError::MissingEffectResource)?;
+                if resource.kind == spec.kind {
+                    Ok(resource)
+                } else {
+                    Err(RenderError::EffectResourceKindMismatch)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -141,17 +158,7 @@ impl Renderer {
                 resource: uniforms.binding(runtime_uniform),
             },
         ];
-        for (index, spec) in registered.definition.resources.iter().enumerate() {
-            let id = resources
-                .get(&spec.name)
-                .ok_or(RenderError::MissingEffectResource)?;
-            let resource = self
-                .effect_resources
-                .get(id)
-                .ok_or(RenderError::MissingEffectResource)?;
-            if resource.kind != spec.kind {
-                return Err(RenderError::EffectResourceKindMismatch);
-            }
+        for (index, resource) in bound.iter().enumerate() {
             entries.push(wgpu::BindGroupEntry {
                 binding: u32::try_from(index).unwrap_or(0) * 2 + 5,
                 resource: wgpu::BindingResource::TextureView(&resource.view),

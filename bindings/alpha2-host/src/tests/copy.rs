@@ -69,7 +69,7 @@ fn a_failed_copy_reports_its_step_and_its_output_path() {
     let request = |output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "copy-failure", "operation": "export",
+                "protocolVersion": 2, "requestId": "copy-failure", "operation": "export",
                 "project": {
                     "schema_version": 1, "id": "copy", "name": "Copy",
                     "settings": {"width": 128, "height": 96, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},

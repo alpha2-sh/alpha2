@@ -69,7 +69,7 @@ fn frame(source: &SourceId, cache: CacheIntent, opacity: f32) -> FrameDesc<'stat
 #[test]
 fn frames_are_kept_only_from_keyed_sources_and_as_clips_ask() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -177,7 +177,7 @@ fn a_still_under_an_effect_that_cannot_read_the_time_is_found_in_later_frames() 
             false,
         ),
     ] {
-        let mut renderer = Renderer::new(gpu());
+        let renderer = Renderer::new(gpu());
         pollster::block_on(renderer.register_effect(runtime_tint_effect(body)))
             .expect("effect compiles");
         renderer.set_result_cache_budget(1 << 20);
@@ -269,7 +269,7 @@ fn film_grain_is_new_in_every_frame_of_a_long_timeline() {
 #[test]
 fn a_held_caption_is_found_in_later_frames_until_its_text_or_fonts_change() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
     renderer.set_result_cache_budget(1 << 24);
@@ -318,7 +318,7 @@ fn a_held_caption_is_found_in_later_frames_until_its_text_or_fonts_change() {
 #[test]
 fn a_generated_picture_is_found_in_later_frames() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
     renderer.set_result_cache_budget(1 << 20);

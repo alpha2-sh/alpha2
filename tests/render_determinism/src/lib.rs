@@ -361,7 +361,7 @@ pub fn project_hash() -> u64 {
     let settings = &project.project().settings;
     let quality = QualityProfile::export();
     let size = quality.export_size(settings).expect("size");
-    let mut renderer = CpuRenderer::new(1);
+    let renderer = CpuRenderer::new(1);
     renderer
         .register_lut3d("grade", &Lut3dData::from_cube(GRADE_CUBE).expect("cube"))
         .expect("lut");

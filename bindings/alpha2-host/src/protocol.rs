@@ -16,8 +16,12 @@ use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
 /// A project at the engine's [`alpha2_model::MAX_PROJECT_JSON_BYTES`] plus as much again for the
-/// rest of the request. A longer line is answered `INVALID_REQUEST` without being parsed.
-pub const MAX_REQUEST_LINE_BYTES: usize = 2 * alpha2_model::MAX_PROJECT_JSON_BYTES;
+/// rest of the request. A longer header is answered `INVALID_REQUEST` without being parsed.
+#[allow(clippy::cast_possible_truncation)]
+pub const MAX_REQUEST_HEADER_BYTES: u32 = 2 * alpha2_model::MAX_PROJECT_JSON_BYTES as u32;
+
+/// All the attachments of one request together.
+pub const MAX_REQUEST_ATTACHMENT_BYTES: u32 = 256 * 1024 * 1024;
 
 /// The small settings `parse_request` reads into a JSON tree for checking (`videoQuality`,
 /// `audioQuality`, `renderCache`, `loudness`, `memory`) may be at most this long.
@@ -79,6 +83,34 @@ impl ProjectJson {
     }
 }
 
+/// The `requestId` of a `status` request.
+///
+/// # Errors
+/// `UNSUPPORTED_PROTOCOL` for another protocol version, `INVALID_REQUEST` for a malformed header or
+/// an empty `requestId`.
+pub fn parse_status(line: &str) -> Result<String, HostError> {
+    let status: CancelRequest = serde_json::from_str(line)
+        .map_err(|error| HostError::new("INVALID_REQUEST", format!("invalid request: {error}")))?;
+    check_version(status.protocol_version)?;
+    if status.request_id.is_empty() {
+        return Err(HostError::new(
+            "INVALID_REQUEST",
+            "requestId must not be empty",
+        ));
+    }
+    Ok(status.request_id)
+}
+
+fn check_version(version: u64) -> Result<(), HostError> {
+    if version == u64::from(PROTOCOL_VERSION) {
+        return Ok(());
+    }
+    Err(HostError::new(
+        "UNSUPPORTED_PROTOCOL",
+        format!("unsupported protocol major {version}; this host supports {PROTOCOL_VERSION}"),
+    ))
+}
+
 #[derive(Deserialize)]
 struct CapabilitiesRequest {
     #[serde(rename = "protocolVersion")]
@@ -87,8 +119,9 @@ struct CapabilitiesRequest {
     request_id: String,
 }
 
-/// A longer line goes to the server, which refuses it. A cancel names two ids and nothing else.
-pub const MAX_CANCEL_LINE_BYTES: usize = 64 * 1024;
+/// A longer header goes to the server, which refuses it. A cancel names two ids and nothing else,
+/// a status one.
+pub const MAX_CONTROL_HEADER_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Deserialize)]
 pub struct CancelRequest {
@@ -101,20 +134,12 @@ pub struct CancelRequest {
 }
 
 /// # Errors
-/// `UNSUPPORTED_PROTOCOL` for another protocol version, `INVALID_REQUEST` for a malformed line or
+/// `UNSUPPORTED_PROTOCOL` for another protocol version, `INVALID_REQUEST` for a malformed header or
 /// an empty `requestId` or `target`.
 pub fn parse_cancel(line: &str) -> Result<CancelRequest, HostError> {
     let cancel: CancelRequest = serde_json::from_str(line)
         .map_err(|error| HostError::new("INVALID_REQUEST", format!("invalid request: {error}")))?;
-    if cancel.protocol_version != u64::from(PROTOCOL_VERSION) {
-        return Err(HostError::new(
-            "UNSUPPORTED_PROTOCOL",
-            format!(
-                "unsupported protocol major {}; this host supports {PROTOCOL_VERSION}",
-                cancel.protocol_version
-            ),
-        ));
-    }
+    check_version(cancel.protocol_version)?;
     if cancel.request_id.is_empty() {
         return Err(HostError::new(
             "INVALID_REQUEST",
@@ -463,7 +488,9 @@ pub struct StillSize {
 pub struct StillEntry {
     /// Ticks; the frame drawn is the grid frame that holds it.
     pub time: i64,
-    pub output: PathBuf,
+    /// `None` returns the PNG as an attachment of the response.
+    #[serde(default)]
+    pub output: Option<PathBuf>,
 }
 
 impl StillRequest {
@@ -492,18 +519,19 @@ impl StillRequest {
                     still.time
                 )));
             }
-            if still.output.as_os_str().is_empty() {
+            let Some(output) = &still.output else {
+                continue;
+            };
+            if output.as_os_str().is_empty() {
                 return Err(HostError::invalid_input(
                     "a still's output must not be empty",
                 ));
             }
-            if let Some(earlier) =
-                outputs.insert(crate::paths::output_key(&still.output), &still.output)
-            {
+            if let Some(earlier) = outputs.insert(crate::paths::output_key(output), output) {
                 return Err(HostError::invalid_input(format!(
                     "two stills write one file: {} and {}",
                     earlier.display(),
-                    still.output.display()
+                    output.display()
                 )));
             }
         }
@@ -622,7 +650,7 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
         .ok_or_else(|| {
             HostError::new(
                 "UNSUPPORTED_PROTOCOL",
-                "protocolVersion must be the integer 1",
+                "protocolVersion must be the integer 2",
             )
         })?;
     if version != u64::from(PROTOCOL_VERSION) {
@@ -658,18 +686,18 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             still.check()?;
             Request::Still(Box::new(still))
         }
-        // The reader answers every cancel line it takes; one reaches here only when too long.
-        Some("cancel") => {
+        // The reader answers every cancel and status it takes; one reaches here only when too long.
+        Some(operation @ ("cancel" | "status")) => {
             return Err(HostError::new(
                 "INVALID_REQUEST",
-                format!("a cancel line is at most {MAX_CANCEL_LINE_BYTES} bytes"),
+                format!("a {operation} header is at most {MAX_CONTROL_HEADER_BYTES} bytes"),
             ));
         }
         Some(other) => {
             return Err(HostError::new(
                 "INVALID_REQUEST",
                 format!(
-                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`, `compose`, `cancel`"
+                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`, `compose`, `cancel`, `status`"
                 ),
             ));
         }
@@ -707,8 +735,8 @@ fn render_cache<'de, D: serde::Deserializer<'de>>(
         .transpose()
 }
 
-/// The rest of the line is skipped, not parsed into a tree.
-pub fn request_id_from_line(line: &str) -> String {
+/// The rest of the header is skipped, not parsed into a tree.
+pub fn request_id_from_header(line: &str) -> String {
     #[derive(Deserialize)]
     struct Id {
         #[serde(rename = "requestId")]
@@ -722,7 +750,7 @@ pub fn request_id_from_line(line: &str) -> String {
 }
 
 /// Says whether a refusal answers an export, whose error carries a failure report.
-pub fn operation_from_line(line: &str) -> Option<String> {
+pub fn operation_from_header(line: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct Operation {
         operation: Option<String>,
@@ -756,7 +784,7 @@ pub const HARDWARE_DECODE_STALL_MARKER: &str = "holding hardware decode sessions
 /// evidence, not from these words.
 pub const HARDWARE_ENCODE_STALL_MARKER: &str = "holding a hardware encode session";
 
-pub const PROTOCOL_CODES: [&str; 25] = [
+pub const PROTOCOL_CODES: [&str; 26] = [
     "UNSUPPORTED_PROTOCOL",
     "INVALID_REQUEST",
     "INVALID_INPUT",
@@ -780,6 +808,7 @@ pub const PROTOCOL_CODES: [&str; 25] = [
     "OUTPUT_PUBLISH_FAILED",
     "CANCELLED",
     "RESOURCE_LIMIT",
+    "HOST_RETIRING",
     "INTERNAL",
     "ALPHA2_ERROR",
 ];

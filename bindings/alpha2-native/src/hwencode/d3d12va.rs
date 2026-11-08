@@ -457,6 +457,16 @@ static TIMED_OUT: std::sync::LazyLock<Mutex<HashMap<ProbedAdapter, String>>> =
 /// `E_OUTOFMEMORY` in an answer means the device was busy, so the answer is not cached.
 const BUSY_HRESULT: &str = "0x8007000E";
 
+/// Why D3D12VA is off on each adapter whose test encode timed out in this process.
+pub fn d3d12va_timeouts() -> Vec<String> {
+    TIMED_OUT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .values()
+        .cloned()
+        .collect()
+}
+
 fn timed_out_on(adapter: ProbedAdapter) -> Option<String> {
     TIMED_OUT
         .lock()

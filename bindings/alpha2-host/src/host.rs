@@ -79,35 +79,56 @@ fn fallback_summary(metrics: &ExportMetrics) -> String {
     }
 }
 
-/// Its definition as the request gave it, and why registering it failed, when it did.
+/// Why registering a runtime effect the request defined failed, when it did.
 pub struct RuntimeEffect {
-    definition: String,
     rejected: Option<String>,
 }
 
 const CPU_RUNTIME_EFFECT: &str = "the CPU renderer runs no runtime WGSL effects";
 
-/// One renderer on one device, answering requests one at a time. Per-export state is set when an
-/// export begins and cleared when it ends.
-pub struct Host {
+/// One renderer on one device, shared by every request the host runs.
+pub struct HostDevice {
     pub renderer: crate::renderer_backend::RendererBackend,
     /// Set when `auto` found no hardware GPU or the GPU host could not start.
     pub renderer_reason: Option<String>,
     pub builtin_effects: HashSet<(String, u32)>,
-    /// Only those [`Host::register_request_effects`] took from the current or last request.
-    pub runtime_effects: HashMap<(String, u32), RuntimeEffect>,
     pub decode_policy: VideoDecodePolicy,
     /// Why `auto` decode runs in software, reported with every export.
     pub hardware_decode_unavailable: Option<String>,
+    /// Cloned into each request, since `FFmpeg`'s device reference is not shared between threads.
+    #[cfg(all(target_os = "linux", feature = "hwdevice"))]
+    shared_vulkan: std::sync::Mutex<Option<SharedVulkanContext>>,
+    #[cfg(all(target_os = "macos", feature = "hwdevice"))]
+    shared_metal: std::sync::Mutex<Option<SharedMetalContext>>,
+    #[cfg(all(target_os = "windows", feature = "hwdevice"))]
+    shared_d3d12: std::sync::Mutex<Option<SharedD3D12Context>>,
+    pub encode_adapters: crate::adapter_choice::EncodeAdapterNotes,
+    /// `None` on a host that renders on the CPU.
+    pub adapter_choice: Option<crate::adapter_choice::AdapterChoiceReport>,
+    pub gpu_log: std::sync::Arc<alpha2_gpu::GpuDiagnosticLog>,
+    /// Request contexts alive on this device.
+    requests: std::sync::atomic::AtomicUsize,
+    /// Runtime effects and effect resources, held by the requests that use them.
+    pub(crate) registrations: crate::registrations::Registrations,
+    /// Blocks this device's drop forever when a test asks, as on a device that never goes idle.
+    #[cfg(test)]
+    _drop_stall: crate::teardown::injected::DropStall,
+}
+
+/// One request's state over a shared [`HostDevice`], which it dereferences to. Per-export state
+/// is set when an export begins and cleared when it ends.
+pub struct Host {
+    device: std::sync::Arc<HostDevice>,
     #[cfg(all(target_os = "linux", feature = "hwdevice"))]
     pub shared_vulkan: Option<SharedVulkanContext>,
     #[cfg(all(target_os = "macos", feature = "hwdevice"))]
     pub shared_metal: Option<SharedMetalContext>,
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     pub shared_d3d12: Option<SharedD3D12Context>,
-    pub encode_adapters: crate::adapter_choice::EncodeAdapterNotes,
-    /// `None` on a host that renders on the CPU.
-    pub adapter_choice: Option<crate::adapter_choice::AdapterChoiceReport>,
+    /// The runtime effects this request defined, as [`Host::register_request_effects`] took them.
+    pub runtime_effects: HashMap<(String, u32), RuntimeEffect>,
+    /// What this request holds of [`HostDevice::registrations`].
+    held: Vec<crate::registrations::Key>,
     /// Behind a lock because export stages borrow the host from several threads; only the render
     /// loop takes it.
     pub texts: std::sync::Mutex<TextTextures>,
@@ -120,12 +141,27 @@ pub struct Host {
     pub render_cache: Option<(crate::render_cache::RenderCacheRequest, [u8; 32])>,
     pub input_policy: crate::config::VideoInputPolicy,
     pub strategy: crate::config::ExportStrategy,
-    pub gpu_log: std::sync::Arc<alpha2_gpu::GpuDiagnosticLog>,
     pub failure: crate::failure::FailureContext,
     pub memory: crate::memory::MemoryPolicy,
-    /// Blocks this host's drop forever when a test asks, as on a device that never goes idle.
-    #[cfg(test)]
-    _drop_stall: crate::teardown::injected::DropStall,
+    /// What the response to the current request carries besides its header.
+    pub reply_attachments: Vec<alpha2_host_core::host_frames::Attachment>,
+}
+
+impl std::ops::Deref for Host {
+    type Target = HostDevice;
+
+    fn deref(&self) -> &HostDevice {
+        &self.device
+    }
+}
+
+impl Drop for Host {
+    fn drop(&mut self) {
+        self.device.registrations.release(&self.held);
+        self.device
+            .requests
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 struct ExportRequestFacts<'a> {
@@ -153,6 +189,25 @@ struct CanvasSize {
     height: u64,
 }
 
+#[cfg(feature = "hwdevice")]
+fn clone_shared<T: Clone>(shared: &std::sync::Mutex<Option<T>>) -> Option<T> {
+    shared
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    use std::fmt::Write as _;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
+}
+
 /// Includes the DX12 shader compiler, since DXC and FXC compile one pipeline to different bytes.
 pub(crate) fn add_adapter_identity(
     identity: &mut crate::render_cache::SnapshotIdentity,
@@ -170,6 +225,53 @@ pub(crate) fn add_adapter_identity(
 }
 
 impl Host {
+    /// A new request's context on `device`.
+    pub fn for_request(device: std::sync::Arc<HostDevice>) -> Self {
+        device
+            .requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(all(target_os = "linux", feature = "hwdevice"))]
+        let shared_vulkan = clone_shared(&device.shared_vulkan);
+        #[cfg(all(target_os = "macos", feature = "hwdevice"))]
+        let shared_metal = clone_shared(&device.shared_metal);
+        #[cfg(all(target_os = "windows", feature = "hwdevice"))]
+        let shared_d3d12 = clone_shared(&device.shared_d3d12);
+        Self {
+            device,
+            #[cfg(all(target_os = "linux", feature = "hwdevice"))]
+            shared_vulkan,
+            #[cfg(all(target_os = "macos", feature = "hwdevice"))]
+            shared_metal,
+            #[cfg(all(target_os = "windows", feature = "hwdevice"))]
+            shared_d3d12,
+            runtime_effects: HashMap::new(),
+            held: Vec::new(),
+            texts: std::sync::Mutex::new(TextTextures::new()),
+            provider_files: alpha2_host_core::providers::ProviderFiles::default(),
+            conformed_video_frames: None,
+            largest_video_frames: std::sync::Mutex::new(None),
+            render_cache: None,
+            input_policy: crate::config::VideoInputPolicy::Auto,
+            strategy: crate::config::ExportStrategy::Render,
+            failure: crate::failure::FailureContext::default(),
+            memory: crate::memory::MemoryPolicy::default(),
+            reply_attachments: Vec::new(),
+        }
+    }
+
+    pub fn device(&self) -> &std::sync::Arc<HostDevice> {
+        &self.device
+    }
+
+    /// For setting up the device before a second request shares it.
+    ///
+    /// # Panics
+    /// When another request context holds the device.
+    pub fn device_mut(&mut self) -> &mut HostDevice {
+        std::sync::Arc::get_mut(&mut self.device)
+            .expect("the device is set up before another request shares it")
+    }
+
     #[cfg(not(any(
         all(target_os = "linux", feature = "hwdevice"),
         all(target_os = "macos", feature = "hwdevice"),
@@ -180,34 +282,26 @@ impl Host {
         registered: HashSet<(String, u32)>,
         decode_policy: VideoDecodePolicy,
     ) -> Self {
-        Self {
+        Self::for_request(std::sync::Arc::new(HostDevice {
             renderer: crate::renderer_backend::RendererBackend::Gpu(Box::new(renderer)),
             renderer_reason: None,
             builtin_effects: registered,
-            runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
             encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
             adapter_choice: None,
             #[cfg(all(target_os = "linux", feature = "hwdevice"))]
-            shared_vulkan: None,
+            shared_vulkan: std::sync::Mutex::new(None),
             #[cfg(all(target_os = "macos", feature = "hwdevice"))]
-            shared_metal: None,
+            shared_metal: std::sync::Mutex::new(None),
             #[cfg(all(target_os = "windows", feature = "hwdevice"))]
-            shared_d3d12: None,
-            texts: std::sync::Mutex::new(TextTextures::new()),
-            provider_files: alpha2_host_core::providers::ProviderFiles::default(),
-            conformed_video_frames: None,
-            largest_video_frames: std::sync::Mutex::new(None),
-            render_cache: None,
-            input_policy: crate::config::VideoInputPolicy::Auto,
-            strategy: crate::config::ExportStrategy::Render,
+            shared_d3d12: std::sync::Mutex::new(None),
             gpu_log: std::sync::Arc::default(),
-            failure: crate::failure::FailureContext::default(),
-            memory: crate::memory::MemoryPolicy::default(),
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
-        }
+            requests: std::sync::atomic::AtomicUsize::new(0),
+            registrations: crate::registrations::Registrations::default(),
+        }))
     }
 
     #[cfg(all(target_os = "macos", feature = "hwdevice"))]
@@ -217,29 +311,21 @@ impl Host {
         shared_metal: Option<SharedMetalContext>,
         decode_policy: VideoDecodePolicy,
     ) -> Self {
-        Self {
+        Self::for_request(std::sync::Arc::new(HostDevice {
             renderer: crate::renderer_backend::RendererBackend::Gpu(Box::new(renderer)),
             renderer_reason: None,
             builtin_effects: registered,
-            runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
             encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
             adapter_choice: None,
-            shared_metal,
-            texts: std::sync::Mutex::new(TextTextures::new()),
-            provider_files: alpha2_host_core::providers::ProviderFiles::default(),
-            conformed_video_frames: None,
-            largest_video_frames: std::sync::Mutex::new(None),
-            render_cache: None,
-            input_policy: crate::config::VideoInputPolicy::Auto,
-            strategy: crate::config::ExportStrategy::Render,
+            shared_metal: std::sync::Mutex::new(shared_metal),
             gpu_log: std::sync::Arc::default(),
-            failure: crate::failure::FailureContext::default(),
-            memory: crate::memory::MemoryPolicy::default(),
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
-        }
+            requests: std::sync::atomic::AtomicUsize::new(0),
+            registrations: crate::registrations::Registrations::default(),
+        }))
     }
 
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
@@ -249,29 +335,21 @@ impl Host {
         shared_d3d12: Option<SharedD3D12Context>,
         decode_policy: VideoDecodePolicy,
     ) -> Self {
-        Self {
+        Self::for_request(std::sync::Arc::new(HostDevice {
             renderer: crate::renderer_backend::RendererBackend::Gpu(Box::new(renderer)),
             renderer_reason: None,
             builtin_effects: registered,
-            runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
             encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
             adapter_choice: None,
-            shared_d3d12,
-            texts: std::sync::Mutex::new(TextTextures::new()),
-            provider_files: alpha2_host_core::providers::ProviderFiles::default(),
-            conformed_video_frames: None,
-            largest_video_frames: std::sync::Mutex::new(None),
-            render_cache: None,
-            input_policy: crate::config::VideoInputPolicy::Auto,
-            strategy: crate::config::ExportStrategy::Render,
+            shared_d3d12: std::sync::Mutex::new(shared_d3d12),
             gpu_log: std::sync::Arc::default(),
-            failure: crate::failure::FailureContext::default(),
-            memory: crate::memory::MemoryPolicy::default(),
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
-        }
+            requests: std::sync::atomic::AtomicUsize::new(0),
+            registrations: crate::registrations::Registrations::default(),
+        }))
     }
 
     #[cfg(all(target_os = "linux", feature = "hwdevice"))]
@@ -281,29 +359,21 @@ impl Host {
         shared_vulkan: Option<SharedVulkanContext>,
         decode_policy: VideoDecodePolicy,
     ) -> Self {
-        Self {
+        Self::for_request(std::sync::Arc::new(HostDevice {
             renderer: crate::renderer_backend::RendererBackend::Gpu(Box::new(renderer)),
             renderer_reason: None,
             builtin_effects: registered,
-            runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
             encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
             adapter_choice: None,
-            shared_vulkan,
-            texts: std::sync::Mutex::new(TextTextures::new()),
-            provider_files: alpha2_host_core::providers::ProviderFiles::default(),
-            conformed_video_frames: None,
-            largest_video_frames: std::sync::Mutex::new(None),
-            render_cache: None,
-            input_policy: crate::config::VideoInputPolicy::Auto,
-            strategy: crate::config::ExportStrategy::Render,
+            shared_vulkan: std::sync::Mutex::new(shared_vulkan),
             gpu_log: std::sync::Arc::default(),
-            failure: crate::failure::FailureContext::default(),
-            memory: crate::memory::MemoryPolicy::default(),
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
-        }
+            requests: std::sync::atomic::AtomicUsize::new(0),
+            registrations: crate::registrations::Registrations::default(),
+        }))
     }
 
     fn decode_capabilities(&self) -> Value {
@@ -445,34 +515,26 @@ impl Host {
         registered: HashSet<(String, u32)>,
         reason: String,
     ) -> Self {
-        Self {
+        Self::for_request(std::sync::Arc::new(HostDevice {
             renderer: RendererBackend::Cpu(Box::new(renderer)),
             renderer_reason: Some(reason),
             builtin_effects: registered,
-            runtime_effects: HashMap::new(),
             decode_policy: VideoDecodePolicy::Software,
             hardware_decode_unavailable: None,
             encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
             adapter_choice: None,
             #[cfg(all(target_os = "linux", feature = "hwdevice"))]
-            shared_vulkan: None,
+            shared_vulkan: std::sync::Mutex::new(None),
             #[cfg(all(target_os = "macos", feature = "hwdevice"))]
-            shared_metal: None,
+            shared_metal: std::sync::Mutex::new(None),
             #[cfg(all(target_os = "windows", feature = "hwdevice"))]
-            shared_d3d12: None,
-            texts: std::sync::Mutex::new(TextTextures::new()),
-            provider_files: alpha2_host_core::providers::ProviderFiles::default(),
-            conformed_video_frames: None,
-            largest_video_frames: std::sync::Mutex::new(None),
-            render_cache: None,
-            input_policy: crate::config::VideoInputPolicy::Auto,
-            strategy: crate::config::ExportStrategy::Render,
+            shared_d3d12: std::sync::Mutex::new(None),
             gpu_log: std::sync::Arc::default(),
-            failure: crate::failure::FailureContext::default(),
-            memory: crate::memory::MemoryPolicy::default(),
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
-        }
+            requests: std::sync::atomic::AtomicUsize::new(0),
+            registrations: crate::registrations::Registrations::default(),
+        }))
     }
 
     pub(crate) fn gpu_renderer(&self) -> &Renderer {
@@ -814,7 +876,7 @@ impl Host {
         self.begin_request(crate::memory::MemoryRequest::default(), None)?;
         let outputs = stills
             .iter()
-            .map(|still| still.output.as_path())
+            .filter_map(|still| still.output.as_deref())
             .collect::<Vec<_>>();
         let PreparedRequest {
             resolved,
@@ -1047,14 +1109,17 @@ impl Host {
         self.begin_request(memory, Some(facts))
     }
 
-    /// Device events before it are forgotten, a loss excepted.
+    /// Device events before it are forgotten, a loss excepted, unless another request runs on the
+    /// device and they may be its.
     fn begin_request(
         &mut self,
         memory: crate::memory::MemoryRequest,
         facts: Option<&ExportRequestFacts<'_>>,
     ) -> Result<(), HostError> {
         self.failure.begin();
-        self.gpu_log.clear();
+        if self.requests.load(std::sync::atomic::Ordering::Relaxed) <= 1 {
+            self.gpu_log.clear();
+        }
         if let Some(facts) = facts {
             self.note_request(facts);
         }
@@ -1364,7 +1429,7 @@ impl Host {
     ) -> Result<(Project, EngineProject), String> {
         self.register_request_effects(effects)?;
         let project = Project::from_json(project).map_err(error_message)?;
-        self.renderer.clear_effect_resources();
+        let mut luts = HashMap::new();
         for resource in &project.effect_resources {
             let path = effect_assets.get(resource.id.as_str()).ok_or_else(|| {
                 code_tag(
@@ -1400,12 +1465,11 @@ impl Host {
                             format!("effect resource {}: {error}", resource.id),
                         )
                     })?;
-                    self.renderer
-                        .register_lut3d(resource.id.as_str(), &data)
-                        .map_err(error_message)?;
+                    luts.insert(resource.id.to_string(), (hex_digest(&bytes), data));
                 }
             }
         }
+        self.register_request_resources(luts)?;
         let snapshot = EngineProject::new(project.clone()).map_err(error_message)?;
         self.validate_project_effects(&snapshot)?;
         Ok((project, snapshot))
@@ -1438,53 +1502,109 @@ impl Host {
                 }
             }
         }
-        let stale = self
-            .runtime_effects
-            .iter()
-            .filter(|(key, registered)| {
-                requested
-                    .get(*key)
-                    .is_none_or(|(definition, _)| *definition != registered.definition)
+        self.release_held(crate::registrations::Kind::Effect);
+        self.runtime_effects.clear();
+        let mut definitions = HashMap::new();
+        let wanted = requested
+            .into_iter()
+            .map(|((id, version), (definition, effect))| {
+                let key = crate::registrations::Key::Effect(id, version);
+                definitions.insert(key.clone(), effect);
+                (key, definition)
             })
-            .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
-        for key in stale {
-            if let Some(stale) = self.runtime_effects.remove(&key)
-                && stale.rejected.is_none()
-                && let Some(renderer) = self.renderer.gpu_mut()
-            {
-                renderer.unregister_effect(&EffectId::new(key.0, key.1));
-            }
-        }
-        for (key, (definition, effect)) in requested {
-            if self.runtime_effects.contains_key(&key) {
-                continue;
-            }
-            let rejected = match (effect.into_definition(), self.renderer.gpu_mut()) {
-                (Ok(effect), Some(renderer)) => {
-                    pollster::block_on(renderer.register_effect(effect))
-                        .err()
-                        .map(|diagnostics| format!("{diagnostics:?}"))
+        let device = std::sync::Arc::clone(&self.device);
+        let refusals = device.registrations.hold(
+            crate::registrations::Kind::Effect,
+            &wanted,
+            &mut |key| {
+                let crate::registrations::Key::Effect(id, version) = key else {
+                    return None;
+                };
+                let effect = definitions.remove(key)?;
+                let refused = match (effect.into_definition(), device.renderer.gpu()) {
+                    (Ok(effect), Some(renderer)) => {
+                        pollster::block_on(renderer.register_effect(effect))
+                            .err()
+                            .map(|diagnostics| format!("{diagnostics:?}"))
+                    }
+                    (Ok(_), None) => Some(CPU_RUNTIME_EFFECT.to_owned()),
+                    (Err(error), _) => Some(error),
+                };
+                if let Some(reason) = &refused {
+                    alpha2_os::diagnostic!(
+                        "alpha2 native web host skipped runtime effect {id}@{version}: {reason}"
+                    );
                 }
-                (Ok(_), None) => Some(CPU_RUNTIME_EFFECT.to_owned()),
-                (Err(error), _) => Some(error),
-            };
-            if let Some(reason) = &rejected {
-                alpha2_os::diagnostic!(
-                    "alpha2 native web host skipped runtime effect {}@{}: {reason}",
-                    key.0,
-                    key.1
-                );
+                refused
+            },
+            &mut |key| {
+                if let (crate::registrations::Key::Effect(id, version), Some(renderer)) =
+                    (key, device.renderer.gpu())
+                {
+                    renderer.unregister_effect(&EffectId::new(id.clone(), *version));
+                }
+            },
+        );
+        for ((key, _), rejected) in wanted.into_iter().zip(refusals) {
+            if let crate::registrations::Key::Effect(id, version) = &key {
+                self.runtime_effects
+                    .insert((id.clone(), *version), RuntimeEffect { rejected });
             }
-            self.runtime_effects.insert(
-                key,
-                RuntimeEffect {
-                    definition,
-                    rejected,
-                },
-            );
+            self.held.push(key);
         }
         Ok(())
+    }
+
+    /// Registers the request's effect resources by id, each identified by its file's digest.
+    ///
+    /// # Errors
+    /// A resource the renderer refuses.
+    fn register_request_resources(
+        &mut self,
+        luts: HashMap<String, (String, Lut3dData)>,
+    ) -> Result<(), String> {
+        self.release_held(crate::registrations::Kind::Resource);
+        let mut data = HashMap::new();
+        let wanted = luts
+            .into_iter()
+            .map(|(id, (digest, lut))| {
+                let key = crate::registrations::Key::Resource(id);
+                data.insert(key.clone(), lut);
+                (key, digest)
+            })
+            .collect::<Vec<_>>();
+        let device = std::sync::Arc::clone(&self.device);
+        let refusals = device.registrations.hold(
+            crate::registrations::Kind::Resource,
+            &wanted,
+            &mut |key| {
+                let crate::registrations::Key::Resource(id) = key else {
+                    return None;
+                };
+                let lut = data.remove(key)?;
+                device
+                    .renderer
+                    .register_lut3d(id, &lut)
+                    .err()
+                    .map(error_message)
+            },
+            &mut |key| {
+                if let crate::registrations::Key::Resource(id) = key {
+                    device.renderer.unregister_effect_resource(id);
+                }
+            },
+        );
+        self.held.extend(wanted.into_iter().map(|(key, _)| key));
+        refusals.into_iter().flatten().next().map_or(Ok(()), Err)
+    }
+
+    fn release_held(&mut self, kind: crate::registrations::Kind) {
+        let (released, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.held)
+            .into_iter()
+            .partition(|key| key.kind() == kind);
+        self.device.registrations.release(&released);
+        self.held = kept;
     }
 
     /// Created at first draw they would stall the export there, up to a second on DX12 (film burn

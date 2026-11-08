@@ -239,6 +239,8 @@ const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
   OUTPUT_PUBLISH_FAILED: { code: "OUTPUT_IO_FAILED", resource: "unknown" },
   CANCELLED: { code: "CANCELLED", resource: "unknown" },
   RESOURCE_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
+  // Never started: the host was retiring, and another host runs it.
+  HOST_RETIRING: { code: "HOST_EXITED", resource: "unknown" },
   GPU_INIT_FAILED: unknown,
   ENCODE_ERROR: unknown,
   ENCODER_BUSY: { code: "RESOURCE_BUSY", resource: "gpu" },

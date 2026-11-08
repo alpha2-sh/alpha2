@@ -18,6 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { readFrames, encodeFrame } from "./lib/host-frames.mjs";
 import {
   checkValidationLog,
   DECODE_KNOWN,
@@ -195,8 +196,7 @@ function serve({ name, fixture, exports }) {
   const ticks = 30_000;
   const project = exportProject([640, 360], ticks);
   const requests = Array.from({ length: exports }, (_, index) =>
-    JSON.stringify({
-      protocolVersion: 1,
+    encodeFrame({
       operation: "export",
       requestId: `${name}-${index}`,
       project,
@@ -215,29 +215,27 @@ function serve({ name, fixture, exports }) {
   const log = join(logs, `${name}.log`);
   rmSync(log, { force: true });
   const result = spawnSync(host, ["serve"], {
-    input: `${requests.join("\n")}\n`,
-    encoding: "utf8",
+    input: Buffer.concat(requests),
     maxBuffer: 64 * 1024 * 1024,
     timeout: TIMEOUT_MS * exports,
     killSignal: "SIGKILL",
     env: { ...layerEnvironment(log), ALPHA2_VIDEO_DECODE: "hardware-required" },
   });
+  const stderr = result.stderr?.toString("utf8") ?? "";
   if (result.error?.code === "ETIMEDOUT") {
     process.stdout.write(
-      `FAIL ${name}: serve did not finish within ${(TIMEOUT_MS * exports) / 1000} s and was killed\n${(result.stderr ?? "").slice(-2000)}\n`,
+      `FAIL ${name}: serve did not finish within ${(TIMEOUT_MS * exports) / 1000} s and was killed\n${stderr.slice(-2000)}\n`,
     );
     return false;
   }
   if (result.status !== 0) {
     process.stdout.write(
-      `FAIL ${name}: serve exited ${result.status ?? result.signal}\n${result.stderr.slice(-2000)}\n`,
+      `FAIL ${name}: serve exited ${result.status ?? result.signal}\n${stderr.slice(-2000)}\n`,
     );
     return false;
   }
-  const answers = result.stdout
-    .split("\n")
-    .filter((text) => text.startsWith("{"))
-    .map((text) => JSON.parse(text))
+  const answers = readFrames(result.stdout)
+    .messages.map(({ header }) => header)
     .filter((message) => "ok" in message);
   const resident = answers.filter(
     (answer) =>
@@ -245,7 +243,7 @@ function serve({ name, fixture, exports }) {
   );
   if (answers.length !== exports || resident.length !== exports) {
     process.stdout.write(
-      `FAIL ${name}: ${resident.length} of ${exports} exports took the GPU-resident path (${answers.length} answers)\n${result.stdout.slice(-2000)}\n`,
+      `FAIL ${name}: ${resident.length} of ${exports} exports took the GPU-resident path (${answers.length} answers)\n${JSON.stringify(answers).slice(-2000)}\n`,
     );
     return false;
   }

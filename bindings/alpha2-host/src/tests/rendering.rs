@@ -707,7 +707,7 @@ fn tinted_still_project() -> Value {
 fn export_tinted(host: &mut Host, effects: &Value, output: &Path) -> Result<Value, HostError> {
     let request = parse_request(
         &json!({
-            "protocolVersion": 1,
+            "protocolVersion": 2,
             "operation": "export",
             "requestId": "tinted",
             "project": tinted_still_project(),
@@ -755,7 +755,7 @@ fn export_look(
     project["timeline"]["tracks"][0]["clips"][0]["composition"] = json!({"id": "look"});
     let request = parse_request(
         &json!({
-            "protocolVersion": 1,
+            "protocolVersion": 2,
             "operation": "export",
             "requestId": "look",
             "project": project,

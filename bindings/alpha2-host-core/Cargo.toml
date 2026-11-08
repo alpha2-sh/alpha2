@@ -20,7 +20,7 @@ include = [
 [features]
 default = ["engine"]
 engine = ["dep:alpha2-engine", "dep:alpha2-eval", "dep:alpha2-model", "dep:alpha2-render", "dep:wgpu"]
-providers = ["engine", "dep:alpha2-extensions", "dep:bytemuck", "dep:serde_json"]
+providers = ["engine", "dep:alpha2-extensions", "dep:bytemuck"]
 cpal-host = ["dep:cpal"]
 # Thread-local decode budget overrides for dependents' tests. Never enable in a product build.
 test-hooks = []
@@ -40,7 +40,7 @@ bytemuck = { version = "1.25.2", optional = true }
 bytes.workspace = true
 image-webp = "0.2.4"
 png.workspace = true
-serde_json = { workspace = true, optional = true }
+serde_json.workspace = true
 wgpu = { workspace = true, optional = true }
 zune-core = "0.5.3"
 zune-jpeg = "0.5.15"

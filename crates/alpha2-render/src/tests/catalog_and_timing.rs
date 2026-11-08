@@ -155,6 +155,7 @@ fn complete_builtin_catalog_compiles_and_survives_host_cleanup() {
         assert_eq!(
             renderer
                 .project_effect_id(&definition.id, definition.version)
+                .as_ref()
                 .map(crate::EffectId::as_str),
             Some(definition.id.as_str())
         );
@@ -175,8 +176,8 @@ fn a_pass_timed_while_the_probe_is_busy_renders_untimed_and_leaves_the_probe_to_
     // The timestamp probe is released by its map callback, so frames that wait on a readback never
     // find it busy; this test holds it to exercise the busy-skip path.
     let _lock = gpu_test_lock();
-    let mut timed = Renderer::new(gpu());
-    let mut untimed = Renderer::new(gpu());
+    let timed = Renderer::new(gpu());
+    let untimed = Renderer::new(gpu());
     let definition = || {
         runtime_tint_effect(
             "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
@@ -290,7 +291,7 @@ fn a_pass_timed_while_the_probe_is_busy_renders_untimed_and_leaves_the_probe_to_
 #[test]
 fn effect_schema_rejects_invalid_defaults_before_compilation() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let mut definition = runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     );
@@ -320,7 +321,7 @@ fn settle_timestamp_probe(renderer: &Renderer) -> bool {
 fn a_timestamp_read_that_lands_after_timing_is_turned_off_records_nothing() {
     // A late map callback must not write into the history cleared by turning timing off.
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -390,7 +391,7 @@ fn a_timestamp_read_that_lands_after_timing_is_turned_off_records_nothing() {
 fn a_transition_or_generator_pass_records_its_gpu_time_under_its_own_kind() {
     // Effects, transitions and generators share one probe; the read records the node's own kind.
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let definition = |id: &str, kind, wgsl_body: &str| EffectDef {
         id: id.into(),
         version: 1,

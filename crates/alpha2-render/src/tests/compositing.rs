@@ -154,7 +154,7 @@ fn first_layer_specialization_matches_compositing_over_transparent() {
 #[test]
 fn first_layer_specialization_preserves_out_of_range_effect_math() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, _src: vec4f) -> vec4f { return vec4f(2.0, -1.0, 0.5, 0.25); }",
     )))

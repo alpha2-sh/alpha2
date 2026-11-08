@@ -167,16 +167,20 @@ class ExportResult(TypedDict):
 
 
 class StillFrame(TypedDict):
-    """One PNG a still request wrote."""
+    """One PNG a still request rendered."""
 
-    output: str
-    """The absolute path of the file written."""
+    output: str | None
+    """The absolute path of the file written, or ``None`` for a still asked without one."""
     frameTime: int
     """The time of the grid frame holding the requested time, in ticks."""
     width: int
     height: int
-    publish: PublishReport
-    """How the PNG was moved to ``output``."""
+    publish: NotRequired[PublishReport]
+    """How the PNG was moved to ``output``; absent without one."""
+    attachment: NotRequired[int]
+    """The index of the PNG among the response's attachments, without an ``output``."""
+    png: NotRequired[bytes]
+    """The PNG, without an ``output``."""
 
 
 class StillTimings(TypedDict):

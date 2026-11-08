@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
+use std::sync::{Arc, PoisonError, RwLockReadGuard, RwLockWriteGuard};
 
 use alpha2_gpu::{CapabilityTier, GpuContext};
 
@@ -190,9 +191,10 @@ impl CompiledEffect {
     }
 }
 
+/// Entries are shared so a frame keeps drawing with an effect another thread unregisters.
 #[derive(Debug, Default)]
 pub(crate) struct EffectRegistry {
-    entries: HashMap<EffectId, RegisteredEffect>,
+    entries: HashMap<EffectId, crate::Shared<RegisteredEffect>>,
     builtins: HashSet<EffectId>,
     internal: HashSet<EffectId>,
 }
@@ -218,7 +220,7 @@ impl EffectRegistry {
 
 #[derive(Debug)]
 pub(crate) struct RegisteredEffect {
-    pub(crate) definition: EffectDef,
+    pub(crate) definition: Arc<EffectDef>,
     pub(crate) uniform_layout: UniformLayout,
     reads_time: bool,
     /// Worst-case per-pixel cost of one invocation.
@@ -245,7 +247,7 @@ impl Renderer {
     /// # Errors
     /// Returns schema or WGSL diagnostics without mutating the registry.
     pub async fn register_effect(
-        &mut self,
+        &self,
         definition: EffectDef,
     ) -> Result<EffectId, ShaderDiagnostics> {
         let compiled = self.compile_effect(definition)?.compiled().await?;
@@ -298,14 +300,26 @@ impl Renderer {
     /// # Errors
     /// Schema diagnostics, a duplicate id or a full registry.
     pub(crate) fn register_lazily(
-        &mut self,
+        &self,
         definition: EffectDef,
     ) -> Result<EffectId, ShaderDiagnostics> {
         let id = self.check_registration(&definition)?;
-        self.effects
-            .entries
-            .insert(id.clone(), registered_effect(definition));
+        let mut effects = self.effects_mut();
+        effects.check_room(&id)?;
+        effects.entries.insert(
+            id.clone(),
+            crate::Shared::new(registered_effect(definition)),
+        );
         Ok(id)
+    }
+
+    /// The registry, read; registration and removal take it briefly to write.
+    pub(crate) fn effects(&self) -> RwLockReadGuard<'_, EffectRegistry> {
+        self.effects.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn effects_mut(&self) -> RwLockWriteGuard<'_, EffectRegistry> {
+        self.effects.write().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Pre-device registration checks; returns the identity to register under.
@@ -321,7 +335,7 @@ impl Renderer {
             ));
         }
         let id = EffectId::new(definition.id.clone(), definition.version);
-        self.effects.check_room(&id)?;
+        self.effects().check_room(&id)?;
         Ok(id)
     }
 
@@ -348,7 +362,7 @@ impl Renderer {
     /// # Errors
     /// Refuses an effect from another device, one registered meanwhile, or a full registry.
     pub fn register_compiled(
-        &mut self,
+        &self,
         compiled: CompiledEffect,
     ) -> Result<EffectId, ShaderDiagnostics> {
         if compiled.device != *self.gpu.device() {
@@ -358,10 +372,11 @@ impl Renderer {
                 compiled.id.version()
             )));
         }
-        self.effects.check_room(&compiled.id)?;
-        self.effects
+        let mut effects = self.effects_mut();
+        effects.check_room(&compiled.id)?;
+        effects
             .entries
-            .insert(compiled.id.clone(), compiled.effect);
+            .insert(compiled.id.clone(), crate::Shared::new(compiled.effect));
         Ok(compiled.id)
     }
 
@@ -409,17 +424,20 @@ impl Renderer {
 
     /// The generated host uniform layout of a registered effect.
     #[must_use]
-    pub fn effect_uniform_layout(&self, id: &EffectId) -> Option<&UniformLayout> {
-        self.effects
+    pub fn effect_uniform_layout(&self, id: &EffectId) -> Option<UniformLayout> {
+        self.effects()
             .entries
             .get(id)
-            .map(|entry| &entry.uniform_layout)
+            .map(|entry| entry.uniform_layout.clone())
     }
 
     /// The definition of a registered effect.
     #[must_use]
-    pub fn effect_definition(&self, id: &EffectId) -> Option<&EffectDef> {
-        self.effects.entries.get(id).map(|entry| &entry.definition)
+    pub fn effect_definition(&self, id: &EffectId) -> Option<Arc<EffectDef>> {
+        self.effects()
+            .entries
+            .get(id)
+            .map(|entry| Arc::clone(&entry.definition))
     }
 
     /// Whether `id`'s output can change with frame time alone; `true` for unknown effects.
@@ -434,7 +452,7 @@ impl Renderer {
                 .iter()
                 .any(|pass| self.effect_reads_time(&EffectId::from_static(pass, 1)));
         }
-        self.effects
+        self.effects()
             .entries
             .get(id)
             .is_none_or(|entry| entry.reads_time)
@@ -443,39 +461,42 @@ impl Renderer {
     /// Whether an exact effect version is registered.
     #[must_use]
     pub fn is_effect_registered(&self, id: &EffectId) -> bool {
-        self.effects.entries.contains_key(id)
+        self.effects().entries.contains_key(id)
     }
 
     /// Whether a project document may reference the effect.
     #[must_use]
     pub fn is_effect_project_visible(&self, id: &EffectId) -> bool {
-        self.effects.entries.contains_key(id) && !self.effects.internal.contains(id)
+        let effects = self.effects();
+        effects.entries.contains_key(id) && !effects.internal.contains(id)
     }
 
     /// The registered identity a project reference to `id`@`version` draws with, if the project
-    /// may reference it. Allocation-free.
+    /// may reference it.
     #[must_use]
-    pub fn project_effect_id(&self, id: &str, version: u32) -> Option<&EffectId> {
+    pub fn project_effect_id(&self, id: &str, version: u32) -> Option<EffectId> {
         let key: &dyn EffectKey = &(id, version);
-        self.effects
+        let effects = self.effects();
+        effects
             .entries
             .get_key_value(key)
             .map(|(id, _)| id)
-            .filter(|id| !self.effects.internal.contains(*id))
+            .filter(|id| !effects.internal.contains(*id))
+            .cloned()
     }
 
     /// Whether `id` is an engine built-in rather than a host-registered runtime effect.
     #[must_use]
     pub fn is_builtin_effect(&self, id: &EffectId) -> bool {
-        self.effects.builtins.contains(id)
+        self.effects().builtins.contains(id)
     }
 
-    /// Removes one runtime effect and releases its GPU resources.
-    pub fn unregister_effect(&mut self, id: &EffectId) -> bool {
-        if self.effects.builtins.contains(id) {
-            return false;
-        }
-        let removed = self.effects.entries.remove(id).is_some();
+    /// Removes one runtime effect and releases its GPU resources once no frame draws with it.
+    pub fn unregister_effect(&self, id: &EffectId) -> bool {
+        let removed = {
+            let mut effects = self.effects_mut();
+            !effects.builtins.contains(id) && effects.entries.remove(id).is_some()
+        };
         if removed {
             self.clear_result_cache_for(crate::CacheInvalidation::Effects);
         }
@@ -483,10 +504,14 @@ impl Renderer {
     }
 
     /// Removes every host-registered runtime effect.
-    pub fn clear_effects(&mut self) {
-        self.effects
-            .entries
-            .retain(|id, _| self.effects.builtins.contains(id));
+    pub fn clear_effects(&self) {
+        {
+            let mut effects = self.effects_mut();
+            let EffectRegistry {
+                entries, builtins, ..
+            } = &mut *effects;
+            entries.retain(|id, _| builtins.contains(id));
+        }
         self.clear_result_cache_for(crate::CacheInvalidation::Effects);
     }
 
@@ -497,17 +522,17 @@ impl Renderer {
     /// Names the first unregistered effect.
     pub fn warmup(&self, effects: &[EffectId]) -> Result<(), ShaderDiagnostics> {
         for effect in effects {
-            let Some(registered) = self.effects.get(effect) else {
+            let Some(registered) = self.effects().get(effect) else {
                 return Err(ShaderDiagnostics::error(format!(
                     "effect {} version {} is not registered",
                     effect.as_str(),
                     effect.version()
                 )));
             };
-            self.effect_pipeline(registered);
+            self.effect_pipeline(&registered);
             for pass in crate::gaussian_blur::expanded_passes(effect.as_str()).unwrap_or_default() {
-                if let Some(registered) = self.effects.get(&EffectId::from_static(pass, 1)) {
-                    self.effect_pipeline(registered);
+                if let Some(registered) = self.effects().get(&EffectId::from_static(pass, 1)) {
+                    self.effect_pipeline(&registered);
                 }
             }
         }
@@ -516,8 +541,8 @@ impl Renderer {
 }
 
 impl EffectRegistry {
-    pub(crate) fn get(&self, id: &EffectId) -> Option<&RegisteredEffect> {
-        self.entries.get(id)
+    pub(crate) fn get(&self, id: &EffectId) -> Option<crate::Shared<RegisteredEffect>> {
+        self.entries.get(id).cloned()
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -541,7 +566,7 @@ pub(crate) fn registered_effect(definition: EffectDef) -> RegisteredEffect {
         uniform_layout: uniform_layout(&definition.params),
         reads_time: body_reads_time(&definition.wgsl_body),
         cost: crate::effect_cost::invocation_cost(&blank_comments(&definition.wgsl_body)),
-        definition,
+        definition: Arc::new(definition),
         pipeline: std::sync::OnceLock::new(),
     }
 }

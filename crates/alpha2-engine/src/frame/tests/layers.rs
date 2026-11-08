@@ -88,7 +88,7 @@ fn a_track_matte_keeps_its_clip_where_the_matte_says_and_is_never_drawn() {
     use alpha2_model::{Matte, MatteMode};
 
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::track_matte_definition()))
         .expect("the matte compiles");
     let size = RenderSize::new(2, 1).expect("size");
@@ -171,7 +171,7 @@ fn clip_masks_are_applied_after_its_effects_in_source_space() {
     };
 
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     for definition in alpha2_render::mask_combine_definitions() {
         pollster::block_on(renderer.register_effect(definition)).expect("the masks compile");
     }
@@ -243,7 +243,7 @@ fn clip_masks_are_applied_after_its_effects_in_source_space() {
 #[test]
 fn stacked_clips_keep_their_own_source_across_repeated_frames() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -345,7 +345,7 @@ fn stacked_clips_keep_their_own_source_across_repeated_frames() {
 #[allow(clippy::too_many_lines)]
 fn a_transformed_top_layer_never_samples_another_track_across_many_frames() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -457,7 +457,7 @@ fn a_transformed_top_layer_never_samples_another_track_across_many_frames() {
 #[test]
 fn two_effected_clips_do_not_share_an_intermediate_texture() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -619,7 +619,7 @@ fn stacked_effect_frame(sources: &[SourceId]) -> FrameDesc<'static> {
 #[test]
 fn stacked_effect_layers_survive_per_frame_source_uploads_without_a_sync() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -718,7 +718,7 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
     use alpha2_model::{Animated, Matte, MatteMode, ShapeMask};
 
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::track_matte_definition()))
         .expect("the matte compiles");
     for definition in alpha2_render::mask_combine_definitions() {

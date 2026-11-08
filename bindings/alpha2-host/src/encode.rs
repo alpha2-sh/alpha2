@@ -822,6 +822,10 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
+/// [`INJECT_SLOW_ENCODE`] for the first export `serve` runs.
+#[cfg(test)]
+pub static SERVE_SLOW_ENCODE: std::sync::Mutex<Option<Duration>> = std::sync::Mutex::new(None);
+
 #[cfg(test)]
 pub const INJECTED_WRITE_FAILURE: &str =
     "native encode failed while writing media: packet write failed: No space left on device";

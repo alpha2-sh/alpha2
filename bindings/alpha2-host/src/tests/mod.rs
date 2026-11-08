@@ -115,25 +115,47 @@ fn corpus(name: &str) -> PathBuf {
         .join(name)
 }
 
-/// Cancels are answered first, as they would be when the input is written at once.
+/// `input` is JSON lines, each sent as one frame. Cancels are answered first, as they would be when
+/// the input is written at once.
 fn serve_input(
     serving: &mut Serving,
     input: &[u8],
-    answered: &mut dyn FnMut(Option<&Host>),
-) -> (Result<(), HostError>, Vec<u8>) {
+    unusable: &crate::Unusable<'_>,
+) -> (Result<crate::Served, HostError>, Vec<u8>) {
     let captured = crate::serve_io::Captured::default();
     let out = captured.responder();
-    let lines = crate::serve_io::lines_of(input, &out);
-    let served = serve_requests(serving, &lines, &out, answered);
+    let frames = crate::serve_io::frames_of_lines(input);
+    let requests = crate::serve_io::requests_of(&frames, &out, &serving.lifecycle);
+    let served = serve_requests(serving, &requests, &out, unusable);
     (served, captured.bytes())
 }
 
-fn answers_of(output: Vec<u8>) -> Vec<Value> {
-    String::from_utf8(output)
-        .expect("UTF-8")
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("an answer is JSON"))
+/// The answers' headers, without `state` messages.
+fn answers_of(output: &[u8]) -> Vec<Value> {
+    crate::serve_io::messages_of(output)
+        .into_iter()
+        .map(|(header, _)| header)
+        .filter(|message| message["type"] != "state")
         .collect()
+}
+
+/// The headers of what a child wrote to stdout after the frames' magic; libtest writes before it.
+fn child_messages(stdout: &[u8]) -> Vec<Value> {
+    let mut stdout = stdout;
+    alpha2_host_core::host_frames::skip_to_magic(&mut stdout, usize::MAX)
+        .expect("a slice reads")
+        .unwrap_or_else(|| panic!("no magic in {}", String::from_utf8_lossy(stdout)));
+    crate::serve_io::messages_of(stdout)
+        .into_iter()
+        .map(|(header, _)| header)
+        .collect()
+}
+
+/// `serve`'s flags from `ALPHA2_TEST_SERVE_ARGS`, for a child that runs `serve`.
+fn test_serve_limits() -> crate::lifecycle::ServeOptions {
+    let args = std::env::var("ALPHA2_TEST_SERVE_ARGS").unwrap_or_default();
+    crate::lifecycle::ServeOptions::from_args(args.split_whitespace().map(str::to_owned))
+        .expect("ALPHA2_TEST_SERVE_ARGS")
 }
 
 fn no_gpu(_: VideoDecodePolicy) -> Result<Host, HostError> {

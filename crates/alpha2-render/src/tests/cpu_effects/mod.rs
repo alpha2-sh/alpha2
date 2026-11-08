@@ -344,7 +344,7 @@ fn test_lut(domain_min: [f32; 3], domain_max: [f32; 3]) -> Lut3dData {
 
 #[test]
 fn lut_3d_matches() {
-    let mut parity = Parity::new();
+    let parity = Parity::new();
     for (id, lut) in [
         ("unit", test_lut([0.0; 3], [1.0; 3])),
         ("wide", test_lut([-0.1, 0.05, -0.2], [1.2, 0.9, 1.1])),

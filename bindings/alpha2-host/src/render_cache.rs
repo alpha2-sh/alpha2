@@ -94,6 +94,19 @@ static TEMPORARY: AtomicU64 = AtomicU64::new(0);
 /// None of these is used again by this process.
 static ABANDONED_DIRECTORIES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
+/// Why each directory an earlier export abandoned is off for this process.
+pub fn abandoned_directory_reasons() -> Vec<String> {
+    abandoned_directories()
+        .iter()
+        .map(|directory| {
+            format!(
+                "render cache directory {} is off: a thread is stuck in its filesystem",
+                directory.display()
+            )
+        })
+        .collect()
+}
+
 fn abandoned_directories() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
     ABANDONED_DIRECTORIES
         .lock()

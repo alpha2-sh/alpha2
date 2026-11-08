@@ -7,9 +7,9 @@ import os
 import sys
 import textwrap
 import threading
-from collections.abc import Callable
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, Protocol
 
 import pytest
 
@@ -75,7 +75,7 @@ def corpus(name: str) -> Any:
 
 
 HOST_PRELUDE = """\
-import json, os, signal, sys, time
+import json, os, signal, struct, sys, time
 # As the real host reads and writes: UTF-8 and bare newlines, whatever the platform's defaults are.
 sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8", newline="\\n")
@@ -83,27 +83,82 @@ sys.stderr.reconfigure(encoding="utf-8", newline="\\n")
 def record(path, text):
     with open(path, "a", encoding="utf-8") as file:
         file.write(text + "\\n")
-def read_request():
-    line = sys.stdin.readline()
-    return json.loads(line), line
-def send(request, **message):
-    sys.stdout.write(json.dumps({"protocolVersion": 1, "requestId": request["requestId"], **message}) + "\\n")
+# The protocol's framing: every fake host starts, reads and writes through these three.
+def begin():
     sys.stdout.flush()
+    sys.stdout.buffer.write(b"\\x89A2HOST\\n")
+    sys.stdout.buffer.flush()
+def write_message(message, attachments=()):
+    if attachments:
+        message = {**message, "attachments": [{"type": kind, "bytes": len(data)} for kind, data in attachments]}
+    header = json.dumps({"protocolVersion": 2, **message}).encode()
+    data = b"".join(data for _, data in attachments)
+    sys.stdout.buffer.write(struct.pack("<II", len(header), len(data)) + header + data)
+    sys.stdout.buffer.flush()
+def read_message():
+    lengths = sys.stdin.buffer.read(8)
+    if len(lengths) < 8:
+        return None
+    header_bytes, attachment_bytes = struct.unpack("<II", lengths)
+    header = sys.stdin.buffer.read(header_bytes).decode()
+    sys.stdin.buffer.read(attachment_bytes)
+    return json.loads(header), header
+def state(state="ready", reason="started", **details):
+    write_message({"type": "state", "state": state, "reason": reason, "details": details})
+def send(request, **message):
+    if "ok" in message:
+        message = {"hostState": "ready", **message}
+    write_message({"requestId": request["requestId"], **message})
+def read_request():
+    received = read_message()
+    if received is None:
+        sys.exit(0)
+    return received
+def serve(answer):
+    while (received := read_message()) is not None:
+        if received[0]["operation"] != "cancel":
+            answer(received[0])
 """
 
 
-@pytest.fixture
-def fake_host(monkeypatch: pytest.MonkeyPatch) -> Callable[[Path, str], str]:
-    """Writes a fake ``alpha2-host``. ``<python> serve`` runs the file ``serve`` in the working
-    directory, which starts the same way on every platform, unlike a shebang script."""
+class FakeHost(Protocol):
+    def __call__(self, directory: Path, source: str, *, ready: bool = True) -> str: ...
 
-    def make(directory: Path, source: str) -> str:
+
+@pytest.fixture
+def fake_host(monkeypatch: pytest.MonkeyPatch) -> FakeHost:
+    """Writes a fake ``alpha2-host``. ``<python> serve`` runs the file ``serve`` in the working
+    directory, which starts the same way on every platform, unlike a shebang script. The host writes
+    the protocol magic and says it is ready before ``source`` runs unless ``ready`` is false."""
+
+    def make(directory: Path, source: str, *, ready: bool = True) -> str:
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "serve").write_text(HOST_PRELUDE + textwrap.dedent(source), encoding="utf-8")
+        prelude = HOST_PRELUDE + ("begin()\nstate()\n" if ready else "")
+        (directory / "serve").write_text(prelude + textwrap.dedent(source), encoding="utf-8")
         monkeypatch.chdir(directory)
         return sys.executable
 
     return make
+
+
+@pytest.fixture(autouse=True)
+def close_host_clients(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Ends the hosts of every client a test made, so idle fake hosts do not outlive it."""
+    from alpha2 import client as client_module
+
+    made: list[client_module.HostClient] = []
+    initialize = client_module.HostClient.__init__
+
+    def recorded(self: client_module.HostClient, *args: Any, **kwargs: Any) -> None:
+        initialize(self, *args, **kwargs)
+        made.append(self)
+
+    monkeypatch.setattr(client_module.HostClient, "__init__", recorded)
+    yield
+    with client_module._shared_lock:
+        client_module._shared_clients.clear()
+    for client in made:
+        client.close()
 
 
 def project_document() -> dict[str, Any]:

@@ -32,14 +32,20 @@ print(result["output"], result["videoPipeline"], result["frames"])
 
 - `alpha2.export`, `alpha2.conform` and `alpha2.capabilities` run on a shared `HostClient`; make
   your own (`alpha2.HostClient(concurrency=2)`) to bound or separate them.
+- A client keeps up to `concurrency` `alpha2-host` processes and sends each one request at a
+  time, so later requests skip the start. A host serves until it decides a new process would do
+  better (memory, request count, idle time) and drains; the client then starts another. A host
+  takes only requests that would start a host with its environment, decode and renderer modes
+  included, so changing `os.environ` starts new hosts. `client.close()`, or a `with` block, ends
+  them; an idle host never keeps Python from exiting.
 - An existing `output` is refused unless you pass `overwrite=True`, which replaces it only once
   the export is whole. An output that is one of the export's inputs is always refused.
 - Setting a `cancel` event (`threading.Event`) or pressing Ctrl-C cancels the request: the client
-  writes a cancel line, the host stops the export, removes its partial output and answers, and the
-  host ends, all before the call returns. A host that does not answer within 5 s is ended; a second
-  Ctrl-C ends it at once. The host also exits when the process that started it dies.
+  sends a cancel message, and the host stops the export, removes its partial output and answers
+  before the call returns. A host that does not answer within 5 s is ended; a second Ctrl-C ends
+  it at once. The host also exits when the process that started it dies.
 - Every failure is an `alpha2.Alpha2HostError` with a machine-readable `code` and a classified
-  `failure` dict for retry policies. A host that writes nothing within `host_start_timeout`
+  `failure` dict for retry policies. A host that is not ready within `host_start_timeout`
   (seconds, a `HostClient` argument, 30 by default, `None` to wait forever) is killed and the
   request fails with `HOST_START_TIMEOUT`; a host macOS has quarantined is refused before it starts
   with `HOST_QUARANTINED`, one Windows refuses by policy is `HOST_BLOCKED`, and a Linux host whose
@@ -168,6 +174,8 @@ print(result["stills"][0]["frameTime"])  # the grid frame that holds 1.5 s, in t
   host, decoding once; `size=(width, height)` renders the project at another canvas size.
 - The PNG is 8-bit RGBA, the picture before any video encoding. `overwrite=True` replaces an
   existing file, as for `export`.
+- Without a path (`alpha2.still(project, 1.5)`, or `None` in a `stills` pair) nothing is written:
+  the PNG comes back as bytes in `result["stills"][i]["png"]`, and `output` is `None`.
 - From a shell: `python -m alpha2 still project.json check.png --at 1.5 --asset title=title.png`.
 
 ## Renderer and video decode

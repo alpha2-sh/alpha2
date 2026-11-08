@@ -159,3 +159,10 @@ path = "fuzz_targets/still_decode.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "host_frames"
+path = "fuzz_targets/host_frames.rs"
+test = false
+doc = false
+bench = false

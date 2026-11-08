@@ -281,6 +281,67 @@ pub(crate) fn process_memory() -> ProcessMemory {
     }
 }
 
+unsafe extern "C" {
+    fn _dup2(from: std::ffi::c_int, to: std::ffi::c_int) -> std::ffi::c_int;
+}
+
+pub(crate) fn claim_stdout() -> io::Result<File> {
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{
+        DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let usable = |handle: HANDLE| !handle.is_null() && handle != INVALID_HANDLE_VALUE;
+    // SAFETY: any standard handle id may be asked for.
+    let output = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    if !usable(output) {
+        return Err(io::Error::from(io::ErrorKind::NotFound));
+    }
+    let mut claimed: HANDLE = std::ptr::null_mut();
+    // SAFETY: both process handles are the current-process pseudo-handle, `output` is open, and
+    // `claimed` outlives the call; the duplicate is not inheritable.
+    let duplicated = unsafe {
+        DuplicateHandle(
+            GetCurrentProcess(),
+            output,
+            GetCurrentProcess(),
+            &raw mut claimed,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    } != 0;
+    if !duplicated {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `claimed` is a new handle nothing else owns.
+    let claimed = unsafe { File::from_raw_handle(claimed.cast()) };
+    // SAFETY: as above.
+    let errors = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+    let target = if usable(errors) {
+        errors
+    } else {
+        let null = std::fs::OpenOptions::new().write(true).open("NUL")?;
+        std::os::windows::io::IntoRawHandle::into_raw_handle(null).cast()
+    };
+    // SAFETY: `target` is an open handle kept for the process's life.
+    unsafe { SetStdHandle(STD_OUTPUT_HANDLE, target) };
+    // SAFETY: `_dup2` takes any descriptors and fails without effect when one is not open.
+    let _ = unsafe { _dup2(2, 1) };
+    Ok(claimed)
+}
+
+pub(crate) fn open_handles() -> Option<u64> {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessHandleCount};
+    let mut count = 0_u32;
+    // SAFETY: the pseudo-handle is always valid and `count` outlives the call.
+    (unsafe { GetProcessHandleCount(GetCurrentProcess(), &raw mut count) } != 0)
+        .then_some(u64::from(count))
+}
+
 /// The limit is the lower of the job's process and job memory limits, when there are any.
 pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
     use windows_sys::Win32::System::JobObjects::{

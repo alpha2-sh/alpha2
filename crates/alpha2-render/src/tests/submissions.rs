@@ -19,7 +19,7 @@ fn heavy_effect() -> EffectDef {
 
 /// Draws `effect` over a gradient on its own renderer, returning the picture and its submissions.
 fn draw(effect: EffectDef, size: RenderSize) -> (Vec<u8>, crate::FrameSubmissions) {
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(effect)).expect("the effect compiles");
     let pixels = (0..size.width * size.height)
         .flat_map(|index| {

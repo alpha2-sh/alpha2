@@ -11,7 +11,7 @@ from pathlib import Path
 from .install import LINUX_GLIBC_FLOOR, _linux_libc
 
 DEFAULT_HOST_START_TIMEOUT = 30.0
-"""Seconds a started host has to write its first line, by default."""
+"""Seconds a started host has to report that it is ready, by default."""
 
 # CreateProcess errors for policy refusals: ERROR_INVALID_IMAGE_HASH,
 # ERROR_ACCESS_DISABLED_BY_POLICY, ERROR_VIRUS_INFECTED, ERROR_VIRUS_DELETED and the

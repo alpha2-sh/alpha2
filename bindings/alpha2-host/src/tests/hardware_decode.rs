@@ -854,7 +854,7 @@ fn export_with_a_surface_fault(
         }]}]}
     });
     let request = json!({
-        "protocolVersion": 1, "requestId": "surface-fault", "operation": "export",
+        "protocolVersion": 2, "requestId": "surface-fault", "operation": "export",
         "project": project,
         "assets": {"video": corpus("h264-bt709-transcode.mp4")},
         "startTicks": 0, "endTicks": end,
@@ -1023,7 +1023,7 @@ fn a_synchronous_export_decodes_in_software() {
     let directory = scratch_directory("pipeline-off-decode");
     let request = |name: &str| {
         let mut request = json!({
-            "protocolVersion": 1, "requestId": name, "operation": "export",
+            "protocolVersion": 2, "requestId": name, "operation": "export",
             "project": conform_project(&json!({})),
             "assets": {"video": corpus("h264-bt709-copy.mp4")},
             "startTicks": 0, "endTicks": 120_000,

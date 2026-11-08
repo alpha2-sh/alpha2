@@ -279,6 +279,21 @@ def test_a_still_is_a_png_of_the_canvas_in_the_projects_colors(
         client.stills(SOLID, [(0, output), (1, output)])
 
 
+def test_a_still_without_an_output_returns_the_png_a_file_would_hold(
+    client: HostClient, tmp_path: Path
+) -> None:
+    written = tmp_path / "written.png"
+    result = client.stills(SOLID, [(0.51, written), (0.51, None)], size=(31, 17))
+    on_disk, returned = result["stills"]
+    assert returned["output"] is None and "publish" not in returned
+    assert returned["frameTime"] == on_disk["frameTime"]
+    png = returned["png"]
+    assert png == written.read_bytes()
+    (tmp_path / "returned.png").write_bytes(png)
+    assert read_rgba_png(tmp_path / "returned.png") == read_rgba_png(written)
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["returned.png", "written.png"]
+
+
 def test_the_command_line_writes_a_still(tmp_path: Path) -> None:
     project = tmp_path / "project.json"
     project.write_text(json.dumps(SOLID))

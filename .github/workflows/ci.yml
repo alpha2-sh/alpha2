@@ -737,12 +737,21 @@ jobs:
       - name: The Windows host reports DXC
         if: runner.os == 'Windows'
         run: |
-          echo '{"protocolVersion":1,"requestId":"c","operation":"capabilities"}' \
-            | ALPHA2_RENDERER=gpu target/debug/alpha2-host serve > "$RUNNER_TEMP/capabilities.json"
-          python - "$RUNNER_TEMP/capabilities.json" <<'PY'
-          import json, sys
-          lines = [json.loads(line) for line in open(sys.argv[1]).read().splitlines() if line]
-          answer = next(line for line in lines if line.get("requestId") == "c")
+          python - <<'PY'
+          import json, os, struct, subprocess
+          header = json.dumps({"protocolVersion": 2, "requestId": "c", "operation": "capabilities"})
+          frame = struct.pack("<II", len(header), 0) + header.encode()
+          env = {**os.environ, "ALPHA2_RENDERER": "gpu"}
+          run = subprocess.run(["target/debug/alpha2-host", "serve"], input=frame, env=env,
+                               capture_output=True, check=True)
+          out = run.stdout[run.stdout.index(b"\x89A2HOST\n") + 8:]
+          answer = None
+          while out and answer is None:
+              size, attached = struct.unpack_from("<II", out)
+              message = json.loads(out[8:8 + size])
+              out = out[8 + size + attached:]
+              if message.get("requestId") == "c":
+                  answer = message
           compiler = answer["result"]["capabilities"]["gpu"]["shaderCompiler"]
           assert compiler.startswith("DXC"), compiler
           print(compiler)

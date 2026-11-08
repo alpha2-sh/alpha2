@@ -8,7 +8,7 @@ fn export_request_from(input: &Path, output: &Path, overwrite: bool) -> Request 
     let second = alpha2_time::TICKS_PER_SECOND;
     parse_request(
         &json!({
-            "protocolVersion": 1, "operation": "export", "requestId": "overwrite",
+            "protocolVersion": 2, "operation": "export", "requestId": "overwrite",
             "project": {
                 "schema_version": 1, "id": "out", "name": "Out",
                 "settings": {"width": 128, "height": 96, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
