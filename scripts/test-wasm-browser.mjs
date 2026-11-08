@@ -68,28 +68,32 @@ if (!existsSync(join(root, "packages/alpha2/wasm/alpha2_wasm_bg.wasm"))) {
   process.exit(1);
 }
 
-// Plugin cases load a fixture plugin packed for the browser, wasm only.
+// Plugin cases load plugins packed for the browser, wasm only.
+const browserPlugins = ["fixture-digest", "silence"];
 if (names.some((name) => name.startsWith("plugin-"))) {
-  const packed = spawnSync(
-    "cargo",
-    [
-      "run",
-      "--quiet",
-      "--manifest-path",
-      join(root, "plugins", "Cargo.toml"),
-      "-p",
-      "alpha2-plugin-pack",
-      "--",
-      join(root, "plugins", "fixture-digest"),
-      "--out",
-      join(root, "plugins", "target", "browser-fixtures", "digest"),
-      "--no-native",
-    ],
-    { stdio: "inherit" },
-  );
-  if (packed.status !== 0) {
-    process.stdout.write("FAIL the fixture plugin did not pack\n");
-    process.exit(1);
+  for (const plugin of browserPlugins) {
+    const packed = spawnSync(
+      "cargo",
+      [
+        "run",
+        "--quiet",
+        "--release",
+        "--manifest-path",
+        join(root, "plugins", "Cargo.toml"),
+        "-p",
+        "alpha2-plugin-pack",
+        "--",
+        join(root, "plugins", plugin),
+        "--out",
+        join(root, "plugins", "target", "browser-fixtures", plugin),
+        "--no-native",
+      ],
+      { stdio: "inherit" },
+    );
+    if (packed.status !== 0) {
+      process.stdout.write(`FAIL plugins/${plugin} did not pack\n`);
+      process.exit(1);
+    }
   }
 }
 

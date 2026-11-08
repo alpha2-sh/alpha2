@@ -4,6 +4,7 @@ import {
   extractDigest,
   extractInvalidEmit,
   extractTimeline,
+  pluginConformance,
   pluginDigest,
 } from "./extract.mjs";
 import {
@@ -110,6 +111,7 @@ export const cases = {
   "extract-invalid-emit": extractInvalidEmit,
   "extract-timeline": extractTimeline,
   "plugin-digest": pluginDigest,
+  "plugin-conformance": pluginConformance,
   "webgpu-smoke": () => smoke(false),
   "webgl2-smoke": () => smoke(true),
   "webgl-context-loss": webglContextLoss,

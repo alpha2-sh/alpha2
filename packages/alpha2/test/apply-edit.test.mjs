@@ -24,7 +24,7 @@ const skip =
 
 const corpus = JSON.parse(
   readFileSync(
-    new URL("../../../tests/cases/data-edit-corpus.json", import.meta.url),
+    new URL("../../../tests/cases/surface-conformance.json", import.meta.url),
     "utf8",
   ),
 );
@@ -44,7 +44,7 @@ test(
   { skip },
   async () => {
     const wasm = await binding();
-    for (const fixture of corpus.cases) {
+    for (const fixture of corpus.edit) {
       const project = corpus.projects[fixture.project];
       const before = structuredClone(project);
       const { expected } = fixture;

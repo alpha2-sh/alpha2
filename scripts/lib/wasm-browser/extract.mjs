@@ -144,7 +144,7 @@ report({ ok: set.times.length === 10 && set.values.every((value) => value === 1)
 export function pluginDigest() {
   return `${prelude}
 const { loadPlugin } = await import("alpha2/plugins");
-const manifestUrl = "/plugins/target/browser-fixtures/digest/manifest.json";
+const manifestUrl = "/plugins/target/browser-fixtures/fixture-digest/manifest.json";
 const manifestBytes = await (await fetch(manifestUrl)).arrayBuffer();
 const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", manifestBytes))]
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -176,5 +176,78 @@ report({
     && set.made_by.plugin?.artifact_sha256 === plugin.artifactSha256,
   refused, found, madeBy: set.made_by,
 });
+`;
+}
+
+// Every case of tests/cases/surface-conformance.json the page can run: edits through wasm, the
+// digest fixture over each source this browser decodes (H.264 always), the packed plugins' wasm
+// artifacts, and timeline inputs drawn by the CPU renderer.
+export function pluginConformance() {
+  return `${prelude}
+const { loadPlugin } = await import("alpha2/plugins");
+const { applyEdit } = await import("alpha2/apply-edit");
+const { dataHash, digestValues } = await import("/scripts/lib/surface-conformance.mjs");
+const table = await (await fetch("/tests/cases/surface-conformance.json")).json();
+const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+  .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+const sorted = (value) =>
+  Array.isArray(value) ? value.map(sorted)
+    : value !== null && typeof value === "object"
+      ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, sorted(value[key])]))
+      : value;
+const same = (a, b) => JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
+const failed = [];
+for (const fixture of table.edit) {
+  const { expected } = fixture;
+  try {
+    const edited = applyEdit(wasm, table.projects[fixture.project], fixture.request);
+    const hash = await sha256(new TextEncoder().encode(edited.projectJson));
+    if (hash !== expected.project_sha256 || !same(edited.report, expected.report))
+      failed.push(fixture.name);
+  } catch (error) {
+    if (error?.code !== expected.code || error?.details?.refusal !== expected.refusal) failed.push(fixture.name);
+  }
+}
+const plugins = {};
+const plugin = async (name) => {
+  const url = "/plugins/target/browser-fixtures/" + name + "/manifest.json";
+  plugins[name] ??= await loadPlugin(url, await sha256(await (await fetch(url)).arrayBuffer()));
+  return plugins[name];
+};
+const found = {};
+const undecodable = {};
+for (const fixture of table.extract) {
+  const project = table.projects[fixture.project];
+  const media = {};
+  for (const [id, path] of Object.entries(fixture.assets)) media[id] = await (await fetch("/" + path)).blob();
+  let timelineFrame;
+  if (fixture.request.input.from === "timeline") {
+    const engine = wasm.WebEffectRegistry.createCpu(
+      new OffscreenCanvas(project.settings.width, project.settings.height));
+    engine.loadProject(JSON.stringify(project));
+    timelineFrame = (time, width, height) => ({ width, height, rgba: engine.readRgbaAt(time, width, height) });
+  }
+  const loaded = fixture.extractor.plugin === undefined ? undefined : await plugin(fixture.extractor.plugin);
+  const extractor = loaded?.extractor() ?? {
+    describe: () => fixture.extractor.client,
+    video(frame, out) {
+      out.sample("digest", frame.time, digestValues(frame.data));
+    },
+  };
+  let result;
+  try {
+    result = await runExtractor({
+      binding: wasm, audioBinding: wasm, project, media, timelineFrame, plugin: loaded,
+      request: fixture.request,
+    }, extractor);
+  } catch (error) {
+    if (error?.code !== "DECODE_UNAVAILABLE" || fixture.name.includes("h264")) throw error;
+    undecodable[fixture.name] = error.message;
+    continue;
+  }
+  found[fixture.name] = await dataHash(result.dataSets);
+  if (found[fixture.name] !== fixture.sha256) failed.push(fixture.name);
+}
+report({ ok: failed.length === 0, failed, found, undecodable });
 `;
 }

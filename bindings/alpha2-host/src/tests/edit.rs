@@ -1,4 +1,4 @@
-//! The `edit` operation answers `tests/cases/data-edit-corpus.json` as `alpha2_eval::edit` does.
+//! The `edit` operation answers the `edit` cases of `tests/cases/surface-conformance.json`.
 
 use std::time::Duration;
 
@@ -9,7 +9,7 @@ use super::*;
 
 fn corpus() -> Value {
     let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cases/data-edit-corpus.json");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cases/surface-conformance.json");
     serde_json::from_slice(&std::fs::read(path).expect("the corpus")).expect("json")
 }
 
@@ -30,7 +30,7 @@ fn hex(bytes: &[u8]) -> String {
 #[test]
 fn each_corpus_case_answers_as_the_engine() {
     let corpus = corpus();
-    for case in corpus["cases"].as_array().expect("cases") {
+    for case in corpus["edit"].as_array().expect("cases") {
         let name = case["name"].as_str().expect("name");
         let project = &corpus["projects"][case["project"].as_str().expect("project")];
         let Ok(Request::Edit(request)) = parse_request(&line(name, project, &case["request"]))
@@ -63,7 +63,7 @@ fn each_corpus_case_answers_as_the_engine() {
 #[test]
 fn a_served_edit_answers_without_a_device() {
     let corpus = corpus();
-    let case = &corpus["cases"][0];
+    let case = &corpus["edit"][0];
     let mut serving = ServeChild::start(SERVE_CHILD, &[]);
     assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
     serving.write(&line(

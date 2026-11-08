@@ -1,5 +1,6 @@
 {
-  "cases": [
+  "data_hash": "sha256 of the data sets as lines joined by \\n, one per set: `id kind|item;item;...`. Sampled kinds: `time:value,value`, each value the 8 lowercase hex digits of its f32 bits or `-` for null. Intervals: `start:end:label:score`; words: `start:end:text:speaker`; absent fields are empty, a score is its f32 bits.",
+  "edit": [
     {
       "expected": {
         "project_sha256": "2a3f595fac64d6ea54b8072eb3031c3095362553470e7ef7e22ab2a3c4ec70a5",
@@ -1012,7 +1013,563 @@
       }
     }
   ],
+  "extract": [
+    {
+      "assets": {
+        "v": "tests/corpus/h264-bt709-copy.mp4"
+      },
+      "extractor": {
+        "client": {
+          "id": "alpha2.test.digest",
+          "input": {
+            "format": "rgba8",
+            "from": [
+              "source",
+              "timeline"
+            ],
+            "max_size": 960,
+            "media": "video"
+          },
+          "outputs": [
+            {
+              "channels": [
+                "hi",
+                "lo"
+              ],
+              "interpolation": "hold",
+              "kind": "scalars",
+              "name": "digest"
+            }
+          ],
+          "params_schema": {
+            "type": "object"
+          },
+          "version": 1
+        }
+      },
+      "name": "digest-source-h264-bt709-copy",
+      "project": "media",
+      "request": {
+        "extractor": "alpha2.test.digest",
+        "input": {
+          "from": "source",
+          "range": {
+            "end": 40000,
+            "start": 0
+          },
+          "size": 96,
+          "source_id": "v"
+        },
+        "outputs": {
+          "digest": "frames"
+        },
+        "version": 1
+      },
+      "sha256": "ca0d507ef86a48f2e6963bddc22fa6b1b65a4e861715af19a3992f9255aa1fe8"
+    },
+    {
+      "assets": {
+        "v": "tests/corpus/hevc-hvc1.mp4"
+      },
+      "extractor": {
+        "client": {
+          "id": "alpha2.test.digest",
+          "input": {
+            "format": "rgba8",
+            "from": [
+              "source",
+              "timeline"
+            ],
+            "max_size": 960,
+            "media": "video"
+          },
+          "outputs": [
+            {
+              "channels": [
+                "hi",
+                "lo"
+              ],
+              "interpolation": "hold",
+              "kind": "scalars",
+              "name": "digest"
+            }
+          ],
+          "params_schema": {
+            "type": "object"
+          },
+          "version": 1
+        }
+      },
+      "name": "digest-source-hevc-hvc1",
+      "project": "media",
+      "request": {
+        "extractor": "alpha2.test.digest",
+        "input": {
+          "from": "source",
+          "range": {
+            "end": 40000,
+            "start": 0
+          },
+          "size": 96,
+          "source_id": "v"
+        },
+        "outputs": {
+          "digest": "frames"
+        },
+        "version": 1
+      },
+      "sha256": "0a888dad64fe9c91d9124ca957b8472547eef68eae68b026dcda15e59ecad2d9"
+    },
+    {
+      "assets": {
+        "v": "tests/corpus/rotation.mp4"
+      },
+      "extractor": {
+        "client": {
+          "id": "alpha2.test.digest",
+          "input": {
+            "format": "rgba8",
+            "from": [
+              "source",
+              "timeline"
+            ],
+            "max_size": 960,
+            "media": "video"
+          },
+          "outputs": [
+            {
+              "channels": [
+                "hi",
+                "lo"
+              ],
+              "interpolation": "hold",
+              "kind": "scalars",
+              "name": "digest"
+            }
+          ],
+          "params_schema": {
+            "type": "object"
+          },
+          "version": 1
+        }
+      },
+      "name": "digest-source-rotation",
+      "project": "media",
+      "request": {
+        "extractor": "alpha2.test.digest",
+        "input": {
+          "from": "source",
+          "range": {
+            "end": 40000,
+            "start": 0
+          },
+          "size": 96,
+          "source_id": "v"
+        },
+        "outputs": {
+          "digest": "frames"
+        },
+        "version": 1
+      },
+      "sha256": "d83f9c43779088e6f9f8792213006248563fb191d0b2c6605440422454a07bb2"
+    },
+    {
+      "assets": {
+        "v": "tests/corpus/sar-16-15.mp4"
+      },
+      "extractor": {
+        "client": {
+          "id": "alpha2.test.digest",
+          "input": {
+            "format": "rgba8",
+            "from": [
+              "source",
+              "timeline"
+            ],
+            "max_size": 960,
+            "media": "video"
+          },
+          "outputs": [
+            {
+              "channels": [
+                "hi",
+                "lo"
+              ],
+              "interpolation": "hold",
+              "kind": "scalars",
+              "name": "digest"
+            }
+          ],
+          "params_schema": {
+            "type": "object"
+          },
+          "version": 1
+        }
+      },
+      "name": "digest-source-sar-16-15",
+      "project": "media",
+      "request": {
+        "extractor": "alpha2.test.digest",
+        "input": {
+          "from": "source",
+          "range": {
+            "end": 40000,
+            "start": 0
+          },
+          "size": 96,
+          "source_id": "v"
+        },
+        "outputs": {
+          "digest": "frames"
+        },
+        "version": 1
+      },
+      "sha256": "9440bcc11b0cb90b736f571db594e4c6796a989a40fc1eb7bb7f02be3a7fd641"
+    },
+    {
+      "assets": {
+        "v": "tests/corpus/hdr-pq.mp4"
+      },
+      "extractor": {
+        "client": {
+          "id": "alpha2.test.digest",
+          "input": {
+            "format": "rgba8",
+            "from": [
+              "source",
+              "timeline"
+            ],
+            "max_size": 960,
+            "media": "video"
+          },
+          "outputs": [
+            {
+              "channels": [
+                "hi",
+                "lo"
+              ],
+              "interpolation": "hold",
+              "kind": "scalars",
+              "name": "digest"
+            }
+          ],
+          "params_schema": {
+            "type": "object"
+          },
+          "version": 1
+        }
+      },
+      "name": "digest-source-hdr-pq",
+      "project": "media",
+      "request": {
+        "extractor": "alpha2.test.digest",
+        "input": {
+          "from": "source",
+          "range": {
+            "end": 40000,
+            "start": 0
+          },
+          "size": 96,
+          "source_id": "v"
+        },
+        "outputs": {
+          "digest": "frames"
+        },
+        "version": 1
+      },
+      "sha256": "98678e3bad52d11f326340941a280927c53187e32fef0c52472886279f47abc2"
+    },
+    {
+      "assets": {
+        "v": "tests/corpus/h264-bt709-copy.mp4"
+      },
+      "extractor": {
+        "plugin": "fixture-digest"
+      },
+      "name": "plugin-digest-source-h264-bt709-copy",
+      "project": "media",
+      "request": {
+        "extractor": "alpha2.test.digest",
+        "input": {
+          "from": "source",
+          "range": {
+            "end": 40000,
+            "start": 0
+          },
+          "size": 96,
+          "source_id": "v"
+        },
+        "outputs": {
+          "digest": "frames"
+        },
+        "version": 1
+      },
+      "sha256": "ca0d507ef86a48f2e6963bddc22fa6b1b65a4e861715af19a3992f9255aa1fe8"
+    },
+    {
+      "assets": {
+        "a": "plugins/silence/tests/fixtures/speech.wav"
+      },
+      "extractor": {
+        "plugin": "silence"
+      },
+      "name": "plugin-silence-speech",
+      "project": "speech",
+      "request": {
+        "extractor": "alpha2.silence",
+        "input": {
+          "from": "source",
+          "range": {
+            "end": 1555200,
+            "start": 0
+          },
+          "source_id": "a"
+        },
+        "outputs": {
+          "silence": "quiet"
+        },
+        "version": 1
+      },
+      "sha256": "8d46260ffac6b3fabaf0113779371540b778461c5aa3223070ccc86b1d70be89"
+    },
+    {
+      "assets": {},
+      "extractor": {
+        "client": {
+          "id": "alpha2.test.digest",
+          "input": {
+            "format": "rgba8",
+            "from": [
+              "source",
+              "timeline"
+            ],
+            "max_size": 960,
+            "media": "video"
+          },
+          "outputs": [
+            {
+              "channels": [
+                "hi",
+                "lo"
+              ],
+              "interpolation": "hold",
+              "kind": "scalars",
+              "name": "digest"
+            }
+          ],
+          "params_schema": {
+            "type": "object"
+          },
+          "version": 1
+        }
+      },
+      "name": "digest-timeline-cpu",
+      "project": "generated",
+      "renderer": "cpu",
+      "request": {
+        "extractor": "alpha2.test.digest",
+        "input": {
+          "frame_rate": {
+            "den": 1,
+            "num": 30
+          },
+          "from": "timeline",
+          "range": {
+            "end": 40000,
+            "start": 0
+          },
+          "size": 64
+        },
+        "outputs": {
+          "digest": "frames"
+        },
+        "version": 1
+      },
+      "sha256": "bea8d2d6c069635167433a3fe8457a6b15e23fe4c62738523c60ff134485d5e2"
+    },
+    {
+      "assets": {},
+      "extractor": {
+        "plugin": "fixture-digest"
+      },
+      "name": "plugin-digest-timeline-cpu",
+      "project": "generated",
+      "renderer": "cpu",
+      "request": {
+        "extractor": "alpha2.test.digest",
+        "input": {
+          "frame_rate": {
+            "den": 1,
+            "num": 30
+          },
+          "from": "timeline",
+          "range": {
+            "end": 40000,
+            "start": 0
+          },
+          "size": 64
+        },
+        "outputs": {
+          "digest": "frames"
+        },
+        "version": 1
+      },
+      "sha256": "bea8d2d6c069635167433a3fe8457a6b15e23fe4c62738523c60ff134485d5e2"
+    }
+  ],
   "projects": {
+    "generated": {
+      "id": "p",
+      "name": "P",
+      "schema_version": 1,
+      "settings": {
+        "frame_rate": {
+          "den": 1,
+          "num": 30
+        },
+        "height": 180,
+        "sample_rate": 48000,
+        "width": 320
+      },
+      "sources": [
+        {
+          "generator": {
+            "paint": {
+              "color": {
+                "alpha": 1,
+                "blue": 0.8,
+                "green": 0.3,
+                "red": 0.1
+              },
+              "type": "solid"
+            },
+            "type": "fill"
+          },
+          "id": "ground",
+          "kind": "generated",
+          "locator": ""
+        },
+        {
+          "generator": {
+            "items": [
+              {
+                "center": {
+                  "mode": "constant",
+                  "value": {
+                    "x": 0.5,
+                    "y": 0.5
+                  }
+                },
+                "size": {
+                  "mode": "constant",
+                  "value": {
+                    "x": 0.4,
+                    "y": 0.3
+                  }
+                },
+                "type": "rectangle"
+              },
+              {
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "color": "#ffcc00",
+                    "type": "solid"
+                  }
+                },
+                "type": "fill"
+              }
+            ],
+            "type": "shapes"
+          },
+          "id": "shape",
+          "kind": "generated",
+          "locator": ""
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "clips": [
+              {
+                "id": "g",
+                "source_id": "ground",
+                "source_range": {
+                  "end": 40000,
+                  "start": 0
+                },
+                "timeline_range": {
+                  "end": 40000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-ground",
+            "kind": "video",
+            "name": "Ground"
+          },
+          {
+            "clips": [
+              {
+                "id": "s",
+                "source_id": "shape",
+                "source_range": {
+                  "end": 40000,
+                  "start": 0
+                },
+                "timeline_range": {
+                  "end": 40000,
+                  "start": 0
+                },
+                "visual": {
+                  "opacity": {
+                    "keyframes": [
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 0,
+                        "value": 0.1
+                      },
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 40000,
+                        "value": 1.0
+                      }
+                    ],
+                    "mode": "keyframes"
+                  },
+                  "rotation_degrees": {
+                    "keyframes": [
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 0,
+                        "value": 0.0
+                      },
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 40000,
+                        "value": 45.0
+                      }
+                    ],
+                    "mode": "keyframes"
+                  }
+                }
+              }
+            ],
+            "id": "t-shape",
+            "kind": "video",
+            "name": "Shape"
+          }
+        ]
+      }
+    },
     "kept": {
       "data": [
         {
@@ -1496,6 +2053,54 @@
             "name": "C"
           }
         ]
+      }
+    },
+    "media": {
+      "id": "p",
+      "name": "P",
+      "schema_version": 1,
+      "settings": {
+        "frame_rate": {
+          "den": 1,
+          "num": 30
+        },
+        "height": 180,
+        "sample_rate": 48000,
+        "width": 320
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": []
+      }
+    },
+    "speech": {
+      "id": "p",
+      "name": "P",
+      "schema_version": 1,
+      "settings": {
+        "frame_rate": {
+          "den": 1,
+          "num": 30
+        },
+        "height": 180,
+        "sample_rate": 48000,
+        "width": 320
+      },
+      "sources": [
+        {
+          "id": "a",
+          "kind": "audio",
+          "locator": "speech.wav"
+        }
+      ],
+      "timeline": {
+        "tracks": []
       }
     },
     "words": {

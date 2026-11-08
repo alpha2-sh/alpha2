@@ -40,6 +40,7 @@ use serde_json::{Value, json};
 mod alpha_sources;
 mod audio;
 mod conform;
+mod conformance;
 mod copy;
 mod cpu_renderer;
 #[cfg(all(target_os = "windows", feature = "hwencode"))]

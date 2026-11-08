@@ -11,11 +11,11 @@ import pytest
 import alpha2
 
 CORPUS = json.loads(
-    (Path(__file__).parents[3] / "tests" / "cases" / "data-edit-corpus.json").read_text("utf-8")
+    (Path(__file__).parents[3] / "tests" / "cases" / "surface-conformance.json").read_text("utf-8")
 )
 
 
-@pytest.mark.parametrize("case", CORPUS["cases"], ids=lambda case: case["name"])
+@pytest.mark.parametrize("case", CORPUS["edit"], ids=lambda case: case["name"])
 def test_each_case_answers_as_rust(case: dict) -> None:
     project = CORPUS["projects"][case["project"]]
     expected = case["expected"]
