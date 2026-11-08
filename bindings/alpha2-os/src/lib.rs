@@ -506,6 +506,33 @@ pub fn process_memory() -> ProcessMemory {
     }
 }
 
+/// Handles the process holds open: file descriptors on Unix, kernel handles on Windows. `None`
+/// where unavailable.
+#[must_use]
+pub fn open_handles() -> Option<u64> {
+    #[cfg(any(unix, windows))]
+    {
+        platform::open_handles()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
+    }
+}
+
+/// The soft limit on open file descriptors; `None` on Windows or where unlimited or unknown.
+#[must_use]
+pub fn open_file_limit() -> Option<u64> {
+    #[cfg(unix)]
+    {
+        platform::open_file_limit()
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 /// The calling thread's CPU work so far, comparable only with other readings on the same thread:
 /// CPU nanoseconds on Unix, cycles on Windows (`QueryThreadCycleTime`). Excludes time spent
 /// waiting for a CPU. `None` where unavailable.
@@ -594,6 +621,24 @@ mod tests {
                 .map(|earlier| started.duration_since(earlier)),
             Some(Duration::from_millis(1))
         );
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn opened_files_count_as_open_handles() {
+        let path = std::env::temp_dir().join(format!("alpha2-os-handles-{}", std::process::id()));
+        fs::write(&path, b"x").expect("write");
+        let before = open_handles().expect("open handles");
+        // Other test threads open and close handles meanwhile, so a margin absorbs them.
+        let opened = (0..64)
+            .map(|_| File::open(&path).expect("open"))
+            .collect::<Vec<_>>();
+        let during = open_handles().expect("open handles");
+        assert!(during >= before + 32, "{before} then {during}");
+        drop(opened);
+        fs::remove_file(&path).expect("remove");
+        #[cfg(unix)]
+        assert!(open_file_limit().is_none_or(|limit| limit >= during));
     }
 
     #[test]

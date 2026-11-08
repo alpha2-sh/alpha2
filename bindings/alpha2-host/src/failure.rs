@@ -258,6 +258,8 @@ pub fn classify_failure(
         "GPU_TIMEOUT" => return class("GPU_TIMEOUT", "gpu"),
         // Every session is held by other exports; it frees up when they end.
         "ENCODER_BUSY" => return class("RESOURCE_BUSY", "gpu"),
+        // Never started: the host was retiring, and another host runs it.
+        "HOST_RETIRING" => return class("HOST_EXITED", "unknown"),
         // The export's own submission stopped the GPU; another attempt on the GPU stops it again.
         "GPU_DEVICE_HUNG" => return class("DEVICE_HUNG", "gpu"),
         // With a hardware session open the stall waits on the GPU, otherwise most likely on I/O.

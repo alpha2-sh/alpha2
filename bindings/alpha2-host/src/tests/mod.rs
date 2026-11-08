@@ -119,21 +119,30 @@ fn corpus(name: &str) -> PathBuf {
 fn serve_input(
     serving: &mut Serving,
     input: &[u8],
-    answered: &mut dyn FnMut(Option<&Host>),
-) -> (Result<(), HostError>, Vec<u8>) {
+    unusable: &mut dyn FnMut(Option<&Host>) -> Option<crate::lifecycle::DrainReason>,
+) -> (Result<crate::Served, HostError>, Vec<u8>) {
     let captured = crate::serve_io::Captured::default();
     let out = captured.responder();
-    let lines = crate::serve_io::lines_of(input, &out);
-    let served = serve_requests(serving, &lines, &out, answered);
+    let lines = crate::serve_io::lines_of(input, &out, &serving.lifecycle);
+    let served = serve_requests(serving, &lines, &out, unusable);
     (served, captured.bytes())
 }
 
+/// The answers, without `state` messages.
 fn answers_of(output: Vec<u8>) -> Vec<Value> {
     String::from_utf8(output)
         .expect("UTF-8")
         .lines()
-        .map(|line| serde_json::from_str(line).expect("an answer is JSON"))
+        .map(|line| serde_json::from_str::<Value>(line).expect("an answer is JSON"))
+        .filter(|message| message["type"] != "state")
         .collect()
+}
+
+/// `serve`'s flags from `ALPHA2_TEST_SERVE_ARGS`, for a child that runs `serve`.
+fn test_serve_limits() -> crate::lifecycle::SoftLimits {
+    let args = std::env::var("ALPHA2_TEST_SERVE_ARGS").unwrap_or_default();
+    crate::lifecycle::SoftLimits::from_args(args.split_whitespace().map(str::to_owned))
+        .expect("ALPHA2_TEST_SERVE_ARGS")
 }
 
 fn no_gpu(_: VideoDecodePolicy) -> Result<Host, HostError> {

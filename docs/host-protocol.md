@@ -6,9 +6,9 @@
 
 Every message, both ways, is one JSON object on one line of UTF-8 text, and has `"protocolVersion": 1`. What the host writes is ASCII: every character past ASCII in a string is a `\uXXXX` escape (two for one outside the Basic Multilingual Plane), so a reader that decodes it in a legacy code page reads the same text.
 
-The first line the host writes, before it reads any input, is `{"protocolVersion":1,"type":"ready"}`. A host that writes nothing for long is held before it runs (a Gatekeeper check on macOS, an antivirus scan or an App Control policy on Windows, a stopped process); `@alpha2-sh/node` and the Python client end it after 30 seconds and fail with `HOST_START_TIMEOUT`. A host that dies of `SIGKILL` while its cgroup's `oom_kill` count (cgroup v2 `memory.events`, Linux) rises fails with `HOST_OOM_KILLED` in both clients.
+The first line the host writes, before it reads any input, is its `ready` state (see [Host state](#host-state)): `{"protocolVersion":1,"type":"state","state":"ready","reason":"started","details":{...}}`. A host that writes nothing for long is held before it runs (a Gatekeeper check on macOS, an antivirus scan or an App Control policy on Windows, a stopped process); `@alpha2-sh/node` and the Python client end it after 30 seconds and fail with `HOST_START_TIMEOUT`. A host that dies of `SIGKILL` while its cgroup's `oom_kill` count (cgroup v2 `memory.events`, Linux) rises fails with `HOST_OOM_KILLED` in both clients.
 
-A request has a `requestId`, a string that is not empty, and an `operation`: `capabilities`, `conform`, `export`, `still`, `compose` or `cancel`.
+A request has a `requestId`, a string that is not empty, and an `operation`: `capabilities`, `conform`, `export`, `still`, `compose`, `cancel` or `status`.
 
 ```json
 {"protocolVersion":1,"requestId":"1","operation":"capabilities"}
@@ -17,19 +17,75 @@ A request has a `requestId`, a string that is not empty, and an `operation`: `ca
 The host answers each request with one response that carries its `requestId`:
 
 ```json
-{"protocolVersion":1,"requestId":"1","ok":true,"result":{...}}
-{"protocolVersion":1,"requestId":"1","ok":false,"error":{"code":"INVALID_INPUT","message":"..."}}
+{"protocolVersion":1,"requestId":"1","ok":true,"result":{...},"hostState":"ready"}
+{"protocolVersion":1,"requestId":"1","ok":false,"error":{"code":"INVALID_INPUT","message":"..."},"hostState":"ready"}
 ```
+
+`hostState` is the host's state once the request has ended, after the checks of [Host state](#host-state).
 
 - Requests can be written before earlier ones are answered. Match each response to its request by `requestId`.
 - A request the host cannot read is answered with `"requestId": "unknown"` when it has no usable `requestId`.
 - A request line is at most 128 MiB, and the `project` in it at most 64 MiB.
 - While an export runs, the host also writes progress lines: `{"protocolVersion":1,"type":"progress","requestId":"...","phase":"frames","completed":12,"total":30}`. `phase` is `frames` while frames are encoded and `finalizing` once every frame is and the file is being completed. A line with `"restarted": true` and `completed` 0 says the export started over on the readback path, because the GPU-resident encoder rejected a frame on a device that was still usable; the result's `gpuOutputPathFallback` names the encoder, the frame and the reason. The export is finished only when its response arrives.
 - When the host cannot start its GPU device (or, in `hardware-required` decode mode, its decode device) for the first request that needs it, it writes `{"protocolVersion":1,"type":"fatal","error":{...}}` and exits; that request and the ones after it get no response. `conform` needs no GPU.
-- When the host's device is lost or a decoder or encoder thread is stuck, the host exits after its response; the requests after it get no response. Start a new process for them.
+- When the host's device is lost or a decoder or encoder thread is stuck, the host goes `draining`, answers the requests it has read but not started with `HOST_RETIRING`, and exits.
 - The end of standard input means no more requests: the host answers every request it has read, then exits. A client that may cancel keeps standard input open until it has its answer.
 
 Standard error carries human-readable diagnostics, not protocol messages.
+
+## Host state
+
+A host is `ready`, taking requests, or `draining`, taking none and about to exit. It sends a `state` message when it starts and whenever its state changes:
+
+```json
+{"protocolVersion":1,"type":"state","state":"draining","reason":"memory","details":{...}}
+```
+
+The host decides when a new process would serve better than itself and drains; the client only follows. After each request it compares itself with its soft limits, set by `serve` flags (`0` turns a limit off):
+
+| Reason | Flag | Default | The host drains when |
+| --- | --- | --- | --- |
+| `memory` | `--max-memory-share <fraction>` | `0.5` | its footprint (the memory the operating system charges it: `RssAnon + RssShmem` on Linux, the physical footprint on macOS, private bytes on Windows) is over this share of the memory it may use (the lower of its cgroup or job limit and the physical memory) |
+| `memory-growth` | `--max-memory-growth <bytes>` | 1 GiB | its footprint grew by more than this since its first request ended |
+| `requests` | `--max-requests <count>` | `1000` | it has answered this many requests |
+| `handles` | `--max-handles <count>` | `4096`, and at most half the open-file limit on Linux and macOS | it holds more open handles (file descriptors) than this |
+| `degraded` | none | | it has a degradation a new process would not have, such as a hardware encoder it turned off for the rest of its life; `details.degradations` names it |
+| `idle` | `--idle-timeout <ms>` | `120000` | it has run nothing for this long |
+
+It also drains, with no limit to compare, when its GPU device is lost (`device-lost`), when a decoder or encoder thread is stuck and abandoned (`threads-abandoned`), when it is asked to terminate (`terminating`) and when its input ends (`input-closed`). The memory watchdog of `export` still stops an export that runs out of memory while it runs; the soft limits are only compared between requests.
+
+A response written when the request moved the host to `draining` carries `"hostState": "draining"`, after the `state` message. A request the host reads while `draining`, or has read but not started when it drains, is answered `HOST_RETIRING` without running; send it to another host. A draining host exits once no request runs and its input has ended, or 5 seconds after it started draining; after `device-lost` and `threads-abandoned` it exits as soon as it has answered.
+
+`details` is for observation, and may gain fields:
+
+| Field | |
+| --- | --- |
+| `activity` | `idle` or `busy` |
+| `requestsServed` | requests answered so far |
+| `memory` | `{ "residentBytes", "footprintBytes", "baselineBytes", "capacityBytes" }`: now, after the first request, and what the host may use; `null` where unknown |
+| `openHandles` | open handles (file descriptors), `null` where unknown |
+| `renderer` | `gpu`, `cpu`, or `null` before a request needed one |
+| `rendererFallback` | why the host renders on the CPU, when `auto` chose it |
+| `hardwareDecodeFallback` | why `auto` decode runs in software |
+| `degradations` | what this process has lost that a new one would not have |
+| `limits` | `{ "maxMemoryShare", "maxMemoryGrowthBytes", "maxRequests", "maxHandles", "idleTimeoutMs" }`, `null` for one turned off |
+
+## `status`
+
+Takes no other fields, and is answered at once, whatever the host is doing, as `cancel` is: `result` is `{ "state", "reason", "details" }`, as the last `state` message would say now. It is for diagnostics and monitoring; a client keeping hosts does not need it.
+
+## Keeping hosts
+
+Starting a host costs a process, a GPU device and its probes, so a client keeps hosts and sends them one request after another. `@alpha2-sh/node` and the Python client follow these rules, which are all a client in another language needs:
+
+- Run at most `concurrency` hosts, and send each one request at a time.
+- Send a request to an idle `ready` host. With none, start a new host, which counts as started once its `ready` message arrives; at the limit, end an idle host of other modes to make room, or wait for a host to come free.
+- The renderer and decode modes are read when the host starts (`ALPHA2_RENDERER`, `ALPHA2_VIDEO_DECODE`), so hosts are kept apart by them.
+- Stop sending to a host when it reports `draining`, in a `state` message or a response's `hostState`, or when it exits. Close its standard input once it runs nothing.
+- Send a request answered `HOST_RETIRING` again, to another host.
+- A request whose host exits before answering fails with what the exit says (`HOST_EXITED`, `HOST_OOM_KILLED`, ...) and is never sent again: an export writes files, and only its caller knows whether running it again is safe.
+
+Everything else stays as it is for one process: the start timeout, the classification of an exit, and cancelling. The client has no memory checks, health polls or idle timers of its own.
 
 ## `capabilities`
 
@@ -184,6 +240,7 @@ A `cancel` without a `target` is answered `INVALID_REQUEST`. The host reads canc
 | `OUTPUT_PUBLISH_FAILED` | The output was rendered in full but could not be moved into place; `details.keptPath` names where the finished file was kept. |
 | `CANCELLED` | The request was cancelled: by a `cancel` line, before or while it ran, or by a termination signal. |
 | `RESOURCE_LIMIT` | A budget or limit refused the work, such as a memory budget too small for the export; `failure.stage` is `machine-memory` or `memory-limit-reached` when the machine's memory refused it (see `export`). |
+| `HOST_RETIRING` | The host is `draining` and did not start the request; send it to another host. |
 | `INTERNAL` | A defect in the host failed the request. The host answers the requests after it. |
 | `ALPHA2_ERROR` | A failure no other code describes. |
 

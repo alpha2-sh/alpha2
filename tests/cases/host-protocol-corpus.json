@@ -45,7 +45,8 @@
               ]
             }
           }
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -100,7 +101,8 @@
             "stagedLocally": false,
             "retries": 0
           }
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -145,7 +147,8 @@
           "details": {
             "keptPath": "/staging/output.a2kept.mp4"
           }
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -166,7 +169,8 @@
         "error": {
           "code": "UNSUPPORTED_PROTOCOL",
           "message": "unsupported protocol major 2; this host supports 1"
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -464,7 +468,8 @@
         "ok": true,
         "result": {
           "frames": 30
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -826,7 +831,8 @@
             "renderMs": 2.25,
             "writeMs": 1.5
           }
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
@@ -2217,12 +2223,13 @@
         "result": {
           "target": "export-1",
           "state": "running"
-        }
+        },
+        "hostState": "ready"
       }
     ]
   },
   {
-    "name": "a cancelled export is answered CANCELLED after the ready line and its progress",
+    "name": "a cancelled export is answered CANCELLED after the ready state and its progress",
     "requestValid": true,
     "request": {
       "protocolVersion": 1,
@@ -2247,7 +2254,31 @@
     "messages": [
       {
         "protocolVersion": 1,
-        "type": "ready"
+        "type": "state",
+        "state": "ready",
+        "reason": "started",
+        "details": {
+          "activity": "idle",
+          "requestsServed": 0,
+          "memory": {
+            "residentBytes": 52428800,
+            "footprintBytes": 41943040,
+            "baselineBytes": null,
+            "capacityBytes": 17179869184
+          },
+          "openHandles": 12,
+          "renderer": null,
+          "rendererFallback": null,
+          "hardwareDecodeFallback": null,
+          "degradations": [],
+          "limits": {
+            "maxMemoryShare": 0.5,
+            "maxMemoryGrowthBytes": 1073741824,
+            "maxRequests": 1000,
+            "maxHandles": 4096,
+            "idleTimeoutMs": 120000
+          }
+        }
       },
       {
         "protocolVersion": 1,
@@ -2264,7 +2295,100 @@
         "error": {
           "code": "CANCELLED",
           "message": "native export was cancelled: the client cancelled request export-cancelled"
+        },
+        "hostState": "ready"
+      }
+    ]
+  },
+  {
+    "name": "a request a draining host did not start is answered HOST_RETIRING",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "capabilities",
+      "requestId": "caps-late"
+    },
+    "messages": [
+      {
+        "protocolVersion": 1,
+        "type": "state",
+        "state": "draining",
+        "reason": "requests",
+        "details": {
+          "activity": "idle",
+          "requestsServed": 1000,
+          "memory": {
+            "residentBytes": 52428800,
+            "footprintBytes": 41943040,
+            "baselineBytes": 41943040,
+            "capacityBytes": 17179869184
+          },
+          "openHandles": 12,
+          "renderer": "gpu",
+          "rendererFallback": null,
+          "hardwareDecodeFallback": null,
+          "degradations": [],
+          "limits": {
+            "maxMemoryShare": 0.5,
+            "maxMemoryGrowthBytes": 1073741824,
+            "maxRequests": 1000,
+            "maxHandles": 4096,
+            "idleTimeoutMs": 120000
+          }
         }
+      },
+      {
+        "protocolVersion": 1,
+        "requestId": "caps-late",
+        "ok": false,
+        "error": {
+          "code": "HOST_RETIRING",
+          "message": "the host is draining (requests) and did not start the request; send it to another host"
+        },
+        "hostState": "draining"
+      }
+    ]
+  },
+  {
+    "name": "a status request is answered with the host state",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "status",
+      "requestId": "status-1"
+    },
+    "messages": [
+      {
+        "protocolVersion": 1,
+        "requestId": "status-1",
+        "ok": true,
+        "result": {
+          "state": "ready",
+          "reason": "started",
+          "details": {
+            "activity": "busy",
+            "requestsServed": 3,
+            "memory": {
+              "residentBytes": 52428800,
+              "footprintBytes": 41943040,
+              "baselineBytes": 41943040,
+              "capacityBytes": 17179869184
+            },
+            "openHandles": 12,
+            "renderer": "gpu",
+            "rendererFallback": null,
+            "hardwareDecodeFallback": null,
+            "degradations": [],
+            "limits": {
+              "maxMemoryShare": 0.5,
+              "maxMemoryGrowthBytes": 1073741824,
+              "maxRequests": 1000,
+              "maxHandles": 4096,
+              "idleTimeoutMs": 120000
+            }
+          }
+        },
+        "hostState": "ready"
       }
     ]
   }

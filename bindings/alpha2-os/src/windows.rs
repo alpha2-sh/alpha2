@@ -281,6 +281,14 @@ pub(crate) fn process_memory() -> ProcessMemory {
     }
 }
 
+pub(crate) fn open_handles() -> Option<u64> {
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessHandleCount};
+    let mut count = 0_u32;
+    // SAFETY: the pseudo-handle is always valid and `count` outlives the call.
+    (unsafe { GetProcessHandleCount(GetCurrentProcess(), &raw mut count) } != 0)
+        .then_some(u64::from(count))
+}
+
 /// The limit is the lower of the job's process and job memory limits, when there are any.
 pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
     use windows_sys::Win32::System::JobObjects::{

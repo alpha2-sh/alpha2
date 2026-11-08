@@ -24,6 +24,7 @@
     "OUTPUT_PUBLISH_FAILED": { "code": "OUTPUT_IO_FAILED", "resource": "unknown" },
     "CANCELLED": { "code": "CANCELLED", "resource": "unknown" },
     "RESOURCE_LIMIT": { "code": "RESOURCE_LIMIT", "resource": "unknown" },
+    "HOST_RETIRING": { "code": "HOST_EXITED", "resource": "unknown" },
     "INTERNAL": { "code": "UNKNOWN", "resource": "unknown" },
     "ALPHA2_ERROR": { "code": "UNKNOWN", "resource": "unknown" }
   },

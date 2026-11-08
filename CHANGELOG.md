@@ -26,6 +26,10 @@ All notable changes to this project are documented in this file.
   and specs.
 - The compose schema lists every built-in effect with its parameter types and ranges. Schemas carry
   their alpha2.sh ids, and a core compose schema leaves out engine nodes.
+- `serve` reports its state: `ready`, or `draining` once a new process would serve better (memory,
+  memory growth, requests served, open handles, a lost device or encoder path, idle time), with
+  soft limits set by `serve` flags. Requests it did not start are answered `HOST_RETIRING`, and a
+  `status` operation reports the state at once.
 
 ### Changed
 

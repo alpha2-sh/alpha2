@@ -210,6 +210,7 @@ impl Drop for ExportCancel {
 static TERMINATIONS: Terminations = Terminations::new(exit_on_termination);
 
 fn exit_on_termination(termination: Termination) {
+    crate::lifecycle::announce_termination();
     crate::exit_unflushed(termination.exit_code());
 }
 

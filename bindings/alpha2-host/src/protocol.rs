@@ -79,6 +79,34 @@ impl ProjectJson {
     }
 }
 
+/// The `requestId` of a `status` request.
+///
+/// # Errors
+/// `UNSUPPORTED_PROTOCOL` for another protocol version, `INVALID_REQUEST` for a malformed line or
+/// an empty `requestId`.
+pub fn parse_status(line: &str) -> Result<String, HostError> {
+    let status: CancelRequest = serde_json::from_str(line)
+        .map_err(|error| HostError::new("INVALID_REQUEST", format!("invalid request: {error}")))?;
+    check_version(status.protocol_version)?;
+    if status.request_id.is_empty() {
+        return Err(HostError::new(
+            "INVALID_REQUEST",
+            "requestId must not be empty",
+        ));
+    }
+    Ok(status.request_id)
+}
+
+fn check_version(version: u64) -> Result<(), HostError> {
+    if version == u64::from(PROTOCOL_VERSION) {
+        return Ok(());
+    }
+    Err(HostError::new(
+        "UNSUPPORTED_PROTOCOL",
+        format!("unsupported protocol major {version}; this host supports {PROTOCOL_VERSION}"),
+    ))
+}
+
 #[derive(Deserialize)]
 struct CapabilitiesRequest {
     #[serde(rename = "protocolVersion")]
@@ -87,7 +115,8 @@ struct CapabilitiesRequest {
     request_id: String,
 }
 
-/// A longer line goes to the server, which refuses it. A cancel names two ids and nothing else.
+/// A longer line goes to the server, which refuses it. A cancel names two ids and nothing else, a
+/// status one.
 pub const MAX_CANCEL_LINE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -106,15 +135,7 @@ pub struct CancelRequest {
 pub fn parse_cancel(line: &str) -> Result<CancelRequest, HostError> {
     let cancel: CancelRequest = serde_json::from_str(line)
         .map_err(|error| HostError::new("INVALID_REQUEST", format!("invalid request: {error}")))?;
-    if cancel.protocol_version != u64::from(PROTOCOL_VERSION) {
-        return Err(HostError::new(
-            "UNSUPPORTED_PROTOCOL",
-            format!(
-                "unsupported protocol major {}; this host supports {PROTOCOL_VERSION}",
-                cancel.protocol_version
-            ),
-        ));
-    }
+    check_version(cancel.protocol_version)?;
     if cancel.request_id.is_empty() {
         return Err(HostError::new(
             "INVALID_REQUEST",
@@ -658,18 +679,19 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             still.check()?;
             Request::Still(Box::new(still))
         }
-        // The reader answers every cancel line it takes; one reaches here only when too long.
-        Some("cancel") => {
+        // The reader answers every cancel and status line it takes; one reaches here only when
+        // too long.
+        Some(operation @ ("cancel" | "status")) => {
             return Err(HostError::new(
                 "INVALID_REQUEST",
-                format!("a cancel line is at most {MAX_CANCEL_LINE_BYTES} bytes"),
+                format!("a {operation} line is at most {MAX_CANCEL_LINE_BYTES} bytes"),
             ));
         }
         Some(other) => {
             return Err(HostError::new(
                 "INVALID_REQUEST",
                 format!(
-                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`, `compose`, `cancel`"
+                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`, `compose`, `cancel`, `status`"
                 ),
             ));
         }
@@ -756,7 +778,7 @@ pub const HARDWARE_DECODE_STALL_MARKER: &str = "holding hardware decode sessions
 /// evidence, not from these words.
 pub const HARDWARE_ENCODE_STALL_MARKER: &str = "holding a hardware encode session";
 
-pub const PROTOCOL_CODES: [&str; 25] = [
+pub const PROTOCOL_CODES: [&str; 26] = [
     "UNSUPPORTED_PROTOCOL",
     "INVALID_REQUEST",
     "INVALID_INPUT",
@@ -780,6 +802,7 @@ pub const PROTOCOL_CODES: [&str; 25] = [
     "OUTPUT_PUBLISH_FAILED",
     "CANCELLED",
     "RESOURCE_LIMIT",
+    "HOST_RETIRING",
     "INTERNAL",
     "ALPHA2_ERROR",
 ];

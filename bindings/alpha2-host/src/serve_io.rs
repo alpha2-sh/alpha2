@@ -1,18 +1,23 @@
 //! How `serve` reads and writes its lines.
 //!
-//! The `alpha2-requests` thread owns stdin: it answers each `cancel` line at once and queues
-//! every other line for the request thread, so a cancel reaches a running export without waiting.
+//! The `alpha2-requests` thread owns stdin: it answers each `cancel` and `status` line at once and
+//! queues every other line for the request thread, so a cancel reaches a running export without
+//! waiting.
 //! Every stdout line goes through one [`Responder`], which writes it whole.
 
 use std::io::{BufRead, Write};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::PROTOCOL_VERSION;
-use crate::protocol::{HostError, MAX_CANCEL_LINE_BYTES, MAX_REQUEST_LINE_BYTES, parse_cancel};
+use crate::lifecycle::Lifecycle;
+use crate::protocol::{
+    HostError, MAX_CANCEL_LINE_BYTES, MAX_REQUEST_LINE_BYTES, parse_cancel, parse_status,
+};
 
 /// Past this the reader stops reading until a line is taken, so a cancel behind that much queued
 /// input is read late.
@@ -79,9 +84,9 @@ impl Responder {
     }
 }
 
-/// The first line `serve` writes, before anything that can take long.
-pub(crate) fn write_ready(out: &Responder) -> Result<(), HostError> {
-    out.line(&json!({ "protocolVersion": PROTOCOL_VERSION, "type": "ready" }))
+/// The first line `serve` writes, its `ready` state, before anything that can take long.
+pub(crate) fn write_ready(out: &Responder, lifecycle: &Lifecycle) -> Result<(), HostError> {
+    out.line(&lifecycle.state_message())
 }
 
 pub(crate) enum InputLine {
@@ -158,6 +163,24 @@ impl RequestLines {
         let Ok(line) = self.receiver.recv() else {
             return InputLine::End;
         };
+        self.taken(line)
+    }
+
+    /// `None` when no line arrived within `limit`.
+    pub(crate) fn next_within(&self, limit: Duration) -> Option<InputLine> {
+        match self.receiver.recv_timeout(limit) {
+            Ok(line) => Some(self.taken(line)),
+            Err(RecvTimeoutError::Timeout) => None,
+            Err(RecvTimeoutError::Disconnected) => Some(InputLine::End),
+        }
+    }
+
+    /// A line already read, without waiting for one.
+    pub(crate) fn queued(&self) -> Option<InputLine> {
+        self.receiver.try_recv().ok().map(|line| self.taken(line))
+    }
+
+    fn taken(&self, line: InputLine) -> InputLine {
         let mut queued = self
             .queued
             .bytes
@@ -169,16 +192,27 @@ impl RequestLines {
     }
 }
 
-pub(crate) fn read_requests(input: &mut impl BufRead, lines: &LineSender, out: &Responder) {
+pub(crate) fn read_requests(
+    input: &mut impl BufRead,
+    lines: &LineSender,
+    out: &Responder,
+    lifecycle: &Lifecycle,
+) {
     let mut buffer = Vec::new();
     loop {
         let line = match read_request_line(input, MAX_REQUEST_LINE_BYTES, &mut buffer) {
             Ok(RequestLine::Line(line)) => {
-                if line.len() <= MAX_CANCEL_LINE_BYTES
-                    && crate::protocol::operation_from_line(line).as_deref() == Some("cancel")
-                {
-                    let _ = out.line(&cancel_answer(line));
-                    continue;
+                if line.len() <= MAX_CANCEL_LINE_BYTES {
+                    let answer = match crate::protocol::operation_from_line(line).as_deref() {
+                        Some("cancel") => Some(cancel_answer(line)),
+                        Some("status") => Some(status_answer(line, lifecycle)),
+                        _ => None,
+                    };
+                    if let Some(mut answer) = answer {
+                        answer["hostState"] = json!(lifecycle.state().as_str());
+                        let _ = out.line(&answer);
+                        continue;
+                    }
                 }
                 InputLine::Line(line.to_owned())
             }
@@ -216,19 +250,39 @@ fn cancel_answer(line: &str) -> Value {
     }
 }
 
-pub(crate) fn start_reader(out: Arc<Responder>) -> Result<RequestLines, HostError> {
+fn status_answer(line: &str, lifecycle: &Lifecycle) -> Value {
+    match parse_status(line) {
+        Ok(request_id) => json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "requestId": request_id,
+            "ok": true,
+            "result": lifecycle.status(),
+        }),
+        Err(error) => json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "requestId": crate::protocol::request_id_from_line(line),
+            "ok": false,
+            "error": error,
+        }),
+    }
+}
+
+pub(crate) fn start_reader(
+    out: Arc<Responder>,
+    lifecycle: Arc<Lifecycle>,
+) -> Result<RequestLines, HostError> {
     let (sender, lines) = request_queue();
     std::thread::Builder::new()
         .name("alpha2-requests".to_owned())
-        .spawn(move || read_requests(&mut std::io::stdin().lock(), &sender, &out))
+        .spawn(move || read_requests(&mut std::io::stdin().lock(), &sender, &out, &lifecycle))
         .map_err(HostError::io)?;
     Ok(lines)
 }
 
 #[cfg(test)]
-pub(crate) fn lines_of(input: &[u8], out: &Responder) -> RequestLines {
+pub(crate) fn lines_of(input: &[u8], out: &Responder, lifecycle: &Lifecycle) -> RequestLines {
     let (sender, lines) = request_queue();
-    read_requests(&mut std::io::BufReader::new(input), &sender, out);
+    read_requests(&mut std::io::BufReader::new(input), &sender, out, lifecycle);
     lines
 }
 

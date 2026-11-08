@@ -652,7 +652,7 @@ fn a_malformed_made_from_is_refused_as_input() {
     let input = format!("{conform}\n");
     let mut serving = Serving::new(VideoDecodePolicy::Software);
     serving.create = no_gpu;
-    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |_| {});
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |_| None);
     let _ = served;
     let answers = answers_of(output);
     assert_eq!(answers[0]["ok"], false, "{}", answers[0]);

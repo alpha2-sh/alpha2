@@ -37,8 +37,8 @@ pub(crate) use d3d12va::probe_d3d12va_rate_control;
 #[cfg(target_os = "windows")]
 pub use d3d12va::{
     D3D12EncodeProbe, D3D12RateControlOpen, D3D12RateControlRunner, D3D12TestEncodeRunner,
-    D3D12VA_TEST_ENCODE_SIZE, d3d12va_encoder, open_d3d12va_rate_control, probe_d3d12va_encode,
-    set_d3d12va_rate_control_runner, set_d3d12va_test_encode_runner,
+    D3D12VA_TEST_ENCODE_SIZE, d3d12va_encoder, d3d12va_timeouts, open_d3d12va_rate_control,
+    probe_d3d12va_encode, set_d3d12va_rate_control_runner, set_d3d12va_test_encode_runner,
 };
 #[cfg(target_os = "macos")]
 pub use videotoolbox::{VideoToolboxEncodeProbe, probe_videotoolbox_encode};

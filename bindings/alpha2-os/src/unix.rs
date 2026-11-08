@@ -347,6 +347,33 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
     Ok(())
 }
 
+/// Counts the entries of the descriptor directory, less the one the listing itself opens.
+pub(crate) fn open_handles() -> Option<u64> {
+    let directory = if cfg!(any(target_os = "linux", target_os = "android")) {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+    let entries = std::fs::read_dir(directory).ok()?.count();
+    u64::try_from(entries.saturating_sub(1)).ok()
+}
+
+pub(crate) fn open_file_limit() -> Option<u64> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is a valid `rlimit` the call fills.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) } != 0 {
+        return None;
+    }
+    // `rlim_t` is narrower than `u64` on some 32-bit targets.
+    #[allow(clippy::useless_conversion)]
+    (limit.rlim_cur != libc::RLIM_INFINITY)
+        .then(|| u64::try_from(limit.rlim_cur).ok())
+        .flatten()
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn process_memory() -> ProcessMemory {
     let status = fs::read_to_string("/proc/self/status").unwrap_or_default();

@@ -220,7 +220,7 @@ fn serve_exits_at_the_end_of_its_input_when_its_device_never_goes_idle() {
 fn serve_with_a_hung_release() {
     crate::teardown::injected::stall_host_drops();
     let mut host = None;
-    let result = serve(&mut host);
+    let result = serve(&mut host, test_serve_limits());
     assert!(host.is_some(), "the request started no host");
     let code = conclude(result, host);
     panic!("the release returned (status {code}) although it never finishes");
@@ -347,15 +347,11 @@ fn serve_answers_oversized_requests_and_then_the_next() {
     let (served, output) = serve_input(
         &mut Serving::started(host),
         input.as_bytes(),
-        // Other tests leave decode threads behind on purpose; `serve` would exit for them.
-        &mut |_| {},
+        // Other tests leave decode threads behind on purpose; `serve` would retire for them.
+        &mut |_| None,
     );
     served.expect("serve");
-    let answers: Vec<Value> = String::from_utf8(output)
-        .expect("UTF-8")
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("an answer is JSON"))
-        .collect();
+    let answers = answers_of(output);
     assert_eq!(answers.len(), 3, "{answers:?}");
     assert_eq!(answers[0]["requestId"], "unknown");
     assert_eq!(answers[0]["error"]["code"], "INVALID_REQUEST");
@@ -408,6 +404,7 @@ fn serve_answers_conform_without_a_gpu_and_reports_a_failed_start_on_the_first_r
         let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
             assert!(host.is_none(), "conform made no host");
             answered += 1;
+            None
         });
         let error = served.expect_err("capabilities needs the GPU host");
         assert_eq!(error.code, "GPU_INIT_FAILED");
@@ -456,6 +453,7 @@ fn serve_refuses_a_composition_scale_with_a_zero_term_as_invalid_input() {
     serving.create = no_gpu;
     let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
         assert!(host.is_none(), "conform made no host");
+        None
     });
     served.expect("serve");
     let answers = answers_of(output);
@@ -495,6 +493,7 @@ fn serve_answers_each_edge_line_by_its_id_and_serves_the_rest() {
     let mut answered = 0;
     let (served, output) = serve_input(&mut Serving::started(host), input.as_slice(), &mut |_| {
         answered += 1;
+        None
     });
     served.expect("serve");
     let answers = answers_of(output);
@@ -559,7 +558,7 @@ fn a_device_wgpu_reported_lost_retires_the_host() {
 }
 
 #[test]
-#[ignore = "run by a_host_that_cannot_take_another_request_exits_after_answering"]
+#[ignore = "run by a_host_that_cannot_take_another_request_drains_and_exits_after_answering"]
 fn serve_pipelined_requests_on_an_unusable_host() {
     let _gpu = gpu_test_lock();
     let host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -586,19 +585,15 @@ fn serve_pipelined_requests_on_an_unusable_host() {
     ]
     .join("\n");
     let out = crate::serve_io::Responder::stdout();
-    let lines = crate::serve_io::lines_of(input.as_bytes(), &out);
-    serve_requests(
-        &mut Serving::started(host),
-        &lines,
-        &out,
-        &mut exit_if_unusable,
-    )
-    .expect("serve");
-    panic!("the host answered every request instead of exiting after the first");
+    let mut serving = Serving::started(host);
+    let lines = crate::serve_io::lines_of(input.as_bytes(), &out, &serving.lifecycle);
+    let served = serve_requests(&mut serving, &lines, &out, &mut unusable_reason);
+    exit_if_retired(&served);
+    panic!("the host answered every request instead of exiting after the first: {served:?}");
 }
 
 #[test]
-fn a_host_that_cannot_take_another_request_exits_after_answering() {
+fn a_host_that_cannot_take_another_request_drains_and_exits_after_answering() {
     for unusable in ["device-lost", "threads-abandoned"] {
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
             .args([
@@ -619,21 +614,30 @@ fn a_host_that_cannot_take_another_request_exits_after_answering() {
             Some(1),
             "{unusable}\n{stdout}\n{stderr}"
         );
-        let answers: Vec<Value> = stdout
+        let messages: Vec<Value> = stdout
             .lines()
             .filter_map(|line| line.find("{\"").map(|at| &line[at..]))
-            .map(|line| serde_json::from_str(line).expect("an answer is JSON"))
+            .map(|line| serde_json::from_str(line).expect("a message is JSON"))
             .collect();
-        assert_eq!(answers.len(), 1, "{unusable}\n{stdout}");
-        assert_eq!(answers[0]["requestId"], "first", "{unusable}\n{stdout}");
-        assert_eq!(answers[0]["ok"], true, "{unusable}\n{stdout}");
+        assert_eq!(messages.len(), 3, "{unusable}\n{stdout}");
+        assert_eq!(messages[0]["type"], "state", "{unusable}\n{stdout}");
+        assert_eq!(messages[0]["state"], "draining", "{unusable}\n{stdout}");
+        assert_eq!(messages[0]["reason"], unusable, "{unusable}\n{stdout}");
+        assert_eq!(messages[1]["requestId"], "first", "{unusable}\n{stdout}");
+        assert_eq!(messages[1]["ok"], true, "{unusable}\n{stdout}");
+        assert_eq!(messages[1]["hostState"], "draining", "{unusable}\n{stdout}");
+        assert_eq!(messages[2]["requestId"], "second", "{unusable}\n{stdout}");
+        assert_eq!(
+            messages[2]["error"]["code"], "HOST_RETIRING",
+            "{unusable}\n{stdout}"
+        );
     }
 }
 
 #[test]
 #[ignore = "run by an_unknown_decode_mode_is_a_fatal_invalid_input with ALPHA2_VIDEO_DECODE set"]
 fn serve_with_an_unknown_decode_mode() {
-    let error = serve(&mut None).expect_err("an unknown mode");
+    let error = serve(&mut None, test_serve_limits()).expect_err("an unknown mode");
     assert_eq!(error.code, "INVALID_INPUT");
 }
 
@@ -656,7 +660,7 @@ fn an_unknown_decode_mode_is_a_fatal_invalid_input() {
     let fatal: Value = stdout
         .lines()
         // libtest writes the test's name on the same line before the JSON.
-        .filter(|line| !line.contains(r#""type":"ready""#))
+        .filter(|line| !line.contains(r#""type":"state""#))
         .find_map(|line| line.find("{\"").map(|at| &line[at..]))
         .map_or_else(
             || panic!("no fatal notification: {stdout}"),
@@ -692,13 +696,10 @@ fn a_refused_export_and_a_failed_start_carry_a_failure_report() {
         r#"{"protocolVersion":1,"requestId":"next","operation":"capabilities"}"#.to_owned(),
     ];
     let input = lines.join("\n") + "\n";
-    let (served, output) = serve_input(&mut Serving::started(host), input.as_bytes(), &mut |_| {});
+    let (served, output) =
+        serve_input(&mut Serving::started(host), input.as_bytes(), &mut |_| None);
     served.expect("serve");
-    let answers: Vec<Value> = String::from_utf8(output)
-        .expect("UTF-8")
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("an answer is JSON"))
-        .collect();
+    let answers = answers_of(output);
     assert_eq!(answers.len(), lines.len(), "{answers:?}");
     for (answer, code) in answers.iter().zip([
         Some("INVALID_REQUEST"),
@@ -1035,6 +1036,13 @@ fn shared_rust_and_node_protocol_corpus_agrees() {
                 fixture["requestValid"].as_bool() == Some(true),
                 "{name}: {cancel:?}"
             );
+        } else if fixture["request"]["operation"] == "status" {
+            let status = crate::protocol::parse_status(&line);
+            assert_eq!(
+                status.is_ok(),
+                fixture["requestValid"].as_bool() == Some(true),
+                "{name}: {status:?}"
+            );
         } else if fixture["requestValid"].as_bool() == Some(true) {
             let request = parse_request(&line).unwrap_or_else(|error| panic!("{name}: {error:?}"));
             assert_eq!(request.protocol_version(), PROTOCOL_VERSION, "{name}");
@@ -1056,12 +1064,19 @@ fn shared_rust_and_node_protocol_corpus_agrees() {
                 Some(u64::from(PROTOCOL_VERSION)),
                 "{name}"
             );
-            if message["type"] == "ready" {
-                assert_eq!(
-                    message.as_object().map(serde_json::Map::len),
-                    Some(2),
+            if message.get("ok").is_some() {
+                assert!(
+                    ["ready", "draining"].contains(&message["hostState"].as_str().unwrap_or("")),
                     "{name}"
                 );
+            }
+            if message["type"] == "state" {
+                assert!(
+                    ["ready", "draining"].contains(&message["state"].as_str().unwrap_or("")),
+                    "{name}"
+                );
+                assert!(message["reason"].as_str().is_some(), "{name}");
+                assert!(message["details"]["limits"].is_object(), "{name}");
             } else if message["type"] == "progress" {
                 assert!(message["completed"].as_u64().is_some(), "{name}");
                 assert!(message["total"].as_u64().is_some(), "{name}");
@@ -1562,7 +1577,7 @@ fn serve_standard_input() {
             .with(|slow| slow.set(Some(Duration::from_millis(milliseconds))));
     }
     let mut host = None;
-    serve(&mut host).expect("serve");
+    serve(&mut host, test_serve_limits()).expect("serve");
 }
 
 const SERVE_CHILD: &str = "tests::requests::serve_standard_input";
@@ -1573,7 +1588,10 @@ const SERVE_CHILD: &str = "tests::requests::serve_standard_input";
 fn serve_writes_ready_before_reading_input() {
     let serving = ServeChild::start(SERVE_CHILD, &[]);
     let ready = serving.message(Duration::from_secs(30));
-    assert_eq!(ready, json!({"protocolVersion": 1, "type": "ready"}));
+    assert_eq!(ready["type"], "state", "{ready}");
+    assert_eq!(ready["state"], "ready", "{ready}");
+    assert_eq!(ready["reason"], "started", "{ready}");
+    assert_eq!(ready["details"]["requestsServed"], 0, "{ready}");
     assert_eq!(serving.finish(), Some(0));
 }
 
@@ -1584,12 +1602,143 @@ fn the_end_of_input_finishes_queued_requests_before_exiting() {
     serving.write(r#"{"protocolVersion":1,"requestId":"one","operation":"capabilities"}"#);
     serving.write(r#"{"protocolVersion":1,"requestId":"two","operation":"capabilities"}"#);
     drop(serving.stdin.take());
-    assert_eq!(serving.message(Duration::from_secs(30))["type"], "ready");
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
     for id in ["one", "two"] {
         let answer = serving.message(Duration::from_secs(60));
         assert_eq!(answer["requestId"], id, "{answer}");
         assert_eq!(answer["ok"], true, "{answer}");
     }
+    assert_eq!(serving.finish(), Some(0));
+}
+
+const TEMPLATES: &str =
+    r#"{"protocolVersion":1,"requestId":"REQUEST","operation":"compose","action":"templates"}"#;
+
+fn templates(id: &str) -> String {
+    TEMPLATES.replace("REQUEST", id)
+}
+
+#[test]
+fn each_soft_limit_drains_the_host_and_later_requests_are_retired() {
+    for (flags, reason) in [
+        ("--max-requests 1", "requests"),
+        ("--max-memory-share 0.000001", "memory"),
+        ("--max-handles 1", "handles"),
+    ] {
+        let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SERVE_ARGS", flags)]);
+        assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+        serving.write(&templates("first"));
+        serving.write(&templates("second"));
+        let state = serving.message(Duration::from_secs(30));
+        assert_eq!(state["type"], "state", "{flags}: {state}");
+        assert_eq!(state["state"], "draining", "{flags}: {state}");
+        assert_eq!(state["reason"], reason, "{flags}: {state}");
+        assert_eq!(state["details"]["requestsServed"], 1, "{flags}: {state}");
+        let first = serving.message(Duration::from_secs(30));
+        assert_eq!(first["requestId"], "first", "{flags}: {first}");
+        assert_eq!(first["ok"], true, "{flags}: {first}");
+        assert_eq!(first["hostState"], "draining", "{flags}: {first}");
+        let second = serving.message(Duration::from_secs(30));
+        assert_eq!(second["requestId"], "second", "{flags}: {second}");
+        assert_eq!(
+            second["error"]["code"], "HOST_RETIRING",
+            "{flags}: {second}"
+        );
+        assert_eq!(second["hostState"], "draining", "{flags}: {second}");
+        assert_eq!(serving.finish(), Some(0), "{flags}");
+    }
+}
+
+#[test]
+fn an_idle_host_drains_and_exits_on_its_own() {
+    let serving = ServeChild::start(
+        SERVE_CHILD,
+        &[("ALPHA2_TEST_SERVE_ARGS", "--idle-timeout 100")],
+    );
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    let state = serving.message(Duration::from_secs(30));
+    assert_eq!(state["state"], "draining", "{state}");
+    assert_eq!(state["reason"], "idle", "{state}");
+    assert_eq!(state["details"]["activity"], "idle", "{state}");
+    let mut serving = serving;
+    serving.write(&templates("late"));
+    let late = serving.message(Duration::from_secs(30));
+    assert_eq!(late["requestId"], "late", "{late}");
+    assert_eq!(late["error"]["code"], "HOST_RETIRING", "{late}");
+    let started = Instant::now();
+    let child = &mut serving.child;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("child status") {
+            break status;
+        }
+        assert!(
+            started.elapsed() < crate::lifecycle::DRAIN_GRACE + Duration::from_secs(30),
+            "a draining host with open input outlived its grace"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.code(), Some(0));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_termination_while_idle_reports_draining_before_the_exit() {
+    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    let killed = std::process::Command::new("kill")
+        .args(["-TERM", &serving.child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(killed.success());
+    let state = serving.message(Duration::from_secs(30));
+    assert_eq!(state["state"], "draining", "{state}");
+    assert_eq!(state["reason"], "terminating", "{state}");
+    drop(serving.stdin.take());
+    assert_eq!(serving.child.wait().expect("exit").code(), Some(143));
+}
+
+#[test]
+fn status_answers_at_once_while_an_export_runs() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("status-line");
+    let output = directory.join("busy.mp4");
+    let end = 4 * alpha2_time::TICKS_PER_SECOND;
+    let export = json!({
+        "protocolVersion": 1, "operation": "export", "requestId": "long",
+        "project": {
+            "schema_version": 1, "id": "cancel", "name": "Cancel",
+            "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": end},
+                "source_range": {"start": 0, "end": end}
+            }]}]}
+        },
+        "assets": {"video": corpus("h264-long-gop.mp4")},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "output": output
+    });
+    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SLOW_ENCODE_MS", "100")]);
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    serving.write(&export.to_string());
+    let progress = serving.message(Duration::from_secs(60));
+    assert_eq!(progress["type"], "progress", "{progress}");
+    serving.write(r#"{"protocolVersion":1,"requestId":"status","operation":"status"}"#);
+    let status = std::iter::repeat_with(|| serving.message(Duration::from_secs(60)))
+        .find(|message| message["type"] != "progress")
+        .expect("an answer");
+    assert_eq!(status["requestId"], "status", "{status}");
+    assert_eq!(status["hostState"], "ready", "{status}");
+    assert_eq!(status["result"]["state"], "ready", "{status}");
+    assert_eq!(status["result"]["details"]["activity"], "busy", "{status}");
+    assert_eq!(status["result"]["details"]["renderer"], "gpu", "{status}");
+    serving.write(
+        r#"{"protocolVersion":1,"requestId":"long:cancel","operation":"cancel","target":"long"}"#,
+    );
     assert_eq!(serving.finish(), Some(0));
 }
 
@@ -1620,7 +1769,7 @@ fn a_cancel_line_stops_the_running_export_and_the_host_serves_the_next_request()
     });
     // 120 frames at 100 ms each: far longer than the cancel takes to arrive.
     let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SLOW_ENCODE_MS", "100")]);
-    assert_eq!(serving.message(Duration::from_secs(30))["type"], "ready");
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
     serving.write(&export.to_string());
     let progress = serving.message(Duration::from_secs(60));
     assert_eq!(progress["type"], "progress", "{progress}");
@@ -1637,7 +1786,7 @@ fn a_cancel_line_stops_the_running_export_and_the_host_serves_the_next_request()
         answers[0],
         json!({
             "protocolVersion": 1, "requestId": "long:cancel", "ok": true,
-            "result": {"target": "long", "state": "running"}
+            "result": {"target": "long", "state": "running"}, "hostState": "ready"
         })
     );
     assert_eq!(answers[1]["requestId"], "long", "{}", answers[1]);
@@ -1676,6 +1825,7 @@ fn a_cancel_for_a_request_not_yet_read_answers_it_cancelled_without_running_it()
     serving.create = no_gpu;
     let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
         assert!(host.is_none(), "a cancelled request made no host");
+        None
     });
     served.expect("serve");
     let answers = answers_of(output);
@@ -1697,7 +1847,7 @@ fn a_cancel_without_a_target_is_an_invalid_request() {
     .join("\n");
     let mut serving = Serving::new(VideoDecodePolicy::Software);
     serving.create = no_gpu;
-    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |_| {});
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |_| None);
     served.expect("serve");
     let summary: Vec<(Value, Value)> = answers_of(output)
         .iter()

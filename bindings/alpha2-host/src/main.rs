@@ -4,21 +4,24 @@
 //!
 //! `alpha2-host serve` exchanges one UTF-8 JSON object per line over stdin and stdout; its output
 //! is ASCII, with other characters escaped as `\uXXXX`. Every message contains
-//! `protocolVersion: 1`. The first line `serve` writes is `{protocolVersion, type: "ready"}`,
-//! before reading input; a client may treat its absence within a bound as a start failure.
+//! `protocolVersion: 1`. The first line `serve` writes is its `ready` state, before reading input;
+//! a client may treat its absence within a bound as a start failure. The host reports
+//! `{type: "state", state: "draining", reason}` when a new process would serve better
+//! ([`lifecycle`]), and answers what it did not start `HOST_RETIRING`.
 //!
 //! Requests carry a caller-unique `requestId` and an `operation`: `capabilities`, `conform` (which
 //! media each source would read, without rendering), `export`, `still` (frames to PNG, as an
-//! export draws them) or `cancel`. Responses are `{protocolVersion, requestId, ok: true, result}`
-//! or `{protocolVersion, requestId, ok: false, error: {code, message}}`. During an export the host
-//! may emit `{protocolVersion, type: "progress", requestId, phase, completed, total}`, with `phase`
-//! `frames` or, once every frame is encoded and the output is closing, `finalizing`. A failed
-//! export's error also carries `failure`: its class, step, frame, and diagnostics.
+//! export draws them), `compose`, `cancel` or `status`. Responses are
+//! `{protocolVersion, requestId, ok: true, result, hostState}` or
+//! `{protocolVersion, requestId, ok: false, error: {code, message}, hostState}`. During an export
+//! the host may emit `{protocolVersion, type: "progress", requestId, phase, completed, total}`,
+//! with `phase` `frames` or, once every frame is encoded and the output is closing, `finalizing`.
+//! A failed export's error also carries `failure`: its class, step, frame, and diagnostics.
 //!
 //! Requests may be pipelined and must be correlated only by `requestId`; this executable runs them
 //! serially, but clients must not rely on response order. A host whose worker threads are stuck or
-//! whose device is lost exits after its answer, leaving later requests unanswered. End of stdin
-//! means no more requests: the host answers what it has read and exits.
+//! whose device is lost drains and exits after its answer. End of stdin means no more requests:
+//! the host answers what it has read and exits.
 //!
 //! `{protocolVersion, requestId, operation: "cancel", target}` is answered at once with
 //! `result: {target, state}`: `running` when `target` is being handled (an export stops, removes
@@ -60,6 +63,7 @@ mod gpu_export;
 mod gpu_output;
 mod heartbeat;
 mod host;
+mod lifecycle;
 mod media;
 mod memory;
 mod metrics;
@@ -93,6 +97,7 @@ use std::time::Duration;
 use crate::cli::{conform_cli, export_cli, usage};
 use crate::config::VideoDecodePolicy;
 use crate::host::Host;
+use crate::lifecycle::{DrainReason, Lifecycle, SoftLimits};
 use crate::protocol::{HostError, operation_from_line, parse_request, request_id_from_line};
 use crate::serve_io::{InputLine, RequestLines, Responder};
 #[cfg(test)]
@@ -219,16 +224,6 @@ fn exit_if_worker_threads_abandoned(code: u8) {
     exit_now(code);
 }
 
-fn exit_if_gpu_lost(host: &Host) {
-    let Some(reason) = gpu_unusable(host) else {
-        return;
-    };
-    alpha2_os::diagnostic!(
-        "alpha2-host: {reason}; exiting so that the next request gets a new process"
-    );
-    exit_now(1);
-}
-
 /// The device was found unable to run work (lost, or completing work without running it), or
 /// `wgpu` reported it lost.
 ///
@@ -245,14 +240,24 @@ fn gpu_unusable(host: &Host) -> Option<String> {
         .then(|| "the GPU device was lost".to_owned())
 }
 
-/// A host with stuck workers or an unusable device cannot take another request, so the process
-/// exits and unread requests go unanswered.
-fn exit_if_unusable(host: Option<&Host>) {
-    exit_if_worker_threads_abandoned(
-        termination::requested().map_or(1, alpha2_os::Termination::exit_code),
+/// A host with stuck workers or an unusable device cannot take another request.
+fn unusable_reason(host: Option<&Host>) -> Option<DrainReason> {
+    if heartbeat::worker_threads_abandoned() {
+        return Some(DrainReason::ThreadsAbandoned);
+    }
+    let reason = gpu_unusable(host?)?;
+    alpha2_os::diagnostic!(
+        "alpha2-host: {reason}; retiring so that the next request gets a new process"
     );
-    if let Some(host) = host {
-        exit_if_gpu_lost(host);
+    Some(DrainReason::DeviceLost)
+}
+
+/// Exits without handlers once a host that cannot take another request has answered.
+fn exit_if_retired(served: &Result<Served, HostError>) {
+    if let Ok(Served::Drained(reason)) = served
+        && reason.exits_at_once()
+    {
+        exit_now(termination::requested().map_or(1, alpha2_os::Termination::exit_code));
     }
 }
 
@@ -280,10 +285,9 @@ fn run(host: &mut Option<Host>) -> Result<(), HostError> {
     let mut args = utf8_arguments(env::args_os().skip(1))?.into_iter();
     match args.next().as_deref() {
         Some("serve") => {
-            if args.next().is_some() {
-                return Err(HostError::invalid_input(usage()));
-            }
-            serve(host)
+            let limits = SoftLimits::from_args(args)
+                .map_err(|error| HostError::invalid_input(format!("{error}\n{}", usage())))?;
+            serve(host, limits)
         }
         Some("export") => export_cli(args.collect(), host),
         Some("conform") => conform_cli(args.collect()),
@@ -1317,16 +1321,18 @@ fn install_termination() {
 /// The CPU renderer reuses its frame and band buffers, so the cap does not slow it.
 const SERVE_HEAP_ARENAS: u16 = 2;
 
-fn serve(host: &mut Option<Host>) -> Result<(), HostError> {
+fn serve(host: &mut Option<Host>, limits: SoftLimits) -> Result<(), HostError> {
     alpha2_os::limit_heap_arenas(SERVE_HEAP_ARENAS);
+    let out = Arc::new(Responder::stdout());
+    let lifecycle = Arc::new(Lifecycle::new(limits));
+    lifecycle::install(&lifecycle, &out);
     install_termination();
     if let Err(error) = alpha2_os::watch_parent() {
         alpha2_os::diagnostic!(
             "alpha2-host: the exit of the process that started this host goes unnoticed: {error}"
         );
     }
-    let out = Arc::new(Responder::stdout());
-    serve_io::write_ready(&out)?;
+    serve_io::write_ready(&out, &lifecycle)?;
     let policy = match VideoDecodePolicy::from_env() {
         Ok(policy) => policy,
         Err(message) => {
@@ -1337,12 +1343,13 @@ fn serve(host: &mut Option<Host>) -> Result<(), HostError> {
     if let Err(reason) = crate::host::host_binary_digest() {
         alpha2_os::diagnostic!("alpha2-host render cache unavailable: {reason}");
     }
-    let lines = serve_io::start_reader(Arc::clone(&out))?;
-    let mut serving = Serving::new(policy);
-    let served = serve_requests(&mut serving, &lines, &out, &mut exit_if_unusable);
+    let lines = serve_io::start_reader(Arc::clone(&out), Arc::clone(&lifecycle))?;
+    let mut serving = Serving::with_lifecycle(policy, lifecycle);
+    let served = serve_requests(&mut serving, &lines, &out, &mut unusable_reason);
+    exit_if_retired(&served);
     // Released by `main` once the outcome is out.
     *host = serving.host.take();
-    served
+    served.map(|_| ())
 }
 
 fn write_fatal(error: HostError, out: &Responder) -> Result<HostError, HostError> {
@@ -1367,87 +1374,100 @@ struct Serving {
     policy: VideoDecodePolicy,
     host: Option<Host>,
     create: fn(VideoDecodePolicy) -> Result<Host, HostError>,
+    lifecycle: Arc<Lifecycle>,
 }
 
 impl Serving {
-    const fn new(policy: VideoDecodePolicy) -> Self {
+    const fn with_lifecycle(policy: VideoDecodePolicy, lifecycle: Arc<Lifecycle>) -> Self {
         Self {
             policy,
             host: None,
             create: create_host,
+            lifecycle,
         }
     }
 
+    /// With every soft limit off, so other tests' memory does not retire it.
     #[cfg(test)]
-    const fn started(host: Host) -> Self {
-        Self {
-            policy: host.decode_policy,
-            host: Some(host),
-            create: create_host,
-        }
+    fn new(policy: VideoDecodePolicy) -> Self {
+        Self::with_lifecycle(policy, Arc::new(Lifecycle::new(SoftLimits::OFF)))
+    }
+
+    #[cfg(test)]
+    fn started(host: Host) -> Self {
+        let mut serving = Self::new(host.decode_policy);
+        serving.lifecycle.set_renderer(renderer_facts(&host));
+        serving.host = Some(host);
+        serving
     }
 
     fn host(&mut self) -> Result<&mut Host, HostError> {
         match &mut self.host {
             Some(host) => Ok(host),
-            slot => Ok(slot.insert((self.create)(self.policy)?)),
+            slot => {
+                let host = slot.insert((self.create)(self.policy)?);
+                self.lifecycle.set_renderer(renderer_facts(host));
+                Ok(host)
+            }
         }
     }
 }
 
+fn renderer_facts(host: &Host) -> lifecycle::RendererFacts {
+    lifecycle::RendererFacts {
+        renderer: host.renderer.name(),
+        fallback: host.renderer_reason.clone(),
+        hardware_decode_fallback: host.hardware_decode_unavailable.clone(),
+    }
+}
+
+/// How [`serve_requests`] stopped.
+#[derive(Debug, PartialEq, Eq)]
+enum Served {
+    InputEnded,
+    Drained(DrainReason),
+}
+
 /// When the GPU host cannot be made, the `fatal` notification is written and its error returned,
 /// and that request and later ones go unanswered. A request cancelled before it started is
-/// answered `CANCELLED` without running.
+/// answered `CANCELLED` without running. After each answer the host compares itself with its soft
+/// limits and `unusable`, and once draining refuses what it has not started ([`retire`]).
 fn serve_requests(
     serving: &mut Serving,
     lines: &RequestLines,
     out: &Responder,
-    answered: &mut dyn FnMut(Option<&Host>),
-) -> Result<(), HostError> {
+    unusable: &mut dyn FnMut(Option<&Host>) -> Option<DrainReason>,
+) -> Result<Served, HostError> {
+    let lifecycle = Arc::clone(&serving.lifecycle);
     loop {
-        let envelope = match lines.next() {
-            InputLine::End => break,
-            InputLine::Line(line) if line.trim().is_empty() => continue,
-            InputLine::Line(line) => {
-                let envelope = parse_request(&line);
-                let request_id = match &envelope {
-                    Ok(request) => request.request_id().to_owned(),
-                    Err(_) => request_id_from_line(&line),
-                };
-                // A refused line answers an export unless it says it is another operation.
-                let export = envelope.is_err()
-                    && operation_from_line(&line).is_none_or(|operation| operation == "export");
-                (request_id, envelope, export)
+        let input = match lifecycle.idle_timeout() {
+            Some(limit) => lines.next_within(limit),
+            None => Some(lines.next()),
+        };
+        let Some(input) = input else {
+            lifecycle.drain(DrainReason::Idle, out)?;
+            return retire(lines, out, &lifecycle, DrainReason::Idle);
+        };
+        let envelope = match input {
+            InputLine::End => {
+                lifecycle.drain(DrainReason::InputClosed, out)?;
+                return Ok(Served::InputEnded);
             }
-            InputLine::NotUtf8 => (
-                "unknown".to_owned(),
-                Err(HostError::new(
-                    "INVALID_REQUEST",
-                    "a request line must be UTF-8 JSON",
-                )),
-                true,
-            ),
-            InputLine::TooLong(bytes) => (
-                "unknown".to_owned(),
-                Err(HostError::new(
-                    "INVALID_REQUEST",
-                    format!(
-                        "the request line is {bytes} bytes; the maximum is {}",
-                        crate::protocol::MAX_REQUEST_LINE_BYTES
-                    ),
-                )),
-                true,
-            ),
+            InputLine::Line(line) if line.trim().is_empty() => continue,
+            input => envelope_of(input),
         };
         let (request_id, envelope, refused_export) = envelope;
         let is_export = match &envelope {
             Ok(request) => matches!(request, crate::protocol::Request::Export(_)),
             Err(_) => refused_export,
         };
+        lifecycle.begin_request();
         // Cancelled while queued: answered without making a GPU host for it.
         if envelope.is_ok() && termination::terminations().take_pending_cancel(&request_id) {
-            write_answer(out, &request_id, Err(cancelled_before_start(is_export)))?;
-            answered(serving.host.as_ref());
+            let response = Err(cancelled_before_start(is_export));
+            if let Some(reason) = answer(serving, out, &request_id, response, unusable)? {
+                return retire(lines, out, &lifecycle, reason);
+            }
             continue;
         }
         let needs_host = match &envelope {
@@ -1489,29 +1509,160 @@ fn serve_requests(
             Err(error) if refused_export => Err(serving.host()?.refuse_export(error)),
             Err(error) => Err(error),
         };
-        write_answer(out, &request_id, response)?;
-        answered(serving.host.as_ref());
+        let drained = answer(serving, out, &request_id, response, unusable)?;
+        // A termination ends the process here, once the answer is out.
+        drop(guard);
+        if let Some(reason) = drained {
+            return retire(lines, out, &lifecycle, reason);
+        }
     }
-    Ok(())
+}
+
+/// A request read, or why the line is not one, with its id and whether a refusal answers an
+/// export.
+type Envelope = (String, Result<crate::protocol::Request, HostError>, bool);
+
+fn envelope_of(input: InputLine) -> Envelope {
+    match input {
+        InputLine::Line(line) => {
+            let envelope = parse_request(&line);
+            let request_id = match &envelope {
+                Ok(request) => request.request_id().to_owned(),
+                Err(_) => request_id_from_line(&line),
+            };
+            // A refused line answers an export unless it says it is another operation.
+            let export = envelope.is_err()
+                && operation_from_line(&line).is_none_or(|operation| operation == "export");
+            (request_id, envelope, export)
+        }
+        InputLine::NotUtf8 => (
+            "unknown".to_owned(),
+            Err(HostError::new(
+                "INVALID_REQUEST",
+                "a request line must be UTF-8 JSON",
+            )),
+            true,
+        ),
+        InputLine::TooLong(bytes) => (
+            "unknown".to_owned(),
+            Err(HostError::new(
+                "INVALID_REQUEST",
+                format!(
+                    "the request line is {bytes} bytes; the maximum is {}",
+                    crate::protocol::MAX_REQUEST_LINE_BYTES
+                ),
+            )),
+            true,
+        ),
+        InputLine::End => unreachable!("the end of input is no request"),
+    }
+}
+
+/// Ends the request: drains first when the host should not take another, so the answer carries
+/// the state. Returns the reason the host is draining for, if it is.
+fn answer(
+    serving: &Serving,
+    out: &Responder,
+    request_id: &str,
+    response: Result<Value, HostError>,
+    unusable: &mut dyn FnMut(Option<&Host>) -> Option<DrainReason>,
+) -> Result<Option<DrainReason>, HostError> {
+    let lifecycle = &serving.lifecycle;
+    lifecycle.end_request();
+    let reason = unusable(serving.host.as_ref())
+        .or_else(|| termination::requested().map(|_| DrainReason::Terminating))
+        .or_else(|| lifecycle.over_soft_limit());
+    if let Some(reason) = reason {
+        lifecycle.drain(reason, out)?;
+    }
+    write_answer(out, request_id, response, lifecycle)?;
+    Ok(lifecycle.draining_since().map(|(reason, _)| reason))
+}
+
+/// Answers `HOST_RETIRING` to every request read but not started, and to those that arrive within
+/// [`lifecycle::DRAIN_GRACE`] of draining until the input ends. A host that exits at once refuses
+/// only what it has read.
+fn retire(
+    lines: &RequestLines,
+    out: &Responder,
+    lifecycle: &Lifecycle,
+    reason: DrainReason,
+) -> Result<Served, HostError> {
+    if reason.exits_at_once() {
+        while let Some(input) = lines.queued() {
+            if matches!(input, InputLine::End) {
+                break;
+            }
+            refuse_retiring(out, &input, reason, lifecycle)?;
+        }
+        return Ok(Served::Drained(reason));
+    }
+    let since = lifecycle
+        .draining_since()
+        .map_or_else(std::time::Instant::now, |(_, since)| since);
+    let deadline = since + lifecycle::DRAIN_GRACE;
+    loop {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        match lines.next_within(left) {
+            None | Some(InputLine::End) => return Ok(Served::Drained(reason)),
+            Some(InputLine::Line(line)) if line.trim().is_empty() => {}
+            Some(input) => refuse_retiring(out, &input, reason, lifecycle)?,
+        }
+    }
+}
+
+fn refuse_retiring(
+    out: &Responder,
+    input: &InputLine,
+    reason: DrainReason,
+    lifecycle: &Lifecycle,
+) -> Result<(), HostError> {
+    let (request_id, export) = match input {
+        InputLine::Line(line) => (
+            request_id_from_line(line),
+            operation_from_line(line).as_deref() == Some("export"),
+        ),
+        InputLine::TooLong(_) | InputLine::NotUtf8 | InputLine::End => {
+            ("unknown".to_owned(), false)
+        }
+    };
+    let error = HostError::new(
+        "HOST_RETIRING",
+        format!(
+            "the host is draining ({}) and did not start the request; send it to another host",
+            reason.as_str()
+        ),
+    );
+    let error = if export {
+        let failure = crate::failure::startup_failure_json(error.code, &error.message, None);
+        error.with_failure(failure)
+    } else {
+        error
+    };
+    write_answer(out, &request_id, Err(error), lifecycle)
 }
 
 fn write_answer(
     out: &Responder,
     request_id: &str,
     response: Result<Value, HostError>,
+    lifecycle: &Lifecycle,
 ) -> Result<(), HostError> {
+    let host_state = lifecycle.state().as_str();
     out.line(&match response {
         Ok(value) => json!({
             "protocolVersion": PROTOCOL_VERSION,
             "requestId": request_id,
             "ok": true,
             "result": value,
+            "hostState": host_state,
         }),
         Err(error) => json!({
             "protocolVersion": PROTOCOL_VERSION,
             "requestId": request_id,
             "ok": false,
             "error": error,
+            "hostState": host_state,
         }),
     })
 }
