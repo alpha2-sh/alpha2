@@ -23,6 +23,8 @@ pub mod encode_watch;
 #[cfg(feature = "engine")]
 pub mod export;
 pub mod export_policy;
+#[cfg(feature = "engine")]
+pub mod extract;
 pub mod host_frames;
 pub mod parameter_sets;
 pub mod partial;

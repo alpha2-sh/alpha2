@@ -26,7 +26,7 @@ pub use descriptor::{
     MAX_EXTRACTOR_PASSES, OutputSpec, Pass, RequestInput, Suggest, VideoFormat,
 };
 pub use drive::{DriveError, Emitter, Extractor, ExtractorError, PassInfo, Supplier, drive};
-pub use pixels::{delivered_size, luma8_from_rgba8};
+pub use pixels::{delivered_size, luma8_from_rgba8, mono_downmix};
 pub use session::{
     AudioInput, Delivery, Emit, ExtractSession, FrameFrom, Need, PassProgress, RequestError,
     RunContext, SessionError, Step, SuppliedAudio, SuppliedFrame, VideoInput,

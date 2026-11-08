@@ -41,6 +41,7 @@ members = [
     "tests/facade_without_wgpu",
     "tests/golden_support",
     "tests/provider_contract",
+    "tests/reader_conformance",
     "tests/render_determinism",
     "tests/scaling_support",
     "tests/test_support",
@@ -93,6 +94,7 @@ alpha2-native-gpu = { version = "0.6.0", path = "bindings/alpha2-native-gpu" }
 alpha2-os = { version = "0.6.0", path = "bindings/alpha2-os" }
 alpha2-text = { version = "0.6.0", path = "bindings/alpha2-text" }
 alpha2-backend-conformance = { path = "tests/backend_conformance" }
+alpha2-reader-conformance = { path = "tests/reader_conformance" }
 alpha2-golden-support = { path = "tests/golden_support" }
 alpha2-provider-contract = { path = "tests/provider_contract", default-features = false }
 alpha2-scaling-support = { path = "tests/scaling_support" }

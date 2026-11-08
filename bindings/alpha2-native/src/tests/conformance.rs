@@ -45,3 +45,4 @@ impl Backend for Ffmpeg {
 }
 
 conformance_tests!(ffmpeg());
+alpha2_reader_conformance::reader_conformance_tests!(ffmpeg());

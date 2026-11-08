@@ -33,3 +33,20 @@ pub fn luma8_from_rgba8(rgba: &[u8]) -> Vec<u8> {
         })
         .collect()
 }
+
+/// The mixer's mono fold of `planes`, whose speakers are `speakers`: each plane weighted by the
+/// mean of its stereo weights, summed in plane order. `None` for no planes or more than the
+/// mixer takes.
+#[must_use]
+pub fn mono_downmix(speakers: &[alpha2_media::Speaker], planes: &[Vec<f32>]) -> Option<Vec<f32>> {
+    let mix = crate::downmix::Downmix::new(speakers, alpha2_audio::ChannelLayout::Mono)?;
+    let frames = planes.first().map_or(0, Vec::len);
+    let mut out = vec![0.0_f32; frames];
+    for (plane, weight) in mix.channel(0).terms() {
+        let samples = planes.get(*plane)?;
+        for (sample, value) in out.iter_mut().zip(samples) {
+            *sample += value * weight;
+        }
+    }
+    Some(out)
+}

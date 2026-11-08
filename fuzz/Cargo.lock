@@ -96,6 +96,7 @@ dependencies = [
  "alpha2-model",
  "alpha2-time",
  "libm",
+ "serde",
 ]
 
 [[package]]
