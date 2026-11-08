@@ -209,6 +209,20 @@ Compiles compose specs and binds templates, without a GPU and without reading me
 
 `facts` describes the files a spec names (`{"media": {path: {width, height, frame_rate, duration_ticks, has_audio}}, "texts": {path: text}}`). A spec or data that does not compile or bind fails with `INVALID_INPUT`, its `details` `{path, problem}` naming where in the spec, template or data (`spec.body.children[2].path`, `data.title`).
 
+## `edit`
+
+Applies one edit operation to a project, without a GPU and without reading media; the same function as `alpha2.edit.apply` in Python, `applyEdit` in `alpha2/apply-edit` in the browser and `applyEdit` in the mobile library. Fields: `project` and `edit`, the operation:
+
+| `op` | Fields |
+| --- | --- |
+| `remove_ranges` | `ranges` (`{"data": id}` of an `intervals` data set, or `{"list": [{start, end}], "anchor": {...}}`), `target` (`{"track": id}` or `{"clips": [id]}`), `ripple` (`none`, `track`, `timeline`; default `timeline`), `invert` (`false`), `padding` (ticks, `0`), `min_duration` (ticks, `0`) |
+| `split_at` | `times` (`{"data": id}`, the starts of an `intervals` data set, or `{"list": [ticks], "anchor": {...}}`), `target` |
+| `bake` | `targets`: `{clip, property}`, `{composition, node, property}` or `{track, property: "captions"}`, with lint property paths |
+
+Every kept moment renders as before: split clips continue their source and time map, timeline keyframes and timeline-anchored data are cut and shifted, captions are trimmed, and transitions whose cut is removed are removed.
+
+The result is `{projectJson, report}`. `projectJson` is the edited project as the engine's canonical text, the same bytes on every surface; `report` has `removed` (timeline ranges, in the old timeline's time), `moved` (`{from, to}` ranges) and `created` (clip ids). A refusal fails with `INVALID_INPUT`, its `details` `{refusal}` naming why: `invalid_project`, `invalid_request`, `unknown_data`, `wrong_kind`, `unknown_target`, `empty_target`, `missing_anchor`, `invalid_range`, `nothing_to_bake` or `correction_not_bakeable`. An edited project that fails validation is a defect and fails with `INTERNAL` (`invalid_result`).
+
 ## `extract`
 
 Runs an extractor over a source or the timeline and answers with the data sets it made, validated as the project validates data. The extractor is the client's own, which sees the input step by step and sends its values back, or a [plugin](plugin-abi.md) the host fetches and runs itself, so frames never cross the pipe. Any language can be a client this way: `@alpha2-sh/node` has `extract(request, extractor)` and the Python client `HostClient.extract(project, request, extractor)`; both take a plugin instead of an extractor.

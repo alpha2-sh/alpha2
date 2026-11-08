@@ -13,6 +13,7 @@ __all__ = [
     "Alpha2AbortError",
     "Alpha2ComposeError",
     "Alpha2ConformError",
+    "Alpha2EditError",
     "Alpha2GpuInitializationError",
     "Alpha2HostError",
     "Alpha2HostInstallError",
@@ -251,6 +252,24 @@ class Alpha2HostInstallError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class Alpha2EditError(ValueError):
+    """An edit operation that refused (``code`` ``INVALID_INPUT``), or an edited project that failed
+    validation, which is a defect (``INTERNAL``).
+
+    ``refusal`` names why in snake case: ``invalid_project``, ``invalid_request``,
+    ``unknown_data``, ``wrong_kind``, ``unknown_target``, ``empty_target``, ``missing_anchor``,
+    ``invalid_range``, ``nothing_to_bake``, ``correction_not_bakeable`` or ``invalid_result``.
+    """
+
+    code: str
+    refusal: str
+
+    def __init__(self, message: str, code: str, refusal: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.refusal = refusal
 
 
 class Alpha2ComposeError(ValueError):

@@ -265,6 +265,7 @@ dependencies = [
  "libm",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -481,6 +482,7 @@ dependencies = [
  "alpha2-compose",
  "alpha2-container",
  "alpha2-engine",
+ "alpha2-eval",
  "alpha2-extensions",
  "alpha2-gpu",
  "alpha2-host-core",
@@ -597,6 +599,7 @@ name = "alpha2-python"
 version = "0.6.0"
 dependencies = [
  "alpha2-compose",
+ "alpha2-eval",
  "alpha2-layout",
  "alpha2-media",
  "alpha2-model",

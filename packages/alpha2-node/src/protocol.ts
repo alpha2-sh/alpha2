@@ -15,6 +15,7 @@ export function createRequest(
     | "conform"
     | "still"
     | "compose"
+    | "edit"
     | "extract"
     | "extract.ack"
     | "cancel"

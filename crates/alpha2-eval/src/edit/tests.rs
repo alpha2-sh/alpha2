@@ -25,7 +25,7 @@ fn keyed(times: &[(i64, f64)], curve: &Value) -> Value {
 
 /// One clip of each time map on its own track, with keyframes, a mask, a transition, captions,
 /// an audio clip and a timeline-anchored binding.
-fn corpus() -> Value {
+pub(super) fn corpus() -> Value {
     let linear = json!({ "type": "linear" });
     let eased = json!({ "type": "cubic_bezier", "x1": 0.42, "y1": 0.0, "x2": 0.58, "y2": 1.0 });
     let mut forward = clip("fwd", "v", (0, 60), (10, 70), &json!({ "type": "forward" }));

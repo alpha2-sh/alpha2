@@ -230,6 +230,27 @@ with alpha2.HostClient() as client:
   sandboxed; `"allow_native": True` lets a native artifact run with the host's rights. A plugin
   that is refused, does not load, traps or runs past its limits fails with a `PLUGIN_*` code.
 
+## Apply data with edit operations
+
+`alpha2.edit.apply(project, request)` runs one of the engine's edit operations in this process, no
+host needed, and returns `Edited(project, project_json, report)`. `remove_ranges` drops ranges
+(silences from an extractor, or a list on a source or the timeline) and closes the gaps,
+`split_at` cuts at times, and `bake` turns data bindings into keyframes and words into cues:
+
+```python
+edited = alpha2.edit.apply(project, {
+    "op": "remove_ranges",
+    "ranges": {"data": "interview-silence"},
+    "target": {"track": "v1"},
+    "padding": 12_000,
+    "min_duration": 36_000,
+})
+```
+
+Every kept moment renders as before, and `project_json` is the same bytes on every surface.
+A refusal raises `alpha2.Alpha2EditError`, whose `refusal` names why (`unknown_data`,
+`empty_target`, ...). [The host protocol](../../docs/host-protocol.md#edit) lists the fields.
+
 ## Renderer and video decode
 
 `renderer=` (`"auto"`, `"gpu"`, `"cpu"`; typed as `alpha2.client.RendererMode`) chooses what draws

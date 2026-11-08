@@ -7,11 +7,15 @@
 //! whose cut point is removed are removed. The result validates and is canonical.
 
 mod bake;
+mod json;
 mod request;
 mod split;
 #[cfg(test)]
+mod surface_corpus_tests;
+#[cfg(test)]
 mod tests;
 
+pub use json::{EditFailure, EditedJson, apply_json};
 pub use request::{
     BakeTarget, DataRef, EditError, EditReport, EditRequest, Moved, RangeList, Ranges, RawRange,
     Ripple, Target, TimeList, Times,

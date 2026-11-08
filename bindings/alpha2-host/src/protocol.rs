@@ -36,6 +36,7 @@ pub enum Request {
     Conform(ConformRequest),
     Still(Box<StillRequest>),
     Compose(Box<ComposeRequest>),
+    Edit(Box<EditRequest>),
     Extract(Box<crate::extract_request::ExtractHostRequest>),
 }
 
@@ -64,6 +65,35 @@ pub struct ComposeRequest {
     pub theme: Option<serde_json::Value>,
     #[serde(default)]
     pub templates: Vec<serde_json::Value>,
+}
+
+/// An edit operation applied to a project, answered without a GPU or reading media.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub project: ProjectJson,
+    /// The operation: `remove_ranges`, `split_at` or `bake`.
+    pub edit: Box<RawValue>,
+}
+
+impl EditRequest {
+    /// The edited project as the engine's canonical text, and the report.
+    ///
+    /// # Errors
+    /// `INVALID_INPUT` for an invalid project or operation and for every refusal, `INTERNAL` for
+    /// an edited project that fails validation; `details.refusal` names why.
+    pub fn answer(&self) -> Result<Value, HostError> {
+        let edited = alpha2_eval::edit::apply_json(self.project.text(), self.edit.get()).map_err(
+            |failure| {
+                HostError::new(failure.code, failure.message)
+                    .with_details(serde_json::json!({ "refusal": failure.refusal }))
+            },
+        )?;
+        let report: Value = serde_json::from_str(&edited.report).map_err(HostError::json)?;
+        Ok(serde_json::json!({ "projectJson": edited.project, "report": report }))
+    }
 }
 
 /// Kept as text so the engine checks its size before parsing; the host never holds a tree of a
@@ -600,6 +630,7 @@ impl Request {
             Self::Conform(conform) => &conform.request_id,
             Self::Still(still) => &still.request_id,
             Self::Compose(compose) => &compose.request_id,
+            Self::Edit(edit) => &edit.request_id,
             Self::Extract(extract) => &extract.request_id,
         }
     }
@@ -613,6 +644,7 @@ impl Request {
             Self::Conform(conform) => conform.protocol_version,
             Self::Still(still) => still.protocol_version,
             Self::Compose(compose) => compose.protocol_version,
+            Self::Edit(edit) => edit.protocol_version,
             Self::Extract(extract) => extract.protocol_version,
         }
     }
@@ -685,6 +717,7 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
         }
         Some("conform") => Request::Conform(serde_json::from_str(line).map_err(invalid)?),
         Some("compose") => Request::Compose(Box::new(serde_json::from_str(line).map_err(invalid)?)),
+        Some("edit") => Request::Edit(Box::new(serde_json::from_str(line).map_err(invalid)?)),
         Some("still") => {
             let still: StillRequest = serde_json::from_str(line).map_err(invalid)?;
             still.check()?;

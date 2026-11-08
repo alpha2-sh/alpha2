@@ -679,6 +679,7 @@ impl Host {
             Request::Export(export) => return self.handle_export(*export, progress),
             Request::Still(still) => return self.handle_still(*still),
             Request::Compose(compose) => return crate::compose_request::answer(&compose),
+            Request::Edit(edit) => return edit.answer(),
             Request::Extract(_) => {
                 return Err(HostError::new(
                     "INTERNAL",

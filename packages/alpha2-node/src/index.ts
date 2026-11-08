@@ -12,6 +12,7 @@ import type {
   Selection,
 } from "alpha2/assets";
 import type { CapabilityReport } from "alpha2";
+import type { AppliedEdit, EditReport, EditRequest } from "alpha2/apply-edit";
 import {
   ExportFormatError,
   resolveEngineExportFormat,
@@ -93,6 +94,12 @@ export type {
 } from "./install.js";
 export type { ProgressPhase } from "./protocol.js";
 export type { ExportFailure } from "alpha2/export-failure";
+export type {
+  AppliedEdit,
+  EditRefusal,
+  EditReport,
+  EditRequest,
+} from "alpha2/apply-edit";
 
 /** Where to find `alpha2-host`; see {@link resolveHostBinary}. */
 export interface ResolveHostBinaryOptions {
@@ -1011,6 +1018,8 @@ export interface Alpha2HostErrorOptions extends ErrorOptions {
   readonly path?: string;
   /** As {@link Alpha2HostError.problem}. */
   readonly problem?: string;
+  /** As {@link Alpha2HostError.refusal}. */
+  readonly refusal?: string;
 }
 
 /** Bytes of the host's standard error an error keeps. */
@@ -1037,6 +1046,8 @@ export class Alpha2HostError extends Error {
   readonly path?: string;
   /** What is wrong where a compose refusal lies. */
   readonly problem?: string;
+  /** Why an edit operation refused, such as `unknown_data` (`alpha2/apply-edit` `EditRefusal`). */
+  readonly refusal?: string;
 
   constructor(code: string, message: string, options?: Alpha2HostErrorOptions) {
     super(message, options);
@@ -1061,6 +1072,7 @@ export class Alpha2HostError extends Error {
     if (options?.keptPath !== undefined) this.keptPath = options.keptPath;
     if (options?.path !== undefined) this.path = options.path;
     if (options?.problem !== undefined) this.problem = options.problem;
+    if (options?.refusal !== undefined) this.refusal = options.refusal;
   }
 }
 
@@ -1451,6 +1463,32 @@ export class Alpha2NodeClient {
   }
 
   /**
+   * Applies an edit operation (`remove_ranges`, `split_at`, `bake`) to `project` in the host,
+   * without a GPU; `projectJson` is the engine's canonical text, the same bytes on every surface.
+   * Rejects with {@link Alpha2HostError} `INVALID_INPUT`, whose `refusal` names why, for an
+   * invalid project or operation and for every refusal.
+   */
+  async edit(
+    project: Project,
+    edit: EditRequest,
+    signal?: AbortSignal,
+  ): Promise<AppliedEdit> {
+    const answer = (
+      await this.#request(
+        "edit",
+        { project, edit },
+        { videoDecode: this.#videoDecode, renderer: this.#renderer },
+        signal,
+      )
+    ).result as { projectJson: string; report: EditReport };
+    return {
+      project: JSON.parse(answer.projectJson) as Project,
+      projectJson: answer.projectJson,
+      report: answer.report,
+    };
+  }
+
+  /**
    * Renders and encodes `request.project` to `request.output` and resolves with that path.
    *
    * Rejects with {@link Alpha2ProjectValidationError} or `INVALID_INPUT` for an invalid request,
@@ -1663,7 +1701,13 @@ export class Alpha2NodeClient {
 
   async #request(
     operation:
-      "capabilities" | "export" | "conform" | "still" | "compose" | "extract",
+      | "capabilities"
+      | "export"
+      | "conform"
+      | "still"
+      | "compose"
+      | "edit"
+      | "extract",
     payload: Readonly<Record<string, unknown>>,
     modes: HostModes,
     signal?: AbortSignal,
@@ -3205,7 +3249,13 @@ function errorFromHost(
       { failure, stderr, phase },
     );
   const details = error.details as
-    { keptPath?: unknown; path?: unknown; problem?: unknown } | undefined;
+    | {
+        keptPath?: unknown;
+        path?: unknown;
+        problem?: unknown;
+        refusal?: unknown;
+      }
+    | undefined;
   const keptPath = details?.keptPath;
   return new Alpha2HostError(error.code, error.message, {
     failure,
@@ -3216,6 +3266,9 @@ function errorFromHost(
       : {}),
     ...(typeof details?.path === "string" && typeof details.problem === "string"
       ? { path: details.path, problem: details.problem }
+      : {}),
+    ...(typeof details?.refusal === "string"
+      ? { refusal: details.refusal }
       : {}),
   });
 }

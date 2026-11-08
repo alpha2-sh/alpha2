@@ -1546,7 +1546,9 @@ fn dispatch<'scope>(
         let needs_host = match &envelope {
             Ok(request) => !matches!(
                 request,
-                crate::protocol::Request::Conform(_) | crate::protocol::Request::Compose(_)
+                crate::protocol::Request::Conform(_)
+                    | crate::protocol::Request::Compose(_)
+                    | crate::protocol::Request::Edit(_)
             ),
             Err(_) => refused_export,
         };
@@ -1649,6 +1651,7 @@ impl RequestWork {
             Ok(crate::protocol::Request::Compose(request)) => {
                 crate::compose_request::answer(&request)
             }
+            Ok(crate::protocol::Request::Edit(request)) => request.answer(),
             Ok(crate::protocol::Request::Extract(request)) => match host.as_mut() {
                 Some(host) => {
                     let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

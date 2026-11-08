@@ -22,6 +22,7 @@ uniffi::setup_scaffolding!();
 
 #[cfg(feature = "compose")]
 mod compose;
+mod edit;
 mod error;
 // The media pipeline is built everywhere so desktop tests compile it; only platforms with a media
 // backend run it.
@@ -46,6 +47,7 @@ pub mod android;
 #[cfg(all(test, any(target_os = "android", target_os = "ios")))]
 mod device_tests;
 
+pub use edit::{EditedProject, apply_edit};
 pub use error::{Alpha2Error, EncoderRefusalRecord};
 pub use extract::{
     ExtractAudioBlock, ExtractRequest, ExtractVideoFrame, ExtractionHandle, Extractor,

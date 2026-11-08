@@ -85,6 +85,10 @@
       "types": "./dist/active-clock.d.ts",
       "import": "./dist/active-clock.js"
     },
+    "./apply-edit": {
+      "types": "./dist/apply-edit.d.ts",
+      "import": "./dist/apply-edit.js"
+    },
     "./assets": {
       "types": "./dist/assets.d.ts",
       "import": "./dist/assets.js"

@@ -47,6 +47,7 @@ mod d3d12va_encode;
 mod decode_plan;
 mod decoder_sessions;
 mod device_hung;
+mod edit;
 mod encoder_refusal;
 mod export_pipeline;
 mod extract;

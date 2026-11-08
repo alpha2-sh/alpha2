@@ -44,6 +44,14 @@ def resolve_pixels(
     Raises ValueError with the engine's message for pictures the codec cannot write.
     """
 
+def apply_edit(project: str, request: str) -> tuple[str, str]:
+    """An edit operation applied to a project, both JSON text: ``(project, report)`` as the
+    engine's canonical JSON text.
+
+    Raises ValueError(message, code, refusal) for an invalid project or request and for every
+    refusal.
+    """
+
 def compose_requirements(spec: str) -> str:
     """The files a compose spec (JSON text) names, as JSON text: ``{"media", "texts"}``.
 

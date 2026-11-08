@@ -25,6 +25,7 @@ fn parsed_video_quality(video_quality: Option<Value>) -> Result<VideoQualityRequ
         | Request::Conform(_)
         | Request::Still(_)
         | Request::Compose(_)
+        | Request::Edit(_)
         | Request::Extract(_) => {
             unreachable!("an export line parses as an export")
         }
@@ -814,6 +815,7 @@ fn an_export_includes_audio_unless_the_request_says_not_to() {
             | Request::Conform(_)
             | Request::Still(_)
             | Request::Compose(_)
+            | Request::Edit(_)
             | Request::Extract(_) => {
                 unreachable!("an export line parses as an export")
             }
@@ -1012,6 +1014,7 @@ fn audio_quality_takes_a_level_or_a_bitrate_and_names_itself_when_wrong() {
             | Request::Conform(_)
             | Request::Still(_)
             | Request::Compose(_)
+            | Request::Edit(_)
             | Request::Extract(_) => {
                 unreachable!("an export line parses as an export")
             }
@@ -1203,6 +1206,7 @@ fn resolved_format(fields: &Value) -> Result<crate::protocol::ResolvedFormat, Ho
         | Request::Conform(_)
         | Request::Still(_)
         | Request::Compose(_)
+        | Request::Edit(_)
         | Request::Extract(_) => {
             unreachable!("an export line parses as an export")
         }
@@ -1330,6 +1334,7 @@ fn a_cli_export_resolves_its_container_as_the_protocol_does() {
                 | Request::Conform(_)
                 | Request::Still(_)
                 | Request::Compose(_)
+                | Request::Edit(_)
                 | Request::Extract(_) => {
                     unreachable!("an export")
                 }

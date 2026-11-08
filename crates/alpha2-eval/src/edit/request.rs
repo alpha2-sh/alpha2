@@ -230,3 +230,23 @@ impl fmt::Display for EditError {
 }
 
 impl std::error::Error for EditError {}
+
+impl EditError {
+    /// The refusal in snake case, as every binding reports it: `unknown_data`, `wrong_kind`,
+    /// `unknown_target`, `empty_target`, `missing_anchor`, `invalid_range`, `nothing_to_bake`,
+    /// `correction_not_bakeable` or `invalid_result`.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::UnknownData(_) => "unknown_data",
+            Self::WrongKind { .. } => "wrong_kind",
+            Self::UnknownTarget(_) => "unknown_target",
+            Self::EmptyTarget => "empty_target",
+            Self::MissingAnchor => "missing_anchor",
+            Self::InvalidRange(_) => "invalid_range",
+            Self::NothingToBake(_) => "nothing_to_bake",
+            Self::CorrectionNotBakeable(_) => "correction_not_bakeable",
+            Self::InvalidResult(_) => "invalid_result",
+        }
+    }
+}

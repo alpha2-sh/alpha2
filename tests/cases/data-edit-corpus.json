@@ -1,0 +1,1980 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "project_sha256": "2a3f595fac64d6ea54b8072eb3031c3095362553470e7ef7e22ab2a3c4ec70a5",
+        "report": {
+          "created": [
+            "fwd.1",
+            "fwd.2",
+            "fast.1",
+            "fast.2",
+            "rev.1",
+            "rev.2",
+            "rep.1",
+            "rep.2",
+            "rep.3",
+            "pp.1",
+            "pp.2",
+            "pp.3",
+            "frz.1",
+            "frz.2",
+            "ta.1",
+            "ta.2",
+            "au.1",
+            "au.2"
+          ],
+          "moved": [
+            {
+              "from": {
+                "end": 80000,
+                "start": 40000
+              },
+              "to": {
+                "end": 60000,
+                "start": 20000
+              }
+            },
+            {
+              "from": {
+                "end": 360000,
+                "start": 100000
+              },
+              "to": {
+                "end": 320000,
+                "start": 60000
+              }
+            }
+          ],
+          "removed": [
+            {
+              "end": 40000,
+              "start": 20000
+            },
+            {
+              "end": 100000,
+              "start": 80000
+            }
+          ]
+        }
+      },
+      "name": "remove-timeline-ripple",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 40000,
+              "start": 20000
+            },
+            {
+              "end": 100000,
+              "start": 80000
+            }
+          ]
+        },
+        "target": {
+          "track": "t-fwd"
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "92e05b076f529ddd84d2d26df8a94144100185ff6212f351cabb945108966aba",
+        "report": {
+          "created": [
+            "fast.1"
+          ],
+          "moved": [
+            {
+              "from": {
+                "end": 360000,
+                "start": 40000
+              },
+              "to": {
+                "end": 340000,
+                "start": 20000
+              }
+            }
+          ],
+          "removed": [
+            {
+              "end": 40000,
+              "start": 20000
+            }
+          ]
+        }
+      },
+      "name": "remove-track-ripple",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 40000,
+              "start": 20000
+            }
+          ]
+        },
+        "ripple": "track",
+        "target": {
+          "track": "t-speed"
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "1fc16abc64f07e555c818400ebc977af79822496538855b8a69b5e247e95a68e",
+        "report": {
+          "created": [
+            "fwd.1"
+          ],
+          "moved": [],
+          "removed": [
+            {
+              "end": 40000,
+              "start": 20000
+            }
+          ]
+        }
+      },
+      "name": "remove-no-ripple",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 40000,
+              "start": 20000
+            }
+          ]
+        },
+        "ripple": "none",
+        "target": {
+          "track": "t-fwd"
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "837df652bf963bef5c74045351287cbc40fa08f029472acb09b8f0ec6fbba571",
+        "report": {
+          "created": [
+            "fwd.1",
+            "fast.1",
+            "rev.1",
+            "rep.1",
+            "rep.2",
+            "pp.1",
+            "pp.2",
+            "pp.3",
+            "frz.1",
+            "ta.1",
+            "au.1"
+          ],
+          "moved": [
+            {
+              "from": {
+                "end": 360000,
+                "start": 72000
+              },
+              "to": {
+                "end": 336000,
+                "start": 48000
+              }
+            }
+          ],
+          "removed": [
+            {
+              "end": 72000,
+              "start": 48000
+            }
+          ]
+        }
+      },
+      "name": "remove-source-data",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "data": "quiet"
+        },
+        "target": {
+          "clips": [
+            "au"
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "088bb19e28e471f9c2bb78e27597c99a3f8fb4de7ce00e829d1e2ddd0753e619",
+        "report": {
+          "created": [
+            "fwd.1",
+            "fwd.2",
+            "fwd.3",
+            "fast.1",
+            "slow.1",
+            "slow.2",
+            "slow.3",
+            "rev.1",
+            "rev.2",
+            "rep.1",
+            "rep.2",
+            "rep.3",
+            "rep.4",
+            "pp.1",
+            "pp.2",
+            "pp.3",
+            "pp.4",
+            "frz.1",
+            "ta.1",
+            "tb.1",
+            "tb.2",
+            "au.1",
+            "au.2",
+            "au.3",
+            "au.4"
+          ],
+          "moved": [
+            {
+              "from": {
+                "end": 140000,
+                "start": 96000
+              },
+              "to": {
+                "end": 104000,
+                "start": 60000
+              }
+            },
+            {
+              "from": {
+                "end": 176000,
+                "start": 160000
+              },
+              "to": {
+                "end": 120000,
+                "start": 104000
+              }
+            },
+            {
+              "from": {
+                "end": 220000,
+                "start": 200000
+              },
+              "to": {
+                "end": 140000,
+                "start": 120000
+              }
+            },
+            {
+              "from": {
+                "end": 360000,
+                "start": 256000
+              },
+              "to": {
+                "end": 244000,
+                "start": 140000
+              }
+            }
+          ],
+          "removed": [
+            {
+              "end": 96000,
+              "start": 60000
+            },
+            {
+              "end": 160000,
+              "start": 140000
+            },
+            {
+              "end": 200000,
+              "start": 176000
+            },
+            {
+              "end": 256000,
+              "start": 220000
+            }
+          ]
+        }
+      },
+      "name": "remove-source-list",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "source_id": "v",
+            "type": "source"
+          },
+          "list": [
+            {
+              "end": 100000,
+              "start": 60000
+            }
+          ]
+        },
+        "target": {
+          "clips": [
+            "rev",
+            "rep",
+            "pp",
+            "frz"
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "03cb24e24b45a3d126339a4e9d609cb45178710cafcb9528723ea8ee3b7fbcd4",
+        "report": {
+          "created": [
+            "fwd.1",
+            "rev.1",
+            "rep.1",
+            "pp.1",
+            "au.1"
+          ],
+          "moved": [
+            {
+              "from": {
+                "end": 80000,
+                "start": 40000
+              },
+              "to": {
+                "end": 40000,
+                "start": 0
+              }
+            },
+            {
+              "from": {
+                "end": 200000,
+                "start": 160000
+              },
+              "to": {
+                "end": 80000,
+                "start": 40000
+              }
+            }
+          ],
+          "removed": [
+            {
+              "end": 40000,
+              "start": 0
+            },
+            {
+              "end": 160000,
+              "start": 80000
+            },
+            {
+              "end": 360000,
+              "start": 200000
+            }
+          ]
+        }
+      },
+      "name": "remove-invert",
+      "project": "kept",
+      "request": {
+        "invert": true,
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 80000,
+              "start": 40000
+            },
+            {
+              "end": 200000,
+              "start": 160000
+            }
+          ]
+        },
+        "target": {
+          "track": "t-speed"
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "62244e709355ac15fe4133251c52fe6f6b01be0ea2a016d0b713f24d9b6eaf4a",
+        "report": {
+          "created": [
+            "fwd.1",
+            "rev.1",
+            "rep.1",
+            "rep.2",
+            "pp.1",
+            "pp.2",
+            "frz.1",
+            "au.1"
+          ],
+          "moved": [
+            {
+              "from": {
+                "end": 360000,
+                "start": 152000
+              },
+              "to": {
+                "end": 296000,
+                "start": 88000
+              }
+            }
+          ],
+          "removed": [
+            {
+              "end": 152000,
+              "start": 88000
+            }
+          ]
+        }
+      },
+      "name": "remove-padding-min-duration",
+      "project": "kept",
+      "request": {
+        "min_duration": 12000,
+        "op": "remove_ranges",
+        "padding": 8000,
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 32000,
+              "start": 20000
+            },
+            {
+              "end": 160000,
+              "start": 80000
+            }
+          ]
+        },
+        "target": {
+          "track": "t-fwd"
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "aa3ace4aed1441b5bc022ee174e331caff9c5c9fdb38358f469df7ac50c9bc8a",
+        "report": {
+          "created": [
+            "fwd.1",
+            "slow.1",
+            "rev.1",
+            "rep.1",
+            "rep.2",
+            "pp.1",
+            "pp.2",
+            "frz.1",
+            "au.1"
+          ],
+          "moved": [
+            {
+              "from": {
+                "end": 360000,
+                "start": 152000
+              },
+              "to": {
+                "end": 336000,
+                "start": 128000
+              }
+            }
+          ],
+          "removed": [
+            {
+              "end": 152000,
+              "start": 128000
+            }
+          ]
+        }
+      },
+      "name": "remove-over-a-transition",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 152000,
+              "start": 128000
+            }
+          ]
+        },
+        "target": {
+          "track": "t-mix"
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "880f72dc9d6f42cb9d0b1939d7871f767640c1b9641e082ed2286c9eb42fb064",
+        "report": {
+          "created": [
+            "fwd.1",
+            "fwd.2",
+            "fast.1",
+            "slow.1",
+            "rev.1",
+            "rep.1",
+            "rep.2",
+            "rep.3",
+            "rep.4",
+            "pp.1",
+            "pp.2",
+            "pp.3",
+            "pp.4",
+            "pp.5",
+            "frz.1",
+            "ta.1",
+            "tb.1",
+            "au.1",
+            "au.2"
+          ],
+          "moved": [
+            {
+              "from": {
+                "end": 164000,
+                "start": 56000
+              },
+              "to": {
+                "end": 124000,
+                "start": 16000
+              }
+            },
+            {
+              "from": {
+                "end": 360000,
+                "start": 200000
+              },
+              "to": {
+                "end": 284000,
+                "start": 124000
+              }
+            }
+          ],
+          "removed": [
+            {
+              "end": 56000,
+              "start": 16000
+            },
+            {
+              "end": 200000,
+              "start": 164000
+            }
+          ]
+        }
+      },
+      "name": "remove-through-captions",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 56000,
+              "start": 16000
+            },
+            {
+              "end": 200000,
+              "start": 164000
+            }
+          ]
+        },
+        "target": {
+          "track": "t-fwd"
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "eac40d59a0ab37f21a1c5d1a0e4be1ace3522bad49f256b3ad10b7cb8c1dd4ba",
+        "report": {
+          "created": [
+            "fwd.1",
+            "rev.1",
+            "rep.1",
+            "rep.2",
+            "pp.1",
+            "pp.2",
+            "frz.1",
+            "au.1"
+          ],
+          "moved": [
+            {
+              "from": {
+                "end": 360000,
+                "start": 132000
+              },
+              "to": {
+                "end": 276000,
+                "start": 48000
+              }
+            }
+          ],
+          "removed": [
+            {
+              "end": 132000,
+              "start": 48000
+            }
+          ]
+        }
+      },
+      "name": "remove-loops-and-freeze",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 132000,
+              "start": 48000
+            }
+          ]
+        },
+        "target": {
+          "clips": [
+            "rep",
+            "pp",
+            "frz"
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "a092189bc0814a2a2112bb39af9aef6d687b545316df4c8c8563c4611f3f23c0",
+        "report": {
+          "created": [],
+          "moved": [],
+          "removed": []
+        }
+      },
+      "name": "remove-nothing",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": []
+        },
+        "target": {
+          "track": "t-fwd"
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "3c1b52f09d6b729d12a407b3f2c8143cd04ce4b033e921e8cb692876d4e9202f",
+        "report": {
+          "created": [
+            "rep.1",
+            "rep.2",
+            "rep.3",
+            "rep.4",
+            "rep.5"
+          ],
+          "moved": [],
+          "removed": []
+        }
+      },
+      "name": "split-timeline-list",
+      "project": "kept",
+      "request": {
+        "op": "split_at",
+        "target": {
+          "track": "t-rep"
+        },
+        "times": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            28000,
+            132000,
+            244000
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "012d7fb4a7844bdfadb7949e639787da97179b42600d0561ddb7d34c0b433ca8",
+        "report": {
+          "created": [
+            "rev.1",
+            "rev.2",
+            "pp.1",
+            "pp.2",
+            "pp.3",
+            "pp.4"
+          ],
+          "moved": [],
+          "removed": []
+        }
+      },
+      "name": "split-reverse-and-ping-pong",
+      "project": "kept",
+      "request": {
+        "op": "split_at",
+        "target": {
+          "clips": [
+            "rev",
+            "pp"
+          ]
+        },
+        "times": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            20000,
+            124000
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "fc68d6df67750892c5b3f2cae251a87dd216892846e7b6b80c67c0752e38cea8",
+        "report": {
+          "created": [
+            "au.1",
+            "au.2"
+          ],
+          "moved": [],
+          "removed": []
+        }
+      },
+      "name": "split-source-data",
+      "project": "kept",
+      "request": {
+        "op": "split_at",
+        "target": {
+          "clips": [
+            "au"
+          ]
+        },
+        "times": {
+          "data": "quiet"
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "f5e395926d5c09609011b17baec78fae932ec1fd719e4a5ac799e5e4ebcff856",
+        "report": {
+          "created": [],
+          "moved": [],
+          "removed": []
+        }
+      },
+      "name": "bake-data-binding",
+      "project": "kept",
+      "request": {
+        "op": "bake",
+        "targets": [
+          {
+            "clip": "ta",
+            "property": "visual.opacity"
+          }
+        ]
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "fd6caf1ca366938d610e2f0da7a80b85c78d6af63dd4632e812ad6b90d334438",
+        "report": {
+          "created": [],
+          "moved": [],
+          "removed": []
+        }
+      },
+      "name": "bake-words",
+      "project": "words",
+      "request": {
+        "op": "bake",
+        "targets": [
+          {
+            "property": "captions",
+            "track": "t-subs"
+          }
+        ]
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "unknown_data"
+      },
+      "name": "refuse-unknown-data",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "data": "nope"
+        },
+        "target": {
+          "clips": [
+            "fwd"
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "wrong_kind"
+      },
+      "name": "refuse-wrong-kind",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "data": "beat"
+        },
+        "target": {
+          "clips": [
+            "fwd"
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "unknown_target"
+      },
+      "name": "refuse-unknown-target",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 8000,
+              "start": 4000
+            }
+          ]
+        },
+        "target": {
+          "clips": [
+            "ghost"
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "empty_target"
+      },
+      "name": "refuse-empty-target",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 8000,
+              "start": 4000
+            }
+          ]
+        },
+        "target": {
+          "clips": []
+        }
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "missing_anchor"
+      },
+      "name": "refuse-missing-anchor",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "list": []
+        },
+        "target": {
+          "clips": [
+            "fwd"
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "invalid_range"
+      },
+      "name": "refuse-invalid-range",
+      "project": "kept",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 5,
+              "start": 9
+            }
+          ]
+        },
+        "target": {
+          "clips": [
+            "fwd"
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "nothing_to_bake"
+      },
+      "name": "refuse-nothing-to-bake",
+      "project": "kept",
+      "request": {
+        "op": "bake",
+        "targets": [
+          {
+            "clip": "fwd",
+            "property": "visual.opacity"
+          }
+        ]
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "correction_not_bakeable"
+      },
+      "name": "refuse-correction",
+      "project": "kept",
+      "request": {
+        "op": "bake",
+        "targets": [
+          {
+            "clip": "fwd",
+            "property": "visual.correction"
+          }
+        ]
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "invalid_request"
+      },
+      "name": "refuse-unknown-operation",
+      "project": "kept",
+      "request": {
+        "op": "remove_silence"
+      }
+    }
+  ],
+  "projects": {
+    "kept": {
+      "data": [
+        {
+          "anchor": {
+            "type": "timeline"
+          },
+          "channels": [
+            "level"
+          ],
+          "id": "beat",
+          "interpolation": "hold",
+          "kind": "scalars",
+          "times": [
+            0,
+            32000,
+            64000,
+            96000,
+            128000
+          ],
+          "values": [
+            0.1,
+            0.9,
+            0.3,
+            0.7,
+            0.5
+          ]
+        },
+        {
+          "anchor": {
+            "source_id": "a",
+            "type": "source"
+          },
+          "id": "quiet",
+          "intervals": [
+            {
+              "end": 72000,
+              "start": 48000
+            },
+            {
+              "end": 100000,
+              "start": 100000
+            }
+          ],
+          "kind": "intervals"
+        }
+      ],
+      "id": "p",
+      "name": "P",
+      "schema_version": 1,
+      "settings": {
+        "frame_rate": {
+          "den": 1,
+          "num": 30
+        },
+        "height": 360,
+        "sample_rate": 48000,
+        "width": 640
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "w",
+          "kind": "video",
+          "locator": "w.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "audio",
+          "locator": "a.m4a"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "clips": [
+              {
+                "id": "fwd",
+                "masks": [
+                  {
+                    "feather": {
+                      "keyframes": [
+                        {
+                          "interpolation": {
+                            "type": "linear"
+                          },
+                          "time": 40000,
+                          "value": 0.0
+                        },
+                        {
+                          "interpolation": {
+                            "type": "linear"
+                          },
+                          "time": 160000,
+                          "value": 0.1
+                        }
+                      ],
+                      "mode": "keyframes"
+                    },
+                    "shape": {
+                      "center": {
+                        "mode": "constant",
+                        "value": {
+                          "x": 0.5,
+                          "y": 0.5
+                        }
+                      },
+                      "size": {
+                        "keyframes": [
+                          {
+                            "interpolation": {
+                              "type": "linear"
+                            },
+                            "time": 0,
+                            "value": {
+                              "x": 0.2,
+                              "y": 0.2
+                            }
+                          },
+                          {
+                            "interpolation": {
+                              "type": "linear"
+                            },
+                            "time": 240000,
+                            "value": {
+                              "x": 0.6,
+                              "y": 0.6
+                            }
+                          }
+                        ],
+                        "mode": "keyframes"
+                      },
+                      "type": "ellipse"
+                    }
+                  }
+                ],
+                "source_id": "v",
+                "source_range": {
+                  "end": 280000,
+                  "start": 40000
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 240000,
+                  "start": 0
+                },
+                "visual": {
+                  "opacity": {
+                    "keyframes": [
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 0,
+                        "value": 0.2
+                      },
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 120000,
+                        "value": 1.0
+                      },
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 240000,
+                        "value": 0.5
+                      }
+                    ],
+                    "mode": "keyframes"
+                  },
+                  "rotation_degrees": {
+                    "keyframes": [
+                      {
+                        "interpolation": {
+                          "type": "cubic_bezier",
+                          "x1": 0.42,
+                          "x2": 0.58,
+                          "y1": 0.0,
+                          "y2": 1.0
+                        },
+                        "time": 20000,
+                        "value": 0.0
+                      },
+                      {
+                        "interpolation": {
+                          "type": "cubic_bezier",
+                          "x1": 0.42,
+                          "x2": 0.58,
+                          "y1": 0.0,
+                          "y2": 1.0
+                        },
+                        "time": 200000,
+                        "value": 90.0
+                      }
+                    ],
+                    "mode": "keyframes"
+                  }
+                }
+              }
+            ],
+            "id": "t-fwd",
+            "kind": "video",
+            "name": "F"
+          },
+          {
+            "clips": [
+              {
+                "id": "fast",
+                "source_id": "v",
+                "source_range": {
+                  "end": 240000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 120000,
+                  "start": 0
+                }
+              },
+              {
+                "id": "slow",
+                "source_id": "v",
+                "source_range": {
+                  "end": 120000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 360000,
+                  "start": 120000
+                }
+              }
+            ],
+            "id": "t-speed",
+            "kind": "video",
+            "name": "S"
+          },
+          {
+            "clips": [
+              {
+                "id": "rev",
+                "source_id": "v",
+                "source_range": {
+                  "end": 280000,
+                  "start": 80000
+                },
+                "time_map": {
+                  "type": "reverse"
+                },
+                "timeline_range": {
+                  "end": 200000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-rev",
+            "kind": "video",
+            "name": "R"
+          },
+          {
+            "clips": [
+              {
+                "id": "rep",
+                "source_id": "v",
+                "source_range": {
+                  "end": 80000,
+                  "start": 0
+                },
+                "time_map": {
+                  "mode": "repeat",
+                  "type": "loop"
+                },
+                "timeline_range": {
+                  "end": 280000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-rep",
+            "kind": "video",
+            "name": "L"
+          },
+          {
+            "clips": [
+              {
+                "id": "pp",
+                "source_id": "v",
+                "source_range": {
+                  "end": 80000,
+                  "start": 0
+                },
+                "time_map": {
+                  "mode": "ping_pong",
+                  "type": "loop"
+                },
+                "timeline_range": {
+                  "end": 280000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-pp",
+            "kind": "video",
+            "name": "P"
+          },
+          {
+            "clips": [
+              {
+                "id": "frz",
+                "source_id": "v",
+                "source_range": {
+                  "end": 160000,
+                  "start": 0
+                },
+                "time_map": {
+                  "source_time": 50000,
+                  "type": "freeze"
+                },
+                "timeline_range": {
+                  "end": 160000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-frz",
+            "kind": "video",
+            "name": "Z"
+          },
+          {
+            "clips": [
+              {
+                "id": "ta",
+                "source_id": "v",
+                "source_range": {
+                  "end": 160000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 160000,
+                  "start": 0
+                },
+                "visual": {
+                  "opacity": {
+                    "channel": "level",
+                    "data": "beat",
+                    "mode": "data"
+                  }
+                }
+              },
+              {
+                "id": "tb",
+                "source_id": "w",
+                "source_range": {
+                  "end": 200000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 320000,
+                  "start": 120000
+                }
+              }
+            ],
+            "id": "t-mix",
+            "kind": "video",
+            "name": "M",
+            "transitions": [
+              {
+                "easing": {
+                  "type": "linear"
+                },
+                "effect": {
+                  "id": "alpha2.transition.fade",
+                  "version": 1
+                },
+                "from_clip": "ta",
+                "timeline_range": {
+                  "end": 160000,
+                  "start": 120000
+                },
+                "to_clip": "tb"
+              }
+            ]
+          },
+          {
+            "clips": [
+              {
+                "audio": {
+                  "gain": {
+                    "keyframes": [
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 0,
+                        "value": 0.5
+                      },
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 360000,
+                        "value": 1.0
+                      }
+                    ],
+                    "mode": "keyframes"
+                  }
+                },
+                "id": "au",
+                "source_id": "a",
+                "source_range": {
+                  "end": 360000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 360000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-audio",
+            "kind": "audio",
+            "name": "A"
+          },
+          {
+            "captions": {
+              "cues": [
+                {
+                  "text": [
+                    {
+                      "text": "one ",
+                      "time": {
+                        "end": 20000,
+                        "start": 0
+                      }
+                    },
+                    {
+                      "text": "two",
+                      "time": {
+                        "end": 80000,
+                        "start": 48000
+                      }
+                    }
+                  ],
+                  "timeline_range": {
+                    "end": 88000,
+                    "start": 8000
+                  }
+                },
+                {
+                  "text": "three",
+                  "timeline_range": {
+                    "end": 176000,
+                    "start": 160000
+                  }
+                }
+              ]
+            },
+            "id": "t-subs",
+            "kind": "caption",
+            "name": "C"
+          }
+        ]
+      }
+    },
+    "words": {
+      "data": [
+        {
+          "anchor": {
+            "type": "timeline"
+          },
+          "channels": [
+            "level"
+          ],
+          "id": "beat",
+          "interpolation": "hold",
+          "kind": "scalars",
+          "times": [
+            0,
+            32000,
+            64000,
+            96000,
+            128000
+          ],
+          "values": [
+            0.1,
+            0.9,
+            0.3,
+            0.7,
+            0.5
+          ]
+        },
+        {
+          "anchor": {
+            "source_id": "a",
+            "type": "source"
+          },
+          "id": "quiet",
+          "intervals": [
+            {
+              "end": 72000,
+              "start": 48000
+            },
+            {
+              "end": 100000,
+              "start": 100000
+            }
+          ],
+          "kind": "intervals"
+        },
+        {
+          "anchor": {
+            "type": "timeline"
+          },
+          "id": "speech",
+          "kind": "words",
+          "words": [
+            {
+              "end": 4000,
+              "start": 0,
+              "text": "Hi"
+            },
+            {
+              "end": 20000,
+              "speaker": "A",
+              "start": 8000,
+              "text": "there"
+            }
+          ]
+        }
+      ],
+      "id": "p",
+      "name": "P",
+      "schema_version": 1,
+      "settings": {
+        "frame_rate": {
+          "den": 1,
+          "num": 30
+        },
+        "height": 360,
+        "sample_rate": 48000,
+        "width": 640
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "w",
+          "kind": "video",
+          "locator": "w.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "audio",
+          "locator": "a.m4a"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "clips": [
+              {
+                "id": "fwd",
+                "masks": [
+                  {
+                    "feather": {
+                      "keyframes": [
+                        {
+                          "interpolation": {
+                            "type": "linear"
+                          },
+                          "time": 40000,
+                          "value": 0.0
+                        },
+                        {
+                          "interpolation": {
+                            "type": "linear"
+                          },
+                          "time": 160000,
+                          "value": 0.1
+                        }
+                      ],
+                      "mode": "keyframes"
+                    },
+                    "shape": {
+                      "center": {
+                        "mode": "constant",
+                        "value": {
+                          "x": 0.5,
+                          "y": 0.5
+                        }
+                      },
+                      "size": {
+                        "keyframes": [
+                          {
+                            "interpolation": {
+                              "type": "linear"
+                            },
+                            "time": 0,
+                            "value": {
+                              "x": 0.2,
+                              "y": 0.2
+                            }
+                          },
+                          {
+                            "interpolation": {
+                              "type": "linear"
+                            },
+                            "time": 240000,
+                            "value": {
+                              "x": 0.6,
+                              "y": 0.6
+                            }
+                          }
+                        ],
+                        "mode": "keyframes"
+                      },
+                      "type": "ellipse"
+                    }
+                  }
+                ],
+                "source_id": "v",
+                "source_range": {
+                  "end": 280000,
+                  "start": 40000
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 240000,
+                  "start": 0
+                },
+                "visual": {
+                  "opacity": {
+                    "keyframes": [
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 0,
+                        "value": 0.2
+                      },
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 120000,
+                        "value": 1.0
+                      },
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 240000,
+                        "value": 0.5
+                      }
+                    ],
+                    "mode": "keyframes"
+                  },
+                  "rotation_degrees": {
+                    "keyframes": [
+                      {
+                        "interpolation": {
+                          "type": "cubic_bezier",
+                          "x1": 0.42,
+                          "x2": 0.58,
+                          "y1": 0.0,
+                          "y2": 1.0
+                        },
+                        "time": 20000,
+                        "value": 0.0
+                      },
+                      {
+                        "interpolation": {
+                          "type": "cubic_bezier",
+                          "x1": 0.42,
+                          "x2": 0.58,
+                          "y1": 0.0,
+                          "y2": 1.0
+                        },
+                        "time": 200000,
+                        "value": 90.0
+                      }
+                    ],
+                    "mode": "keyframes"
+                  }
+                }
+              }
+            ],
+            "id": "t-fwd",
+            "kind": "video",
+            "name": "F"
+          },
+          {
+            "clips": [
+              {
+                "id": "fast",
+                "source_id": "v",
+                "source_range": {
+                  "end": 240000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 120000,
+                  "start": 0
+                }
+              },
+              {
+                "id": "slow",
+                "source_id": "v",
+                "source_range": {
+                  "end": 120000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 360000,
+                  "start": 120000
+                }
+              }
+            ],
+            "id": "t-speed",
+            "kind": "video",
+            "name": "S"
+          },
+          {
+            "clips": [
+              {
+                "id": "rev",
+                "source_id": "v",
+                "source_range": {
+                  "end": 280000,
+                  "start": 80000
+                },
+                "time_map": {
+                  "type": "reverse"
+                },
+                "timeline_range": {
+                  "end": 200000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-rev",
+            "kind": "video",
+            "name": "R"
+          },
+          {
+            "clips": [
+              {
+                "id": "rep",
+                "source_id": "v",
+                "source_range": {
+                  "end": 80000,
+                  "start": 0
+                },
+                "time_map": {
+                  "mode": "repeat",
+                  "type": "loop"
+                },
+                "timeline_range": {
+                  "end": 280000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-rep",
+            "kind": "video",
+            "name": "L"
+          },
+          {
+            "clips": [
+              {
+                "id": "pp",
+                "source_id": "v",
+                "source_range": {
+                  "end": 80000,
+                  "start": 0
+                },
+                "time_map": {
+                  "mode": "ping_pong",
+                  "type": "loop"
+                },
+                "timeline_range": {
+                  "end": 280000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-pp",
+            "kind": "video",
+            "name": "P"
+          },
+          {
+            "clips": [
+              {
+                "id": "frz",
+                "source_id": "v",
+                "source_range": {
+                  "end": 160000,
+                  "start": 0
+                },
+                "time_map": {
+                  "source_time": 50000,
+                  "type": "freeze"
+                },
+                "timeline_range": {
+                  "end": 160000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-frz",
+            "kind": "video",
+            "name": "Z"
+          },
+          {
+            "clips": [
+              {
+                "id": "ta",
+                "source_id": "v",
+                "source_range": {
+                  "end": 160000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 160000,
+                  "start": 0
+                },
+                "visual": {
+                  "opacity": {
+                    "channel": "level",
+                    "data": "beat",
+                    "mode": "data"
+                  }
+                }
+              },
+              {
+                "id": "tb",
+                "source_id": "w",
+                "source_range": {
+                  "end": 200000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 320000,
+                  "start": 120000
+                }
+              }
+            ],
+            "id": "t-mix",
+            "kind": "video",
+            "name": "M",
+            "transitions": [
+              {
+                "easing": {
+                  "type": "linear"
+                },
+                "effect": {
+                  "id": "alpha2.transition.fade",
+                  "version": 1
+                },
+                "from_clip": "ta",
+                "timeline_range": {
+                  "end": 160000,
+                  "start": 120000
+                },
+                "to_clip": "tb"
+              }
+            ]
+          },
+          {
+            "clips": [
+              {
+                "audio": {
+                  "gain": {
+                    "keyframes": [
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 0,
+                        "value": 0.5
+                      },
+                      {
+                        "interpolation": {
+                          "type": "linear"
+                        },
+                        "time": 360000,
+                        "value": 1.0
+                      }
+                    ],
+                    "mode": "keyframes"
+                  }
+                },
+                "id": "au",
+                "source_id": "a",
+                "source_range": {
+                  "end": 360000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 360000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-audio",
+            "kind": "audio",
+            "name": "A"
+          },
+          {
+            "captions": {
+              "from_words": {
+                "data": "speech",
+                "max_chars": 40
+              }
+            },
+            "id": "t-subs",
+            "kind": "caption",
+            "name": "C"
+          }
+        ]
+      }
+    }
+  }
+}

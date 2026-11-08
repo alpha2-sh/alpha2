@@ -53,8 +53,8 @@ if (packageNotices !== workspaceNotices) {
 // Raise a budget when a feature needs it; do not contort code to fit. Keep each budget at least 5%
 // over what the pinned toolchain builds, so another compiler release does not fail here.
 const wasmBudgets = {
-  // Rust 1.99.0 builds 9,697,800 bytes.
-  "alpha2_wasm_bg.wasm": 10_182_690,
+  // Rust 1.99.0 builds 10,522,810 bytes.
+  "alpha2_wasm_bg.wasm": 11_048_951,
   // Rust 1.99.0 builds 113,964 bytes.
   "alpha2_audio_worklet.wasm": 119_662,
   // Rust 1.99.0 builds 4,878,210 bytes.
