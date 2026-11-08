@@ -1,0 +1,21 @@
+[package]
+name = "alpha2-plugin-abi"
+version.workspace = true
+description = "The alpha2-plugin/1 ABI: native tables, wasm names and emit records."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["video", "plugin", "abi", "wasm"]
+categories = ["multimedia", "wasm"]
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+]
+
+[dependencies]
+
+[lints]
+workspace = true

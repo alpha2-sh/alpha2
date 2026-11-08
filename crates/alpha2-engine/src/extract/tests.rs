@@ -673,3 +673,71 @@ fn requests_that_break_a_rule_are_refused() {
     let mut supply = ExtractSession::new(&project(), &descriptor, base).expect("session");
     assert!(supply.supply_end().is_err());
 }
+
+#[test]
+fn manifests_are_checked_as_the_shared_corpus_says() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/cases/plugin-manifest-corpus.json"
+    );
+    let corpus: Vec<serde_json::Value> =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("corpus")).expect("json");
+    assert!(corpus.len() >= 10);
+    for case in corpus {
+        let name = case["name"].as_str().expect("name");
+        let read = PluginManifest::from_json(&case["manifest"].to_string());
+        match (case["valid"].as_bool(), case["error"].as_str()) {
+            (Some(true), _) => {
+                let manifest = read.unwrap_or_else(|error| panic!("{name}: {error}"));
+                assert_eq!(
+                    serde_json::to_value(&manifest).expect("json"),
+                    case["manifest"],
+                    "{name}"
+                );
+            }
+            (_, Some("abi")) => assert!(
+                matches!(read, Err(ManifestError::UnsupportedAbi(_))),
+                "{name}: {read:?}"
+            ),
+            _ => assert!(
+                matches!(read, Err(ManifestError::Invalid(_))),
+                "{name}: {read:?}"
+            ),
+        }
+    }
+}
+
+#[test]
+fn a_manifest_finds_its_artifacts_by_target_and_kind() {
+    let hash = "0".repeat(64);
+    let manifest = PluginManifest::from_json(
+        &serde_json::json!({
+            "id": "a.b", "version": "0.1.0", "abi": "alpha2-plugin/1", "kind": "extractor",
+            "artifacts": [
+                { "target": "wasm32", "type": "wasm", "url": "a.wasm", "sha256": hash, "bytes": 1 },
+                { "target": "aarch64-apple-ios", "type": "staticlib", "url": "a.a", "sha256": hash, "bytes": 1 }
+            ],
+            "descriptor": fixtures::digest_descriptor(video_input(VideoFormat::Luma8, 64))
+        })
+        .to_string()
+        .replace("alpha2.test.digest", "a.b"),
+    )
+    .expect("manifest");
+    assert_eq!(
+        manifest
+            .artifact(WASM_TARGET, ArtifactKind::Wasm)
+            .map(|a| a.url.as_str()),
+        Some("a.wasm")
+    );
+    assert!(
+        manifest
+            .artifact("aarch64-apple-ios", ArtifactKind::Cdylib)
+            .is_none()
+    );
+    assert_eq!(
+        PluginManifest::from_json(&"x".repeat(MAX_MANIFEST_BYTES + 1)),
+        Err(ManifestError::Invalid(format!(
+            "longer than {MAX_MANIFEST_BYTES} bytes"
+        )))
+    );
+}

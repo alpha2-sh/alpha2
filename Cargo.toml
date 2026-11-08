@@ -15,6 +15,7 @@ members = [
     "crates/alpha2-layout",
     "crates/alpha2-compose",
     "crates/alpha2-container",
+    "crates/alpha2-plugin-abi",
     "extensions",
     "extensions/web",
     "extensions/pdf-web",
@@ -79,6 +80,7 @@ alpha2-layout = { version = "0.6.0", path = "crates/alpha2-layout" }
 alpha2-gpu = { version = "0.6.0", path = "crates/alpha2-gpu" }
 alpha2-media = { version = "0.6.0", path = "crates/alpha2-media" }
 alpha2-model = { version = "0.6.0", path = "crates/alpha2-model" }
+alpha2-plugin-abi = { version = "0.6.0", path = "crates/alpha2-plugin-abi" }
 alpha2-render = { version = "0.6.0", path = "crates/alpha2-render" }
 alpha2-shaders = { version = "0.6.0", path = "crates/alpha2-shaders" }
 alpha2-time = { version = "0.6.0", path = "crates/alpha2-time" }

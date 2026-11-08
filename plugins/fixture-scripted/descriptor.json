@@ -1,0 +1,27 @@
+{
+  "id": "alpha2.test.scripted",
+  "version": 1,
+  "input": {
+    "media": "video",
+    "from": ["source", "timeline"],
+    "format": "luma8",
+    "max_size": 960
+  },
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "per_delivery": { "type": "array" },
+      "at_end": { "type": "array" },
+      "fail_at": { "type": "integer" },
+      "panic_at": { "type": "integer" }
+    },
+    "additionalProperties": false
+  },
+  "outputs": [
+    { "name": "track", "kind": "points", "channels": ["p"], "interpolation": "linear" },
+    { "name": "levels", "kind": "scalars", "channels": ["a", "b"] },
+    { "name": "correction", "kind": "similarity" },
+    { "name": "words", "kind": "words" },
+    { "name": "quiet", "kind": "intervals", "suggest": "remove_ranges" }
+  ]
+}

@@ -230,12 +230,14 @@ dependencies = [
  "alpha2-layout",
  "alpha2-media",
  "alpha2-model",
+ "alpha2-plugin-abi",
  "alpha2-render",
  "alpha2-shaders",
  "alpha2-text",
  "alpha2-time",
  "libm",
  "pollster",
+ "schemars",
  "serde",
  "serde_json",
  "web-time",
@@ -558,6 +560,10 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "alpha2-plugin-abi"
+version = "0.6.0"
 
 [[package]]
 name = "alpha2-provider-contract"

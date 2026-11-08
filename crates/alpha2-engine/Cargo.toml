@@ -21,6 +21,8 @@ include = [
 wgpu-interop = ["alpha2-render/wgpu-interop"]
 # Test-only `scripted` and `digest` extractors; no release enables it.
 extract-fixtures = []
+# The JSON Schema of the plugin manifest.
+schema = ["dep:schemars", "alpha2-model/schema"]
 
 [dependencies]
 libm = "0.2.16"
@@ -31,10 +33,12 @@ alpha2-gpu.workspace = true
 alpha2-layout.workspace = true
 alpha2-media.workspace = true
 alpha2-model.workspace = true
+alpha2-plugin-abi.workspace = true
 alpha2-render.workspace = true
 alpha2-shaders.workspace = true
 alpha2-text.workspace = true
 alpha2-time.workspace = true
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 web-time = "1.1.0"
@@ -56,3 +60,7 @@ harness = false
 [[bench]]
 name = "export_prefetch"
 harness = false
+
+[[example]]
+name = "emit-plugin-manifest-schema"
+required-features = ["schema"]

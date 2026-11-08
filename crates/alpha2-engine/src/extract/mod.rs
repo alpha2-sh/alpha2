@@ -15,6 +15,7 @@ mod descriptor;
 mod drive;
 #[cfg(any(test, feature = "extract-fixtures"))]
 pub mod fixtures;
+mod manifest;
 mod pixels;
 mod session;
 #[cfg(test)]
@@ -26,6 +27,13 @@ pub use descriptor::{
     MAX_EXTRACTOR_PASSES, OutputSpec, Pass, RequestInput, Suggest, VideoFormat,
 };
 pub use drive::{DriveError, Emitter, Extractor, ExtractorError, PassInfo, Supplier, drive};
+#[cfg(feature = "schema")]
+pub use manifest::plugin_manifest_json_schema;
+pub use manifest::{
+    ArtifactKind, MAX_MANIFEST_BYTES, MAX_PLUGIN_ARTIFACTS, MAX_PLUGIN_RESOURCES, ManifestError,
+    PLUGIN_MANIFEST_SCHEMA_ID, PluginArtifact, PluginKind, PluginManifest, PluginResource,
+    WASM_TARGET,
+};
 pub use pixels::{delivered_size, luma8_from_rgba8, mono_downmix};
 pub use session::{
     AudioInput, Delivery, Emit, ExtractSession, FrameFrom, Need, PassProgress, RequestError,

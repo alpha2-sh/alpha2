@@ -18,6 +18,7 @@ pub const MAX_EXTRACTOR_OUTPUTS: usize = 32;
 pub const MAX_EXTRACTOR_PASSES: usize = 64;
 
 /// What an extractor declares: its identity, the input it reads and the outputs it emits.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Descriptor {
@@ -39,6 +40,7 @@ fn empty_schema() -> serde_json::Value {
 }
 
 /// What an extractor reads.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "media", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InputSpec {
@@ -89,6 +91,7 @@ impl InputSpec {
 }
 
 /// Which clock an extractor reads on.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputFrom {
@@ -99,6 +102,7 @@ pub enum InputFrom {
 }
 
 /// How delivered video frames are packed.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VideoFormat {
@@ -120,6 +124,7 @@ impl VideoFormat {
 }
 
 /// How delivered audio is stored.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioFormat {
@@ -128,6 +133,7 @@ pub enum AudioFormat {
 }
 
 /// Which channels delivered audio has.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AudioChannels {
@@ -138,6 +144,7 @@ pub enum AudioChannels {
 }
 
 /// One output an extractor emits.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputSpec {
@@ -171,6 +178,7 @@ impl OutputSpec {
 }
 
 /// How an output is usually used.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Suggest {

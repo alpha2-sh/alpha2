@@ -383,7 +383,7 @@ pub struct ExtractSession {
     gathered: BTreeMap<String, Gathered>,
 }
 
-fn validate_descriptor(descriptor: &Descriptor) -> Result<(), RequestError> {
+pub(super) fn validate_descriptor(descriptor: &Descriptor) -> Result<(), RequestError> {
     let invalid = |why: &str| Err(RequestError::InvalidDescriptor(why.to_owned()));
     if descriptor.id.is_empty() {
         return invalid("empty id");
