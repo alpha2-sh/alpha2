@@ -62,7 +62,7 @@ fn extension_sources_export_through_their_providers() {
     let request = |frames: Value, output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "extensions", "operation": "export",
+                "protocolVersion": 2, "requestId": "extensions", "operation": "export",
                 "project": extension_project(),
                 "assets": {
                     "gif": extension_corpus("animation.gif"),
@@ -169,7 +169,7 @@ fn extension_sources_export_through_their_providers() {
     assert_unrequested(&result["memoryPolicy"]["inFlightBytes"]);
     let mut starved = parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "starved", "operation": "export",
+            "protocolVersion": 2, "requestId": "starved", "operation": "export",
             "project": extension_project(),
             "assets": {
                 "gif": extension_corpus("animation.gif"),
@@ -198,7 +198,7 @@ fn extension_sources_export_through_their_providers() {
     assert!(!directory.join("starved.mp4").exists());
     starved = parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "zero", "operation": "export",
+            "protocolVersion": 2, "requestId": "zero", "operation": "export",
             "project": extension_project(), "assets": {}, "startTicks": 0, "endTicks": 1,
             "frameRate": {"num": 10, "den": 1}, "memory": {"decodeQueueBytes": 0},
             "output": directory.join("zero.mp4")
@@ -228,7 +228,7 @@ fn a_lottie_source_conforms_for_the_animation_it_shows() {
         let output = directory.join(name);
         let request = parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "lottie-item", "operation": "export",
+                "protocolVersion": 2, "requestId": "lottie-item", "operation": "export",
                 "project": {
                     "schema_version": 1, "id": "lottie", "name": "Lottie",
                     "settings": {"width": 64, "height": 48, "frame_rate": {"num": 10, "den": 1}, "sample_rate": 48_000},
@@ -357,7 +357,7 @@ fn sources_are_refused_exactly_when_the_build_has_no_provider_for_them() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let request = parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "no-extensions", "operation": "export",
+            "protocolVersion": 2, "requestId": "no-extensions", "operation": "export",
             "project": extension_project(),
             "assets": {
                 "gif": extension_corpus("animation.gif"),
@@ -425,7 +425,7 @@ fn exr_sources_export_as_linear_light() {
     });
     let request = parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "exr", "operation": "export",
+            "protocolVersion": 2, "requestId": "exr", "operation": "export",
             "project": project,
             "assets": {"still": extension_corpus("half.exr")},
             "frames": {"seq": [extension_corpus("sequence_0001.exr"), extension_corpus("sequence_0002.exr")]},
@@ -608,7 +608,7 @@ fn an_svg_draws_with_the_fonts_its_export_read_at_its_start() {
         std::fs::copy(corpus("../fonts/Alpha2Fixture.ttf"), &font).expect("font");
         let request = parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "svg-fonts", "operation": "export",
+                "protocolVersion": 2, "requestId": "svg-fonts", "operation": "export",
                 "project": project,
                 "assets": {"label": extension_corpus("label.svg")},
                 "fonts": [font],
@@ -653,7 +653,7 @@ fn provider_diagnostics_are_reported_with_the_export_and_its_failure() {
     let request = |output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "provider-diagnostics", "operation": "export",
+                "protocolVersion": 2, "requestId": "provider-diagnostics", "operation": "export",
                 "project": {
                     "schema_version": 1, "id": "label", "name": "Label",
                     "settings": {"width": 96, "height": 64, "frame_rate": {"num": 10, "den": 1}, "sample_rate": 48_000},
@@ -709,7 +709,7 @@ fn an_svg_draws_the_image_files_its_resources_give_it() {
     let request = |output: &Path, resources: Value| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "provider-resources", "operation": "export",
+                "protocolVersion": 2, "requestId": "provider-resources", "operation": "export",
                 "project": {
                     "schema_version": 1, "id": "badge", "name": "Badge",
                     "settings": {"width": 96, "height": 64, "frame_rate": {"num": 10, "den": 1}, "sample_rate": 48_000},
@@ -1213,7 +1213,7 @@ fn an_export_closes_provider_sources_past_its_budget_and_writes_the_same_file() 
         host.handle(
             parse_request(
                 &json!({
-                    "protocolVersion": 1, "requestId": "provider-budget", "operation": "export",
+                    "protocolVersion": 2, "requestId": "provider-budget", "operation": "export",
                     "project": provider_succession_project(),
                     "assets": {
                         "gif": extension_corpus("animation.gif"),
@@ -1328,7 +1328,7 @@ fn a_latex_source_needs_no_file_and_a_formula_that_does_not_typeset_fails_confor
     let still = |latex: &str| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "operation": "still", "requestId": "latex",
+                "protocolVersion": 2, "operation": "still", "requestId": "latex",
                 "project": project(latex), "assets": {},
                 "stills": [{"time": 0, "output": output}]
             })

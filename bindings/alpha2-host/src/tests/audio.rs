@@ -956,7 +956,7 @@ fn measure_file_loudness(path: &Path, sample_rate: u32) -> alpha2_audio::Loudnes
 fn loudness_requests_are_checked_and_need_audio() {
     let request = |loudness: Value, include_audio: bool| {
         json!({
-            "protocolVersion": 1, "operation": "export", "requestId": "r",
+            "protocolVersion": 2, "operation": "export", "requestId": "r",
             "project": {}, "assets": {}, "startTicks": 0, "endTicks": 1,
             "frameRate": {"num": 30, "den": 1}, "includeAudio": include_audio,
             "loudness": loudness, "output": "/tmp/x.mp4"
@@ -1022,7 +1022,7 @@ fn loudness_for_a_project_that_hears_nothing_is_refused_on_every_path() {
         let output = directory.join(name);
         let request = parse_request(
             &json!({
-                "protocolVersion": 1,
+                "protocolVersion": 2,
                 "operation": "export",
                 "requestId": name,
                 "project": project,

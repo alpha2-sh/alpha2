@@ -29,6 +29,8 @@ pub(crate) struct SoftLimits {
     pub max_requests: Option<u64>,
     pub max_handles: Option<u64>,
     pub idle_timeout: Option<Duration>,
+    /// Whether a degradation a new process would not have drains the host.
+    pub drain_degraded: bool,
 }
 
 impl Default for SoftLimits {
@@ -43,6 +45,7 @@ impl Default for SoftLimits {
             max_requests: Some(DEFAULT_MAX_REQUESTS),
             max_handles: Some(handles.max(1)),
             idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
+            drain_degraded: true,
         }
     }
 }
@@ -55,6 +58,7 @@ impl SoftLimits {
         max_requests: None,
         max_handles: None,
         idle_timeout: None,
+        drain_degraded: false,
     };
 
     /// Reads `serve`'s flags over the defaults; `0` turns a limit off.
@@ -262,7 +266,7 @@ impl Lifecycle {
         {
             return Some(DrainReason::Handles);
         }
-        if usage.degraded {
+        if limits.drain_degraded && usage.degraded {
             return Some(DrainReason::Degraded);
         }
         None
@@ -285,7 +289,7 @@ impl Lifecycle {
             }
             life.draining = Some((reason, Instant::now()));
         }
-        out.line(&self.state_message())
+        out.send(&self.state_message())
     }
 
     /// `{type: "state", state, reason, details}` as the host is now.
@@ -424,6 +428,7 @@ mod tests {
             max_requests: Some(2),
             max_handles: Some(50),
             idle_timeout: None,
+            drain_degraded: true,
         };
         let lifecycle = Lifecycle::new(limits);
         lifecycle.begin_request();
@@ -454,10 +459,7 @@ mod tests {
         );
         let off = Lifecycle::new(SoftLimits::OFF);
         assert_eq!(off.over_limit(&usage(999, 1 << 20, false)), None);
-        assert_eq!(
-            off.over_limit(&usage(999, 0, true)),
-            Some(DrainReason::Degraded)
-        );
+        assert_eq!(off.over_limit(&usage(999, 0, true)), None);
     }
 
     #[test]
@@ -489,10 +491,9 @@ mod tests {
         lifecycle.drain(DrainReason::Idle, &out).expect("drain");
         lifecycle.drain(DrainReason::Requests, &out).expect("drain");
         assert_eq!(lifecycle.state(), HostState::Draining);
-        let messages = String::from_utf8(captured.bytes()).expect("UTF-8");
-        let messages = messages.lines().collect::<Vec<_>>();
-        assert_eq!(messages.len(), 1, "{messages:?}");
-        let message: Value = serde_json::from_str(messages[0]).expect("JSON");
+        let messages = crate::serve_io::messages_of(&captured.bytes());
+        assert_eq!(messages.len(), 1);
+        let message = &messages[0].0;
         assert_eq!(message["type"], "state");
         assert_eq!(message["state"], "draining");
         assert_eq!(message["reason"], "idle");

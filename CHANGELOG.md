@@ -34,9 +34,13 @@ All notable changes to this project are documented in this file.
   one request at a time each, and replace a host that drains or exits. Hosts are kept apart by the
   environment they start with. `Alpha2NodeClient.close()` and `HostClient.close()` end them; idle
   hosts keep no Node or Python process alive. The MCP server reuses hosts across tool calls.
+- A `still` without an `output` returns its PNG in the response instead of a file.
 
 ### Changed
 
+- Host protocol version 2: every message is a length-prefixed frame, a JSON header and binary
+  attachments, instead of a JSON line. `serve` owns standard output: it writes a magic before its
+  first frame, and anything else the process prints goes to standard error.
 - Built-in effects and transitions are validated against their published definitions.
 - Mattes and masks spread over transitions that commute with coverage, such as wipes.
 - Builds link the pinned FFmpeg ahead of system library directories.

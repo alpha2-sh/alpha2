@@ -71,7 +71,7 @@ fn a_still_under_a_constant_effect_or_a_held_caption_is_drawn_once_per_export() 
     let mut export = |name: &str, project: &Value| {
         let request = parse_request(
             &json!({
-                "protocolVersion": 1,
+                "protocolVersion": 2,
                 "operation": "export",
                 "requestId": name,
                 "project": project,
@@ -135,7 +135,7 @@ fn a_picture_shown_over_several_output_frames_is_drawn_once() {
     let directory = scratch_directory("result-cache-pictures");
     let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let request = json!({
-        "protocolVersion": 1, "requestId": "pictures", "operation": "export",
+        "protocolVersion": 2, "requestId": "pictures", "operation": "export",
         "project": conform_project(&json!({})),
         "assets": {"video": corpus("parity-rgb.mov")},
         "startTicks": 0, "endTicks": alpha2_time::TICKS_PER_SECOND,
@@ -212,7 +212,7 @@ fn export_with_render_cache(
 ) -> Value {
     let request = parse_request(
         &json!({
-            "protocolVersion": 1,
+            "protocolVersion": 2,
             "operation": "export",
             "requestId": "baked",
             "project": project,
@@ -329,7 +329,7 @@ fn slideshow_request(
         })
         .collect::<serde_json::Map<_, _>>();
     let mut request = json!({
-        "protocolVersion": 1, "operation": "export", "requestId": "slideshow",
+        "protocolVersion": 2, "operation": "export", "requestId": "slideshow",
         "project": {
             "schema_version": 1, "id": "slideshow", "name": "Slideshow",
             "settings": {"width": 64, "height": 48,
@@ -446,7 +446,7 @@ fn a_copy_and_a_gpu_resident_export_report_the_render_cache_unavailable() {
     let render_cache = json!({"directory": cache, "quotaBytes": 1 << 30, "backlog": "wait"});
     let copy = parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "copy-cache", "operation": "export",
+            "protocolVersion": 2, "requestId": "copy-cache", "operation": "export",
             "project": {
                 "schema_version": 1, "id": "copy", "name": "Copy",
                 "settings": {"width": 128, "height": 96, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
@@ -526,7 +526,7 @@ fn a_frame_the_render_cache_holds_uploads_no_source() {
     let mut export_video = |name: &str| {
         let request = parse_request(
             &json!({
-                "protocolVersion": 1, "operation": "export", "requestId": "cached",
+                "protocolVersion": 2, "operation": "export", "requestId": "cached",
                 "project": project,
                 "assets": {"video-source": corpus("h264-long-gop.mp4")},
                 "startTicks": 0, "endTicks": 120_000,
@@ -602,7 +602,7 @@ fn the_render_cache_evicts_old_unpinned_frames_first() {
     let frame_bytes = std::fs::metadata(&walk(&cache)[0]).expect("frame").len();
     let request = parse_request(
         &json!({
-            "protocolVersion": 1, "operation": "export", "requestId": "quota",
+            "protocolVersion": 2, "operation": "export", "requestId": "quota",
             "project": still_project([0.4, 0.0, 0.0], "auto"),
             "assets": {"image": Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../tests/corpus/cross_topology_parity.png")},
@@ -1287,7 +1287,7 @@ fn export_with_a_stuck_cache_writer(
     });
     let request = parse_request(
         &json!({
-            "protocolVersion": 1,
+            "protocolVersion": 2,
             "operation": "export",
             "requestId": "stuck-cache",
             "project": project,

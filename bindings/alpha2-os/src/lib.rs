@@ -26,7 +26,7 @@ mod windows;
 use windows as platform;
 
 pub use lifetime::{
-    KillOnCloseJob, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
+    KillOnCloseJob, claim_stdout, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
 };
 pub use memory::{MemoryCapacity, memory_capacity};
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -621,6 +621,49 @@ mod tests {
                 .map(|earlier| started.duration_since(earlier)),
             Some(Duration::from_millis(1))
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_claimed_stream_keeps_stray_writes_out() {
+        use std::io::{Read, Write};
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        let pipe = || {
+            let mut ends = [0; 2];
+            // SAFETY: `ends` holds the two descriptors `pipe` writes.
+            assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+            // SAFETY: both descriptors are new and owned here.
+            unsafe { (File::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])) }
+        };
+        let stray = |fd: i32| {
+            // SAFETY: the bytes are valid for the call; a write to a closed fd fails harmlessly.
+            unsafe { libc::write(fd, b"stray".as_ptr().cast(), 5) }
+        };
+        for diagnostics_open in [true, false] {
+            let (mut protocol_read, protocol_write) = pipe();
+            let (mut diagnostics_read, diagnostics_write) = pipe();
+            let diagnostics_fd = if diagnostics_open {
+                diagnostics_write.as_raw_fd()
+            } else {
+                -1
+            };
+            let mut claimed =
+                platform::claim_stream(protocol_write.as_raw_fd(), diagnostics_fd).expect("claim");
+            stray(protocol_write.as_raw_fd());
+            claimed.write_all(b"frame").expect("frame");
+            drop((claimed, protocol_write, diagnostics_write));
+            let mut protocol = String::new();
+            protocol_read
+                .read_to_string(&mut protocol)
+                .expect("protocol");
+            assert_eq!(protocol, "frame", "diagnostics open: {diagnostics_open}");
+            let mut diagnostics = String::new();
+            diagnostics_read
+                .read_to_string(&mut diagnostics)
+                .expect("diagnostics");
+            let expected = if diagnostics_open { "stray" } else { "" };
+            assert_eq!(diagnostics, expected);
+        }
     }
 
     #[test]

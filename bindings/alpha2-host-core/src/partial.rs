@@ -928,21 +928,47 @@ pub fn write_png(
     }
     write_whole(target, |file| {
         let mut buffered = std::io::BufWriter::new(file);
-        let mut encoder = png::Encoder::new(&mut buffered, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        // The pixels are display-encoded sRGB; tag them rather than leaving viewers to assume it.
-        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
-        writer
-            .write_image_data(rgba)
-            .map_err(|error| error.to_string())?;
-        writer.finish().map_err(|error| error.to_string())?;
+        encode_png(&mut buffered, width, height, rgba)?;
         buffered
             .into_inner()
             .map(|_| ())
             .map_err(|error| error.error().to_string())
     })
+}
+
+/// Straight-alpha 8-bit RGBA `rgba` as the bytes of a PNG [`write_png`] would write.
+///
+/// # Errors
+/// When `rgba` is not `width` x `height` pixels.
+pub fn png_bytes(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, String> {
+    let expected = u64::from(width) * u64::from(height) * 4;
+    if u64::try_from(rgba.len()).ok() != Some(expected) {
+        return Err(format!(
+            "a {width}x{height} RGBA image is {expected} bytes, not {}",
+            rgba.len()
+        ));
+    }
+    let mut bytes = Vec::new();
+    encode_png(&mut bytes, width, height, rgba)?;
+    Ok(bytes)
+}
+
+fn encode_png(
+    output: &mut impl std::io::Write,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> Result<(), String> {
+    let mut encoder = png::Encoder::new(output, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    // The pixels are display-encoded sRGB; tag them rather than leaving viewers to assume it.
+    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+    let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+    writer
+        .write_image_data(rgba)
+        .map_err(|error| error.to_string())?;
+    writer.finish().map_err(|error| error.to_string())
 }
 
 /// Removes a sibling partial file left by an interrupted transactional export.

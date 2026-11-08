@@ -10,6 +10,7 @@ use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
 use alpha2_engine::{ExportTextureStep, Exporter, FrameProvider, FramesWithText, QualityProfile};
+use alpha2_host_core::host_frames::Attachment;
 use alpha2_media::CancelToken;
 use alpha2_native::{ExistingOutput, OutputTarget};
 use alpha2_render::RenderSize;
@@ -25,6 +26,9 @@ use crate::metrics::ExportMetrics;
 use crate::protocol::StillEntry;
 use crate::renderer_backend::RendererBackend;
 use crate::{WORKER_RETRY_INTERVAL, error_message};
+
+/// What one response carries in attachments, the most a frame holds.
+const MAX_RESPONSE_ATTACHMENT_BYTES: u64 = u32::MAX as u64;
 
 impl Host {
     /// Renders in time order so every decoder only moves forward, and answers in request order.
@@ -87,6 +91,8 @@ impl Host {
         let mut timings = StillTimings::default();
         let mut answers = vec![Value::Null; stills.len()];
         let mut written: Vec<&Path> = Vec::with_capacity(stills.len());
+        let mut pngs: Vec<(usize, Vec<u8>)> = Vec::new();
+        let mut attached = 0_u64;
         for (index, mut exporter) in order.iter().map(|&index| (index, exporters[index].clone())) {
             let still = &stills[index];
             let frame_time = exporter
@@ -144,43 +150,74 @@ impl Host {
             };
             timings.render += render_started.elapsed();
             let write_started = Instant::now();
-            // A link or a second name of a folder can still name a file an earlier still wrote.
-            if let Some(earlier) = written
-                .iter()
-                .find(|earlier| alpha2_os::same_file_at(&still.output, earlier).unwrap_or(false))
-            {
-                return Err(crate::protocol::code_tag(
-                    "INVALID_INPUT",
-                    format!(
-                        "two stills write one file: {} and {}",
-                        earlier.display(),
-                        still.output.display()
-                    ),
-                ));
-            }
             let straight = alpha2_host_core::tools::unpremultiplied(pixels);
-            let published = alpha2_native::write_png(
-                OutputTarget {
-                    path: still.output.clone(),
-                    existing,
-                },
-                size.width,
-                size.height,
-                &straight,
-            )
-            .map_err(|error| crate::encode::encode_failure("writing a still", error))?;
-            timings.write += write_started.elapsed();
-            written.push(&still.output);
-            answers[index] = json!({
-                "output": written_path(&still.output),
+            let mut answer = json!({
                 "frameTime": frame_time.ticks(),
                 "width": size.width,
                 "height": size.height,
-                "publish": crate::host::publish_json(Some(published)),
             });
+            if let Some(output) = &still.output {
+                // A link or a second name of a folder can still name a file an earlier still
+                // wrote.
+                if let Some(earlier) = written
+                    .iter()
+                    .find(|earlier| alpha2_os::same_file_at(output, earlier).unwrap_or(false))
+                {
+                    return Err(crate::protocol::code_tag(
+                        "INVALID_INPUT",
+                        format!(
+                            "two stills write one file: {} and {}",
+                            earlier.display(),
+                            output.display()
+                        ),
+                    ));
+                }
+                let published = alpha2_native::write_png(
+                    OutputTarget {
+                        path: output.clone(),
+                        existing,
+                    },
+                    size.width,
+                    size.height,
+                    &straight,
+                )
+                .map_err(|error| crate::encode::encode_failure("writing a still", error))?;
+                written.push(output);
+                answer["output"] = json!(written_path(output));
+                answer["publish"] = crate::host::publish_json(Some(published));
+            } else {
+                let png = alpha2_host_core::partial::png_bytes(size.width, size.height, &straight)
+                    .map_err(|error| crate::protocol::code_tag("ENCODE_ERROR", error))?;
+                attached = attached.saturating_add(png.len() as u64);
+                if attached > MAX_RESPONSE_ATTACHMENT_BYTES {
+                    return Err(crate::protocol::code_tag(
+                        "RESOURCE_LIMIT",
+                        format!(
+                            "the stills without an output are over {MAX_RESPONSE_ATTACHMENT_BYTES} \
+                             bytes of PNG, more than one response carries; give some an output"
+                        ),
+                    ));
+                }
+                answer["output"] = Value::Null;
+                pngs.push((index, png));
+            }
+            timings.write += write_started.elapsed();
+            answers[index] = answer;
             check_cancel(&cancel)?;
         }
         worker.finish()?;
+        // Attached in request order, which is the order their indices were given in.
+        pngs.sort_by_key(|(index, _)| *index);
+        for (attachment, (index, _)) in pngs.iter().enumerate() {
+            answers[*index]["attachment"] = json!(attachment);
+        }
+        self.reply_attachments = pngs
+            .into_iter()
+            .map(|(_, bytes)| Attachment {
+                kind: "image/png".to_owned(),
+                bytes,
+            })
+            .collect();
         let mut result = self.response_metadata(started.elapsed().as_secs_f64() * 1_000.0);
         result["stills"] = Value::Array(answers);
         result["timings"] = timings.to_json();

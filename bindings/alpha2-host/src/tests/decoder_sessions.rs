@@ -9,7 +9,7 @@ fn grid_export(output: &Path, budget: Option<u64>) -> Request {
         .map(|index| (format!("v{index}"), corpus("h264-bt709-copy.mp4")))
         .collect::<HashMap<_, _>>();
     let mut request = json!({
-        "protocolVersion": 1, "operation": "export", "requestId": "grid",
+        "protocolVersion": 2, "operation": "export", "requestId": "grid",
         "project": project,
         "assets": assets,
         "startTicks": 0, "endTicks": alpha2_time::TICKS_PER_SECOND,

@@ -347,6 +347,30 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
     Ok(())
 }
 
+/// Duplicates `stream` for the caller and points it at `diagnostics`, or at `/dev/null` when that
+/// is not open.
+pub(crate) fn claim_stream(
+    stream: std::os::fd::RawFd,
+    diagnostics: std::os::fd::RawFd,
+) -> io::Result<File> {
+    // SAFETY: `F_DUPFD_CLOEXEC` reads no memory; a closed `stream` fails with `EBADF`.
+    let claimed = unsafe { libc::fcntl(stream, libc::F_DUPFD_CLOEXEC, 3) };
+    if claimed < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `claimed` is a new descriptor nothing else owns.
+    let claimed = unsafe { File::from_raw_fd(claimed) };
+    // SAFETY: `dup2` reads no memory; a closed `diagnostics` fails with `EBADF`.
+    if unsafe { libc::dup2(diagnostics, stream) } < 0 {
+        let null = fs::OpenOptions::new().write(true).open("/dev/null")?;
+        // SAFETY: as above, with a descriptor `null` keeps open for the call.
+        if unsafe { libc::dup2(null.as_raw_fd(), stream) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(claimed)
+}
+
 /// Counts the entries of the descriptor directory, less the one the listing itself opens.
 pub(crate) fn open_handles() -> Option<u64> {
     let directory = if cfg!(any(target_os = "linux", target_os = "android")) {

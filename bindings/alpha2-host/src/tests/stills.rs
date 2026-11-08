@@ -35,7 +35,7 @@ fn font() -> PathBuf {
 
 fn still_request(project: &Value, stills: &[(i64, &Path)], fields: &Value) -> Request {
     let mut request = json!({
-        "protocolVersion": 1, "operation": "still", "requestId": "still",
+        "protocolVersion": 2, "operation": "still", "requestId": "still",
         "project": project,
         "assets": assets(),
         "fonts": [font()],
@@ -239,6 +239,48 @@ fn a_still_renders_at_the_size_it_asks_for() {
 }
 
 #[test]
+fn a_still_without_an_output_comes_back_as_an_attachment() {
+    let _gpu = gpu_test_lock();
+    let host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("stills-attached");
+    let written = directory.join("written.png");
+    let request = json!({
+        "protocolVersion": 2, "operation": "still", "requestId": "attached",
+        "project": titled_project(),
+        "assets": assets(),
+        "fonts": [font()],
+        "size": {"width": 64, "height": 36},
+        "stills": [{"time": 80_000}, {"time": 40_000, "output": written}, {"time": 40_000}],
+    });
+    let (served, output) = serve_input(
+        &mut Serving::started(host),
+        request.to_string().as_bytes(),
+        &mut |_| None,
+    );
+    served.expect("serve");
+    let (answer, attachments) = crate::serve_io::messages_of(&output)
+        .into_iter()
+        .find(|(header, _)| header["requestId"] == "attached")
+        .expect("an answer");
+    assert_eq!(answer["ok"], true, "{answer}");
+    let stills = &answer["result"]["stills"];
+    assert_eq!(stills[0]["output"], Value::Null, "{answer}");
+    assert_eq!(stills[0]["attachment"], 0, "{answer}");
+    assert_eq!(stills[1]["attachment"], Value::Null, "{answer}");
+    assert_eq!(stills[2]["attachment"], 1, "{answer}");
+    assert_eq!(answer["attachments"][0]["type"], "image/png", "{answer}");
+    assert_eq!(attachments.len(), 2);
+    assert_eq!(
+        attachments[1].bytes,
+        std::fs::read(&written).expect("the written still"),
+        "a still is the same PNG in a file and in an attachment"
+    );
+    let first = directory.join("first.png");
+    std::fs::write(&first, &attachments[0].bytes).expect("write");
+    assert_eq!(read_png(&first).0, (64, 36));
+}
+
+#[test]
 fn a_refused_still_writes_no_file() {
     let _gpu = gpu_test_lock();
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -248,7 +290,7 @@ fn a_refused_still_writes_no_file() {
     std::fs::copy(corpus("cross_topology_parity.png"), &still).expect("still");
     let refused = |host: &mut Host, request: Value| {
         let mut line = json!({
-            "protocolVersion": 1, "operation": "still", "requestId": "still",
+            "protocolVersion": 2, "operation": "still", "requestId": "still",
             "project": titled_project(),
             "assets": assets(),
             "fonts": [font()],

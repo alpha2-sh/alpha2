@@ -479,7 +479,7 @@ fn a_rendezvous_export_waits_only_for_the_encoder() {
     let end = 2 * alpha2_time::TICKS_PER_SECOND;
     crate::encode::INJECT_SLOW_ENCODE.with(|slow| slow.set(Some(Duration::from_millis(15))));
     let request = json!({
-        "protocolVersion": 1, "operation": "export", "requestId": "rendezvous",
+        "protocolVersion": 2, "operation": "export", "requestId": "rendezvous",
         "project": {
             "schema_version": 1, "id": "rendezvous", "name": "Rendezvous",
             "settings": {"width": 640, "height": 360, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},

@@ -123,6 +123,8 @@ pub struct Host {
     pub gpu_log: std::sync::Arc<alpha2_gpu::GpuDiagnosticLog>,
     pub failure: crate::failure::FailureContext,
     pub memory: crate::memory::MemoryPolicy,
+    /// What the response to the current request carries besides its header.
+    pub reply_attachments: Vec<alpha2_host_core::host_frames::Attachment>,
     /// Blocks this host's drop forever when a test asks, as on a device that never goes idle.
     #[cfg(test)]
     _drop_stall: crate::teardown::injected::DropStall,
@@ -205,6 +207,7 @@ impl Host {
             gpu_log: std::sync::Arc::default(),
             failure: crate::failure::FailureContext::default(),
             memory: crate::memory::MemoryPolicy::default(),
+            reply_attachments: Vec::new(),
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
         }
@@ -237,6 +240,7 @@ impl Host {
             gpu_log: std::sync::Arc::default(),
             failure: crate::failure::FailureContext::default(),
             memory: crate::memory::MemoryPolicy::default(),
+            reply_attachments: Vec::new(),
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
         }
@@ -269,6 +273,7 @@ impl Host {
             gpu_log: std::sync::Arc::default(),
             failure: crate::failure::FailureContext::default(),
             memory: crate::memory::MemoryPolicy::default(),
+            reply_attachments: Vec::new(),
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
         }
@@ -301,6 +306,7 @@ impl Host {
             gpu_log: std::sync::Arc::default(),
             failure: crate::failure::FailureContext::default(),
             memory: crate::memory::MemoryPolicy::default(),
+            reply_attachments: Vec::new(),
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
         }
@@ -470,6 +476,7 @@ impl Host {
             gpu_log: std::sync::Arc::default(),
             failure: crate::failure::FailureContext::default(),
             memory: crate::memory::MemoryPolicy::default(),
+            reply_attachments: Vec::new(),
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
         }
@@ -814,7 +821,7 @@ impl Host {
         self.begin_request(crate::memory::MemoryRequest::default(), None)?;
         let outputs = stills
             .iter()
-            .map(|still| still.output.as_path())
+            .filter_map(|still| still.output.as_deref())
             .collect::<Vec<_>>();
         let PreparedRequest {
             resolved,

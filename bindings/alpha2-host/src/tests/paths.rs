@@ -4,7 +4,7 @@ use crate::text_file::decode_user_text;
 fn still_request(outputs: &[&Path], overwrite: bool) -> Result<Request, HostError> {
     parse_request(
         &json!({
-            "protocolVersion": 1, "operation": "still", "requestId": "spellings",
+            "protocolVersion": 2, "operation": "still", "requestId": "spellings",
             "project": conform_project(&json!({})),
             "assets": {"video": corpus("parity-rgb.mov")},
             "stills": outputs
@@ -125,7 +125,7 @@ fn a_lut_with_a_legacy_title_is_invalid_input_naming_it() {
         json!([{"id": "grade", "kind": "lut3d", "locator": "asset://grade"}]);
     let request = parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "lut", "operation": "export",
+            "protocolVersion": 2, "requestId": "lut", "operation": "export",
             "project": project,
             "assets": {"video": corpus("parity-rgb.mov")},
             "effectAssets": {"grade": lut},

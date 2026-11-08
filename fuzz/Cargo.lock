@@ -176,6 +176,7 @@ dependencies = [
  "bytes",
  "image-webp",
  "png",
+ "serde_json",
  "zune-core",
  "zune-jpeg",
 ]

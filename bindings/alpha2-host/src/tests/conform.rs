@@ -251,7 +251,7 @@ fn a_panic_handling_a_request_fails_that_request_and_the_host_answers_the_next()
     let conform = || {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "conform", "operation": "conform",
+                "protocolVersion": 2, "requestId": "conform", "operation": "conform",
                 "project": conform_project(&json!({})),
                 "assets": {"video": clip}
             })
@@ -262,7 +262,7 @@ fn a_panic_handling_a_request_fails_that_request_and_the_host_answers_the_next()
     let export = |output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "export", "operation": "export",
+                "protocolVersion": 2, "requestId": "export", "operation": "export",
                 "project": conform_project(&json!({})),
                 "assets": {"video": clip},
                 "startTicks": 0, "endTicks": 30_000,
@@ -315,7 +315,7 @@ fn an_encode_worker_that_cannot_start_fails_the_export_and_leaves_no_partial() {
     let export = |output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "export", "operation": "export",
+                "protocolVersion": 2, "requestId": "export", "operation": "export",
                 "project": conform_project(&json!({})),
                 "assets": {"video": clip},
                 "startTicks": 0, "endTicks": 30_000,
@@ -363,7 +363,7 @@ fn an_export_refuses_unready_media_before_any_output_and_says_what_it_read() {
     let request = |media: &str, assets: Value, proxies: Value, output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "conform", "operation": "export",
+                "protocolVersion": 2, "requestId": "conform", "operation": "export",
                 "project": conform_project(&json!({})),
                 "assets": assets, "proxies": proxies, "media": media,
                 "startTicks": 0, "endTicks": 120_000,
@@ -489,7 +489,7 @@ fn media_only_a_group_or_composition_source_reads_is_checked_and_decoded() {
         let request = |assets: &Value, output: &Path| {
             parse_request(
                 &json!({
-                    "protocolVersion": 1, "requestId": through, "operation": "export",
+                    "protocolVersion": 2, "requestId": through, "operation": "export",
                     "project": nested_media_project(through),
                     "assets": assets,
                     "startTicks": 0, "endTicks": 120_000,
@@ -644,7 +644,7 @@ fn a_native_host_reads_the_proxy_a_browser_made_from_the_evidence_it_recorded() 
 fn a_malformed_made_from_is_refused_as_input() {
     let clip = corpus("parity-rgb.mov");
     let conform = json!({
-        "protocolVersion": 1, "requestId": "conform", "operation": "conform",
+        "protocolVersion": 2, "requestId": "conform", "operation": "conform",
         "project": conform_project(&json!({})),
         "assets": {"video": clip},
         "proxies": {"video": [{"path": clip, "madeFrom": {"content_sha256": "A".repeat(64)}}]}
@@ -654,7 +654,7 @@ fn a_malformed_made_from_is_refused_as_input() {
     serving.create = no_gpu;
     let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |_| None);
     let _ = served;
-    let answers = answers_of(output);
+    let answers = answers_of(&output);
     assert_eq!(answers[0]["ok"], false, "{}", answers[0]);
     assert_eq!(
         answers[0]["error"]["code"], "INVALID_INPUT",

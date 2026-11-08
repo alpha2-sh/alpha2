@@ -1,5 +1,7 @@
 //! Every report names the operating system version beside the adapter.
 
+mod common;
+
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -17,13 +19,14 @@ fn capabilities_name_the_os_version() {
         .stdin
         .take()
         .expect("stdin")
-        .write_all(b"{\"protocolVersion\":1,\"requestId\":\"os\",\"operation\":\"capabilities\"}\n")
+        .write_all(&common::request(
+            r#"{"protocolVersion":2,"requestId":"os","operation":"capabilities"}"#,
+        ))
         .expect("the request is written");
     let output = child.wait_with_output().expect("the host ends");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let answer = stdout
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+    let answer = common::messages(&output.stdout)
+        .into_iter()
         .find(|line| line["requestId"] == "os")
         .unwrap_or_else(|| panic!("no answer: {stdout}"));
     assert_eq!(answer["ok"], true, "{answer}");
