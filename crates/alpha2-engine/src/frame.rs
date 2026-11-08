@@ -1151,6 +1151,15 @@ fn clip_layer<'a>(
             .set_cache_intent(source, intent)
             .map_err(GraphError::into_render_error)?;
     }
+    if let Some(correction) = clip.correction {
+        source = graph
+            .add_composite(vec![GraphLayer {
+                source,
+                visual: correction_transform(correction),
+                blend_mode: BlendMode::Normal,
+            }])
+            .map_err(GraphError::into_render_error)?;
+    }
     Ok(GraphLayer {
         source,
         visual: layer_transform(clip.visual.ok_or(RenderError::InvalidVisual)?),
@@ -1680,6 +1689,21 @@ fn identity_layer(source: RenderNodeId) -> GraphLayer {
             opacity: 1.0,
         },
         blend_mode: BlendMode::Normal,
+    }
+}
+
+/// A correction as a layer transform: turned and scaled about the layer's centre, then moved by
+/// its translation in fractions of the displayed picture, as `Correction::apply` maps points.
+fn correction_transform(correction: alpha2_eval::Correction) -> LayerTransform {
+    LayerTransform {
+        position: [
+            0.5 + correction.translate.x * correction.picture.x,
+            0.5 + correction.translate.y * correction.picture.y,
+        ],
+        anchor: [0.5, 0.5],
+        scale: [correction.scale, correction.scale],
+        rotation_degrees: correction.rotation_degrees,
+        opacity: 1.0,
     }
 }
 

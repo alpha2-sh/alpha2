@@ -139,6 +139,16 @@ fn active_clip<'a>(
         source_composition: active_source_composition(entry, source_time)?
             .map(|plan| plan.with_data(*context)),
         data: *context,
+        correction: (entry.track_kind == TrackKind::Video)
+            .then(|| {
+                crate::data::clip_correction(
+                    &entry.visual,
+                    (entry.timeline_range, entry.source_range, entry.time_map),
+                    time,
+                    context,
+                )
+            })
+            .flatten(),
     })
 }
 

@@ -33,6 +33,9 @@ pub struct CompositionPlan {
     pub steps: Vec<Step>,
     /// The step whose image is the composition's picture.
     pub output: usize,
+    /// Every `media` node of the compositions the steps come from, drawn or not, by inlined path,
+    /// with its start: what a value bound to data reads through.
+    pub media: Vec<(String, MediaTime)>,
 }
 
 impl CompositionPlan {
@@ -50,13 +53,8 @@ impl CompositionPlan {
     pub fn media_start(&self, step: usize, via: &alpha2_model::NodeId) -> Option<MediaTime> {
         let path = self.steps.get(step)?.node.as_str();
         let prefix = path.rfind('/').map_or("", |slash| &path[..=slash]);
-        self.steps.iter().find_map(|candidate| match &candidate.op {
-            StepOp::Media { start, .. }
-                if candidate.node.as_str().strip_prefix(prefix) == Some(via.as_str()) =>
-            {
-                Some(*start)
-            }
-            _ => None,
+        self.media.iter().find_map(|(node, start)| {
+            (node.strip_prefix(prefix) == Some(via.as_str())).then_some(*start)
         })
     }
 
@@ -325,6 +323,7 @@ fn plan<'a>(
     let mut planner = Planner {
         lookup,
         steps: Vec::new(),
+        media: Vec::new(),
         budget,
     };
     let scope = Scope {
@@ -342,6 +341,7 @@ fn plan<'a>(
         id: composition.id.clone(),
         steps: planner.steps,
         output,
+        media: planner.media,
     })
 }
 
@@ -367,6 +367,7 @@ struct Scope<'a> {
 struct Planner<'a, 'b> {
     lookup: &'b Lookup<'a>,
     steps: Vec<Step>,
+    media: Vec<(String, MediaTime)>,
     budget: &'b mut PlanBudget,
 }
 
@@ -378,6 +379,11 @@ impl<'a> Planner<'a, '_> {
             .output
             .as_ref()
             .ok_or(PlanError::NoOutput)?;
+        for node in &scope.composition.nodes {
+            if let NodeOp::Media { start, .. } = &node.op {
+                self.media.push((format!("{}{}", scope.prefix, node.id), *start));
+            }
+        }
         let nodes: HashMap<&NodeId, &'a alpha2_model::CompositionNode> = scope
             .composition
             .nodes

@@ -462,16 +462,33 @@ pub fn correction_at(
     time: MediaTime,
     context: &SampleContext<'_>,
 ) -> Option<Correction> {
-    let reference = clip.visual.correction.as_ref()?;
+    clip_correction(
+        &clip.visual,
+        (clip.timeline_range, clip.source_range, clip.time_map),
+        time,
+        context,
+    )
+}
+
+/// The correction `visual` names at timeline `time`, for a clip placed by `placement`
+/// (timeline range, source range, time map).
+pub(crate) fn clip_correction(
+    visual: &alpha2_model::VisualProperties,
+    placement: (alpha2_time::TimeRange, alpha2_time::TimeRange, alpha2_model::TimeMap),
+    time: MediaTime,
+    context: &SampleContext<'_>,
+) -> Option<Correction> {
+    let reference = visual.correction.as_ref()?;
     let scope = context.scope?;
     let (set, index) = scope.index.set(scope.project, &reference.data)?;
     let DataValues::Similarity(samples) = &set.values else {
         return None;
     };
+    let (timeline_range, source_range, time_map) = placement;
     let at = crate::picture_source_time(
-        clip.timeline_range,
-        clip.source_range,
-        clip.time_map,
+        timeline_range,
+        source_range,
+        time_map,
         scope.project.settings.frame_rate,
         time,
     )?;

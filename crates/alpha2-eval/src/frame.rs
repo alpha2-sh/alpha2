@@ -92,6 +92,9 @@ pub struct ActiveClip<'a> {
     pub source_composition: Option<crate::ActiveComposition<'a>>,
     /// What the clip's timeline-time values (its masks) read data through.
     pub data: SampleContext<'a>,
+    /// The correction drawn between the clip's finished picture and its visual, when it has one
+    /// with a value at this time.
+    pub correction: Option<crate::Correction>,
 }
 
 impl ActiveClip<'_> {

@@ -150,6 +150,7 @@ fn evaluated_frame_and_yuv_readback_share_one_submission() {
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
             data: alpha2_eval::SampleContext::NONE,
+            correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
             source_id: leak(source.clone()),
             track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -235,6 +236,7 @@ fn pending_source_presentation_joins_the_export_submission() {
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
             data: alpha2_eval::SampleContext::NONE,
+            correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
             source_id: leak(source.clone()),
             track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -349,6 +351,7 @@ fn export_submission_stages_external_source_synchronization() {
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
             data: alpha2_eval::SampleContext::NONE,
+            correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
             source_id: leak(source.clone()),
             track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -433,6 +436,7 @@ fn a_failed_source_synchronization_fails_the_frame_with_what_the_device_said() {
             time: MediaTime::ZERO,
             visual: vec![ActiveClip {
                 data: alpha2_eval::SampleContext::NONE,
+                correction: None,
                 clip_id: leak(ClipId::new("clip").expect("valid ID")),
                 source_id: leak(source),
                 track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -480,6 +484,7 @@ fn failed_frame_encoding_restores_pending_source_work() {
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
             data: alpha2_eval::SampleContext::NONE,
+            correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
             source_id: leak(source.clone()),
             track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -545,6 +550,7 @@ fn pending_source_presentation_joins_the_preview_graph_submission() {
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
             data: alpha2_eval::SampleContext::NONE,
+            correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
             source_id: leak(source.clone()),
             track_id: leak(TrackId::new("track").expect("valid ID")),

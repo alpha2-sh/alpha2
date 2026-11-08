@@ -14,6 +14,7 @@ impl FrameProvider for Frames {
 fn clip(id: &str, time: i64, visual: EvaluatedVisual, mode: ClipBlendMode) -> ActiveClip<'static> {
     ActiveClip {
         data: alpha2_eval::SampleContext::NONE,
+        correction: None,
         clip_id: leak(ClipId::new(id).unwrap()),
         source_id: leak(SourceId::new("source").unwrap()),
         track_id: leak(TrackId::new("track").unwrap()),
