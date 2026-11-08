@@ -12,7 +12,7 @@ use std::time::UNIX_EPOCH;
 
 use alpha2_assets::{
     AssetCatalog, AssetEntry, AudioStreamFacts, ConformIssue, ConformReport, FrameRateEvidence,
-    MediaPurpose, OriginalState, ProxyState, ProxyVariant, Selection, conform,
+    MediaPurpose, OriginalState, ProxyState, ProxyVariant, Selection, conform_sources,
 };
 use alpha2_extensions::Registry;
 use alpha2_media::{SourceId, StreamKind};
@@ -147,11 +147,33 @@ pub fn resolve_media(
     purpose: MediaPurpose,
     hardware: &HardwareVideoDecode,
 ) -> ResolvedMedia {
+    resolve_sources(
+        project,
+        project.used_sources(),
+        resolver,
+        derivatives,
+        purpose,
+        hardware,
+    )
+}
+
+/// [`resolve_media`] over `sources` instead of the ones a render reads.
+pub fn resolve_sources(
+    project: &Project,
+    sources: Vec<&alpha2_model::MediaSource>,
+    resolver: &dyn AssetResolver,
+    derivatives: &dyn DerivativeProvider,
+    purpose: MediaPurpose,
+    hardware: &HardwareVideoDecode,
+) -> ResolvedMedia {
     let mut assets = Vec::new();
     let mut proxy_paths = HashMap::new();
     let mut frames = HashMap::<PathBuf, VideoFrameSize>::new();
-    for source in project
-        .used_sources()
+    let wanted = sources
+        .iter()
+        .map(|source| source.id.clone())
+        .collect::<Vec<_>>();
+    for source in sources
         .into_iter()
         .filter(|source| source.is_host_supplied())
     {
@@ -199,7 +221,16 @@ pub fn resolve_media(
         assets.push(entry);
     }
     let catalog = AssetCatalog::new(assets);
-    let report = conform(project, &catalog, purpose);
+    let report = conform_sources(
+        project,
+        project
+            .sources
+            .iter()
+            .filter(|source| wanted.contains(&source.id))
+            .collect(),
+        &catalog,
+        purpose,
+    );
     let paths = report
         .sources
         .iter()

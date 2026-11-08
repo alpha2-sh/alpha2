@@ -49,6 +49,7 @@ mod decoder_sessions;
 mod device_hung;
 mod encoder_refusal;
 mod export_pipeline;
+mod extract;
 mod failures;
 mod gpu_encode;
 mod gpu_resident;

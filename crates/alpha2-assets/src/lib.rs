@@ -23,6 +23,8 @@ pub use catalog::{
     ProxyMismatch, ProxyProblem, ProxyState, ProxyVariant, Selection, color_pipeline_fingerprint,
     proxy_problem, select,
 };
-pub use conform::{ConformEntry, ConformIssue, ConformReport, SourceConform, conform};
+pub use conform::{
+    ConformEntry, ConformIssue, ConformReport, SourceConform, conform, conform_sources,
+};
 pub use evidence::{FingerprintField, FingerprintMatch, compare, duration_tolerance, rates_agree};
 pub use rate::{FrameRateEvidence, rational_rate};

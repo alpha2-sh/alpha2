@@ -55,6 +55,7 @@ mod effect_request;
 mod encode;
 mod encoder_refusal;
 mod export_decode;
+mod extract_request;
 mod failure;
 mod frames;
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
@@ -1345,6 +1346,7 @@ fn serve(host: &mut Option<Host>, options: ServeOptions) -> Result<(), HostError
     }
     let requests = serve_io::start_reader(Arc::clone(&out), Arc::clone(&lifecycle))?;
     let mut serving = Serving::with_lifecycle(policy, lifecycle, options.max_running);
+    serving.extract_step_timeout = options.extract_step_timeout;
     let served = serve_requests(&mut serving, &requests, &out, &unusable_reason);
     exit_if_retired(&served);
     // Released by `main` once the outcome is out.
@@ -1377,6 +1379,8 @@ struct Serving {
     lifecycle: Arc<Lifecycle>,
     /// How many requests run at once at most.
     max_running: usize,
+    /// How long a client may take to acknowledge an extraction step.
+    extract_step_timeout: Option<std::time::Duration>,
 }
 
 impl Serving {
@@ -1391,6 +1395,7 @@ impl Serving {
             create: create_host,
             lifecycle,
             max_running,
+            extract_step_timeout: Some(crate::extract_request::DEFAULT_STEP_TIMEOUT),
         }
     }
 
@@ -1574,6 +1579,7 @@ fn dispatch<'scope>(
             device,
             policy: serving.policy,
             lifecycle: Arc::clone(&lifecycle),
+            extract_step_timeout: serving.extract_step_timeout,
         };
         let spawned = std::thread::Builder::new()
             .name("alpha2-request".to_owned())
@@ -1604,6 +1610,7 @@ struct RequestWork {
     device: Option<Arc<HostDevice>>,
     policy: VideoDecodePolicy,
     lifecycle: Arc<Lifecycle>,
+    extract_step_timeout: Option<std::time::Duration>,
 }
 
 impl RequestWork {
@@ -1617,6 +1624,7 @@ impl RequestWork {
             device,
             policy,
             lifecycle,
+            extract_step_timeout,
         } = self;
         #[cfg(test)]
         if matches!(envelope, Ok(crate::protocol::Request::Export(_)))
@@ -1640,6 +1648,25 @@ impl RequestWork {
             Ok(crate::protocol::Request::Compose(request)) => {
                 crate::compose_request::answer(&request)
             }
+            Ok(crate::protocol::Request::Extract(request)) => match host.as_mut() {
+                Some(host) => {
+                    let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::extract_request::handle(host, *request, out, extract_step_timeout)
+                    }))
+                    .unwrap_or_else(|payload| {
+                        Err(HostError::new(
+                            "INTERNAL",
+                            format!(
+                                "the host panicked handling the request: {}",
+                                crate::failure::panic_message(&*payload)
+                            ),
+                        ))
+                    });
+                    host.end_extract();
+                    answer
+                }
+                None => Err(missing()),
+            },
             Ok(request) => match host.as_mut() {
                 Some(host) => host.handle(request, &mut |progress| {
                     let mut event = json!({

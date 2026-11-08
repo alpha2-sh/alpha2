@@ -36,6 +36,7 @@ pub enum Request {
     Conform(ConformRequest),
     Still(Box<StillRequest>),
     Compose(Box<ComposeRequest>),
+    Extract(Box<crate::extract_request::ExtractHostRequest>),
 }
 
 /// A compose or template request, answered without a GPU or reading media.
@@ -599,6 +600,7 @@ impl Request {
             Self::Conform(conform) => &conform.request_id,
             Self::Still(still) => &still.request_id,
             Self::Compose(compose) => &compose.request_id,
+            Self::Extract(extract) => &extract.request_id,
         }
     }
 
@@ -611,6 +613,7 @@ impl Request {
             Self::Conform(conform) => conform.protocol_version,
             Self::Still(still) => still.protocol_version,
             Self::Compose(compose) => compose.protocol_version,
+            Self::Extract(extract) => extract.protocol_version,
         }
     }
 }
@@ -618,6 +621,7 @@ impl Request {
 /// Only the few small settings checked first become JSON trees: the top level is read as raw text
 /// per field, the operation's fields parse into their types, and the project stays text until the
 /// engine checks its size.
+#[allow(clippy::too_many_lines)]
 pub fn parse_request(line: &str) -> Result<Request, HostError> {
     let invalid = |error: serde_json::Error| {
         HostError::new("INVALID_REQUEST", format!("invalid request: {error}"))
@@ -686,6 +690,12 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             still.check()?;
             Request::Still(Box::new(still))
         }
+        Some("extract") => {
+            let extract: crate::extract_request::ExtractHostRequest =
+                serde_json::from_str(line).map_err(invalid)?;
+            extract.check()?;
+            Request::Extract(Box::new(extract))
+        }
         // The reader answers every cancel and status it takes; one reaches here only when too long.
         Some(operation @ ("cancel" | "status")) => {
             return Err(HostError::new(
@@ -697,7 +707,7 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             return Err(HostError::new(
                 "INVALID_REQUEST",
                 format!(
-                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`, `compose`, `cancel`, `status`"
+                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`, `compose`, `extract`, `cancel`, `status`"
                 ),
             ));
         }
@@ -784,7 +794,7 @@ pub const HARDWARE_DECODE_STALL_MARKER: &str = "holding hardware decode sessions
 /// evidence, not from these words.
 pub const HARDWARE_ENCODE_STALL_MARKER: &str = "holding a hardware encode session";
 
-pub const PROTOCOL_CODES: [&str; 26] = [
+pub const PROTOCOL_CODES: [&str; 29] = [
     "UNSUPPORTED_PROTOCOL",
     "INVALID_REQUEST",
     "INVALID_INPUT",
@@ -809,6 +819,9 @@ pub const PROTOCOL_CODES: [&str; 26] = [
     "CANCELLED",
     "RESOURCE_LIMIT",
     "HOST_RETIRING",
+    "INVALID_EMIT",
+    "EXTRACTOR_FAILED",
+    "EXTRACTOR_TIMEOUT",
     "INTERNAL",
     "ALPHA2_ERROR",
 ];

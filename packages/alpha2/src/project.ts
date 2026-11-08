@@ -1396,7 +1396,10 @@ type CanonicalValue<T> = [T] extends [never]
         : Same<T, LayoutOffset> extends true
           ? CanonicalOffset
           : Same<T, VisualProperties> extends true
-            ? CanonicalPart<Required<VisualProperties>>
+            ? CanonicalPart<
+                Required<Omit<VisualProperties, "correction">> &
+                  Pick<VisualProperties, "correction">
+              >
             : CanonicalPart<T>;
 
 type CanonicalPart<T> = T extends string | number | boolean | bigint

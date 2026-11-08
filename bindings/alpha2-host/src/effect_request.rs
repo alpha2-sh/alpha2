@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// A runtime effect as the protocol sends it (camelCase JSON).
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectRequest {
     pub id: String,
@@ -28,13 +28,13 @@ pub struct EffectRequest {
     pub license: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InputRequest {
     pub name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceRequest {
     pub name: String,
@@ -61,7 +61,7 @@ pub enum TierRequest {
     B,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParameterRequest {
     pub name: String,

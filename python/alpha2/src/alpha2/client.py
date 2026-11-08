@@ -39,6 +39,7 @@ from .errors import (
     Alpha2ProjectValidationError,
     ExportPhase,
 )
+from .extract import ExtractProgress, schema_problem, take_step
 from .install import cached_host_binary, host_cache_directory, host_executable_name, package_version
 from .protocol import (
     UNREAD_REQUEST_ID,
@@ -1038,6 +1039,47 @@ class HostClient:
         result without one: :meth:`stills` of one."""
         return self.stills(project, [(time, output)], **options)
 
+    def extract(
+        self,
+        project: Mapping[str, Any],
+        request: Mapping[str, Any],
+        extractor: Any,
+        *,
+        assets: Mapping[str, PathLike] | None = None,
+        proxies: Mapping[str, Sequence[ProxyFile]] | None = None,
+        media: Literal["original", "proxies"] = "original",
+        fonts: Sequence[PathLike] | None = None,
+        on_progress: Callable[[ExtractProgress], object] | None = None,
+        cancel: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        """Runs ``extractor`` (see :class:`alpha2.extract.Extractor`) over ``request``.
+
+        The host decodes and presents the input and hands it over step by step; this call returns
+        ``{"dataSets", "timings"}`` with the data sets the session validated, ``made_from`` set to
+        the conformed original. ``request["params"]`` is checked against the descriptor's
+        ``params_schema`` first. Raises with ``INVALID_EMIT`` for output the session refuses,
+        ``EXTRACTOR_FAILED`` when a step raises, ``EXTRACTOR_TIMEOUT`` when one takes longer than
+        the host's step timeout (begin and end have none), and
+        :class:`~alpha2.Alpha2AbortError` on ``cancel``.
+        """
+        descriptor = extractor.describe()
+        problems = _project_problems(project)
+        if problems:
+            raise Alpha2ProjectValidationError(problems)
+        problem = schema_problem(descriptor.get("params_schema"), request.get("params", {}))
+        if problem is not None:
+            raise _invalid(f"invalid params: {problem}")
+        inputs = _request_inputs(project, assets, proxies, None, None, media, None, fonts, None)
+        payload = {**inputs, "request": dict(request), "descriptor": descriptor}
+        return self._pool.request(  # type: ignore[no-any-return]
+            "extract",
+            payload,
+            _HostModes(self.video_decode, self.renderer, self.host_start_timeout),
+            cancel,
+            None,
+            _Extraction(extractor, on_progress),
+        )
+
     def close(self) -> None:
         """Ends the client's idle hosts and returns once they have exited.
 
@@ -1492,8 +1534,11 @@ class _Pool:
         modes: _HostModes,
         cancel: threading.Event | None,
         on_progress: ProgressCallback | None,
+        extraction: _Extraction | None = None,
     ) -> Any:
-        return self.request_with_attachments(operation, payload, modes, cancel, on_progress)[0]
+        return self.request_with_attachments(
+            operation, payload, modes, cancel, on_progress, extraction
+        )[0]
 
     def request_with_attachments(
         self,
@@ -1502,6 +1547,7 @@ class _Pool:
         modes: _HostModes,
         cancel: threading.Event | None,
         on_progress: ProgressCallback | None,
+        extraction: _Extraction | None = None,
     ) -> tuple[Any, list[dict[str, Any]]]:
         """The response's result, and its attachments with their ``data``."""
         if cancel is not None and cancel.is_set():
@@ -1526,7 +1572,7 @@ class _Pool:
             host, fresh = self._acquire(modes, events, cancel)
             try:
                 return self._run(
-                    host, fresh, events, framed, request_id, modes, cancel, on_progress
+                    host, fresh, events, framed, request_id, modes, cancel, on_progress, extraction
                 )
             except Alpha2HostError as error:
                 if error.code != "HOST_RETIRING" or resends >= _MAX_RESENDS:
@@ -1545,6 +1591,7 @@ class _Pool:
         modes: _HostModes,
         cancel: threading.Event | None,
         on_progress: ProgressCallback | None,
+        extraction: _Extraction | None = None,
     ) -> tuple[Any, list[dict[str, Any]]]:
         binary = self.binary
         last_phase: str | None = None
@@ -1646,6 +1693,41 @@ class _Pool:
                 if message.get("type") == "fatal":
                     outcome = (False, (message["error"], phase_now()))
                     break
+                if message.get("type") == "extract.step":
+                    if message["requestId"] != request_id or extraction is None:
+                        continue
+                    ack = take_step(extraction.extractor, message, message.get("attachments", []))
+                    host.send(
+                        _wire.frame(
+                            _wire.encode(
+                                create_request(
+                                    "extract.ack", request_id, {"seq": message["seq"], **ack}
+                                )
+                            )
+                        )
+                    )
+                    continue
+                if message.get("type") == "progress" and message.get("phase") == "extract":
+                    if message["requestId"] != request_id or extraction is None:
+                        continue
+                    if extraction.on_progress is not None:
+                        try:
+                            extraction.on_progress(
+                                ExtractProgress(
+                                    message.get("pass", 0), message["completed"], message["total"]
+                                )
+                            )
+                        except Exception as cause:  # noqa: BLE001 - reported as the request's failure
+                            error = Alpha2HostError(
+                                "PROGRESS_CALLBACK_FAILED",
+                                "on_progress callback raised",
+                                phase=phase_now(),
+                            )
+                            error.__cause__ = cause
+                            outcome = (False, error)
+                            cancelled = True
+                            break
+                    continue
                 if message.get("type") == "progress":
                     if message["requestId"] != request_id:
                         continue
@@ -1754,6 +1836,14 @@ class _Pool:
             if "ok" in value and value["requestId"] in (request_id, UNREAD_REQUEST_ID):
                 return
         self._end(host)
+
+
+@dataclass(frozen=True)
+class _Extraction:
+    """How a request with a client-side extractor takes its steps and reports its passes."""
+
+    extractor: Any
+    on_progress: Callable[[ExtractProgress], object] | None
 
 
 def _exit_error(

@@ -129,14 +129,25 @@ pub enum ConformIssue {
 /// dropped alpha are reported without blocking.
 #[must_use]
 pub fn conform(project: &Project, catalog: &AssetCatalog, purpose: MediaPurpose) -> ConformReport {
+    conform_sources(project, project.used_sources(), catalog, purpose)
+}
+
+/// [`conform`] over `sources` instead of the ones a render reads, such as the one source an
+/// extraction reads.
+#[must_use]
+pub fn conform_sources(
+    project: &Project,
+    sources: Vec<&MediaSource>,
+    catalog: &AssetCatalog,
+    purpose: MediaPurpose,
+) -> ConformReport {
     // Index once to avoid quadratic lookups; the first entry per ID wins, as in
     // `AssetCatalog::entry`.
     let mut entries = HashMap::with_capacity(catalog.assets.len());
     for entry in &catalog.assets {
         entries.entry(&entry.source_id).or_insert(entry);
     }
-    let sources = project
-        .used_sources()
+    let sources = sources
         .into_iter()
         .filter(|source| source.is_host_supplied())
         .map(|source| {

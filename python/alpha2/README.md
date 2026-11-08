@@ -178,6 +178,53 @@ print(result["stills"][0]["frameTime"])  # the grid frame that holds 1.5 s, in t
   the PNG comes back as bytes in `result["stills"][i]["png"]`, and `output` is `None`.
 - From a shell: `python -m alpha2 still project.json check.png --at 1.5 --asset title=title.png`.
 
+## Extract data
+
+`HostClient.extract(project, request, extractor, assets=...)` runs an extractor of your own over a
+source or the timeline and returns `{"dataSets", "timings"}`, data sets ready to put in the
+project's `data`. The host decodes and presents the input and calls the extractor step by step;
+every value it emits is validated as the project validates data:
+
+```python
+class Brightness:
+    def describe(self):
+        return {
+            "id": "com.example.brightness",
+            "version": 1,
+            "input": {"media": "video", "from": ["source"], "format": "luma8"},
+            "outputs": [{"name": "level", "kind": "scalars", "channels": ["y"]}],
+        }
+
+    def video(self, frame, out):
+        out.sample("level", frame.time, [sum(frame.data) / len(frame.data) / 255])
+
+
+with alpha2.HostClient() as client:
+    result = client.extract(
+        project,
+        {
+            "extractor": "com.example.brightness",
+            "version": 1,
+            "input": {
+                "from": "source",
+                "source_id": "interview",
+                "range": {"start": 0, "end": 600_000},
+                "size": 64,
+            },
+            "outputs": {"level": "interview-brightness"},
+        },
+        Brightness(),
+        assets={"interview": "interview.mp4"},
+    )
+```
+
+- `begin(context)`, `pass_(index, direction)`, `audio(block, out)` and `end(out)` are the other
+  steps (`alpha2.extract` has the types). `request["params"]` is checked against the
+  descriptor's `params_schema` first.
+- Output the project would refuse fails with `INVALID_EMIT`, a step that raises with
+  `EXTRACTOR_FAILED`, and a step slower than the host's `--extract-step-timeout` with
+  `EXTRACTOR_TIMEOUT`. `cancel=` and `on_progress=` work as for `export`.
+
 ## Renderer and video decode
 
 `renderer=` (`"auto"`, `"gpu"`, `"cpu"`; typed as `alpha2.client.RendererMode`) chooses what draws

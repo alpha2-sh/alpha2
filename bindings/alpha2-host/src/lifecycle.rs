@@ -28,6 +28,8 @@ pub(crate) struct ServeOptions {
     pub limits: SoftLimits,
     /// How many requests run at once at most.
     pub max_running: usize,
+    /// How long a client may take to acknowledge an extraction step; `None` waits forever.
+    pub extract_step_timeout: Option<Duration>,
 }
 
 impl ServeOptions {
@@ -37,10 +39,17 @@ impl ServeOptions {
     /// An unknown flag, a missing value or one out of range.
     pub(crate) fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut max_running = DEFAULT_MAX_RUNNING;
+        let mut extract_step_timeout = Some(crate::extract_request::DEFAULT_STEP_TIMEOUT);
         let mut rest = Vec::new();
         let mut args = args.into_iter();
         while let Some(flag) = args.next() {
-            if flag == "--max-running" {
+            if flag == "--extract-step-timeout" {
+                let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
+                let millis = value
+                    .parse::<u64>()
+                    .map_err(|_| format!("{flag} takes milliseconds, got {value}"))?;
+                extract_step_timeout = (millis > 0).then(|| Duration::from_millis(millis));
+            } else if flag == "--max-running" {
                 let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
                 max_running = value
                     .parse::<usize>()
@@ -54,6 +63,7 @@ impl ServeOptions {
         Ok(Self {
             limits: SoftLimits::from_args(rest)?,
             max_running,
+            extract_step_timeout,
         })
     }
 }

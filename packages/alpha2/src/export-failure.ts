@@ -241,6 +241,10 @@ const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
   RESOURCE_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
   // Never started: the host was retiring, and another host runs it.
   HOST_RETIRING: { code: "HOST_EXITED", resource: "unknown" },
+  // An extractor's own output or failure repeats on a retry; a slow client may not.
+  INVALID_EMIT: permanent,
+  EXTRACTOR_FAILED: permanent,
+  EXTRACTOR_TIMEOUT: unknown,
   GPU_INIT_FAILED: unknown,
   ENCODE_ERROR: unknown,
   ENCODER_BUSY: { code: "RESOURCE_BUSY", resource: "gpu" },

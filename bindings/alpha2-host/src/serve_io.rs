@@ -307,6 +307,18 @@ pub(crate) fn read_requests(
                 return;
             }
         };
+        // Acknowledgements go to their running extract request, never the request queue.
+        if let InputFrame::Request {
+            header,
+            attachments: Ok(attachments),
+        } = &frame
+            && attachments.is_empty()
+            && crate::protocol::operation_from_header(header).as_deref() == Some("extract.ack")
+        {
+            let request_id = crate::protocol::request_id_from_header(header);
+            crate::extract_request::route_ack(&request_id, header.clone());
+            continue;
+        }
         if let InputFrame::Request {
             header,
             attachments: Ok(attachments),

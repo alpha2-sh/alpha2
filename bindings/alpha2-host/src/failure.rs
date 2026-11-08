@@ -284,8 +284,13 @@ pub fn classify_failure(
         | "COPY_INELIGIBLE"
         | "GPU_OUTPUT_UNAVAILABLE"
         | "HARDWARE_DECODE_UNAVAILABLE"
+        // An extractor's own output or failure repeats on a retry.
+        | "INVALID_EMIT"
+        | "EXTRACTOR_FAILED"
         // Another export is writing the same output; retrying meets it again until that one ends.
         | "OUTPUT_IN_USE" => return class("INVALID_INPUT", "unknown"),
+        // A slow client may answer in time on another attempt.
+        "EXTRACTOR_TIMEOUT" => return class("UNKNOWN", "unknown"),
         _ => {}
     }
     let missing_canary = message.contains(alpha2_render::GPU_WORK_DROPPED_MESSAGE);

@@ -28,6 +28,17 @@ import {
 } from "alpha2/project";
 
 import {
+  type ExtractContext,
+  type ExtractProgress,
+  type ExtractResult,
+  type ExtractRun,
+  type Extractor,
+  type StepAck,
+  schemaProblem,
+  takeStep,
+} from "./extract.js";
+import {
+  type ExtractStepMessage,
   type HostMessage,
   type ProgressMessage,
   type ProgressPhase,
@@ -1567,12 +1578,59 @@ export class Alpha2NodeClient {
     await this.#pool.close();
   }
 
+  /**
+   * Runs `extractor` over `request.request`: the host decodes and presents the input and hands it
+   * over step by step, and resolves with the data sets the session validated, `made_from` set to
+   * the conformed original. `request.request.params` are checked against the descriptor's
+   * `params_schema` first. Rejects with `INVALID_EMIT` for output the session refuses,
+   * `EXTRACTOR_FAILED` when a callback throws, `EXTRACTOR_TIMEOUT` when one takes longer than the
+   * host's step timeout (begin and end have none), and `Alpha2AbortError` on `signal`.
+   */
+  async extract(
+    request: ExtractRequest,
+    extractor: Extractor,
+  ): Promise<ExtractResult> {
+    const descriptor = extractor.describe();
+    const problems = projectProblems(request.project);
+    if (problems.length > 0) throw new Alpha2ProjectValidationError(problems);
+    const problem = schemaProblem(
+      descriptor.params_schema,
+      request.request.params ?? {},
+    );
+    if (problem !== undefined)
+      throw new Alpha2HostError("INVALID_INPUT", `invalid params: ${problem}`);
+    const onProgress = request.onProgress;
+    const answer = await this.#request(
+      "extract",
+      {
+        project: request.project,
+        assets: request.assets ?? {},
+        proxies: proxiesPayload(request.proxies),
+        media: request.media ?? "original",
+        fonts: request.fonts ?? [],
+        request: request.request,
+        descriptor,
+      },
+      { videoDecode: this.#videoDecode, renderer: this.#renderer },
+      request.signal,
+      undefined,
+      {
+        step: (message, attachments) =>
+          takeStep(extractor, message, attachments),
+        progress: (progress) => onProgress?.(progress),
+      },
+    );
+    return answer.result as ExtractResult;
+  }
+
   async #request(
-    operation: "capabilities" | "export" | "conform" | "still" | "compose",
+    operation:
+      "capabilities" | "export" | "conform" | "still" | "compose" | "extract",
     payload: Readonly<Record<string, unknown>>,
     modes: HostModes,
     signal?: AbortSignal,
     onProgress?: ExportProgressCallback,
+    extraction?: Extraction,
   ): Promise<HostAnswer> {
     if (signal?.aborted) throw new Alpha2AbortError();
     const requestId = `node-${process.pid}-${Date.now()}-${nextRequestSequence++}`;
@@ -1593,9 +1651,45 @@ export class Alpha2NodeClient {
         "INVALID_INPUT",
         `the ${operation} request is ${frame.headerBytes} bytes of JSON; the host reads at most ${MAX_REQUEST_HEADER_BYTES}`,
       );
-    return this.#pool.request(frame, requestId, modes, signal, onProgress);
+    return this.#pool.request(
+      frame,
+      requestId,
+      modes,
+      signal,
+      onProgress,
+      extraction,
+    );
   }
 }
+
+/** An `extract` request for {@link Alpha2NodeClient.extract}. */
+export interface ExtractRequest {
+  readonly project: Project;
+  /** Source id to media path. */
+  readonly assets?: Readonly<Record<string, string>>;
+  readonly proxies?: Readonly<Record<string, readonly ProxyFile[]>>;
+  /** Read proxies (where fresh) instead of originals; `made_from` is the original's either way. */
+  readonly media?: "original" | "proxies";
+  /** Fonts for timeline input that draws text. */
+  readonly fonts?: readonly string[];
+  readonly request: ExtractRun;
+  readonly signal?: AbortSignal;
+  readonly onProgress?: (progress: ExtractProgress) => void | Promise<void>;
+}
+
+export type {
+  ExtractContext,
+  ExtractProgress,
+  ExtractResult,
+  ExtractRun,
+  Extractor,
+};
+export type {
+  ExtractAudio,
+  ExtractEmitter,
+  ExtractFrame,
+  ExtractorDescriptor,
+} from "./extract.js";
 
 /** Puts each returned PNG on its frame in place of the host's attachment index. */
 function withStillImages(answer: HostAnswer): StillResult {
@@ -2225,8 +2319,21 @@ type RunOutcome =
 /** Builds a request's error once the host's stderr for it is complete. */
 type FailureBuilder = (stderr: string, phase: ExportPhase) => Error;
 
+/** How a request with a client-side extractor takes its steps and reports its passes. */
+interface Extraction {
+  readonly step: (
+    message: ExtractStepMessage,
+    attachments: readonly Attachment[],
+  ) => Promise<StepAck>;
+  readonly progress: (progress: ExtractProgress) => void | Promise<void>;
+}
+
 interface ActiveRun {
   readonly progress: (message: ProgressMessage) => void;
+  readonly step: (
+    message: ExtractStepMessage,
+    attachments: readonly Attachment[],
+  ) => void;
   readonly answer: (
     message: ResponseMessage,
     attachments: readonly Attachment[],
@@ -2261,10 +2368,11 @@ class HostPool {
     modes: HostModes,
     signal?: AbortSignal,
     onProgress?: ExportProgressCallback,
+    extraction?: Extraction,
   ): Promise<HostAnswer> {
     for (let resends = 0; ;) {
       const outcome = await this.#acquire(modes, signal, (host) =>
-        host.run(frame, requestId, signal, onProgress),
+        host.run(frame, requestId, signal, onProgress, extraction),
       );
       if (outcome.kind === "result") return outcome.answer;
       if (outcome.kind === "retiring") {
@@ -2471,6 +2579,7 @@ class Host {
     requestId: string,
     signal: AbortSignal | undefined,
     onProgress: ExportProgressCallback | undefined,
+    extraction?: Extraction,
   ): Promise<RunOutcome> {
     const wire = this.#wire;
     if (this.#retired || wire === undefined) {
@@ -2570,12 +2679,52 @@ class Host {
         pendingCallbacks.add(pending);
         void pending.then(() => pendingCallbacks.delete(pending));
       };
+      // Steps are taken one at a time in order; each answer is written when its step settles.
+      let steps: Promise<void> = Promise.resolve();
       this.#run = {
         phase,
         progress: (message) => {
           if (message.requestId !== requestId) return;
+          if (message.phase === "extract") {
+            if (extraction === undefined) return;
+            try {
+              track(
+                extraction.progress({
+                  phase: "extract",
+                  pass: message.pass ?? 0,
+                  completed: message.completed,
+                  total: message.total,
+                }),
+              );
+            } catch (cause) {
+              callbackFailed(
+                new Alpha2HostError(
+                  "PROGRESS_CALLBACK_FAILED",
+                  "onProgress callback threw",
+                  { cause, phase: phase() },
+                ),
+              );
+            }
+            return;
+          }
           lastPhase = message.phase ?? "frames";
           notifyProgress(message, onProgress, callbackFailed, track, phase());
+        },
+        step: (message, attachments) => {
+          if (message.requestId !== requestId || extraction === undefined)
+            return;
+          steps = steps.then(async () => {
+            const ack = await extraction.step(message, attachments);
+            if (settled) return;
+            wire.write(
+              encodeMessage(
+                createRequest("extract.ack", requestId, {
+                  seq: message.seq,
+                  ...ack,
+                }),
+              ),
+            );
+          });
         },
         answer: (message, attachments) => {
           // One request at a time, so an answer to an unreadable request is this request's answer.
@@ -2735,7 +2884,9 @@ class Host {
       );
       return;
     }
-    if ("type" in message) this.#run?.progress(message);
+    if ("type" in message && message.type === "extract.step")
+      this.#run?.step(message, attachments);
+    else if ("type" in message) this.#run?.progress(message);
     else this.#run?.answer(message, attachments);
   }
 
@@ -2962,7 +3113,7 @@ function notifyProgress(
       callback?.({
         phase: message.phase ?? "frames",
         completed: message.completed,
-        total: message.total,
+        total: message.total ?? message.completed,
       }),
     );
   } catch (cause) {
