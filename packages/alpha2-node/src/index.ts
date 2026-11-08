@@ -38,7 +38,12 @@ import {
   loaderRefused,
   windowsPolicyBlocked,
 } from "./protocol.js";
-import { type Frame, HostWire, encodeMessage } from "./host-wire.js";
+import {
+  type Attachment,
+  type Frame,
+  HostWire,
+  encodeMessage,
+} from "./host-wire.js";
 import {
   glibcHint,
   hostBlockedMessage,
@@ -1197,8 +1202,9 @@ export function resolveHostBinary(
 /** Frames of a project to render to PNG, each as an export renders it. */
 export interface StillsRequest extends RenderInputs {
   /**
-   * 1 to 256 frames with distinct outputs. Each time snaps to the frame-grid frame containing it.
-   * Frames render in time order regardless of the order given.
+   * 1 to 256 frames with distinct outputs, or no output to get the PNG back in the result. Each
+   * time snaps to the frame-grid frame containing it. Frames render in time order regardless of
+   * the order given.
    */
   readonly stills: readonly StillEntry[];
   /** Canvas size to render at instead of the project's, 1 to 16384 pixels each way. */
@@ -1222,23 +1228,36 @@ export interface StillsRequest extends RenderInputs {
 export interface StillEntry {
   /** A timeline time in ticks (120,000 a second). */
   readonly time: number;
-  /** The PNG to write. */
-  readonly output: string;
+  /** The PNG to write. Without one, the result's frame carries the PNG as `png`. */
+  readonly output?: string;
 }
 
 /** One frame of a {@link StillsRequest} at its time, to its PNG. */
 export type StillRequest = Omit<StillsRequest, "stills"> & StillEntry;
 
-/** One PNG a still request wrote. */
-export interface StillFrame {
-  /** The absolute path of the file written. */
-  readonly output: string;
+/** One PNG a still request rendered: written to its output, or returned as `png`. */
+export type StillFrame = WrittenStillFrame | ReturnedStillFrame;
+
+interface StillFrameBase {
   /** Time of the grid frame drawn, in ticks. */
   readonly frameTime: number;
   readonly width: number;
   readonly height: number;
+}
+
+/** A frame whose entry named an output. */
+export interface WrittenStillFrame extends StillFrameBase {
+  /** The absolute path of the file written. */
+  readonly output: string;
   /** How the PNG was moved to `output`. */
   readonly publish: PublishReport;
+}
+
+/** A frame whose entry named no output. */
+export interface ReturnedStillFrame extends StillFrameBase {
+  readonly output: null;
+  /** The PNG file's bytes; the caller owns them. */
+  readonly png: Uint8Array;
 }
 
 /** What a still request did. */
@@ -1322,7 +1341,7 @@ export class Alpha2NodeClient {
         {},
         { videoDecode, renderer },
         controller.signal,
-      ) as Promise<HostCapabilities>;
+      ).then((answer) => answer.result as HostCapabilities);
       const started: CapabilityProbe = {
         result,
         controller,
@@ -1381,18 +1400,20 @@ export class Alpha2NodeClient {
     const problems = projectProblems(request.project);
     if (problems.length > 0) throw new Alpha2ProjectValidationError(problems);
     validateMediaPaths(request, false);
-    return (await this.#request(
-      "conform",
-      {
-        project: request.project,
-        assets: request.assets ?? {},
-        proxies: proxiesPayload(request.proxies),
-        frames: request.frames ?? {},
-        purpose: (request.purpose ?? "export_original").replace(/_/g, "-"),
-      },
-      { videoDecode: this.#videoDecode, renderer: this.#renderer },
-      request.signal,
-    )) as ConformResult;
+    return (
+      await this.#request(
+        "conform",
+        {
+          project: request.project,
+          assets: request.assets ?? {},
+          proxies: proxiesPayload(request.proxies),
+          frames: request.frames ?? {},
+          purpose: (request.purpose ?? "export_original").replace(/_/g, "-"),
+        },
+        { videoDecode: this.#videoDecode, renderer: this.#renderer },
+        request.signal,
+      )
+    ).result as ConformResult;
   }
 
   /**
@@ -1408,12 +1429,14 @@ export class Alpha2NodeClient {
     fields: Readonly<Record<string, unknown>> = {},
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
-    return (await this.#request(
-      "compose",
-      { ...fields, action },
-      { videoDecode: this.#videoDecode, renderer: this.#renderer },
-      signal,
-    )) as Record<string, unknown>;
+    return (
+      await this.#request(
+        "compose",
+        { ...fields, action },
+        { videoDecode: this.#videoDecode, renderer: this.#renderer },
+        signal,
+      )
+    ).result as Record<string, unknown>;
   }
 
   /**
@@ -1471,7 +1494,7 @@ export class Alpha2NodeClient {
       );
     let result: NativeExportResult;
     try {
-      result = (await run(videoDecode)) as NativeExportResult;
+      result = (await run(videoDecode)).result as NativeExportResult;
     } catch (error) {
       // A decoder stuck in the driver cannot be recovered in-process, so rerun on a software
       // decode host. Software stalls would recur and `hardware-required` forbids the fallback.
@@ -1483,7 +1506,7 @@ export class Alpha2NodeClient {
       )
         throw error;
       try {
-        result = (await run("software")) as NativeExportResult;
+        result = (await run("software")).result as NativeExportResult;
       } catch (retryError) {
         throw recordDecodeStall(retryError, error);
       }
@@ -1493,8 +1516,9 @@ export class Alpha2NodeClient {
   }
 
   /**
-   * Renders frames to 8-bit sRGB RGBA PNG files, identical to what an export draws before
-   * encoding. One host serves all frames.
+   * Renders frames to 8-bit sRGB RGBA PNG images, identical to what an export draws before
+   * encoding, written to files or returned as `png` for entries without an output. One host serves
+   * all frames.
    *
    * Rejects as {@link exportProject} does, without the decode retry.
    */
@@ -1502,11 +1526,13 @@ export class Alpha2NodeClient {
     const problems = projectProblems(request.project);
     if (problems.length > 0) throw new Alpha2ProjectValidationError(problems);
     validateStillsRequest(request);
-    return (await this.#request(
+    const answer = await this.#request(
       "still",
       {
         ...renderInputsPayload(request),
-        stills: request.stills.map(({ time, output }) => ({ time, output })),
+        stills: request.stills.map(({ time, output }) =>
+          output === undefined ? { time } : { time, output },
+        ),
         overwrite: request.overwrite ?? false,
         ...(request.alpha === true ? { alpha: true } : {}),
         ...(request.size === undefined
@@ -1523,7 +1549,8 @@ export class Alpha2NodeClient {
         renderer: request.renderer ?? this.#renderer,
       },
       request.signal,
-    )) as StillResult;
+    );
+    return withStillImages(answer);
   }
 
   /** Renders one frame; {@link stills} with a single entry. */
@@ -1546,7 +1573,7 @@ export class Alpha2NodeClient {
     modes: HostModes,
     signal?: AbortSignal,
     onProgress?: ExportProgressCallback,
-  ): Promise<unknown> {
+  ): Promise<HostAnswer> {
     if (signal?.aborted) throw new Alpha2AbortError();
     const requestId = `node-${process.pid}-${Date.now()}-${nextRequestSequence++}`;
     // Serialize before a host is taken so unserializable values (BigInt, cycles) start nothing.
@@ -1561,13 +1588,33 @@ export class Alpha2NodeClient {
       );
     }
     // The host would create its GPU device before refusing an oversized request.
-    if (frame.bodyBytes > MAX_REQUEST_LINE_BYTES)
+    if (frame.headerBytes > MAX_REQUEST_HEADER_BYTES)
       throw new Alpha2HostError(
         "INVALID_INPUT",
-        `the ${operation} request is ${frame.bodyBytes} bytes of JSON; the host reads at most ${MAX_REQUEST_LINE_BYTES}`,
+        `the ${operation} request is ${frame.headerBytes} bytes of JSON; the host reads at most ${MAX_REQUEST_HEADER_BYTES}`,
       );
     return this.#pool.request(frame, requestId, modes, signal, onProgress);
   }
+}
+
+/** Puts each returned PNG on its frame in place of the host's attachment index. */
+function withStillImages(answer: HostAnswer): StillResult {
+  const result = answer.result as StillResult;
+  const stills = result.stills.map((frame) => {
+    if (frame.output !== null) return frame;
+    const { attachment: index, ...rest } = frame as ReturnedStillFrame & {
+      attachment?: unknown;
+    };
+    const attachment =
+      typeof index === "number" ? answer.attachments[index] : undefined;
+    if (attachment?.type !== "image/png")
+      throw new Alpha2HostError(
+        "INVALID_RESPONSE",
+        `alpha2-host returned the still at ${frame.frameTime} without its PNG attachment`,
+      );
+    return { ...rest, png: attachment.data };
+  });
+  return { ...result, stills };
 }
 
 /**
@@ -1790,6 +1837,7 @@ function validateStillsRequest(request: StillsRequest): void {
         "INVALID_INPUT",
         "a still's time is a non-negative integer tick count",
       );
+    if (still.output === undefined) continue;
     if (!nonEmptyString(still.output))
       throw new Alpha2HostError(
         "INVALID_INPUT",
@@ -2164,8 +2212,13 @@ interface HostWaiter {
   evicted?: Host;
 }
 
+interface HostAnswer {
+  readonly result: unknown;
+  readonly attachments: readonly Attachment[];
+}
+
 type RunOutcome =
-  | { readonly kind: "result"; readonly result: unknown }
+  | { readonly kind: "result"; readonly answer: HostAnswer }
   | { readonly kind: "unsent" }
   | { readonly kind: "retiring"; readonly error: Alpha2HostError };
 
@@ -2174,7 +2227,10 @@ type FailureBuilder = (stderr: string, phase: ExportPhase) => Error;
 
 interface ActiveRun {
   readonly progress: (message: ProgressMessage) => void;
-  readonly answer: (message: ResponseMessage) => void;
+  readonly answer: (
+    message: ResponseMessage,
+    attachments: readonly Attachment[],
+  ) => void;
   /** The host is ending; the request settles with this error when it exits. */
   readonly fail: (error: FailureBuilder) => void;
   readonly exited: (code: number | null, signal: string | null) => void;
@@ -2205,12 +2261,12 @@ class HostPool {
     modes: HostModes,
     signal?: AbortSignal,
     onProgress?: ExportProgressCallback,
-  ): Promise<unknown> {
+  ): Promise<HostAnswer> {
     for (let resends = 0; ;) {
       const outcome = await this.#acquire(modes, signal, (host) =>
         host.run(frame, requestId, signal, onProgress),
       );
-      if (outcome.kind === "result") return outcome.result;
+      if (outcome.kind === "result") return outcome.answer;
       if (outcome.kind === "retiring") {
         if (resends === MAX_RETIRING_RESENDS) throw outcome.error;
         resends += 1;
@@ -2431,6 +2487,7 @@ class Host {
       const oomKillsBefore = oomKillCount();
       let lastPhase: ProgressPhase | undefined;
       let answer: ResponseMessage | undefined;
+      let answerAttachments: readonly Attachment[] = [];
       let failure: FailureBuilder | undefined;
       let written = false;
       let settled = false;
@@ -2464,13 +2521,17 @@ class Host {
       };
       const fromAnswer = (message: ResponseMessage): RunOutcome | Error => {
         if (failure !== undefined) return failure(stderrTail(), phase());
-        if (message.ok) return { kind: "result", result: message.result };
+        if (message.ok)
+          return {
+            kind: "result",
+            answer: { result: message.result, attachments: answerAttachments },
+          };
         const error = errorFromHost(message.error, stderrTail(), phase());
         return message.error.code === "HOST_RETIRING"
           ? { kind: "retiring", error }
           : error;
       };
-      // A running request gets a cancel line so the host removes its partial file; the host is
+      // A running request is sent a cancel so the host removes its partial file; the host is
       // ended if it does not answer in time, or at once when the request is not fully written.
       const cancel = (error: Error): void => {
         if (settled || answer !== undefined || failure !== undefined) return;
@@ -2516,8 +2577,8 @@ class Host {
           lastPhase = message.phase ?? "frames";
           notifyProgress(message, onProgress, callbackFailed, track, phase());
         },
-        answer: (message) => {
-          // One request at a time, so an answer to an unreadable line is this request's answer.
+        answer: (message, attachments) => {
+          // One request at a time, so an answer to an unreadable request is this request's answer.
           if (
             answer !== undefined ||
             (message.requestId !== requestId &&
@@ -2525,6 +2586,7 @@ class Host {
           )
             return;
           answer = message;
+          answerAttachments = attachments;
           if (message.hostState === "draining") this.retire();
           if (message.ok) settle(() => fromAnswer(message));
           else
@@ -2618,17 +2680,17 @@ class Host {
     stderr.on("error", ignore);
     stderr.on("data", (chunk: Buffer) => this.#appendStderr(chunk));
     this.#wire = new HostWire(stdin, stdout, {
-      message: (message) => this.#receive(message),
+      message: (message, attachments) => this.#receive(message, attachments),
       invalid: (cause) =>
         this.#fail(
           (_stderr, phase) =>
             new Alpha2HostError(
               "INVALID_RESPONSE",
-              "alpha2-host returned invalid JSON",
+              `alpha2-host sent a message the client cannot read: ${cause.message}`,
               { cause, phase },
             ),
         ),
-      diagnostic: (text) => this.#appendStderr(Buffer.from(text)),
+      diagnostic: (bytes) => this.#appendStderr(bytes),
     });
     // A host held before running (approval prompt, scan, stopped process) writes nothing.
     const timeoutMs = this.#pool.startTimeoutMs;
@@ -2645,7 +2707,7 @@ class Host {
       }, timeoutMs);
   }
 
-  #receive(message: HostMessage): void {
+  #receive(message: HostMessage, attachments: readonly Attachment[]): void {
     if ("type" in message && message.type === "state") {
       if (message.state === "draining") this.retire();
       else if (!this.#ready && !this.#retired) this.#becomeReady();
@@ -2674,7 +2736,7 @@ class Host {
       return;
     }
     if ("type" in message) this.#run?.progress(message);
-    else this.#run?.answer(message);
+    else this.#run?.answer(message, attachments);
   }
 
   #becomeReady(): void {
@@ -3024,8 +3086,8 @@ function quarantineCheck(
   return check;
 }
 
-/** Must match the host's limit, newline excluded. */
-const MAX_REQUEST_LINE_BYTES = 2 * MAX_PROJECT_JSON_BYTES;
+/** Must match the host's limit on a request's header. */
+const MAX_REQUEST_HEADER_BYTES = 2 * MAX_PROJECT_JSON_BYTES;
 
 /** The `requestId` the host uses when it could not read the request's own. */
 const UNREAD_REQUEST_ID = "unknown";

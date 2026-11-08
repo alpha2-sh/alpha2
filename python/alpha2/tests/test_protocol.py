@@ -41,17 +41,17 @@ def test_the_shared_protocol_corpus_parses_as_the_host_and_node_read_it() -> Non
     "message",
     [
         "[]",
-        '{"protocolVersion": 2, "requestId": "r", "ok": true, "result": {}}',
+        '{"protocolVersion": 1, "requestId": "r", "ok": true, "result": {}, "hostState": "ready"}',
         '{"protocolVersion": true, "requestId": "r", "ok": true, "result": {}}',
-        '{"protocolVersion": 1, "type": "progress", "requestId": "r", "phase": "done", '
+        '{"protocolVersion": 2, "type": "progress", "requestId": "r", "phase": "done", '
         '"completed": 1, "total": 1}',
-        '{"protocolVersion": 1, "type": "progress", "requestId": "r", "completed": 2, "total": 1}',
-        '{"protocolVersion": 1, "type": "progress", "requestId": "r", "completed": -1, "total": 1}',
-        '{"protocolVersion": 1, "type": "fatal", "error": {"code": "", "message": "m"}}',
-        '{"protocolVersion": 1, "requestId": "r", "ok": false, "error": {"code": "X"}, '
+        '{"protocolVersion": 2, "type": "progress", "requestId": "r", "completed": 2, "total": 1}',
+        '{"protocolVersion": 2, "type": "progress", "requestId": "r", "completed": -1, "total": 1}',
+        '{"protocolVersion": 2, "type": "fatal", "error": {"code": "", "message": "m"}}',
+        '{"protocolVersion": 2, "requestId": "r", "ok": false, "error": {"code": "X"}, '
         '"hostState": "ready"}',
-        '{"protocolVersion": 1, "requestId": "r", "ok": true, "hostState": "ready"}',
-        '{"protocolVersion": 1, "requestId": 3, "ok": true, "result": {}, "hostState": "ready"}',
+        '{"protocolVersion": 2, "requestId": "r", "ok": true, "hostState": "ready"}',
+        '{"protocolVersion": 2, "requestId": 3, "ok": true, "result": {}, "hostState": "ready"}',
     ],
 )
 def test_a_malformed_host_message_is_refused(message: str) -> None:
@@ -167,7 +167,7 @@ def test_the_native_module_is_the_packages_version_and_the_engines_constants() -
 
 def test_state_messages_responses_and_status_have_the_protocols_shapes() -> None:
     draining = {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "type": "state",
         "state": "draining",
         "reason": "memory",
@@ -175,16 +175,16 @@ def test_state_messages_responses_and_status_have_the_protocols_shapes() -> None
     }
     assert parse_host_message(json.dumps(draining)) == draining
     status = {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "requestId": "s",
         "ok": True,
         "result": {"state": "ready", "reason": "started", "details": {}},
         "hostState": "ready",
     }
     assert parse_host_message(json.dumps(status)) == status
-    assert create_status("s") == {"protocolVersion": 1, "operation": "status", "requestId": "s"}
+    assert create_status("s") == {"protocolVersion": 2, "operation": "status", "requestId": "s"}
     assert create_cancel("r") == {
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "operation": "cancel",
         "requestId": "r:cancel",
         "target": "r",
@@ -194,12 +194,18 @@ def test_state_messages_responses_and_status_have_the_protocols_shapes() -> None
 @pytest.mark.parametrize(
     "message",
     [
-        '{"protocolVersion": 1, "type": "ready"}',
-        '{"protocolVersion": 1, "type": "state", "state": "stopped", "reason": "x", "details": {}}',
-        '{"protocolVersion": 1, "type": "state", "state": "ready", "details": {}}',
-        '{"protocolVersion": 1, "type": "state", "state": "ready", "reason": "started"}',
-        '{"protocolVersion": 1, "requestId": "r", "ok": true, "result": {}}',
-        '{"protocolVersion": 1, "requestId": "r", "ok": true, "result": {}, "hostState": "idle"}',
+        '{"protocolVersion": 2, "type": "ready"}',
+        '{"protocolVersion": 2, "type": "state", "state": "stopped", "reason": "x", "details": {}}',
+        '{"protocolVersion": 2, "type": "state", "state": "ready", "details": {}}',
+        '{"protocolVersion": 2, "type": "state", "state": "ready", "reason": "started"}',
+        '{"protocolVersion": 2, "requestId": "r", "ok": true, "result": {}}',
+        '{"protocolVersion": 2, "requestId": "r", "ok": true, "result": {}, "hostState": "idle"}',
+        '{"protocolVersion": 2, "requestId": "r", "ok": true, "result": {}, "hostState": "ready", '
+        '"attachments": {"type": "image/png", "bytes": 3}}',
+        '{"protocolVersion": 2, "requestId": "r", "ok": true, "result": {}, "hostState": "ready", '
+        '"attachments": [{"type": "image/png", "bytes": -3}]}',
+        '{"protocolVersion": 2, "requestId": "r", "ok": true, "result": {}, "hostState": "ready", '
+        '"attachments": [{"bytes": 3}]}',
     ],
 )
 def test_a_message_of_another_shape_than_the_host_state_protocol_is_refused(message: str) -> None:

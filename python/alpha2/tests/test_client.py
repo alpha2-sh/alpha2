@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -500,7 +501,7 @@ def test_a_cancel_while_the_host_starts_ends_it_before_the_request_is_written(
     tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
 ) -> None:
     log = tmp_path / "log"
-    source = "time.sleep(0.5)\nstate()\n" + textwrap.dedent(queue_host(log))
+    source = "time.sleep(0.5)\nbegin()\nstate()\n" + textwrap.dedent(queue_host(log))
     host_path = fake_host(tmp_path, source, ready=False)
     cancel = threading.Event()
     threading.Timer(0.2, cancel.set).start()
@@ -656,43 +657,122 @@ def test_an_error_keeps_only_the_stderr_its_own_request_wrote(
         assert caught.value.stderr == f"while {name}\n"
 
 
-def test_a_line_on_the_hosts_stdout_that_is_not_a_message_is_kept_as_diagnostic_output(
+def test_what_a_host_prints_before_its_magic_is_kept_as_diagnostic_output(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:
     banner = "Validation Error: [ VUID-StandaloneSpirv-None-10684 ] vkCreateShaderModule"
-
-    def host(answer: str) -> str:
-        return f"""
-        sys.stdout.write({banner!r} + "\\n\\n")
-        sys.stdout.flush()
+    host_path = fake_host(
+        tmp_path,
+        f"""
+        sys.stdout.write({banner!r} + "\\n")
+        begin()
+        state()
         request, _ = read_request()
-        sys.stdout.write(" " + {banner!r} + "\\n" + {answer!r}.replace("REQUEST", request["requestId"]) + "\\n")
-        sys.stdout.flush()
-        """
-
-    ready = HostClient(
-        host_path=fake_host(
-            tmp_path / "ready",
-            host(
-                '{"protocolVersion":1,"requestId":"REQUEST","ok":true,"result":{"status":"ready"},"hostState":"ready"}'
-            ),
-        )
-    ).capabilities()
-    assert ready["status"] == "ready"
+        send(request, ok=False, error={{"code": "ALPHA2_ERROR", "message": "failed"}})
+        """,
+        ready=False,
+    )
     with pytest.raises(Alpha2HostError) as caught:
-        HostClient(
-            host_path=fake_host(
-                tmp_path / "failed",
-                host(
-                    '{"protocolVersion":1,"requestId":"REQUEST","ok":false,'
-                    '"error":{"code":"ALPHA2_ERROR","message":"failed"},"hostState":"ready"}'
-                ),
-            )
-        ).export(**export_args(tmp_path / "out.mp4"))
+        HostClient(host_path=host_path).export(**export_args(tmp_path / "out.mp4"))
     assert caught.value.code == "ALPHA2_ERROR"
     assert caught.value.stderr is not None and banner in caught.value.stderr
+
+
+def test_a_host_that_never_writes_its_magic_fails_to_start_with_invalid_response(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    # One byte past the client's bound on what may come before the magic.
+    host_path = fake_host(
+        tmp_path,
+        """
+        sys.stdout.write("x" * (1 << 20) + "y" * 9)
+        sys.stdout.flush()
+        read_request()
+        """,
+        ready=False,
+    )
     with pytest.raises(Alpha2HostError) as caught:
-        HostClient(host_path=fake_host(tmp_path / "broken", host("{not json"))).capabilities()
+        HostClient(host_path=host_path).capabilities()
+    assert caught.value.code == "INVALID_RESPONSE"
+    assert "without its protocol magic" in caught.value.message
+
+
+def test_a_frame_the_client_cannot_read_is_invalid_response(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    bodies = {
+        "json": 'b"{not json"',
+        # The header lists 4 bytes of attachments; the frame carries 3.
+        "attachments": 'json.dumps({"protocolVersion": 2, "requestId": request["requestId"], "ok": True, '
+        '"result": {}, "hostState": "ready", "attachments": [{"type": "image/png", "bytes": 4}]}).encode()',
+        "list": 'json.dumps({"protocolVersion": 2, "requestId": request["requestId"], "ok": True, '
+        '"result": {}, "hostState": "ready", "attachments": [{"type": "", "bytes": 3}]}).encode()',
+    }
+    for name, body in bodies.items():
+        host_path = fake_host(
+            tmp_path / name,
+            f"""
+            request, _ = read_request()
+            header = {body}
+            sys.stdout.buffer.write(struct.pack("<II", len(header), 3) + header + b"PNG")
+            sys.stdout.buffer.flush()
+            read_request()
+            """,
+        )
+        with pytest.raises(Alpha2HostError) as caught:
+            HostClient(host_path=host_path).capabilities()
+        assert caught.value.code == "INVALID_RESPONSE", name
+
+
+def test_a_still_without_an_output_returns_its_png(tmp_path: Path, fake_host: FakeHost) -> None:
+    recorded = tmp_path / "request.json"
+    host_path = fake_host(
+        tmp_path,
+        f"""
+        request, header = read_request()
+        open({str(recorded)!r}, "w").write(header)
+        frames, attachments = [], []
+        for index, still in enumerate(request["stills"]):
+            frame = {{"frameTime": still["time"], "width": 1, "height": 1}}
+            if "output" in still:
+                frames.append({{**frame, "output": still["output"]}})
+            else:
+                frames.append({{**frame, "output": None, "attachment": len(attachments)}})
+                attachments.append(("image/png", b"PNG-" + str(index).encode()))
+        write_message({{"requestId": request["requestId"], "ok": True, "hostState": "ready",
+            "result": {{"stills": frames, "renderer": "cpu", "timings": {{}}}}}}, attachments)
+        read_request()
+        """,
+    )
+    result = HostClient(host_path=host_path).stills(
+        project_document(), [(0, None), (0.5, tmp_path / "b.png"), (1, None)]
+    )
+    request = json.loads(recorded.read_text())
+    assert request["stills"] == [
+        {"time": 0},
+        {"time": 60_000, "output": str(tmp_path / "b.png")},
+        {"time": 120_000},
+    ]
+    frames = result["stills"]
+    assert [frame.get("png") for frame in frames] == [b"PNG-0", None, b"PNG-2"]
+    assert [frame["output"] for frame in frames] == [None, str(tmp_path / "b.png"), None]
+
+
+def test_a_still_naming_an_attachment_the_response_lacks_is_invalid_response(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    host_path = fake_host(
+        tmp_path,
+        """
+        request, _ = read_request()
+        frame = {"frameTime": 0, "width": 1, "height": 1, "output": None, "attachment": 1}
+        write_message({"requestId": request["requestId"], "ok": True, "hostState": "ready",
+            "result": {"stills": [frame], "renderer": "cpu", "timings": {}}}, [("image/png", b"PNG")])
+        read_request()
+        """,
+    )
+    with pytest.raises(Alpha2HostError) as caught:
+        HostClient(host_path=host_path).still(project_document(), 0)
     assert caught.value.code == "INVALID_RESPONSE"
 
 
@@ -1429,6 +1509,7 @@ def test_a_host_that_writes_ready_late_but_in_time_is_not_timed_out(
         tmp_path,
         """
         time.sleep(0.2)
+        begin()
         state()
         request, _ = read_request()
         time.sleep(1.5)

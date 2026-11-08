@@ -95,11 +95,11 @@ A host that does not report that it is ready within `hostStartTimeoutMs` (a clie
 
 ## Cancelling
 
-`signal` (an `AbortSignal`) cancels an export. The client writes a `cancel` line to the host, which stops the export, removes its partial file and answers; `exportProject` then rejects with `Alpha2AbortError`, and the host serves later requests. A host that does not answer within 5 seconds is ended, and the request rejects once it has exited. The host also watches the process that started it: when that process dies, the host cancels its export and exits.
+`signal` (an `AbortSignal`) cancels an export. The client sends the host a `cancel`, which stops the export, removes its partial file and answers; `exportProject` then rejects with `Alpha2AbortError`, and the host serves later requests. A host that does not answer within 5 seconds is ended, and the request rejects once it has exited. The host also watches the process that started it: when that process dies, the host cancels its export and exits.
 
 ## Concurrency
 
-`client.still({ project, assets, time, output })` renders one frame to a PNG, the frame an export draws at that time (the frame of the project's grid that holds it, `stills[0].frameTime` in the result), without encoding a video; `client.stills({ ..., stills: [{ time, output }, ...] })` renders up to 256 with one host. `time` is in ticks.
+`client.still({ project, assets, time, output })` renders one frame to a PNG, the frame an export draws at that time (the frame of the project's grid that holds it, `stills[0].frameTime` in the result), without encoding a video; `client.stills({ ..., stills: [{ time, output }, ...] })` renders up to 256 with one host. `time` is in ticks. A still without an `output` writes no file: its entry in the result has `output: null` and the PNG's bytes as `png`, a `Uint8Array`.
 
 `concurrency` (default 1) is how many host processes a client runs at once, and so how many exports share the GPU. Each host runs one request at a time and is kept for the next one. A host reads its environment when it starts, so it serves only requests that would start a host with the same environment: the same `videoDecode`, `renderer` and environment variables (`process.env` when the request is made). A request for another environment gets a host of its own, and at the limit an idle host of another environment is ended to make room. Other requests wait for a host to come free.
 

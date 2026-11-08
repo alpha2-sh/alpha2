@@ -275,7 +275,7 @@ test("a CONFORM_FAILED error carries the host's report", async () => {
   };
   const message = parseHostMessage(
     JSON.stringify({
-      protocolVersion: 1,
+      protocolVersion: 2,
       requestId: "r",
       ok: false,
       error: { code: "CONFORM_FAILED", message: "not ready", details: report },
@@ -430,7 +430,7 @@ process.on("SIGTERM", () => {
   }, 100);
 });
 setInterval(() => {}, 1_000);
-// Ignores the cancel line and the end of its input.
+// Ignores the cancel and the end of its input.
 serve((request) => progress(request, { completed: 0, total: 1 }), { onEnd: () => {} });
 `,
   );
@@ -769,34 +769,26 @@ serve((request) => {
     );
 });
 
-test("a line on the host's stdout that is not a message is kept as its diagnostic output", async () => {
-  // A Vulkan validation layer prints to stdout, possibly before the answer.
-  const root = await scratch("alpha2-node-stdout-noise-");
+test("output before the magic is kept as diagnostics, and a host that never writes the magic is INVALID_RESPONSE", async () => {
+  // A library may print to stdout before the host takes it over.
+  const root = await scratch("alpha2-node-preamble-");
   const banner =
     "Validation Error: [ VUID-StandaloneSpirv-None-10684 ] vkCreateShaderModule";
-  const host = (answer) => `import { ready, requests, sendRaw } from ${IO};
-process.stdout.write(${JSON.stringify(banner)} + "\\n\\n");
-ready();
-requests((request) => {
-  process.stdout.write(" " + ${JSON.stringify(banner)} + "\\n");
-  sendRaw(${JSON.stringify(answer)}.replace("REQUEST", request.requestId));
-});
-`;
   const ready = await new Alpha2NodeClient({
     hostPath: await fakeHost(
       join(root, "ready"),
-      host(
-        '{"protocolVersion":1,"requestId":"REQUEST","ok":true,"result":{"status":"ready"},"hostState":"ready"}',
-      ),
+      `import { respond, serve } from ${IO};
+process.stdout.write(${JSON.stringify(banner)} + "\\n\\x89A2HOS");
+serve((request) => respond(request, { ok: true, result: { status: "ready" } }));
+`,
     ),
   }).getCapabilities();
   assert.equal(ready.status, "ready");
-  const failed = await new Alpha2NodeClient({
+  const exited = await new Alpha2NodeClient({
     hostPath: await fakeHost(
-      join(root, "failed"),
-      host(
-        '{"protocolVersion":1,"requestId":"REQUEST","ok":false,"error":{"code":"ALPHA2_ERROR","message":"failed"},"hostState":"ready"}',
-      ),
+      join(root, "exited"),
+      `process.stdout.write(${JSON.stringify(banner)} + "\\n", () => process.exit(1));
+`,
     ),
   })
     .exportProject(exportRequest(join(root, "out.mp4")))
@@ -804,14 +796,122 @@ requests((request) => {
       () => assert.fail("the export resolved"),
       (cause) => cause,
     );
-  assert.equal(failed.code, "ALPHA2_ERROR");
-  assert.ok(failed.stderr.includes(banner), failed.stderr);
-  const broken = new Alpha2NodeClient({
-    hostPath: await fakeHost(join(root, "broken"), host("{not json")),
+  assert.equal(exited.code, "HOST_EXITED");
+  assert.ok(exited.stderr.includes(banner), exited.stderr);
+  const flooded = new Alpha2NodeClient({
+    hostPath: await fakeHost(
+      join(root, "flooded"),
+      `process.stdout.write("x".repeat(1024 * 1024 + 16));
+setInterval(() => {}, 1_000);
+`,
+    ),
   });
-  await assert.rejects(broken.getCapabilities(), {
-    code: "INVALID_RESPONSE",
+  await assert.rejects(flooded.getCapabilities(), (error) => {
+    assert.equal(error.code, "INVALID_RESPONSE");
+    assert.match(error.message, /without the protocol's magic/);
+    return true;
   });
+});
+
+test("a frame the host writes in pieces is read whole", async () => {
+  const root = await scratch("alpha2-node-split-frames-");
+  const hostPath = await fakeHost(
+    root,
+    `import { MAGIC, frame, requests } from ${IO};
+const ready = frame({ protocolVersion: 2, type: "state", state: "ready", reason: "started", details: {} });
+const bytes = Buffer.concat([MAGIC, ready]);
+const trickle = (data, done) => {
+  if (data.length === 0) return done();
+  process.stdout.write(data.subarray(0, 3), () => setTimeout(() => trickle(data.subarray(3), done), 1));
+};
+trickle(bytes, () => {
+  requests((request) => {
+    const answer = frame({ protocolVersion: 2, requestId: request.requestId, ok: true, result: { status: "ready", note: "\u00e9".repeat(5000) }, hostState: "ready" });
+    // One write ends mid-header and the next carries the rest.
+    process.stdout.write(answer.subarray(0, 11), () => setTimeout(() => process.stdout.write(answer.subarray(11)), 20));
+  });
+});
+`,
+  );
+  const report = await new Alpha2NodeClient({ hostPath }).getCapabilities();
+  assert.equal(report.note, "\u00e9".repeat(5000));
+});
+
+test("a header whose attachment list does not match the frame is INVALID_RESPONSE", async () => {
+  const root = await scratch("alpha2-node-bad-attachments-");
+  const cases = [
+    [
+      `[{ type: "image/png", bytes: 3 }]`,
+      4,
+      /lists 3 attachment bytes and the frame has 4/,
+    ],
+    [`[{ type: "", bytes: 4 }]`, 4, /invalid attachment list/],
+    [`undefined`, 4, /lists 0 attachment bytes and the frame has 4/],
+  ];
+  for (const [index, [listed, bytes, message]] of cases.entries()) {
+    const hostPath = await fakeHost(
+      join(root, String(index)),
+      `import { frame, sendBytes, serve } from ${IO};
+serve((request) => {
+  const header = { protocolVersion: 2, requestId: request.requestId, ok: true, result: {}, hostState: "ready", attachments: ${listed} };
+  sendBytes(frame(header, [{ data: Buffer.alloc(${bytes}) }]));
+});
+`,
+    );
+    await assert.rejects(
+      new Alpha2NodeClient({ hostPath }).getCapabilities(),
+      (error) => {
+        assert.equal(error.code, "INVALID_RESPONSE", listed);
+        assert.match(error.message, message);
+        return true;
+      },
+    );
+  }
+});
+
+test("a still without an output comes back as the PNG bytes of its attachment", async () => {
+  const root = await scratch("alpha2-node-still-attachment-");
+  const recorded = join(root, "request.json");
+  const hostPath = await fakeHost(
+    root,
+    `import { writeFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+serve((request) => {
+  writeFileSync(${JSON.stringify(recorded)}, JSON.stringify(request));
+  const png = (time) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.from(String(time))]);
+  const attachments = [];
+  const stills = request.stills.map(({ time, output }) => {
+    if (output !== undefined) return { output, frameTime: time, width: 16, height: 16, publish: { method: "rename" } };
+    attachments.push({ type: "image/png", data: png(time) });
+    return { output: null, frameTime: time, width: 16, height: 16, attachment: attachments.length - 1 };
+  });
+  respond(request, { ok: true, result: { stills, renderer: "cpu" } }, undefined, attachments);
+});
+`,
+  );
+  const client = new Alpha2NodeClient({ hostPath });
+  const { project } = exportRequest("");
+  const written = join(root, "written.png");
+  const result = await client.stills({
+    project,
+    assets: {},
+    stills: [{ time: 4000 }, { time: 0, output: written }, { time: 8000 }],
+  });
+  assert.deepEqual(JSON.parse(await readFile(recorded, "utf8")).stills, [
+    { time: 4000 },
+    { time: 0, output: written },
+    { time: 8000 },
+  ]);
+  const [first, file, last] = result.stills;
+  assert.equal(first.output, null);
+  assert.ok(first.png instanceof Uint8Array);
+  assert.equal(Buffer.from(first.png).toString("latin1"), "\x89PNG4000");
+  assert.equal("attachment" in first, false);
+  assert.equal(file.output, written);
+  assert.equal(file.png, undefined);
+  assert.equal(Buffer.from(last.png).toString("latin1"), "\x89PNG8000");
+  const one = await client.still({ project, assets: {}, time: 0 });
+  assert.equal(Buffer.from(one.stills[0].png).toString("latin1"), "\x89PNG0");
 });
 
 test("a host that dies mid-export is HOST_EXITED, with no cause claimed", async () => {
@@ -1511,8 +1611,8 @@ serve((request) => {
   assert.deepEqual(await startsIn(runs), ["auto cpu", "software cpu"]);
 });
 
-test("an answer to a line the host could not read is the request's answer", async () => {
-  // The host answers an unreadable line with requestId "unknown", then exits 0 when stdin ends.
+test("an answer to a request the host could not read is the request's answer", async () => {
+  // The host answers an unreadable request with requestId "unknown".
   const root = await scratch("alpha2-node-unread-");
   const hostPath = await fakeHost(
     root,
@@ -1521,7 +1621,8 @@ test("an answer to a line the host could not read is the request's answer", asyn
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: "the request line is 40000000 bytes; the maximum is 134217728",
+        message:
+          "the request header is 40000000 bytes; the maximum is 134217728",
       },
     }),
   );
@@ -1537,7 +1638,7 @@ test("an answer to a line the host could not read is the request's answer", asyn
   assert.equal(retried(error), false);
 });
 
-test("a request line longer than the host reads is refused before a host starts", async () => {
+test("a request header longer than the host reads is refused before a host starts", async () => {
   const root = await scratch("alpha2-node-long-line-");
   const starts = join(root, "starts");
   const hostPath = await fakeHost(root, STARTED_HOST(starts));
@@ -1611,7 +1712,7 @@ test("progress phases other than frames and finalizing are refused", () => {
   assert.throws(() =>
     parseHostMessage(
       JSON.stringify({
-        protocolVersion: 1,
+        protocolVersion: 2,
         type: "progress",
         requestId: "r",
         phase: "done",
@@ -2015,9 +2116,9 @@ function retried(error) {
   ]).retry;
 }
 
-/** Answers every request with `line`, or for a `fatal` line sends it and exits 70. */
-const ANSWERING_HOST = (line) => `import { respond, send, serve } from ${IO};
-const answer = ${JSON.stringify(line)};
+/** Answers every request with `answer`, or for a `fatal` answer sends it and exits 70. */
+const ANSWERING_HOST = (answer) => `import { respond, send, serve } from ${IO};
+const answer = ${JSON.stringify(answer)};
 serve((request) => {
   if (answer.type === "fatal") send(answer, () => process.exit(70));
   else respond(request, answer);
@@ -2220,7 +2321,7 @@ test("every code the client makes is classified in the shared table", async () =
 
 test("parseHostMessage reads state messages and a response's host state", () => {
   const draining = {
-    protocolVersion: 1,
+    protocolVersion: 2,
     type: "state",
     state: "draining",
     reason: "memory",
@@ -2228,7 +2329,7 @@ test("parseHostMessage reads state messages and a response's host state", () => 
   };
   assert.deepEqual(parseHostMessage(JSON.stringify(draining)), draining);
   const answered = {
-    protocolVersion: 1,
+    protocolVersion: 2,
     requestId: "r",
     ok: true,
     result: { state: "ready", reason: "started", details: {} },
@@ -2236,7 +2337,7 @@ test("parseHostMessage reads state messages and a response's host state", () => 
   };
   assert.deepEqual(parseHostMessage(JSON.stringify(answered)), answered);
   for (const message of [
-    { protocolVersion: 1, type: "ready" },
+    { protocolVersion: 2, type: "ready" },
     { ...draining, state: "stopped" },
     { ...draining, reason: undefined },
     { ...draining, details: [] },
@@ -2344,7 +2445,7 @@ test("a start timeout that is not above zero is refused, and Infinity waits fore
   );
 });
 
-/** Logs every line, answers a cancel as `serve` does unless `answerCancel: false`. */
+/** Logs every request, answers a cancel as `serve` does unless `answerCancel: false`. */
 const CANCELLABLE_HOST = (
   log,
   { answerCancel = true } = {},
@@ -2371,7 +2472,7 @@ serve((request) => {
 `;
 
 test(
-  "an abort writes a cancel line, settles once the host answers, and keeps the host",
+  "an abort sends a cancel, settles once the host answers, and keeps the host",
   { timeout: 10_000 },
   async () => {
     const root = await scratch("alpha2-node-cancel-line-");

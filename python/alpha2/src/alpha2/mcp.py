@@ -9,9 +9,7 @@ from __future__ import annotations
 import base64
 import functools
 import json
-import shutil
 import sys
-import tempfile
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -190,16 +188,11 @@ class Server:
     """Font files text is measured and drawn with."""
     host_path: str | None = None
     _client: HostClient | None = None
-    _frames: Path | None = None
-    _frame_count: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def close(self) -> None:
         if self._client is not None:
             self._client.close()
-        if self._frames is not None:
-            shutil.rmtree(self._frames, ignore_errors=True)
-            self._frames = None
 
     def client(self) -> HostClient:
         """The one client every tool call runs on, so calls reuse its hosts."""
@@ -261,15 +254,6 @@ class Server:
                     {"code": error.code},
                 ) from None
             raise
-
-    def frame_path(self) -> Path:
-        with self._lock:
-            if self._frames is None:
-                self._frames = Path(tempfile.mkdtemp(prefix="alpha2-mcp-"))
-            self._frame_count += 1
-            return self._frames / f"frame-{self._frame_count}.png"
-
-    # The tools.
 
     def list_templates(self, _arguments: dict[str, Any]) -> Any:
         listed = []
@@ -361,7 +345,7 @@ class Server:
 
     def render_frame(self, arguments: dict[str, Any]) -> Any:
         compiled = self.compiled(arguments)
-        output = Path(arguments["output"]) if "output" in arguments else self.frame_path()
+        output = arguments.get("output")
         result = self.rendered(
             lambda: self.client().still(
                 compiled,
@@ -372,7 +356,7 @@ class Server:
         )
         still = result["stills"][0]
         return _Image(
-            output.read_bytes(),
+            Path(output).read_bytes() if output is not None else still["png"],
             {
                 "output": still["output"],
                 "seconds": still["frameTime"] / TICKS_PER_SECOND,
@@ -500,7 +484,7 @@ class Server:
                         "seconds": {"type": "number", "minimum": 0, "description": "Default 0."},
                         "output": {
                             "type": "string",
-                            "description": "Where to keep the PNG. Default: a temporary file.",
+                            "description": "Where to keep the PNG. Default: only returned.",
                         },
                         "overwrite": {
                             "type": "boolean",

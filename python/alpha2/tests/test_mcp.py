@@ -160,9 +160,17 @@ def still_host(tmp_path: Path, fake_host: FakeHost, error: dict[str, Any] | None
             if error:
                 send(request, ok=False, error=error)
             else:
-                output = request["stills"][0]["output"]
-                open(output, "wb").write(b"PNG")
-                send(request, ok=True, result={{"stills": [{{"output": output, "frameTime": request["stills"][0]["time"], "width": 16, "height": 9}}], "renderer": "cpu", "timings": {{}}}})
+                still = request["stills"][0]
+                frame = {{"frameTime": still["time"], "width": 16, "height": 9}}
+                if "output" in still:
+                    open(still["output"], "wb").write(b"PNG")
+                    frame["output"] = still["output"]
+                    attachments = []
+                else:
+                    frame.update(output=None, attachment=0)
+                    attachments = [("image/png", b"PNG")]
+                write_message({{"requestId": request["requestId"], "ok": True, "hostState": "ready",
+                    "result": {{"stills": [frame], "renderer": "cpu", "timings": {{}}}}}}, attachments)
         serve(answer)
         """,
     )
@@ -178,7 +186,6 @@ def test_a_frame_comes_back_as_an_image(tmp_path: Path, fake_host: FakeHost) -> 
         "mimeType": "image/png",
     }
     assert json.loads(details["text"])["seconds"] == 0.5
-    assert server._frames is None
 
 
 def test_tool_calls_reuse_one_host(tmp_path: Path, fake_host: FakeHost) -> None:

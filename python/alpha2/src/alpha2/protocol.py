@@ -1,4 +1,4 @@
-"""The line-delimited JSON protocol spoken with ``alpha2-host serve`` over stdio."""
+"""The messages of the protocol spoken with ``alpha2-host serve`` over stdio."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ __all__ = [
     "windows_policy_blocked",
 ]
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # The requestId the host uses when it could not read the line's own.
 UNREAD_REQUEST_ID = "unknown"
@@ -69,18 +69,31 @@ def _protocol_error(value: object) -> bool:
     )
 
 
-def parse_host_message(line: str) -> dict[str, Any]:
-    """Parses and checks one line the host wrote.
+def _attachments(value: object) -> bool:
+    return isinstance(value, list) and all(
+        isinstance(entry, dict)
+        and isinstance(entry.get("type"), str)
+        and len(entry["type"]) > 0
+        and _safe_count(entry.get("bytes"))
+        for entry in value
+    )
+
+
+def parse_host_message(header: str) -> dict[str, Any]:
+    """Parses and checks the header of one frame the host wrote.
 
     A message is ``state``, ``progress``, ``fatal``, or a response (``ok``, with ``hostState``).
-    Raises ``ValueError`` for non-JSON, another protocol version, or a malformed message.
+    ``attachments``, when present, lists ``{"type", "bytes"}`` entries. Raises ``ValueError`` for
+    non-JSON, another protocol version, or a malformed message.
     """
-    value = json.loads(line)
+    value = json.loads(header)
     if not isinstance(value, dict):
         raise ValueError("host message must be an object")
     version = value.get("protocolVersion")
     if version != PROTOCOL_VERSION or isinstance(version, bool):
         raise ValueError(f"unsupported host protocol {version}; expected {PROTOCOL_VERSION}")
+    if "attachments" in value and not _attachments(value["attachments"]):
+        raise ValueError("invalid attachment list")
     kind = value.get("type")
     if kind == "state":
         if (

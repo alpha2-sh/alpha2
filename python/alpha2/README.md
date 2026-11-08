@@ -41,7 +41,7 @@ print(result["output"], result["videoPipeline"], result["frames"])
 - An existing `output` is refused unless you pass `overwrite=True`, which replaces it only once
   the export is whole. An output that is one of the export's inputs is always refused.
 - Setting a `cancel` event (`threading.Event`) or pressing Ctrl-C cancels the request: the client
-  writes a cancel line, and the host stops the export, removes its partial output and answers
+  sends a cancel message, and the host stops the export, removes its partial output and answers
   before the call returns. A host that does not answer within 5 s is ended; a second Ctrl-C ends
   it at once. The host also exits when the process that started it dies.
 - Every failure is an `alpha2.Alpha2HostError` with a machine-readable `code` and a classified
@@ -174,6 +174,8 @@ print(result["stills"][0]["frameTime"])  # the grid frame that holds 1.5 s, in t
   host, decoding once; `size=(width, height)` renders the project at another canvas size.
 - The PNG is 8-bit RGBA, the picture before any video encoding. `overwrite=True` replaces an
   existing file, as for `export`.
+- Without a path (`alpha2.still(project, 1.5)`, or `None` in a `stills` pair) nothing is written:
+  the PNG comes back as bytes in `result["stills"][i]["png"]`, and `output` is `None`.
 - From a shell: `python -m alpha2 still project.json check.png --at 1.5 --asset title=title.png`.
 
 ## Renderer and video decode

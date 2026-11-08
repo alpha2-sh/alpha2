@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
+import { inflateSync } from "node:zlib";
 
 import {
   Alpha2ConformError,
@@ -28,6 +29,7 @@ import {
   suiteOf,
 } from "../../../../scripts/lib/capabilities.mjs";
 import { executable } from "../../../../scripts/lib/cargo-target.mjs";
+import { encodeFrame } from "../../../../scripts/lib/host-frames.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..", "..");
 const hostPath =
@@ -437,54 +439,56 @@ test("an existing output is replaced only with overwrite, and an input is never 
   }
 });
 
-test("a still is the PNG of the frame of the grid that holds its time", async () => {
-  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-still-"));
-  const solid = {
-    schema_version: 1,
-    id: "solid",
-    name: "Solid",
-    settings: {
-      width: 64,
-      height: 48,
-      frame_rate: { num: 30, den: 1 },
-      sample_rate: 48000,
-    },
-    sources: [
-      {
-        id: "red",
-        kind: "generated",
-        generator: {
-          type: "fill",
-          paint: {
-            type: "solid",
-            color: { red: 1, green: 0, blue: 0, alpha: 1 },
-          },
+/** A 64x48 red project at 30 fps, one second long. */
+const SOLID_PROJECT = {
+  schema_version: 1,
+  id: "solid",
+  name: "Solid",
+  settings: {
+    width: 64,
+    height: 48,
+    frame_rate: { num: 30, den: 1 },
+    sample_rate: 48000,
+  },
+  sources: [
+    {
+      id: "red",
+      kind: "generated",
+      generator: {
+        type: "fill",
+        paint: {
+          type: "solid",
+          color: { red: 1, green: 0, blue: 0, alpha: 1 },
         },
       },
-    ],
-    timeline: {
-      tracks: [
-        {
-          id: "v",
-          name: "V",
-          kind: "video",
-          clips: [
-            {
-              id: "clip",
-              source_id: "red",
-              timeline_range: { start: 0, end: 120_000 },
-              source_range: { start: 0, end: 120_000 },
-            },
-          ],
-        },
-      ],
     },
-  };
+  ],
+  timeline: {
+    tracks: [
+      {
+        id: "v",
+        name: "V",
+        kind: "video",
+        clips: [
+          {
+            id: "clip",
+            source_id: "red",
+            timeline_range: { start: 0, end: 120_000 },
+            source_range: { start: 0, end: 120_000 },
+          },
+        ],
+      },
+    ],
+  },
+};
+
+test("a still is the PNG of the frame of the grid that holds its time", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-still-"));
   try {
     const output = join(scratch, "frame.png");
     // 61 200 ticks is between frames 15 and 16 at 30 fps.
     const result = await client.still({
-      project: solid,
+      project: SOLID_PROJECT,
       assets: {},
       time: 61_200,
       output,
@@ -500,7 +504,7 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
       [64, 48, 8, 6],
     );
     const many = await client.stills({
-      project: solid,
+      project: SOLID_PROJECT,
       assets: {},
       stills: [
         { time: 120_000, output: join(scratch, "late.png") },
@@ -516,11 +520,11 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
       ],
     );
     await assert.rejects(
-      client.still({ project: solid, assets: {}, time: 0, output }),
+      client.still({ project: SOLID_PROJECT, assets: {}, time: 0, output }),
       (error) => error.code === "IO_ERROR",
     );
     await client.still({
-      project: solid,
+      project: SOLID_PROJECT,
       assets: {},
       time: 0,
       output,
@@ -528,7 +532,7 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
     });
     await assert.rejects(
       client.stills({
-        project: solid,
+        project: SOLID_PROJECT,
         assets: {},
         stills: [
           { time: 0, output },
@@ -537,6 +541,39 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
       }),
       /two stills write/,
     );
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test("a still without an output comes back as the PNG it would have written", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-still-returned-"));
+  try {
+    const output = join(scratch, "written.png");
+    const result = await client.stills({
+      project: SOLID_PROJECT,
+      assets: {},
+      stills: [{ time: 61_200 }, { time: 61_200, output }],
+    });
+    const [returned, written] = result.stills;
+    assert.equal(returned.output, null);
+    assert.equal(returned.publish, undefined);
+    assert.equal(returned.frameTime, 60_000);
+    assert.equal(written.output, await realpath(output));
+    const png = Buffer.from(returned.png);
+    assert.deepEqual(png, await readFile(output));
+    // Inflating the image data proves the PNG decodes: a filter byte and 64 RGBA pixels a row.
+    const data = [];
+    for (let at = 8; at < png.length;) {
+      const length = png.readUInt32BE(at);
+      if (png.toString("ascii", at + 4, at + 8) === "IDAT")
+        data.push(png.subarray(at + 8, at + 8 + length));
+      at += 12 + length;
+    }
+    const pixels = inflateSync(Buffer.concat(data));
+    assert.equal(pixels.length, 48 * (1 + 64 * 4));
+    // No filter changes the first pixel of the first row.
+    assert.deepEqual([...pixels.subarray(1, 5)], [255, 0, 0, 255]);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -1465,16 +1502,15 @@ test("an idle host asked to terminate exits as the signal would have made it", a
   });
   const closed = once(child, "close");
   const answered = new Promise((resolveAnswer) => {
-    let written = "";
-    child.stdout.setEncoding("utf8");
+    let written = Buffer.alloc(0);
     child.stdout.on("data", (chunk) => {
-      written += chunk;
+      written = Buffer.concat([written, chunk]);
       if (written.includes('"requestId":"idle"')) resolveAnswer();
     });
   });
   child.stderr.resume();
   child.stdin.write(
-    `${JSON.stringify({ protocolVersion: 1, requestId: "idle", operation: "capabilities" })}\n`,
+    encodeFrame({ requestId: "idle", operation: "capabilities" }),
   );
   await answered;
   const killer = setTimeout(() => child.kill("SIGKILL"), 5_000);

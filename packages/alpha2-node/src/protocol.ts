@@ -1,5 +1,12 @@
-/** The version of the line-delimited JSON protocol spoken with `alpha2-host` over stdio. */
-export const PROTOCOL_VERSION = 1 as const;
+/** The version of the framed protocol spoken with `alpha2-host` over stdio. */
+export const PROTOCOL_VERSION = 2 as const;
+
+/** An attachment as a frame's header lists it; the bytes follow the header in this order. */
+export interface AttachmentInfo {
+  /** A media type, such as `image/png`. */
+  readonly type: string;
+  readonly bytes: number;
+}
 
 export function createRequest(
   operation:
@@ -37,6 +44,7 @@ export type ProgressPhase = "frames" | "finalizing";
 /** Progress of the request `requestId`; `completed` never exceeds `total`. */
 export interface ProgressMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly attachments?: readonly AttachmentInfo[];
   readonly type: "progress";
   readonly requestId: string;
   readonly phase?: ProgressPhase;
@@ -69,6 +77,7 @@ export interface HostStateDetails {
 /** Sent when the host starts (`ready`, reason `started`) and whenever its state changes. */
 export interface StateMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly attachments?: readonly AttachmentInfo[];
   readonly type: "state";
   readonly state: HostState;
   /** Why, such as `started`, `memory`, `idle` or `device-lost`. */
@@ -86,6 +95,7 @@ export interface StatusResult {
 /** A failure of the host process itself, not tied to a request. */
 export interface FatalMessage {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly attachments?: readonly AttachmentInfo[];
   readonly type: "fatal";
   readonly error: ProtocolError;
 }
@@ -94,6 +104,7 @@ export interface FatalMessage {
 export type ResponseMessage =
   | {
       readonly protocolVersion: typeof PROTOCOL_VERSION;
+      readonly attachments?: readonly AttachmentInfo[];
       readonly requestId: string;
       readonly ok: true;
       readonly result: unknown;
@@ -101,6 +112,7 @@ export type ResponseMessage =
     }
   | {
       readonly protocolVersion: typeof PROTOCOL_VERSION;
+      readonly attachments?: readonly AttachmentInfo[];
       readonly requestId: string;
       readonly ok: false;
       readonly error: ProtocolError;
@@ -110,15 +122,20 @@ export type ResponseMessage =
 export type HostMessage =
   StateMessage | ProgressMessage | FatalMessage | ResponseMessage;
 
-/** Throws when the line is not JSON, has another protocol version, or is malformed. */
-export function parseHostMessage(line: string): HostMessage {
-  const value: unknown = JSON.parse(line);
+/** Throws when the header is not JSON, has another protocol version, or is malformed. */
+export function parseHostMessage(header: string): HostMessage {
+  const value: unknown = JSON.parse(header);
   if (!record(value)) throw new Error("host message must be an object");
   if (value.protocolVersion !== PROTOCOL_VERSION) {
     throw new Error(
       `unsupported host protocol ${String(value.protocolVersion)}; expected ${PROTOCOL_VERSION}`,
     );
   }
+  if (
+    value.attachments !== undefined &&
+    !(Array.isArray(value.attachments) && value.attachments.every(attachment))
+  )
+    throw new Error("invalid attachment list");
   if (value.type === "progress") {
     if (
       typeof value.requestId !== "string" ||
@@ -248,6 +265,15 @@ export function loaderRefused(
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function attachment(value: unknown): value is AttachmentInfo {
+  return (
+    record(value) &&
+    typeof value.type === "string" &&
+    value.type.length > 0 &&
+    nonNegativeInteger(value.bytes)
+  );
 }
 
 function hostState(value: unknown): value is HostState {

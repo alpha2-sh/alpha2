@@ -913,7 +913,7 @@ class HostClient:
     def stills(
         self,
         project: Mapping[str, Any] | Compiled,
-        stills: Sequence[tuple[Time, PathLike]],
+        stills: Sequence[tuple[Time, PathLike | None]],
         *,
         assets: Mapping[str, PathLike] | None = None,
         proxies: Mapping[str, Sequence[ProxyFile]] | None = None,
@@ -930,15 +930,17 @@ class HostClient:
         renderer: RendererMode | None = None,
         cancel: threading.Event | None = None,
     ) -> StillResult:
-        """Renders frames of ``project`` to PNG files, each as an export renders that frame.
+        """Renders frames of ``project`` to PNG images, each as an export renders that frame.
 
-        ``stills`` pairs 1 to 256 times (seconds, or exact :class:`~alpha2.Ticks`) with PNG paths.
-        Each still is the frame-grid frame holding its time (``frameTime`` in ticks), as 8-bit sRGB
-        RGBA before video encoding. ``size`` (width, height, 1 to 16384 each) overrides the canvas
-        size. ``alpha`` omits the project background. ``overwrite`` works as in :meth:`export`.
+        ``stills`` pairs 1 to 256 times (seconds, or exact :class:`~alpha2.Ticks`) with PNG paths,
+        or with ``None`` to get the PNG back as bytes. Each still is the frame-grid frame holding
+        its time (``frameTime`` in ticks), as 8-bit sRGB RGBA before video encoding. ``size``
+        (width, height, 1 to 16384 each) overrides the canvas size. ``alpha`` omits the project
+        background. ``overwrite`` works as in :meth:`export`.
 
         Other options are :meth:`export`'s. Returns ``stills`` (``output``, ``frameTime``,
-        ``width``, ``height``, in request order), ``renderer`` and ``timings``.
+        ``width``, ``height``, in request order; ``output`` is ``None`` and ``png`` holds the
+        image for a still without a path), ``renderer`` and ``timings``.
         """
         from .compose import Compiled  # here: compose imports this module
 
@@ -966,6 +968,9 @@ class HostClient:
                 raise _invalid(f"a still's time: {error}") from None
             if at < 0:
                 raise _invalid(f"a still's time is from 0, not {time_value!r}")
+            if output is None:
+                entries.append({"time": at})
+                continue
             output_text = os.fspath(output) if isinstance(output, (str, os.PathLike)) else None
             if not isinstance(output_text, str) or not output_text:
                 raise _invalid("a still's output must not be empty")
@@ -999,22 +1004,38 @@ class HostClient:
         _check_renderer("renderer", renderer)
         mode = video_decode if video_decode is not None else self.video_decode
         drawn_by = renderer if renderer is not None else self.renderer
-        return self._pool.request(  # type: ignore[no-any-return]
+        result, attachments = self._pool.request_with_attachments(
             "still",
             payload,
             _HostModes(mode, drawn_by, self.host_start_timeout),
             cancel,
             None,
         )
+        for frame in result["stills"]:
+            index = frame.get("attachment")
+            if index is None:
+                continue
+            if (
+                not _safe_integer(index)
+                or not 0 <= index < len(attachments)
+                or attachments[index]["type"] != "image/png"
+            ):
+                raise Alpha2HostError(
+                    "INVALID_RESPONSE",
+                    f"a still names attachment {index!r}, which the response has no PNG for",
+                )
+            frame["png"] = attachments[index]["data"]
+        return result  # type: ignore[no-any-return]
 
     def still(
         self,
         project: Mapping[str, Any] | Compiled,
         time: Time,
-        output: PathLike,
+        output: PathLike | None = None,
         **options: Any,
     ) -> StillResult:
-        """One frame of ``project`` at ``time`` to the PNG ``output``: :meth:`stills` of one."""
+        """One frame of ``project`` at ``time`` to the PNG ``output``, or to ``png`` bytes in the
+        result without one: :meth:`stills` of one."""
         return self.stills(project, [(time, output)], **options)
 
     def close(self) -> None:
@@ -1472,6 +1493,17 @@ class _Pool:
         cancel: threading.Event | None,
         on_progress: ProgressCallback | None,
     ) -> Any:
+        return self.request_with_attachments(operation, payload, modes, cancel, on_progress)[0]
+
+    def request_with_attachments(
+        self,
+        operation: str,
+        payload: dict[str, Any],
+        modes: _HostModes,
+        cancel: threading.Event | None,
+        on_progress: ProgressCallback | None,
+    ) -> tuple[Any, list[dict[str, Any]]]:
+        """The response's result, and its attachments with their ``data``."""
         if cancel is not None and cancel.is_set():
             raise Alpha2AbortError()
         request_id = f"python-{os.getpid()}-{int(time.time() * 1000)}-{next(_request_sequence)}"
@@ -1513,7 +1545,7 @@ class _Pool:
         modes: _HostModes,
         cancel: threading.Event | None,
         on_progress: ProgressCallback | None,
-    ) -> Any:
+    ) -> tuple[Any, list[dict[str, Any]]]:
         binary = self.binary
         last_phase: str | None = None
 
@@ -1588,7 +1620,7 @@ class _Pool:
                         False,
                         Alpha2HostError(
                             "INVALID_RESPONSE",
-                            "alpha2-host returned invalid JSON",
+                            f"alpha2-host wrote an invalid message: {value}",
                             phase=phase_now(),
                         ),
                     )
@@ -1642,7 +1674,7 @@ class _Pool:
                 if not sent or message["requestId"] not in (request_id, UNREAD_REQUEST_ID):
                     continue
                 outcome = (
-                    (True, message["result"])
+                    (True, (message["result"], message.get("attachments", [])))
                     if message["ok"]
                     else (False, (message["error"], phase_now()))
                 )
@@ -1671,7 +1703,7 @@ class _Pool:
             if refusal is not None:
                 raise Alpha2HostError("HOST_QUARANTINED", refusal)
         if outcome is not None and outcome[0]:
-            return outcome[1]
+            return outcome[1]  # type: ignore[no-any-return]
         if outcome is not None:
             failed = outcome[1]
             if isinstance(failed, tuple):
@@ -1893,7 +1925,7 @@ def export(
 
 def stills(
     project: Mapping[str, Any] | Compiled,
-    stills: Sequence[tuple[Time, PathLike]],
+    stills: Sequence[tuple[Time, PathLike | None]],
     *,
     client: HostClient | None = None,
     host_path: PathLike | None = None,
@@ -1909,7 +1941,7 @@ def stills(
 def still(
     project: Mapping[str, Any] | Compiled,
     time: Time,
-    output: PathLike,
+    output: PathLike | None = None,
     *,
     client: HostClient | None = None,
     host_path: PathLike | None = None,

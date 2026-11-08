@@ -3,6 +3,7 @@ import { readFileSync, rmSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
 
 import { hostCommand } from "../host-command.mjs";
+import { readFrames, encodeFrame } from "../host-frames.mjs";
 import { hostGpuError } from "../host-gpu-errors.mjs";
 
 export const root = resolve(import.meta.dirname, "..", "..", "..");
@@ -39,11 +40,11 @@ export function createHarness(options, scratch) {
       }
     },
     capabilities() {
-      const { answer, line, stderr } = harness.serve(capabilitiesRequest());
+      const { answer, stdout, stderr } = harness.serve(capabilitiesRequest());
       if (!answer?.ok) {
         throw new Error(
           `${options.host} did not answer a capabilities request: ${
-            stderr.slice(-500) || line
+            stderr.slice(-500) || stdout
           }`,
         );
       }
@@ -52,14 +53,13 @@ export function createHarness(options, scratch) {
     serve(request, env = {}) {
       const started = performance.now();
       const result = spawnSync(...hostCommand(options.host, ["serve"]), {
-        encoding: "utf8",
-        input: `${JSON.stringify({ protocolVersion: 1, ...request })}\n`,
+        input: encodeFrame(request),
         env: { ...process.env, ...env },
         timeout: TIMEOUT_MS,
         killSignal: "SIGKILL",
       });
       const ms = performance.now() - started;
-      const stderr = result.stderr ?? "";
+      const stderr = result.stderr?.toString("utf8") ?? "";
       if (result.error?.code === "ETIMEDOUT") {
         throw new Error(
           `the ${request.operation} request to ${options.host} did not finish within ${TIMEOUT_MS / 1000} s and was killed: ${stderr.slice(-1000)}`,
@@ -74,19 +74,21 @@ export function createHarness(options, scratch) {
           `the ${request.operation} request reported ${gpuError}: ${stderr.slice(-1000)}`,
         );
       }
-      const lines = (result.stdout ?? "").trim().split("\n");
-      for (const line of lines) {
-        let parsed = null;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          parsed = null;
-        }
-        if (parsed?.requestId === request.requestId) {
-          return { answer: parsed, line, stderr, ms };
-        }
-      }
-      return { answer: null, line: lines[0] ?? "", stderr, ms };
+      const { messages, preamble } = readFrames(
+        result.stdout ?? Buffer.alloc(0),
+      );
+      const answer =
+        messages
+          .map(({ header }) => header)
+          .find(
+            (header) =>
+              header.requestId === request.requestId && "ok" in header,
+          ) ?? null;
+      const stdout =
+        answer === null
+          ? preamble.toString("utf8").slice(0, 500)
+          : JSON.stringify(answer);
+      return { answer, stdout, stderr, ms };
     },
     runExport({
       project,

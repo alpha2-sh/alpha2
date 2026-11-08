@@ -75,7 +75,7 @@ def corpus(name: str) -> Any:
 
 
 HOST_PRELUDE = """\
-import json, os, signal, sys, time
+import json, os, signal, struct, sys, time
 # As the real host reads and writes: UTF-8 and bare newlines, whatever the platform's defaults are.
 sys.stdin.reconfigure(encoding="utf-8")
 sys.stdout.reconfigure(encoding="utf-8", newline="\\n")
@@ -83,13 +83,26 @@ sys.stderr.reconfigure(encoding="utf-8", newline="\\n")
 def record(path, text):
     with open(path, "a", encoding="utf-8") as file:
         file.write(text + "\\n")
-# The protocol's framing: every fake host reads and writes messages through these two.
-def write_message(message):
-    sys.stdout.write(json.dumps({"protocolVersion": 1, **message}) + "\\n")
+# The protocol's framing: every fake host starts, reads and writes through these three.
+def begin():
     sys.stdout.flush()
+    sys.stdout.buffer.write(b"\\x89A2HOST\\n")
+    sys.stdout.buffer.flush()
+def write_message(message, attachments=()):
+    if attachments:
+        message = {**message, "attachments": [{"type": kind, "bytes": len(data)} for kind, data in attachments]}
+    header = json.dumps({"protocolVersion": 2, **message}).encode()
+    data = b"".join(data for _, data in attachments)
+    sys.stdout.buffer.write(struct.pack("<II", len(header), len(data)) + header + data)
+    sys.stdout.buffer.flush()
 def read_message():
-    line = sys.stdin.readline()
-    return (json.loads(line), line) if line else None
+    lengths = sys.stdin.buffer.read(8)
+    if len(lengths) < 8:
+        return None
+    header_bytes, attachment_bytes = struct.unpack("<II", lengths)
+    header = sys.stdin.buffer.read(header_bytes).decode()
+    sys.stdin.buffer.read(attachment_bytes)
+    return json.loads(header), header
 def state(state="ready", reason="started", **details):
     write_message({"type": "state", "state": state, "reason": reason, "details": details})
 def send(request, **message):
@@ -115,12 +128,12 @@ class FakeHost(Protocol):
 @pytest.fixture
 def fake_host(monkeypatch: pytest.MonkeyPatch) -> FakeHost:
     """Writes a fake ``alpha2-host``. ``<python> serve`` runs the file ``serve`` in the working
-    directory, which starts the same way on every platform, unlike a shebang script. The host says
-    it is ready before ``source`` runs unless ``ready`` is false."""
+    directory, which starts the same way on every platform, unlike a shebang script. The host writes
+    the protocol magic and says it is ready before ``source`` runs unless ``ready`` is false."""
 
     def make(directory: Path, source: str, *, ready: bool = True) -> str:
         directory.mkdir(parents=True, exist_ok=True)
-        prelude = HOST_PRELUDE + ("state()\n" if ready else "")
+        prelude = HOST_PRELUDE + ("begin()\nstate()\n" if ready else "")
         (directory / "serve").write_text(prelude + textwrap.dedent(source), encoding="utf-8")
         monkeypatch.chdir(directory)
         return sys.executable
