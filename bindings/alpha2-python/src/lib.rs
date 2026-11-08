@@ -1,8 +1,8 @@
 //! `alpha2._native`, the compiled part of the `alpha2` Python package.
 //!
 //! Exposes the engine's own validation, edit operations, export format resolution, compose
-//! compiler and text layout so Python does not reimplement them. Links neither a GPU nor `FFmpeg`. Documents cross
-//! the boundary as JSON text.
+//! compiler and text layout so Python does not reimplement them. Links neither a GPU nor
+//! `FFmpeg`. Documents cross the boundary as JSON text.
 
 use std::path::PathBuf;
 use std::str::FromStr;
