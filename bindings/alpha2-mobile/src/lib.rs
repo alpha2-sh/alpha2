@@ -30,6 +30,7 @@ mod error;
     allow(dead_code)
 )]
 mod export;
+mod extract;
 mod platform;
 mod player;
 mod session;
@@ -44,6 +45,10 @@ pub mod android;
 mod device_tests;
 
 pub use error::{Alpha2Error, EncoderRefusalRecord};
+pub use extract::{
+    ExtractAudioBlock, ExtractRequest, ExtractVideoFrame, ExtractionHandle, Extractor,
+    ExtractorFailure,
+};
 pub use player::{Player, PlayerRequest};
 pub use session::{
     Alpha2, ConformRequest, EngineConfig, ExportHandle, ExportOutcome, ExportProgress,

@@ -32,6 +32,65 @@ pub(crate) fn render(
     preference: DecodePreference,
     budget: &FrameBudget,
 ) -> Result<Value, Alpha2Error> {
+    let existing = if request.overwrite {
+        ExistingOutput::Replace
+    } else {
+        ExistingOutput::Refuse
+    };
+    let mut order = (0..request.stills.len()).collect::<Vec<_>>();
+    order.sort_by_key(|&index| (request.stills[index].time_ticks, index));
+    let mut answers = vec![Value::Null; request.stills.len()];
+    let times = order
+        .into_iter()
+        .map(|index| (index, request.stills[index].time_ticks));
+    let renderer = render_each(
+        request,
+        config,
+        fonts,
+        (video, preference),
+        budget,
+        times,
+        |index, frame_time, size, pixels| {
+            let still = &request.stills[index];
+            alpha2_host_core::write_png(
+                OutputTarget {
+                    path: PathBuf::from(&still.output_path),
+                    existing,
+                },
+                size.width,
+                size.height,
+                &alpha2_host_core::tools::unpremultiplied(pixels),
+            )
+            .map_err(Alpha2Error::from)?;
+            answers[index] = json!({
+                "output": still.output_path,
+                "frameTime": frame_time.ticks(),
+                "width": size.width,
+                "height": size.height,
+            });
+            Ok(())
+        },
+    )?;
+    Ok(json!({ "stills": answers, "renderer": renderer }))
+}
+
+/// Renders the project's frame at each `(key, time)` of `times`, in that order, through the steps
+/// an export takes, and hands `sink` the key, the frame's time, its size and its premultiplied
+/// RGBA8 pixels. Returns the renderer's name. `request.stills` is not read.
+pub(crate) fn render_each(
+    request: &StillsRequest,
+    config: &EngineConfig,
+    fonts: &[LoadedFont],
+    (video, preference): (Option<Arc<dyn VideoBackends>>, DecodePreference),
+    budget: &FrameBudget,
+    times: impl IntoIterator<Item = (usize, i64)>,
+    mut sink: impl FnMut(
+        usize,
+        MediaTime,
+        alpha2_render::RenderSize,
+        Vec<u8>,
+    ) -> Result<(), Alpha2Error>,
+) -> Result<&'static str, Alpha2Error> {
     let project = Project::from_json(&request.project_json)
         .map_err(|error| Alpha2Error::invalid(error.to_string()))?;
     let snapshot = EngineProject::new(project.clone())
@@ -64,20 +123,11 @@ pub(crate) fn render(
         sources = sources.with_surface_import(Arc::clone(&frames.import));
     }
     let mut cache = SourceFrameCache::for_renderer(drawing.as_export(), budget.bytes());
-    let existing = if request.overwrite {
-        ExistingOutput::Replace
-    } else {
-        ExistingOutput::Refuse
-    };
     let cancel = CancelToken::default();
-    let mut order = (0..request.stills.len()).collect::<Vec<_>>();
-    order.sort_by_key(|&index| (request.stills[index].time_ticks, index));
-    let mut answers = vec![Value::Null; request.stills.len()];
-    for (step, index) in order.into_iter().enumerate() {
-        let still = &request.stills[index];
+    for (step, (key, time)) in times.into_iter().enumerate() {
         let mut exporter = Exporter::still(
             &snapshot,
-            MediaTime::from_ticks(still.time_ticks),
+            MediaTime::from_ticks(time),
             settings.frame_rate,
             QualityProfile::export(),
         )
@@ -110,24 +160,9 @@ pub(crate) fn render(
             (frame_time, size),
         )?;
         cache.unpin();
-        alpha2_host_core::write_png(
-            OutputTarget {
-                path: PathBuf::from(&still.output_path),
-                existing,
-            },
-            size.width,
-            size.height,
-            &alpha2_host_core::tools::unpremultiplied(pixels),
-        )
-        .map_err(Alpha2Error::from)?;
-        answers[index] = json!({
-            "output": still.output_path,
-            "frameTime": frame_time.ticks(),
-            "width": size.width,
-            "height": size.height,
-        });
+        sink(key, frame_time, size, pixels)?;
     }
-    Ok(json!({ "stills": answers, "renderer": drawing.name() }))
+    Ok(drawing.name())
 }
 
 /// The still `exporter` stands at, drawn and read back as premultiplied RGBA8.

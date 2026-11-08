@@ -85,6 +85,11 @@ impl Emitter {
         });
     }
 
+    /// An emit as it is, such as one parsed from a client's JSON.
+    pub fn push(&mut self, emit: Emit) {
+        self.emits.push(emit);
+    }
+
     /// The emits collected so far, in order.
     #[must_use]
     pub fn emits(&self) -> &[Emit] {
