@@ -294,3 +294,45 @@ test("a chunk larger than one hashing slice hashes as SHA-256", async () => {
   );
   assert.equal(seen.at(-1), bytes.length);
 });
+
+test(
+  "conform reports data made from other media than its source now is",
+  { skip },
+  async () => {
+    const wasm = await binding();
+    const madeFrom = (hash) => ({
+      ...recorded,
+      content_sha256: hash.repeat(64),
+    });
+    const withData = {
+      ...project,
+      data: [
+        {
+          id: "track",
+          anchor: { type: "source", source_id: "video" },
+          kind: "intervals",
+          intervals: [],
+          made_from: madeFrom("a"),
+        },
+      ],
+    };
+    const online = (hash) => ({
+      assets: [
+        {
+          source_id: "video",
+          revision: 0,
+          original: { state: "online", fingerprint: madeFrom(hash) },
+          proxies: [],
+        },
+      ],
+    });
+    assert.deepEqual(
+      conformProject(wasm, withData, online("a"), "preview").stale_data,
+      [],
+    );
+    const relinked = conformProject(wasm, withData, online("b"), "preview");
+    assert.deepEqual(relinked.stale_data, [
+      { data: "track", source: "video", fields: ["content"] },
+    ]);
+  },
+);

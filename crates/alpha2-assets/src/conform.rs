@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 
 use alpha2_media::{ColorMetadata, SourceId};
-use alpha2_model::{ClipId, HdrSources, MediaFingerprint, MediaKind, MediaSource, Project};
+use alpha2_model::{
+    ClipId, DataSetId, HdrSources, MediaFingerprint, MediaKind, MediaSource, Project,
+};
 use serde::Serialize;
 
 use crate::catalog::{
@@ -23,6 +25,20 @@ pub struct ConformReport {
     pub ready: bool,
     /// Each host-supplied source a render reads, in project order.
     pub sources: Vec<SourceConform>,
+    /// Data sets made from other media than their source's original now is, in data order.
+    /// Never blocking: the data still reads, but may no longer describe the picture or sound.
+    pub stale_data: Vec<StaleData>,
+}
+
+/// A data set whose `made_from` differs from its source's current original.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StaleData {
+    /// The data set.
+    pub data: DataSetId,
+    /// The source it is anchored to.
+    pub source: SourceId,
+    /// The parts of the fingerprint that differ.
+    pub fields: Vec<FingerprintField>,
 }
 
 impl ConformReport {
@@ -155,12 +171,32 @@ pub fn conform_sources(
             conform_source(project, source, entry, purpose)
         })
         .collect::<Vec<_>>();
+    let stale_data = project
+        .data
+        .iter()
+        .filter_map(|set| {
+            let source = set.anchor.source()?;
+            let made_from = set.made_from.as_ref()?;
+            let OriginalState::Online { fingerprint } = &entries.get(source)?.original else {
+                return None;
+            };
+            match compare(made_from, fingerprint) {
+                FingerprintMatch::Mismatch { fields } => Some(StaleData {
+                    data: set.id.clone(),
+                    source: source.clone(),
+                    fields,
+                }),
+                _ => None,
+            }
+        })
+        .collect();
     ConformReport {
         purpose,
         ready: sources
             .iter()
             .all(|source| source.issues.iter().all(|entry| !entry.blocking)),
         sources,
+        stale_data,
     }
 }
 

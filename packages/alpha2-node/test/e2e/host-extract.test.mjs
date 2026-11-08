@@ -538,3 +538,53 @@ test("a native plugin that ends the host fails the request and the pool starts a
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("conform reports data made from other media once its source is relinked", async () => {
+  const video = join(root, "tests", "corpus", "h264-bt709-copy.mp4");
+  const placed = {
+    ...project,
+    timeline: {
+      tracks: [
+        {
+          id: "t",
+          name: "T",
+          kind: "video",
+          clips: [
+            {
+              id: "c",
+              source_id: "v",
+              timeline_range: { start: 0, end: 40_000 },
+              source_range: { start: 0, end: 40_000 },
+            },
+          ],
+        },
+      ],
+    },
+  };
+  const first = await client.conform({ project: placed, assets: { v: video } });
+  const withData = {
+    ...placed,
+    data: [
+      {
+        id: "track",
+        anchor: { type: "source", source_id: "v" },
+        kind: "intervals",
+        intervals: [],
+        made_from: first.catalog.assets[0].original.fingerprint,
+      },
+    ],
+  };
+  const same = await client.conform({
+    project: withData,
+    assets: { v: video },
+  });
+  assert.deepEqual(same.report.stale_data, []);
+  const relinked = await client.conform({
+    project: withData,
+    assets: { v: join(root, "tests", "corpus", "rotation.mp4") },
+  });
+  assert.deepEqual(
+    relinked.report.stale_data.map((entry) => entry.data),
+    ["track"],
+  );
+});

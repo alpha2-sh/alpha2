@@ -556,7 +556,8 @@ fn reports_and_catalogs_have_a_stable_wire_form() {
                 "selection": { "media": "unavailable" },
                 "usable_proxy": "half",
                 "issues": [{ "kind": "offline", "blocking": true }]
-            }]
+            }],
+            "stale_data": []
         })
     );
 }
@@ -1023,5 +1024,46 @@ fn a_clip_choosing_an_audio_stream_or_channel_the_media_lacks_blocks() {
     assert_eq!(
         wire["audio_streams"][1],
         json!({ "channels": 4, "default": true })
+    );
+}
+
+#[test]
+fn data_made_from_other_media_is_reported_stale() {
+    let mut document = serde_json::to_value(project()).expect("json");
+    let other = MediaFingerprint {
+        content_sha256: Some(hash('b')),
+        ..fingerprint()
+    };
+    document["data"] = json!([
+        { "id": "made-here", "anchor": { "type": "source", "source_id": "video" }, "kind": "intervals",
+          "intervals": [], "made_from": fingerprint() },
+        { "id": "made-elsewhere", "anchor": { "type": "source", "source_id": "video" }, "kind": "intervals",
+          "intervals": [], "made_from": other },
+        { "id": "unrecorded", "anchor": { "type": "source", "source_id": "video" }, "kind": "intervals",
+          "intervals": [] },
+        { "id": "timeline", "anchor": { "type": "timeline" }, "kind": "intervals", "intervals": [] }
+    ]);
+    let project = Project::from_json(&document.to_string()).expect("project");
+    let online = catalog(entry(
+        OriginalState::Online {
+            fingerprint: fingerprint(),
+        },
+        Vec::new(),
+    ));
+    let report = conform(&project, &online, MediaPurpose::Preview);
+    assert!(report.ready, "stale data never blocks");
+    assert_eq!(
+        report.stale_data,
+        vec![crate::StaleData {
+            data: alpha2_model::DataSetId::new("made-elsewhere").expect("id"),
+            source: SourceId::new("video").expect("id"),
+            fields: vec![FingerprintField::Content],
+        }]
+    );
+    // Media that cannot be read is not judged.
+    let offline = catalog(entry(OriginalState::Offline { path: None }, Vec::new()));
+    assert_eq!(
+        conform(&project, &offline, MediaPurpose::Preview).stale_data,
+        Vec::new()
     );
 }

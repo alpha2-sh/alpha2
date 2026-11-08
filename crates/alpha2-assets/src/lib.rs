@@ -24,7 +24,7 @@ pub use catalog::{
     proxy_problem, select,
 };
 pub use conform::{
-    ConformEntry, ConformIssue, ConformReport, SourceConform, conform, conform_sources,
+    ConformEntry, ConformIssue, ConformReport, SourceConform, StaleData, conform, conform_sources,
 };
 pub use evidence::{FingerprintField, FingerprintMatch, compare, duration_tolerance, rates_agree};
 pub use rate::{FrameRateEvidence, rational_rate};

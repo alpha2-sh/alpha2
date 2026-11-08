@@ -418,3 +418,35 @@ def test_a_native_plugin_that_ends_the_host_fails_and_the_pool_starts_another(
         assets=video(),
     )
     assert len(after["dataSets"]) == 5
+
+
+def test_conform_reports_data_made_from_other_media_once_its_source_is_relinked(
+    client: HostClient,
+) -> None:
+    clip = {
+        "id": "c",
+        "source_id": "v",
+        "timeline_range": {"start": 0, "end": 40_000},
+        "source_range": {"start": 0, "end": 40_000},
+    }
+    placed = {
+        **PROJECT,
+        "timeline": {"tracks": [{"id": "t", "name": "T", "kind": "video", "clips": [clip]}]},
+    }
+    first = client.conform(placed, assets=video())
+    fingerprint = first["catalog"]["assets"][0]["original"]["fingerprint"]
+    project = {
+        **placed,
+        "data": [
+            {
+                "id": "track",
+                "anchor": {"type": "source", "source_id": "v"},
+                "kind": "intervals",
+                "intervals": [],
+                "made_from": fingerprint,
+            }
+        ],
+    }
+    assert client.conform(project, assets=video())["report"]["stale_data"] == []
+    relinked = client.conform(project, assets=video("rotation.mp4"))
+    assert [entry["data"] for entry in relinked["report"]["stale_data"]] == ["track"]
