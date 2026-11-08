@@ -474,7 +474,11 @@ pub fn correction_at(
 /// (timeline range, source range, time map).
 pub(crate) fn clip_correction(
     visual: &alpha2_model::VisualProperties,
-    placement: (alpha2_time::TimeRange, alpha2_time::TimeRange, alpha2_model::TimeMap),
+    placement: (
+        alpha2_time::TimeRange,
+        alpha2_time::TimeRange,
+        alpha2_model::TimeMap,
+    ),
     time: MediaTime,
     context: &SampleContext<'_>,
 ) -> Option<Correction> {

@@ -381,7 +381,8 @@ impl<'a> Planner<'a, '_> {
             .ok_or(PlanError::NoOutput)?;
         for node in &scope.composition.nodes {
             if let NodeOp::Media { start, .. } = &node.op {
-                self.media.push((format!("{}{}", scope.prefix, node.id), *start));
+                self.media
+                    .push((format!("{}{}", scope.prefix, node.id), *start));
             }
         }
         let nodes: HashMap<&NodeId, &'a alpha2_model::CompositionNode> = scope
