@@ -169,6 +169,10 @@
       "types": "./dist/edit.d.ts",
       "import": "./dist/edit.js"
     },
+    "./extract": {
+      "types": "./dist/extract.d.ts",
+      "import": "./dist/extract.js"
+    },
     "./effects": {
       "types": "./dist/effects.d.ts",
       "import": "./dist/effects.js"

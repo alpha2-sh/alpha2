@@ -1676,6 +1676,51 @@ impl WebCpuRenderer {
     ///
     /// # Errors
     /// Fails without a project, or when the frame cannot be drawn.
+    /// `WebEffectRegistry.readRgbaAt`: the project's frame at `time_ticks`, drawn at `width` x
+    /// `height` from the frames uploaded so far, as straight-alpha sRGB RGBA8; nothing is shown on
+    /// the canvas. An extraction reads timeline frames through it.
+    ///
+    /// # Errors
+    /// `INVALID_STATE` without a project, `MISSING_INPUT` when a source frame it shows has not
+    /// been uploaded, and what drawing the frame refuses.
+    #[wasm_bindgen(js_name = readRgbaAt)]
+    pub fn read_rgba_at(
+        &mut self,
+        time_ticks: i64,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, JsValue> {
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| invalid_state("no project is loaded"))?;
+        let size = RenderSize::new(width, height).map_err(|error| typed_error(&error))?;
+        let time = MediaTime(time_ticks);
+        self.texts
+            .prepare_at(&self.renderer, project, time, size)
+            .map_err(|error| typed_error(&error))?;
+        let frame = project
+            .evaluate(time)
+            .map_err(|error| typed_error(&error))?;
+        let output = self
+            .renderer
+            .render_frame(
+                size,
+                &frame,
+                &FramesWithText::new(&self.frames, &self.texts),
+            )
+            .map_err(|error| typed_error(&error))?;
+        let picture = output.texture.ok_or_else(|| {
+            coded_error(
+                Code::MISSING_INPUT,
+                format!("a source frame at {time_ticks} has not been uploaded"),
+            )
+        })?;
+        let mut pixels = picture.read_rgba8();
+        unpremultiply(&mut pixels);
+        Ok(pixels)
+    }
+
     #[wasm_bindgen(js_name = renderAt)]
     pub fn render_at(&mut self, time_ticks: i64) -> Result<String, JsValue> {
         let project = self

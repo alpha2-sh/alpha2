@@ -24,6 +24,8 @@ mod completion;
 mod effect;
 #[cfg(any(target_arch = "wasm32", test))]
 mod error;
+#[cfg(target_arch = "wasm32")]
+mod extract;
 #[cfg(any(target_arch = "wasm32", test))]
 #[cfg(any(target_arch = "wasm32", test))]
 mod geometry;

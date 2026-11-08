@@ -731,6 +731,7 @@ dependencies = [
  "alpha2-shaders",
  "alpha2-text",
  "alpha2-time",
+ "bytes",
  "serde",
  "serde_json",
  "wasm-bindgen",

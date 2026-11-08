@@ -20,6 +20,7 @@ mod pixels;
 mod session;
 #[cfg(test)]
 mod tests;
+mod wire;
 
 pub use descriptor::{
     AudioChannels, AudioFormat, BLOCK_FRAMES_RANGE, DEFAULT_BLOCK_FRAMES, DEFAULT_MAX_SIZE,
@@ -41,3 +42,4 @@ pub use session::{
     AudioInput, Delivery, Emit, ExtractSession, FrameFrom, Need, PassProgress, RequestError,
     RunContext, SessionError, Step, SuppliedAudio, SuppliedFrame, VideoInput,
 };
+pub use wire::{client_context_json, emit_from_json};

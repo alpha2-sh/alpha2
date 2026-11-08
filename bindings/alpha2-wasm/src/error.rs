@@ -19,6 +19,8 @@ pub(crate) enum Code {
     GpuInitFailed,
     /// An export would show a source the browser gave only as frames the engine cannot convert.
     PlanarDecodeUnavailable,
+    /// An extractor emitted a value the session refuses.
+    InvalidEmit,
 }
 
 impl Code {
@@ -39,6 +41,7 @@ impl Code {
             Self::ResourceLimit => "RESOURCE_LIMIT",
             Self::GpuInitFailed => "GPU_INIT_FAILED",
             Self::PlanarDecodeUnavailable => "PLANAR_DECODE_UNAVAILABLE",
+            Self::InvalidEmit => "INVALID_EMIT",
         }
     }
 

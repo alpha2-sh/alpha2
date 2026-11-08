@@ -810,7 +810,7 @@ async function firstPacketTimes(
   return { resolution, timestamps };
 }
 
-async function streamChromaSiting(
+export async function streamChromaSiting(
   track: InputVideoTrack,
   packets: EncodedPacketSink,
 ): Promise<ChromaSiting> {
