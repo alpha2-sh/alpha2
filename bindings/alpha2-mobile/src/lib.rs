@@ -33,6 +33,8 @@ mod export;
 mod extract;
 mod platform;
 mod player;
+#[cfg(feature = "plugins")]
+mod plugin;
 mod session;
 mod stills;
 mod surface;
@@ -50,6 +52,8 @@ pub use extract::{
     ExtractorFailure,
 };
 pub use player::{Player, PlayerRequest};
+#[cfg(feature = "plugins")]
+pub use plugin::Plugin;
 pub use session::{
     Alpha2, ConformRequest, EngineConfig, ExportHandle, ExportOutcome, ExportProgress,
     ExportProgressEvent, ExportRequest, FontFile, RendererMode, StillEntry, StillsRequest,

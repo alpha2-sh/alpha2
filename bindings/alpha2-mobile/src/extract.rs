@@ -330,20 +330,19 @@ impl Supplier for MobileSupplier<'_> {
     }
 }
 
-/// Runs the request on the calling thread.
+/// Runs `extractor` over the request on the calling thread.
 #[allow(clippy::too_many_lines)]
 fn extract(
     session: &Alpha2,
     request: &ExtractRequest,
-    extractor: Arc<dyn Extractor>,
+    extractor: &mut dyn Engine,
     cancel: &CancelToken,
-) -> Result<String, Alpha2Error> {
+) -> Result<Vec<alpha2_model::DataSet>, Alpha2Error> {
     let invalid = |error: &dyn std::fmt::Display| Alpha2Error::invalid(error.to_string());
     let project = Project::from_json(&request.project_json).map_err(|error| invalid(&error))?;
     let run_request: RunRequest =
         serde_json::from_str(&request.request_json).map_err(|error| invalid(&error))?;
-    let descriptor: Descriptor =
-        serde_json::from_str(&extractor.describe()).map_err(|error| invalid(&error))?;
+    let descriptor = extractor.describe().clone();
     let made_from: Option<MediaFingerprint> = request
         .made_from_json
         .as_deref()
@@ -418,14 +417,10 @@ fn extract(
         reader: ReaderSupplier::new(&renderer, video, audio),
         timeline,
     };
-    let mut foreign = Foreign {
-        extractor,
-        descriptor,
-    };
-    let sets = run(
+    run(
         &project,
         run_request,
-        &mut foreign,
+        extractor,
         &mut supplier,
         made_from.as_ref(),
     )
@@ -451,11 +446,55 @@ fn extract(
             code: "SOURCE_FAILED".into(),
             reason: error.to_string(),
         },
-    })?;
-    serde_json::to_string(&sets).map_err(|error| Alpha2Error::Failed {
-        code: "INTERNAL".into(),
-        reason: error.to_string(),
     })
+}
+
+/// The extractor a run uses, made on the run's thread.
+type MakeExtractor = Box<dyn FnOnce() -> Result<RunExtractor, Alpha2Error> + Send>;
+
+/// An extractor, and what its data records as `made_by.plugin`.
+pub(crate) struct RunExtractor {
+    pub(crate) extractor: Box<dyn Engine>,
+    pub(crate) plugin: Option<alpha2_model::MadeByPlugin>,
+}
+
+impl Alpha2 {
+    /// Checks the request and runs it on a library thread with the extractor `make` builds there.
+    pub(crate) fn start_extraction(
+        self: Arc<Self>,
+        request: ExtractRequest,
+        make: MakeExtractor,
+    ) -> Result<Arc<ExtractionHandle>, Alpha2Error> {
+        let problems = crate::session::project_problems(&request.project_json);
+        if !problems.is_empty() {
+            return Err(Alpha2Error::InvalidInput { problems });
+        }
+        let handle = Arc::new(ExtractionHandle::default());
+        let finished = Arc::clone(&handle);
+        std::thread::Builder::new()
+            .name("alpha2-extract".into())
+            .spawn(move || {
+                let outcome = make().and_then(|mut made| {
+                    let mut sets =
+                        extract(&self, &request, &mut *made.extractor, &finished.cancel)?;
+                    for set in &mut sets {
+                        if let (Some(plugin), Some(made_by)) = (&made.plugin, &mut set.made_by) {
+                            made_by.plugin = Some(plugin.clone());
+                        }
+                    }
+                    serde_json::to_string(&sets).map_err(|error| Alpha2Error::Failed {
+                        code: "INTERNAL".into(),
+                        reason: error.to_string(),
+                    })
+                });
+                finished.finish(outcome);
+            })
+            .map_err(|error| Alpha2Error::Failed {
+                code: "RESOURCE_LIMIT".into(),
+                reason: format!("cannot start the extraction thread: {error}"),
+            })?;
+        Ok(handle)
+    }
 }
 
 /// A running extraction.
@@ -554,22 +593,19 @@ impl Alpha2 {
         request: ExtractRequest,
         extractor: Arc<dyn Extractor>,
     ) -> Result<Arc<ExtractionHandle>, Alpha2Error> {
-        let problems = crate::session::project_problems(&request.project_json);
-        if !problems.is_empty() {
-            return Err(Alpha2Error::InvalidInput { problems });
-        }
-        let handle = Arc::new(ExtractionHandle::default());
-        let finished = Arc::clone(&handle);
-        std::thread::Builder::new()
-            .name("alpha2-extract".into())
-            .spawn(move || {
-                let outcome = extract(&self, &request, extractor, &finished.cancel);
-                finished.finish(outcome);
-            })
-            .map_err(|error| Alpha2Error::Failed {
-                code: "RESOURCE_LIMIT".into(),
-                reason: format!("cannot start the extraction thread: {error}"),
-            })?;
-        Ok(handle)
+        let descriptor: Descriptor = serde_json::from_str(&extractor.describe())
+            .map_err(|error| Alpha2Error::invalid(format!("invalid descriptor: {error}")))?;
+        self.start_extraction(
+            request,
+            Box::new(move || {
+                Ok(RunExtractor {
+                    extractor: Box::new(Foreign {
+                        extractor,
+                        descriptor,
+                    }),
+                    plugin: None,
+                })
+            }),
+        )
     }
 }

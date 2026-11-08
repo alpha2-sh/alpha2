@@ -40,6 +40,13 @@ A wasm artifact is sandboxed: it imports only the functions below, with no files
 
 A native artifact runs with the full rights of the process and is refused unless the caller allows native code for that plugin id. It must not bring libraries that collide with the host's own (FFmpeg under its standard names). Native builds may differ across targets in floating-point results.
 
+## Mobile apps
+
+The App Store and Google Play forbid downloading executable code, so an app bundles each plugin it runs: the manifest, the artifacts and the resources, at the same relative paths the manifest names (`pack` writes that layout). With the library's `plugins` feature, `Plugin.load(manifestPath, sha256, allowNative)` reads them from the bundle, checks every hash, and `Alpha2.extractPlugin(request, plugin)` runs the plugin like an extractor the app wrote. Manifest URLs that are not relative paths are refused with `PLUGIN_FETCH_FAILED`.
+
+- The wasm artifact runs everywhere, sandboxed: wasmtime compiles it on Android; on iOS, where apps may not generate code, it runs in wasmtime's interpreter.
+- An Android app may bundle the `.so` built for its ABI (`aarch64-linux-android`) and pass `allowNative`; it runs with the app's rights.
+
 ## Calls
 
 Every call but `describe` returns a status: `0` succeeded, `1` failed (the plugin called `fail` with the reason first), `2` a panic was caught at the boundary. Integers and floats are little-endian; times are ticks (1/120000 s, signed 64-bit) on the input's clock.
