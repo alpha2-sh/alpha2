@@ -1,0 +1,43 @@
+{
+  "source": "https://archive.org/download/art_of_war_librivox/art_of_war_03-04_sun_tzu_64kb.mp3",
+  "source_sha1": "bfda68aff1a6f6a7a55f62cf11ee3ee652b3f699",
+  "decoded": "ffmpeg -i <source> -ac 1 -ar 16000 -f s16le",
+  "phrases": [
+    {
+      "source_start_sample": 576640,
+      "source_end_sample": 613440,
+      "start": 0,
+      "end": 36800
+    },
+    {
+      "source_start_sample": 733760,
+      "source_end_sample": 769600,
+      "start": 36800,
+      "end": 72640
+    },
+    {
+      "source_start_sample": 970560,
+      "source_end_sample": 1004800,
+      "start": 72640,
+      "end": 106880
+    },
+    {
+      "source_start_sample": 1091520,
+      "source_end_sample": 1121920,
+      "start": 106880,
+      "end": 137280
+    },
+    {
+      "source_start_sample": 1223680,
+      "source_end_sample": 1255360,
+      "start": 137280,
+      "end": 168960
+    },
+    {
+      "source_start_sample": 1452480,
+      "source_end_sample": 1490880,
+      "start": 168960,
+      "end": 207360
+    }
+  ]
+}

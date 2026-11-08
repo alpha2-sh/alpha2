@@ -17,6 +17,10 @@ use std::process::{Command, ExitCode};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+/// The flags every wasm artifact is built with.
+const WASM_RUSTFLAGS: &str =
+    "-Ctarget-feature=-relaxed-simd --cfg getrandom_backend=\"unsupported\"";
+
 const USAGE: &str =
     "usage: alpha2-plugin-pack <plugin-dir> --out <dir> [--target <triple>]... [--no-native]";
 
@@ -113,10 +117,11 @@ fn build(manifest: &Path, target: &str, wasm: bool) -> Result<(), String> {
     command.args(["build", "--release", "--target", target, "--manifest-path"]);
     command.arg(manifest);
     if wasm {
-        // Relaxed SIMD results differ between runtimes; the target never enables threads.
+        // Relaxed SIMD results differ between runtimes; the target never enables threads. A
+        // plugin has no randomness, so getrandom reports it unsupported instead of importing it.
         command.env(
             "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS",
-            "-Ctarget-feature=-relaxed-simd",
+            WASM_RUSTFLAGS,
         );
     }
     run(&mut command).map(drop)

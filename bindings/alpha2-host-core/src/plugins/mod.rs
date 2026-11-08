@@ -7,6 +7,8 @@
 
 mod native;
 #[cfg(test)]
+mod silence_tests;
+#[cfg(test)]
 mod tests;
 mod wasm;
 

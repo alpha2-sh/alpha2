@@ -1,0 +1,23 @@
+{
+  "id": "alpha2.silence",
+  "version": 1,
+  "input": {
+    "media": "audio",
+    "from": ["source", "timeline"],
+    "format": "f32",
+    "sample_rate": 16000,
+    "channels": "mono",
+    "block_frames": 512
+  },
+  "params_schema": {
+    "type": "object",
+    "properties": {
+      "threshold": { "type": "number", "minimum": 0.05, "maximum": 0.95 },
+      "min_silence_ms": { "type": "number", "minimum": 0, "maximum": 60000 }
+    },
+    "additionalProperties": false
+  },
+  "outputs": [
+    { "name": "silence", "kind": "intervals", "suggest": "remove_ranges" }
+  ]
+}
