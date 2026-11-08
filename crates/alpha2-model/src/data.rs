@@ -913,9 +913,12 @@ pub fn valid_interval(interval: &DataInterval) -> bool {
 }
 
 impl DataSet {
-    /// Checks the set against the model's rules. `source_duration` is the anchored source's
-    /// fingerprint duration in ticks, when known.
-    pub(crate) fn check(&self, source_duration: Option<i64>) -> Result<(), DataProblem> {
+    /// Checks the set on its own against the model's rules (everything but its anchor's
+    /// existence). `source_duration` is the anchored source's duration in ticks, when known.
+    ///
+    /// # Errors
+    /// The first [`DataProblem`] found.
+    pub fn validate(&self, source_duration: Option<i64>) -> Result<(), DataProblem> {
         if self.id.as_str().len() > MAX_DATA_ID_BYTES {
             return Err(DataProblem::IdTooLong);
         }

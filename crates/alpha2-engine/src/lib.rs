@@ -15,6 +15,7 @@ mod downmix;
 mod error;
 mod error_code;
 mod exporter;
+pub mod extract;
 mod frame;
 pub mod frame_store;
 mod generated;

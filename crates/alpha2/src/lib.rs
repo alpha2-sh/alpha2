@@ -31,6 +31,7 @@ pub use alpha2_render as render;
 /// Exact media-time and frame-rate primitives.
 pub use alpha2_time as time;
 
+pub use alpha2_engine::extract;
 pub use alpha2_engine::{
     EngineProject, ExportStep, Exporter, FrameProvider, FrameRenderer, Player, QualityProfile,
 };

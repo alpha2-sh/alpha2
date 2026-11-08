@@ -19,6 +19,8 @@ include = [
 
 [features]
 wgpu-interop = ["alpha2-render/wgpu-interop"]
+# Test-only `scripted` and `digest` extractors; no release enables it.
+extract-fixtures = []
 
 [dependencies]
 libm = "0.2.16"

@@ -44,7 +44,7 @@ fn brute_force(
         }
         match ranges.last_mut() {
             Some(last) if last.end().ticks() == tick => {
-                *last = range(last.start().ticks(), tick + 1)
+                *last = range(last.start().ticks(), tick + 1);
             }
             _ => ranges.push(range(tick, tick + 1)),
         }

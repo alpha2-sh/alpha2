@@ -87,7 +87,7 @@ pub(crate) fn validate_data(
             }
             DataAnchor::Timeline => None,
         };
-        set.check(duration).map_err(invalid)?;
+        set.validate(duration).map_err(invalid)?;
     }
     let mut places = Places {
         data,
@@ -171,6 +171,7 @@ fn collect(
 }
 
 impl<'a> Places<'a> {
+    #[allow(clippy::too_many_lines)]
     fn walk_timeline(&mut self, project: &'a Project) -> Result<(), ModelError> {
         for track in &project.timeline.tracks {
             for clip in &track.clips {
@@ -198,10 +199,10 @@ impl<'a> Places<'a> {
                 }
                 found.extend(collect(|visit| {
                     visit_keyed("audio.gain", &clip.audio.gain, &mut |at, keyed| {
-                        visit(at, keyed)
+                        visit(at, keyed);
                     });
                     visit_keyed("audio.pan", &clip.audio.pan, &mut |at, keyed| {
-                        visit(at, keyed)
+                        visit(at, keyed);
                     });
                 }));
                 for (at, binding, place) in &found {
@@ -324,11 +325,11 @@ impl<'a> Places<'a> {
             let found = collect(|visit| match generator {
                 Generator::Shapes { items } => {
                     crate::shapes::for_each_keyed_item(items, "items", &mut |at, keyed| {
-                        visit(at, keyed)
+                        visit(at, keyed);
                     });
                 }
                 Generator::Layout { root } => {
-                    root.for_each_keyed("root", &mut |at, keyed| visit(at, keyed))
+                    root.for_each_keyed("root", &mut |at, keyed| visit(at, keyed));
                 }
                 Generator::Text { style, .. } => crate::text_animation::for_each_keyed_animator(
                     &style.animators,
@@ -384,6 +385,7 @@ impl<'a> Places<'a> {
 
     /// Checks one binding at `at`; `follower` is the clip whose value it is, for the canvas
     /// dependency graph.
+    #[allow(clippy::too_many_lines)]
     fn check(
         &mut self,
         owner: &DataOwner,
