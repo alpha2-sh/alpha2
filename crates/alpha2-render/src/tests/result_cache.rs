@@ -11,7 +11,7 @@ use crate::{
 const TINT: &str = "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }";
 
 fn renderer_with_tint() -> (Renderer, EffectId) {
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let tint = pollster::block_on(renderer.register_effect(runtime_tint_effect(TINT)))
         .expect("tint compiles");
     (renderer, tint)
@@ -208,7 +208,7 @@ fn the_budget_evicts_least_recently_used_results_and_pinned_ones_last() {
 #[test]
 fn what_keys_leave_out_clears_the_cache() {
     let _lock = gpu_test_lock();
-    let (mut renderer, tint) = renderer_with_tint();
+    let (renderer, tint) = renderer_with_tint();
     renderer.set_result_cache_budget(1 << 20);
     let texture = rgba_texture(&renderer, [200, 100, 50, 255]);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -260,7 +260,7 @@ fn what_keys_leave_out_clears_the_cache() {
 #[test]
 fn the_content_epoch_moves_on_every_clear_even_of_an_empty_cache() {
     let _lock = gpu_test_lock();
-    let (mut renderer, tint) = renderer_with_tint();
+    let (renderer, tint) = renderer_with_tint();
     let texture = rgba_texture(&renderer, [200, 100, 50, 255]);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let epoch = renderer.content_epoch();

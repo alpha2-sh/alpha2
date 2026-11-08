@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn runtime_effect_registration_compiles_author_wgsl_and_layout() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let definition = runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     );
@@ -13,7 +13,10 @@ fn runtime_effect_registration_compiles_author_wgsl_and_layout() {
         .expect("valid runtime effect compiles");
     assert_eq!(id.as_str(), "test.tint");
     assert_eq!(id.version(), 1);
-    assert_eq!(renderer.effect_definition(&id), Some(&definition));
+    assert_eq!(
+        renderer.effect_definition(&id).as_deref(),
+        Some(&definition)
+    );
     assert_eq!(
         renderer
             .effect_uniform_layout(&id)
@@ -28,7 +31,7 @@ fn runtime_effect_registration_compiles_author_wgsl_and_layout() {
 #[test]
 fn effects_compiled_side_by_side_register_in_any_order_and_a_duplicate_is_refused_at_commit() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let tint = |id: &str| EffectDef {
         id: id.to_owned(),
         ..runtime_tint_effect(
@@ -77,7 +80,7 @@ fn effects_compiled_side_by_side_register_in_any_order_and_a_duplicate_is_refuse
 }
 
 fn render_runtime_effect_pixel(body: &str) -> [u8; 4] {
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(runtime_tint_effect(body)))
         .expect("a bounded loop compiles");
     let size = RenderSize::new(1, 1).expect("size");
@@ -165,7 +168,7 @@ fn a_flat_operator_chain_fails_its_registration_not_the_process() {
         std::thread::Builder::new()
             .stack_size(stack)
             .spawn(move || {
-                let mut renderer = Renderer::new(gpu());
+                let renderer = Renderer::new(gpu());
                 pollster::block_on(renderer.register_effect(runtime_tint_effect(&body)))
                     .map(drop)
                     .map_err(|diagnostics| format!("{diagnostics:?}"))
@@ -184,7 +187,7 @@ fn a_flat_operator_chain_fails_its_registration_not_the_process() {
 #[test]
 fn runtime_effect_registration_returns_shader_diagnostics() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let definition = runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return definitely_invalid(src); }",
     );
@@ -202,7 +205,7 @@ fn runtime_effect_registration_returns_shader_diagnostics() {
 #[test]
 fn registered_effect_executes_with_named_parameters() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let definition = runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     );
@@ -284,7 +287,7 @@ fn resource_backed_lut_effect_executes_from_a_cube_resource() {
 #[test]
 fn registered_transition_executes_with_two_inputs() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let definition = EffectDef {
         id: "test.crossfade".into(),
         version: 1,
@@ -361,7 +364,7 @@ fn every_uniform_a_graph_writes_fits_the_arena_at_the_adapters_own_alignment() {
     let gpu = gpu_with_the_adapters_uniform_alignment();
     let alignment = gpu.device().limits().min_uniform_buffer_offset_alignment;
     eprintln!("uniform offset alignment {alignment}");
-    let mut renderer = Renderer::new(gpu);
+    let renderer = Renderer::new(gpu);
     let effect = pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -447,7 +450,7 @@ fn effect_with_float_params(id: &str, count: usize) -> EffectDef {
 #[test]
 fn a_definition_past_the_webgl2_uniform_limit_is_refused_on_every_device() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let refused = pollster::block_on(
         renderer.register_effect(effect_with_float_params("test.webgl2-limit", 1025)),
     )
@@ -466,7 +469,7 @@ fn an_effect_whose_parameters_overflow_the_uniform_binding_limit_is_refused_at_r
     // Each parameter is a 16-byte slot (16 KiB on WebGL2 limits). Past the cap the pipeline
     // compiles but every bind group is invalid.
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     assert!(renderer.limits().max_uniform_buffer_binding_size >= 16_384);
     let fitting = 16_384 / 16;
     let refused = pollster::block_on(
@@ -515,7 +518,7 @@ fn an_effect_whose_parameters_overflow_the_uniform_binding_limit_is_refused_at_r
 fn a_generator_that_declares_a_resource_draws_with_the_resource_it_is_given() {
     // Generator resource slots are validated like an effect's, so the node must carry resources.
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(EffectDef {
         id: "test.graded-generator".into(),
         version: 1,
@@ -663,7 +666,7 @@ const ONE: RenderSize = RenderSize {
 fn an_effect_samples_its_named_inputs_by_name() {
     // Declared `b` then `a`: each binds by name, not position.
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
         "test.two-inputs",
         &["b", "a"],
@@ -687,7 +690,7 @@ fn an_effect_samples_its_named_inputs_by_name() {
 #[test]
 fn size_of_a_named_input_is_the_bound_textures() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
         "test.input-size",
         &["x"],
@@ -702,7 +705,7 @@ fn size_of_a_named_input_is_the_bound_textures() {
 #[test]
 fn a_declared_input_left_unbound_fails_the_pass() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
         "test.needs-map",
         &["map"],
@@ -718,7 +721,7 @@ fn a_declared_input_left_unbound_fails_the_pass() {
 #[test]
 fn an_undeclared_input_fails_the_pass() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
         "test.needs-map",
         &["map"],
@@ -737,7 +740,7 @@ fn an_effect_past_the_devices_texture_budget_is_refused_at_compilation() {
     // WebGL2 limits allow 16 sampled textures per stage, two for the source pair; eight resources
     // and six inputs fill it, and a seventh input is refused before reaching the device.
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     assert_eq!(renderer.limits().max_sampled_textures_per_shader_stage, 16);
     let budget = |inputs: usize| EffectDef {
         resources: (0..8)

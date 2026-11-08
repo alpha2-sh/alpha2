@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn generated_sources_render_without_host_frames() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
     // The clip transform applies to a generated picture as to any source.
@@ -70,7 +70,7 @@ fn generated_sources_render_without_host_frames() {
 #[test]
 fn captions_show_their_cue_between_the_tracks_around_them() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
     let project = caption_project();
@@ -224,7 +224,7 @@ fn assert_same_pixels(actual: &[u8], expected: &[u8], what: &str) {
 #[test]
 fn a_text_generator_draws_its_text_as_a_caption_in_its_style_would() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
     let caption = text_project(
@@ -295,7 +295,7 @@ fn a_text_generator_draws_its_text_as_a_caption_in_its_style_would() {
 #[test]
 fn a_text_generator_needs_fonts_and_its_text_prepared() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
     let project = text_project(
@@ -408,7 +408,7 @@ fn matte_caption_projects() -> [(&'static str, crate::EngineProject, bool); 5] {
 #[test]
 fn a_caption_stays_under_the_track_after_it_over_a_matte_no_clip_uses() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
     pollster::block_on(renderer.register_effect(alpha2_render::track_matte_definition()))
@@ -515,7 +515,7 @@ fn titled_frame(
 )]
 fn a_text_measure_bounds_the_pixels_a_frame_draws_of_it() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
     let (width, height) = (320_u32, 180_u32);
@@ -621,7 +621,7 @@ fn a_text_measure_bounds_the_pixels_a_frame_draws_of_it() {
 #[test]
 fn a_frame_of_text_and_captions_has_a_complete_cache_key() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
     let project = text_project(

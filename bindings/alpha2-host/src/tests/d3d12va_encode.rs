@@ -137,7 +137,7 @@ fn software_decode_does_not_decode_on_the_encode_device() {
         performance["softwareDecodedFrames"].as_u64() > Some(0),
         "{performance}"
     );
-    host.decode_policy = VideoDecodePolicy::Auto;
+    host.device_mut().decode_policy = VideoDecodePolicy::Auto;
     assert_eq!(host.decode_d3d12().is_some(), shared.decode_planes());
 }
 

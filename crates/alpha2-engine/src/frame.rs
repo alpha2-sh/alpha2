@@ -1686,11 +1686,12 @@ fn effect_params<'a>(
     effect: ActiveEffect<'a>,
 ) -> EffectParams<'a> {
     let mut params = EffectParams::with_capacity(effect.authored().params.len());
+    let definition = renderer.effect_definition(id);
     for (name, sample) in effect.params() {
         let mut value = param_value(sample.value);
         if sample.interpolated
-            && let Some(spec) = renderer
-                .effect_definition(id)
+            && let Some(spec) = definition
+                .as_ref()
                 .and_then(|definition| definition.params.iter().find(|spec| spec.name == name))
         {
             value = clamp_to_range(spec, value);
@@ -1707,7 +1708,6 @@ fn project_effect_id(
 ) -> Result<EffectId, RenderError> {
     renderer
         .project_effect_id(id, version)
-        .cloned()
         .ok_or(RenderError::UnknownEffect)
 }
 

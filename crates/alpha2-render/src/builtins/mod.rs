@@ -388,7 +388,7 @@ impl Renderer {
         definition: EffectDef,
     ) -> Result<EffectId, ShaderDiagnostics> {
         let id = self.register_lazily(definition)?;
-        self.effects.mark_builtin(id.clone());
+        self.effects_mut().mark_builtin(id.clone());
         Ok(id)
     }
 
@@ -400,7 +400,7 @@ impl Renderer {
     pub fn register_builtins(&mut self) -> Result<Vec<EffectId>, ShaderDiagnostics> {
         for definition in internal_effect_definitions() {
             let internal = self.register_builtin_definition(definition)?;
-            self.effects.mark_internal(internal);
+            self.effects_mut().mark_internal(internal);
         }
         let mut definitions = builtin_effect_definitions();
         definitions.extend(builtin_transition_definitions());
@@ -425,7 +425,7 @@ impl Renderer {
     /// Returns schema diagnostics when registration fails.
     pub fn register_builtin_gaussian_blur(&mut self) -> Result<EffectId, ShaderDiagnostics> {
         let internal = self.register_builtin_definition(gaussian_blur_pass_definition())?;
-        self.effects.mark_internal(internal);
+        self.effects_mut().mark_internal(internal);
         self.register_builtin_definition(gaussian_blur_definition())
     }
 

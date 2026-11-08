@@ -20,6 +20,43 @@ const DEFAULT_MAX_MEMORY_GROWTH_BYTES: u64 = 1 << 30;
 const DEFAULT_MAX_REQUESTS: u64 = 1000;
 const DEFAULT_MAX_HANDLES: u64 = 4096;
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_MAX_RUNNING: usize = 2;
+
+/// `serve`'s flags.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ServeOptions {
+    pub limits: SoftLimits,
+    /// How many requests run at once at most.
+    pub max_running: usize,
+}
+
+impl ServeOptions {
+    /// Reads `serve`'s flags over the defaults.
+    ///
+    /// # Errors
+    /// An unknown flag, a missing value or one out of range.
+    pub(crate) fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
+        let mut max_running = DEFAULT_MAX_RUNNING;
+        let mut rest = Vec::new();
+        let mut args = args.into_iter();
+        while let Some(flag) = args.next() {
+            if flag == "--max-running" {
+                let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
+                max_running = value
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|count| *count > 0)
+                    .ok_or_else(|| format!("{flag} takes a count from 1, got {value}"))?;
+            } else {
+                rest.push(flag);
+            }
+        }
+        Ok(Self {
+            limits: SoftLimits::from_args(rest)?,
+            max_running,
+        })
+    }
+}
 
 /// `None` turns a limit off.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -314,6 +351,7 @@ impl Lifecycle {
             "reason": reason,
             "details": {
                 "activity": if life.running == 0 { "idle" } else { "busy" },
+                "runningRequests": life.running,
                 "requestsServed": life.requests_served,
                 "memory": {
                     "residentBytes": memory.resident_bytes,
@@ -402,6 +440,15 @@ mod tests {
         assert_eq!(limits.max_handles, None);
         assert_eq!(limits.idle_timeout, Some(Duration::from_millis(50)));
         assert_eq!(SoftLimits::from_args(args("")), Ok(SoftLimits::default()));
+        let options =
+            ServeOptions::from_args(args("--max-requests 3 --max-running 4")).expect("flags");
+        assert_eq!(options.max_running, 4);
+        assert_eq!(options.limits.max_requests, Some(3));
+        assert_eq!(
+            ServeOptions::from_args(args("")).expect("none").max_running,
+            DEFAULT_MAX_RUNNING
+        );
+        assert!(ServeOptions::from_args(args("--max-running 0")).is_err());
         for refused in [
             "--max-memory-share 2",
             "--max-requests -1",

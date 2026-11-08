@@ -418,7 +418,7 @@ impl Renderer {
             RenderNode::Effect { effect, .. }
             | RenderNode::Transition { effect, .. }
             | RenderNode::Generator { effect, .. } => {
-                self.effects.get(effect).map(|registered| registered.cost)
+                self.effects().get(effect).map(|registered| registered.cost)
             }
             RenderNode::Composite { layers, .. } => Some(
                 crate::submission_planner::COMPOSITE_LAYER_COST
@@ -475,7 +475,7 @@ fn graph_uniform_capacity(
             | RenderNode::Transition { effect, .. }
             | RenderNode::Generator { effect, .. } => {
                 let parameter_bytes = renderer
-                    .effects
+                    .effects()
                     .get(effect)
                     .map_or(0, |registered| registered.definition.params.len());
                 let parameter_bytes =

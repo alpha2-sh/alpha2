@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn evaluated_frame_executes_the_clip_effect_chain() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -67,7 +67,7 @@ fn keyframed_effect_parameters_render_at_the_frame_time_and_clamp_only_overshoot
     use alpha2_model::{CubicBezier, Interpolation, Keyframe};
 
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     // `gain` scales the source; its catalog range is 0..=1.
     pollster::block_on(renderer.register_effect(EffectDef {
         params: vec![ParamSpec {
@@ -179,7 +179,7 @@ fn keyframed_effect_parameters_render_at_the_frame_time_and_clamp_only_overshoot
 #[test]
 fn evaluated_frame_executes_active_transition_nodes() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let transition = pollster::block_on(renderer.register_effect(EffectDef {
         id: "test.frame-fade".into(),
         version: 1,

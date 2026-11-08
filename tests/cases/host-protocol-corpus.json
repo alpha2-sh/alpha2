@@ -2259,6 +2259,7 @@
         "reason": "started",
         "details": {
           "activity": "idle",
+          "runningRequests": 0,
           "requestsServed": 0,
           "memory": {
             "residentBytes": 52428800,
@@ -2316,6 +2317,7 @@
         "reason": "requests",
         "details": {
           "activity": "idle",
+          "runningRequests": 0,
           "requestsServed": 1000,
           "memory": {
             "residentBytes": 52428800,
@@ -2367,6 +2369,7 @@
           "reason": "started",
           "details": {
             "activity": "busy",
+            "runningRequests": 1,
             "requestsServed": 3,
             "memory": {
               "residentBytes": 52428800,

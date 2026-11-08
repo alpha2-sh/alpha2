@@ -35,11 +35,12 @@ The host answers each request with one response that carries its `requestId`:
 `hostState` is the host's state once the request has ended, after the checks of [Host state](#host-state).
 
 - Requests can be written before earlier ones are answered. Match each response to its request by `requestId`.
+- The host runs up to `--max-running <count>` requests at once (a `serve` flag, 2 by default), each on its own thread against its one GPU device, and answers each as it ends, so responses come in any order. A request past that count waits for a running one to end. A runtime effect `id`@`version` or an effect resource id that a running request defines differently waits until that request ends; requests that define it alike share it. When the memory watchdog of `export` stops an export, it stops the newest one first. An export's GPU timing counters (`gpuSubmissions`, `gpuRenderMsPerFrame`, `gpuPackMsPerFrame`, `pipelineCompileMs`) cover the GPU work of the requests that ran with it.
 - A request the host cannot read is answered with `"requestId": "unknown"` when it has no usable `requestId`.
 - A request's header is at most 128 MiB, the `project` in it at most 64 MiB, and its attachments at most 256 MiB. No operation takes attachments yet; a request with some is refused with `INVALID_REQUEST`.
 - While an export runs, the host also writes progress messages: `{"protocolVersion":2,"type":"progress","requestId":"...","phase":"frames","completed":12,"total":30}`. `phase` is `frames` while frames are encoded and `finalizing` once every frame is and the file is being completed. A message with `"restarted": true` and `completed` 0 says the export started over on the readback path, because the GPU-resident encoder rejected a frame on a device that was still usable; the result's `gpuOutputPathFallback` names the encoder, the frame and the reason. The export is finished only when its response arrives.
 - When the host cannot start its GPU device (or, in `hardware-required` decode mode, its decode device) for the first request that needs it, it writes `{"protocolVersion":2,"type":"fatal","error":{...}}` and exits; that request and the ones after it get no response. `conform` needs no GPU.
-- When the host's device is lost or a decoder or encoder thread is stuck, the host goes `draining`, answers the requests it has read but not started with `HOST_RETIRING`, and exits.
+- When the host's device is lost or a decoder or encoder thread is stuck, the host goes `draining`, lets the requests it runs answer (for up to 60 seconds), answers those it has read but not started with `HOST_RETIRING`, and exits.
 - The end of standard input means no more requests: the host answers every request it has read, then exits. A client that may cancel keeps standard input open until it has its answer.
 
 Standard error carries human-readable diagnostics, not protocol messages. Responses can carry attachments: a [`still`](#still) without an `output` returns its PNG as one.
@@ -72,6 +73,7 @@ A response written when the request moved the host to `draining` carries `"hostS
 | Field | |
 | --- | --- |
 | `activity` | `idle` or `busy` |
+| `runningRequests` | requests running now |
 | `requestsServed` | requests answered so far |
 | `memory` | `{ "residentBytes", "footprintBytes", "baselineBytes", "capacityBytes" }`: now, after the first request, and what the host may use; `null` where unknown |
 | `openHandles` | open handles (file descriptors), `null` where unknown |

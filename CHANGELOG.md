@@ -35,6 +35,9 @@ All notable changes to this project are documented in this file.
   environment they start with. `Alpha2NodeClient.close()` and `HostClient.close()` end them; idle
   hosts keep no Node or Python process alive. The MCP server reuses hosts across tool calls.
 - A `still` without an `output` returns its PNG in the response instead of a file.
+- `serve` runs up to `--max-running` requests at once on its one GPU device. Requests hold the
+  runtime effects and effect resources they define, so two that define one id differently take
+  turns, and the memory watchdog stops the newest export first.
 
 ### Changed
 

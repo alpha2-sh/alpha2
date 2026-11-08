@@ -26,18 +26,24 @@ pub(crate) struct Terminations {
 
 struct State {
     requested: Option<Termination>,
-    /// Requests from their line being read until answered.
+    /// Requests from their frame being read until answered.
     busy: usize,
-    running: Vec<(u64, CancelToken)>,
+    /// Export cancel tokens and the request each belongs to, if known.
+    running: Vec<(u64, Option<u64>, CancelToken)>,
     next: u64,
-    current: Option<String>,
-    cancelled_current: bool,
+    /// Requests being handled: their sequence number, id and whether a cancel named them.
+    active: Vec<(u64, String, bool)>,
     /// Ids cancelled before they were read or started, oldest first. A cancel for a request that
     /// already ended stays until newer ones push it out.
     pending: VecDeque<String>,
 }
 
 const MAX_PENDING_CANCELS: usize = 1024;
+
+thread_local! {
+    /// The request this thread handles, set by [`Terminations::begin_request`].
+    static CURRENT: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
 
 impl Terminations {
     pub(crate) const fn new(on_idle: fn(Termination)) -> Self {
@@ -47,8 +53,7 @@ impl Terminations {
                 busy: 0,
                 running: Vec::new(),
                 next: 0,
-                current: None,
-                cancelled_current: false,
+                active: Vec::new(),
                 pending: VecDeque::new(),
             }),
             on_idle,
@@ -63,7 +68,7 @@ impl Terminations {
     pub(crate) fn request(&self, termination: Termination) -> bool {
         let mut state = self.lock();
         state.requested.get_or_insert(termination);
-        for (_, token) in &state.running {
+        for (_, _, token) in &state.running {
             token.cancel();
         }
         state.busy == 0
@@ -73,17 +78,20 @@ impl Terminations {
         self.lock().requested
     }
 
-    /// Held until the guard drops. A cancel that named `id` earlier is taken now
-    /// ([`RequestGuard::cancelled_before_start`]).
+    /// Held until the guard drops, on the thread that handles the request. A cancel that named
+    /// `id` earlier is taken now ([`RequestGuard::cancelled_before_start`]).
     pub(crate) fn begin_request(&'static self, id: &str) -> RequestGuard {
         let mut state = self.lock();
         state.busy += 1;
         let cancelled = take_pending(&mut state.pending, id);
-        state.current = Some(id.to_owned());
-        state.cancelled_current = cancelled;
+        let sequence = state.next;
+        state.next += 1;
+        state.active.push((sequence, id.to_owned(), cancelled));
+        drop(state);
+        CURRENT.with(|current| current.set(Some(sequence)));
         RequestGuard {
             owner: self,
-            id: id.to_owned(),
+            sequence,
             cancelled_before_start: cancelled,
         }
     }
@@ -92,15 +100,22 @@ impl Terminations {
         take_pending(&mut self.lock().pending, id)
     }
 
-    /// `running` when `target` is the request being handled (a request with nothing to cancel
-    /// finishes); otherwise `pending`, kept for a later request with that id.
+    /// `running` when a request with id `target` is being handled (a request with nothing to
+    /// cancel finishes); otherwise `pending`, kept for a later request with that id.
     pub(crate) fn cancel_request(&self, target: &str) -> &'static str {
         let mut state = self.lock();
-        if state.current.as_deref() == Some(target) {
-            state.cancelled_current = true;
-            for (_, token) in &state.running {
-                token.cancel();
+        let State {
+            active, running, ..
+        } = &mut *state;
+        let mut found = false;
+        for (sequence, id, cancelled) in active.iter_mut() {
+            if id == target {
+                *cancelled = true;
+                found = true;
+                cancel_tokens_of(running, Some(*sequence));
             }
+        }
+        if found {
             return "running";
         }
         if state.pending.len() >= MAX_PENDING_CANCELS {
@@ -111,11 +126,17 @@ impl Terminations {
     }
 
     /// For a cause the caller already recorded as the failure (the Linux memory watchdog), so the
-    /// exports report that cause, not a cancel.
+    /// export reports that cause, not a cancel. Cancels every export when `request` is unknown.
     #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
-    pub(crate) fn cancel_running(&self) {
-        for (_, token) in &self.lock().running {
-            token.cancel();
+    pub(crate) fn cancel_running_request(&self, request: Option<u64>) {
+        let state = self.lock();
+        match request {
+            Some(_) => cancel_tokens_of(&state.running, request),
+            None => {
+                for (_, _, token) in &state.running {
+                    token.cancel();
+                }
+            }
         }
     }
 
@@ -124,16 +145,24 @@ impl Terminations {
         self.lock().busy += 1;
     }
 
-    /// Already cancelled when a termination was asked for.
+    /// Belongs to the request this thread handles. Already cancelled when a termination was asked
+    /// for or a cancel named the request.
     pub(crate) fn export_cancel(&'static self) -> ExportCancel {
         let token = CancelToken::default();
+        let request = current_request();
         let mut state = self.lock();
-        if state.requested.is_some() || state.cancelled_current {
+        let cancelled = request.is_some_and(|request| {
+            state
+                .active
+                .iter()
+                .any(|(sequence, _, cancelled)| *sequence == request && *cancelled)
+        });
+        if state.requested.is_some() || cancelled {
             token.cancel();
         }
         let id = state.next;
         state.next += 1;
-        state.running.push((id, token.clone()));
+        state.running.push((id, request, token.clone()));
         ExportCancel {
             token,
             id,
@@ -149,6 +178,20 @@ impl Terminations {
     }
 }
 
+/// Tokens of no known request are cancelled with any request, as they may be its.
+fn cancel_tokens_of(running: &[(u64, Option<u64>, CancelToken)], request: Option<u64>) {
+    for (_, owner, token) in running {
+        if owner.is_none() || *owner == request {
+            token.cancel();
+        }
+    }
+}
+
+/// The request the calling thread handles, if it handles one.
+pub(crate) fn current_request() -> Option<u64> {
+    CURRENT.with(std::cell::Cell::get)
+}
+
 fn take_pending(pending: &mut VecDeque<String>, id: &str) -> bool {
     match pending.iter().position(|cancelled| cancelled == id) {
         Some(at) => {
@@ -161,7 +204,7 @@ fn take_pending(pending: &mut VecDeque<String>, id: &str) -> bool {
 
 pub(crate) struct RequestGuard {
     owner: &'static Terminations,
-    id: String,
+    sequence: u64,
     cancelled_before_start: bool,
 }
 
@@ -173,12 +216,16 @@ impl RequestGuard {
 
 impl Drop for RequestGuard {
     fn drop(&mut self) {
+        CURRENT.with(|current| {
+            if current.get() == Some(self.sequence) {
+                current.set(None);
+            }
+        });
         let mut state = self.owner.lock();
         state.busy = state.busy.saturating_sub(1);
-        if state.current.as_deref() == Some(self.id.as_str()) {
-            state.current = None;
-            state.cancelled_current = false;
-        }
+        state
+            .active
+            .retain(|(sequence, _, _)| *sequence != self.sequence);
         let idle = (state.busy == 0).then_some(state.requested).flatten();
         drop(state);
         if let Some(termination) = idle {
@@ -203,7 +250,10 @@ impl std::ops::Deref for ExportCancel {
 
 impl Drop for ExportCancel {
     fn drop(&mut self) {
-        self.owner.lock().running.retain(|(id, _)| *id != self.id);
+        self.owner
+            .lock()
+            .running
+            .retain(|(id, _, _)| *id != self.id);
     }
 }
 
@@ -232,6 +282,7 @@ pub(crate) fn cancelled_by_request_or_termination(message: String) -> String {
     if crate::protocol::is_cancelled(&message) {
         return message;
     }
+    let request = current_request();
     let state = TERMINATIONS.lock();
     if let Some(termination) = state.requested {
         return crate::protocol::cancelled(format!(
@@ -239,11 +290,15 @@ pub(crate) fn cancelled_by_request_or_termination(message: String) -> String {
             termination.name()
         ));
     }
-    match (&state.current, state.cancelled_current) {
-        (Some(id), true) => crate::protocol::cancelled(format!(
+    match state
+        .active
+        .iter()
+        .find(|(sequence, _, cancelled)| Some(*sequence) == request && *cancelled)
+    {
+        Some((_, id, _)) => crate::protocol::cancelled(format!(
             "native export was cancelled: the client cancelled request {id}"
         )),
-        _ => message,
+        None => message,
     }
 }
 

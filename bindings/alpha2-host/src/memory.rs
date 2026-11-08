@@ -524,12 +524,30 @@ pub fn admit(least: LeastWorkingSet, capacity: &alpha2_os::MemoryCapacity) -> Re
     )))
 }
 
-/// Stops the export once the cgroup v2 working set reaches 95 % of the limit, so it fails with
-/// `RESOURCE_LIMIT` (`memory-limit-reached`) instead of being silently OOM-killed. Best effort: an
-/// allocation that jumps past the limit between looks still gets the process killed. Linux only.
+/// Stops an export once the cgroup v2 working set reaches 95 % of the limit, so it fails with
+/// `RESOURCE_LIMIT` (`memory-limit-reached`) instead of being silently OOM-killed. Of the exports
+/// running at once, the newest stops first; the next newest stops only if the set stays over the
+/// limit once it has gone. Best effort: an allocation that jumps past the limit between looks
+/// still gets the process killed. Linux only.
 pub struct MemoryWatchdog {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     stop: Option<(std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>)>,
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    watched: u64,
+}
+
+/// The watchdogs running, oldest first.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+static WATCHED: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+static NEXT_WATCHED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn watchdogs() -> std::sync::MutexGuard<'static, Vec<u64>> {
+    WATCHED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl MemoryWatchdog {
@@ -547,9 +565,15 @@ impl MemoryWatchdog {
     pub fn start(failure: crate::encode::PipelineFailure) -> Self {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
+            let watched = NEXT_WATCHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             if alpha2_os::cgroup_v2_usage().is_none() {
-                return Self { stop: None };
+                return Self {
+                    stop: None,
+                    watched,
+                };
             }
+            watchdogs().push(watched);
+            let request = crate::termination::current_request();
             let (sender, receiver) = std::sync::mpsc::channel::<()>();
             let spawned = std::thread::Builder::new()
                 .name("alpha2 memory watchdog".to_owned())
@@ -557,15 +581,18 @@ impl MemoryWatchdog {
                     while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
                         receiver.recv_timeout(Self::INTERVAL)
                     {
-                        if let Some(reached) = Self::reached(alpha2_os::cgroup_v2_usage()) {
+                        let newest = watchdogs().last() == Some(&watched);
+                        if newest && let Some(reached) = Self::reached(alpha2_os::cgroup_v2_usage())
+                        {
                             failure.record(&reached);
-                            crate::termination::terminations().cancel_running();
+                            crate::termination::terminations().cancel_running_request(request);
                             return;
                         }
                     }
                 });
             Self {
                 stop: spawned.ok().map(|handle| (sender, handle)),
+                watched,
             }
         }
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
@@ -590,9 +617,12 @@ impl MemoryWatchdog {
 impl Drop for MemoryWatchdog {
     fn drop(&mut self) {
         #[cfg(any(target_os = "linux", target_os = "android"))]
-        if let Some((sender, handle)) = self.stop.take() {
-            drop(sender);
-            let _ = handle.join();
+        {
+            if let Some((sender, handle)) = self.stop.take() {
+                drop(sender);
+                let _ = handle.join();
+            }
+            watchdogs().retain(|watched| *watched != self.watched);
         }
     }
 }

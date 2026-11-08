@@ -238,7 +238,8 @@ impl CpuRenderer {
         {
             return Err(RenderError::InvalidEffectParams.into());
         }
-        let mut resources: Vec<(&str, &CpuLut)> = Vec::with_capacity(definition.resources.len());
+        let mut held: Vec<(&str, std::sync::Arc<CpuLut>)> =
+            Vec::with_capacity(definition.resources.len());
         for spec in &definition.resources {
             let id = node
                 .resources
@@ -247,8 +248,10 @@ impl CpuRenderer {
             let lut = self
                 .resource(id)
                 .ok_or(RenderError::MissingEffectResource)?;
-            resources.push((spec.name.as_str(), lut));
+            held.push((spec.name.as_str(), lut));
         }
+        let resources: Vec<(&str, &CpuLut)> =
+            held.iter().map(|(name, lut)| (*name, &**lut)).collect();
         if node
             .inputs
             .iter()

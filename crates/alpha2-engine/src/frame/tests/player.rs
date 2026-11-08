@@ -83,7 +83,7 @@ fn step(
 #[test]
 fn a_frame_equal_to_the_one_shown_is_neither_rendered_nor_submitted() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
     let tint = pollster::block_on(renderer.register_effect(runtime_tint_effect(

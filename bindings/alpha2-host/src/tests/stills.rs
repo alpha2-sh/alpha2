@@ -255,7 +255,7 @@ fn a_still_without_an_output_comes_back_as_an_attachment() {
     let (served, output) = serve_input(
         &mut Serving::started(host),
         request.to_string().as_bytes(),
-        &mut |_| None,
+        &|_| None,
     );
     served.expect("serve");
     let (answer, attachments) = crate::serve_io::messages_of(&output)

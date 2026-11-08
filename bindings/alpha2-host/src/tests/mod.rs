@@ -120,7 +120,7 @@ fn corpus(name: &str) -> PathBuf {
 fn serve_input(
     serving: &mut Serving,
     input: &[u8],
-    unusable: &mut dyn FnMut(Option<&Host>) -> Option<crate::lifecycle::DrainReason>,
+    unusable: &crate::Unusable<'_>,
 ) -> (Result<crate::Served, HostError>, Vec<u8>) {
     let captured = crate::serve_io::Captured::default();
     let out = captured.responder();
@@ -152,9 +152,9 @@ fn child_messages(stdout: &[u8]) -> Vec<Value> {
 }
 
 /// `serve`'s flags from `ALPHA2_TEST_SERVE_ARGS`, for a child that runs `serve`.
-fn test_serve_limits() -> crate::lifecycle::SoftLimits {
+fn test_serve_limits() -> crate::lifecycle::ServeOptions {
     let args = std::env::var("ALPHA2_TEST_SERVE_ARGS").unwrap_or_default();
-    crate::lifecycle::SoftLimits::from_args(args.split_whitespace().map(str::to_owned))
+    crate::lifecycle::ServeOptions::from_args(args.split_whitespace().map(str::to_owned))
         .expect("ALPHA2_TEST_SERVE_ARGS")
 }
 

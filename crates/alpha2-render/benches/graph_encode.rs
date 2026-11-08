@@ -118,7 +118,7 @@ fn main() {
         adapter.adapter_name, adapter.backend, adapter.driver, adapter.driver_info
     );
     let device = gpu.device().clone();
-    let mut renderer = Renderer::new(gpu);
+    let renderer = Renderer::new(gpu);
     let tint = pollster::block_on(renderer.register_effect(tint_effect())).expect("tint compiles");
     let idle = || {
         device
