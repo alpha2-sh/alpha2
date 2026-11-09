@@ -1866,19 +1866,26 @@ def test_concurrent_requests_share_at_most_concurrency_hosts(
     tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
 ) -> None:
     log = tmp_path / "log"
-    running = tmp_path / "running"
-    answer = f"""record({str(running)!r}, "+")
+    # One file per host: appends from two processes to one file can lose a line on Windows.
+    running = f"{str(tmp_path / 'running-')!r} + str(os.getpid())"
+    answer = f"""record({running}, "1 " + str(time.perf_counter_ns()))
         time.sleep(0.2)
-        record({str(running)!r}, "-")
+        record({running}, "0 " + str(time.perf_counter_ns()))
         send(request, ok=True, result={{"pid": os.getpid()}})"""
     client = HostClient(host_path=fake_host(tmp_path, pooled_host(log, answer)), concurrency=2)
     with ThreadPoolExecutor(6) as pool:
         calls = [pool.submit(client.export, **export_args(f"{index}.mp4")) for index in range(6)]
         pids = {call.result()["pid"] for call in calls}
     assert len(started_pids) == 2 and len(pids) == 2
+    marks = sorted(
+        (int(time), int(starts))
+        for path in tmp_path.glob("running-*")
+        for starts, time in (line.split() for line in lines_in(path))
+    )
+    assert len(marks) == 12
     depth = 0
-    for mark in lines_in(running):
-        depth += 1 if mark == "+" else -1
+    for _, starts in marks:
+        depth += 1 if starts else -1
         assert depth <= 2
 
 
