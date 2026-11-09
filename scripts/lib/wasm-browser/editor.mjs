@@ -8,16 +8,20 @@ const table = await (await fetch("/tests/cases/surface-conformance.json")).json(
 const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 const codeOf = (promise) => promise.then(() => "resolved", (error) => error?.code ?? String(error));
-// Skips the case as the page skips the engine's decoder refusal, which the editor wraps.
+const { ALL_FORMATS, BlobSource, Input } = await import("mediabunny");
+// Skips, as the extraction cases do, where this browser decodes none of the clip's video.
 const importVideo = async (bridge, bytes) => {
+  const input = new Input({ source: new BlobSource(bytes), formats: ALL_FORMATS });
   try {
-    const { assetIds } = await bridge.importFiles([new File([bytes], "clip.mp4", { type: "video/mp4" })]);
-    return assetIds[0];
-  } catch (error) {
-    if (error?.cause?.code === "DECODE_UNAVAILABLE")
-      skip("webcodecs-video", "this browser does not decode the case's source: " + error.message);
-    throw error;
+    const track = await input.getPrimaryVideoTrack();
+    if (!(await track?.canDecode()))
+      skip("webcodecs-video", "this browser does not decode the case's source: "
+        + ((await track?.getCodecParameterString()) ?? "no video track"));
+  } finally {
+    input.dispose();
   }
+  const { assetIds } = await bridge.importFiles([new File([bytes], "clip.mp4", { type: "video/mp4" })]);
+  return assetIds[0];
 };
 `;
 
