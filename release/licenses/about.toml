@@ -1,7 +1,14 @@
 # Same license set as deny.toml.
-accepted = ["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "Unicode-3.0", "Unlicense", "Zlib"]
+accepted = ["0BSD", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "Unicode-3.0", "Unlicense", "Zlib"]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
+
+# Mozilla's CA certificates as data, through ureq and its platform verifier.
+[webpki-roots]
+accepted = ["CDLA-Permissive-2.0"]
+
+[webpki-root-certs]
+accepted = ["CDLA-Permissive-2.0"]
 
 [uniffi]
 accepted = ["MPL-2.0"]
