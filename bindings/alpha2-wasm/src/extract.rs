@@ -1,7 +1,7 @@
-//! The extraction session for the web, push style: the worker asks [`WebExtractSession::next`]
-//! what to do, supplies frames and audio, hands each delivery to the extractor and gives its emits
-//! back. Source frames arrive as `VideoFrame.copyTo` planes and are presented on the CPU renderer
-//! exactly as the native hosts present them, so deliveries match byte for byte.
+//! Drives the extraction session for the web, push style. The worker asks
+//! [`WebExtractSession::next`] what to do, supplies frames and audio, hands each delivery to the
+//! extractor and gives its emits back. Source frames arrive as `VideoFrame.copyTo` planes and are
+//! presented on the CPU renderer as the native hosts present them, so deliveries match exactly.
 
 use std::sync::Arc;
 
@@ -89,12 +89,10 @@ fn need_json(need: &Need, canvas: (u32, u32)) -> Value {
 
 #[wasm_bindgen(js_class = ExtractSession)]
 impl WebExtractSession {
-    /// A run of the extractor `descriptor` describes over `project`, as `request` asks; all three
-    /// are JSON.
+    /// A run of the extractor `descriptor` describes over `project`, as `request` asks, all JSON.
     ///
     /// # Errors
-    /// `INVALID_INPUT` for a project, descriptor or request that does not parse or that the
-    /// session refuses.
+    /// `INVALID_INPUT` for a project, descriptor or request that does not parse or is refused.
     #[wasm_bindgen(constructor)]
     pub fn new(
         project: &str,
@@ -121,7 +119,7 @@ impl WebExtractSession {
             .ok_or_else(|| invalid_input("the extraction has finished"))
     }
 
-    /// What `begin` is told, as JSON: the range, passes, clock and the delivered video or audio.
+    /// What `begin` is told as JSON, with the range, passes, clock and delivered video or audio.
     ///
     /// # Errors
     /// After `finish`.
@@ -190,8 +188,7 @@ impl WebExtractSession {
     /// them (the arguments of `uploadYuvFrame`), presented at the delivered size.
     ///
     /// # Errors
-    /// `INVALID_INPUT` for planes that do not fit their format, or a supply the session did not
-    /// ask for.
+    /// `INVALID_INPUT` for planes that do not fit their format, or an unasked supply.
     #[wasm_bindgen(js_name = supplyYuvFrame)]
     #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     pub fn supply_yuv_frame(
@@ -297,7 +294,7 @@ impl WebExtractSession {
             .map_err(refused)
     }
 
-    /// Answers a source-frame need: the source has no such frame.
+    /// Answers a source-frame need when the source has no such frame.
     ///
     /// # Errors
     /// `INVALID_INPUT` when the session did not ask for a source frame.
@@ -358,8 +355,7 @@ impl WebExtractSession {
         self.session()?.supply_audio(supplied).map_err(refused)
     }
 
-    /// Takes the extractor's emits for the last delivery (or `end`), a JSON array in the host
-    /// protocol's form.
+    /// Takes the extractor's emits for the last delivery or `end`, in the host protocol's JSON.
     ///
     /// # Errors
     /// `INVALID_EMIT` with `{ index, reason }` for the first emit the session refuses.

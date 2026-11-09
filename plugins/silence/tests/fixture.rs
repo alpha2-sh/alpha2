@@ -1,6 +1,6 @@
 //! The plugin over the speech fixture with silences inserted at known places.
 
-// Sample counts here are a few hundred thousand: far inside every integer type used.
+// Sample counts here stay in the hundreds of thousands, far inside every integer type used.
 #![allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 
 use std::collections::HashMap;

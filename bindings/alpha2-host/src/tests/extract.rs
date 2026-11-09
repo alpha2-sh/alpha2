@@ -1,5 +1,3 @@
-//! The `extract` operation with a fake client: steps out, acknowledgements back.
-
 use super::requests::{SERVE_CHILD, ServeChild};
 use super::*;
 use alpha2_engine::extract::fixtures::{digest_values, fnv1a};

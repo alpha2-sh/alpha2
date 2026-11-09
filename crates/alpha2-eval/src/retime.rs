@@ -201,12 +201,11 @@ fn first_reached(from: i64, to: i64, reached: impl Fn(i64) -> bool) -> i64 {
 }
 
 /// The timeline ranges of a clip at which its picture shows a source time in
-/// `[range_start, range_end)`: the full preimage of [`picture_source_time`].
+/// `[range_start, range_end)`, the full preimage of [`picture_source_time`].
 ///
 /// Forward and stretched clips give one range, reversed clips one mirrored range, loops one per
 /// pass that reaches the interval, and a freeze the whole clip when its instant lies inside the
-/// interval. Ranges are in timeline order and disjoint. `None` for a time that does not fit in
-/// ticks.
+/// interval. Ranges are in timeline order and disjoint. `None` for a time beyond ticks.
 #[must_use]
 pub fn source_range_to_timeline(
     timeline: TimeRange,

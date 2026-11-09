@@ -1,9 +1,9 @@
-//! Extractor plugins: a manifest's artifact picked by the trust policy, checked against its hash,
-//! and loaded as an [`Extractor`] the session drives like any other. wasm modules run in wasmtime,
-//! sandboxed, with capped memory and bounded calls; native libraries run in the process, and only
-//! for plugins the caller allows.
+//! Loads extractor plugins. The trust policy picks a manifest's artifact, which is checked against
+//! its hash and loaded as an [`Extractor`] the session drives like any other. wasm modules run in
+//! wasmtime, sandboxed, with capped memory and bounded calls. Native libraries run in the process,
+//! and only for plugins the caller allows.
 //!
-//! Fetching is the caller's: [`load`] asks a [`Fetch`] for each file by URL and hash.
+//! The caller fetches: [`load`] asks a [`Fetch`] for each file by URL and hash.
 
 mod native;
 #[cfg(test)]
@@ -142,8 +142,7 @@ impl Default for Policy {
 /// The Rust target triple this build runs on, as manifests name native artifacts.
 pub const TARGET: &str = env!("ALPHA2_HOST_CORE_TARGET");
 
-/// The artifact to load: the native one for `target` when the policy allows native code, else the
-/// wasm one.
+/// Picks the native artifact for `target` when the policy allows native code, else the wasm one.
 ///
 /// # Errors
 /// `PLUGIN_NATIVE_REFUSED` when only a native artifact runs here and native code is not allowed,
@@ -267,7 +266,7 @@ fn log_line(message: &str) {
     eprintln!("plugin: {}", &message[..end]);
 }
 
-/// The outcome of one plugin call: what it emitted, or why it failed.
+/// What one plugin call emitted, or why it failed.
 type Call = Result<Vec<Record>, ExtractorError>;
 
 /// How the loader calls a plugin, whichever transport it came through.

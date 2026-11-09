@@ -1508,7 +1508,7 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "Source time: the presentation times the source's pictures and sound carry once decoded.\nPoints are normalized to the displayed source picture.",
+          "description": "Source time, the presentation times the source's pictures and sound carry once decoded.\nPoints are normalized to the displayed source picture.",
           "properties": {
             "source_id": {
               "$ref": "#/$defs/SourceId",
@@ -1546,7 +1546,7 @@
       "oneOf": [
         {
           "const": "hold",
-          "description": "The sample at or before the time: the rule of the picture shown at that time.",
+          "description": "The sample at or before the time, as the picture shown at that time is chosen.",
           "type": "string"
         },
         {
@@ -1572,7 +1572,7 @@
           ]
         },
         "score": {
-          "description": "A free score, finite, at most [`MAX_DATA_SCALAR`] in magnitude. Edit operations ignore\nit.",
+          "description": "A free, finite score of at most [`MAX_DATA_SCALAR`] in magnitude; edit operations ignore it.",
           "format": "float",
           "type": [
             "number",

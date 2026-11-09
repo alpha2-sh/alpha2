@@ -1,5 +1,4 @@
-// Data sets and the places that bind to them. Mirrors `alpha2-model`'s `data` and
-// `data_places` modules.
+// Data sets and the places that bind to them, mirroring `alpha2-model`'s `data` and `data_places`.
 
 import {
   MAX_DATA_CHANNELS,
@@ -23,7 +22,7 @@ type Clock =
   | { readonly kind: "composition"; readonly composition: Json }
   | { readonly kind: "picture" };
 
-/** The value type a binding sits on: `param` carries a built-in parameter's type, if known. */
+/** The value type a binding sits on; `param` carries a built-in parameter's type, if known. */
 type Slot =
   | { readonly kind: "point" | "vec2" | "scalar" | "other" }
   | { readonly kind: "param"; readonly type: string | undefined };

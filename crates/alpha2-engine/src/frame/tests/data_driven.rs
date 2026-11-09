@@ -1,5 +1,3 @@
-//! Frames whose correction and effect parameters follow data sets.
-
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -34,7 +32,7 @@ fn picture() -> Vec<u8> {
     pixels
 }
 
-/// Every value held over the clip: a similarity correction, and four picture-space corner points.
+/// A similarity correction and four picture-space corner points, each held over the clip.
 fn data() -> Value {
     serde_json::json!([
         { "id": "stab", "anchor": { "type": "source", "source_id": "v" }, "kind": "similarity",

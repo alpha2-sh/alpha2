@@ -1,4 +1,4 @@
-//! Edit operations that apply data to a project once: `remove_ranges`, `split_at` and `bake`.
+//! The edit operations `remove_ranges`, `split_at` and `bake`, which apply data to a project once.
 //!
 //! Operations are named for primitives, never for features, and are pure: a project and a
 //! request in, a project and a report out, with no I/O. Every kept moment renders as before:
@@ -334,9 +334,9 @@ fn remove_ranges(
     Ok((edited, report))
 }
 
-/// For each clip of a transition a removed range crosses, what it also loses so the two no
-/// longer overlap: the from-clip after the first cut inside the transition, the to-clip before
-/// the last.
+/// For each clip of a transition a removed range crosses, what it also loses so the two no longer
+/// overlap. The from-clip loses what follows the first cut inside the transition, and the to-clip
+/// what precedes the last.
 fn crossed_transitions(
     project: &Project,
     removal: &[(i64, i64)],
@@ -400,7 +400,7 @@ fn kept_windows_ticks(start: i64, end: i64, removal: &[(i64, i64)]) -> Vec<(i64,
     windows
 }
 
-/// How far a time at or after `tick` moves left: the removed length before it.
+/// How far a time at or after `tick` moves left, which is the removed length before it.
 fn shift_of(tick: i64, removal: &[(i64, i64)]) -> i64 {
     removal
         .iter()

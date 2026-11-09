@@ -1,4 +1,4 @@
-//! Baking: data bindings become keyframes, caption words become cues.
+//! Bakes data bindings into keyframes and caption words into cues.
 
 use super::{BakeTarget, EditError, EditReport};
 use crate::SampleContext;

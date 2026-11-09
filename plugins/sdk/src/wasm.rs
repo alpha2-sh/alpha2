@@ -1,4 +1,4 @@
-//! The wasm transport: the `alpha2_*` exports and the `alpha2` imports.
+//! The wasm transport, with the `alpha2_*` exports and the `alpha2` imports.
 
 use std::alloc::Layout;
 use std::cell::UnsafeCell;
@@ -21,7 +21,7 @@ unsafe extern "C" {
     fn host_log(level: u32, ptr: *const u8, len: usize);
 }
 
-/// The one instance of a module: a module instance serves one run, on one thread.
+/// The one instance of a module, which serves one run on one thread.
 pub struct Slot<E>(UnsafeCell<Option<Runtime<E>>>);
 
 // SAFETY: wasm32 plugins are built without threads, so the slot is never shared across threads.

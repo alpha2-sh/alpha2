@@ -1,6 +1,3 @@
-//! `plugins/silence`, packed as it is shipped and loaded from its manifest: the wasm and native
-//! artifacts agree, find the fixture's inserted silences, and their intervals cut cleanly.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -142,7 +139,7 @@ fn project(duration: i64, data: &[DataSet]) -> Project {
     .expect("project")
 }
 
-/// The silences the artifact `policy` picks finds over the fixture, in ticks.
+/// The silences that the artifact `policy` picks finds in the fixture, in ticks.
 fn run(samples: &[f32], policy: &Policy) -> (DataSet, Vec<(i64, i64)>) {
     let manifest =
         parse_manifest(&std::fs::read_to_string(packed().join("manifest.json")).expect("manifest"))

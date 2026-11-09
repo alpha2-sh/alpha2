@@ -18,8 +18,7 @@ pub struct EditedJson {
 pub struct EditFailure {
     /// `INVALID_INPUT`, or `INTERNAL` for an edited project that fails validation.
     pub code: &'static str,
-    /// The reason in snake case: `invalid_project`, `invalid_request` or an
-    /// [`EditError::kind`].
+    /// The reason in snake case, `invalid_project`, `invalid_request` or an [`EditError::kind`].
     pub refusal: &'static str,
     /// What went wrong.
     pub message: String,

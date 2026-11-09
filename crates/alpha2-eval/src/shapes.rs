@@ -203,8 +203,7 @@ pub fn evaluate_item(item: &ShapeItem, time: MediaTime, aspect: f64) -> Evaluate
     }
 }
 
-/// A geometry at `time`: a mask's outline, or a content tree's. `context` resolves a mask's
-/// data bindings.
+/// A mask's outline or a content tree's geometry at `time`; `context` resolves mask bindings.
 #[must_use]
 pub fn evaluate_geometry(
     geometry: &ShapeGeometry,

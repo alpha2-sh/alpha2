@@ -1,6 +1,6 @@
-//! The `alpha2-plugin/1` ABI: what a plugin exports, what a host gives it, and the binary records
-//! a plugin emits values in. Native plugins exchange the `#[repr(C)]` tables below; wasm plugins
-//! use the export and import names in [`wasm`]. Both send emits as [`records`].
+//! The `alpha2-plugin/1` ABI, covering what a plugin exports, what a host gives it, and the binary
+//! records a plugin emits values in. Native plugins exchange the `#[repr(C)]` tables below; wasm
+//! plugins use the export and import names in [`wasm`]. Both send emits as [`records`].
 
 #![no_std]
 
@@ -82,7 +82,7 @@ pub struct HostV1 {
     pub log: unsafe extern "C" fn(context: *mut c_void, level: u32, message: *const u8, len: usize),
 }
 
-/// What a native plugin's [`NATIVE_ENTRY`] returns: a static table that outlives every instance.
+/// The static table a native plugin's [`NATIVE_ENTRY`] returns, which outlives every instance.
 ///
 /// Calls other than `describe` and `create` take the instance `create` returned. Pointers passed to
 /// the plugin are borrowed for the call alone.

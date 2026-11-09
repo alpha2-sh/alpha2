@@ -13,7 +13,7 @@ use std::fmt;
 pub enum EditRequest {
     /// Removes timeline ranges from the target clips, with ripple.
     RemoveRanges {
-        /// The ranges: an `intervals` data set or an anchored list.
+        /// An `intervals` data set or an anchored list.
         ranges: Ranges,
         /// The clips the ranges come from and apply to.
         target: Target,
@@ -32,7 +32,7 @@ pub enum EditRequest {
     },
     /// Splits every target clip spanning a mapped time.
     SplitAt {
-        /// The times: an `intervals` data set's starts or an anchored list of ticks.
+        /// An `intervals` data set's starts or an anchored list of ticks.
         times: Times,
         /// The clips split.
         target: Target,
@@ -118,10 +118,9 @@ pub enum Target {
 #[derive(Copy, Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Ripple {
-    /// Nothing: the target clips lose the ranges and gaps stay.
+    /// Nothing closes them; the target clips lose the ranges and gaps stay.
     None,
-    /// Every clip on the target clips' tracks loses the ranges and closes up; other tracks keep
-    /// their times.
+    /// Every clip on the target clips' tracks loses the ranges and closes up; other tracks stay.
     Track,
     /// The ranges leave every track, so picture, sound and captions stay in sync.
     #[default]

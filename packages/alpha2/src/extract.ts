@@ -1,5 +1,5 @@
-// Extractors in the page or a worker: the descriptor and step types every surface shares, and
-// `runExtractor`, which drives the engine's session in wasm over media decoded by the browser.
+// Extractors in the page or a worker. Holds the descriptor and step types every surface shares,
+// and `runExtractor`, which drives the engine's session in wasm over media the browser decodes.
 
 import {
   ALL_FORMATS,
@@ -205,8 +205,8 @@ export function collectEmits(): {
 
 /**
  * Where `value` breaks `schema`, as a path and reason, or `undefined`. Covers the JSON Schema
- * keywords descriptors use: `type`, `enum`, `const`, `properties`, `required`,
- * `additionalProperties`, `items`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength`,
+ * keywords descriptors use, which are `type`, `enum`, `const`, `properties`, `required`,
+ * `additionalProperties`, `items`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength` and
  * `maxLength`.
  */
 export function schemaProblem(
@@ -286,7 +286,7 @@ export function schemaProblem(
   return undefined;
 }
 
-/** The wasm `ExtractSession`: the session, driven push style. */
+/** The wasm `ExtractSession`, driven push style. */
 export interface WasmExtractSession {
   context(): string;
   next(): string;

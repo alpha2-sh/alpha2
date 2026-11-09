@@ -45,11 +45,10 @@ def resolve_pixels(
     """
 
 def apply_edit(project: str, request: str) -> tuple[str, str]:
-    """An edit operation applied to a project, both JSON text: ``(project, report)`` as the
+    """An edit operation applied to a project, both JSON text, as ``(project, report)`` in the
     engine's canonical JSON text.
 
-    Raises ValueError(message, code, refusal) for an invalid project or request and for every
-    refusal.
+    Raises ValueError(message, code, refusal) for an invalid project or request, or a refusal.
     """
 
 def compose_requirements(spec: str) -> str:

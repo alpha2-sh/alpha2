@@ -1,4 +1,4 @@
-//! An in-process host for plugin tests: it drives a native plugin table as a loader would and
+//! An in-process host for plugin tests. It drives a native plugin table as a loader would and
 //! keeps what the plugin emitted, decoded.
 
 use std::cell::RefCell;
@@ -107,8 +107,7 @@ unsafe extern "C" fn log(context: *mut c_void, level: u32, message: *const u8, l
 }
 
 impl Instance {
-    /// Creates an instance of the plugin whose `alpha2_plugin_v1` returned `table`, offering
-    /// `resources`.
+    /// Creates an instance, offering `resources`, of the plugin whose entry returned `table`.
     ///
     /// # Safety
     /// `table` is what a plugin's `alpha2_plugin_v1` returned.

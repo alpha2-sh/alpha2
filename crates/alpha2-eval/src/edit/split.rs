@@ -55,8 +55,8 @@ fn piece(clip: &Clip, window: (i64, i64), source: (i64, i64), time_map: TimeMap)
     Some(part)
 }
 
-/// The pieces showing `window` of `clip`: one clip per window, or for a loop, a head for a
-/// partial pass, whole passes as a loop and, for a ping-pong starting backward, a reversed pass.
+/// The pieces showing `window` of `clip`. That is one clip, or for a loop a head for a partial
+/// pass, whole passes as a loop and, for a ping-pong starting backward, a reversed pass.
 fn pieces(clip: &Clip, window: (i64, i64)) -> Vec<Clip> {
     let (t0, t1) = (
         clip.timeline_range.start().ticks(),
@@ -164,7 +164,7 @@ pub(super) fn parts(
     out
 }
 
-/// Fades stay where they were: a part keeps a fade only where the fade lies inside it.
+/// Keeps fades where they were, so a part keeps a fade only where the fade lies inside it.
 fn fades(part: &mut Clip, whole: (i64, i64), window: (i64, i64)) {
     if window.0 != whole.0 {
         part.audio.fade_in = MediaTime::ZERO;

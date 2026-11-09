@@ -1,5 +1,5 @@
-//! Data sets: values an extractor derived from media, recorded in the project and anchored to a
-//! source's clock or the timeline's.
+//! Data sets, the values an extractor derived from media, recorded in the project and anchored to
+//! a source's clock or the timeline's.
 //!
 //! The engine consumes data in two ways. Values and caption tracks bind to a data set and
 //! follow it at render time through the same time map the picture uses; edit operations apply
@@ -38,7 +38,7 @@ pub const MAX_DATA_SCALE: f32 = 1_000.0;
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DataAnchor {
-    /// Source time: the presentation times the source's pictures and sound carry once decoded.
+    /// Source time, the presentation times the source's pictures and sound carry once decoded.
     /// Points are normalized to the displayed source picture.
     Source {
         /// The source.
@@ -64,7 +64,7 @@ impl DataAnchor {
 #[cfg_attr(feature = "schema", schemars(rename = "DataAnchor"))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum DataAnchorWire {
-    /// Source time: the presentation times the source's pictures and sound carry once decoded.
+    /// Source time, the presentation times the source's pictures and sound carry once decoded.
     /// Points are normalized to the displayed source picture.
     Source {
         /// The source.
@@ -99,7 +99,7 @@ impl schemars::JsonSchema for DataAnchor {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum DataInterpolation {
-    /// The sample at or before the time: the rule of the picture shown at that time.
+    /// The sample at or before the time, as the picture shown at that time is chosen.
     #[default]
     Hold,
     /// A straight line between the samples around the time.
@@ -210,8 +210,7 @@ pub struct DataInterval {
     /// A free label, at most [`MAX_DATA_LABEL_BYTES`] bytes. Edit operations ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// A free score, finite, at most [`MAX_DATA_SCALAR`] in magnitude. Edit operations ignore
-    /// it.
+    /// A free, finite score of at most [`MAX_DATA_SCALAR`] in magnitude; edit operations ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score: Option<f32>,
 }
@@ -788,8 +787,8 @@ pub enum BindingProblem {
     WrongKind(DataKind),
     /// The value's type takes no data (an effect parameter that is not a Float or Vec2).
     TypeRefusesData,
-    /// The place's clock refuses this anchor: a composition-time place and a timeline anchor,
-    /// or a picture-time place and any anchor.
+    /// The place's clock refuses this anchor, as a composition-time place refuses a timeline anchor
+    /// and a picture-time place refuses any.
     ClockRefusesAnchor,
     /// The channel is not one of the data set's.
     UnknownChannel,

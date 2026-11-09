@@ -1,5 +1,4 @@
-//! A plugin's manifest: its identity, artifacts, resources and the descriptor of the extractor it
-//! provides.
+//! A plugin's manifest, naming its identity, artifacts, resources and extractor descriptor.
 
 use std::collections::HashSet;
 use std::fmt;

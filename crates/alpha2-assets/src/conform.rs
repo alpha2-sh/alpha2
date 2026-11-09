@@ -25,8 +25,8 @@ pub struct ConformReport {
     pub ready: bool,
     /// Each host-supplied source a render reads, in project order.
     pub sources: Vec<SourceConform>,
-    /// Data sets made from other media than their source's original now is, in data order.
-    /// Never blocking: the data still reads, but may no longer describe the picture or sound.
+    /// Data sets made from other media than their source's original now is, in data order. This
+    /// never blocks, since the data still reads, but it may no longer describe the media.
     pub stale_data: Vec<StaleData>,
 }
 
@@ -148,8 +148,7 @@ pub fn conform(project: &Project, catalog: &AssetCatalog, purpose: MediaPurpose)
     conform_sources(project, project.used_sources(), catalog, purpose)
 }
 
-/// [`conform`] over `sources` instead of the ones a render reads, such as the one source an
-/// extraction reads.
+/// [`conform`] over `sources` instead of those a render reads, such as an extraction's source.
 #[must_use]
 pub fn conform_sources(
     project: &Project,

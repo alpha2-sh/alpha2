@@ -6,9 +6,9 @@ use serde_json::{Value, json};
 
 use super::{Emit, RunContext};
 
-/// An emit as clients write it: `{ output, time, values }` for samples (`null` a lost channel),
-/// `{ output, start, end, text, speaker? }` for words, `{ output, start, end, label?, score? }` for
-/// intervals.
+/// An emit as clients write it, `{ output, time, values }` for samples (`null` a lost channel),
+/// `{ output, start, end, text, speaker? }` for words, and for intervals
+/// `{ output, start, end, label?, score? }`.
 ///
 /// # Errors
 /// What is missing or mistyped.

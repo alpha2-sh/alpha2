@@ -1,6 +1,6 @@
-//! Builds an alpha2 extractor plugin from one [`Extractor`] implementation: a core wasm module
-//! for `wasm32-unknown-unknown` and a C-ABI library for every other target, both speaking
-//! `alpha2-plugin/1` (`docs/plugin-abi.md`).
+//! Builds an alpha2 extractor plugin from one [`Extractor`] implementation. It makes a core wasm
+//! module for `wasm32-unknown-unknown` and a C-ABI library for every other target, both speaking
+//! the `alpha2-plugin/1` ABI that `docs/plugin-abi.md` specifies.
 //!
 //! ```ignore
 //! struct Brightness;
@@ -50,7 +50,7 @@ pub trait Extractor: Sized + 'static {
     /// The descriptor as JSON, exactly the manifest's `descriptor`.
     const DESCRIPTOR: &'static str;
 
-    /// Starts a run: the place to load models and resources.
+    /// Starts a run; models and resources load here.
     ///
     /// # Errors
     /// Why the extractor cannot run; the run ends with `EXTRACTOR_FAILED`.
@@ -232,8 +232,8 @@ pub struct Audio<'a> {
     pub samples: &'a [f32],
 }
 
-/// Generates the plugin's exports for `$extractor`: the `alpha2_plugin_v1` table on native
-/// targets and the `alpha2_*` functions on wasm32. Use it once per plugin crate.
+/// Generates the plugin's exports for `$extractor`, the `alpha2_plugin_v1` table on native targets
+/// and the `alpha2_*` functions on wasm32. Use it once per plugin crate.
 #[macro_export]
 macro_rules! export_extractor {
     ($extractor:ty) => {

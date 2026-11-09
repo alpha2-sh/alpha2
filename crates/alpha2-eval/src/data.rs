@@ -1,4 +1,4 @@
-//! Reading data sets at render time: the `data` value mode and picture corrections.
+//! Reads data sets at render time for the `data` value mode and picture corrections.
 //!
 //! A source-anchored set is read at the source time its reader shows (a clip's picture time
 //! map, or a media node's start plus composition time), so a bound value follows the picture
@@ -16,8 +16,7 @@ use std::collections::HashMap;
 pub struct DataIndex {
     sets: HashMap<DataSetId, usize>,
     clips: HashMap<ClipId, (usize, usize)>,
-    /// Per set, the displayed size of its source's picture: `made_from`'s video stream, else the
-    /// source fingerprint's.
+    /// Per set, its source picture's displayed size from `made_from`, else the source fingerprint.
     picture_sizes: Vec<Option<(u32, u32)>>,
 }
 
@@ -86,8 +85,7 @@ impl DataIndex {
     }
 }
 
-/// What a sampled value can read data through: the project's data sets and the clock of the
-/// place being sampled.
+/// What a sampled value reads data through, the project's data sets and the clock of its place.
 #[derive(Clone, Copy)]
 pub struct SampleContext<'a> {
     scope: Option<Scope<'a>>,
@@ -160,7 +158,7 @@ impl std::fmt::Debug for SampleContext<'_> {
 }
 
 impl<'a> SampleContext<'a> {
-    /// No data: a bound value evaluates as having no samples.
+    /// No data, so a bound value evaluates as having no samples.
     pub const NONE: SampleContext<'static> = SampleContext { scope: None };
 
     /// Timeline-time places of `project`.
@@ -191,7 +189,7 @@ impl<'a> SampleContext<'a> {
         }
     }
 
-    /// The same data read at step `step` of `plan`: its settings are in composition time and
+    /// The same data read at step `step` of `plan`, whose settings are in composition time and
     /// read through the `media` steps inlined beside it.
     #[must_use]
     pub fn for_step(&self, plan: &'a crate::CompositionPlan, step: usize) -> Self {
@@ -397,8 +395,8 @@ pub fn bound_scalar(
     Some(binding.remap.map_or(value, |remap| remap.apply(value)))
 }
 
-/// A two-component binding's value at `time`: a point in its space plus its offset, or a scalar
-/// in both components. `None` without a value.
+/// A two-component binding's value at `time`, a point in its space plus its offset or a scalar in
+/// both components. `None` without a value.
 #[must_use]
 pub fn bound_vec2(
     binding: &DataBinding,

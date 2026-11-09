@@ -1,5 +1,3 @@
-//! The `extract` operation with a plugin the host fetches, checks and runs itself.
-
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -10,8 +8,7 @@ use alpha2_host_core::plugins::{TARGET, sha256_hex};
 
 const VIDEO: &str = "h264-bt709-copy.mp4";
 
-/// Builds the fixture plugins for wasm32 and this target once, and returns the plugins'
-/// target directory.
+/// Builds the fixture plugins for wasm32 and this target once; returns their target directory.
 fn built() -> &'static Path {
     static BUILT: OnceLock<PathBuf> = OnceLock::new();
     BUILT.get_or_init(|| {

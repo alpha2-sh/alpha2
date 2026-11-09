@@ -1,5 +1,6 @@
-//! wasm plugins: a core module in wasmtime, with only the `alpha2` imports, its memory capped, each
-//! call bounded by an epoch deadline, and NaNs canonicalized so results do not depend on the CPU.
+//! Runs wasm plugins as core modules in wasmtime with only the `alpha2` imports. Memory is capped,
+//! each call is bounded by an epoch deadline, and NaNs are canonicalized so results do not depend
+//! on the CPU.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -54,8 +55,7 @@ fn engine() -> Result<&'static Engine, PluginError> {
         .map_err(|error| PluginError::new(codes::LOAD_FAILED, format!("wasmtime: {error}")))
 }
 
-/// The features a plugin module may use: the defaults, without the ones whose results differ
-/// between runtimes or that need threads.
+/// The default features minus those whose results differ between runtimes or that need threads.
 fn features() -> WasmFeatures {
     let mut features = WasmFeatures::default();
     features.remove(

@@ -1,4 +1,4 @@
-//! The C-ABI transport: the `alpha2_plugin_v1` table and the host table's functions.
+//! The C-ABI transport, with the `alpha2_plugin_v1` table and the host table's functions.
 
 use std::ffi::c_void;
 

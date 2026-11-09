@@ -1,7 +1,7 @@
-//! Extractors an app writes in Swift or Kotlin: the session runs in the library, reads source
-//! frames and audio through the platform's decoders (in software, so frames carry planes and
-//! present alike on every surface) and timeline frames through the still path, and hands each
-//! delivery to the app's [`Extractor`].
+//! Runs extractors an app writes in Swift or Kotlin. The session runs in the library and reads
+//! source frames and audio through the platform's decoders, in software so frames carry planes and
+//! present alike on every surface. Timeline frames come from the still path, and each delivery
+//! goes to the app's [`Extractor`].
 //!
 //! ```kotlin
 //! class Brightness : Extractor {
@@ -526,8 +526,8 @@ pub struct ExtractionHandle {
 
 #[uniffi::export]
 impl ExtractionHandle {
-    /// Stops the extraction between steps; [`Self::outcome`] then fails with
-    /// [`Alpha2Error::Aborted`].
+    /// Stops the extraction between steps, after which [`Self::outcome`] fails with
+    /// [`Alpha2Error::Aborted`] for the caller.
     pub fn cancel(&self) {
         self.cancel.cancel();
     }
@@ -605,8 +605,8 @@ impl Alpha2 {
     /// Starts `extractor` over `request` on a library thread; the extractor is called there.
     ///
     /// # Errors
-    /// [`Alpha2Error::InvalidInput`] for an invalid project; everything later is the handle's
-    /// [`ExtractionHandle::outcome`] result.
+    /// [`Alpha2Error::InvalidInput`] for an invalid project. Later failures are what
+    /// [`ExtractionHandle::outcome`] returns.
     pub fn extract(
         self: Arc<Self>,
         request: ExtractRequest,

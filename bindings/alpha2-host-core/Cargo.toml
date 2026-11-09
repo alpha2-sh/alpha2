@@ -23,7 +23,7 @@ default = ["engine"]
 engine = ["dep:alpha2-engine", "dep:alpha2-eval", "dep:alpha2-model", "dep:alpha2-render", "dep:wgpu"]
 providers = ["engine", "dep:alpha2-extensions", "dep:bytemuck"]
 cpal-host = ["dep:cpal"]
-# Extractor plugins: wasm modules through wasmtime and native libraries through the platform loader.
+# Runs extractor plugins, wasm modules through wasmtime and native ones through the platform loader.
 plugins = ["engine", "dep:alpha2-plugin-abi", "dep:libloading", "dep:sha2", "dep:wasmtime"]
 # Thread-local decode budget overrides for dependents' tests. Never enable in a product build.
 test-hooks = []
@@ -56,7 +56,7 @@ cpal = { version = "0.17.3", optional = true }
 [dev-dependencies]
 alpha2-engine = { workspace = true, features = ["extract-fixtures"] }
 
-# The workspace's lints, except that unsafe code is denied rather than forbidden: the plugin loader
+# The workspace's lints, with unsafe code denied rather than forbidden, because the plugin loader
 # calls into native plugins and allows it there alone.
 [lints.rust]
 unsafe_code = "deny"

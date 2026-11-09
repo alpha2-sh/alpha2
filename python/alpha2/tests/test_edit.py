@@ -1,5 +1,3 @@
-"""Edit operations through the compiled engine answer the shared corpus byte for byte."""
-
 from __future__ import annotations
 
 import hashlib

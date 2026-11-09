@@ -45,9 +45,8 @@ pub fn luma8_from_rgba8(rgba: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// The mixer's mono fold of `planes`, whose speakers are `speakers`: each plane weighted by the
-/// mean of its stereo weights, summed in plane order. `None` for no planes or more than the
-/// mixer takes.
+/// The mixer's mono fold of `planes`, whose speakers are `speakers`. Each plane is weighted by the
+/// mean of its stereo weights and summed in plane order. `None` for no planes or too many.
 #[must_use]
 pub fn mono_downmix(speakers: &[alpha2_media::Speaker], planes: &[Vec<f32>]) -> Option<Vec<f32>> {
     let mix = crate::downmix::Downmix::new(speakers, alpha2_audio::ChannelLayout::Mono)?;
@@ -62,8 +61,8 @@ pub fn mono_downmix(speakers: &[alpha2_media::Speaker], planes: &[Vec<f32>]) -> 
     Some(out)
 }
 
-/// The displayed size of a decoded frame: its visible rectangle widened by the pixel aspect
-/// ratio (rounded half up) and turned upright.
+/// The displayed size of a decoded frame, its visible rectangle widened by the pixel aspect ratio
+/// (rounded half up) and turned upright.
 #[must_use]
 pub fn displayed_size(frame: &DecodedVideoFrame) -> (u32, u32) {
     let sar = frame.sample_aspect_ratio;

@@ -66,7 +66,7 @@ fn built() -> &'static Built {
     })
 }
 
-/// Files fetched by path: a test manifest's URLs are local paths.
+/// Fetches files by path, since a test manifest's URLs are local paths.
 struct Local;
 
 impl Fetch for Local {
@@ -151,8 +151,7 @@ fn request(descriptor: &Descriptor, params: &Value) -> ExtractRequest {
     .expect("request")
 }
 
-/// A source with a frame every 4000 ticks, each 4x2 pixels whose bytes depend on the frame and
-/// the position.
+/// A source with a 4x2 frame every 4000 ticks whose bytes depend on the frame and position.
 struct Frames;
 
 impl Supplier for Frames {

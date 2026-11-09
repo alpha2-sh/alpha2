@@ -1,5 +1,4 @@
-// Extractors in the page: runExtractor drives the engine's session in wasm over frames the
-// browser decodes in software.
+// runExtractor drives the engine's session in wasm over frames the browser decodes in software.
 
 const prelude = `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
@@ -179,9 +178,9 @@ report({
 `;
 }
 
-// Every case of tests/cases/surface-conformance.json the page can run: edits through wasm, the
-// digest fixture over each source this browser decodes (H.264 always), the packed plugins' wasm
-// artifacts, and timeline inputs drawn by the CPU renderer.
+// Every case of tests/cases/surface-conformance.json the page can run, which covers edits through
+// wasm, the digest fixture over each source this browser decodes (H.264 always), the packed
+// plugins' wasm artifacts, and timeline inputs drawn by the CPU renderer.
 export function pluginConformance() {
   return `${prelude}
 const { loadPlugin } = await import("alpha2/plugins");

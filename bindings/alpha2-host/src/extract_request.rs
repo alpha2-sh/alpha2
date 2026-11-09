@@ -1,5 +1,5 @@
-//! The `extract` operation: the host runs an extraction session and its supplier, and the client
-//! runs the extractor, one step at a time over protocol frames.
+//! Serves the `extract` operation. The host runs the extraction session and its supplier, and the
+//! client runs the extractor, one step at a time over protocol frames.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -54,7 +54,7 @@ impl Default for ExtractOptions {
     }
 }
 
-/// The `plugin` of an `extract` request: a manifest the host fetches and runs.
+/// The `plugin` of an `extract` request, a manifest the host fetches and runs.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginRequest {
@@ -105,8 +105,8 @@ pub struct ExtractHostRequest {
 
 impl ExtractHostRequest {
     /// # Errors
-    /// `INVALID_REQUEST` for another operation, or for neither or both of `descriptor` and
-    /// `plugin`.
+    /// `INVALID_REQUEST` for another operation, or unless exactly one of `descriptor` and `plugin`
+    /// is given.
     pub fn check(&self) -> Result<(), HostError> {
         if self.operation != "extract" {
             return Err(HostError::new(
@@ -635,8 +635,7 @@ fn plugin_error(error: alpha2_host_core::plugins::PluginError) -> HostError {
     HostError::new(error.code, error.message)
 }
 
-/// Fetches the manifest, checks it against its pinned hash and loads the artifact the request's
-/// policy picks.
+/// Fetches and checks the manifest, then loads the artifact the request's policy picks.
 fn load_plugin(
     plugin: &PluginRequest,
     request: &ExtractRequest,
@@ -732,7 +731,7 @@ fn run_plugin(
         .map_err(|error| HostError::new("INVALID_EMIT", error.to_string()))
 }
 
-/// The fingerprint `made_from` records: the conformed original's.
+/// The conformed original's fingerprint, which `made_from` records.
 pub fn original_fingerprint(
     catalog: &alpha2_assets::AssetCatalog,
     source: &alpha2_media::SourceId,

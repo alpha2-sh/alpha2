@@ -1,5 +1,5 @@
-//! Test fixtures, never shipped: `scripted` emits what it is given, `digest` hashes what it is
-//! supplied so equal data across surfaces proves byte-identical inputs.
+//! Test fixtures that never ship. `scripted` emits what it is given, and `digest` hashes what it
+//! is supplied so equal data across surfaces proves byte-identical inputs.
 
 use super::descriptor::{AudioFormat, Descriptor, InputFrom, InputSpec, OutputSpec, VideoFormat};
 use super::drive::{Emitter, Extractor, ExtractorError, PassInfo};
@@ -19,15 +19,14 @@ pub fn fnv1a(bytes: impl IntoIterator<Item = u8>) -> u32 {
     })
 }
 
-/// A hash as the two scalars the digest emits: its upper and lower 16 bits over 65536, exact in
-/// f32.
+/// A hash as the two scalars the digest emits, its 16-bit halves over 65536, exact in f32.
 #[must_use]
 pub fn digest_values(hash: u32) -> [f32; 2] {
     let half = |bits: u32| f32::from(u16::try_from(bits & 0xffff).unwrap_or(0)) / 65_536.0;
     [half(hash >> 16), half(hash)]
 }
 
-/// The digest's descriptor for `input`: one `scalars` output `digest` with channels `hi`, `lo`.
+/// The digest's descriptor for `input`, one `scalars` output `digest` with channels `hi`, `lo`.
 #[must_use]
 pub fn digest_descriptor(input: InputSpec) -> Descriptor {
     Descriptor {
@@ -124,8 +123,7 @@ pub struct Scripted {
 }
 
 impl Scripted {
-    /// The fixture declaring `outputs` over `input`. Deliveries beyond `per_delivery` emit
-    /// nothing.
+    /// The fixture declaring `outputs` over `input`; deliveries past `per_delivery` emit nothing.
     #[must_use]
     pub fn new(
         input: InputSpec,

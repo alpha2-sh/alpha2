@@ -1,6 +1,5 @@
-// Plugins in the browser: a manifest's wasm artifact, checked against its pinned hashes and run
-// through the `alpha2-plugin/1` ABI as an extractor for `runExtractor`. Native artifacts never run
-// here.
+// Runs a plugin's wasm artifact in the browser, checked against its pinned hashes, through the
+// `alpha2-plugin/1` ABI as an extractor for `runExtractor`. Native artifacts never run here.
 
 import type {
   ExtractAudio,
@@ -346,9 +345,8 @@ interface Exports {
 }
 
 /**
- * One run of the module: an instance, its host functions and what they collected. Instantiated
- * asynchronously, since browsers refuse to instantiate large modules synchronously on the main
- * thread.
+ * One run of the module, with an instance, its host functions and what they collected. It is
+ * instantiated asynchronously because browsers refuse large synchronous instantiation.
  */
 class Run {
   #exports!: Exports;
@@ -554,10 +552,11 @@ function abiContext(
 /**
  * Loads the plugin whose manifest is at `manifest` (a URL, absolute or relative to the page) and
  * whose bytes have SHA-256 `sha256`, with its wasm artifact and resources, each checked against
- * the hash and length the manifest pins. Rejects with a {@link PluginError}: `PLUGIN_FETCH_FAILED`,
- * `PLUGIN_HASH_MISMATCH`, `PLUGIN_ABI_UNSUPPORTED`, `PLUGIN_NO_ARTIFACT` (a manifest without a
- * wasm artifact), `PLUGIN_UNSUPPORTED_FEATURE`, `PLUGIN_LOAD_FAILED` or
- * `PLUGIN_DESCRIPTOR_MISMATCH`.
+ * the hash and length the manifest pins.
+ *
+ * Rejects with a {@link PluginError} whose code is `PLUGIN_FETCH_FAILED`, `PLUGIN_HASH_MISMATCH`,
+ * `PLUGIN_ABI_UNSUPPORTED`, `PLUGIN_NO_ARTIFACT` (no wasm artifact), `PLUGIN_UNSUPPORTED_FEATURE`,
+ * `PLUGIN_LOAD_FAILED` or `PLUGIN_DESCRIPTOR_MISMATCH`.
  */
 export async function loadPlugin(
   manifest: string | URL,

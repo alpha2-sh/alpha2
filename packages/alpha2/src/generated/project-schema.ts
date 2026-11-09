@@ -1362,7 +1362,7 @@ export type DataAnchor =
        */
       readonly source_id: SourceId;
       /**
-       * Source time: the presentation times the source's pictures and sound carry once decoded.
+       * Source time, the presentation times the source's pictures and sound carry once decoded.
        * Points are normalized to the displayed source picture.
        */
       readonly type: "source";
@@ -1392,8 +1392,7 @@ export interface DataInterval {
    */
   readonly label?: string | null;
   /**
-   * A free score, finite, at most `MAX_DATA_SCALAR` in magnitude. Edit operations ignore
-   * it.
+   * A free, finite score of at most `MAX_DATA_SCALAR` in magnitude; edit operations ignore it.
    */
   readonly score?: number | null;
   /**

@@ -992,7 +992,7 @@ class Dash(TypedDict):
 
 
 class DataAnchorSource(TypedDict):
-    """Source time: the presentation times the source's pictures and sound carry once decoded.
+    """Source time, the presentation times the source's pictures and sound carry once decoded.
     Points are normalized to the displayed source picture.
     """
 
@@ -1022,9 +1022,7 @@ class DataInterval(TypedDict):
     label: NotRequired[str | None]
     """A free label, at most `MAX_DATA_LABEL_BYTES` bytes. Edit operations ignore it."""
     score: NotRequired[float | None]
-    """A free score, finite, at most `MAX_DATA_SCALAR` in magnitude. Edit operations ignore
-    it.
-    """
+    """A free, finite score of at most `MAX_DATA_SCALAR` in magnitude; edit operations ignore it."""
     start: MediaTime
     """When it starts, in ticks on the anchor's clock."""
 

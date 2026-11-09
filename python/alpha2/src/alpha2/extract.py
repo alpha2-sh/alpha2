@@ -40,8 +40,7 @@ class ExtractAudio:
 
 @dataclass(frozen=True)
 class ExtractProgress:
-    """Progress of one pass; ``total`` is ``None`` for source frames, whose count is not known
-    ahead."""
+    """Progress of one pass; ``total`` is ``None`` for source frames, whose count is unknown."""
 
     pass_index: int
     completed: int
@@ -55,8 +54,7 @@ class Emitter:
         self.emits: list[dict[str, Any]] = []
 
     def sample(self, output: str, time: int, values: list[float | None]) -> None:
-        """A sample of a ``points``, ``scalars`` or ``similarity`` output; ``None`` marks a lost
-        channel."""
+        """A ``points``, ``scalars`` or ``similarity`` sample; ``None`` marks a lost channel."""
         self.emits.append({"output": output, "time": time, "values": list(values)})
 
     def word(
@@ -99,8 +97,7 @@ class Extractor(Protocol):
 def take_step(
     extractor: Any, message: dict[str, Any], attachments: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Takes one step with ``extractor`` and returns its acknowledgement's payload; never
-    raises."""
+    """Takes one step with ``extractor``; returns its acknowledgement's payload, never raising."""
     out = Emitter()
     step = message["step"]
     data: bytes = attachments[0]["data"] if attachments else b""
@@ -140,10 +137,7 @@ def take_step(
 
 
 def schema_problem(schema: object, value: object, at: str = "params") -> str | None:
-    """Where ``value`` breaks ``schema``, or ``None``. Covers the JSON Schema keywords
-    descriptors use: ``type``, ``enum``, ``const``, ``properties``, ``required``,
-    ``additionalProperties``, ``items``, ``minItems``, ``maxItems``, ``minimum``, ``maximum``,
-    ``minLength`` and ``maxLength``."""
+    """Where ``value`` breaks ``schema``, or ``None``. Mirrors ``schemaProblem`` of ``alpha2``."""
     if not isinstance(schema, dict):
         return None
 

@@ -1,4 +1,4 @@
-//! Emit records: what a plugin passes to `emit`, one batch per call.
+//! Emit records, which a plugin passes to `emit` one batch per call.
 //!
 //! A batch is records back to back. Each record is an 8-byte header (`u8` tag, `u8` 0, `u16`
 //! output index in the descriptor's `outputs`, `u32` body length) and its body. Integers and floats

@@ -1,9 +1,4 @@
-"""The extract cases of ``tests/cases/surface-conformance.json`` against a real ``alpha2-host`` on
-the CPU renderer, mirroring ``@alpha2-sh/node``'s test. The edit cases run in ``test_edit``.
-
-The host is ``ALPHA2_HOST_BINARY``, else ``target/debug/alpha2-host``; without one the module is
-skipped.
-"""
+"""Needs a host, as ``test_e2e.py`` does."""
 
 from __future__ import annotations
 

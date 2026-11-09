@@ -2,8 +2,7 @@
 
 use crate::error::Alpha2Error;
 
-/// An edit operation's result as the engine's canonical JSON text, byte for byte what every
-/// surface answers.
+/// An edit operation's result as the engine's canonical JSON text, the same on every surface.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct EditedProject {
     /// The edited project document.

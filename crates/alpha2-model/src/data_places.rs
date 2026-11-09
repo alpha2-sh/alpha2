@@ -1,4 +1,4 @@
-//! Where data can be bound: a value's type decides the kinds it can follow, and the clock its
+//! Where data can be bound. A value's type decides the kinds it can follow, and the clock its
 //! keyframes are on decides the anchors.
 
 use crate::animation::{Keyed, PlaceType, visit_keyed};
@@ -27,8 +27,7 @@ enum Slot {
     Point,
     Vec2,
     Scalar,
-    /// An effect parameter of a known type, or of a host effect whose type the model does not
-    /// know.
+    /// An effect parameter of a known type, or of a host effect whose type the model lacks.
     Param(Option<EffectParamType>),
     Other,
 }
@@ -383,8 +382,7 @@ impl<'a> Places<'a> {
             })
     }
 
-    /// Checks one binding at `at`; `follower` is the clip whose value it is, for the canvas
-    /// dependency graph.
+    /// Checks one binding at `at`; `follower` owns the value, for the canvas dependency graph.
     #[allow(clippy::too_many_lines)]
     fn check(
         &mut self,

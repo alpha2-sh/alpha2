@@ -1,5 +1,3 @@
-//! The `edit` cases of `tests/cases/surface-conformance.json`: each request's edited project
-//! text, by SHA-256, and report, or its refusal, which every binding must answer alike.
 //! `ALPHA2_UPDATE_GOLDENS=1` rewrites the expected answers.
 
 use serde_json::{Value, json};

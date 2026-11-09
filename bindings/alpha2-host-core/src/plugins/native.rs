@@ -1,5 +1,6 @@
-//! Native plugins: a C-ABI library loaded by the platform loader, its `alpha2_plugin_v1` table,
-//! and the host table it calls back through. The library runs with the process's rights.
+//! Runs native plugins, C-ABI libraries loaded by the platform loader, through their
+//! `alpha2_plugin_v1` table and the host table they call back through. A library runs with the
+//! process's rights, as allowed by the caller.
 
 #![allow(unsafe_code)]
 

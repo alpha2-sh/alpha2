@@ -5,8 +5,7 @@ use alpha2_model::{
 };
 use alpha2_time::{MediaTime, TimeRange};
 
-/// The cues a caption track shows: its own, or for `from_words` its words mapped to timeline
-/// time and grouped.
+/// The cues a caption track shows, its own or its `from_words` words grouped in timeline time.
 ///
 /// A source-anchored word set contributes through each clip of the named track showing its
 /// source with a forward or loop time map (reversed sound is unintelligible and a freeze is

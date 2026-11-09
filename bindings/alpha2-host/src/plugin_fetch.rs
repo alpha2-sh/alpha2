@@ -1,5 +1,5 @@
-//! Plugin files: a manifest named by `https:` URL, `file:` URL or path, and the artifacts and
-//! resources it names relative to itself, fetched into a cache keyed by SHA-256.
+//! Fetches plugin files into a cache keyed by SHA-256. A manifest is named by `https:` URL,
+//! `file:` URL or path, and names its artifacts and resources relative to itself.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -32,8 +32,7 @@ fn fetch_failed(message: impl Into<String>) -> PluginError {
     PluginError::new(codes::FETCH_FAILED, message)
 }
 
-/// A `file:` URL's path: percent escapes decoded, and on Windows the drive letter's leading slash
-/// dropped.
+/// A `file:` URL's path, percent-decoded, without the slash before a Windows drive letter.
 fn file_url_path(url: &str) -> Result<PathBuf, PluginError> {
     let rest = url
         .strip_prefix("file://")
@@ -188,8 +187,7 @@ pub fn manifest(location: &str, sha256: &str) -> Result<(String, Base), PluginEr
     Ok((text, base))
 }
 
-/// The directory fetched plugin files are kept in: `ALPHA2_PLUGIN_CACHE`, else the platform's
-/// cache directory.
+/// Where fetched plugin files are kept, `ALPHA2_PLUGIN_CACHE` or else the platform's cache.
 #[must_use]
 pub fn cache_directory() -> PathBuf {
     if let Some(directory) =

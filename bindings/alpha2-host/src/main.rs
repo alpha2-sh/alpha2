@@ -1380,7 +1380,7 @@ struct Serving {
     lifecycle: Arc<Lifecycle>,
     /// How many requests run at once at most.
     max_running: usize,
-    /// Extraction's step timeout and plugin limits.
+    /// As [`crate::lifecycle::ServeOptions::extract`].
     extract: crate::extract_request::ExtractOptions,
 }
 

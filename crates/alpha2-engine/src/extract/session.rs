@@ -17,8 +17,7 @@ use std::fmt;
 /// Where a source frame is asked for, relative to what the pass has seen.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FrameFrom {
-    /// The frame shown at this time: the last with pts at or before it, or the first frame when
-    /// none is.
+    /// The frame shown at this time, the last with pts at or before it, else the first frame.
     Start(MediaTime),
     /// The next frame after the one with this pts, in the pass direction.
     After(MediaTime),
@@ -27,8 +26,7 @@ pub enum FrameFrom {
 /// What the host must supply next.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Need {
-    /// A source frame, answered by [`ExtractSession::supply_video`] or
-    /// [`ExtractSession::supply_end`].
+    /// A source frame; [`ExtractSession::supply_video`] or [`ExtractSession::supply_end`] answers.
     SourceFrame {
         /// The source.
         source: SourceId,
@@ -346,8 +344,8 @@ enum Phase {
 #[derive(Clone, Copy, Debug)]
 struct Cursor {
     pass: usize,
-    /// Source frames: the last delivered pts. Timeline frames: the next frame index. Audio: the
-    /// next block's first sample (forward) or exclusive end (backward).
+    /// The last delivered pts for source frames, the next frame index for timeline frames, and the
+    /// next block's first sample (forward) or exclusive end (backward) for audio.
     position: Option<i64>,
 }
 
@@ -374,7 +372,7 @@ pub struct ExtractSession {
     passes: Vec<Pass>,
     phase: Phase,
     progress: Vec<PassProgress>,
-    /// In the current pass, the latest delivery's bound: a frame pts, or a block's edge.
+    /// The latest delivery's bound in the current pass, a frame pts or a block's edge.
     delivered: Option<MediaTime>,
     /// The pts of every frame delivered, which emits may name even before the range.
     delivered_pts: HashSet<MediaTime>,
@@ -1344,8 +1342,7 @@ fn timeline_frames(range: TimeRange, rate: FrameRate) -> Option<(i64, i64)> {
     Some((first, last.max(first)))
 }
 
-/// The frame a pass starting at `start` begins with: the frame shown at `start`, kept inside
-/// `[first, last)`.
+/// The frame a pass starting at `start` begins with, the one shown there, kept in `[first, last)`.
 fn start_frame(start: MediaTime, rate: FrameRate, first: i64, last: i64) -> Option<i64> {
     let frame = rate.frame_at_or_before(start)?;
     (first < last).then(|| frame.clamp(first, last - 1))

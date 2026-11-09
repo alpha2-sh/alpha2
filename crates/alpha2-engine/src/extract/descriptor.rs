@@ -17,7 +17,7 @@ pub const MAX_EXTRACTOR_OUTPUTS: usize = 32;
 /// Most passes one request asks for.
 pub const MAX_EXTRACTOR_PASSES: usize = 64;
 
-/// What an extractor declares: its identity, the input it reads and the outputs it emits.
+/// What an extractor declares, with its identity, the input it reads and the outputs it emits.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -164,8 +164,7 @@ pub struct OutputSpec {
 }
 
 impl OutputSpec {
-    /// Numbers a sample of this output carries: channels times components, or zero for words
-    /// and intervals.
+    /// Numbers per sample of this output, channels times components; zero for words and intervals.
     #[must_use]
     pub fn sample_width(&self) -> usize {
         match self.kind {

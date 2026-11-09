@@ -1,5 +1,5 @@
-# Plugins and their SDK: a workspace of its own, with its own lock, so plugin dependencies never
-# reach the engine's. Nothing here is published or released from the repository.
+# Plugins and their SDK have a workspace and lock of their own, so plugin dependencies never reach
+# the engine's. Nothing here is published or released from the repository.
 [workspace]
 members = ["sdk", "fixture-digest", "fixture-scripted", "pack", "silence"]
 resolver = "3"

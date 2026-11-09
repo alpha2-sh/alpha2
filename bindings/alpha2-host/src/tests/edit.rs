@@ -1,5 +1,3 @@
-//! The `edit` operation answers the `edit` cases of `tests/cases/surface-conformance.json`.
-
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};

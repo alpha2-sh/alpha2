@@ -351,7 +351,7 @@ function hostTriple() {
   return /^host: (.+)$/m.exec(output)[1];
 }
 
-/** Builds fixture `name` and writes it as a plugin directory; returns the manifest's path and hash. */
+/** Writes fixture `name` as a plugin directory; returns the manifest's path and hash. */
 async function pluginDir(name, { wasm = true, native = false } = {}) {
   const plugins = join(root, "plugins");
   const triple = hostTriple();

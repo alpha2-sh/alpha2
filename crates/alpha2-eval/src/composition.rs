@@ -47,8 +47,8 @@ impl CompositionPlan {
         })
     }
 
-    /// The start of the `media` node `via` beside step `step`: the step of that id in the same
-    /// inlined composition.
+    /// The start of the `media` node `via` beside step `step`, found as the step of that id in the
+    /// same inlined composition.
     #[must_use]
     pub fn media_start(&self, step: usize, via: &alpha2_model::NodeId) -> Option<MediaTime> {
         let path = self.steps.get(step)?.node.as_str();

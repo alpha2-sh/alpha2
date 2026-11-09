@@ -1,10 +1,10 @@
-//! The extractor contract: how code outside the engine is supplied frames or audio and returns
+//! The extractor contract. Code outside the engine is supplied frames or audio and returns
 //! primitives that a project records as data sets.
 //!
-//! An extractor runs ahead of time over a range, never while a frame renders. The host drives
-//! an [`ExtractSession`]: it supplies each [`Need`] from its own decoders or renderer, hands each
-//! [`Delivery`] to the extractor, and passes the extractor's [`Emit`]s back, which the session
-//! validates. [`ExtractSession::finish`] returns sorted, validated data sets. Rust extractors
+//! An extractor runs ahead of time over a range, never while a frame renders. The host drives an
+//! [`ExtractSession`]. It supplies each [`Need`] from its own decoders or renderer, hands each
+//! [`Delivery`] to the extractor, and passes the extractor's [`Emit`]s back for the session to
+//! validate. [`ExtractSession::finish`] returns sorted, validated data sets. Rust extractors
 //! implement [`Extractor`] and run through [`drive`]; other surfaces wrap the same step machine.
 //!
 //! Source frames are delivered display-oriented, contain-fit to at most `size` on the long edge
@@ -103,9 +103,8 @@
 //! - Data set ids, and labels, texts, speakers and channel names:
 //!   [`alpha2_model::MAX_DATA_ID_BYTES`], [`alpha2_model::MAX_DATA_LABEL_BYTES`].
 //! - Emitted values: [`alpha2_model::MAX_DATA_COORDINATE`] for points and similarity
-//!   translation, [`alpha2_model::MAX_DATA_SCALAR`] for scalars and interval scores,
-//!   [`alpha2_model::MAX_DATA_ROTATION_DEGREES`] and [`alpha2_model::MAX_DATA_SCALE`] for
-//!   similarity.
+//!   translation, [`alpha2_model::MAX_DATA_SCALAR`] for scalars and interval scores, and for
+//!   similarity [`alpha2_model::MAX_DATA_ROTATION_DEGREES`] and [`alpha2_model::MAX_DATA_SCALE`].
 
 mod descriptor;
 mod drive;

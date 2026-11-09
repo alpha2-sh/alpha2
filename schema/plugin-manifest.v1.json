@@ -50,7 +50,7 @@
       "oneOf": [
         {
           "const": "hold",
-          "description": "The sample at or before the time: the rule of the picture shown at that time.",
+          "description": "The sample at or before the time, as the picture shown at that time is chosen.",
           "type": "string"
         },
         {
@@ -92,7 +92,7 @@
     },
     "Descriptor": {
       "additionalProperties": false,
-      "description": "What an extractor declares: its identity, the input it reads and the outputs it emits.",
+      "description": "What an extractor declares, with its identity, the input it reads and the outputs it emits.",
       "properties": {
         "id": {
           "description": "Reverse-DNS id; `alpha2.` is reserved for first-party plugins by convention.",

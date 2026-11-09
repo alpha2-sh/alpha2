@@ -175,8 +175,8 @@ export interface ConformReport {
   /** Each host-supplied source a render reads, in project order. */
   readonly sources: readonly SourceConform[];
   /**
-   * Data sets made from other media than their source's original now is, in data order. Never
-   * blocking: the data still reads, but may no longer describe the picture or sound.
+   * Data sets made from other media than their source's original now is, in data order. This
+   * never blocks, since the data still reads, but it may no longer describe the media.
    */
   readonly stale_data: readonly StaleData[];
 }

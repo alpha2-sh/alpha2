@@ -53,8 +53,8 @@ pub struct Project {
     /// Master bus applied to the summed track audio.
     #[serde(default)]
     pub audio: MasterAudio,
-    /// Values derived from media, which properties and caption tracks can follow. At most
-    /// [`crate::MAX_DATA_SETS`].
+    /// Values derived from media that properties and caption tracks can follow.
+    /// At most [`crate::MAX_DATA_SETS`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub data: Vec<crate::DataSet>,
 }

@@ -25,7 +25,7 @@ impl Host {
     }
 }
 
-/// One plugin instance: the extractor once `begin` has made it, and the emitter its steps share.
+/// One plugin instance, holding the extractor `begin` made and the emitter its steps share.
 #[doc(hidden)]
 pub struct Runtime<E> {
     host: Host,

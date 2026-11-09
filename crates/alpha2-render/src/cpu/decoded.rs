@@ -1,4 +1,4 @@
-//! Decoded frames lent to the CPU renderer: the planes stay the decoder's, drawn at a size.
+//! Lends decoded frames to the CPU renderer, which draws the decoder's own planes at a size.
 
 use std::sync::Arc;
 
@@ -22,8 +22,7 @@ pub fn refuse_hdr(color: ColorPolicy, frame_color: Option<ColorMetadata>) -> Res
     Ok(())
 }
 
-/// How `frame` is shown at `size`: its visible rectangle, orientation, pixel aspect and chroma
-/// siting.
+/// How `frame` is shown at `size`, from its visible rectangle, orientation, aspect and siting.
 #[must_use]
 pub fn presentation(frame: &DecodedVideoFrame, size: RenderSize) -> SourcePresentation {
     SourcePresentation {

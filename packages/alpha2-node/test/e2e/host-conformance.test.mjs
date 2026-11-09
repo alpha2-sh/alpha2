@@ -1,5 +1,4 @@
-// tests/cases/surface-conformance.json against a real alpha2-host on the CPU renderer;
-// `npm run test:node-e2e` builds it first.
+// The conformance table against a real alpha2-host; `npm run test:node-e2e` builds it first.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

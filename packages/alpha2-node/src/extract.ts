@@ -1,4 +1,4 @@
-// Client-side extractors over the host protocol's `extract` operation: the host supplies frames
+// Client-side extractors over the host protocol's `extract` operation. The host supplies frames
 // and audio step by step, and the extractor's emits go back in acknowledgements.
 
 import {

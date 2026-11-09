@@ -1,6 +1,6 @@
-//! Plugins an app bundles: a manifest and its files inside the app, checked against their pinned
-//! hashes and run as extractors. App stores forbid downloading code, so nothing is fetched: every
-//! URL in the manifest must be relative to it.
+//! Runs plugins an app bundles, a manifest and its files inside the app, checked against their
+//! pinned hashes. App stores forbid downloading code, so nothing is fetched and every URL in the
+//! manifest must be relative to it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -47,9 +47,8 @@ pub struct Plugin {
 
 #[uniffi::export]
 impl Plugin {
-    /// The plugin whose manifest is the file at `manifest_path`, which has SHA-256 `sha256`. Its
-    /// native artifact for this device runs only when `allow_native`; otherwise its wasm artifact
-    /// runs, sandboxed.
+    /// The plugin whose manifest is the file at `manifest_path`, which has SHA-256 `sha256`.
+    /// Its native artifact runs only when `allow_native`; otherwise its sandboxed wasm one does.
     ///
     /// # Errors
     /// `PLUGIN_FETCH_FAILED` for an unreadable manifest, `PLUGIN_HASH_MISMATCH`,

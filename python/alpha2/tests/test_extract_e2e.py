@@ -1,8 +1,4 @@
-"""Client-side extractors against a real ``alpha2-host``, mirroring ``@alpha2-sh/node``'s test.
-
-The host is ``ALPHA2_HOST_BINARY``, else ``target/debug/alpha2-host``; without one the module is
-skipped.
-"""
+"""Needs a host, as ``test_e2e.py`` does."""
 
 from __future__ import annotations
 

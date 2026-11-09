@@ -1,6 +1,3 @@
-//! The `extract` cases of `tests/cases/surface-conformance.json`, served by the host on the CPU
-//! renderer: a Rust client runs the digest fixture, the packed plugins run in the host, and each
-//! case's data hashes as pinned. A source digest case also runs in process and hashes alike.
 //! `ALPHA2_UPDATE_GOLDENS=1` rewrites the pinned hashes.
 
 use std::fmt::Write as _;
@@ -192,7 +189,7 @@ fn every_extract_case_hashes_as_pinned_on_every_path() {
     let dir = scratch_directory("conformance");
     let mut table: Value =
         serde_json::from_slice(&std::fs::read(table_path()).expect("the table")).expect("json");
-    // Packed before the host starts: a cold plugin build outlasts the host's idle timeout.
+    // Pack before the host starts, because a cold plugin build outlasts its idle timeout.
     let mut plugins = HashMap::new();
     for case in table["extract"].as_array().expect("extract cases") {
         if let Some(plugin) = case["extractor"]["plugin"].as_str() {

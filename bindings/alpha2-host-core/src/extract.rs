@@ -1,6 +1,6 @@
-//! Supplying an extraction session from decoders: one source reader over any
-//! [`alpha2_media::Decoder`], CPU presentation of its frames, and [`run`], which drives an
-//! extractor and records where its data came from.
+//! Supplies an extraction session from decoders. A source reader works over any
+//! [`alpha2_media::Decoder`] and presents its frames on the CPU; [`run`] drives an extractor and
+//! records where its data came from.
 
 use std::sync::Arc;
 

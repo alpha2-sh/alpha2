@@ -111,7 +111,7 @@ impl EffectParamSpec {
         }
     }
 
-    /// Whether the parameter can follow a data set: a Float or Vec2 one.
+    /// Whether the parameter can follow a data set, which only Float and Vec2 ones can.
     #[must_use]
     pub const fn takes_data(&self) -> bool {
         matches!(
@@ -120,9 +120,8 @@ impl EffectParamSpec {
         )
     }
 
-    /// Whether every authored value of `animation` is accepted, or for a data binding whether
-    /// the type takes data. Interpolated overshoot is clamped when drawn, so only keyframe values
-    /// count.
+    /// Whether every authored value of `animation` is accepted, or for a data binding whether the
+    /// type takes data. Only keyframe values count, since interpolated overshoot is clamped.
     #[must_use]
     pub fn accepts_animation(&self, animation: &Animated<EffectValue>) -> bool {
         match animation {

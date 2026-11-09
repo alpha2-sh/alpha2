@@ -1,5 +1,5 @@
-//! What a wasm artifact must be: valid without relaxed SIMD, threads or shared memory, importing
-//! only the `alpha2` host functions, and exporting every `alpha2-plugin/1` function.
+//! Checks a wasm artifact. It must validate without relaxed SIMD, threads or shared memory, import
+//! only the `alpha2` host functions, and export every `alpha2-plugin/1` function.
 
 use wasmparser::{Parser, Payload, TypeRef, Validator, WasmFeatures};
 
@@ -17,8 +17,7 @@ const EXPORTS: [&str; 10] = [
     "alpha2_end",
 ];
 
-/// The features a plugin module may use: the defaults, without the ones whose results differ
-/// between runtimes or that need threads.
+/// The default features minus those whose results differ between runtimes or that need threads.
 fn features() -> WasmFeatures {
     let mut features = WasmFeatures::default();
     features.remove(

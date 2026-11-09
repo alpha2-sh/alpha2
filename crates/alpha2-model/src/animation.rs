@@ -124,8 +124,7 @@ impl<'de, T: Deserialize<'de> + AnimatedValue> Deserialize<'de> for Animated<T> 
 
 #[cfg(feature = "schema")]
 impl<T: schemars::JsonSchema + AnimatedValue> schemars::JsonSchema for Animated<T> {
-    // Types without the data mode are a separate generic, `Keyframed_{T}`, so each generic has
-    // one shape.
+    // Types without the data mode are a separate generic, `Keyframed_{T}`, for one shape each.
     fn schema_name() -> std::borrow::Cow<'static, str> {
         if T::ACCEPTS_DATA {
             AnimatedWire::<T>::schema_name()
