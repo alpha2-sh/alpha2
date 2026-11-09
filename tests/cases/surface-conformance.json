@@ -6,24 +6,78 @@
         "project_sha256": "2a3f595fac64d6ea54b8072eb3031c3095362553470e7ef7e22ab2a3c4ec70a5",
         "report": {
           "created": [
-            "fwd.1",
-            "fwd.2",
-            "fast.1",
-            "fast.2",
-            "rev.1",
-            "rev.2",
-            "rep.1",
-            "rep.2",
-            "rep.3",
-            "pp.1",
-            "pp.2",
-            "pp.3",
-            "frz.1",
-            "frz.2",
-            "ta.1",
-            "ta.2",
-            "au.1",
-            "au.2"
+            {
+              "from": "fwd",
+              "id": "fwd.1"
+            },
+            {
+              "from": "fwd",
+              "id": "fwd.2"
+            },
+            {
+              "from": "fast",
+              "id": "fast.1"
+            },
+            {
+              "from": "fast",
+              "id": "fast.2"
+            },
+            {
+              "from": "rev",
+              "id": "rev.1"
+            },
+            {
+              "from": "rev",
+              "id": "rev.2"
+            },
+            {
+              "from": "rep",
+              "id": "rep.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.2"
+            },
+            {
+              "from": "rep",
+              "id": "rep.3"
+            },
+            {
+              "from": "pp",
+              "id": "pp.1"
+            },
+            {
+              "from": "pp",
+              "id": "pp.2"
+            },
+            {
+              "from": "pp",
+              "id": "pp.3"
+            },
+            {
+              "from": "frz",
+              "id": "frz.1"
+            },
+            {
+              "from": "frz",
+              "id": "frz.2"
+            },
+            {
+              "from": "ta",
+              "id": "ta.1"
+            },
+            {
+              "from": "ta",
+              "id": "ta.2"
+            },
+            {
+              "from": "au",
+              "id": "au.1"
+            },
+            {
+              "from": "au",
+              "id": "au.2"
+            }
           ],
           "moved": [
             {
@@ -88,7 +142,10 @@
         "project_sha256": "92e05b076f529ddd84d2d26df8a94144100185ff6212f351cabb945108966aba",
         "report": {
           "created": [
-            "fast.1"
+            {
+              "from": "fast",
+              "id": "fast.1"
+            }
           ],
           "moved": [
             {
@@ -136,7 +193,10 @@
         "project_sha256": "1fc16abc64f07e555c818400ebc977af79822496538855b8a69b5e247e95a68e",
         "report": {
           "created": [
-            "fwd.1"
+            {
+              "from": "fwd",
+              "id": "fwd.1"
+            }
           ],
           "moved": [],
           "removed": [
@@ -173,17 +233,50 @@
         "project_sha256": "837df652bf963bef5c74045351287cbc40fa08f029472acb09b8f0ec6fbba571",
         "report": {
           "created": [
-            "fwd.1",
-            "fast.1",
-            "rev.1",
-            "rep.1",
-            "rep.2",
-            "pp.1",
-            "pp.2",
-            "pp.3",
-            "frz.1",
-            "ta.1",
-            "au.1"
+            {
+              "from": "fwd",
+              "id": "fwd.1"
+            },
+            {
+              "from": "fast",
+              "id": "fast.1"
+            },
+            {
+              "from": "rev",
+              "id": "rev.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.2"
+            },
+            {
+              "from": "pp",
+              "id": "pp.1"
+            },
+            {
+              "from": "pp",
+              "id": "pp.2"
+            },
+            {
+              "from": "pp",
+              "id": "pp.3"
+            },
+            {
+              "from": "frz",
+              "id": "frz.1"
+            },
+            {
+              "from": "ta",
+              "id": "ta.1"
+            },
+            {
+              "from": "au",
+              "id": "au.1"
+            }
           ],
           "moved": [
             {
@@ -224,31 +317,106 @@
         "project_sha256": "088bb19e28e471f9c2bb78e27597c99a3f8fb4de7ce00e829d1e2ddd0753e619",
         "report": {
           "created": [
-            "fwd.1",
-            "fwd.2",
-            "fwd.3",
-            "fast.1",
-            "slow.1",
-            "slow.2",
-            "slow.3",
-            "rev.1",
-            "rev.2",
-            "rep.1",
-            "rep.2",
-            "rep.3",
-            "rep.4",
-            "pp.1",
-            "pp.2",
-            "pp.3",
-            "pp.4",
-            "frz.1",
-            "ta.1",
-            "tb.1",
-            "tb.2",
-            "au.1",
-            "au.2",
-            "au.3",
-            "au.4"
+            {
+              "from": "fwd",
+              "id": "fwd.1"
+            },
+            {
+              "from": "fwd",
+              "id": "fwd.2"
+            },
+            {
+              "from": "fwd",
+              "id": "fwd.3"
+            },
+            {
+              "from": "fast",
+              "id": "fast.1"
+            },
+            {
+              "from": "slow",
+              "id": "slow.1"
+            },
+            {
+              "from": "slow",
+              "id": "slow.2"
+            },
+            {
+              "from": "slow",
+              "id": "slow.3"
+            },
+            {
+              "from": "rev",
+              "id": "rev.1"
+            },
+            {
+              "from": "rev",
+              "id": "rev.2"
+            },
+            {
+              "from": "rep",
+              "id": "rep.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.2"
+            },
+            {
+              "from": "rep",
+              "id": "rep.3"
+            },
+            {
+              "from": "rep",
+              "id": "rep.4"
+            },
+            {
+              "from": "pp",
+              "id": "pp.1"
+            },
+            {
+              "from": "pp",
+              "id": "pp.2"
+            },
+            {
+              "from": "pp",
+              "id": "pp.3"
+            },
+            {
+              "from": "pp",
+              "id": "pp.4"
+            },
+            {
+              "from": "frz",
+              "id": "frz.1"
+            },
+            {
+              "from": "ta",
+              "id": "ta.1"
+            },
+            {
+              "from": "tb",
+              "id": "tb.1"
+            },
+            {
+              "from": "tb",
+              "id": "tb.2"
+            },
+            {
+              "from": "au",
+              "id": "au.1"
+            },
+            {
+              "from": "au",
+              "id": "au.2"
+            },
+            {
+              "from": "au",
+              "id": "au.3"
+            },
+            {
+              "from": "au",
+              "id": "au.4"
+            }
           ],
           "moved": [
             {
@@ -343,11 +511,26 @@
         "project_sha256": "03cb24e24b45a3d126339a4e9d609cb45178710cafcb9528723ea8ee3b7fbcd4",
         "report": {
           "created": [
-            "fwd.1",
-            "rev.1",
-            "rep.1",
-            "pp.1",
-            "au.1"
+            {
+              "from": "fwd",
+              "id": "fwd.1"
+            },
+            {
+              "from": "rev",
+              "id": "rev.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.1"
+            },
+            {
+              "from": "pp",
+              "id": "pp.1"
+            },
+            {
+              "from": "au",
+              "id": "au.1"
+            }
           ],
           "moved": [
             {
@@ -417,14 +600,38 @@
         "project_sha256": "62244e709355ac15fe4133251c52fe6f6b01be0ea2a016d0b713f24d9b6eaf4a",
         "report": {
           "created": [
-            "fwd.1",
-            "rev.1",
-            "rep.1",
-            "rep.2",
-            "pp.1",
-            "pp.2",
-            "frz.1",
-            "au.1"
+            {
+              "from": "fwd",
+              "id": "fwd.1"
+            },
+            {
+              "from": "rev",
+              "id": "rev.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.2"
+            },
+            {
+              "from": "pp",
+              "id": "pp.1"
+            },
+            {
+              "from": "pp",
+              "id": "pp.2"
+            },
+            {
+              "from": "frz",
+              "id": "frz.1"
+            },
+            {
+              "from": "au",
+              "id": "au.1"
+            }
           ],
           "moved": [
             {
@@ -477,15 +684,42 @@
         "project_sha256": "aa3ace4aed1441b5bc022ee174e331caff9c5c9fdb38358f469df7ac50c9bc8a",
         "report": {
           "created": [
-            "fwd.1",
-            "slow.1",
-            "rev.1",
-            "rep.1",
-            "rep.2",
-            "pp.1",
-            "pp.2",
-            "frz.1",
-            "au.1"
+            {
+              "from": "fwd",
+              "id": "fwd.1"
+            },
+            {
+              "from": "slow",
+              "id": "slow.1"
+            },
+            {
+              "from": "rev",
+              "id": "rev.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.2"
+            },
+            {
+              "from": "pp",
+              "id": "pp.1"
+            },
+            {
+              "from": "pp",
+              "id": "pp.2"
+            },
+            {
+              "from": "frz",
+              "id": "frz.1"
+            },
+            {
+              "from": "au",
+              "id": "au.1"
+            }
           ],
           "moved": [
             {
@@ -532,25 +766,82 @@
         "project_sha256": "880f72dc9d6f42cb9d0b1939d7871f767640c1b9641e082ed2286c9eb42fb064",
         "report": {
           "created": [
-            "fwd.1",
-            "fwd.2",
-            "fast.1",
-            "slow.1",
-            "rev.1",
-            "rep.1",
-            "rep.2",
-            "rep.3",
-            "rep.4",
-            "pp.1",
-            "pp.2",
-            "pp.3",
-            "pp.4",
-            "pp.5",
-            "frz.1",
-            "ta.1",
-            "tb.1",
-            "au.1",
-            "au.2"
+            {
+              "from": "fwd",
+              "id": "fwd.1"
+            },
+            {
+              "from": "fwd",
+              "id": "fwd.2"
+            },
+            {
+              "from": "fast",
+              "id": "fast.1"
+            },
+            {
+              "from": "slow",
+              "id": "slow.1"
+            },
+            {
+              "from": "rev",
+              "id": "rev.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.2"
+            },
+            {
+              "from": "rep",
+              "id": "rep.3"
+            },
+            {
+              "from": "rep",
+              "id": "rep.4"
+            },
+            {
+              "from": "pp",
+              "id": "pp.1"
+            },
+            {
+              "from": "pp",
+              "id": "pp.2"
+            },
+            {
+              "from": "pp",
+              "id": "pp.3"
+            },
+            {
+              "from": "pp",
+              "id": "pp.4"
+            },
+            {
+              "from": "pp",
+              "id": "pp.5"
+            },
+            {
+              "from": "frz",
+              "id": "frz.1"
+            },
+            {
+              "from": "ta",
+              "id": "ta.1"
+            },
+            {
+              "from": "tb",
+              "id": "tb.1"
+            },
+            {
+              "from": "au",
+              "id": "au.1"
+            },
+            {
+              "from": "au",
+              "id": "au.2"
+            }
           ],
           "moved": [
             {
@@ -615,14 +906,38 @@
         "project_sha256": "eac40d59a0ab37f21a1c5d1a0e4be1ace3522bad49f256b3ad10b7cb8c1dd4ba",
         "report": {
           "created": [
-            "fwd.1",
-            "rev.1",
-            "rep.1",
-            "rep.2",
-            "pp.1",
-            "pp.2",
-            "frz.1",
-            "au.1"
+            {
+              "from": "fwd",
+              "id": "fwd.1"
+            },
+            {
+              "from": "rev",
+              "id": "rev.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.2"
+            },
+            {
+              "from": "pp",
+              "id": "pp.1"
+            },
+            {
+              "from": "pp",
+              "id": "pp.2"
+            },
+            {
+              "from": "frz",
+              "id": "frz.1"
+            },
+            {
+              "from": "au",
+              "id": "au.1"
+            }
           ],
           "moved": [
             {
@@ -697,11 +1012,26 @@
         "project_sha256": "3c1b52f09d6b729d12a407b3f2c8143cd04ce4b033e921e8cb692876d4e9202f",
         "report": {
           "created": [
-            "rep.1",
-            "rep.2",
-            "rep.3",
-            "rep.4",
-            "rep.5"
+            {
+              "from": "rep",
+              "id": "rep.1"
+            },
+            {
+              "from": "rep",
+              "id": "rep.2"
+            },
+            {
+              "from": "rep",
+              "id": "rep.3"
+            },
+            {
+              "from": "rep",
+              "id": "rep.4"
+            },
+            {
+              "from": "rep",
+              "id": "rep.5"
+            }
           ],
           "moved": [],
           "removed": []
@@ -731,12 +1061,30 @@
         "project_sha256": "012d7fb4a7844bdfadb7949e639787da97179b42600d0561ddb7d34c0b433ca8",
         "report": {
           "created": [
-            "rev.1",
-            "rev.2",
-            "pp.1",
-            "pp.2",
-            "pp.3",
-            "pp.4"
+            {
+              "from": "rev",
+              "id": "rev.1"
+            },
+            {
+              "from": "rev",
+              "id": "rev.2"
+            },
+            {
+              "from": "pp",
+              "id": "pp.1"
+            },
+            {
+              "from": "pp",
+              "id": "pp.2"
+            },
+            {
+              "from": "pp",
+              "id": "pp.3"
+            },
+            {
+              "from": "pp",
+              "id": "pp.4"
+            }
           ],
           "moved": [],
           "removed": []
@@ -768,8 +1116,14 @@
         "project_sha256": "fc68d6df67750892c5b3f2cae251a87dd216892846e7b6b80c67c0752e38cea8",
         "report": {
           "created": [
-            "au.1",
-            "au.2"
+            {
+              "from": "au",
+              "id": "au.1"
+            },
+            {
+              "from": "au",
+              "id": "au.2"
+            }
           ],
           "moved": [],
           "removed": []
@@ -1284,7 +1638,7 @@
         "v": "tests/corpus/h264-bt709-copy.mp4"
       },
       "extractor": {
-        "plugin": "fixture-digest"
+        "plugin": "plugins/fixtures/digest"
       },
       "name": "plugin-digest-source-h264-bt709-copy",
       "project": "media",
@@ -1308,10 +1662,10 @@
     },
     {
       "assets": {
-        "a": "plugins/silence/tests/fixtures/speech.wav"
+        "a": "plugins/first-party/silence/tests/fixtures/speech.wav"
       },
       "extractor": {
-        "plugin": "silence"
+        "plugin": "plugins/first-party/silence"
       },
       "name": "plugin-silence-speech",
       "project": "speech",
@@ -1390,7 +1744,7 @@
     {
       "assets": {},
       "extractor": {
-        "plugin": "fixture-digest"
+        "plugin": "plugins/fixtures/digest"
       },
       "name": "plugin-digest-timeline-cpu",
       "project": "generated",

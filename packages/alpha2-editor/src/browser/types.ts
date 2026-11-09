@@ -597,8 +597,62 @@ export interface BrowserBridge {
     options?: Pick<BrowserExportOptions, "media">,
   ): Promise<import("../native-client/index.js").NativeAsset[]>;
   /**
+   * Runs an engine edit operation (`remove_ranges`, `split_at`, `bake`) on the committed document
+   * with this runtime's engine and commits it as one undo step (`EditorSession.applyEdit`), with
+   * `then` in the same step. Waits for the engine to load, so it can be called right away.
+   *
+   * Rejects with the engine's refusal (an `Alpha2Error` whose `details.refusal` names it), with
+   * `stale_edit` when the document changed while the engine loaded, with what
+   * `EditorSession.applyEdit` refuses, when `signal` aborts before the edit runs, and after the
+   * bridge is disposed (`disposed`).
+   */
+  applyEdit(
+    request: import("alpha2/apply-edit").EditRequest,
+    options?: {
+      readonly then?: readonly import("../core/commands.js").Command[];
+      readonly label?: string;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<{
+    readonly document: import("../core/document.js").EditorDocument;
+    readonly report: import("alpha2/apply-edit").EditReport;
+  }>;
+  /**
+   * Runs an extractor over a source's original media on this page (`runExtractor` from
+   * `alpha2/extract`), with an app's `extractor` or a `plugin` it loads (`loadPlugin` from
+   * `alpha2/plugins`, manifest and SHA-256 pinned). Resolves with the result and the read taken
+   * when the run started; commit them with `EditorSession.applyExtraction(result, { read })`.
+   *
+   * Rejects without exactly one of `plugin` and `extractor` (`invalid_command`), for a timeline
+   * input (`unsupported_media`), without the source's original in this session (`missing_asset`),
+   * with the plugin loader's and the extractor's errors (`PLUGIN_*`, `INVALID_INPUT`,
+   * `INVALID_EMIT`, `EXTRACTOR_FAILED`, `DECODE_UNAVAILABLE`), with `cancelled` when `signal`
+   * aborts or the bridge is disposed, and after disposal (`disposed`).
+   */
+  extract(
+    run: import("alpha2/extractor").ExtractRun,
+    options: {
+      readonly plugin?: {
+        readonly manifest: string | URL;
+        readonly sha256: string;
+        /** The most linear memory the module may have; the loader's default when left out. */
+        readonly memoryBytes?: number;
+      };
+      readonly extractor?: import("alpha2/extractor").Extractor;
+      readonly signal?: AbortSignal;
+      readonly onProgress?: (
+        progress: import("alpha2/extractor").ExtractProgress,
+      ) => void;
+    },
+  ): Promise<{
+    readonly result: import("alpha2/extractor").ExtractResult;
+    readonly read: import("../core/session.js").ExtractionRead;
+  }>;
+  /**
    * Whether the document's media is ready for `purpose`, as the engine decides from this session's
-   * originals and kept proxies.
+   * originals and kept proxies. Its `stale_data` lists the data sets whose `made_from` no longer
+   * matches their source's original (`data`, `source` and the differing `fields`); the set's own
+   * `made_by` in the project says how to run its extractor again. Nothing is fixed automatically.
    */
   conform(
     purpose: MediaPurpose,

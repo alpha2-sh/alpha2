@@ -94,13 +94,13 @@ def client() -> Iterator[HostClient]:
 
 @pytest.fixture(scope="module")
 def packed(tmp_path_factory: pytest.TempPathFactory) -> Any:
-    """Packs ``plugins/<name>`` once: its manifest's path and SHA-256."""
+    """Packs the crate at repository path ``path`` once: its manifest's path and SHA-256."""
     done: dict[str, dict[str, str]] = {}
     out = tmp_path_factory.mktemp("plugins")
     env = {key: value for key, value in os.environ.items() if key != "CARGO_TARGET_DIR"}
 
-    def pack(name: str) -> dict[str, str]:
-        if name not in done:
+    def pack(path: str) -> dict[str, str]:
+        if path not in done:
             plugins = ROOT / "plugins"
             subprocess.run(
                 [
@@ -108,17 +108,17 @@ def packed(tmp_path_factory: pytest.TempPathFactory) -> Any:
                     "--manifest-path", str(plugins / "Cargo.toml"),
                     "--target-dir", str(plugins / "target"),
                     "-p", "alpha2-plugin-pack", "--",
-                    str(plugins / name), "--out", str(out / name),
+                    str(ROOT / path), "--out", str(out / path),
                 ],
                 check=True,
                 env=env,
             )  # fmt: skip
-            manifest = out / name / "manifest.json"
-            done[name] = {
+            manifest = out / path / "manifest.json"
+            done[path] = {
                 "manifest": str(manifest),
                 "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
             }
-        return done[name]
+        return done[path]
 
     return pack
 

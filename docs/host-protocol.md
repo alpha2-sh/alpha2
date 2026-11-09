@@ -221,7 +221,7 @@ Applies one edit operation to a project, without a GPU and without reading media
 
 Every kept moment renders as before: split clips continue their source and time map, timeline keyframes and timeline-anchored data are cut and shifted, captions are trimmed, and transitions whose cut is removed are removed.
 
-The result is `{projectJson, report}`. `projectJson` is the edited project as the engine's canonical text, the same bytes on every surface; `report` has `removed` (timeline ranges, in the old timeline's time), `moved` (`{from, to}` ranges) and `created` (clip ids). A refusal fails with `INVALID_INPUT`, its `details` `{refusal}` naming why: `invalid_project`, `invalid_request`, `unknown_data`, `wrong_kind`, `unknown_target`, `empty_target`, `missing_anchor`, `invalid_range`, `nothing_to_bake` or `correction_not_bakeable`. An edited project that fails validation is a defect and fails with `INTERNAL` (`invalid_result`).
+The result is `{projectJson, report}`. `projectJson` is the edited project as the engine's canonical text, the same bytes on every surface; `report` has `removed` (timeline ranges, in the old timeline's time), `moved` (`{from, to}` ranges) and `created` (`{id, from}`: each new clip and the clip it was cut from). A refusal fails with `INVALID_INPUT`, its `details` `{refusal}` naming why: `invalid_project`, `invalid_request`, `unknown_data`, `wrong_kind`, `unknown_target`, `empty_target`, `missing_anchor`, `invalid_range`, `nothing_to_bake` or `correction_not_bakeable`. An edited project that fails validation is a defect and fails with `INTERNAL` (`invalid_result`).
 
 ## `extract`
 

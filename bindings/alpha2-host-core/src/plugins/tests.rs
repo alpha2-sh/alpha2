@@ -81,9 +81,9 @@ fn entry(path: &Path) -> Value {
 }
 
 fn descriptor_of(plugin: usize) -> Value {
-    let file = ["fixture-digest", "fixture-scripted"][plugin];
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("../../plugins/{file}/descriptor.json"));
+    let file = ["digest", "scripted"][plugin];
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../../plugins/fixtures/{file}/descriptor.json"));
     serde_json::from_slice(&std::fs::read(path).expect("descriptor")).expect("json")
 }
 

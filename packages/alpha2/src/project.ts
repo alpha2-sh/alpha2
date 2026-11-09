@@ -32,6 +32,13 @@ import type {
 } from "./generated/project-schema.js";
 import { BUILTIN_EFFECT_RULES } from "./generated/builtin-effects.js";
 import { dataProblems } from "./project-data.js";
+import { shortestFloat32 } from "./float32.js";
+export {
+  dataReferences,
+  describeDataReference,
+  type DataOwner,
+  type DataReference,
+} from "./project-data.js";
 import {
   parseHex,
   parseInsets,
@@ -323,6 +330,7 @@ function projectDataProblems(project: Project): string[] {
     project as unknown as Record<string, unknown>,
     (id, name) => builtinParamRule(id, name)?.type,
     validFingerprint,
+    sealed,
   );
 }
 
@@ -1407,16 +1415,6 @@ type CanonicalPart<T> = T extends string | number | boolean | bigint
   : { readonly [K in keyof T]: Canonical<T[K]> };
 
 export type CanonicalProject = Canonical<Project>;
-
-// The shortest decimal that reads back as the same 32-bit float, as the engine writes it.
-function shortestFloat32(value: number): number {
-  const target = Math.fround(value);
-  for (let digits = 1; digits < 9; digits++) {
-    const short = Number(target.toPrecision(digits));
-    if (Math.fround(short) === target) return short;
-  }
-  return Number(target.toPrecision(9));
-}
 
 /** The whole text of a caption cue or text generator, with runs joined. */
 export function textOf(content: TextContent | Canonical<TextContent>): string {

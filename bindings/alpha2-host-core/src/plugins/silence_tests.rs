@@ -35,13 +35,13 @@ fn packed() -> &'static Path {
             .arg("--target-dir")
             .arg(plugins.join("target"))
             .args(["-p", "alpha2-plugin-pack", "--"])
-            .arg(plugins.join("silence"))
+            .arg(plugins.join("first-party/silence"))
             .arg("--out")
             .arg(&out)
             .env_remove("CARGO_TARGET_DIR")
             .status()
             .expect("cargo runs");
-        assert!(status.success(), "plugins/silence packs");
+        assert!(status.success(), "plugins/first-party/silence packs");
         out
     })
 }
@@ -57,7 +57,8 @@ impl Fetch for Packed {
 
 /// The fixture's samples and, in ticks, where each inserted silence lies.
 fn fixture() -> (Vec<f32>, Vec<(i64, i64)>) {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/silence/tests/fixtures");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../plugins/first-party/silence/tests/fixtures");
     let wav = std::fs::read(dir.join("speech.wav")).expect("speech.wav");
     let meta: Value =
         serde_json::from_slice(&std::fs::read(dir.join("speech.json")).expect("json"))

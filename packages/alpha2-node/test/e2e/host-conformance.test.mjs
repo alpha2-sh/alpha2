@@ -35,11 +35,11 @@ function withoutTargetDirectory() {
   return env;
 }
 
-/** Packs `plugins/<name>` once and returns its manifest's path and SHA-256. */
+/** Packs the plugin crate at `path` (from the repository root) once: manifest path and SHA-256. */
 const packed = new Map();
-async function plugin(name) {
-  if (!packed.has(name)) {
-    const out = join(scratch, name);
+async function plugin(path) {
+  if (!packed.has(path)) {
+    const out = join(scratch, path);
     const plugins = join(root, "plugins");
     const run = spawnSync(
       "cargo",
@@ -53,22 +53,22 @@ async function plugin(name) {
         "-p",
         "alpha2-plugin-pack",
         "--",
-        join(plugins, name),
+        join(root, path),
         "--out",
         out,
       ],
       { stdio: "inherit", env: withoutTargetDirectory() },
     );
-    assert.equal(run.status, 0, `plugins/${name} packs`);
+    assert.equal(run.status, 0, `${path} packs`);
     const manifest = join(out, "manifest.json");
-    packed.set(name, {
+    packed.set(path, {
       manifest,
       sha256: createHash("sha256")
         .update(await readFile(manifest))
         .digest("hex"),
     });
   }
-  return packed.get(name);
+  return packed.get(path);
 }
 
 test("the host's edit operation answers each edit case as pinned", async () => {

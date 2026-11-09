@@ -83,7 +83,7 @@ fn plugin_dir(dir: &Path, name: &str, wasm: bool, native: bool) -> (PathBuf, Str
     let descriptor: Value = serde_json::from_slice(
         &std::fs::read(
             Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join(format!("../../plugins/fixture-{name}/descriptor.json")),
+                .join(format!("../../plugins/fixtures/{name}/descriptor.json")),
         )
         .expect("descriptor"),
     )

@@ -75,8 +75,8 @@ export interface EditReport {
     readonly from: TickRange;
     readonly to: TickRange;
   }[];
-  /** Clips the operation created. */
-  readonly created: readonly string[];
+  /** Clips the operation created, each with the clip it was cut from (which keeps its id). */
+  readonly created: readonly { readonly id: string; readonly from: string }[];
 }
 
 /** An operation's result. */

@@ -260,14 +260,383 @@ interface Follow {
   readonly at: string;
 }
 
+/** What holds a data reference. */
+export type DataOwner =
+  | { readonly kind: "clip"; readonly clip: string }
+  | { readonly kind: "track"; readonly track: string }
+  | {
+      readonly kind: "transition";
+      readonly track: string;
+      readonly from: string;
+      readonly to: string;
+    }
+  | {
+      readonly kind: "node";
+      readonly composition: string;
+      readonly node: string;
+    }
+  | { readonly kind: "master" }
+  | { readonly kind: "source"; readonly source: string };
+
+/** One place of a project that reads a data set. */
+export interface DataReference {
+  /** The data set's id. */
+  readonly data: string;
+  readonly owner: DataOwner;
+  /**
+   * The property path in the syntax `bake` targets use: `visual.position`, `masks[0].feather`,
+   * `effect.params.radius`, `visual.correction`, or `captions` for a track's caption words.
+   */
+  readonly property: string;
+  /** The clip or composition node a source-anchored binding reads through. */
+  readonly via?: { readonly clip: string } | { readonly node: string };
+}
+
+/** A reference as the walker finds it, with what checking it needs. */
+type Place =
+  | {
+      readonly use: "binding";
+      readonly owner: DataOwner;
+      readonly at: string;
+      readonly binding: Json;
+      readonly clock: Clock;
+      readonly slot: Slot;
+      readonly follower: string | undefined;
+    }
+  | {
+      readonly use: "correction" | "words";
+      readonly owner: DataOwner;
+      readonly at: string;
+      readonly reference: Json;
+    }
+  | {
+      readonly use: "refused";
+      readonly owner: DataOwner;
+      readonly at: string;
+      readonly problem: string;
+    };
+
+function ownerText(owner: DataOwner): string {
+  switch (owner.kind) {
+    case "clip":
+      return `clip ${owner.clip}`;
+    case "track":
+      return `track ${owner.track}`;
+    case "transition":
+      return `track ${owner.track} transition ${owner.from} to ${owner.to}`;
+    case "node":
+      return `composition ${owner.composition} node ${owner.node}`;
+    case "master":
+      return "the master bus";
+    case "source":
+      return `source ${owner.source}`;
+  }
+}
+
+/** `reference` as text in the lint path syntax, such as `clip c1 visual.position`. */
+export function describeDataReference(reference: DataReference): string {
+  return `${ownerText(reference.owner)} ${reference.property}`;
+}
+
+/** Visits every binding, correction and caption words reference in `data_places` order. */
+function walkPlaces(
+  project: Json,
+  paramType: ParamType,
+  visit: (place: Place) => void,
+): void {
+  const timeline = isRecord(project.timeline) ? project.timeline : {};
+  const tracks = (Array.isArray(timeline.tracks) ? timeline.tracks : []).filter(
+    isRecord,
+  );
+  const timelineClock: Clock = { kind: "timeline" };
+  const pictureClock: Clock = { kind: "picture" };
+  const scalar: Slot = { kind: "scalar" };
+  for (const track of tracks) {
+    const trackId = String(track.id);
+    for (const clip of Array.isArray(track.clips) ? track.clips : []) {
+      if (!isRecord(clip)) continue;
+      const clipId = String(clip.id);
+      const owner: DataOwner = { kind: "clip", clip: clipId };
+      const found: [string, Json, Slot][] = [];
+      visualBindings(clip.visual, "visual", found);
+      maskBindings(clip.masks, "", found);
+      const audio = isRecord(clip.audio) ? clip.audio : {};
+      for (const field of ["gain", "pan"]) {
+        if (isData(audio[field]))
+          found.push([`audio.${field}`, audio[field], slotOf("scalar")]);
+      }
+      for (const [at, binding, slot] of found)
+        visit({
+          use: "binding",
+          owner,
+          at,
+          binding,
+          clock: timelineClock,
+          slot,
+          follower: clipId,
+        });
+      const visual = isRecord(clip.visual) ? clip.visual : {};
+      if (isRecord(visual.correction))
+        visit({
+          use: "correction",
+          owner,
+          at: "visual.correction",
+          reference: visual.correction,
+        });
+    }
+    for (const transition of Array.isArray(track.transitions)
+      ? track.transitions
+      : []) {
+      if (!isRecord(transition) || !isRecord(transition.effect)) continue;
+      const owner: DataOwner = {
+        kind: "transition",
+        track: trackId,
+        from: String(transition.from_clip),
+        to: String(transition.to_clip),
+      };
+      const params = isRecord(transition.effect.params)
+        ? transition.effect.params
+        : {};
+      for (const [name, value] of Object.entries(params)) {
+        if (!isData(value)) continue;
+        visit({
+          use: "binding",
+          owner,
+          at: `effect.params.${name}`,
+          binding: value,
+          clock: timelineClock,
+          slot: {
+            kind: "param",
+            type: paramType(String(transition.effect.id), name),
+          },
+          follower: undefined,
+        });
+      }
+    }
+    const owner: DataOwner = { kind: "track", track: trackId };
+    const audio = isRecord(track.audio) ? track.audio : {};
+    for (const field of ["gain", "pan"]) {
+      const value = audio[field];
+      if (isData(value))
+        visit({
+          use: "binding",
+          owner,
+          at: `audio.${field}`,
+          binding: value,
+          clock: timelineClock,
+          slot: scalar,
+          follower: undefined,
+        });
+    }
+    if (isRecord(track.captions)) {
+      const captions = track.captions;
+      const found: [string, Json][] = [];
+      bindingsUnder(captions.style, "captions.style", found);
+      bindingsUnder(captions.styles, "captions.styles", found);
+      for (const [at, binding] of found)
+        visit({
+          use: "binding",
+          owner,
+          at,
+          binding,
+          clock: pictureClock,
+          slot: scalar,
+          follower: undefined,
+        });
+      if (isRecord(captions.from_words))
+        visit({
+          use: "words",
+          owner,
+          at: "captions.from_words",
+          reference: captions.from_words,
+        });
+    }
+  }
+  const master = isRecord(project.audio) ? project.audio : {};
+  if (isData(master.gain))
+    visit({
+      use: "binding",
+      owner: { kind: "master" },
+      at: "audio.gain",
+      binding: master.gain,
+      clock: timelineClock,
+      slot: slotOf("scalar"),
+      follower: undefined,
+    });
+
+  const compositions = new Map<string, Json>();
+  for (const composition of Array.isArray(project.compositions)
+    ? project.compositions
+    : []) {
+    if (isRecord(composition))
+      compositions.set(String(composition.id), composition);
+  }
+  for (const composition of compositions.values()) {
+    for (const node of Array.isArray(composition.nodes)
+      ? composition.nodes
+      : []) {
+      if (!isRecord(node) || !isRecord(node.op)) continue;
+      const op = node.op;
+      const owner: DataOwner = {
+        kind: "node",
+        composition: String(composition.id),
+        node: String(node.id),
+      };
+      const clock: Clock = { kind: "composition", composition };
+      const found: [string, Json, Slot][] = [];
+      const effectParams = (effect: unknown) => {
+        if (!isRecord(effect) || !isRecord(effect.params)) return;
+        for (const [name, value] of Object.entries(effect.params)) {
+          if (isData(value))
+            found.push([
+              `effect.params.${name}`,
+              value,
+              { kind: "param", type: paramType(String(effect.id), name) },
+            ]);
+        }
+      };
+      switch (op.type) {
+        case "effect":
+          effectParams(op.effect);
+          break;
+        case "transition":
+          effectParams(op.effect);
+          if (isData(op.progress))
+            found.push(["progress", op.progress, slotOf("scalar")]);
+          break;
+        case "transform":
+          if (isRecord(op.transform) && op.transform.correction != null)
+            visit({
+              use: "refused",
+              owner,
+              at: "transform.correction",
+              problem: "has `correction` where it does not apply",
+            });
+          visualBindings(op.transform, "transform", found);
+          break;
+        case "merge":
+          (Array.isArray(op.layers) ? op.layers : []).forEach(
+            (layer: unknown, index) => {
+              if (isRecord(layer) && isData(layer.opacity))
+                found.push([
+                  `layers[${index}].opacity`,
+                  layer.opacity,
+                  slotOf("scalar"),
+                ]);
+            },
+          );
+          break;
+        case "shape_mask":
+          maskBindings(op.masks, "", found);
+          break;
+        case "group": {
+          const controls = isRecord(op.controls) ? op.controls : {};
+          const group = compositions.get(String(op.composition));
+          for (const [name, value] of Object.entries(controls)) {
+            if (!isData(value)) continue;
+            const control = (
+              Array.isArray(group?.controls) ? group.controls : []
+            ).find(
+              (candidate: unknown) =>
+                isRecord(candidate) && candidate.name === name,
+            ) as Json | undefined;
+            const target = (
+              Array.isArray(group?.nodes) ? group.nodes : []
+            ).find(
+              (candidate: unknown) =>
+                isRecord(candidate) && candidate.id === control?.node,
+            ) as Json | undefined;
+            const targetOp = isRecord(target?.op) ? target.op : undefined;
+            const type =
+              (targetOp?.type === "effect" ||
+                targetOp?.type === "transition") &&
+              isRecord(targetOp.effect)
+                ? paramType(String(targetOp.effect.id), String(control?.param))
+                : undefined;
+            found.push([`controls.${name}`, value, { kind: "param", type }]);
+          }
+          break;
+        }
+        case "generator": {
+          const nested: [string, Json][] = [];
+          bindingsUnder(op.generator, "generator", nested);
+          for (const [at, binding] of nested) found.push([at, binding, scalar]);
+          break;
+        }
+        default:
+          break;
+      }
+      for (const [at, binding, slot] of found)
+        visit({
+          use: "binding",
+          owner,
+          at,
+          binding,
+          clock: op.type === "generator" ? pictureClock : clock,
+          slot,
+          follower: undefined,
+        });
+    }
+  }
+  for (const source of Array.isArray(project.sources) ? project.sources : []) {
+    if (!isRecord(source) || !isRecord(source.generator)) continue;
+    const found: [string, Json][] = [];
+    bindingsUnder(source.generator, "", found);
+    for (const [at, binding] of found)
+      visit({
+        use: "binding",
+        owner: { kind: "source", source: String(source.id) },
+        at,
+        binding,
+        clock: pictureClock,
+        slot: scalar,
+        follower: undefined,
+      });
+  }
+}
+
+/**
+ * Every place of `project` that reads a data set, in document order: bindings, corrections and
+ * caption words. References to sets the project lacks are listed too.
+ */
+export function dataReferences(project: object): DataReference[] {
+  const references: DataReference[] = [];
+  walkPlaces(
+    project as Json,
+    () => undefined,
+    (place) => {
+      if (place.use === "refused") return;
+      const reference =
+        place.use === "binding" ? place.binding : place.reference;
+      const via = place.use === "binding" ? place.binding.via : undefined;
+      references.push({
+        data: String(reference.data),
+        owner: place.owner,
+        property: place.use === "words" ? "captions" : place.at,
+        ...(isRecord(via) && typeof via.clip === "string"
+          ? { via: { clip: via.clip } }
+          : isRecord(via) && typeof via.node === "string"
+            ? { via: { node: via.node } }
+            : {}),
+      });
+    },
+  );
+  return references;
+}
+
+/** Data sets whose own checks passed, by the source duration they passed with. */
+const passedSets = new WeakMap<object, number | undefined>();
+
 /**
  * Problems of the project's data sets and of every binding, correction and caption words
- * reference. `validFingerprint` is the validator's own fingerprint check.
+ * reference. `validFingerprint` is the validator's own fingerprint check. A set `sealed` reports
+ * as unchangeable skips its own checks once it has passed them with the same source duration.
  */
 export function dataProblems(
   project: Json,
   paramType: ParamType,
   validFingerprint: (fingerprint: unknown) => boolean,
+  sealed: (value: unknown) => boolean = () => false,
 ): string[] {
   const problems: string[] = [];
   const sets = Array.isArray(project.data) ? (project.data as unknown[]) : [];
@@ -313,8 +682,10 @@ export function dataProblems(
           ? fingerprint.duration_ticks
           : undefined;
     }
+    if (passedSets.has(set) && passedSets.get(set) === duration) continue;
     const problem = setProblem(set, duration, validFingerprint);
     if (problem) problems.push(`data set ${id} ${problem}`);
+    else if (sealed(set)) passedSets.set(set, duration);
   }
 
   const timeline = isRecord(project.timeline) ? project.timeline : {};
@@ -327,13 +698,6 @@ export function dataProblems(
       if (isRecord(clip))
         clips.set(String(clip.id), { clip, trackKind: track.kind });
     }
-  }
-  const compositions = new Map<string, Json>();
-  for (const composition of Array.isArray(project.compositions)
-    ? project.compositions
-    : []) {
-    if (isRecord(composition))
-      compositions.set(String(composition.id), composition);
   }
   const follows: Follow[] = [];
 
@@ -444,244 +808,48 @@ export function dataProblems(
     return set;
   };
 
-  for (const track of tracks) {
-    const trackId = String(track.id);
-    for (const clip of Array.isArray(track.clips) ? track.clips : []) {
-      if (!isRecord(clip)) continue;
-      const clipId = String(clip.id);
-      const owner = `clip ${clipId}`;
-      const found: [string, Json, Slot][] = [];
-      visualBindings(clip.visual, "visual", found);
-      maskBindings(clip.masks, "", found);
-      const audio = isRecord(clip.audio) ? clip.audio : {};
-      for (const field of ["gain", "pan"]) {
-        if (isData(audio[field]))
-          found.push([`audio.${field}`, audio[field], slotOf("scalar")]);
-      }
-      for (const [at, binding, slot] of found) {
-        report(
-          owner,
-          at,
-          check(binding, { kind: "timeline" }, slot, clipId, at),
-        );
-      }
-      const visual = isRecord(clip.visual) ? clip.visual : {};
-      if (isRecord(visual.correction)) {
-        const at = "visual.correction";
-        const set = usable(visual.correction.data, at, owner);
-        if (set !== undefined) {
-          const anchor = isRecord(set.anchor) ? set.anchor : {};
-          if (set.kind !== "similarity")
-            report(owner, at, `cannot follow ${String(set.kind)} data`);
-          else if (
-            anchor.type !== "source" ||
-            anchor.source_id !== clip.source_id
-          )
-            report(owner, at, "corrects with data anchored to another source");
-        }
-      }
+  walkPlaces(project, paramType, (place) => {
+    const owner = ownerText(place.owner);
+    if (place.use === "refused") {
+      report(owner, place.at, place.problem);
+      return;
     }
-    for (const transition of Array.isArray(track.transitions)
-      ? track.transitions
-      : []) {
-      if (!isRecord(transition) || !isRecord(transition.effect)) continue;
-      const owner = `track ${trackId} transition ${String(transition.from_clip)} to ${String(transition.to_clip)}`;
-      const params = isRecord(transition.effect.params)
-        ? transition.effect.params
-        : {};
-      for (const [name, value] of Object.entries(params)) {
-        if (!isData(value)) continue;
-        const slot: Slot = {
-          kind: "param",
-          type: paramType(String(transition.effect.id), name),
-        };
-        const at = `effect.params.${name}`;
-        report(
-          owner,
-          at,
-          check(value, { kind: "timeline" }, slot, undefined, at),
-        );
-      }
-    }
-    const owner = `track ${trackId}`;
-    const audio = isRecord(track.audio) ? track.audio : {};
-    for (const field of ["gain", "pan"]) {
-      const value = audio[field];
-      if (isData(value))
-        report(
-          owner,
-          `audio.${field}`,
-          check(value, { kind: "timeline" }, slotOf("scalar"), undefined, ""),
-        );
-    }
-    if (isRecord(track.captions)) {
-      const captions = track.captions;
-      const found: [string, Json][] = [];
-      bindingsUnder(captions.style, "captions.style", found);
-      bindingsUnder(captions.styles, "captions.styles", found);
-      for (const [at, binding] of found) {
-        report(
-          owner,
-          at,
-          check(
-            binding,
-            { kind: "picture" },
-            { kind: "scalar" },
-            undefined,
-            at,
-          ),
-        );
-      }
-      if (isRecord(captions.from_words)) {
-        const at = "captions.from_words";
-        const words = captions.from_words;
-        const set = usable(words.data, at, owner);
-        if (set !== undefined) {
-          const anchor = isRecord(set.anchor) ? set.anchor : {};
-          const trackOk =
-            anchor.type === "source"
-              ? typeof words.track === "string" &&
-                tracks.some(
-                  (other) =>
-                    other.id === words.track && other.kind !== "caption",
-                )
-              : words.track == null;
-          if (set.kind !== "words")
-            report(owner, at, `cannot follow ${String(set.kind)} data`);
-          else if (!trackOk || words.max_chars === 0)
-            report(owner, at, "has an invalid words track or max_chars");
-        }
-      }
-    }
-  }
-  const master = isRecord(project.audio) ? project.audio : {};
-  if (isData(master.gain)) {
-    report(
-      "the master bus",
-      "audio.gain",
-      check(master.gain, { kind: "timeline" }, slotOf("scalar"), undefined, ""),
-    );
-  }
-
-  for (const composition of compositions.values()) {
-    for (const node of Array.isArray(composition.nodes)
-      ? composition.nodes
-      : []) {
-      if (!isRecord(node) || !isRecord(node.op)) continue;
-      const op = node.op;
-      const owner = `composition ${String(composition.id)} node ${String(node.id)}`;
-      const clock: Clock = { kind: "composition", composition };
-      const found: [string, Json, Slot][] = [];
-      const effectParams = (effect: unknown) => {
-        if (!isRecord(effect) || !isRecord(effect.params)) return;
-        for (const [name, value] of Object.entries(effect.params)) {
-          if (isData(value))
-            found.push([
-              `effect.params.${name}`,
-              value,
-              { kind: "param", type: paramType(String(effect.id), name) },
-            ]);
-        }
-      };
-      switch (op.type) {
-        case "effect":
-          effectParams(op.effect);
-          break;
-        case "transition":
-          effectParams(op.effect);
-          if (isData(op.progress))
-            found.push(["progress", op.progress, slotOf("scalar")]);
-          break;
-        case "transform":
-          if (isRecord(op.transform) && op.transform.correction != null) {
-            report(
-              owner,
-              "transform.correction",
-              "has `correction` where it does not apply",
-            );
-          }
-          visualBindings(op.transform, "transform", found);
-          break;
-        case "merge":
-          (Array.isArray(op.layers) ? op.layers : []).forEach(
-            (layer: unknown, index) => {
-              if (isRecord(layer) && isData(layer.opacity))
-                found.push([
-                  `layers[${index}].opacity`,
-                  layer.opacity,
-                  slotOf("scalar"),
-                ]);
-            },
-          );
-          break;
-        case "shape_mask":
-          maskBindings(op.masks, "", found);
-          break;
-        case "group": {
-          const controls = isRecord(op.controls) ? op.controls : {};
-          const group = compositions.get(String(op.composition));
-          for (const [name, value] of Object.entries(controls)) {
-            if (!isData(value)) continue;
-            const control = (
-              Array.isArray(group?.controls) ? group.controls : []
-            ).find(
-              (candidate: unknown) =>
-                isRecord(candidate) && candidate.name === name,
-            ) as Json | undefined;
-            const target = (
-              Array.isArray(group?.nodes) ? group.nodes : []
-            ).find(
-              (candidate: unknown) =>
-                isRecord(candidate) && candidate.id === control?.node,
-            ) as Json | undefined;
-            const targetOp = isRecord(target?.op) ? target.op : undefined;
-            const type =
-              (targetOp?.type === "effect" ||
-                targetOp?.type === "transition") &&
-              isRecord(targetOp.effect)
-                ? paramType(String(targetOp.effect.id), String(control?.param))
-                : undefined;
-            found.push([`controls.${name}`, value, { kind: "param", type }]);
-          }
-          break;
-        }
-        case "generator": {
-          const nested: [string, Json][] = [];
-          bindingsUnder(op.generator, "generator", nested);
-          for (const [at, binding] of nested) {
-            report(
-              owner,
-              at,
-              check(
-                binding,
-                { kind: "picture" },
-                { kind: "scalar" },
-                undefined,
-                at,
-              ),
-            );
-          }
-          break;
-        }
-        default:
-          break;
-      }
-      for (const [at, binding, slot] of found)
-        report(owner, at, check(binding, clock, slot, undefined, at));
-    }
-  }
-  for (const source of sources.values()) {
-    if (!isRecord(source.generator)) continue;
-    const found: [string, Json][] = [];
-    bindingsUnder(source.generator, "", found);
-    for (const [at, binding] of found) {
+    if (place.use === "binding") {
       report(
-        `source ${String(source.id)}`,
-        at,
-        check(binding, { kind: "picture" }, { kind: "scalar" }, undefined, at),
+        owner,
+        place.at,
+        check(place.binding, place.clock, place.slot, place.follower, place.at),
       );
+      return;
     }
-  }
+    const set = usable(place.reference.data, place.at, owner);
+    if (set === undefined) return;
+    const anchor = isRecord(set.anchor) ? set.anchor : {};
+    if (place.use === "correction") {
+      const clip = clips.get((place.owner as { clip: string }).clip)?.clip;
+      if (set.kind !== "similarity")
+        report(owner, place.at, `cannot follow ${String(set.kind)} data`);
+      else if (anchor.type !== "source" || anchor.source_id !== clip?.source_id)
+        report(
+          owner,
+          place.at,
+          "corrects with data anchored to another source",
+        );
+      return;
+    }
+    const words = place.reference;
+    const trackOk =
+      anchor.type === "source"
+        ? typeof words.track === "string" &&
+          tracks.some(
+            (other) => other.id === words.track && other.kind !== "caption",
+          )
+        : words.track == null;
+    if (set.kind !== "words")
+      report(owner, place.at, `cannot follow ${String(set.kind)} data`);
+    else if (!trackOk || words.max_chars === 0)
+      report(owner, place.at, "has an invalid words track or max_chars");
+  });
   const cycle = followCycle(follows);
   if (cycle)
     problems.push(

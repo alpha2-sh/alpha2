@@ -98,23 +98,24 @@ fn data_hash(sets: &Value) -> String {
     hex(&Sha256::digest(lines.join("\n").as_bytes()))
 }
 
-/// Packs `plugins/<name>` into `dir` and returns its manifest's path and SHA-256.
-fn packed(dir: &Path, name: &str) -> (PathBuf, String) {
+/// Packs the plugin crate at `path` (from the repository root) into `dir` and returns its
+/// manifest's path and SHA-256.
+fn packed(dir: &Path, path: &str) -> (PathBuf, String) {
     let plugins = root().join("plugins");
-    let out = dir.join(name);
+    let out = dir.join(path);
     let status = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
         .args(["run", "--release", "--manifest-path"])
         .arg(plugins.join("Cargo.toml"))
         .arg("--target-dir")
         .arg(plugins.join("target"))
         .args(["-p", "alpha2-plugin-pack", "--"])
-        .arg(plugins.join(name))
+        .arg(root().join(path))
         .arg("--out")
         .arg(&out)
         .env_remove("CARGO_TARGET_DIR")
         .status()
         .expect("cargo runs");
-    assert!(status.success(), "plugins/{name} packs");
+    assert!(status.success(), "{path} packs");
     let manifest = out.join("manifest.json");
     let sha256 = hex(&Sha256::digest(std::fs::read(&manifest).expect("manifest")));
     (manifest, sha256)

@@ -8,6 +8,11 @@ import {
   pluginDigest,
 } from "./extract.mjs";
 import {
+  editorApplyEdit,
+  editorConformStaleData,
+  pluginEditorExtract,
+} from "./editor.mjs";
+import {
   aacLayoutRefusal,
   audioContinuity,
   audioMatroskaCodecDelay,
@@ -112,6 +117,9 @@ export const cases = {
   "extract-timeline": extractTimeline,
   "plugin-digest": pluginDigest,
   "plugin-conformance": pluginConformance,
+  "plugin-editor-extract": pluginEditorExtract,
+  "editor-apply-edit": editorApplyEdit,
+  "editor-conform-stale-data": editorConformStaleData,
   "webgpu-smoke": () => smoke(false),
   "webgl2-smoke": () => smoke(true),
   "webgl-context-loss": webglContextLoss,

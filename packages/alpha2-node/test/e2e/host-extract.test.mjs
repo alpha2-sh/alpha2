@@ -413,7 +413,7 @@ async function pluginDir(name, { wasm = true, native = false } = {}) {
     );
   }
   const descriptor = JSON.parse(
-    await readFile(join(plugins, `fixture-${name}`, "descriptor.json"), "utf8"),
+    await readFile(join(plugins, "fixtures", name, "descriptor.json"), "utf8"),
   );
   const text = JSON.stringify({
     id: descriptor.id,

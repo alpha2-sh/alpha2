@@ -121,7 +121,7 @@ pub(super) fn parts(
     clip: &Clip,
     keep: &[(i64, i64)],
     ids: &mut IdPool,
-    created: &mut Vec<ClipId>,
+    created: &mut Vec<super::Created>,
 ) -> Vec<Clip> {
     let whole = (
         clip.timeline_range.start().ticks(),
@@ -142,7 +142,10 @@ pub(super) fn parts(
                 first = false;
             } else {
                 part.id = ids.fresh(&clip.id);
-                created.push(part.id.clone());
+                created.push(super::Created {
+                    id: part.id.clone(),
+                    from: clip.id.clone(),
+                });
             }
             if let Some(composition) = &mut part.composition {
                 let advanced = scale(
@@ -229,7 +232,11 @@ pub(super) fn cut_data(set: &mut DataSet, removal: &[(i64, i64)]) {
         DataValues::Points(samples)
         | DataValues::Scalars(samples)
         | DataValues::Similarity(samples) => {
-            let width = samples.values.len() / samples.times.len().max(1);
+            // No sample means nothing to move or hold.
+            if samples.times.is_empty() {
+                return;
+            }
+            let width = samples.values.len() / samples.times.len();
             let channels = samples.channels.len().max(1);
             let arity = width / channels;
             let mut entries: Vec<(i64, Vec<Option<f32>>)> = Vec::new();

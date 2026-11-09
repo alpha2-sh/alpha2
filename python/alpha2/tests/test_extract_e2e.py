@@ -327,7 +327,7 @@ def plugin_dir(tmp: Path, name: str, *, wasm: bool = True, native: bool = False)
         else:
             file = f"lib{library}.so"
         place(release / triple / "release" / file, f"{triple}/{file}", triple, "cdylib")
-    descriptor = json.loads((plugins / f"fixture-{name}" / "descriptor.json").read_text())
+    descriptor = json.loads((plugins / "fixtures" / name / "descriptor.json").read_text())
     text = json.dumps(
         {"id": descriptor["id"], "version": "0.1.0", "abi": "alpha2-plugin/1", "kind": "extractor",
          "artifacts": artifacts, "descriptor": descriptor}

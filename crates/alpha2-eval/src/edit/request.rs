@@ -165,6 +165,15 @@ pub struct Moved {
     pub to: TimeRange,
 }
 
+/// A clip an operation created by cutting another.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Created {
+    /// The new clip.
+    pub id: ClipId,
+    /// The clip it was cut from, which keeps its id on its first part.
+    pub from: ClipId,
+}
+
 /// What an operation changed, so a caller can show and select it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct EditReport {
@@ -172,8 +181,8 @@ pub struct EditReport {
     pub removed: Vec<TimeRange>,
     /// Kept stretches that moved.
     pub moved: Vec<Moved>,
-    /// Clips the operation created.
-    pub created: Vec<ClipId>,
+    /// Clips the operation created, with the clip each was cut from.
+    pub created: Vec<Created>,
 }
 
 /// Why an operation refused.

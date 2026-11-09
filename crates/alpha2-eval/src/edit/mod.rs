@@ -17,8 +17,8 @@ mod tests;
 
 pub use json::{EditFailure, EditedJson, apply_json};
 pub use request::{
-    BakeTarget, DataRef, EditError, EditReport, EditRequest, Moved, RangeList, Ranges, RawRange,
-    Ripple, Target, TimeList, Times,
+    BakeTarget, Created, DataRef, EditError, EditReport, EditRequest, Moved, RangeList, Ranges,
+    RawRange, Ripple, Target, TimeList, Times,
 };
 
 use alpha2_model::{Animated, AnimatedPoint, Clip, ClipId, DataAnchor, DataValues, Project, Track};

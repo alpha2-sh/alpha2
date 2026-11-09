@@ -1,6 +1,10 @@
-import type { Clip, Composition } from "alpha2/project";
+import type { Clip, Composition, Project } from "alpha2/project";
+import type { AppliedEdit, EditReport, EditRequest } from "alpha2/apply-edit";
+import type { ExtractResult } from "alpha2/extractor";
+import { withClipId } from "alpha2/edit";
 import { compositionTree } from "./compositions.js";
 import {
+  compileEditorDocument,
   createEmptyDocument,
   validateDocument,
   withInstanceIds,
@@ -10,7 +14,7 @@ import {
   EditorError,
 } from "./document.js";
 import type { EditorDocument, Result } from "./document.js";
-import { executeCommand } from "./commands.js";
+import { executeCommand, executeEditResult } from "./commands.js";
 import { frozenValid, owned } from "./validated.js";
 import type { Command } from "./commands.js";
 /** An immutable view of an {@link EditorSession}; a new object after every change. */
@@ -30,6 +34,35 @@ export interface EditorSnapshot {
   readonly generation: number;
   readonly canUndo: boolean;
   readonly canRedo: boolean;
+  /** The label of the step `undo` would take back, when it was applied with one. */
+  readonly undoLabel: string | undefined;
+  /** The label of the step `redo` would apply again, when it was applied with one. */
+  readonly redoLabel: string | undefined;
+}
+/**
+ * Which committed document an edit operation was computed from ({@link EditorSession.editProject}).
+ * It pins that document object, so any later commit, data included, makes it stale.
+ */
+export interface EditRead {
+  readonly document: EditorDocument;
+}
+/**
+ * The timeline an extraction read ({@link EditorSession.extractionProject}). It holds the
+ * projection's JSON without data sets, so data applied in between does not make it stale.
+ */
+export interface ExtractionRead {
+  readonly timeline: string;
+}
+/** How {@link EditorSession.applyEdit} applies a result. */
+export interface ApplyEditOptions {
+  /** From the `editProject()` the result was computed from. */
+  readonly read: EditRead;
+  /** The operation that made the result; its `op` is the default history label. */
+  readonly request: EditRequest;
+  /** Commands run on the edited document in the same undo step, such as a `data.remove`. */
+  readonly then?: readonly Command[];
+  /** The history label of the step. */
+  readonly label?: string;
 }
 /**
  * Holds an editor document with undo history, selection, clipboard and pointer gestures. Every
@@ -142,6 +175,12 @@ export class EditorSession {
       generation: this.#generation,
       canUndo: this.#undo.length > 0,
       canRedo: this.#redo.length > 0,
+      undoLabel: this.#undo.length
+        ? this.#labels.get(this.#document)
+        : undefined,
+      redoLabel: this.#redo.length
+        ? this.#labels.get(this.#redo[this.#redo.length - 1])
+        : undefined,
     });
   }
   #emit() {
@@ -180,7 +219,10 @@ export class EditorSession {
       this.#undo.shift();
     }
   }
-  #commit(document: EditorDocument) {
+  /** History labels, by the document the labelled step made. */
+  #labels = new WeakMap<EditorDocument, string>();
+  #commit(document: EditorDocument, label?: string) {
+    if (label !== undefined) this.#labels.set(document, label);
     inheritDocumentIndex(this.#document, document);
     this.#undo.push(this.#document);
     this.#trimHistory(document);
@@ -214,6 +256,118 @@ export class EditorSession {
     if (result.ok && result.value !== this.#document)
       this.#commit(result.value);
     return result;
+  }
+  /**
+   * The committed project, for the runtime to compute an edit operation from (`client.edit` in
+   * `@alpha2-sh/node`, `applyEdit` from `alpha2/apply-edit`), and the read that pins it for
+   * {@link applyEdit}. The project is the stored one, disabled tracks included.
+   */
+  editProject(): { readonly project: Project; readonly read: EditRead } {
+    this.#active();
+    const document = this.#document;
+    return { project: document.project, read: Object.freeze({ document }) };
+  }
+  /**
+   * Commits an edit operation's result (`AppliedEdit`) as one undo step, with `then` run on the
+   * edited document in the same step, cancelling an active gesture first. Returns the document and
+   * the operation's report.
+   *
+   * Refusals leave the session unchanged. They are `invalid_command` without `read`, `stale_edit`
+   * when the committed document is no longer the one `read` pinned (compute again from a new
+   * `editProject()`), and those of `executeEditResult` (`locked`, `invalid_result`, a refused
+   * `then` command).
+   */
+  applyEdit(
+    applied: AppliedEdit,
+    options: ApplyEditOptions,
+  ): Result<{
+    readonly document: EditorDocument;
+    readonly report: EditReport;
+  }> {
+    this.#active();
+    this.#cancelGesture?.();
+    if (!options?.read)
+      return refused(
+        "invalid_command",
+        "applyEdit needs the read of the editProject() the result was computed from",
+      );
+    if (options.read.document !== this.#document)
+      return refused(
+        "stale_edit",
+        "The document changed after the edit was computed; compute it again",
+      );
+    const result = executeEditResult(this.#document, applied, options.then);
+    if (!result.ok) return result;
+    this.#commit(result.value, options.label ?? options.request.op);
+    return {
+      ok: true,
+      value: { document: result.value, report: applied.report },
+    };
+  }
+  /**
+   * The project an extraction reads (what the engine renders of the committed document) and the
+   * read {@link applyExtraction} checks a timeline-anchored result against.
+   */
+  extractionProject(): {
+    readonly project: Project;
+    readonly read: ExtractionRead;
+  } {
+    this.#active();
+    const { project } = compileEditorDocument(this.#document);
+    return { project, read: Object.freeze({ timeline: withoutData(project) }) };
+  }
+  /**
+   * Puts an extraction's data sets in the document as one undo step (a `data.put` for each,
+   * replacing sets with their ids), cancelling an active gesture first. Returns the document,
+   * unchanged for a result without sets.
+   *
+   * Refusals leave the session unchanged. They are `missing_asset` for a source-anchored set
+   * whose source is gone, `invalid_command` for a timeline-anchored set without `read`,
+   * `stale_extraction` when the timeline changed since the read (data put in between does not
+   * count), and those of `data.put`.
+   */
+  applyExtraction(
+    result: ExtractResult,
+    options: { readonly read?: ExtractionRead; readonly label?: string } = {},
+  ): Result<EditorDocument> {
+    this.#active();
+    this.#cancelGesture?.();
+    const sets = result.dataSets;
+    if (!sets.length) return { ok: true, value: this.#document };
+    const sources = new Set(this.#document.project.sources.map((s) => s.id));
+    const lost = sets.find(
+      (set) =>
+        set.anchor.type === "source" && !sources.has(set.anchor.source_id),
+    );
+    if (lost?.anchor.type === "source")
+      return refused(
+        "missing_asset",
+        `Source ${lost.anchor.source_id} was removed after the extraction read it`,
+        "extract",
+        lost.anchor.source_id,
+      );
+    if (sets.some((set) => set.anchor.type === "timeline")) {
+      if (!options.read)
+        return refused(
+          "invalid_command",
+          "A timeline-anchored result needs the read of the extractionProject() it came from",
+          "extract",
+        );
+      const now = withoutData(compileEditorDocument(this.#document).project);
+      if (now !== options.read.timeline)
+        return refused(
+          "stale_extraction",
+          "The timeline changed after the extraction read it; run it again",
+          "extract",
+        );
+    }
+    const applied = executeCommand(this.#document, {
+      type: "transaction",
+      commands: sets.map((dataSet) => ({ type: "data.put", dataSet })),
+    });
+    if (applied.ok && applied.value !== this.#document)
+      this.#commit(applied.value, options.label ?? "extract");
+    return applied;
   }
   /**
    * Replaces the document, clearing history, selection and clipboard and increasing `generation`.
@@ -313,8 +467,9 @@ export class EditorSession {
   }
   /**
    * Inserts the clipboard's clips on their original tracks as one undo step, the earliest at tick
-   * `at` and the rest at their offsets from it. New clip ids come from `idFactory`. With nothing
-   * copied it returns the document unchanged.
+   * `at` and the rest at their offsets from it. New clip ids come from `idFactory`; a pasted clip's
+   * bindings that read through itself read through its new id (`withClipId`). With nothing copied
+   * it returns the document unchanged.
    */
   paste(
     at: number,
@@ -332,7 +487,7 @@ export class EditorSession {
       commands.push({
         type: "clip.insert",
         trackId,
-        clip: { ...clip, id },
+        clip: withClipId(clip, id),
         ...(name ? { name } : {}),
         ...(compositions.length ? { compositions } : {}),
       });
@@ -465,6 +620,22 @@ export class EditorSession {
     });
     return this.#disposal;
   }
+}
+function refused(
+  code: string,
+  message: string,
+  operation = "edit",
+  entityId?: string,
+): Result<never> {
+  return {
+    ok: false,
+    error: new EditorError(code, message, operation, entityId),
+  };
+}
+/** `project` as JSON without its data sets. */
+function withoutData(project: Project): string {
+  const { data: _data, ...rest } = project;
+  return JSON.stringify(rest);
 }
 /** Creates an {@link EditorSession}; see its constructor for the options and their defaults. */
 export function createEditor(

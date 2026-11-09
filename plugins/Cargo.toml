@@ -1,7 +1,13 @@
 # Plugins and their SDK have a workspace and lock of their own, so plugin dependencies never reach
 # the engine's. Nothing here is published or released from the repository.
 [workspace]
-members = ["sdk", "fixture-digest", "fixture-scripted", "pack", "silence"]
+members = [
+    "sdk",
+    "pack",
+    "first-party/silence",
+    "fixtures/digest",
+    "fixtures/scripted",
+]
 resolver = "3"
 
 [workspace.package]

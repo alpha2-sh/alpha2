@@ -144,7 +144,7 @@ report({ ok: set.times.length === 10 && set.values.every((value) => value === 1)
 export function pluginDigest() {
   return `${prelude}
 const { loadPlugin } = await import("alpha2/plugins");
-const manifestUrl = "/plugins/target/browser-fixtures/fixture-digest/manifest.json";
+const manifestUrl = "/plugins/target/browser-fixtures/fixtures/digest/manifest.json";
 const manifestBytes = await (await fetch(manifestUrl)).arrayBuffer();
 const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", manifestBytes))]
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -210,7 +210,7 @@ for (const fixture of table.edit) {
 }
 const plugins = {};
 const plugin = async (name) => {
-  const url = "/plugins/target/browser-fixtures/" + name + "/manifest.json";
+  const url = "/plugins/target/browser-fixtures/" + name.slice("plugins/".length) + "/manifest.json";
   plugins[name] ??= await loadPlugin(url, await sha256(await (await fetch(url)).arrayBuffer()));
   return plugins[name];
 };

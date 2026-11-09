@@ -125,6 +125,7 @@ A timeline input needs `timelineFrame(time, width, height)`, such as the CPU ren
 | `alpha2/edit` | Editing operations on a project: split, trim, ripple, roll, slip, slide, retime, insert, overwrite, append, move. |
 | `alpha2/apply-edit` | `applyEdit`: the engine's edit operations that apply data to a project (`remove_ranges`, `split_at`, `bake`), the same canonical result on every surface. |
 | `alpha2/extract`, `alpha2/plugins` | `runExtractor`: extractors of your own over a source or the timeline, decoded in the browser; `loadPlugin`: [extractor plugins](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md) run sandboxed. |
+| `alpha2/extractor` | The extractor contract every surface shares (`Extractor`, `ExtractorDescriptor`, `ExtractRun`, `ExtractResult`), types only, without a media library. |
 | `alpha2/captions` | SRT and WebVTT import into caption tracks. |
 | `alpha2/geometry` | Shape geometry for editors, from the engine's own code: item bounds, hit tests, nearest points, path lengths, trims, resampling, convert to path, motion paths. |
 | `alpha2/layout` | Layout generators: `measureLayout` (where every box lies and what overflows, laid out with the engine's fonts, pixels those of the project canvas) and a builder from CSS-like props, flexbox and grid. See [docs/layout.md](https://github.com/alpha2-sh/alpha2/blob/main/docs/layout.md). |

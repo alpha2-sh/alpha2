@@ -12,10 +12,13 @@ import {
   providerReadsFile,
 } from "alpha2/project";
 import { containerPolicy } from "alpha2/containers";
+import { applyEdit as applyEngineEdit } from "alpha2/apply-edit";
+import { runExtractor } from "alpha2/extract";
+import { loadPlugin } from "alpha2/plugins";
 import { PlanarDecodeUnavailableError } from "alpha2/hdr-frames";
 import { drawnEffectResources, shownSources } from "../core/compositions.js";
 import { ResourceRegistry } from "./resources.js";
-import { ExportJob, requireExportFrameRate } from "./jobs.js";
+import { ExportJob, ExtractionJob, requireExportFrameRate } from "./jobs.js";
 import {
   GpuRecoveryLadder,
   lossReportFromJson,
@@ -601,6 +604,8 @@ export function createBrowserBridge(options) {
       .catch(() => {});
   };
   const jobs = new Set();
+  /** Running extractions, kept apart from `jobs` so an export never waits for one. */
+  const extractions = new Set();
   let disposed = false,
     engine = null,
     workerPreview = null,
@@ -2529,6 +2534,7 @@ export function createBrowserBridge(options) {
       for (const controller of analyses.values()) controller.abort();
       globalThis.document?.removeEventListener("visibilitychange", visibility);
       await Promise.all([...jobs].map((job) => job.cancel()));
+      await Promise.all([...extractions].map((job) => job.cancel()));
       await queue;
       await mixer?.close();
       await supplier?.close();
@@ -2747,6 +2753,81 @@ export function createBrowserBridge(options) {
       );
     },
     conform,
+    async applyEdit(request, { then, label, signal } = {}) {
+      if (disposed)
+        throw new EditorError("disposed", "Bridge is disposed", "edit");
+      const { project, read } = editor.editProject();
+      const binding = await loadWasm();
+      signal?.throwIfAborted();
+      if (disposed)
+        throw new EditorError("disposed", "Bridge is disposed", "edit");
+      const applied = applyEngineEdit(binding, project, request);
+      const result = editor.applyEdit(applied, { read, request, then, label });
+      if (!result.ok) throw result.error;
+      return result.value;
+    },
+    async extract(run, { plugin, extractor, signal, onProgress } = {}) {
+      if (disposed)
+        throw new EditorError("disposed", "Bridge is disposed", "extract");
+      if ((plugin === undefined) === (extractor === undefined))
+        throw new EditorError(
+          "invalid_command",
+          "Pass a plugin or an extractor",
+          "extract",
+        );
+      if (run.input.from !== "source")
+        throw new EditorError(
+          "unsupported_media",
+          "The browser runtime extracts from source media; it draws no timeline frames for an extractor",
+          "extract",
+        );
+      const id = run.input.source_id ?? "";
+      const { project, read } = editor.extractionProject();
+      const document = editor.document;
+      const file = originalOf(document, id)?.file;
+      if (!file)
+        throw new EditorError(
+          "missing_asset",
+          "Relink the original to extract from it",
+          "extract",
+          id,
+        );
+      const madeFrom =
+        project.sources.find((source) => source.id === id)?.fingerprint ??
+        document.assets[id]?.fingerprint;
+      const job = new ExtractionJob(
+        async (aborted) => {
+          const binding = await loadWasm();
+          const loaded = plugin
+            ? await loadPlugin(plugin.manifest, plugin.sha256, {
+                ...(plugin.memoryBytes === undefined
+                  ? {}
+                  : { memoryBytes: plugin.memoryBytes }),
+                signal: aborted,
+              })
+            : undefined;
+          const result = await runExtractor(
+            {
+              binding,
+              audioBinding: binding,
+              project,
+              request: run,
+              media: { [id]: file },
+              ...(madeFrom ? { madeFrom } : {}),
+              ...(loaded ? { plugin: loaded } : {}),
+              signal: aborted,
+              ...(onProgress ? { onProgress } : {}),
+            },
+            loaded ? loaded.extractor(run.params) : extractor,
+          );
+          return { result, read };
+        },
+        signal,
+        () => extractions.delete(job),
+      );
+      extractions.add(job);
+      return job.result;
+    },
     async generateProxy(id, { signal } = {}) {
       const descriptor = editor.document.assets[id];
       // No single video file for the proxy maker to read.

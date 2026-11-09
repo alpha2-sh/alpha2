@@ -411,6 +411,23 @@ fn split_parts_continue_their_source_and_phase() {
         .expect("split");
         kept_moments_hold(&project, &edited, &report, false);
         assert!(!report.created.is_empty(), "{track}");
+        let clips = project
+            .timeline
+            .tracks
+            .iter()
+            .find(|candidate| candidate.id.as_str() == track)
+            .expect("track")
+            .clips
+            .iter()
+            .map(|clip| clip.id.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            report
+                .created
+                .iter()
+                .all(|created| clips.contains(&created.from) && created.id != created.from),
+            "{track}"
+        );
     }
 }
 
@@ -618,4 +635,28 @@ fn a_no_op_edit_returns_the_same_document() {
         serde_json::to_string(&edited).expect("json"),
         serde_json::to_string(&project).expect("json")
     );
+}
+
+#[test]
+fn an_empty_sample_set_survives_a_timeline_ripple() {
+    let mut document = corpus();
+    document["data"].as_array_mut().expect("data").push(json!({
+        "id": "none", "anchor": { "type": "timeline" }, "kind": "points", "interpolation": "linear",
+        "channels": ["p"], "times": [], "values": [] }));
+    let project = load(&document);
+    let (edited, _) = remove(
+        &project,
+        timeline_list(&[(5, 9)]),
+        Target::Track(alpha2_model::TrackId::new("t-fwd").expect("id")),
+        Ripple::Timeline,
+    );
+    let set = edited
+        .data
+        .iter()
+        .find(|set| set.id.as_str() == "none")
+        .expect("set");
+    let DataValues::Points(samples) = &set.values else {
+        panic!("points");
+    };
+    assert!(samples.times.is_empty() && samples.values.is_empty());
 }

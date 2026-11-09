@@ -5,7 +5,7 @@
 // this way), and `--serve[=port]` serves pages for manual runs.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
@@ -68,9 +68,16 @@ if (!existsSync(join(root, "packages/alpha2/wasm/alpha2_wasm_bg.wasm"))) {
   process.exit(1);
 }
 
-// Plugin cases load plugins packed for the browser, wasm only.
-const browserPlugins = ["fixture-digest", "silence"];
+// Plugin cases load every plugin crate packed for the browser, wasm only, at the path it has
+// under plugins/.
 if (names.some((name) => name.startsWith("plugin-"))) {
+  const browserPlugins = ["first-party", "fixtures"].flatMap((group) =>
+    readdirSync(join(root, "plugins", group))
+      .filter((name) =>
+        existsSync(join(root, "plugins", group, name, "descriptor.json")),
+      )
+      .map((name) => join(group, name)),
+  );
   for (const plugin of browserPlugins) {
     const packed = spawnSync(
       "cargo",

@@ -133,6 +133,8 @@ const EDITOR_FAILURE_CODES: Readonly<Record<string, ExportFailureCode>> =
     cancelled: "CANCELLED",
     conform_failed: "INVALID_INPUT",
     conform_pending: "UNKNOWN",
+    data_bound: "INVALID_INPUT",
+    data_referenced: "INVALID_INPUT",
     disposed: "UNKNOWN",
     duplicate_resource: "INVALID_INPUT",
     effect_unavailable: "INVALID_INPUT",
@@ -153,6 +155,7 @@ const EDITOR_FAILURE_CODES: Readonly<Record<string, ExportFailureCode>> =
     invalid_project: "INVALID_INPUT",
     invalid_projection: "INVALID_INPUT",
     invalid_rate: "INVALID_INPUT",
+    invalid_result: "UNKNOWN",
     invalid_text: "INVALID_INPUT",
     invalid_time: "INVALID_INPUT",
     invalid_transition: "INVALID_INPUT",
@@ -170,6 +173,8 @@ const EDITOR_FAILURE_CODES: Readonly<Record<string, ExportFailureCode>> =
     resource_limit: "RESOURCE_LIMIT",
     sequence_gap: "INVALID_INPUT",
     sequence_size: "INVALID_INPUT",
+    stale_edit: "UNKNOWN",
+    stale_extraction: "UNKNOWN",
     stale_gesture: "UNKNOWN",
     stale_import: "UNKNOWN",
     storage_quota_exceeded: "STORAGE_QUOTA_EXCEEDED",
@@ -184,11 +189,18 @@ const EDITOR_FAILURE_CODES: Readonly<Record<string, ExportFailureCode>> =
 /** An editor refusal or failure, with a machine-readable `code` (a snake_case identifier). */
 export class EditorError extends Error {
   /**
+   * Structured facts about the refusal, for codes that define them. A `data_referenced` refusal has
+   * the `references` (`DataReference`s from `alpha2/project`) or `dataSets` ids that block it.
+   */
+  readonly details?: Readonly<Record<string, unknown>>;
+
+  /**
    * @param code What went wrong, such as `invalid_command` or `locked`.
    * @param message A human-readable description.
    * @param operation The operation that failed, such as `validate`, `open` or a command name.
    * @param entityId The track, clip, asset or other entity the error concerns, when there is one.
    * @param recoverable Whether the editor stays usable after the error. Defaults to `true`.
+   * @param options `cause`, and `details` for {@link EditorError.details}.
    */
   constructor(
     readonly code: string,
@@ -196,10 +208,13 @@ export class EditorError extends Error {
     readonly operation: string,
     readonly entityId?: string,
     readonly recoverable = true,
-    options?: ErrorOptions,
+    options?: ErrorOptions & {
+      readonly details?: Readonly<Record<string, unknown>>;
+    },
   ) {
     super(message, options);
     this.name = "EditorError";
+    if (options?.details) this.details = options.details;
   }
 
   /**
@@ -251,17 +266,33 @@ export function freeze<T>(value: T): T {
  * ({@link MAX_JSON_DEPTH}) plus one for the document that holds it.
  */
 export const MAX_DOCUMENT_JSON_DEPTH = MAX_JSON_DEPTH + 1;
+/** Nesting height of deep-frozen containers that passed {@link assertJson}. */
+const jsonHeights = new WeakMap<object, number>();
 /**
  * Throws an `EditorError` (`invalid_document`) unless `value` is plain JSON (finite numbers, arrays
  * and plain objects) nested at most `maxDepth` deep ({@link MAX_DOCUMENT_JSON_DEPTH} by default).
+ * Deep-frozen parts that passed before are not walked again.
  */
 export function assertJson(
   value: unknown,
   maxDepth = MAX_DOCUMENT_JSON_DEPTH,
 ): void {
-  const pending: [unknown, number][] = [[value, 0]];
+  const tooDeep = () =>
+    new EditorError(
+      "invalid_document",
+      `Document nests deeper than ${maxDepth} levels`,
+      "validate",
+    );
+  // Children follow their parent here, so a reverse pass totals heights without recursion.
+  const containers: {
+    node: object;
+    parent: number;
+    height: number;
+    frozen: boolean;
+  }[] = [];
+  const pending: [unknown, number, number][] = [[value, 0, -1]];
   while (pending.length) {
-    const [next, depth] = pending.pop()!;
+    const [next, depth, parent] = pending.pop()!;
     if (next === null || typeof next === "string" || typeof next === "boolean")
       continue;
     if (typeof next === "number" && Number.isFinite(next)) continue;
@@ -275,14 +306,34 @@ export function assertJson(
         "Document must contain finite JSON values",
         "validate",
       );
-    if (depth >= maxDepth)
-      throw new EditorError(
-        "invalid_document",
-        `Document nests deeper than ${maxDepth} levels`,
-        "validate",
-      );
+    const known = jsonHeights.get(next as object);
+    if (known !== undefined) {
+      if (depth + known > maxDepth) throw tooDeep();
+      if (parent >= 0)
+        containers[parent].height = Math.max(
+          containers[parent].height,
+          known + 1,
+        );
+      continue;
+    }
+    if (depth >= maxDepth) throw tooDeep();
+    const index = containers.length;
+    containers.push({
+      node: next as object,
+      parent,
+      height: 1,
+      frozen: Object.isFrozen(next),
+    });
     for (const child of Object.values(next as object))
-      pending.push([child, depth + 1]);
+      pending.push([child, depth + 1, index]);
+  }
+  for (let index = containers.length - 1; index >= 0; index--) {
+    const entry = containers[index];
+    if (entry.frozen) jsonHeights.set(entry.node, entry.height);
+    if (entry.parent < 0) continue;
+    const parent = containers[entry.parent];
+    parent.height = Math.max(parent.height, entry.height + 1);
+    parent.frozen &&= entry.frozen;
   }
 }
 /**
@@ -346,14 +397,75 @@ const optionalBoolean = (value: unknown) =>
 /** The largest editor file {@link parseDocument} opens; every valid document fits in it. */
 export const MAX_EDITOR_FILE_BYTES = 128 * 1024 * 1024;
 const utf8Length = (text: string) => new TextEncoder().encode(text).length;
+/** {@link jsonLength} of deep-frozen containers. */
+const jsonLengths = new WeakMap<object, number>();
+/** UTF-8 bytes of `text` as `JSON.stringify` writes it, quotes and escapes included. */
+function stringLength(text: string): number {
+  let bytes = 2;
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit === 0x22 || unit === 0x5c) bytes += 2;
+    else if (unit < 0x20)
+      bytes +=
+        unit === 8 || unit === 9 || unit === 10 || unit === 12 || unit === 13
+          ? 2
+          : 6;
+    else if (unit < 0x80) bytes += 1;
+    else if (unit < 0x800) bytes += 2;
+    else if (unit >= 0xd800 && unit < 0xdc00) {
+      const low = text.charCodeAt(i + 1);
+      // A pair is one 4-byte character. A lone surrogate is written as a `\u` escape.
+      if (low >= 0xdc00 && low < 0xe000) {
+        bytes += 4;
+        i++;
+      } else bytes += 6;
+    } else if (unit >= 0xdc00 && unit < 0xe000) bytes += 6;
+    else bytes += 3;
+  }
+  return bytes;
+}
+/**
+ * UTF-8 bytes of `JSON.stringify(value)` for a value {@link assertJson} accepted, without building
+ * the string. Deep-frozen parts are measured once. Returns the length and whether it may be cached.
+ */
+function jsonLength(value: unknown): [number, boolean] {
+  if (value === null) return [4, true];
+  if (typeof value === "string") return [stringLength(value), true];
+  // `assertJson` leaves only finite numbers and booleans here.
+  if (typeof value === "number" || typeof value === "boolean")
+    return [String(value).length, true];
+  if (typeof value !== "object") return [0, true];
+  const known = jsonLengths.get(value);
+  if (known !== undefined) return [known, true];
+  let frozen = Object.isFrozen(value);
+  let bytes: number;
+  if (Array.isArray(value)) {
+    bytes = 1 + Math.max(value.length, 1);
+    for (const item of value as unknown[]) {
+      const [length, cached] = jsonLength(item);
+      bytes += length;
+      frozen &&= cached;
+    }
+  } else {
+    const entries = Object.entries(value);
+    bytes = 1 + Math.max(entries.length, 1);
+    for (const [key, field] of entries) {
+      const [length, cached] = jsonLength(field);
+      bytes += stringLength(key) + 1 + length;
+      frozen &&= cached;
+    }
+  }
+  if (frozen) jsonLengths.set(value, bytes);
+  return [bytes, frozen];
+}
 function assertDocumentSize(document: EditorDocument): void {
-  if (utf8Length(JSON.stringify(document.project)) > MAX_PROJECT_JSON_BYTES)
+  if (jsonLength(document.project)[0] > MAX_PROJECT_JSON_BYTES)
     throw new EditorError(
       "too_large",
       "Engine JSON exceeds its size limit",
       "validate",
     );
-  if (utf8Length(JSON.stringify(document)) > MAX_EDITOR_FILE_BYTES)
+  if (jsonLength(document)[0] > MAX_EDITOR_FILE_BYTES)
     throw new EditorError(
       "too_large",
       "Editor document exceeds the 128 MiB file limit",

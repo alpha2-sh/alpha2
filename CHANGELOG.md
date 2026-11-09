@@ -53,9 +53,23 @@ All notable changes to this project are documented in this file.
   host operation (`client.edit` in Node), `alpha2.edit.apply` in Python, `applyEdit` in
   `alpha2/apply-edit` and `applyEdit` on mobile.
 - Conform reports data sets made from an original that has since changed.
+- `@alpha2-sh/editor` edits data: `data.put` and `data.remove` commands (removal refused while
+  anything reads the set), `dataValue` and `isDataBound`, `editProject` and `applyEdit` to commit an
+  edit operation's result as one undo step, and `extractionProject` and `applyExtraction` to commit
+  an extraction's data sets. Both refuse a result computed from a document that has since changed
+  in what they read. The browser runtime runs edits and extractions itself (`applyEdit`,
+  `extract`). Undo steps can carry a label (`undoLabel`, `redoLabel`).
+- `dataReferences` in `alpha2/project` lists every place that reads a data set.
 
 ### Changed
 
+- An edit report's `created` lists `{id, from}`: each new clip and the clip it was cut from.
+- Editor ripple edits that reach every track cut or open timeline-anchored data sets as the
+  engine's `remove_ranges` does, a split's right part reads its bindings through itself, and a
+  pasted clip's bindings through itself read through its new id. `alpha2/edit` refuses removing a
+  clip another clip's binding reads through (`read_through`).
+- Editor commands no longer revalidate unchanged parts of a document, so a document holding a large
+  data set stays fast to edit.
 - Host protocol version 2: every message is a length-prefixed frame, a JSON header and binary
   attachments, instead of a JSON line. `serve` owns standard output: it writes a magic before its
   first frame, and anything else the process prints goes to standard error.
@@ -65,6 +79,7 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.
 

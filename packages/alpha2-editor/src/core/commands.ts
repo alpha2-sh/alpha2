@@ -33,10 +33,21 @@ import type {
   CompositionNode,
   MediaSource,
   EffectResource,
+  DataSet,
+  DataReference,
 } from "alpha2/project";
+import { dataReferences } from "alpha2/project";
+import type { AppliedEdit } from "alpha2/apply-edit";
+import {
+  assertClipsUnread,
+  assertDataUnread,
+  assertSourceUnanchored,
+  changedDataSets,
+} from "./data.js";
 import { rememberValid, withValidated } from "./validated.js";
 import {
   EditorError,
+  freeze,
   validateDocument,
   validateDocumentShape,
   canonicalDocument,
@@ -436,8 +447,23 @@ export type Command =
       readonly source?: MediaSource;
       readonly resource?: EffectResource;
     }
-  /** Removes a bin asset and its source or effect resource; refused while a clip reads it. */
+  /**
+   * Removes a bin asset and its source or effect resource; refused while a clip reads it, and
+   * (`data_referenced`, with the set ids as `details.dataSets`) while data sets are anchored to it.
+   */
   | { readonly type: "asset.remove"; readonly id: string }
+  /**
+   * Adds a data set, or replaces the set with its id in place. Undo history keeps a replaced set
+   * whole, about its JSON size, so one put of a set near `MAX_DATA_VALUES` (tens of MB) can evict
+   * most or all earlier steps under the default `historyByteLimit`.
+   */
+  | { readonly type: "data.put"; readonly dataSet: DataSet }
+  /**
+   * Removes a data set. Refused (`data_referenced`, with the places as `details.references`) while
+   * a binding, correction or caption track reads it. To keep what they show, apply a `bake` with
+   * this command in its `then` (`EditorSession.applyEdit`).
+   */
+  | { readonly type: "data.remove"; readonly id: string }
   /** Replaces the document metadata fields the patch has. */
   | {
       readonly type: "metadata.update";
@@ -844,6 +870,11 @@ function reduce(
       return withCopiedGraphs({ ...document, project: next }, copies);
     }
     case "track.remove":
+      assertClipsUnread(
+        project,
+        new Set((track!.clips ?? []).map((c) => c.id)),
+        command.type,
+      );
       return {
         ...document,
         project: {
@@ -1067,6 +1098,8 @@ function reduce(
     case "clip.delete": {
       let result: edit.EditResult;
       const found = indexDocument(document).clips.get(command.id);
+      if (command.type === "clip.delete")
+        assertClipsUnread(project, new Set([command.id]), command.type);
       const syncTracks =
         "ripple" in command && command.ripple && found
           ? syncTrackIds(document, found.trackId)
@@ -1557,6 +1590,35 @@ function reduce(
         nextIds,
       );
     }
+    case "data.put": {
+      const sets = project.data ?? [];
+      const at = sets.findIndex((set) => set.id === command.dataSet.id);
+      return {
+        ...document,
+        project: {
+          ...project,
+          data:
+            at < 0
+              ? [...sets, command.dataSet]
+              : sets.map((set, index) =>
+                  index === at ? command.dataSet : set,
+                ),
+        },
+      };
+    }
+    case "data.remove": {
+      const sets = project.data ?? [];
+      if (!sets.some((set) => set.id === command.id))
+        fail("Unknown data set", command.id);
+      assertDataUnread(project, command.id, command.type);
+      const data = sets.filter((set) => set.id !== command.id);
+      // The engine writes no data list when it is empty.
+      const { data: _removed, ...rest } = project;
+      return {
+        ...document,
+        project: data.length ? { ...rest, data } : rest,
+      };
+    }
     case "asset.put": {
       const previous = document.assets[command.asset.id];
       if (previous && command.asset.contentRevision < previous.contentRevision)
@@ -1586,6 +1648,7 @@ function reduce(
       };
     }
     case "asset.remove": {
+      assertSourceUnanchored(project, command.id, command.type);
       const assets = { ...document.assets };
       delete assets[command.id];
       return {
@@ -1655,7 +1718,7 @@ function apply(document: DraftDocument, command: Command): DraftDocument {
 function assertLocksKept(
   document: DraftDocument,
   next: DraftDocument,
-  command: Command,
+  command: Command | { readonly type: "edit" },
 ): void {
   const locked = document.project.timeline.tracks.filter(
     (t) => document.metadata.tracks[t.id]?.locked,
@@ -1668,6 +1731,8 @@ function assertLocksKept(
   const resourcesSame =
     assetsSame && after.effect_resources === before.effect_resources;
   const compositionsSame = after.compositions === before.compositions;
+  const dataChanged = changedDataSets(before, after);
+  let references: readonly DataReference[] | null = null;
   const tracksAfter =
     after.timeline.tracks === before.timeline.tracks
       ? null
@@ -1710,6 +1775,30 @@ function assertLocksKept(
         )
           return true;
       }
+      if (dataChanged.size) {
+        references ??= dataReferences(before);
+        const clips = new Set((track.clips ?? []).map((c) => c.id));
+        const compositions = reachedCompositions(before, track.clips ?? []);
+        const sources = shownSources(before, [track]);
+        const reads = (r: DataReference) => {
+          const owner = r.owner;
+          switch (owner.kind) {
+            case "clip":
+              return clips.has(owner.clip);
+            case "track":
+            case "transition":
+              return owner.track === track.id;
+            case "node":
+              return compositions.has(owner.composition);
+            case "source":
+              return sources.has(owner.source);
+            case "master":
+              return false;
+          }
+        };
+        if (references.some((r) => dataChanged.has(r.data) && reads(r)))
+          return true;
+      }
       if (!resourcesSame) {
         resources ??= [
           byId(before.effect_resources ?? []),
@@ -1734,13 +1823,96 @@ function assertLocksKept(
       );
   }
 }
+/** `document` without the editor metadata of clips the project no longer has. */
+function withoutRemovedClips(
+  document: DraftDocument,
+  before: Project,
+): DraftDocument {
+  const kept = indexDocument(document).clips;
+  const removed = [...indexDocument({ project: before }).clips.keys()].filter(
+    (id) => !kept.has(id),
+  );
+  if (!removed.length) return document;
+  const clips = { ...document.metadata.clips };
+  const instanceIds = { ...document.metadata.instanceIds };
+  for (const id of removed) {
+    delete clips[id];
+    delete instanceIds[`${id}/masks`];
+  }
+  return {
+    ...document,
+    metadata: { ...document.metadata, clips, instanceIds },
+  };
+}
+/**
+ * Puts an engine edit result (`alpha2/apply-edit` `AppliedEdit`, computed from `document`'s
+ * project) in `document`, then runs `then` on it as one transaction. Clips the edit created get the
+ * editor metadata of the clip each was cut from (`report.created[].from`); removed clips lose
+ * theirs. The engine's project is kept as it is.
+ *
+ * Never throws. A refusal is `{ ok: false }` with an `EditorError`, `locked` for a change to a
+ * locked track, `invalid_result` for a result that does not validate (an engine defect), or the
+ * refusal of a `then` command. `document` is not modified, and the result is deep-frozen.
+ */
+export function executeEditResult(
+  document: EditorDocument,
+  applied: Pick<AppliedEdit, "projectJson" | "report">,
+  then: readonly Command[] = [],
+): Result<EditorDocument> {
+  let edited: EditorDocument;
+  try {
+    edited = withValidated(() => {
+      let next: DraftDocument = withoutRemovedClips(
+        {
+          ...document,
+          project: JSON.parse(applied.projectJson) as Project,
+        },
+        document.project,
+      );
+      for (const created of applied.report.created)
+        next = afterSplit(next, created.id, created.from);
+      assertLocksKept(document, next, { type: "edit" });
+      const result = freeze(withInstanceIds(canonicalDocument(next)));
+      try {
+        validateDocument(result);
+      } catch (cause) {
+        throw new EditorError(
+          "invalid_result",
+          `The engine's edit result does not validate: ${cause instanceof Error ? cause.message : String(cause)}`,
+          "edit",
+          undefined,
+          true,
+          { cause },
+        );
+      }
+      return result;
+    });
+  } catch (cause) {
+    return { ok: false, error: asEditorError(cause) };
+  }
+  return then.length
+    ? executeCommand(edited, { type: "transaction", commands: then })
+    : { ok: true, value: edited };
+}
+function asEditorError(cause: unknown): EditorError {
+  return cause instanceof EditorError
+    ? cause
+    : new EditorError(
+        "invalid_command",
+        String(cause),
+        "dispatch",
+        undefined,
+        true,
+        { cause },
+      );
+}
 /**
  * Applies `command` to `document` and validates the result. `gesture` checks only what a pointer
  * move can change (see `validateDocumentShape`); the gesture validates in full when it commits.
  *
  * Never throws: a refusal is `{ ok: false }` with an `EditorError` (`invalid_command`, `locked`, a
  * validation code, or an edit code from `alpha2/edit`). `document` and `command` are not modified;
- * compositions the edit leaves undrawn are removed from the result.
+ * compositions the edit leaves undrawn are removed from the result, which is deep-frozen.
  */
 export function executeCommand(
   document: EditorDocument,
@@ -1753,13 +1925,16 @@ export function executeCommand(
       // A clip owns the composition it shows: what the command stopped drawing goes.
       const undrawn = withoutUndrawn(document.project, reduced.project);
       // Canonicalize what the command brought in.
-      const next = withInstanceIds(
-        canonicalDocument(
-          withoutGraphs(
-            undrawn.removed.size
-              ? { ...reduced, project: undrawn.project }
-              : reduced,
-            undrawn.removed,
+      // Frozen before validation, so validation caches its walk of new parts for later commands.
+      const next = freeze(
+        withInstanceIds(
+          canonicalDocument(
+            withoutGraphs(
+              undrawn.removed.size
+                ? { ...reduced, project: undrawn.project }
+                : reduced,
+              undrawn.removed,
+            ),
           ),
         ),
       );
@@ -1770,19 +1945,6 @@ export function executeCommand(
       return { ok: true, value: next } as const;
     });
   } catch (cause) {
-    return {
-      ok: false,
-      error:
-        cause instanceof EditorError
-          ? cause
-          : new EditorError(
-              "invalid_command",
-              String(cause),
-              "dispatch",
-              undefined,
-              true,
-              { cause },
-            ),
-    };
+    return { ok: false, error: asEditorError(cause) };
   }
 }
