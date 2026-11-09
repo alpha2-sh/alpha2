@@ -19,7 +19,7 @@ The host owns standard output: before its first frame it writes the 8 bytes `89 
 
 The first frame the host writes, before it reads any input, is its `ready` state (see [Host state](#host-state)): `{"protocolVersion":2,"type":"state","state":"ready","reason":"started","details":{...}}`. A host that writes nothing for long is held before it runs (a Gatekeeper check on macOS, an antivirus scan or an App Control policy on Windows, a stopped process); `@alpha2-sh/node` and the Python client end it after 30 seconds and fail with `HOST_START_TIMEOUT`. A host that dies of `SIGKILL` while its cgroup's `oom_kill` count (cgroup v2 `memory.events`, Linux) rises fails with `HOST_OOM_KILLED` in both clients.
 
-A request has a `requestId`, a string that is not empty, and an `operation`: `capabilities`, `conform`, `export`, `still`, `compose`, `cancel` or `status`.
+A request has a `requestId`, a string that is not empty, and an `operation`: `capabilities`, `conform`, `export`, `still`, `compose`, `extract`, `cancel` or `status`; a client running an extractor also sends `extract.ack` (see [`extract`](#extract)).
 
 ```json
 {"protocolVersion":2,"requestId":"1","operation":"capabilities"}
@@ -37,7 +37,7 @@ The host answers each request with one response that carries its `requestId`:
 - Requests can be written before earlier ones are answered. Match each response to its request by `requestId`.
 - The host runs up to `--max-running <count>` requests at once (a `serve` flag, 2 by default), each on its own thread against its one GPU device, and answers each as it ends, so responses come in any order. A request past that count waits for a running one to end. A runtime effect `id`@`version` or an effect resource id that a running request defines differently waits until that request ends; requests that define it alike share it. When the memory watchdog of `export` stops an export, it stops the newest one first. An export's GPU timing counters (`gpuSubmissions`, `gpuRenderMsPerFrame`, `gpuPackMsPerFrame`, `pipelineCompileMs`) cover the GPU work of the requests that ran with it.
 - A request the host cannot read is answered with `"requestId": "unknown"` when it has no usable `requestId`.
-- A request's header is at most 128 MiB, the `project` in it at most 64 MiB, and its attachments at most 256 MiB. No operation takes attachments yet; a request with some is refused with `INVALID_REQUEST`.
+- A request's header is at most 128 MiB, the `project` in it at most 64 MiB, and its attachments at most 256 MiB. No request or acknowledgement takes attachments; one with some is refused with `INVALID_REQUEST`.
 - While an export runs, the host also writes progress messages: `{"protocolVersion":2,"type":"progress","requestId":"...","phase":"frames","completed":12,"total":30}`. `phase` is `frames` while frames are encoded and `finalizing` once every frame is and the file is being completed. A message with `"restarted": true` and `completed` 0 says the export started over on the readback path, because the GPU-resident encoder rejected a frame on a device that was still usable; the result's `gpuOutputPathFallback` names the encoder, the frame and the reason. The export is finished only when its response arrives.
 - When the host cannot start its GPU device (or, in `hardware-required` decode mode, its decode device) for the first request that needs it, it writes `{"protocolVersion":2,"type":"fatal","error":{...}}` and exits; that request and the ones after it get no response. `conform` needs no GPU.
 - When the host's device is lost or a decoder or encoder thread is stuck, the host goes `draining`, lets the requests it runs answer (for up to 60 seconds), answers those it has read but not started with `HOST_RETIRING`, and exits.
@@ -209,6 +209,91 @@ Compiles compose specs and binds templates, without a GPU and without reading me
 
 `facts` describes the files a spec names (`{"media": {path: {width, height, frame_rate, duration_ticks, has_audio}}, "texts": {path: text}}`). A spec or data that does not compile or bind fails with `INVALID_INPUT`, its `details` `{path, problem}` naming where in the spec, template or data (`spec.body.children[2].path`, `data.title`).
 
+## `edit`
+
+Applies one edit operation to a project, without a GPU and without reading media; the same function as `alpha2.edit.apply` in Python, `applyEdit` in `alpha2/apply-edit` in the browser and `applyEdit` in the mobile library. Fields: `project` and `edit`, the operation:
+
+| `op` | Fields |
+| --- | --- |
+| `remove_ranges` | `ranges` (`{"data": id}` of an `intervals` data set, or `{"list": [{start, end}], "anchor": {...}}`), `target` (`{"track": id}` or `{"clips": [id]}`), `ripple` (`none`, `track`, `timeline`; default `timeline`), `invert` (`false`), `padding` (ticks, `0`), `min_duration` (ticks, `0`) |
+| `split_at` | `times` (`{"data": id}`, the starts of an `intervals` data set, or `{"list": [ticks], "anchor": {...}}`), `target` |
+| `bake` | `targets`: `{clip, property}`, `{composition, node, property}` or `{track, property: "captions"}`, with lint property paths |
+
+Every kept moment renders as before: split clips continue their source and time map, timeline keyframes and timeline-anchored data are cut and shifted, captions are trimmed, and transitions whose cut is removed are removed.
+
+The result is `{projectJson, report}`. `projectJson` is the edited project as the engine's canonical text, the same bytes on every surface; `report` has `removed` (timeline ranges, in the old timeline's time), `moved` (`{from, to}` ranges) and `created` (clip ids). A refusal fails with `INVALID_INPUT`, its `details` `{refusal}` naming why: `invalid_project`, `invalid_request`, `unknown_data`, `wrong_kind`, `unknown_target`, `empty_target`, `missing_anchor`, `invalid_range`, `nothing_to_bake` or `correction_not_bakeable`. An edited project that fails validation is a defect and fails with `INTERNAL` (`invalid_result`).
+
+## `extract`
+
+Runs an extractor over a source or the timeline and answers with the data sets it made, validated as the project validates data. The extractor is the client's own, which sees the input step by step and sends its values back, or a [plugin](plugin-abi.md) the host fetches and runs itself, so frames never cross the pipe. Any language can be a client this way: `@alpha2-sh/node` has `extract(request, extractor)` and the Python client `HostClient.extract(project, request, extractor)`; both take a plugin instead of an extractor.
+
+| Field | Type | Default | |
+| --- | --- | --- | --- |
+| `project` | project document | required | |
+| `assets` | `{ "<source-id>": "<path>" }` | required | As for `export`. A source input reads only its own source, whether or not the timeline uses it. |
+| `request` | extract request | required | `{ "extractor", "version", "params"?, "input", "outputs" }`: the descriptor's id and version, its parameters, what to read (`input.from` is `source` with `source_id`, or `timeline`; `range` in ticks on that clock; for video `size`, the longer side, and for the timeline `frame_rate`; `passes` as `[{ "start", "direction" }]`) and the data set id of each output by name. |
+| `descriptor` | extractor descriptor | | For a client-side extractor: what it reads and emits, as its `describe()` returns: `id`, `version`, `input` (`media` `video` with `format` `rgba8` or `luma8`, or `audio` with `format` `f32`), `params_schema` and `outputs` (`name`, `kind`, `channels`, `interpolation`). |
+| `plugin` | `{ "manifest", "sha256", "allow_native"?, "force_wasm"? }` | | Instead of `descriptor`: the plugin to run (see [Plugins](#plugins)). A request has exactly one of the two. |
+| `proxies`, `media`, `fonts` | as for `export` | | `made_from` is the original's fingerprint even when proxies are read. |
+
+The host answers a request the session refuses (an unknown output, a range outside the source, a source the descriptor cannot read) with `INVALID_REQUEST` before anything is decoded. Then it sends steps, one at a time, and waits for the acknowledgement of each before the next:
+
+```json
+{"protocolVersion":2,"type":"extract.step","requestId":"7","seq":3,"step":"video","time":8000,"width":96,"height":54,"format":"luma8","attachments":[{"type":"application/octet-stream","bytes":5184}]}
+{"protocolVersion":2,"operation":"extract.ack","requestId":"7","seq":3,"emits":[{"output":"faces","time":8000,"values":[0.41,0.37,null]}]}
+```
+
+| `step` | Fields | |
+| --- | --- | --- |
+| `begin` | `context`: `range`, `passes`, `from`, `video` (`size`, `format`) or `audio` (`rate`, `channels`, `blockFrames`) | Once, first. Load models here. |
+| `pass` | `pass`, `direction` (`forward` or `backward`) | At the start of each pass. |
+| `video` | `time`, `width`, `height`, `format`; one attachment | A frame: tightly packed `rgba8` (straight alpha, display-encoded sRGB) or `luma8`, top row first, at the displayed size scaled so its longer side is at most `size`. `time` is its presentation time in ticks. |
+| `audio` | `start`, `startSample`, `frames`, `rate`, `channels`; one attachment | A block of little-endian `f32` samples, planar, channel after channel. |
+| `end` | | Once, last. Whole-range work, such as speech recognition, emits here. |
+
+An acknowledgement carries the `requestId` and `seq` of its step and either `emits` or `"error": { "message" }`. It is not a request and gets no response of its own; one for a request that has ended or for another `seq` is ignored. Each emit names an `output` of the descriptor:
+
+- `{ "output", "time", "values": [...] }` for `points`, `scalars` and `similarity`, one value per channel, `null` for a channel lost at that time;
+- `{ "output", "start", "end", "text", "speaker"? }` for `words`;
+- `{ "output", "start", "end", "label"?, "score"? }` for `intervals`.
+
+Times are ticks on the input's clock, inside the range. During a pass an emit reaches no further along the pass than what it has delivered; `end` may emit anywhere in the range.
+
+- A client that does not acknowledge a `pass`, `video` or `audio` step within `--extract-step-timeout <ms>` (a `serve` flag, 60000 by default, 0 for none) ends the request with `EXTRACTOR_TIMEOUT` and frees its place among the running requests. `begin` and `end` have no timeout.
+- An emit the session refuses ends the request with `INVALID_EMIT`, `details` `{ "index", "reason" }` naming the emit in the acknowledgement and why. An acknowledgement with `error` ends it with `EXTRACTOR_FAILED` and that message.
+- Progress messages have `"phase": "extract"`, the `pass`, and its `completed` and `total` deliveries; `total` is `null` for a source pass, whose frame count is not known ahead.
+- A `cancel` ends the request with `CANCELLED` between steps; a client that exits ends it with the host.
+
+Limits, each by the constant that sets it:
+
+| Limit | Constant | Value |
+| --- | --- | --- |
+| Outputs per descriptor | `alpha2_engine::extract::MAX_EXTRACTOR_OUTPUTS` | 32 |
+| Passes per request | `alpha2_engine::extract::MAX_EXTRACTOR_PASSES` | 64 |
+| `size` when the descriptor names no `max_size` | `alpha2_engine::extract::DEFAULT_MAX_SIZE` | 960 |
+| Audio `block_frames` | `alpha2_engine::extract::BLOCK_FRAMES_RANGE`, default `DEFAULT_BLOCK_FRAMES` | 64 to 65536, default 1024 |
+| Data sets per project | `alpha2_model::MAX_DATA_SETS` | 256 |
+| Channels per output | `alpha2_model::MAX_DATA_CHANNELS` | 64 |
+| Values per sampled data set (numbers or `null`s) | `alpha2_model::MAX_DATA_VALUES` | 4,000,000 |
+| Words, intervals per data set | `alpha2_model::MAX_DATA_WORDS`, `MAX_DATA_INTERVALS` | 200,000 each |
+| Data set id; label, text, speaker or channel name | `alpha2_model::MAX_DATA_ID_BYTES`, `MAX_DATA_LABEL_BYTES` | 64, 256 bytes |
+| Points and similarity translation; scalars and interval scores | `alpha2_model::MAX_DATA_COORDINATE`, `MAX_DATA_SCALAR` | 16, 1e9 in magnitude |
+| Similarity rotation; scale | `alpha2_model::MAX_DATA_ROTATION_DEGREES`, `MAX_DATA_SCALE` | 36000 degrees, 1000 |
+| `--extract-step-timeout` default | `alpha2-host` `DEFAULT_STEP_TIMEOUT` | 60 s |
+
+The result is `{ "dataSets": [...], "timings": { "totalMs", "clientMs" } }`: one data set per output, in descriptor order, each anchored to the source read (`made_from` its original's fingerprint) or to the timeline, with `made_by` recording the extractor, version and params, and for a plugin `made_by.plugin` (the package `version` and the `artifact_sha256` that ran). `clientMs` is the time spent waiting for acknowledgements, 0 for a plugin. Putting the data sets in the project, replacing older ones with the same id, is the caller's edit.
+
+### Plugins
+
+With `plugin`, the host runs the extractor itself; no steps go to the client, and progress and `cancel` work as above.
+
+- `manifest` is an `https:` URL, a `file:` URL or a path on the host's file system, and `sha256` the SHA-256 of its bytes; a manifest with another hash is refused with `PLUGIN_HASH_MISMATCH`. Its artifact and resource URLs are relative to it, or absolute; only `https:` URLs (through the platform's certificate verifier and `HTTPS_PROXY` / `NO_PROXY`), `file:` URLs and paths are read.
+- Downloaded files are kept under their SHA-256 in `ALPHA2_PLUGIN_CACHE`, else the platform's cache directory (`~/.cache/alpha2/plugins`, `~/Library/Caches/alpha2/plugins`, `%LOCALAPPDATA%\alpha2\plugins`). Every file is checked against the hash and length its manifest pins before it is used, cached or not.
+- The host takes the native artifact for its own target when `allow_native` is true and `force_wasm` is not, else the wasm artifact. A native artifact runs with the host's rights, inside this host process: if it crashes, the host exits and the request gets no response. A wasm artifact is sandboxed, its memory capped by `--plugin-memory-limit <bytes>` (a `serve` flag, 1 GiB by default) and each call bounded by `--plugin-call-timeout <ms>` (300000 by default); past either it fails with `PLUGIN_LIMIT` and the host goes on serving.
+- The artifact's descriptor must equal the manifest's. The request's `params` go to the plugin as they are; the plugin checks them.
+- A manifest is at most `alpha2_engine::extract::MAX_MANIFEST_BYTES` (1 MiB) with at most `MAX_PLUGIN_ARTIFACTS` artifacts and `MAX_PLUGIN_RESOURCES` resources (64 each). The `--plugin-memory-limit` and `--plugin-call-timeout` defaults are `alpha2_host_core::plugins::DEFAULT_MEMORY_BYTES` and `DEFAULT_CALL_DEADLINE`.
+- The `PLUGIN_*` codes below say why a plugin did not load or run. A plugin call that fails is `EXTRACTOR_FAILED` with the plugin's message, and output the session refuses is `INVALID_EMIT`, as for a client.
+
 ## Cancelling
 
 To cancel a request, send a `cancel` naming it in `target`:
@@ -253,6 +338,19 @@ A `cancel` without a `target` is answered `INVALID_REQUEST`. The host reads canc
 | `OUTPUT_PUBLISH_FAILED` | The output was rendered in full but could not be moved into place; `details.keptPath` names where the finished file was kept. |
 | `CANCELLED` | The request was cancelled: by a `cancel`, before or while it ran, or by a termination signal. |
 | `RESOURCE_LIMIT` | A budget or limit refused the work, such as a memory budget too small for the export; `failure.stage` is `machine-memory` or `memory-limit-reached` when the machine's memory refused it (see `export`). |
+| `INVALID_EMIT` | An `extract` client emitted a value the session refuses; `details` is `{ "index", "reason" }`. |
+| `EXTRACTOR_FAILED` | An `extract` client acknowledged a step with an `error`. |
+| `EXTRACTOR_TIMEOUT` | An `extract` client did not acknowledge a step within `--extract-step-timeout`. |
+| `PLUGIN_FETCH_FAILED` | A plugin's manifest, artifact or resource could not be read or downloaded. |
+| `PLUGIN_HASH_MISMATCH` | A plugin file's SHA-256 or length differs from what the request or the manifest pins. |
+| `PLUGIN_ABI_UNSUPPORTED` | The plugin implements an ABI this host does not. |
+| `PLUGIN_NO_ARTIFACT` | The manifest has no artifact this host runs; the message lists the targets it offers. |
+| `PLUGIN_NATIVE_REFUSED` | Only a native artifact runs here, and the request does not allow native code. |
+| `PLUGIN_DESCRIPTOR_MISMATCH` | The artifact describes another extractor than the manifest. |
+| `PLUGIN_UNSUPPORTED_FEATURE` | The wasm module uses relaxed SIMD, threads or shared memory, or imports something other than the host functions. |
+| `PLUGIN_LOAD_FAILED` | The manifest is not one, or the artifact did not load. |
+| `PLUGIN_TRAPPED` | The wasm module trapped, or the native plugin caught a panic at its boundary. |
+| `PLUGIN_LIMIT` | A wasm plugin ran past its memory cap or a call past its deadline. |
 | `HOST_RETIRING` | The host is `draining` and did not start the request; send it to another host. |
 | `INTERNAL` | A defect in the host failed the request. The host answers the requests after it. |
 | `ALPHA2_ERROR` | A failure no other code describes. |

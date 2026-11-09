@@ -4,11 +4,11 @@
 //! to fractions of the canvas's shorter side and pre-evaluates a tree without keyframes, so every
 //! frame shares one value and key. Text style is inherited during evaluation.
 
-use crate::ShapesPlan;
 use crate::animation::{
     sample_hold, sample_insets, sample_length, sample_offset, sample_paint, sample_scalar,
     sample_size, sample_vec2,
 };
+use crate::{SampleContext, ShapesPlan};
 use alpha2_geometry::StableHash;
 use alpha2_model::{
     AlignContent, AlignItems, Animated, Display, FlexDirection, FlexWrap, GridAutoFlow,
@@ -274,7 +274,9 @@ pub struct EvaluatedText {
 }
 
 fn non_negative(animation: Option<&Animated<f32>>, time: MediaTime, default: f32) -> f32 {
-    animation.map_or(default, |value| sample_scalar(value, time).max(0.0))
+    animation.map_or(default, |value| {
+        sample_scalar(value, time, &SampleContext::NONE).max(0.0)
+    })
 }
 
 fn size_or(
@@ -399,22 +401,19 @@ fn evaluate_node<'a>(
         border_radius: size_or(node.border_radius.as_ref(), time, 0.0),
     };
     let visual = node.has_visual().then(|| NodeVisual {
-        opacity: node
-            .opacity
-            .as_ref()
-            .map_or(1.0, |value| sample_scalar(value, time).clamp(0.0, 1.0)),
+        opacity: node.opacity.as_ref().map_or(1.0, |value| {
+            sample_scalar(value, time, &SampleContext::NONE).clamp(0.0, 1.0)
+        }),
         translate: node
             .translate
             .as_ref()
             .map_or_else(Vec2::default, |value| sample_offset(value, time)),
-        scale: node
-            .scale
-            .as_ref()
-            .map_or(Vec2::new(1.0, 1.0), |value| sample_vec2(value, time)),
-        rotation_degrees: node
-            .rotation_degrees
-            .as_ref()
-            .map_or(0.0, |value| sample_scalar(value, time)),
+        scale: node.scale.as_ref().map_or(Vec2::new(1.0, 1.0), |value| {
+            sample_vec2(value, time, &SampleContext::NONE)
+        }),
+        rotation_degrees: node.rotation_degrees.as_ref().map_or(0.0, |value| {
+            sample_scalar(value, time, &SampleContext::NONE)
+        }),
     });
     let style = text_style(node, time, inherited);
     let content = if let Some(text) = &node.text {
@@ -731,6 +730,7 @@ pub(crate) fn layout_bytes(
             .iter()
             .map(|keyframe| size_of::<alpha2_model::Keyframe<String>>() + keyframe.value.len())
             .sum(),
+        Animated::Data(_) => 0,
     });
     let style = node.font_family.as_ref().map_or(0, String::len) + keys(node.font_size.as_ref());
     let tracks = [
@@ -747,7 +747,7 @@ pub(crate) fn layout_bytes(
         Some(Animated::Keyframes { keyframes }) => {
             keyframes.len() * size_of::<alpha2_model::Keyframe<Paint>>()
         }
-        Some(Animated::Constant { .. }) | None => 0,
+        Some(Animated::Constant { .. } | Animated::Data(_)) | None => 0,
     };
     let inset = node.inset.as_ref().map_or(0, |inset| {
         [&inset.left, &inset.top, &inset.right, &inset.bottom]

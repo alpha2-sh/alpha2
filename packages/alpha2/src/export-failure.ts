@@ -241,6 +241,21 @@ const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
   RESOURCE_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
   // Never started: the host was retiring, and another host runs it.
   HOST_RETIRING: { code: "HOST_EXITED", resource: "unknown" },
+  // An extractor's own output or failure repeats on a retry; a slow client may not.
+  INVALID_EMIT: permanent,
+  EXTRACTOR_FAILED: permanent,
+  EXTRACTOR_TIMEOUT: unknown,
+  // A plugin that is refused, does not load or traps does so again; a server may answer later.
+  PLUGIN_FETCH_FAILED: unknown,
+  PLUGIN_HASH_MISMATCH: permanent,
+  PLUGIN_ABI_UNSUPPORTED: permanent,
+  PLUGIN_NO_ARTIFACT: permanent,
+  PLUGIN_NATIVE_REFUSED: permanent,
+  PLUGIN_DESCRIPTOR_MISMATCH: permanent,
+  PLUGIN_UNSUPPORTED_FEATURE: permanent,
+  PLUGIN_LOAD_FAILED: permanent,
+  PLUGIN_TRAPPED: permanent,
+  PLUGIN_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
   GPU_INIT_FAILED: unknown,
   ENCODE_ERROR: unknown,
   ENCODER_BUSY: { code: "RESOURCE_BUSY", resource: "gpu" },

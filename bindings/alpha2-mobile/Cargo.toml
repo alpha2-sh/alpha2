@@ -16,11 +16,14 @@ crate-type = ["lib", "staticlib", "cdylib"]
 [features]
 default = ["compose"]
 compose = ["dep:alpha2-compose"]
+# Extractor plugins through wasmtime and the platform loader; adds megabytes, so apps opt in.
+plugins = ["alpha2-host-core/plugins"]
 
 [dependencies]
 alpha2-compose = { workspace = true, optional = true }
 alpha2-container.workspace = true
 alpha2-engine.workspace = true
+alpha2-eval.workspace = true
 alpha2-extensions = { workspace = true, features = ["svg", "animated-image", "image-sequence", "lottie", "exr", "latex", "pdf"] }
 alpha2-gpu.workspace = true
 alpha2-host-core = { workspace = true, features = ["cpal-host", "engine", "providers"] }

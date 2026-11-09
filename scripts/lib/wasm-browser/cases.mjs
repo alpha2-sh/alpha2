@@ -1,6 +1,13 @@
 // The cases of test-wasm-browser.mjs in run order; each name is the page's path.
 
 import {
+  extractDigest,
+  extractInvalidEmit,
+  extractTimeline,
+  pluginConformance,
+  pluginDigest,
+} from "./extract.mjs";
+import {
   aacLayoutRefusal,
   audioContinuity,
   audioMatroskaCodecDelay,
@@ -100,6 +107,11 @@ const underSimulation = (names, body, check) =>
   `await simulate(${JSON.stringify(names)}${check ? `, ${check}` : ""});\n${body}`;
 
 export const cases = {
+  "extract-digest": extractDigest,
+  "extract-invalid-emit": extractInvalidEmit,
+  "extract-timeline": extractTimeline,
+  "plugin-digest": pluginDigest,
+  "plugin-conformance": pluginConformance,
   "webgpu-smoke": () => smoke(false),
   "webgl2-smoke": () => smoke(true),
   "webgl-context-loss": webglContextLoss,

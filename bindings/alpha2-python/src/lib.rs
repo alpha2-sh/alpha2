@@ -1,8 +1,8 @@
 //! `alpha2._native`, the compiled part of the `alpha2` Python package.
 //!
-//! Exposes the engine's own validation, export format resolution, compose compiler and text
-//! layout so Python does not reimplement them. Links neither a GPU nor `FFmpeg`. Documents cross
-//! the boundary as JSON text.
+//! Exposes the engine's own validation, edit operations, export format resolution, compose
+//! compiler and text layout so Python does not reimplement them. Links neither a GPU nor
+//! `FFmpeg`. Documents cross the boundary as JSON text.
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -31,7 +31,7 @@ fn validate_project_json(py: Python<'_>, json: &str) -> Vec<String> {
 #[pyfunction]
 fn project_end_ticks(py: Python<'_>, json: &str) -> PyResult<Option<i64>> {
     py.detach(|| Project::from_json(json))
-        .map(|project| project.timeline.extent().map(|extent| extent.end().ticks()))
+        .map(|project| project.extent().map(|extent| extent.end().ticks()))
         .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
@@ -109,6 +109,16 @@ fn resolve_pixels(
 /// Maps a compose error to `ValueError(message, path, problem)`.
 fn compose_error(error: &alpha2_compose::ComposeError) -> PyErr {
     PyValueError::new_err((error.to_string(), error.path.clone(), error.message.clone()))
+}
+
+/// Applies an edit operation (`remove_ranges`, `split_at`, `bake`) to a project, both JSON text,
+/// and answers `(project, report)` as the engine's canonical JSON text. Raises
+/// `ValueError(message, code, refusal)` for an invalid project or request and for every refusal.
+#[pyfunction]
+fn apply_edit(py: Python<'_>, project: &str, request: &str) -> PyResult<(String, String)> {
+    py.detach(|| alpha2_eval::edit::apply_json(project, request))
+        .map(|edited| (edited.project, edited.report))
+        .map_err(|failure| PyValueError::new_err((failure.message, failure.code, failure.refusal)))
 }
 
 /// Files a compose spec names, as JSON `{"media": [{path, kind}], "texts": [path]}`. Raises
@@ -250,6 +260,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(resolve_pixels, module)?)?;
     module.add("COMPOSE_VERSION", alpha2_compose::COMPOSE_VERSION)?;
     module.add("COMPOSE_THEMES", alpha2_compose::THEMES.to_vec())?;
+    module.add_function(wrap_pyfunction!(apply_edit, module)?)?;
     module.add_function(wrap_pyfunction!(compose_requirements, module)?)?;
     module.add_function(wrap_pyfunction!(compose, module)?)?;
     module.add_function(wrap_pyfunction!(compose_bind, module)?)?;

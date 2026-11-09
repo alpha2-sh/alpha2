@@ -18,6 +18,8 @@
 pub use alpha2_audio as audio;
 /// Playback, evaluation, and export orchestration.
 pub use alpha2_engine as engine;
+/// Pure timeline evaluation and edit operations.
+pub use alpha2_eval as eval;
 /// Deterministic vector geometry and coverage for shapes.
 pub use alpha2_geometry as geometry;
 /// GPU adapter and device capability boundary.
@@ -31,9 +33,11 @@ pub use alpha2_render as render;
 /// Exact media-time and frame-rate primitives.
 pub use alpha2_time as time;
 
+pub use alpha2_engine::extract;
 pub use alpha2_engine::{
     EngineProject, ExportStep, Exporter, FrameProvider, FrameRenderer, Player, QualityProfile,
 };
+pub use alpha2_eval::edit;
 pub use alpha2_gpu::{
     GpuAcquisitionStep, GpuContext, GpuDiagnostic, GpuDiagnosticHandler, GpuDiagnosticLog,
     GpuDiagnosticSnapshot, GpuError, GpuErrorKind,

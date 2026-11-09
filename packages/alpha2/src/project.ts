@@ -31,6 +31,7 @@ import type {
   VisualProperties,
 } from "./generated/project-schema.js";
 import { BUILTIN_EFFECT_RULES } from "./generated/builtin-effects.js";
+import { dataProblems } from "./project-data.js";
 import {
   parseHex,
   parseInsets,
@@ -298,6 +299,7 @@ function invariantProblems(value: unknown): string[] {
       problems.push(problem);
   }
   for (const problem of matteProblems(tracks)) problems.push(problem);
+  for (const problem of projectDataProblems(project)) problems.push(problem);
   if (catalog.inlined !== undefined) {
     const frame = frameNodesOver(
       tracks.map((track) =>
@@ -314,6 +316,14 @@ function invariantProblems(value: unknown): string[] {
   for (const problem of duckingProblems(tracks, trackIds))
     problems.push(problem);
   return problems;
+}
+
+function projectDataProblems(project: Project): string[] {
+  return dataProblems(
+    project as unknown as Record<string, unknown>,
+    (id, name) => builtinParamRule(id, name)?.type,
+    validFingerprint,
+  );
 }
 
 function headerProblems(project: Project): string[] {
@@ -918,6 +928,7 @@ function invariantsHold(value: unknown): boolean {
   return (
     clipIdsUnique(summaries) &&
     mattesHold(summaries) &&
+    projectDataProblems(project).length === 0 &&
     frameNodesOver(summaries.map((summary) => summary.frames)) === undefined &&
     audioEffectProblems(
       project.audio,
@@ -1385,7 +1396,10 @@ type CanonicalValue<T> = [T] extends [never]
         : Same<T, LayoutOffset> extends true
           ? CanonicalOffset
           : Same<T, VisualProperties> extends true
-            ? CanonicalPart<Required<VisualProperties>>
+            ? CanonicalPart<
+                Required<Omit<VisualProperties, "correction">> &
+                  Pick<VisualProperties, "correction">
+              >
             : CanonicalPart<T>;
 
 type CanonicalPart<T> = T extends string | number | boolean | bigint
@@ -2211,6 +2225,8 @@ function rangeStart(range: unknown): number {
 function animationValues<T>(animation: unknown): readonly T[] | undefined {
   if (!isRecord(animation)) return undefined;
   if (animation.mode === "constant") return [animation.value as T];
+  // A binding holds no authored value; `dataProblems` checks it.
+  if (animation.mode === "data") return [];
   if (animation.mode !== "keyframes" || !Array.isArray(animation.keyframes)) {
     return undefined;
   }
@@ -2326,6 +2342,7 @@ function validEffectValue(value: unknown): boolean {
 
 // All values share one type, and `enum` and `bool` keyframes must hold.
 function validEffectParam(param: unknown): boolean {
+  if (isRecord(param) && param.mode === "data") return true;
   const values = animationValues<unknown>(param);
   if (values === undefined || !values.every(validEffectValue)) return false;
   const types = new Set(
@@ -2448,6 +2465,9 @@ function acceptsBuiltinParam(
   param: BuiltinEffectRules["params"][string],
   animation: unknown,
 ): boolean {
+  if (isRecord(animation) && animation.mode === "data") {
+    return param.type === "float" || param.type === "vec2";
+  }
   const values = animationValues<unknown>(animation) ?? [];
   const scalar = (value: unknown): boolean =>
     finiteNumber(value) &&
@@ -2861,7 +2881,7 @@ function captionsProblem(
   if (!isRecord(captions) || clips.length > 0 || transitions.length > 0) {
     return invalid;
   }
-  const cues = captions.cues;
+  const cues = captions.cues ?? [];
   const styles = captions.styles ?? {};
   const encoder = new TextEncoder();
   const name = (value: unknown) =>
@@ -2870,6 +2890,7 @@ function captionsProblem(
     encoder.encode(value).length <= MAX_CAPTION_NAME_BYTES;
   if (
     !Array.isArray(cues) ||
+    (captions.from_words != null && cues.length > 0) ||
     !validTextStyle(captions.style ?? {}, MAX_CAPTION_FONT_SIZE) ||
     !isRecord(styles) ||
     Object.keys(styles).length > MAX_CAPTION_STYLES ||

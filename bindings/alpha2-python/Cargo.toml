@@ -16,6 +16,7 @@ doctest = false
 
 [dependencies]
 alpha2-compose = { workspace = true, features = ["schema"] }
+alpha2-eval.workspace = true
 alpha2-layout.workspace = true
 alpha2-media.workspace = true
 alpha2-model.workspace = true

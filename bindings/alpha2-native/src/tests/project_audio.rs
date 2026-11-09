@@ -33,6 +33,7 @@ fn audio_project() -> EngineProject {
     );
     track.clips.push(clip);
     EngineProject::new(Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: ProjectId::new(String::from("native-audio")).expect("id"),
         name: "native".into(),

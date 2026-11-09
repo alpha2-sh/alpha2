@@ -66,6 +66,56 @@ The first `getCapabilities` call for a host environment (decode mode, renderer a
 
 `renderer` (`auto`, `gpu`, `cpu`) chooses what draws the frames, as a client option or per export; unset, the host reads `ALPHA2_RENDERER`, else uses `auto`. `auto` renders on a hardware GPU when there is one and on the CPU otherwise, never on a software GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader); `gpu` takes whatever adapter the host finds and fails with `GPU_INIT_FAILED` without one; `cpu` opens no graphics driver. Results and capabilities report `renderer` (`gpu` or `cpu`), `rendererReason` (why the host renders on the CPU) and, on the CPU, `rendererThreads`; `capabilities.features` has `renderer.gpu`, `renderer.cpu` and `effects.runtime`. A runtime WGSL effect cannot run on the CPU renderer: such an export fails with `EFFECT_ERROR`.
 
+## Extract data
+
+`client.extract(request, extractor)` runs an extractor of your own over a source or the timeline and resolves with the data sets it made, ready to put in `project.data`. The host decodes and presents the input and calls the extractor step by step; every value it emits is validated as the project validates data:
+
+```js
+const { dataSets } = await client.extract(
+  {
+    project,
+    assets: { interview: "interview.mp4" },
+    request: {
+      extractor: "com.example.brightness",
+      version: 1,
+      input: { from: "source", source_id: "interview", range: { start: 0, end: 600_000 }, size: 64 },
+      outputs: { level: "interview-brightness" },
+    },
+  },
+  {
+    describe: () => ({
+      id: "com.example.brightness",
+      version: 1,
+      input: { media: "video", from: ["source"], format: "luma8" },
+      outputs: [{ name: "level", kind: "scalars", channels: ["y"] }],
+    }),
+    video(frame, out) {
+      const sum = frame.data.reduce((total, value) => total + value, 0);
+      out.sample("level", frame.time, [sum / frame.data.length / 255]);
+    },
+  },
+);
+```
+
+`begin`, `pass`, `audio` and `end` are the other steps; any may return a promise. `request.params` is checked against the descriptor's `params_schema` first. Output the project would refuse fails with `INVALID_EMIT`, a step that throws with `EXTRACTOR_FAILED`, and a step slower than the host's `--extract-step-timeout` with `EXTRACTOR_TIMEOUT`. `signal` and `onProgress` work as for exports.
+
+A [plugin](../../docs/plugin-abi.md) runs inside the host instead: pass `plugin: { manifest, sha256 }` in the request and no extractor. The host fetches the manifest (an `https:` URL or a path), checks every file against its pinned SHA-256 and runs the wasm artifact sandboxed; `allowNative: true` lets a native artifact run with the host's rights. A plugin that is refused, does not load, traps or runs past its limits fails with a `PLUGIN_*` code.
+
+## Apply data with edit operations
+
+`client.edit(project, edit)` runs one of the engine's edit operations in the host, without a GPU, and resolves with `{ project, projectJson, report }`. `remove_ranges` drops ranges (silences from an extractor, or a list on a source or the timeline) and closes the gaps, `split_at` cuts at times, and `bake` turns data bindings into keyframes and words into cues:
+
+```js
+const { project: tight } = await client.edit(project, {
+  op: "remove_ranges",
+  ranges: { data: "interview-silence" },
+  target: { track: "v1" },
+  padding: 12_000,
+});
+```
+
+Every kept moment renders as before, and `projectJson` is the same bytes on every surface. A refusal rejects with `INVALID_INPUT`, whose `refusal` names why (`unknown_data`, `empty_target`, ...). [The host protocol](../../docs/host-protocol.md#edit) lists the fields.
+
 ## Software H.264 (OpenH264)
 
 Where no hardware H.264 encoder is available, `alpha2-host` can encode H.264 in software with Cisco's OpenH264 library, which it loads at run time. Neither this package nor the native archives include that library, and nothing downloads it unless you ask: Cisco's patent licence covers its binary only when the user fetches it from Cisco.

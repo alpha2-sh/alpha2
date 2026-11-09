@@ -538,6 +538,7 @@ fn one_source_project(
         })
         .collect();
     alpha2_engine::EngineProject::new(Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: ProjectId::new("one-source".to_owned()).expect("id"),
         name: "one source".into(),

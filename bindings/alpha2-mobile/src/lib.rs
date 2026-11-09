@@ -22,6 +22,7 @@ uniffi::setup_scaffolding!();
 
 #[cfg(feature = "compose")]
 mod compose;
+mod edit;
 mod error;
 // The media pipeline is built everywhere so desktop tests compile it; only platforms with a media
 // backend run it.
@@ -30,8 +31,11 @@ mod error;
     allow(dead_code)
 )]
 mod export;
+mod extract;
 mod platform;
 mod player;
+#[cfg(feature = "plugins")]
+mod plugin;
 mod session;
 mod stills;
 mod surface;
@@ -43,8 +47,15 @@ pub mod android;
 #[cfg(all(test, any(target_os = "android", target_os = "ios")))]
 mod device_tests;
 
+pub use edit::{EditedProject, apply_edit};
 pub use error::{Alpha2Error, EncoderRefusalRecord};
+pub use extract::{
+    ExtractAudioBlock, ExtractRequest, ExtractVideoFrame, ExtractionHandle, Extractor,
+    ExtractorFailure,
+};
 pub use player::{Player, PlayerRequest};
+#[cfg(feature = "plugins")]
+pub use plugin::Plugin;
 pub use session::{
     Alpha2, ConformRequest, EngineConfig, ExportHandle, ExportOutcome, ExportProgress,
     ExportProgressEvent, ExportRequest, FontFile, RendererMode, StillEntry, StillsRequest,

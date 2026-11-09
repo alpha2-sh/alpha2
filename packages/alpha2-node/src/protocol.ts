@@ -15,6 +15,9 @@ export function createRequest(
     | "conform"
     | "still"
     | "compose"
+    | "edit"
+    | "extract"
+    | "extract.ack"
     | "cancel"
     | "status",
   requestId: string,
@@ -38,8 +41,11 @@ export interface ProtocolError {
   readonly failure?: Readonly<Record<string, unknown>>;
 }
 
-/** `frames` while encoding; `finalizing` while the output is flushed and closed. */
-export type ProgressPhase = "frames" | "finalizing";
+/**
+ * `frames` while encoding; `finalizing` while the output is flushed and closed; `extract` while an
+ * extraction pass runs.
+ */
+export type ProgressPhase = "frames" | "finalizing" | "extract";
 
 /** Progress of the request `requestId`; `completed` never exceeds `total`. */
 export interface ProgressMessage {
@@ -49,7 +55,24 @@ export interface ProgressMessage {
   readonly requestId: string;
   readonly phase?: ProgressPhase;
   readonly completed: number;
-  readonly total: number;
+  /** `null` for an extraction pass over source frames, whose count is not known ahead. */
+  readonly total: number | null;
+  /** The extraction pass, for phase `extract`. */
+  readonly pass?: number;
+}
+
+/**
+ * One step of an extraction the host asks the client's extractor to take; answered by an
+ * `extract.ack` with the same `seq`. `video` and `audio` steps carry one attachment.
+ */
+export interface ExtractStepMessage {
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly attachments?: readonly AttachmentInfo[];
+  readonly type: "extract.step";
+  readonly requestId: string;
+  readonly seq: number;
+  readonly step: "begin" | "pass" | "video" | "audio" | "end";
+  readonly [field: string]: unknown;
 }
 
 /** `ready` takes requests; `draining` takes none and is about to exit. */
@@ -120,7 +143,11 @@ export type ResponseMessage =
     };
 
 export type HostMessage =
-  StateMessage | ProgressMessage | FatalMessage | ResponseMessage;
+  | StateMessage
+  | ProgressMessage
+  | ExtractStepMessage
+  | FatalMessage
+  | ResponseMessage;
 
 /** Throws when the header is not JSON, has another protocol version, or is malformed. */
 export function parseHostMessage(header: string): HostMessage {
@@ -137,18 +164,29 @@ export function parseHostMessage(header: string): HostMessage {
   )
     throw new Error("invalid attachment list");
   if (value.type === "progress") {
+    const extract = value.phase === "extract";
     if (
       typeof value.requestId !== "string" ||
       !nonNegativeInteger(value.completed) ||
-      !nonNegativeInteger(value.total) ||
-      value.completed > value.total ||
+      !(nonNegativeInteger(value.total) || (extract && value.total === null)) ||
+      (typeof value.total === "number" && value.completed > value.total) ||
       (value.phase !== undefined &&
         value.phase !== "frames" &&
-        value.phase !== "finalizing")
+        value.phase !== "finalizing" &&
+        !extract)
     ) {
       throw new Error("invalid progress message");
     }
     return value as unknown as ProgressMessage;
+  }
+  if (value.type === "extract.step") {
+    if (
+      typeof value.requestId !== "string" ||
+      !nonNegativeInteger(value.seq) ||
+      !["begin", "pass", "video", "audio", "end"].includes(String(value.step))
+    )
+      throw new Error("invalid extract step");
+    return value as unknown as ExtractStepMessage;
   }
   if (value.type === "state") {
     if (

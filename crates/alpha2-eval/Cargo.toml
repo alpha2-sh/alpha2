@@ -22,10 +22,13 @@ alpha2-geometry.workspace = true
 alpha2-media.workspace = true
 alpha2-model.workspace = true
 alpha2-time.workspace = true
+libm = "0.2.16"
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 alpha2-scaling-support.workspace = true
-serde_json.workspace = true
+sha2 = "0.11"
 
 [lints]
 workspace = true

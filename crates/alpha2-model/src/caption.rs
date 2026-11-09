@@ -29,8 +29,13 @@ pub struct Captions {
     /// [`MAX_CAPTION_STYLES`], names 1 to 64 bytes.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub styles: BTreeMap<String, TextStylePatch>,
-    /// Cues in timeline order, none overlapping; a track shows one cue at a time.
+    /// Cues in timeline order, none overlapping; a track shows one cue at a time. Empty when
+    /// `from_words` gives the cues.
+    #[serde(default)]
     pub cues: Vec<CaptionCue>,
+    /// Cues built at evaluation from a `words` data set, instead of `cues`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_words: Option<crate::CaptionsFromWords>,
 }
 
 /// Text shown over one timeline interval.
@@ -249,7 +254,8 @@ impl Captions {
 
     pub(crate) fn validate(&self) -> Result<(), CaptionIssue> {
         let name = |name: &str| !name.is_empty() && name.len() <= MAX_CAPTION_NAME_BYTES;
-        let valid = self.style.is_valid(MAX_CAPTION_FONT_SIZE)
+        let valid = (self.from_words.is_none() || self.cues.is_empty())
+            && self.style.is_valid(MAX_CAPTION_FONT_SIZE)
             && self.styles.len() <= MAX_CAPTION_STYLES
             && self.styles.keys().all(|key| name(key))
             && self.cues.iter().all(|cue| {
@@ -316,5 +322,107 @@ mod double_option {
         deserializer: D,
     ) -> Result<Option<Option<T>>, D::Error> {
         Option::<T>::deserialize(deserializer).map(Some)
+    }
+}
+
+/// The longest gap between two words of one cue, in ticks (0.6 s).
+pub const WORD_PAUSE_TICKS: i64 = 72_000;
+
+/// Words grouped into cues that end at `max_chars` characters, a sentence's end, a pause longer
+/// than [`WORD_PAUSE_TICKS`] or a change of speaker. Each cue has one run per word (with its
+/// trailing space), timed from the cue's start, so Timing selectors follow the speech.
+///
+/// `words` are in start order, each ending after it starts with non-empty trimmed text. Where
+/// words overlap, each cue ends where the next starts.
+#[must_use]
+pub fn group_words(words: &[crate::DataWord], max_chars: u32) -> Vec<CaptionCue> {
+    // Each cue being built: its start, end, speaker and words with their times.
+    type Words = (i64, i64, Option<String>, Vec<(String, i64, i64)>);
+    let mut groups: Vec<Words> = Vec::new();
+    let mut current: Option<Words> = None;
+    for word in words {
+        let (start, end) = (word.start.ticks(), word.end.ticks());
+        let text = word.text.trim().to_owned();
+        if let Some((_, cue_end, speaker, held)) = &mut current {
+            let length = held
+                .iter()
+                .map(|(word, ..)| word.chars().count() + 1)
+                .sum::<usize>()
+                + text.chars().count();
+            let sentence_end = held
+                .last()
+                .is_some_and(|(word, ..)| word.ends_with(['.', '?', '!', '\u{3002}']));
+            if length <= max_chars as usize
+                && start - *cue_end <= WORD_PAUSE_TICKS
+                && !sentence_end
+                && *speaker == word.speaker
+            {
+                held.push((text, start, end));
+                *cue_end = (*cue_end).max(end);
+                continue;
+            }
+            groups.extend(current.take());
+        }
+        current = Some((start, end, word.speaker.clone(), vec![(text, start, end)]));
+    }
+    groups.extend(current);
+    let mut cues = groups
+        .into_iter()
+        .filter_map(|(start, end, speaker, held)| {
+            let count = held.len();
+            let runs = held
+                .into_iter()
+                .enumerate()
+                .map(|(index, (mut text, from, to))| {
+                    if index + 1 < count {
+                        text.push(' ');
+                    }
+                    crate::TextRun {
+                        text,
+                        class: Vec::new(),
+                        time: Some(crate::RunTime {
+                            start: alpha2_time::MediaTime(from - start),
+                            end: alpha2_time::MediaTime(to - start),
+                        }),
+                    }
+                })
+                .collect();
+            let range =
+                TimeRange::new(alpha2_time::MediaTime(start), alpha2_time::MediaTime(end)).ok()?;
+            Some(CaptionCue {
+                speaker,
+                ..CaptionCue::new(range, crate::TextContent::Runs(runs))
+            })
+        })
+        .collect::<Vec<_>>();
+    for index in 1..cues.len() {
+        let next = cues[index].timeline_range.start();
+        let previous = &mut cues[index - 1];
+        if previous.timeline_range.end() > next && previous.timeline_range.start() < next {
+            previous.timeline_range = TimeRange::new(previous.timeline_range.start(), next)
+                .unwrap_or(previous.timeline_range);
+            clip_runs(previous);
+        }
+    }
+    cues
+}
+
+/// Clamps a cue's run times to its range after the range was shortened. A run that would start
+/// at or after the end gets no time.
+pub fn clip_runs(cue: &mut CaptionCue) {
+    let duration = cue
+        .timeline_range
+        .duration()
+        .map_or(0, alpha2_time::MediaTime::ticks);
+    if let crate::TextContent::Runs(runs) = &mut cue.text {
+        for run in runs {
+            run.time = run.time.and_then(|time| {
+                let end = time.end.ticks().min(duration);
+                (time.start.ticks() < end).then_some(crate::RunTime {
+                    start: time.start,
+                    end: alpha2_time::MediaTime(end),
+                })
+            });
+        }
     }
 }

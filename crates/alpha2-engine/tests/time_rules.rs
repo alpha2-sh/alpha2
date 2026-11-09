@@ -4,7 +4,7 @@
 //! engine and fails on drift; `ALPHA2_UPDATE_GOLDENS=1` rewrites it.
 
 use alpha2_engine::{EngineProject, Exporter, QualityProfile};
-use alpha2_eval::picture_source_time;
+use alpha2_eval::{picture_source_time, source_range_to_timeline};
 use alpha2_media::VideoCodec;
 use alpha2_media::sample_ticks_floor;
 use alpha2_model::{CubicBezier, LoopMode, Project, ProjectId, ProjectSettings, TimeMap};
@@ -245,6 +245,76 @@ fn source_times() -> Value {
     Value::Array(cases)
 }
 
+/// The timeline ranges at which clips of every time map show a source interval: the full
+/// preimage of the picture time map.
+fn source_ranges() -> Value {
+    let maps = [
+        TimeMap::Forward,
+        TimeMap::Reverse,
+        TimeMap::Freeze {
+            source_time: MediaTime::from_ticks(50_000),
+        },
+        TimeMap::Loop {
+            mode: LoopMode::Repeat,
+        },
+        TimeMap::Loop {
+            mode: LoopMode::PingPong,
+        },
+    ];
+    let spans = [
+        ((0, 120_000), (0, 120_000)),
+        ((60_000, 180_000), (12_000, 72_000)),
+        ((0, 60_000), (10_000, 250_000)),
+        ((40_000, 300_000), (10_000, 130_000)),
+        ((40_001, 58_000), (10_000, 46_000)),
+    ];
+    let mut cases = Vec::new();
+    for pair in [(30, 1), (30_000, 1_001), (24, 1)] {
+        let rate = rate(pair);
+        for map in maps {
+            for (timeline, source) in spans {
+                let (timeline, source) = (range(timeline.0, timeline.1), range(source.0, source.1));
+                let (start, end) = (source.start().ticks(), source.end().ticks());
+                let third = (end - start) / 3;
+                let intervals = [
+                    (start, end),
+                    (start, start + third),
+                    (start + third, end - third),
+                    (50_000, 50_001),
+                    (end - 1, end + 10_000),
+                    (end + 1, end + 2),
+                ];
+                let found = intervals
+                    .into_iter()
+                    .map(|(from, to)| {
+                        let ranges = source_range_to_timeline(
+                            timeline,
+                            source,
+                            map,
+                            rate,
+                            MediaTime::from_ticks(from),
+                            MediaTime::from_ticks(to),
+                        )
+                        .expect("preimage")
+                        .into_iter()
+                        .map(|range| json!([range.start().ticks(), range.end().ticks()]))
+                        .collect::<Vec<_>>();
+                        json!({ "interval": [from, to], "ranges": ranges })
+                    })
+                    .collect::<Vec<_>>();
+                cases.push(json!({
+                    "rate": rate_json(rate),
+                    "timeline": { "start": timeline.start().ticks(), "end": timeline.end().ticks() },
+                    "source": { "start": source.start().ticks(), "end": source.end().ticks() },
+                    "timeMap": map,
+                    "cases": found,
+                }));
+            }
+        }
+    }
+    Value::Array(cases)
+}
+
 /// Samples to the tick at or before them, negative ones included.
 fn samples() -> Value {
     let mut cases = Vec::new();
@@ -410,6 +480,7 @@ fn the_time_rules_table_is_the_engines() {
         "exports": exports(),
         "curves": curves(),
         "sourceTimes": source_times(),
+        "sourceRangesToTimeline": source_ranges(),
         "samplesToTicks": samples(),
         "secondsToTicks": seconds(),
         "presentationSlack": presentation_slacks(),

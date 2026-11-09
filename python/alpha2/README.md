@@ -178,6 +178,82 @@ print(result["stills"][0]["frameTime"])  # the grid frame that holds 1.5 s, in t
   the PNG comes back as bytes in `result["stills"][i]["png"]`, and `output` is `None`.
 - From a shell: `python -m alpha2 still project.json check.png --at 1.5 --asset title=title.png`.
 
+## Extract data
+
+`HostClient.extract(project, request, extractor, assets=...)` runs an extractor of your own over a
+source or the timeline and returns `{"dataSets", "timings"}`, data sets ready to put in the
+project's `data`. The host decodes and presents the input and calls the extractor step by step;
+every value it emits is validated as the project validates data:
+
+```python
+class Brightness:
+    def describe(self):
+        return {
+            "id": "com.example.brightness",
+            "version": 1,
+            "input": {"media": "video", "from": ["source"], "format": "luma8"},
+            "outputs": [{"name": "level", "kind": "scalars", "channels": ["y"]}],
+        }
+
+    def video(self, frame, out):
+        out.sample("level", frame.time, [sum(frame.data) / len(frame.data) / 255])
+
+
+with alpha2.HostClient() as client:
+    result = client.extract(
+        project,
+        {
+            "extractor": "com.example.brightness",
+            "version": 1,
+            "input": {
+                "from": "source",
+                "source_id": "interview",
+                "range": {"start": 0, "end": 600_000},
+                "size": 64,
+            },
+            "outputs": {"level": "interview-brightness"},
+        },
+        Brightness(),
+        assets={"interview": "interview.mp4"},
+    )
+```
+
+- `begin(context)`, `pass_(index, direction)`, `audio(block, out)` and `end(out)` are the other
+  steps (`alpha2.extract` has the types). `request["params"]` is checked against the
+  descriptor's `params_schema` first.
+- Output the project would refuse fails with `INVALID_EMIT`, a step that raises with
+  `EXTRACTOR_FAILED`, and a step slower than the host's `--extract-step-timeout` with
+  `EXTRACTOR_TIMEOUT`. `cancel=` and `on_progress=` work as for `export`.
+- A [plugin](../../docs/plugin-abi.md) runs inside the host instead: pass
+  `plugin={"manifest": ..., "sha256": ...}` and no extractor. The host fetches the manifest (an
+  `https:` URL or a path), checks every file against its pinned SHA-256 and runs the wasm artifact
+  sandboxed; `"allow_native": True` lets a native artifact run with the host's rights. A plugin
+  that is refused, does not load, traps or runs past its limits fails with a `PLUGIN_*` code.
+
+## Apply data with edit operations
+
+`alpha2.edit.apply(project, request)` runs one of the engine's edit operations in this process, no
+host needed, and returns `Edited(project, project_json, report)`. `remove_ranges` drops ranges
+(silences from an extractor, or a list on a source or the timeline) and closes the gaps,
+`split_at` cuts at times, and `bake` turns data bindings into keyframes and words into cues:
+
+```python
+edited = alpha2.edit.apply(
+    project,
+    {
+        "op": "remove_ranges",
+        "ranges": {"data": "interview-silence"},
+        "target": {"track": "v1"},
+        "padding": 12_000,
+        "min_duration": 36_000,
+    },
+)
+```
+
+Every kept moment renders as before, and `project_json` is the same bytes on every surface.
+A refusal raises `alpha2.Alpha2EditError`, whose `refusal` names why (`unknown_data`,
+`empty_target`, ...). [The host protocol](../../docs/host-protocol.md#edit) lists the fields.
+
 ## Renderer and video decode
 
 `renderer=` (`"auto"`, `"gpu"`, `"cpu"`; typed as `alpha2.client.RendererMode`) chooses what draws

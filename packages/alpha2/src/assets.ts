@@ -174,6 +174,19 @@ export interface ConformReport {
   readonly ready: boolean;
   /** Each host-supplied source a render reads, in project order. */
   readonly sources: readonly SourceConform[];
+  /**
+   * Data sets made from other media than their source's original now is, in data order. This
+   * never blocks, since the data still reads, but it may no longer describe the media.
+   */
+  readonly stale_data: readonly StaleData[];
+}
+
+/** A data set whose `made_from` differs from its source's current original. */
+export interface StaleData {
+  readonly data: string;
+  readonly source: string;
+  /** The parts of the fingerprint that differ. */
+  readonly fields: readonly FingerprintField[];
 }
 
 /** Lists every blocking issue with its source id. */

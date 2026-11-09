@@ -11,6 +11,7 @@
 mod blend;
 mod composite;
 mod curves;
+pub mod decoded;
 mod execute;
 mod frames;
 pub(crate) mod half;

@@ -1,0 +1,16 @@
+[package]
+name = "alpha2-plugin-pack"
+description = "Builds a plugin for wasm32 and native targets into an upload-ready directory."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+sha2 = "0.11"
+wasmparser = { version = "0.247", default-features = false, features = ["validate", "features", "simd", "std"] }
+
+[lints]
+workspace = true

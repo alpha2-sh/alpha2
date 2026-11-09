@@ -716,3 +716,34 @@ fn conform_lists_each_audio_stream_and_names_a_missing_one() {
          does not exist; the media has 2 audio streams)"
     );
 }
+
+/// Data made from one file is stale once its source is relinked to another.
+#[test]
+fn conform_reports_data_made_from_other_media_as_stale() {
+    use alpha2_assets::{MediaPurpose, OriginalState};
+    let clip = corpus("parity-rgb.mov");
+    let first = resolve(
+        &conform_project(&json!({})),
+        &[("video", clip.clone())],
+        &[],
+        MediaPurpose::Preview,
+    );
+    let OriginalState::Online { fingerprint } = &first.catalog.assets[0].original else {
+        panic!("online");
+    };
+    let mut project = conform_project(&json!({}));
+    project["data"] = json!([{ "id": "track", "anchor": { "type": "source", "source_id": "video" },
+                               "kind": "intervals", "intervals": [], "made_from": fingerprint }]);
+    let same = resolve(&project, &[("video", clip)], &[], MediaPurpose::Preview);
+    assert_eq!(same.report.stale_data, Vec::new());
+    let relinked = resolve(
+        &project,
+        &[("video", corpus("h264-bt709-copy.mp4"))],
+        &[],
+        MediaPurpose::Preview,
+    );
+    let stale = &relinked.report.stale_data;
+    assert_eq!(stale.len(), 1, "{stale:?}");
+    assert_eq!(stale[0].data.as_str(), "track");
+    assert!(relinked.report.ready, "stale data never blocks");
+}

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::assets::{
-    HardwareVideoDecode, ProxyRequest, RequestMedia, ResolvedMedia, blocking_summary, resolve_media,
+    HardwareVideoDecode, ProxyRequest, RequestMedia, ResolvedMedia, blocking_summary,
 };
 use crate::capture::FrameCapture;
 use crate::config::configured_frame_capture;
@@ -679,6 +679,13 @@ impl Host {
             Request::Export(export) => return self.handle_export(*export, progress),
             Request::Still(still) => return self.handle_still(*still),
             Request::Compose(compose) => return crate::compose_request::answer(&compose),
+            Request::Edit(edit) => return edit.answer(),
+            Request::Extract(_) => {
+                return Err(HostError::new(
+                    "INTERNAL",
+                    "an extract request runs on its own worker",
+                ));
+            }
         };
         result.map_err(HostError::classify)
     }
@@ -925,6 +932,70 @@ impl Host {
         })
     }
 
+    /// Conforms an extract request's media and loads its fonts: the path each source reads, and
+    /// the conformed original fingerprint of `source` for `made_from`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn extract_media(
+        &mut self,
+        project: &str,
+        assets: &HashMap<String, PathBuf>,
+        proxies: &HashMap<String, Vec<ProxyRequest>>,
+        frames: &HashMap<String, Vec<Option<PathBuf>>>,
+        resources: &HashMap<String, HashMap<String, PathBuf>>,
+        effect_assets: &HashMap<String, PathBuf>,
+        font_files: &[PathBuf],
+        media: crate::protocol::ExportMedia,
+        source: Option<&alpha2_media::SourceId>,
+    ) -> Result<(HashMap<String, PathBuf>, Option<MediaFingerprint>), HostError> {
+        self.begin_request(crate::memory::MemoryRequest::default(), None)?;
+        // A source extraction reads its one source, placed on the timeline or not.
+        if let Some(source) = source {
+            let resolved = request_media(
+                project,
+                assets,
+                proxies,
+                frames,
+                media.purpose(),
+                &self.hardware_video_decode(),
+                Some(source),
+            )?;
+            if !resolved.report.ready {
+                return Err(
+                    HostError::new("CONFORM_FAILED", blocking_summary(&resolved.report))
+                        .with_details(json!(resolved.report)),
+                );
+            }
+            let original = crate::extract_request::original_fingerprint(&resolved.catalog, source);
+            return Ok((resolved.paths, original));
+        }
+        let PreparedRequest {
+            resolved,
+            provider_files,
+            ..
+        } = self.prepare_request(
+            project,
+            &RequestInputs {
+                assets,
+                proxies,
+                frames,
+                resources,
+                effect_assets,
+                font_files,
+            },
+            media,
+            &[],
+        )?;
+        self.provider_files = provider_files;
+        let fonts = self.set_fonts(font_files).map_err(HostError::classify)?;
+        self.provider_files.fonts = fonts;
+        Ok((resolved.paths, None))
+    }
+
+    /// Ends what [`Self::extract_media`] began.
+    pub(crate) fn end_extract(&mut self) {
+        self.end_export();
+    }
+
     /// A cache this host cannot key is not used; the returned reason is what the result reports.
     #[allow(clippy::too_many_arguments)]
     fn open_render_cache(
@@ -971,6 +1042,7 @@ impl Host {
             frames,
             media.purpose(),
             &self.hardware_video_decode(),
+            None,
         )
         .map_err(|error| self.attach_failure(error, None))?;
         if !resolved.report.ready {
@@ -3629,7 +3701,7 @@ const fn existing_output(overwrite: bool) -> ExistingOutput {
 ///
 /// # Errors
 /// `INVALID_INPUT` when the document is not a JSON object with settings.
-fn still_project(
+pub(crate) fn still_project(
     project: &str,
     size: Option<crate::protocol::StillSize>,
 ) -> Result<String, HostError> {
@@ -3711,6 +3783,7 @@ fn conform_answer(
         &frames,
         purpose.purpose(),
         &conform_hardware(policy),
+        None,
     )?;
     Ok(json!({
         "catalog": resolved.catalog,
@@ -3735,6 +3808,7 @@ fn request_media(
     frames: &HashMap<String, Vec<Option<PathBuf>>>,
     purpose: MediaPurpose,
     hardware: &HardwareVideoDecode,
+    reads: Option<&alpha2_media::SourceId>,
 ) -> Result<ResolvedMedia, HostError> {
     #[cfg(test)]
     assert!(
@@ -3765,7 +3839,17 @@ fn request_media(
         proxies,
         frames,
     };
-    Ok(resolve_media(&project, &links, &links, purpose, hardware))
+    let sources = match reads {
+        Some(id) => project
+            .sources
+            .iter()
+            .filter(|source| &source.id == id)
+            .collect(),
+        None => project.used_sources(),
+    };
+    Ok(crate::assets::resolve_sources(
+        &project, sources, &links, &links, purpose, hardware,
+    ))
 }
 
 /// Which extension formats this build reads, including those that open without a provider.

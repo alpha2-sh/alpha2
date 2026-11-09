@@ -8,6 +8,8 @@ fn availability_pass_deduplicates_missing_sources() {
     let gpu = gpu();
     let source = SourceId::new("source").expect("valid ID");
     let item = ActiveClip {
+        data: alpha2_eval::SampleContext::NONE,
+        correction: None,
         clip_id: leak(ClipId::new("one").expect("valid ID")),
         source_id: leak(source.clone()),
         track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -46,6 +48,8 @@ fn evaluated_frame_render_is_atomic_on_missing_inputs() {
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            data: alpha2_eval::SampleContext::NONE,
+            correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
             source_id: leak(source.clone()),
             track_id: leak(TrackId::new("track").expect("valid ID")),

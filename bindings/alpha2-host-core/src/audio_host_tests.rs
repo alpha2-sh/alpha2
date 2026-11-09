@@ -195,6 +195,7 @@ fn audio_project_with(gain: f32, edit: impl FnOnce(&mut alpha2_model::Project)) 
     );
     track.clips.push(clip);
     let project = Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: ProjectId::new(String::from("native-audio")).expect("id"),
         name: "native".into(),

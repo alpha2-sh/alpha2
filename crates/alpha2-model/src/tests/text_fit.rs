@@ -175,6 +175,7 @@ fn a_block_ellipsis_string_is_short_text_on_one_line() {
 #[test]
 fn a_caption_fit_is_held_to_the_caption_limit() {
     let caption = |fit: Option<FontSizeFit>| crate::Captions {
+        from_words: None,
         style: TextStyle {
             font_size_fit: fit,
             ..TextStyle::default()

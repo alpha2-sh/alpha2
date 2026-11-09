@@ -1,0 +1,19 @@
+{
+  "id": "alpha2.test.digest",
+  "version": 1,
+  "input": {
+    "media": "video",
+    "from": ["source", "timeline"],
+    "format": "rgba8",
+    "max_size": 960
+  },
+  "params_schema": { "type": "object" },
+  "outputs": [
+    {
+      "name": "digest",
+      "kind": "scalars",
+      "channels": ["hi", "lo"],
+      "interpolation": "hold"
+    }
+  ]
+}

@@ -82,9 +82,9 @@ def _attachments(value: object) -> bool:
 def parse_host_message(header: str) -> dict[str, Any]:
     """Parses and checks the header of one frame the host wrote.
 
-    A message is ``state``, ``progress``, ``fatal``, or a response (``ok``, with ``hostState``).
-    ``attachments``, when present, lists ``{"type", "bytes"}`` entries. Raises ``ValueError`` for
-    non-JSON, another protocol version, or a malformed message.
+    A message is ``state``, ``progress``, ``extract.step``, ``fatal``, or a response (``ok``, with
+    ``hostState``). ``attachments``, when present, lists ``{"type", "bytes"}`` entries. Raises
+    ``ValueError`` for non-JSON, another protocol version, or a malformed message.
     """
     value = json.loads(header)
     if not isinstance(value, dict):
@@ -104,14 +104,24 @@ def parse_host_message(header: str) -> dict[str, Any]:
             raise ValueError("invalid state message")
         return value
     if kind == "progress":
+        extract = value.get("phase") == "extract"
+        total = value.get("total")
         if (
             not isinstance(value.get("requestId"), str)
             or not _safe_count(value.get("completed"))
-            or not _safe_count(value.get("total"))
-            or value["completed"] > value["total"]
-            or ("phase" in value and value["phase"] not in ("frames", "finalizing"))
+            or not (_safe_count(total) or (extract and total is None))
+            or (total is not None and value["completed"] > total)
+            or ("phase" in value and value["phase"] not in ("frames", "finalizing", "extract"))
         ):
             raise ValueError("invalid progress message")
+        return value
+    if kind == "extract.step":
+        if (
+            not isinstance(value.get("requestId"), str)
+            or not _safe_count(value.get("seq"))
+            or value.get("step") not in ("begin", "pass", "video", "audio", "end")
+        ):
+            raise ValueError("invalid extract step")
         return value
     if kind == "fatal":
         if not _protocol_error(value.get("error")):

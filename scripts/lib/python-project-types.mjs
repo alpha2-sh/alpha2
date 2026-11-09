@@ -60,7 +60,7 @@ const PRIMITIVE_ARGUMENTS = new Map([
   ["string", "str"],
 ]);
 
-const GENERICS = new Set(["Animated", "Keyframe"]);
+const GENERICS = new Set(["Animated", "Keyframed", "Keyframe"]);
 
 function pascal(text) {
   return text
@@ -300,7 +300,9 @@ function pythonTypes(
         throw new Error(
           `inline type ${name} collides with schema type ${name}`,
         );
-      return declareClass(name, variant);
+      // The `data` value mode reads a data set, so its fields do not depend on the value's type.
+      const dataMode = variant.properties.mode?.const === "data";
+      return declareClass(name, variant, dataMode ? null : generic);
     }
 
     function object(node, owner) {
@@ -324,7 +326,7 @@ function pythonTypes(
       return declareClass(owner, node);
     }
 
-    function declareClass(name, node) {
+    function declareClass(name, node, innerGeneric = generic) {
       const properties = node.properties ?? {};
       if (node.additionalProperties !== false) {
         throw new Error(
@@ -332,7 +334,7 @@ function pythonTypes(
         );
       }
       const required = new Set(node.required ?? []);
-      const inner = renderer(out, generic);
+      const inner = renderer(out, innerGeneric ?? undefined);
       const fields = Object.entries(properties).map(([field, property]) => {
         const rendered = inner.type(property, name + pascal(field));
         return {

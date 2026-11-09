@@ -875,7 +875,7 @@ function rippleSyncTracks(
         ? {
             captions: {
               ...track.captions,
-              cues: track.captions.cues.map((cue) =>
+              cues: (track.captions.cues ?? []).map((cue) =>
                 cue.timeline_range.start >= pivot
                   ? {
                       ...cue,

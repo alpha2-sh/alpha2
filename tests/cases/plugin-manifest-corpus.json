@@ -1,0 +1,1171 @@
+[
+  {
+    "name": "complete",
+    "valid": true,
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "wasm-only-without-resources",
+    "valid": true,
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "prerelease-version",
+    "valid": true,
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "2.0.0-rc.1+build.5",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "missing-artifact-hash",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "missing-resource-hash",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "uppercase-hash",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "short-hash",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "ab",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "unknown-abi",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "abi",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/2",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "missing-abi",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "no-artifacts",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "unknown-field",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "signature": "x"
+    }
+  },
+  {
+    "name": "unknown-kind",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "generator",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "unknown-artifact-type",
+    "valid": false,
+    "rejected_by_schema": true,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "component",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "id-differs-from-descriptor",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.other",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "version-not-semver",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "version-leading-zero",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.02.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "wasm-type-on-native-target",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "wasm",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "target-listed-twice",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "resource-name-repeated",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "descriptor-without-outputs",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        },
+        {
+          "target": "x86_64-unknown-linux-gnu",
+          "type": "cdylib",
+          "url": "libsilence.so",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://example.com/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": []
+      }
+    }
+  }
+]

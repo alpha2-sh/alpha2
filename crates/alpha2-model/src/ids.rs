@@ -83,6 +83,7 @@ define_id!(EffectResourceId, "A stable effect-resource identifier.");
 define_id!(TrackId, "A stable timeline-track identifier.");
 define_id!(ClipId, "A stable timeline-clip identifier.");
 define_id!(CompositionId, "A stable composition-graph identifier.");
+define_id!(DataSetId, "A stable data-set identifier.");
 define_id!(
     NodeId,
     "A stable identifier of a node within one composition graph. It has no `/`, which joins the IDs of the group and media nodes a step was drawn through.",

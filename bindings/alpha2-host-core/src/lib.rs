@@ -23,9 +23,13 @@ pub mod encode_watch;
 #[cfg(feature = "engine")]
 pub mod export;
 pub mod export_policy;
+#[cfg(feature = "engine")]
+pub mod extract;
 pub mod host_frames;
 pub mod parameter_sets;
 pub mod partial;
+#[cfg(feature = "plugins")]
+pub mod plugins;
 #[cfg(all(feature = "engine", feature = "cpal-host"))]
 pub mod preview_audio;
 pub mod probe_cache;
@@ -33,6 +37,7 @@ pub mod probe_cache;
 pub mod providers;
 pub mod rate_control;
 pub mod recovery;
+pub mod reverse_window;
 pub mod stills;
 mod threads;
 pub mod tools;

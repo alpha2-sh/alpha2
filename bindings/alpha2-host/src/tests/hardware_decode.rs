@@ -1141,3 +1141,70 @@ fn a_build_without_hardware_decode_refuses_hardware_required_at_startup() {
         _ => {}
     }
 }
+
+#[cfg(all(target_os = "linux", feature = "hwdecode"))]
+fn open_hardware(
+    name: &str,
+    context: &alpha2_native_gpu::SharedVulkanContext,
+) -> alpha2_native::NativeExportDecoder {
+    alpha2_native::NativeExportDecoder::open_vulkan(corpus(name), 1, context, 1)
+        .expect("a hardware decoder")
+}
+
+#[cfg(all(target_os = "macos", feature = "hwdecode"))]
+fn open_hardware(
+    name: &str,
+    context: &alpha2_native_gpu::SharedMetalContext,
+) -> alpha2_native::NativeExportDecoder {
+    alpha2_native::NativeExportDecoder::open_videotoolbox(corpus(name), 1, context, 1)
+        .expect("a hardware decoder")
+}
+
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwdecode"))]
+#[test]
+fn extraction_reads_the_same_bytes_from_hardware_and_software_decode() {
+    // H.264 and HEVC decode bit-exactly, so a downloaded surface presents as the software frame,
+    // at 8 and 10 bits and with surfaces taller than the picture.
+    let _gpu = gpu_test_lock();
+    let Some(context) = parity_device() else {
+        return;
+    };
+    let renderer = alpha2_render::CpuRenderer::new(1);
+    let cancel = CancelToken::default();
+    let present = |frame: alpha2_media::DecodedVideoFrame| {
+        alpha2_engine::extract::present_for_extraction(&renderer, Arc::new(frame), 96)
+            .expect("the frame presents")
+    };
+    for (name, codec, ten_bit) in [
+        ("h264-long-gop.mp4", "h264", false),
+        ("h264-padded.mp4", "h264", false),
+        ("hevc-padded.mp4", "hevc", false),
+        ("hevc-main10-padded.mp4", "hevc", true),
+    ] {
+        if decodes_in_hardware(&context, codec, ten_bit) != Some(true) {
+            eprintln!("{name}: this device does not decode it in hardware");
+            continue;
+        }
+        let mut hardware = open_hardware(name, &context);
+        let mut software = alpha2_native::NativeExportDecoder::open_with_threads(corpus(name), 1)
+            .expect("a software decoder");
+        for index in 0..10 {
+            let surface = hardware
+                .decode_video_next(&cancel)
+                .expect("hardware decodes")
+                .expect("a hardware frame");
+            let frame = software
+                .decode_video_next(&cancel)
+                .expect("software decodes")
+                .expect("a software frame");
+            assert!(surface.is_hardware(), "{name}");
+            let downloaded = present(surface.to_cpu().expect("the surface downloads"));
+            let decoded = present(frame.as_cpu().expect("a CPU frame").clone());
+            assert_eq!(downloaded.pts, decoded.pts, "{name} frame {index}");
+            assert!(
+                downloaded.rgba == decoded.rgba,
+                "{name} frame {index} differs"
+            );
+        }
+    }
+}

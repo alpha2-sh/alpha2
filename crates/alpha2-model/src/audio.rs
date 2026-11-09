@@ -314,6 +314,7 @@ impl AudioProperties {
                 Animated::Keyframes { keyframes } => {
                     keyframes.iter().any(|keyframe| keyframe.value > 0.0)
                 }
+                Animated::Data(_) => true,
             }
     }
 
@@ -496,5 +497,6 @@ fn valid_range(animation: &Animated<f32>, low: f32, high: f32) -> bool {
             crate::animation::valid_keyframes(keyframes)
                 && keyframes.iter().all(|keyframe| valid(keyframe.value))
         }
+        Animated::Data(_) => true,
     }
 }

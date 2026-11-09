@@ -757,6 +757,69 @@ fn voice() -> Track {
     voice
 }
 
+/// A triangle clip whose gain and pan follow a scalar data set with `interpolation`, or (with
+/// `keyframed`) the same curves written as keyframes, played straight through.
+#[cfg(test)]
+fn data_curves_render(interpolation: &str, keyframed: bool) -> Vec<Vec<f32>> {
+    let times = [0_i64, 12_000, 30_000, 61_000, 90_000];
+    let gain = [1.0, 0.25, 0.8, 0.1, 0.6];
+    let pan = [-1.0, 0.5, 0.0, 1.0, -0.3];
+    let curve = |channel: &str, values: &[f64; 5]| {
+        if keyframed {
+            let keys = times
+                .iter()
+                .zip(values)
+                .map(|(time, value)| {
+                    let interpolation = serde_json::json!({ "type": interpolation });
+                    serde_json::json!({ "time": time, "value": value, "interpolation": interpolation })
+                })
+                .collect::<Vec<_>>();
+            serde_json::json!({ "mode": "keyframes", "keyframes": keys })
+        } else {
+            serde_json::json!({ "mode": "data", "data": "levels", "channel": channel, "via": { "clip": "c" } })
+        }
+    };
+    let values = gain
+        .iter()
+        .zip(pan)
+        .flat_map(|(gain, pan)| [*gain, pan])
+        .collect::<Vec<_>>();
+    let project = Project::from_json(
+        &serde_json::json!({
+            "schema_version": 1, "id": "curves", "name": "curves",
+            "settings": { "width": 16, "height": 16, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": RATE },
+            "sources": [{ "id": "triangle", "kind": "audio", "locator": "synthetic://triangle" }],
+            "data": [{
+                "id": "levels", "anchor": { "type": "source", "source_id": "triangle" }, "kind": "scalars",
+                "channels": ["gain", "pan"], "interpolation": interpolation, "times": times, "values": values
+            }],
+            "timeline": { "tracks": [{ "id": "a", "name": "A", "kind": "audio", "clips": [{
+                "id": "c", "source_id": "triangle",
+                "timeline_range": { "start": 0, "end": 120_000 }, "source_range": { "start": 0, "end": 120_000 },
+                "audio": { "gain": curve("gain", &gain), "pan": curve("pan", &pan) }
+            }] }] }
+        })
+        .to_string(),
+    )
+    .expect("project");
+    let sources = Sources::at(RATE);
+    let snapshot = EngineProject::new(project).expect("valid project");
+    let mut renderer = AudioRenderer::new(&snapshot, 2, BLOCK).expect("renderer");
+    let mut planes = vec![Vec::new(); 2];
+    let mut start = 0;
+    while start < i64::from(RATE) {
+        let status = renderer
+            .render(&snapshot, start, BLOCK, &sources, TransportState::Playing)
+            .expect("render");
+        assert!(status.is_complete(), "every source is supplied");
+        for (channel, plane) in planes.iter_mut().enumerate() {
+            plane.extend_from_slice(renderer.channel(channel));
+        }
+        start += i64::try_from(BLOCK).expect("small");
+    }
+    planes
+}
+
 #[cfg(test)]
 mod tests {
     // Update these pins only with an intended change to audio output, never to make one
@@ -766,6 +829,28 @@ mod tests {
     const EXPECTED_LOUDNESS: u64 = 0x078b_c676_bc76_f77c;
 
     const EXPECTED_STRETCH: u64 = 0xcd19_90c6_1b59_d71f;
+
+    #[test]
+    fn gain_and_pan_following_data_match_the_same_curves_as_keyframes() {
+        for interpolation in ["hold", "linear"] {
+            let bound = super::data_curves_render(interpolation, false);
+            let keyframed = super::data_curves_render(interpolation, true);
+            assert!(
+                bound[0].iter().any(|sample| *sample != 0.0),
+                "{interpolation}: audible"
+            );
+            for (channel, (bound, keyframed)) in bound.iter().zip(&keyframed).enumerate() {
+                let first = bound
+                    .iter()
+                    .zip(keyframed)
+                    .position(|(a, b)| a.to_bits() != b.to_bits());
+                assert_eq!(
+                    first, None,
+                    "{interpolation}: channel {channel} differs first at that sample"
+                );
+            }
+        }
+    }
 
     #[test]
     fn the_stretched_mix_hashes_to_the_same_value_everywhere() {

@@ -3,6 +3,7 @@
 /fuzz/corpus/
 /fuzz/artifacts/
 /fuzz/logs/
+/plugins/target/
 /test-results/
 /release/ffmpeg-lgpl/artifacts/
 /node_modules/

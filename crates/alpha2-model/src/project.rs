@@ -53,6 +53,10 @@ pub struct Project {
     /// Master bus applied to the summed track audio.
     #[serde(default)]
     pub audio: MasterAudio,
+    /// Values derived from media that properties and caption tracks can follow.
+    /// At most [`crate::MAX_DATA_SETS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data: Vec<crate::DataSet>,
 }
 
 /// The deserialized shape of a [`Project`] before its invariants are checked.
@@ -91,6 +95,9 @@ pub(crate) struct ProjectWire {
     /// Master bus applied to the summed track audio.
     #[serde(default)]
     pub(crate) audio: MasterAudio,
+    /// Values derived from media, which properties and caption tracks can follow. At most 256.
+    #[serde(default)]
+    pub(crate) data: Vec<crate::DataSet>,
 }
 
 impl TryFrom<ProjectWire> for Project {
@@ -107,6 +114,7 @@ impl TryFrom<ProjectWire> for Project {
             compositions: wire.compositions,
             timeline: wire.timeline,
             audio: wire.audio,
+            data: wire.data,
         };
         project.validate()?;
         Ok(project)
@@ -282,6 +290,35 @@ impl Project {
             })
     }
 
+    /// The smallest interval holding every clip, caption cue and timeline-anchored word a caption
+    /// track shows, which a whole-project render covers. `None` for a project that shows nothing.
+    #[must_use]
+    pub fn extent(&self) -> Option<alpha2_time::TimeRange> {
+        let words = self
+            .timeline
+            .tracks
+            .iter()
+            .filter_map(|track| track.captions.as_ref()?.from_words.as_ref())
+            .filter_map(|from| self.data.iter().find(|set| set.id == from.data))
+            .filter(|set| set.anchor == crate::DataAnchor::Timeline)
+            .filter_map(|set| match &set.values {
+                crate::DataValues::Words(words) => Some((
+                    words.first()?.start,
+                    words.iter().map(|word| word.end).max()?,
+                )),
+                _ => None,
+            });
+        let mut bounds = self
+            .timeline
+            .extent()
+            .map(|range| (range.start(), range.end()));
+        for (start, end) in words {
+            bounds =
+                Some(bounds.map_or((start, end), |(low, high)| (low.min(start), high.max(end))));
+        }
+        bounds.and_then(|(start, end)| alpha2_time::TimeRange::new(start, end).ok())
+    }
+
     /// Creates an empty project using the current schema version.
     #[must_use]
     pub fn new(id: ProjectId, name: impl Into<String>, settings: ProjectSettings) -> Self {
@@ -295,6 +332,7 @@ impl Project {
             compositions: Vec::new(),
             timeline: Timeline { tracks: Vec::new() },
             audio: MasterAudio::default(),
+            data: Vec::new(),
         }
     }
 
@@ -400,6 +438,7 @@ impl Project {
             ensure_overlaps_have_transitions(track)?;
         }
         self.ensure_audio_effects_fit()?;
+        crate::data_places::validate_data(self, &index.sources)?;
         ensure_ducking_is_acyclic(&self.timeline)?;
         ensure_mattes_are_usable(&self.timeline)?;
         ensure_frames_fit(&self.timeline, &index.sources, &inlined)?;

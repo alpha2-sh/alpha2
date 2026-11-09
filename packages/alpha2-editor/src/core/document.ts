@@ -947,7 +947,7 @@ function projectedTracks(document: EditorDocument): readonly Track[] {
   });
 }
 /** A clip's visual properties when it has none (the engine's `VisualProperties::default`). */
-const DEFAULT_VISUAL: Required<VisualProperties> = {
+const DEFAULT_VISUAL: Required<Omit<VisualProperties, "correction">> = {
   position: { mode: "constant", value: { x: 0.5, y: 0.5 } },
   anchor: { x: 0.5, y: 0.5 },
   scale: { mode: "constant", value: { x: 1, y: 1 } },

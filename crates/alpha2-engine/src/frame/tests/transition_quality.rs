@@ -13,6 +13,8 @@ impl FrameProvider for Frames {
 
 fn clip(id: &str, time: i64, visual: EvaluatedVisual, mode: ClipBlendMode) -> ActiveClip<'static> {
     ActiveClip {
+        data: alpha2_eval::SampleContext::NONE,
+        correction: None,
         clip_id: leak(ClipId::new(id).unwrap()),
         source_id: leak(SourceId::new("source").unwrap()),
         track_id: leak(TrackId::new("track").unwrap()),
@@ -97,6 +99,7 @@ fn transition_endpoints_preserve_each_clips_visual_and_blend_mode() {
                             params: BTreeMap::new(),
                         }),
                         MediaTime::ZERO,
+                        alpha2_eval::SampleContext::NONE,
                     ),
                     progress,
                 }],
@@ -151,6 +154,7 @@ fn transition_opacity_is_applied_once_at_the_midpoint() {
                     params: BTreeMap::new(),
                 }),
                 MediaTime::ZERO,
+                alpha2_eval::SampleContext::NONE,
             ),
             progress: 0.5,
         }],
@@ -211,6 +215,7 @@ fn chained_transitions_on_two_tracks_with_a_matted_endpoint_show_their_endpoints
                 params: BTreeMap::new(),
             }),
             MediaTime::ZERO,
+            alpha2_eval::SampleContext::NONE,
         ),
         progress,
     };

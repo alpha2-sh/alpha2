@@ -4,6 +4,7 @@ Generated files; do not edit them by hand.
 
 - `project.v1.schema.json`: the JSON Schema (draft 2020-12) of the project document, derived from `alpha2-model` with its `schema` feature.
 - `project-limits.v1.json`: the document limits (`MAX_TRACKS` and the rest), which the TypeScript constants are generated from.
+- `plugin-manifest.v1.json`: the JSON Schema of a plugin manifest, derived from `alpha2-engine` with its `schema` feature. `PluginManifest::from_json` checks the rest: the id against the descriptor's, the semantic version, the descriptor's own rules and repeated targets or resource names.
 - `compose.v1.schema.json`: the JSON Schema of the compose spec, derived from `alpha2-compose` with its `schema` feature. The model types it embeds are stated as in the project schema; the Python package's `compose_types.py` is generated from it.
 
 Regenerate them, `packages/alpha2/src/generated/`, and the Python package's generated types with

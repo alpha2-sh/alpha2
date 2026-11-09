@@ -24,7 +24,9 @@ fn parsed_video_quality(video_quality: Option<Value>) -> Result<VideoQualityRequ
         Request::Capabilities { .. }
         | Request::Conform(_)
         | Request::Still(_)
-        | Request::Compose(_) => {
+        | Request::Compose(_)
+        | Request::Edit(_)
+        | Request::Extract(_) => {
             unreachable!("an export line parses as an export")
         }
     }
@@ -812,7 +814,9 @@ fn an_export_includes_audio_unless_the_request_says_not_to() {
             Request::Capabilities { .. }
             | Request::Conform(_)
             | Request::Still(_)
-            | Request::Compose(_) => {
+            | Request::Compose(_)
+            | Request::Edit(_)
+            | Request::Extract(_) => {
                 unreachable!("an export line parses as an export")
             }
         }
@@ -1009,7 +1013,9 @@ fn audio_quality_takes_a_level_or_a_bitrate_and_names_itself_when_wrong() {
             Request::Capabilities { .. }
             | Request::Conform(_)
             | Request::Still(_)
-            | Request::Compose(_) => {
+            | Request::Compose(_)
+            | Request::Edit(_)
+            | Request::Extract(_) => {
                 unreachable!("an export line parses as an export")
             }
         }
@@ -1199,7 +1205,9 @@ fn resolved_format(fields: &Value) -> Result<crate::protocol::ResolvedFormat, Ho
         Request::Capabilities { .. }
         | Request::Conform(_)
         | Request::Still(_)
-        | Request::Compose(_) => {
+        | Request::Compose(_)
+        | Request::Edit(_)
+        | Request::Extract(_) => {
             unreachable!("an export line parses as an export")
         }
     }
@@ -1325,7 +1333,9 @@ fn a_cli_export_resolves_its_container_as_the_protocol_does() {
                 Request::Capabilities { .. }
                 | Request::Conform(_)
                 | Request::Still(_)
-                | Request::Compose(_) => {
+                | Request::Compose(_)
+                | Request::Edit(_)
+                | Request::Extract(_) => {
                     unreachable!("an export")
                 }
             })
@@ -1517,14 +1527,14 @@ fn capabilities_are_the_shared_capability_report() {
 }
 
 /// A child of this test binary running `serve` on its stdin, as `main` runs it.
-struct ServeChild {
+pub(super) struct ServeChild {
     child: std::process::Child,
-    stdin: Option<std::process::ChildStdin>,
+    pub(super) stdin: Option<std::process::ChildStdin>,
     messages: mpsc::Receiver<(Value, Vec<u8>)>,
 }
 
 impl ServeChild {
-    fn start(test: &str, env: &[(&str, &str)]) -> Self {
+    pub(super) fn start(test: &str, env: &[(&str, &str)]) -> Self {
         use alpha2_host_core::host_frames::{FrameLimits, ReadFrame, read_frame, skip_to_magic};
         let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
         command
@@ -1570,18 +1580,18 @@ impl ServeChild {
         }
     }
 
-    fn message(&self, limit: Duration) -> Value {
+    pub(super) fn message(&self, limit: Duration) -> Value {
         self.message_with_attachments(limit).0
     }
 
     /// A header and its attachments' bytes, not split.
-    fn message_with_attachments(&self, limit: Duration) -> (Value, Vec<u8>) {
+    pub(super) fn message_with_attachments(&self, limit: Duration) -> (Value, Vec<u8>) {
         self.messages
             .recv_timeout(limit)
             .unwrap_or_else(|error| panic!("no message within {limit:?}: {error}"))
     }
 
-    fn write(&mut self, header: &str) {
+    pub(super) fn write(&mut self, header: &str) {
         let stdin = self.stdin.as_mut().expect("stdin open");
         let frame =
             alpha2_host_core::host_frames::frame_bytes(header.as_bytes(), &[]).expect("frame");
@@ -1589,7 +1599,7 @@ impl ServeChild {
         stdin.flush().expect("flush");
     }
 
-    fn finish(mut self) -> Option<i32> {
+    pub(super) fn finish(mut self) -> Option<i32> {
         drop(self.stdin.take());
         let started = Instant::now();
         loop {
@@ -1631,7 +1641,7 @@ fn serve_standard_input() {
     serve(&mut host, test_serve_limits()).expect("serve");
 }
 
-const SERVE_CHILD: &str = "tests::requests::serve_standard_input";
+pub(super) const SERVE_CHILD: &str = "tests::requests::serve_standard_input";
 
 /// A client that sees no ready line in time knows the process is held before `main` (a security
 /// scan, an approval prompt) rather than busy.

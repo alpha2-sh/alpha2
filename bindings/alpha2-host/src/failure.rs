@@ -254,7 +254,8 @@ pub fn classify_failure(
     let evidence = gpu.failure_code();
     match host_code {
         "CANCELLED" => return class("CANCELLED", "unknown"),
-        "RESOURCE_LIMIT" => return class("RESOURCE_LIMIT", "unknown"),
+        // A wasm plugin past its memory cap or call deadline is a limit too.
+        "RESOURCE_LIMIT" | "PLUGIN_LIMIT" => return class("RESOURCE_LIMIT", "unknown"),
         "GPU_TIMEOUT" => return class("GPU_TIMEOUT", "gpu"),
         // Every session is held by other exports; it frees up when they end.
         "ENCODER_BUSY" => return class("RESOURCE_BUSY", "gpu"),
@@ -284,8 +285,22 @@ pub fn classify_failure(
         | "COPY_INELIGIBLE"
         | "GPU_OUTPUT_UNAVAILABLE"
         | "HARDWARE_DECODE_UNAVAILABLE"
+        // An extractor's own output or failure repeats on a retry.
+        | "INVALID_EMIT"
+        | "EXTRACTOR_FAILED"
+        // A plugin that is refused, does not load or traps does so again.
+        | "PLUGIN_HASH_MISMATCH"
+        | "PLUGIN_ABI_UNSUPPORTED"
+        | "PLUGIN_NO_ARTIFACT"
+        | "PLUGIN_NATIVE_REFUSED"
+        | "PLUGIN_DESCRIPTOR_MISMATCH"
+        | "PLUGIN_UNSUPPORTED_FEATURE"
+        | "PLUGIN_LOAD_FAILED"
+        | "PLUGIN_TRAPPED"
         // Another export is writing the same output; retrying meets it again until that one ends.
         | "OUTPUT_IN_USE" => return class("INVALID_INPUT", "unknown"),
+        // A slow client, or a plugin's server, may answer in time on another attempt.
+        "EXTRACTOR_TIMEOUT" | "PLUGIN_FETCH_FAILED" => return class("UNKNOWN", "unknown"),
         _ => {}
     }
     let missing_canary = message.contains(alpha2_render::GPU_WORK_DROPPED_MESSAGE);

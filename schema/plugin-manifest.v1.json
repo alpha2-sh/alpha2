@@ -1,0 +1,458 @@
+{
+  "$defs": {
+    "ArtifactKind": {
+      "description": "What kind of code an artifact is.",
+      "oneOf": [
+        {
+          "const": "wasm",
+          "description": "A core wasm module.",
+          "type": "string"
+        },
+        {
+          "const": "cdylib",
+          "description": "A C-ABI dynamic library.",
+          "type": "string"
+        },
+        {
+          "const": "staticlib",
+          "description": "A static library an app links at build time.",
+          "type": "string"
+        }
+      ]
+    },
+    "AudioChannels": {
+      "description": "Which channels delivered audio has.",
+      "oneOf": [
+        {
+          "const": "mono",
+          "description": "One channel, the mixer's equal-weight downmix.",
+          "type": "string"
+        },
+        {
+          "const": "source",
+          "description": "The source's (or the mix's) own channels.",
+          "type": "string"
+        }
+      ]
+    },
+    "AudioFormat": {
+      "description": "How delivered audio is stored.",
+      "oneOf": [
+        {
+          "const": "f32",
+          "description": "Planar 32-bit float, channel after channel.",
+          "type": "string"
+        }
+      ]
+    },
+    "DataInterpolation": {
+      "description": "How a sampled data set reads between its samples.",
+      "oneOf": [
+        {
+          "const": "hold",
+          "description": "The sample at or before the time, as the picture shown at that time is chosen.",
+          "type": "string"
+        },
+        {
+          "const": "linear",
+          "description": "A straight line between the samples around the time.",
+          "type": "string"
+        }
+      ]
+    },
+    "DataKind": {
+      "description": "What a data set holds; each kind has a consumer in the engine.",
+      "oneOf": [
+        {
+          "const": "points",
+          "description": "Named channels of normalized `(x, y)` points.",
+          "type": "string"
+        },
+        {
+          "const": "scalars",
+          "description": "Named channels of numbers.",
+          "type": "string"
+        },
+        {
+          "const": "similarity",
+          "description": "One translation, rotation and uniform scale per sample.",
+          "type": "string"
+        },
+        {
+          "const": "words",
+          "description": "Timed words with text.",
+          "type": "string"
+        },
+        {
+          "const": "intervals",
+          "description": "Timed ranges, a zero-length one being an instant.",
+          "type": "string"
+        }
+      ]
+    },
+    "Descriptor": {
+      "additionalProperties": false,
+      "description": "What an extractor declares, with its identity, the input it reads and the outputs it emits.",
+      "properties": {
+        "id": {
+          "description": "Reverse-DNS id; `alpha2.` is reserved for first-party plugins by convention.",
+          "type": "string"
+        },
+        "input": {
+          "$ref": "#/$defs/InputSpec",
+          "description": "What the extractor reads."
+        },
+        "outputs": {
+          "description": "The outputs it emits, by name.",
+          "items": {
+            "$ref": "#/$defs/OutputSpec"
+          },
+          "type": "array"
+        },
+        "params_schema": {
+          "default": {},
+          "description": "JSON Schema of the request's `params`, for interfaces and validation by surface helpers."
+        },
+        "version": {
+          "description": "The output contract's version.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "input",
+        "outputs"
+      ],
+      "type": "object"
+    },
+    "InputFrom": {
+      "description": "Which clock an extractor reads on.",
+      "oneOf": [
+        {
+          "const": "source",
+          "description": "A source, in source time; its outputs are anchored to that source.",
+          "type": "string"
+        },
+        {
+          "const": "timeline",
+          "description": "The rendered timeline, in timeline time; its outputs are anchored to the timeline.",
+          "type": "string"
+        }
+      ]
+    },
+    "InputSpec": {
+      "description": "What an extractor reads.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Pictures.",
+          "properties": {
+            "format": {
+              "$ref": "#/$defs/VideoFormat",
+              "description": "The pixel format delivered."
+            },
+            "from": {
+              "description": "The inputs it can read.",
+              "items": {
+                "$ref": "#/$defs/InputFrom"
+              },
+              "type": "array"
+            },
+            "max_size": {
+              "default": 960,
+              "description": "The longest edge a delivered frame may have, in pixels.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "media": {
+              "const": "video",
+              "type": "string"
+            }
+          },
+          "required": [
+            "media",
+            "from",
+            "format"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Sound.",
+          "properties": {
+            "block_frames": {
+              "default": 1024,
+              "description": "Frames per delivered block, in [`BLOCK_FRAMES_RANGE`].",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "channels": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/AudioChannels"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The channel layout it needs, if fixed."
+            },
+            "format": {
+              "$ref": "#/$defs/AudioFormat",
+              "description": "The sample format delivered."
+            },
+            "from": {
+              "description": "The inputs it can read.",
+              "items": {
+                "$ref": "#/$defs/InputFrom"
+              },
+              "type": "array"
+            },
+            "media": {
+              "const": "audio",
+              "type": "string"
+            },
+            "sample_rate": {
+              "description": "The rate it needs, if fixed.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "media",
+            "from",
+            "format"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OutputSpec": {
+      "additionalProperties": false,
+      "description": "One output an extractor emits.",
+      "properties": {
+        "channels": {
+          "description": "Channel names, for `points` and `scalars`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "interpolation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DataInterpolation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the values read between samples, for the sampled kinds; `hold` when left out."
+        },
+        "kind": {
+          "$ref": "#/$defs/DataKind",
+          "description": "The kind of data it holds."
+        },
+        "name": {
+          "description": "Its name, unique among the outputs.",
+          "type": "string"
+        },
+        "suggest": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Suggest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How the output is usually used, for interfaces. The engine ignores it."
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "PluginArtifact": {
+      "additionalProperties": false,
+      "description": "One build of a plugin.",
+      "properties": {
+        "bytes": {
+          "description": "Its length in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sha256": {
+          "description": "SHA-256 of its bytes, 64 lowercase hexadecimal digits.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "target": {
+          "description": "`wasm32`, or the Rust target triple a native artifact is built for.",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/ArtifactKind",
+          "description": "What kind of code it is."
+        },
+        "url": {
+          "description": "Where it is, relative to the manifest's own URL or absolute.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "type",
+        "url",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "PluginKind": {
+      "description": "The contract a plugin implements.",
+      "oneOf": [
+        {
+          "const": "extractor",
+          "description": "An extractor.",
+          "type": "string"
+        }
+      ]
+    },
+    "PluginResource": {
+      "additionalProperties": false,
+      "description": "A file a plugin reads.",
+      "properties": {
+        "bytes": {
+          "description": "Its length in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "description": "The name the plugin asks for.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "SHA-256 of its bytes, 64 lowercase hexadecimal digits.",
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "url": {
+          "description": "Where it is, relative to the manifest's own URL or absolute.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url",
+        "sha256",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "Suggest": {
+      "description": "How an output is usually used.",
+      "oneOf": [
+        {
+          "const": "bind",
+          "description": "Values bind to it.",
+          "type": "string"
+        },
+        {
+          "const": "remove_ranges",
+          "description": "`remove_ranges` applies it.",
+          "type": "string"
+        },
+        {
+          "const": "split_at",
+          "description": "`split_at` applies it.",
+          "type": "string"
+        }
+      ]
+    },
+    "VideoFormat": {
+      "description": "How delivered video frames are packed.",
+      "oneOf": [
+        {
+          "const": "rgba8",
+          "description": "Four bytes a pixel: straight-alpha, sRGB-encoded RGBA.",
+          "type": "string"
+        },
+        {
+          "const": "luma8",
+          "description": "One byte a pixel: BT.709 Y' of the sRGB-encoded RGB.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://alpha2.sh/schema/plugin-manifest.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A plugin's manifest.",
+  "properties": {
+    "abi": {
+      "const": "alpha2-plugin/1",
+      "description": "The plugin ABI, `alpha2-plugin/1`.",
+      "type": "string"
+    },
+    "artifacts": {
+      "description": "The code, one artifact per target.",
+      "items": {
+        "$ref": "#/$defs/PluginArtifact"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "descriptor": {
+      "$ref": "#/$defs/Descriptor",
+      "description": "The descriptor `describe()` returns."
+    },
+    "id": {
+      "description": "Reverse-DNS id, equal to the descriptor's.",
+      "type": "string"
+    },
+    "kind": {
+      "$ref": "#/$defs/PluginKind",
+      "description": "The contract the plugin implements."
+    },
+    "resources": {
+      "description": "Files the plugin reads through `resource()`.",
+      "items": {
+        "$ref": "#/$defs/PluginResource"
+      },
+      "type": "array"
+    },
+    "version": {
+      "description": "The package's semantic version.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "version",
+    "abi",
+    "kind",
+    "artifacts",
+    "descriptor"
+  ],
+  "title": "alpha2 plugin manifest, ABI alpha2-plugin/1",
+  "type": "object"
+}

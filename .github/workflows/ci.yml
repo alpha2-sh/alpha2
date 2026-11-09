@@ -652,6 +652,38 @@ jobs:
       - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - run: cargo clippy --manifest-path fuzz/Cargo.toml --locked --bins -- -D warnings
 
+  plugins-check:
+    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',plugins-check,') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc --version
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: plugins
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - run: cargo fmt --manifest-path plugins/Cargo.toml --all --check
+      - run: cargo clippy --manifest-path plugins/Cargo.toml --locked --all-targets -- -D warnings
+      - run: >-
+          cargo clippy --manifest-path plugins/Cargo.toml --locked --target wasm32-unknown-unknown
+          -p alpha2-plugin-sdk -p alpha2-plugin-fixture-digest -p alpha2-plugin-fixture-scripted
+          -- -D warnings
+      - run: cargo test --manifest-path plugins/Cargo.toml --locked
+      - name: Pack the plugins (wasm32 and the host triple; the wasm modules are checked)
+        run: |
+          for plugin in fixture-digest fixture-scripted silence; do
+            cargo run --manifest-path plugins/Cargo.toml --locked -p alpha2-plugin-pack -- \
+              "plugins/$plugin" --out "$RUNNER_TEMP/$plugin"
+          done
+
   platform-lint:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-lint,') }}
     name: Platform lint (${{ matrix.target }})
@@ -1356,6 +1388,10 @@ jobs:
           rustc --version
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
+          command: check
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: plugins/Cargo.toml
           command: check
 
   release-wasm:

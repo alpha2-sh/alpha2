@@ -4,7 +4,7 @@ use alpha2_geometry::StableHash;
 use alpha2_model::{RangeShape, RangeUnits, RunState, TextAnimator, TextSelector, TextUnit};
 use alpha2_time::MediaTime;
 
-use crate::{sample_rgba, sample_scalar, sample_vec2};
+use crate::{SampleContext, sample_rgba, sample_scalar, sample_vec2};
 
 /// An animator's selector and properties at one time.
 #[derive(Clone, Debug, PartialEq)]
@@ -86,11 +86,11 @@ pub fn sample_text_animators(animators: &[TextAnimator], time: MediaTime) -> Vec
                     } => SampledSelector::Range {
                         based_on: *based_on,
                         units: *units,
-                        start: sample_scalar(start, time),
-                        end: sample_scalar(end, time),
-                        offset: sample_scalar(offset, time),
+                        start: sample_scalar(start, time, &SampleContext::NONE),
+                        end: sample_scalar(end, time, &SampleContext::NONE),
+                        offset: sample_scalar(offset, time, &SampleContext::NONE),
                         shape: *shape,
-                        amount: sample_scalar(amount, time).clamp(0.0, 1.0),
+                        amount: sample_scalar(amount, time, &SampleContext::NONE).clamp(0.0, 1.0),
                     },
                     TextSelector::Timing { state, ramp, sweep } => SampledSelector::Timing {
                         state: *state,
@@ -104,19 +104,18 @@ pub fn sample_text_animators(animators: &[TextAnimator], time: MediaTime) -> Vec
                 offset: properties
                     .offset
                     .as_ref()
-                    .map(|value| pair(sample_vec2(value, time))),
-                scale: properties
-                    .scale
-                    .as_ref()
-                    .map(|value| pair(sample_vec2(value, time)).map(|axis| axis.max(0.0))),
+                    .map(|value| pair(sample_vec2(value, time, &SampleContext::NONE))),
+                scale: properties.scale.as_ref().map(|value| {
+                    pair(sample_vec2(value, time, &SampleContext::NONE)).map(|axis| axis.max(0.0))
+                }),
                 rotation_degrees: properties
                     .rotation_degrees
                     .as_ref()
-                    .map(|value| sample_scalar(value, time)),
+                    .map(|value| sample_scalar(value, time, &SampleContext::NONE)),
                 opacity: properties
                     .opacity
                     .as_ref()
-                    .map(|value| sample_scalar(value, time).clamp(0.0, 1.0)),
+                    .map(|value| sample_scalar(value, time, &SampleContext::NONE).clamp(0.0, 1.0)),
                 fill: properties
                     .fill
                     .as_ref()
@@ -128,7 +127,7 @@ pub fn sample_text_animators(animators: &[TextAnimator], time: MediaTime) -> Vec
                 tracking: properties
                     .tracking
                     .as_ref()
-                    .map(|value| sample_scalar(value, time)),
+                    .map(|value| sample_scalar(value, time, &SampleContext::NONE)),
             }
         })
         .collect()

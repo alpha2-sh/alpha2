@@ -28,6 +28,8 @@ pub(crate) struct ServeOptions {
     pub limits: SoftLimits,
     /// How many requests run at once at most.
     pub max_running: usize,
+    /// Extraction's step timeout and plugin limits.
+    pub extract: crate::extract_request::ExtractOptions,
 }
 
 impl ServeOptions {
@@ -37,10 +39,32 @@ impl ServeOptions {
     /// An unknown flag, a missing value or one out of range.
     pub(crate) fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut max_running = DEFAULT_MAX_RUNNING;
+        let mut extract = crate::extract_request::ExtractOptions::default();
         let mut rest = Vec::new();
         let mut args = args.into_iter();
         while let Some(flag) = args.next() {
-            if flag == "--max-running" {
+            let mut number = |what: &str| -> Result<u64, String> {
+                let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
+                value
+                    .parse::<u64>()
+                    .map_err(|_| format!("{flag} takes {what}, got {value}"))
+            };
+            if flag == "--extract-step-timeout" {
+                let millis = number("milliseconds")?;
+                extract.step_timeout = (millis > 0).then(|| Duration::from_millis(millis));
+            } else if flag == "--plugin-call-timeout" {
+                let millis = number("milliseconds")?;
+                if millis == 0 {
+                    return Err(format!("{flag} takes milliseconds from 1"));
+                }
+                extract.plugin_call_deadline = Duration::from_millis(millis);
+            } else if flag == "--plugin-memory-limit" {
+                let bytes = number("bytes")?;
+                if bytes == 0 {
+                    return Err(format!("{flag} takes bytes from 1"));
+                }
+                extract.plugin_memory_bytes = bytes;
+            } else if flag == "--max-running" {
                 let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
                 max_running = value
                     .parse::<usize>()
@@ -54,6 +78,7 @@ impl ServeOptions {
         Ok(Self {
             limits: SoftLimits::from_args(rest)?,
             max_running,
+            extract,
         })
     }
 }

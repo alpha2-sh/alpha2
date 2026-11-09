@@ -12,6 +12,7 @@ import type {
   Selection,
 } from "alpha2/assets";
 import type { CapabilityReport } from "alpha2";
+import type { AppliedEdit, EditReport, EditRequest } from "alpha2/apply-edit";
 import {
   ExportFormatError,
   resolveEngineExportFormat,
@@ -28,6 +29,17 @@ import {
 } from "alpha2/project";
 
 import {
+  type ExtractContext,
+  type ExtractProgress,
+  type ExtractResult,
+  type ExtractRun,
+  type Extractor,
+  type StepAck,
+  schemaProblem,
+  takeStep,
+} from "./extract.js";
+import {
+  type ExtractStepMessage,
   type HostMessage,
   type ProgressMessage,
   type ProgressPhase,
@@ -82,6 +94,12 @@ export type {
 } from "./install.js";
 export type { ProgressPhase } from "./protocol.js";
 export type { ExportFailure } from "alpha2/export-failure";
+export type {
+  AppliedEdit,
+  EditRefusal,
+  EditReport,
+  EditRequest,
+} from "alpha2/apply-edit";
 
 /** Where to find `alpha2-host`; see {@link resolveHostBinary}. */
 export interface ResolveHostBinaryOptions {
@@ -1000,6 +1018,8 @@ export interface Alpha2HostErrorOptions extends ErrorOptions {
   readonly path?: string;
   /** As {@link Alpha2HostError.problem}. */
   readonly problem?: string;
+  /** As {@link Alpha2HostError.refusal}. */
+  readonly refusal?: string;
 }
 
 /** Bytes of the host's standard error an error keeps. */
@@ -1026,6 +1046,8 @@ export class Alpha2HostError extends Error {
   readonly path?: string;
   /** What is wrong where a compose refusal lies. */
   readonly problem?: string;
+  /** Why an edit operation refused, such as `unknown_data` (`alpha2/apply-edit` `EditRefusal`). */
+  readonly refusal?: string;
 
   constructor(code: string, message: string, options?: Alpha2HostErrorOptions) {
     super(message, options);
@@ -1050,6 +1072,7 @@ export class Alpha2HostError extends Error {
     if (options?.keptPath !== undefined) this.keptPath = options.keptPath;
     if (options?.path !== undefined) this.path = options.path;
     if (options?.problem !== undefined) this.problem = options.problem;
+    if (options?.refusal !== undefined) this.refusal = options.refusal;
   }
 }
 
@@ -1440,6 +1463,32 @@ export class Alpha2NodeClient {
   }
 
   /**
+   * Applies an edit operation (`remove_ranges`, `split_at`, `bake`) to `project` in the host,
+   * without a GPU; `projectJson` is the engine's canonical text, the same bytes on every surface.
+   * Rejects with {@link Alpha2HostError} `INVALID_INPUT`, whose `refusal` names why, for an
+   * invalid project or operation and for every refusal.
+   */
+  async edit(
+    project: Project,
+    edit: EditRequest,
+    signal?: AbortSignal,
+  ): Promise<AppliedEdit> {
+    const answer = (
+      await this.#request(
+        "edit",
+        { project, edit },
+        { videoDecode: this.#videoDecode, renderer: this.#renderer },
+        signal,
+      )
+    ).result as { projectJson: string; report: EditReport };
+    return {
+      project: JSON.parse(answer.projectJson) as Project,
+      projectJson: answer.projectJson,
+      report: answer.report,
+    };
+  }
+
+  /**
    * Renders and encodes `request.project` to `request.output` and resolves with that path.
    *
    * Rejects with {@link Alpha2ProjectValidationError} or `INVALID_INPUT` for an invalid request,
@@ -1567,12 +1616,103 @@ export class Alpha2NodeClient {
     await this.#pool.close();
   }
 
+  /**
+   * Runs `extractor`, or the plugin `request.plugin` names, over `request.request`. The host
+   * decodes and presents the input; a client-side extractor gets it step by step, while a plugin
+   * runs inside the host, which fetches its manifest and files, checks them against their pinned
+   * hashes and runs wasm sandboxed (native code only with `allowNative`). Resolves with the data
+   * sets the session validated, `made_from` set to the conformed original and, for a plugin,
+   * `made_by.plugin` naming the artifact that ran.
+   *
+   * A client-side extractor's `request.request.params` are checked against its `params_schema`
+   * first. Rejects with `INVALID_EMIT` for output the session refuses, `EXTRACTOR_FAILED` when a
+   * step fails, `EXTRACTOR_TIMEOUT` when a client step takes longer than the host's step timeout
+   * (begin and end have none), a `PLUGIN_*` code when a plugin is refused, does not load, traps or
+   * runs past its limits, and `Alpha2AbortError` on `signal`.
+   */
+  async extract(
+    request: ExtractRequest,
+    extractor?: Extractor,
+  ): Promise<ExtractResult> {
+    const plugin = request.plugin;
+    if ((extractor === undefined) === (plugin === undefined))
+      throw new Alpha2HostError(
+        "INVALID_INPUT",
+        "extract runs either a client-side extractor or request.plugin",
+      );
+    const problems = projectProblems(request.project);
+    if (problems.length > 0) throw new Alpha2ProjectValidationError(problems);
+    let runs: Readonly<Record<string, unknown>>;
+    if (extractor !== undefined) {
+      const descriptor = extractor.describe();
+      const problem = schemaProblem(
+        descriptor.params_schema,
+        request.request.params ?? {},
+      );
+      if (problem !== undefined)
+        throw new Alpha2HostError(
+          "INVALID_INPUT",
+          `invalid params: ${problem}`,
+        );
+      runs = { descriptor };
+    } else {
+      if (!nonEmptyString(plugin?.manifest) || !nonEmptyString(plugin?.sha256))
+        invalidShape(
+          "request.plugin needs its manifest and the manifest's sha256",
+        );
+      runs = {
+        plugin: {
+          manifest: plugin.manifest,
+          sha256: plugin.sha256,
+          allow_native: plugin.allowNative ?? false,
+          force_wasm: plugin.forceWasm ?? false,
+        },
+      };
+    }
+    const onProgress = request.onProgress;
+    const answer = await this.#request(
+      "extract",
+      {
+        project: request.project,
+        assets: request.assets ?? {},
+        proxies: proxiesPayload(request.proxies),
+        media: request.media ?? "original",
+        fonts: request.fonts ?? [],
+        request: request.request,
+        ...runs,
+      },
+      { videoDecode: this.#videoDecode, renderer: this.#renderer },
+      request.signal,
+      undefined,
+      {
+        step: (message, attachments) =>
+          extractor === undefined
+            ? Promise.resolve({
+                error: {
+                  message: "this request runs no client-side extractor",
+                },
+              })
+            : takeStep(extractor, message, attachments),
+        progress: (progress) => onProgress?.(progress),
+      },
+    );
+    return answer.result as ExtractResult;
+  }
+
   async #request(
-    operation: "capabilities" | "export" | "conform" | "still" | "compose",
+    operation:
+      | "capabilities"
+      | "export"
+      | "conform"
+      | "still"
+      | "compose"
+      | "edit"
+      | "extract",
     payload: Readonly<Record<string, unknown>>,
     modes: HostModes,
     signal?: AbortSignal,
     onProgress?: ExportProgressCallback,
+    extraction?: Extraction,
   ): Promise<HostAnswer> {
     if (signal?.aborted) throw new Alpha2AbortError();
     const requestId = `node-${process.pid}-${Date.now()}-${nextRequestSequence++}`;
@@ -1593,9 +1733,59 @@ export class Alpha2NodeClient {
         "INVALID_INPUT",
         `the ${operation} request is ${frame.headerBytes} bytes of JSON; the host reads at most ${MAX_REQUEST_HEADER_BYTES}`,
       );
-    return this.#pool.request(frame, requestId, modes, signal, onProgress);
+    return this.#pool.request(
+      frame,
+      requestId,
+      modes,
+      signal,
+      onProgress,
+      extraction,
+    );
   }
 }
+
+/** An `extract` request for {@link Alpha2NodeClient.extract}. */
+export interface ExtractRequest {
+  readonly project: Project;
+  /** Source id to media path. */
+  readonly assets?: Readonly<Record<string, string>>;
+  readonly proxies?: Readonly<Record<string, readonly ProxyFile[]>>;
+  /** Read proxies (where fresh) instead of originals; `made_from` is the original's either way. */
+  readonly media?: "original" | "proxies";
+  /** Fonts for timeline input that draws text. */
+  readonly fonts?: readonly string[];
+  readonly request: ExtractRun;
+  /** A plugin the host fetches and runs, instead of a client-side extractor. */
+  readonly plugin?: ExtractPlugin;
+  readonly signal?: AbortSignal;
+  readonly onProgress?: (progress: ExtractProgress) => void | Promise<void>;
+}
+
+/** A plugin for {@link Alpha2NodeClient.extract}, by manifest. */
+export interface ExtractPlugin {
+  /** An `https:` URL, a `file:` URL or a path on the host's file system. */
+  readonly manifest: string;
+  /** SHA-256 of the manifest's bytes, 64 hexadecimal digits. */
+  readonly sha256: string;
+  /** Lets a native artifact run, with the host process's rights. */
+  readonly allowNative?: boolean;
+  /** The wasm artifact even where a native one is allowed. */
+  readonly forceWasm?: boolean;
+}
+
+export type {
+  ExtractContext,
+  ExtractProgress,
+  ExtractResult,
+  ExtractRun,
+  Extractor,
+};
+export type {
+  ExtractAudio,
+  ExtractEmitter,
+  ExtractFrame,
+  ExtractorDescriptor,
+} from "./extract.js";
 
 /** Puts each returned PNG on its frame in place of the host's attachment index. */
 function withStillImages(answer: HostAnswer): StillResult {
@@ -2225,8 +2415,21 @@ type RunOutcome =
 /** Builds a request's error once the host's stderr for it is complete. */
 type FailureBuilder = (stderr: string, phase: ExportPhase) => Error;
 
+/** How a request with a client-side extractor takes its steps and reports its passes. */
+interface Extraction {
+  readonly step: (
+    message: ExtractStepMessage,
+    attachments: readonly Attachment[],
+  ) => Promise<StepAck>;
+  readonly progress: (progress: ExtractProgress) => void | Promise<void>;
+}
+
 interface ActiveRun {
   readonly progress: (message: ProgressMessage) => void;
+  readonly step: (
+    message: ExtractStepMessage,
+    attachments: readonly Attachment[],
+  ) => void;
   readonly answer: (
     message: ResponseMessage,
     attachments: readonly Attachment[],
@@ -2261,10 +2464,11 @@ class HostPool {
     modes: HostModes,
     signal?: AbortSignal,
     onProgress?: ExportProgressCallback,
+    extraction?: Extraction,
   ): Promise<HostAnswer> {
     for (let resends = 0; ;) {
       const outcome = await this.#acquire(modes, signal, (host) =>
-        host.run(frame, requestId, signal, onProgress),
+        host.run(frame, requestId, signal, onProgress, extraction),
       );
       if (outcome.kind === "result") return outcome.answer;
       if (outcome.kind === "retiring") {
@@ -2471,6 +2675,7 @@ class Host {
     requestId: string,
     signal: AbortSignal | undefined,
     onProgress: ExportProgressCallback | undefined,
+    extraction?: Extraction,
   ): Promise<RunOutcome> {
     const wire = this.#wire;
     if (this.#retired || wire === undefined) {
@@ -2570,12 +2775,52 @@ class Host {
         pendingCallbacks.add(pending);
         void pending.then(() => pendingCallbacks.delete(pending));
       };
+      // Steps are taken one at a time in order; each answer is written when its step settles.
+      let steps: Promise<void> = Promise.resolve();
       this.#run = {
         phase,
         progress: (message) => {
           if (message.requestId !== requestId) return;
+          if (message.phase === "extract") {
+            if (extraction === undefined) return;
+            try {
+              track(
+                extraction.progress({
+                  phase: "extract",
+                  pass: message.pass ?? 0,
+                  completed: message.completed,
+                  total: message.total,
+                }),
+              );
+            } catch (cause) {
+              callbackFailed(
+                new Alpha2HostError(
+                  "PROGRESS_CALLBACK_FAILED",
+                  "onProgress callback threw",
+                  { cause, phase: phase() },
+                ),
+              );
+            }
+            return;
+          }
           lastPhase = message.phase ?? "frames";
           notifyProgress(message, onProgress, callbackFailed, track, phase());
+        },
+        step: (message, attachments) => {
+          if (message.requestId !== requestId || extraction === undefined)
+            return;
+          steps = steps.then(async () => {
+            const ack = await extraction.step(message, attachments);
+            if (settled) return;
+            wire.write(
+              encodeMessage(
+                createRequest("extract.ack", requestId, {
+                  seq: message.seq,
+                  ...ack,
+                }),
+              ),
+            );
+          });
         },
         answer: (message, attachments) => {
           // One request at a time, so an answer to an unreadable request is this request's answer.
@@ -2735,7 +2980,9 @@ class Host {
       );
       return;
     }
-    if ("type" in message) this.#run?.progress(message);
+    if ("type" in message && message.type === "extract.step")
+      this.#run?.step(message, attachments);
+    else if ("type" in message) this.#run?.progress(message);
     else this.#run?.answer(message, attachments);
   }
 
@@ -2962,7 +3209,7 @@ function notifyProgress(
       callback?.({
         phase: message.phase ?? "frames",
         completed: message.completed,
-        total: message.total,
+        total: message.total ?? message.completed,
       }),
     );
   } catch (cause) {
@@ -3002,7 +3249,13 @@ function errorFromHost(
       { failure, stderr, phase },
     );
   const details = error.details as
-    { keptPath?: unknown; path?: unknown; problem?: unknown } | undefined;
+    | {
+        keptPath?: unknown;
+        path?: unknown;
+        problem?: unknown;
+        refusal?: unknown;
+      }
+    | undefined;
   const keptPath = details?.keptPath;
   return new Alpha2HostError(error.code, error.message, {
     failure,
@@ -3013,6 +3266,9 @@ function errorFromHost(
       : {}),
     ...(typeof details?.path === "string" && typeof details.problem === "string"
       ? { path: details.path, problem: details.problem }
+      : {}),
+    ...(typeof details?.refusal === "string"
+      ? { refusal: details.refusal }
       : {}),
   });
 }

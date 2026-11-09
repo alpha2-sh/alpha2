@@ -208,6 +208,7 @@ fn project(offset: i64, frames: i64) -> EngineProject {
     );
     track.clips.push(clip);
     EngineProject::new(Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: ProjectId::new("p").expect("id"),
         name: "export".into(),

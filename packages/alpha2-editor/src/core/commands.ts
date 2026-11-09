@@ -1516,7 +1516,7 @@ function reduce(
       if (!track?.captions) fail("Not a caption track", command.trackId);
       const key = `${track.id}/cues`;
       const nextIds = [...(document.metadata.instanceIds[key] ?? [])];
-      const cues = [...track.captions.cues];
+      const cues = [...(track.captions.cues ?? [])];
       // Cues stay in start order; overlaps are for validation to report.
       const place = (instanceId: string, cue: CaptionCue) => {
         const at = cues.findIndex(

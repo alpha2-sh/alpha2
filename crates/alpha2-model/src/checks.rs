@@ -58,6 +58,7 @@ pub(crate) fn animated<T>(
             }
             keyframes.iter().all(|keyframe| check(&keyframe.value))
         }
+        Animated::Data(_) => true,
     };
     values_valid
         .then_some(())

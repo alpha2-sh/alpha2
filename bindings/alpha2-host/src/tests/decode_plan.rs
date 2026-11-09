@@ -812,7 +812,7 @@ fn a_shard_past_its_sessions_evicts_the_least_recently_used_and_reopens_it() {
         let held = state
             .reverse_windows
             .values()
-            .map(|window| window.bytes)
+            .map(crate::decode::ReverseWindow::bytes)
             .sum::<u64>();
         assert_eq!(state.reverse_cache_bytes, held);
     }
@@ -966,7 +966,7 @@ fn an_evicted_backward_cursor_builds_its_window_again_from_the_rest_of_its_run()
         state
             .reverse_windows
             .values()
-            .map(|window| window.bytes)
+            .map(crate::decode::ReverseWindow::bytes)
             .sum::<u64>(),
         window_bytes
     );

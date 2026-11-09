@@ -174,6 +174,11 @@ pub struct ExportOutcome {
 }
 
 impl Alpha2 {
+    /// The configuration the session was made with.
+    pub(crate) const fn engine_config(&self) -> &EngineConfig {
+        &self.config
+    }
+
     /// The fonts set last.
     pub(crate) fn fonts(&self) -> Vec<LoadedFont> {
         self.fonts

@@ -34,6 +34,7 @@ alpha2-render = { workspace = true, features = ["wgpu-interop"] }
 alpha2-shaders.workspace = true
 alpha2-text.workspace = true
 alpha2-time.workspace = true
+bytes.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

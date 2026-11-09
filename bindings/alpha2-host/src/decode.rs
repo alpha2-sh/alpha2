@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -953,9 +953,10 @@ pub struct ExportDecodeState {
 /// 1080p at 8-bit 4:2:0, until a window has measured it.
 const DEFAULT_REVERSE_FRAME_BYTES: u64 = 1920 * 1080 * 3 / 2;
 
-pub struct ReverseWindow {
-    pub frames: BTreeMap<MediaTime, Arc<NativeVideoFrame>>,
-    pub bytes: u64,
+pub type ReverseWindow = alpha2_host_core::reverse_window::ReverseWindow<NativeVideoFrame>;
+
+fn frame_bytes(frame: &NativeVideoFrame) -> u64 {
+    frame.retained_bytes()
 }
 
 pub struct ExportDecodedPosition {
@@ -1655,16 +1656,12 @@ impl ExportDecodeState {
         requested: MediaTime,
     ) -> Option<Arc<NativeVideoFrame>> {
         let window = self.reverse_windows.get(cursor)?;
-        if let Some(frame) = window.frames.get(&requested) {
+        if let Some(frame) = window.get(requested) {
             let frame = Arc::clone(frame);
             self.reverse_cache_hits = self.reverse_cache_hits.saturating_add(1);
             return Some(frame);
         }
-        if window
-            .frames
-            .last_key_value()
-            .is_some_and(|(top, _)| requested > *top)
-        {
+        if window.last_time().is_some_and(|top| requested > top) {
             self.drop_reverse_window(cursor);
             self.reverse_plans.remove(cursor);
         }
@@ -1686,7 +1683,7 @@ impl ExportDecodeState {
 
     fn drop_reverse_window(&mut self, cursor: &DecodeCursorKey) {
         if let Some(window) = self.reverse_windows.remove(cursor) {
-            self.reverse_cache_bytes = self.reverse_cache_bytes.saturating_sub(window.bytes);
+            self.reverse_cache_bytes = self.reverse_cache_bytes.saturating_sub(window.bytes());
         }
     }
 
@@ -1819,8 +1816,7 @@ impl ExportDecodeState {
         let mut tally = DecodeTally::default();
         tally.count(&first);
         let mut current = Arc::new(first);
-        let mut frames = BTreeMap::<MediaTime, Arc<NativeVideoFrame>>::new();
-        let mut bytes = 0_u64;
+        let mut window = ReverseWindow::new(share);
         for target in ordered {
             // As on the forward path, each target keeps the last frame at or before its deadline.
             let deadline = decoder.presentation_deadline(target);
@@ -1853,37 +1849,15 @@ impl ExportDecodeState {
                 tally.count(&frame);
                 current = Arc::new(frame);
             }
-            if !frames
-                .last_key_value()
-                .is_some_and(|(_, last)| Arc::ptr_eq(last, &current))
-            {
-                bytes = bytes.saturating_add(current.retained_bytes());
-            }
-            frames.insert(target, Arc::clone(&current));
-            // The lowest times go first, as the run reaches them last.
-            while bytes > share && frames.len() > 1 {
-                if let Some((_, evicted)) = frames.pop_first()
-                    && !frames
-                        .first_key_value()
-                        .is_some_and(|(_, first)| Arc::ptr_eq(first, &evicted))
-                {
-                    bytes = bytes.saturating_sub(evicted.retained_bytes());
-                }
-            }
+            window.push(target, Arc::clone(&current), frame_bytes);
         }
         self.apply_tally(tally);
-        let distinct = frames
-            .values()
-            .zip(frames.values().skip(1))
-            .filter(|(low, high)| !Arc::ptr_eq(low, high))
-            .count()
-            .saturating_add(1);
+        let bytes = window.bytes();
         self.reverse_frame_bytes.insert(
             cursor.clone(),
-            bytes / u64::try_from(distinct).unwrap_or(1).max(1),
+            bytes / u64::try_from(window.distinct()).unwrap_or(1).max(1),
         );
-        self.reverse_windows
-            .insert(cursor.clone(), ReverseWindow { frames, bytes });
+        self.reverse_windows.insert(cursor.clone(), window);
         self.reverse_cache_bytes = self.reverse_cache_bytes.saturating_add(bytes);
         self.reverse_windows_built = self.reverse_windows_built.saturating_add(1);
         while self.reverse_cache_bytes > self.max_reverse_cache_bytes

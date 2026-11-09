@@ -28,6 +28,8 @@ projects() {
       const cases = expandRepeats(JSON.parse(fs.readFileSync(`tests/cases/${corpus}-corpus.json`, "utf8")));
       cases.forEach((test, index) => write(`${corpus}-${index}`, test.project ?? test.json));
     }
+    const conformance = JSON.parse(fs.readFileSync("tests/cases/surface-conformance.json", "utf8"));
+    for (const [name, project] of Object.entries(conformance.projects)) write(`conformance-${name}`, project);
     for (const file of fs.readdirSync("tests/cases").filter((name) => name.endsWith("-project.json"))) {
       fs.copyFileSync(`tests/cases/${file}`, `${dir}/${file}`);
     }
@@ -91,7 +93,59 @@ seed() {
           if (test.animation) fs.writeFileSync(`${dir}/case-${index}.json`, JSON.stringify(test.animation));
         });' "$corpus/normalize-cases.json" "$dir"
       ;;
-    project_from_json | project_lint) projects "$dir" ;;
+    project_from_json | project_lint | project_data) projects "$dir" ;;
+    edit_apply)
+      node -e '
+        const [table, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        const { projects, edit } = JSON.parse(fs.readFileSync(table, "utf8"));
+        for (const test of edit)
+          fs.writeFileSync(`${dir}/${test.name}.json`, JSON.stringify({ project: projects[test.project], request: test.request }));
+      ' tests/cases/surface-conformance.json "$dir"
+      ;;
+    plugin_manifest)
+      node -e '
+        const [cases, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        JSON.parse(fs.readFileSync(cases, "utf8")).forEach((test) =>
+          fs.writeFileSync(`${dir}/${test.name}.json`, JSON.stringify(test.manifest)));
+      ' tests/cases/plugin-manifest-corpus.json "$dir"
+      ;;
+    plugin_records)
+      # Records as docs/plugin-abi.md lays them out: a sample, a word, an interval, and all three.
+      node -e '
+        const dir = process.argv[1];
+        const fs = require("fs");
+        const record = (tag, output, body) => {
+          const head = Buffer.alloc(8);
+          head.writeUInt8(tag, 0);
+          head.writeUInt16LE(output, 2);
+          head.writeUInt32LE(body.length, 4);
+          return Buffer.concat([head, body]);
+        };
+        const i64 = (value) => { const b = Buffer.alloc(8); b.writeBigInt64LE(BigInt(value)); return b; };
+        const u32 = (value) => { const b = Buffer.alloc(4); b.writeUInt32LE(value); return b; };
+        const f32 = (value) => { const b = Buffer.alloc(4); b.writeFloatLE(value); return b; };
+        const sample = record(1, 0, Buffer.concat([i64(4000), u32(2), u32(2), f32(0.5), f32(0)]));
+        const word = record(2, 1, Buffer.concat([i64(0), i64(8000), u32(2), u32(1), Buffer.from("hiA")]));
+        const interval = record(3, 2, Buffer.concat([i64(0), i64(4000), u32(1), f32(0.5), u32(5), Buffer.from("quiet")]));
+        for (const [name, bytes] of Object.entries({ sample, word, interval, all: Buffer.concat([sample, word, interval]) }))
+          fs.writeFileSync(`${dir}/${name}`, bytes);
+      ' "$dir"
+      ;;
+    extract_emits)
+      node -e '
+        const dir = process.argv[1];
+        const fs = require("fs");
+        fs.writeFileSync(`${dir}/each-kind.json`, JSON.stringify([
+          [{ output: "s", time: 0, values: [0.5, 0.25] }, { output: "i", start: 0, end: 4000, label: "a", score: 0.5 }],
+          [{ output: "p", time: 4000, values: [0.1, 0.2] }, { output: "w", start: 0, end: 8000, text: "hi", speaker: "A" }],
+          [{ output: "m", time: 8000, values: [1, 2, 30, 1] }],
+          [{ output: "i", start: 8000, end: 12000 }],
+        ]));
+        fs.writeFileSync(`${dir}/lost.json`, JSON.stringify([[{ output: "s", time: 0, values: [null, 1] }]]));
+      ' "$dir"
+      ;;
     composition_plan) projects "$dir" compositions ;;
     caption_import)
       for file in tests/corpus/captions/*; do

@@ -71,6 +71,16 @@ pub enum Alpha2Error {
         /// Where the finished file was kept beside the output, if it was; the caller owns it.
         kept_path: Option<String>,
     },
+    /// An edit operation refused (`INVALID_INPUT`).
+    #[error("{reason}")]
+    EditRefused {
+        /// Why, in snake case: `invalid_project`, `invalid_request`, `unknown_data`,
+        /// `wrong_kind`, `unknown_target`, `empty_target`, `missing_anchor`, `invalid_range`,
+        /// `nothing_to_bake` or `correction_not_bakeable`.
+        refusal: String,
+        /// What went wrong.
+        reason: String,
+    },
     /// The call was cancelled (`ABORTED`).
     #[error("alpha2 export was aborted")]
     Aborted,
@@ -89,7 +99,7 @@ impl Alpha2Error {
     #[must_use]
     pub fn code(&self) -> &str {
         match self {
-            Self::InvalidInput { .. } => "INVALID_INPUT",
+            Self::InvalidInput { .. } | Self::EditRefused { .. } => "INVALID_INPUT",
             Self::ConformFailed { .. } => "CONFORM_FAILED",
             Self::Unsupported { .. } => "UNSUPPORTED",
             Self::EncodersRefused { .. } => "ENCODERS_REFUSED",

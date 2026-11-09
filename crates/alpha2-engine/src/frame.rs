@@ -5,7 +5,7 @@
 
 use alpha2_eval::{
     ActiveClip, ActiveComposition, ActiveEffect, ActiveTransition, EvaluatedVisual, FrameDesc,
-    GeneratorPlan, ShapesPlan, StepOp, sample_scalar, sample_visual,
+    GeneratorPlan, SampleContext, ShapesPlan, StepOp, sample_scalar, sample_visual,
 };
 use alpha2_media::{PixelLayout, SourceId, YuvEncoding};
 use alpha2_model::{
@@ -15,10 +15,10 @@ use alpha2_render::{
     BlendMode, CacheIntent, Color, CpuImage, CpuRenderer, EffectCatalog, EffectId, EffectInputs,
     EffectParams, EffectResources, EffectRuntime, FrameSubmitTimings, GENERATOR_EFFECT_ID,
     GraphError, GraphLayer, LayerTransform, MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES,
-    MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamValue, PendingSourceWork, PlaneTarget,
-    RenderCacheKey, RenderControls, RenderError, RenderGraph, RenderNodeId, RenderNodeKind,
-    RenderSize, RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID, Yuv420pReadback,
-    Yuv420pTargets,
+    MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamType, ParamValue, PendingSourceWork,
+    PlaneTarget, RenderCacheKey, RenderControls, RenderError, RenderGraph, RenderNodeId,
+    RenderNodeKind, RenderSize, RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID,
+    Yuv420pReadback, Yuv420pTargets,
 };
 use alpha2_time::MediaTime;
 
@@ -1141,7 +1141,7 @@ fn clip_layer<'a>(
         )?,
     };
     if !clip.masks.is_empty() {
-        source = mask_node(graph, source, clip.masks, time, runtime)?;
+        source = mask_node(graph, source, clip.masks, time, runtime, &clip.data)?;
     }
     // Cache the finished clip picture: layers above change often and everything below is in its
     // key. A bare source frame is already the host's, so only a bypass applies to it.
@@ -1149,6 +1149,15 @@ fn clip_layer<'a>(
     if intent == CacheIntent::Bypass || graph.node_kind(source) != Some(RenderNodeKind::Source) {
         graph
             .set_cache_intent(source, intent)
+            .map_err(GraphError::into_render_error)?;
+    }
+    if let Some(correction) = clip.correction {
+        source = graph
+            .add_composite(vec![GraphLayer {
+                source,
+                visual: correction_transform(correction),
+                blend_mode: BlendMode::Normal,
+            }])
             .map_err(GraphError::into_render_error)?;
     }
     Ok(GraphLayer {
@@ -1270,7 +1279,15 @@ fn plan_node<'a>(
                 Some(StepFrame::Layout(layout)) => layout.add_to(graph)?,
                 _ => return Err(RenderError::MissingText),
             },
-            op => step_node(renderer, graph, op, &built, at, step_runtime)?,
+            op => step_node(
+                renderer,
+                graph,
+                op,
+                &built,
+                at,
+                step_runtime,
+                composition.step_data(index),
+            )?,
         };
         built.push(node);
     }
@@ -1284,6 +1301,7 @@ fn step_input(built: &[RenderNodeId], step: usize) -> Result<RenderNodeId, Rende
     built.get(step).copied().ok_or(RenderError::InvalidGraph)
 }
 
+#[allow(clippy::too_many_lines)]
 fn step_node<'a>(
     renderer: &dyn EffectCatalog,
     graph: &mut RenderGraph<'a>,
@@ -1291,6 +1309,7 @@ fn step_node<'a>(
     built: &[RenderNodeId],
     time: MediaTime,
     runtime: EffectRuntime,
+    context: SampleContext<'a>,
 ) -> Result<RenderNodeId, RenderError> {
     let input = |step: usize| step_input(built, step);
     let node = match op {
@@ -1314,7 +1333,7 @@ fn step_node<'a>(
             effect,
         } => {
             let id = project_effect_id(renderer, &effect.id, effect.version)?;
-            let active = ActiveEffect::new(effect, time);
+            let active = ActiveEffect::new(effect, time, context);
             let params = effect_params(renderer, &id, active);
             let runtime = effect_runtime(renderer, &id, runtime);
             let mut named = EffectInputs::new();
@@ -1338,10 +1357,10 @@ fn step_node<'a>(
             progress,
         } => {
             let id = project_effect_id(renderer, &effect.id, effect.version)?;
-            let active = ActiveEffect::new(effect, time);
+            let active = ActiveEffect::new(effect, time, context);
             let params = effect_params(renderer, &id, active);
             let runtime = EffectRuntime {
-                progress: sample_scalar(progress, time).clamp(0.0, 1.0),
+                progress: sample_scalar(progress, time, &context).clamp(0.0, 1.0),
                 ..effect_runtime(renderer, &id, runtime)
             };
             graph.add_transition_with_resources(
@@ -1360,7 +1379,12 @@ fn step_node<'a>(
         } => graph
             .add_composite(vec![GraphLayer {
                 source: input(*from)?,
-                visual: layer_transform(sample_visual(transform, time, graph_aspect(graph))),
+                visual: layer_transform(sample_visual(
+                    transform,
+                    time,
+                    graph_aspect(graph),
+                    &context,
+                )),
                 blend_mode: BlendMode::Normal,
             }])
             .map_err(GraphError::into_render_error)?,
@@ -1369,7 +1393,8 @@ fn step_node<'a>(
                 .iter()
                 .map(|layer| {
                     let mut placed = identity_layer(input(layer.input)?);
-                    placed.visual.opacity = sample_scalar(&layer.opacity, time).clamp(0.0, 1.0);
+                    placed.visual.opacity =
+                        sample_scalar(&layer.opacity, time, &context).clamp(0.0, 1.0);
                     placed.blend_mode = blend_mode(layer.blend_mode);
                     Ok(placed)
                 })
@@ -1384,7 +1409,7 @@ fn step_node<'a>(
             mode,
         } => matte_node(graph, input(*from)?, input(*matte)?, *mode, runtime)?,
         StepOp::ShapeMask { input: from, masks } => {
-            mask_node(graph, input(*from)?, masks, time, runtime)?
+            mask_node(graph, input(*from)?, masks, time, runtime, &context)?
         }
     };
     Ok(node)
@@ -1405,6 +1430,7 @@ fn mask_node(
     masks: &[ShapeMask],
     time: MediaTime,
     runtime: EffectRuntime,
+    context: &SampleContext<'_>,
 ) -> Result<RenderNodeId, RenderError> {
     let size = graph.size();
     let canvas = alpha2_geometry::CanvasSize::new(size.width, size.height);
@@ -1419,7 +1445,7 @@ fn mask_node(
     }
     let mut coverages = Vec::with_capacity(shown.len());
     for mask in shown {
-        let outline = alpha2_eval::evaluate_geometry(&mask.shape, time, aspect);
+        let outline = alpha2_eval::evaluate_geometry(&mask.shape, time, aspect, context);
         let items = [
             alpha2_geometry::EvaluatedItem::Geometry(outline),
             alpha2_geometry::EvaluatedItem::Fill {
@@ -1432,7 +1458,7 @@ fn mask_node(
             &items, canvas,
         )));
         #[allow(clippy::cast_precision_loss)]
-        let sigma = 0.3125 * sample_scalar(&mask.feather, time).max(0.0) * unit as f32;
+        let sigma = 0.3125 * sample_scalar(&mask.feather, time, context).max(0.0) * unit as f32;
         let coverage = graph
             .add_gaussian_pixels(coverage, sigma, timeless(runtime))
             .map_err(GraphError::into_render_error)?;
@@ -1666,6 +1692,21 @@ fn identity_layer(source: RenderNodeId) -> GraphLayer {
     }
 }
 
+/// A correction as a layer transform: turned and scaled about the layer's centre, then moved by
+/// its translation in fractions of the displayed picture, as `Correction::apply` maps points.
+fn correction_transform(correction: alpha2_eval::Correction) -> LayerTransform {
+    LayerTransform {
+        position: [
+            0.5 + correction.translate.x * correction.picture.x,
+            0.5 + correction.translate.y * correction.picture.y,
+        ],
+        anchor: [0.5, 0.5],
+        scale: [correction.scale, correction.scale],
+        rotation_degrees: correction.rotation_degrees,
+        opacity: 1.0,
+    }
+}
+
 const fn layer_transform(visual: EvaluatedVisual) -> LayerTransform {
     LayerTransform {
         position: [visual.position.x, visual.position.y],
@@ -1689,12 +1730,17 @@ fn effect_params<'a>(
     let definition = renderer.effect_definition(id);
     for (name, sample) in effect.params() {
         let mut value = param_value(sample.value);
-        if sample.interpolated
-            && let Some(spec) = definition
-                .as_ref()
-                .and_then(|definition| definition.params.iter().find(|spec| spec.name == name))
-        {
-            value = clamp_to_range(spec, value);
+        let spec = definition
+            .as_ref()
+            .and_then(|definition| definition.params.iter().find(|spec| spec.name == name));
+        if let Some(spec) = spec {
+            // A scalar data set feeding a Vec2 parameter sets both components.
+            if let (ParamType::Vec2, ParamValue::Float(scalar)) = (spec.param_type, &value) {
+                value = ParamValue::Vec2([*scalar, *scalar]);
+            }
+            if sample.interpolated {
+                value = clamp_to_range(spec, value);
+            }
         }
         params.insert(name, value);
     }

@@ -55,6 +55,7 @@ mod effect_request;
 mod encode;
 mod encoder_refusal;
 mod export_decode;
+mod extract_request;
 mod failure;
 mod frames;
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
@@ -70,6 +71,7 @@ mod memory;
 mod metrics;
 mod packet_copy;
 mod paths;
+mod plugin_fetch;
 mod protocol;
 mod providers;
 mod recovery;
@@ -1345,6 +1347,7 @@ fn serve(host: &mut Option<Host>, options: ServeOptions) -> Result<(), HostError
     }
     let requests = serve_io::start_reader(Arc::clone(&out), Arc::clone(&lifecycle))?;
     let mut serving = Serving::with_lifecycle(policy, lifecycle, options.max_running);
+    serving.extract = options.extract;
     let served = serve_requests(&mut serving, &requests, &out, &unusable_reason);
     exit_if_retired(&served);
     // Released by `main` once the outcome is out.
@@ -1377,6 +1380,8 @@ struct Serving {
     lifecycle: Arc<Lifecycle>,
     /// How many requests run at once at most.
     max_running: usize,
+    /// As [`crate::lifecycle::ServeOptions::extract`].
+    extract: crate::extract_request::ExtractOptions,
 }
 
 impl Serving {
@@ -1391,6 +1396,7 @@ impl Serving {
             create: create_host,
             lifecycle,
             max_running,
+            extract: crate::extract_request::ExtractOptions::DEFAULT,
         }
     }
 
@@ -1540,7 +1546,9 @@ fn dispatch<'scope>(
         let needs_host = match &envelope {
             Ok(request) => !matches!(
                 request,
-                crate::protocol::Request::Conform(_) | crate::protocol::Request::Compose(_)
+                crate::protocol::Request::Conform(_)
+                    | crate::protocol::Request::Compose(_)
+                    | crate::protocol::Request::Edit(_)
             ),
             Err(_) => refused_export,
         };
@@ -1574,6 +1582,7 @@ fn dispatch<'scope>(
             device,
             policy: serving.policy,
             lifecycle: Arc::clone(&lifecycle),
+            extract: serving.extract,
         };
         let spawned = std::thread::Builder::new()
             .name("alpha2-request".to_owned())
@@ -1604,6 +1613,7 @@ struct RequestWork {
     device: Option<Arc<HostDevice>>,
     policy: VideoDecodePolicy,
     lifecycle: Arc<Lifecycle>,
+    extract: crate::extract_request::ExtractOptions,
 }
 
 impl RequestWork {
@@ -1617,6 +1627,7 @@ impl RequestWork {
             device,
             policy,
             lifecycle,
+            extract,
         } = self;
         #[cfg(test)]
         if matches!(envelope, Ok(crate::protocol::Request::Export(_)))
@@ -1640,6 +1651,26 @@ impl RequestWork {
             Ok(crate::protocol::Request::Compose(request)) => {
                 crate::compose_request::answer(&request)
             }
+            Ok(crate::protocol::Request::Edit(request)) => request.answer(),
+            Ok(crate::protocol::Request::Extract(request)) => match host.as_mut() {
+                Some(host) => {
+                    let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        crate::extract_request::handle(host, *request, out, extract)
+                    }))
+                    .unwrap_or_else(|payload| {
+                        Err(HostError::new(
+                            "INTERNAL",
+                            format!(
+                                "the host panicked handling the request: {}",
+                                crate::failure::panic_message(&*payload)
+                            ),
+                        ))
+                    });
+                    host.end_extract();
+                    answer
+                }
+                None => Err(missing()),
+            },
             Ok(request) => match host.as_mut() {
                 Some(host) => host.handle(request, &mut |progress| {
                     let mut event = json!({
