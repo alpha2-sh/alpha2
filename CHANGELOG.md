@@ -38,6 +38,21 @@ All notable changes to this project are documented in this file.
 - `serve` runs up to `--max-running` requests at once on its one GPU device. Requests hold the
   runtime effects and effect resources they define, so two that define one id differently take
   turns, and the memory watchdog stops the newest export first.
+- Data sets in the project: `points`, `scalars`, `similarity`, `words` and `intervals`, anchored to
+  a source or the timeline. Animated values can follow a data set, a clip can take a similarity
+  correction from one, and a caption track can take its cues from words.
+- Extractors: code outside the engine is supplied a range's frames or audio and returns data sets.
+  The host has an `extract` operation (`client.extract` in Node, `HostClient.extract` in Python),
+  the browser has `runExtractor` in `alpha2/extract`, and mobile apps have `Alpha2.extract`.
+- Extractor plugins under the `alpha2-plugin/1` ABI, as wasm or native artifacts pinned by SHA-256
+  in a manifest. The host fetches, caches and runs them (wasm sandboxed, native only when allowed),
+  the browser loads the wasm artifact with `loadPlugin` from `alpha2/plugins`, and mobile apps load
+  bundled ones. The SDK, the pack tool and a first-party silence plugin live in `plugins/`; no
+  release contains a plugin.
+- Edit operations `remove_ranges`, `split_at` and `bake`, with a report of what moved: an `edit`
+  host operation (`client.edit` in Node), `alpha2.edit.apply` in Python, `applyEdit` in
+  `alpha2/apply-edit` and `applyEdit` on mobile.
+- Conform reports data sets made from an original that has since changed.
 
 ### Changed
 
