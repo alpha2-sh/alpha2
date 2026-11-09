@@ -20,6 +20,7 @@ pub(crate) enum Code {
     /// An export would show a source the browser gave only as frames the engine cannot convert.
     PlanarDecodeUnavailable,
     /// An extractor emitted a value the session refuses.
+    #[cfg(target_arch = "wasm32")]
     InvalidEmit,
 }
 
@@ -41,6 +42,7 @@ impl Code {
             Self::ResourceLimit => "RESOURCE_LIMIT",
             Self::GpuInitFailed => "GPU_INIT_FAILED",
             Self::PlanarDecodeUnavailable => "PLANAR_DECODE_UNAVAILABLE",
+            #[cfg(target_arch = "wasm32")]
             Self::InvalidEmit => "INVALID_EMIT",
         }
     }
