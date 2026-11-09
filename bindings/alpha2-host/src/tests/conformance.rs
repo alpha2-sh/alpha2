@@ -192,6 +192,15 @@ fn every_extract_case_hashes_as_pinned_on_every_path() {
     let dir = scratch_directory("conformance");
     let mut table: Value =
         serde_json::from_slice(&std::fs::read(table_path()).expect("the table")).expect("json");
+    // Packed before the host starts: a cold plugin build outlasts the host's idle timeout.
+    let mut plugins = HashMap::new();
+    for case in table["extract"].as_array().expect("extract cases") {
+        if let Some(plugin) = case["extractor"]["plugin"].as_str() {
+            plugins
+                .entry(plugin.to_owned())
+                .or_insert_with(|| packed(&dir, plugin));
+        }
+    }
     let mut serving = ServeChild::start(
         SERVE_CHILD,
         &[
@@ -202,7 +211,6 @@ fn every_extract_case_hashes_as_pinned_on_every_path() {
             ),
         ],
     );
-    let mut plugins = HashMap::new();
     let mut stale = Vec::new();
     let snapshot = table.clone();
     for case in table["extract"].as_array_mut().expect("extract cases") {
@@ -211,10 +219,7 @@ fn every_extract_case_hashes_as_pinned_on_every_path() {
                                "project": snapshot["projects"][case["project"].as_str().expect("project")],
                                "assets": assets(case), "request": case["request"] });
         if let Some(plugin) = case["extractor"]["plugin"].as_str() {
-            let (manifest, sha256) = plugins
-                .entry(plugin.to_owned())
-                .or_insert_with(|| packed(&dir, plugin))
-                .clone();
+            let (manifest, sha256) = &plugins[plugin];
             line["plugin"] = json!({ "manifest": manifest, "sha256": sha256 });
             serving.write(&line.to_string());
         } else {
