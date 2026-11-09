@@ -134,11 +134,25 @@ fn a_correction_and_a_data_driven_corner_pin_draw_their_golden() {
             .expect("frame renders");
         read_rgba8(&renderer, &output.texture.expect("complete"))
     });
-    // The pinned quad's edges sample between pixels, where 8-bit intermediates round apart.
-    assert_golden_or_rgba8(
-        "data_driven",
-        "data_driven_rgba8",
+    // The pinned quad's edges sample between pixels, where 8-bit intermediates round apart, and
+    // DX12 on the 8-bit intermediate rounds one edge pixel further than other backends.
+    let rgba8 = |name, backend| alpha2_golden_support::Variant {
+        name,
+        scope: alpha2_golden_support::Scope {
+            backend,
+            adapter_contains: None,
+            intermediate: Some("Rgba8Unorm"),
+        },
+    };
+    alpha2_golden_support::assert_rgba8_golden_tiles(
+        &golden_run(),
+        &[
+            alpha2_golden_support::Variant::everywhere("data_driven"),
+            rgba8("data_driven_rgba8", None),
+            rgba8("data_driven_dx12_rgba8", Some("Dx12")),
+        ],
         (W * 2, H),
+        &["whole"],
         &strip(&drawn),
         4,
     );
