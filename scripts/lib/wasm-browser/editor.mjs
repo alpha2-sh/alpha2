@@ -8,6 +8,17 @@ const table = await (await fetch("/tests/cases/surface-conformance.json")).json(
 const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 const codeOf = (promise) => promise.then(() => "resolved", (error) => error?.code ?? String(error));
+// Skips the case as the page skips the engine's decoder refusal, which the editor wraps.
+const importVideo = async (bridge, bytes) => {
+  try {
+    const { assetIds } = await bridge.importFiles([new File([bytes], "clip.mp4", { type: "video/mp4" })]);
+    return assetIds[0];
+  } catch (error) {
+    if (error?.cause?.code === "DECODE_UNAVAILABLE")
+      skip("webcodecs-video", "this browser does not decode the case's source: " + error.message);
+    throw error;
+  }
+};
 `;
 
 // A plugin run through bridge.extract and applyExtraction gives the pinned data; a cancelled run
@@ -21,7 +32,7 @@ const plugin = { manifest, sha256: await sha256(await (await fetch(manifest)).ar
 const editor = createEditor();
 const bridge = createBrowserBridge({ editor, runtimeAssets, audio: false });
 const bytes = await (await fetch("/" + fixture.assets.v)).blob();
-const { assetIds: [id] } = await bridge.importFiles([new File([bytes], "clip.mp4", { type: "video/mp4" })]);
+const id = await importVideo(bridge, bytes);
 const run = { ...fixture.request, input: { ...fixture.request.input, source_id: id } };
 
 const removing = bridge.extract(run, { plugin });
@@ -88,7 +99,7 @@ export function editorConformStaleData() {
 const editor = createEditor();
 const bridge = createBrowserBridge({ editor, runtimeAssets, audio: false });
 const bytes = await (await fetch("/tests/corpus/h264-bt709-copy.mp4")).blob();
-const { assetIds: [id] } = await bridge.importFiles([new File([bytes], "clip.mp4", { type: "video/mp4" })]);
+const id = await importVideo(bridge, bytes);
 const fingerprint = editor.document.assets[id].fingerprint;
 const madeFrom = { ...fingerprint, content_sha256: "0".repeat(64) };
 const put = editor.dispatch({ type: "data.put", dataSet: {
