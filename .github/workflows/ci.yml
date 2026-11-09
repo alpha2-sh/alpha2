@@ -171,6 +171,9 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          workspaces: |
+            . -> target
+            plugins -> target
           key: ${{ matrix.features }}
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
@@ -190,6 +193,8 @@ jobs:
             echo "ALPHA2_FFPROBE=$tools/ffprobe"
             echo "ALPHA2_FFMPEG=$tools/ffmpeg"
           } >> "$GITHUB_ENV"
+      - name: Build the plugins the tests pack
+        run: scripts/pack-plugins.sh "$RUNNER_TEMP/plugins"
       - run: cargo test --workspace --${{ matrix.features }} --no-fail-fast
       - name: Skips this run recorded
         if: always()
@@ -451,7 +456,7 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',cpu-renderer,') }}
     name: CPU renderer
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
@@ -467,6 +472,9 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          workspaces: |
+            . -> target
+            plugins -> target
           key: cpu-renderer
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
@@ -481,6 +489,8 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Every CPU pass against the GPU's on lavapipe
         run: cargo test --release -p alpha2-render --lib cpu_ --no-fail-fast
+      - name: Build the plugins the tests pack
+        run: scripts/pack-plugins.sh "$RUNNER_TEMP/plugins"
       - name: The host suite on the CPU renderer
         env:
           ALPHA2_RENDERER: cpu
@@ -678,11 +688,7 @@ jobs:
           -- -D warnings
       - run: cargo test --manifest-path plugins/Cargo.toml --locked
       - name: Pack the plugins (wasm32 and the host triple; the wasm modules are checked)
-        run: |
-          for plugin in fixture-digest fixture-scripted silence; do
-            cargo run --manifest-path plugins/Cargo.toml --locked -p alpha2-plugin-pack -- \
-              "plugins/$plugin" --out "$RUNNER_TEMP/$plugin"
-          done
+        run: scripts/pack-plugins.sh "$RUNNER_TEMP/plugins"
 
   platform-lint:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-lint,') }}
@@ -1214,6 +1220,9 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          workspaces: |
+            . -> target
+            plugins -> target
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Install macOS build tools
@@ -1266,6 +1275,8 @@ jobs:
           uv pip install --group dev
           uv pip install --no-deps -e .
           if [ -d .venv/Scripts ]; then echo "PY=$PWD/.venv/Scripts" >> "$GITHUB_ENV"; else echo "PY=$PWD/.venv/bin" >> "$GITHUB_ENV"; fi
+      - name: Build the plugins the tests pack
+        run: scripts/pack-plugins.sh "$RUNNER_TEMP/plugins"
       - run: npm run test:node-e2e
       - name: Python end-to-end tests
         if: ${{ !cancelled() }}
@@ -1539,7 +1550,7 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser,') }}
     needs: release-wasm
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       ALPHA2_REQUIRE: browser,wasm,webgpu,webgl2,webcodecs-audio,webcodecs-video
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
@@ -1555,6 +1566,9 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          workspaces: |
+            . -> target
+            plugins -> target
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1567,6 +1581,8 @@ jobs:
           name: alpha2-build
           path: packages
       - run: npm run test:wgsl-browser
+      - name: Build the plugins the browser cases load
+        run: scripts/pack-plugins.sh "$RUNNER_TEMP/plugins" --no-native
       - run: node scripts/test-wasm-browser.mjs
       - run: npm run test:editor:package
       - name: The wasm-browser cases in Firefox (the image's Firefox and geckodriver)
@@ -1634,6 +1650,12 @@ jobs:
           rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: plugins -> target
+          key: ${{ matrix.key }}
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -1644,6 +1666,8 @@ jobs:
           name: alpha2-build
           path: packages
       - run: npm run test:wgsl-browser
+      - name: Build the plugins the browser cases load
+        run: scripts/pack-plugins.sh "$RUNNER_TEMP/plugins" --no-native
       - run: node scripts/test-wasm-browser.mjs
         if: ${{ !cancelled() }}
       - run: npm run test:editor:package
@@ -1712,6 +1736,9 @@ jobs:
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          workspaces: |
+            . -> target
+            plugins -> target
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Install Mesa software GPU drivers and the Khronos validation layer
@@ -1762,6 +1789,9 @@ jobs:
         run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
       - name: Adapters
         run: cargo run -q -p alpha2-gpu --example adapters
+      - name: Build the plugins the host tests pack
+        if: contains(matrix.crates, 'alpha2-host')
+        run: scripts/pack-plugins.sh "$RUNNER_TEMP/plugins"
       - name: GPU suites under ${{ matrix.backend }} validation
         run: node scripts/test-gpu-validation.mjs --backend ${{ matrix.backend }} ${{ matrix.crates }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
