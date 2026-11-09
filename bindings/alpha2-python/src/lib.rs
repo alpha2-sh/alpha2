@@ -118,9 +118,7 @@ fn compose_error(error: &alpha2_compose::ComposeError) -> PyErr {
 fn apply_edit(py: Python<'_>, project: &str, request: &str) -> PyResult<(String, String)> {
     py.detach(|| alpha2_eval::edit::apply_json(project, request))
         .map(|edited| (edited.project, edited.report))
-        .map_err(|failure| {
-            PyValueError::new_err((failure.message, failure.code, failure.refusal))
-        })
+        .map_err(|failure| PyValueError::new_err((failure.message, failure.code, failure.refusal)))
 }
 
 /// Files a compose spec names, as JSON `{"media": [{path, kind}], "texts": [path]}`. Raises

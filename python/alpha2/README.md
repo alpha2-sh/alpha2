@@ -238,13 +238,16 @@ host needed, and returns `Edited(project, project_json, report)`. `remove_ranges
 `split_at` cuts at times, and `bake` turns data bindings into keyframes and words into cues:
 
 ```python
-edited = alpha2.edit.apply(project, {
-    "op": "remove_ranges",
-    "ranges": {"data": "interview-silence"},
-    "target": {"track": "v1"},
-    "padding": 12_000,
-    "min_duration": 36_000,
-})
+edited = alpha2.edit.apply(
+    project,
+    {
+        "op": "remove_ranges",
+        "ranges": {"data": "interview-silence"},
+        "target": {"track": "v1"},
+        "padding": 12_000,
+        "min_duration": 36_000,
+    },
+)
 ```
 
 Every kept moment renders as before, and `project_json` is the same bytes on every surface.
