@@ -91,6 +91,7 @@ try {
     },
   }, scripted);
 } catch (caught) {
+  if (caught?.code === "DECODE_UNAVAILABLE") throw caught;
   error = caught;
 }
 report({
@@ -215,6 +216,7 @@ const plugin = async (name) => {
 };
 const found = {};
 const undecodable = {};
+let h264Unavailable;
 for (const fixture of table.extract) {
   const project = table.projects[fixture.project];
   const media = {};
@@ -240,13 +242,16 @@ for (const fixture of table.extract) {
       request: fixture.request,
     }, extractor);
   } catch (error) {
-    if (error?.code !== "DECODE_UNAVAILABLE" || fixture.name.includes("h264")) throw error;
+    if (error?.code !== "DECODE_UNAVAILABLE") throw error;
     undecodable[fixture.name] = error.message;
+    h264Unavailable ??= fixture.name.includes("h264") ? error : undefined;
     continue;
   }
   found[fixture.name] = await dataHash(result.dataSets);
   if (found[fixture.name] !== fixture.sha256) failed.push(fixture.name);
 }
+// Without H.264 the case skips, unless something it could run failed.
+if (h264Unavailable !== undefined && failed.length === 0) throw h264Unavailable;
 report({ ok: failed.length === 0, failed, found, undecodable });
 `;
 }

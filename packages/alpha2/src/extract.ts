@@ -13,13 +13,18 @@ import {
 
 import type { ChromaSiting } from "./chroma-siting.js";
 import type { DataSet, Project } from "./generated/project-schema.js";
-import { copyPlanarYuvFrame } from "./hdr-frames.js";
+import {
+  copyPlanarYuvFrame,
+  DecodeUnavailableError,
+  decodeRefusalMessage,
+} from "./hdr-frames.js";
 import { microsecondsToTicks, readVideoOrientation } from "./media.js";
 import {
   type AudioResamplerBinding,
   MediabunnyAudioDecoder,
   type MediabunnyInput,
   streamChromaSiting,
+  videoTrackFacts,
 } from "./mediabunny.js";
 
 /** What an extractor reads and emits; the same object `describe()` returns on every surface. */
@@ -396,7 +401,10 @@ class SourceFrames {
     this.#chromaSiting = chromaSiting;
   }
 
-  static async open(resource: MediabunnyInput): Promise<SourceFrames> {
+  static async open(
+    resource: MediabunnyInput,
+    id: string,
+  ): Promise<SourceFrames> {
     const source =
       resource instanceof Blob
         ? new BlobSource(resource)
@@ -407,11 +415,25 @@ class SourceFrames {
       input.dispose();
       throw coded("INVALID_INPUT", "the source has no video track");
     }
-    if (!(await track.canDecode())) {
+    // `canDecode` does not ask for a software decoder, so a hardware-only codec would pass it and
+    // then fail on its first read.
+    const config = (await track.canDecode())
+      ? await track.getDecoderConfig()
+      : null;
+    const software =
+      config !== null &&
+      (
+        await VideoDecoder.isConfigSupported({
+          ...config,
+          hardwareAcceleration: "prefer-software",
+        })
+      ).supported === true;
+    if (!software) {
+      const facts = await videoTrackFacts(track);
       input.dispose();
-      throw coded(
-        "DECODE_UNAVAILABLE",
-        `this browser cannot decode the source's ${track.codec ?? "video"} track`,
+      throw new DecodeUnavailableError(
+        decodeRefusalMessage(`source ${id}`, facts),
+        facts,
       );
     }
     const orientation = (await readVideoOrientation(resource, track.id)) ?? {
@@ -595,7 +617,7 @@ export async function runExtractor(
           const id = need.source ?? "";
           let frames = sources.get(id);
           if (frames === undefined) {
-            frames = await SourceFrames.open(resource(id));
+            frames = await SourceFrames.open(resource(id), id);
             sources.set(id, frames);
           }
           const forward = need.direction !== "backward";
