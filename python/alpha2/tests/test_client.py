@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import textwrap
@@ -26,7 +27,7 @@ from alpha2 import (
     Alpha2ProjectValidationError,
     HostClient,
 )
-from alpha2.client import resolve_host_binary
+from alpha2.client import _HOST_SHUTDOWN_TIMEOUT, resolve_host_binary
 from alpha2.errors import failure_class_of_code
 from alpha2.install import host_executable_name
 from alpha2.protocol import describe_exit, windows_policy_blocked
@@ -438,7 +439,7 @@ def queue_host(log: Path, answer_seconds: float = 0, ignore_term: bool = False) 
     if {ignore_term}:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
     def answer(request):
-        record({str(log)!r}, "request " + request["output"])
+        record({str(log)!r}, "request " + os.path.basename(request["output"]))
         send(request, type="progress", phase="frames", completed=0, total=1)
         time.sleep({answer_seconds})
         send(request, ok=True, result={{"output": request["output"]}})
@@ -464,8 +465,8 @@ def test_an_export_cancelled_while_it_waits_for_a_slot_never_starts(
         with pytest.raises(Alpha2AbortError):
             second.result()
         assert not first.done(), "the cancel waited for the slot"
-        assert first.result() == {"output": "a.mp4"}
-        assert third.result() == {"output": "c.mp4"}
+        assert first.result() == {"output": str(Path.cwd() / "a.mp4")}
+        assert third.result() == {"output": str(Path.cwd() / "c.mp4")}
     requests = [line for line in lines_in(log) if line.startswith("request")]
     assert requests == ["request a.mp4", "request c.mp4"]
 
@@ -644,7 +645,7 @@ def test_an_error_keeps_only_the_stderr_its_own_request_wrote(
         tmp_path,
         """
         def answer(request):
-            sys.stderr.write("while " + request["output"] + "\\n")
+            sys.stderr.write("while " + os.path.basename(request["output"]) + "\\n")
             sys.stderr.flush()
             send(request, ok=False, error={"code": "ALPHA2_ERROR", "message": "failed"})
         serve(answer)
@@ -1518,7 +1519,7 @@ def test_a_host_that_writes_ready_late_but_in_time_is_not_timed_out(
         ready=False,
     )
     client = HostClient(host_path=host_path, host_start_timeout=0.5)
-    assert client.export(**export_args("slow.mp4")) == {"output": "slow.mp4"}
+    assert client.export(**export_args("slow.mp4")) == {"output": str(Path.cwd() / "slow.mp4")}
 
 
 def test_a_state_message_is_not_an_answer(tmp_path: Path, fake_host: FakeHost) -> None:
@@ -1531,7 +1532,7 @@ def test_a_state_message_is_not_an_answer(tmp_path: Path, fake_host: FakeHost) -
         """,
     )
     assert HostClient(host_path=host_path).export(**export_args("ready.mp4")) == {
-        "output": "ready.mp4"
+        "output": str(Path.cwd() / "ready.mp4")
     }
 
 
@@ -1817,7 +1818,7 @@ def test_a_request_answered_host_retiring_runs_again_on_another_host(
         else:
             send(request, ok=True, result={{"output": request["output"]}})"""
     client = HostClient(host_path=fake_host(tmp_path, pooled_host(log, answer)))
-    assert client.export(**export_args("out.mp4")) == {"output": "out.mp4"}
+    assert client.export(**export_args("out.mp4")) == {"output": str(Path.cwd() / "out.mp4")}
     assert len(starts_in(log)) == 2
 
 
@@ -1919,3 +1920,339 @@ def test_a_change_to_the_environment_starts_a_new_host_and_no_change_reuses_one(
     assert first["pid"] == same["pid"] != changed["pid"]
     assert (first["flag"], changed["flag"]) == ("one", "two")
     assert len(starts_in(log)) == 2
+
+
+def test_a_relative_output_is_written_in_the_directory_the_call_was_made_from(
+    tmp_path: Path, fake_host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, second = tmp_path / "first", tmp_path / "second"
+    second.mkdir()
+    log = tmp_path / "log"
+    host = f"""
+    def answer(request):
+        record({str(log)!r}, json.dumps({{"cwd": os.getcwd(), "assets": request["assets"]}}))
+        with open(request["output"], "a") as file:
+            file.write("written for " + request["project"]["name"])
+        send(request, ok=True, result={{"output": request["output"]}})
+    serve(answer)
+    """
+    client = HostClient(host_path=fake_host(first, host))
+    for name in ("first", "second"):
+        monkeypatch.chdir(tmp_path / name)
+        project = {**project_document(), "name": name}
+        args = export_args("out.mp4", project=project, assets={"a": "clip.mp4"})
+        assert client.export(**args) == {"output": str(Path.cwd() / "out.mp4")}
+    assert [json.loads(line) for line in lines_in(log)] == [
+        {"cwd": str(first), "assets": {"a": str(first / "clip.mp4")}},
+        {"cwd": str(first), "assets": {"a": str(second / "clip.mp4")}},
+    ]
+    assert (first / "out.mp4").read_text() == "written for first"
+    assert (second / "out.mp4").read_text() == "written for second"
+
+
+CLIENT_SCENARIOS = [
+    scenario
+    for scenario in corpus("client-behavior-corpus.json")
+    if "python" in scenario.get("clients", ["python"])
+]
+
+
+def paths_host(log: Path) -> str:
+    """Logs its start and every request with its pid and working directory, and answers each."""
+    return f"""
+    def entry(**fields):
+        record({str(log)!r}, json.dumps({{"pid": os.getpid(), "cwd": os.getcwd(), **fields}}))
+    entry(start=True)
+    results = {{
+        "capabilities": {{"status": "ready", "capabilities": {{}}, "effectCatalog": {{}}}},
+        "still": {{"stills": []}},
+        "conform": {{"catalog": {{}}, "report": {{}}}},
+        "extract": {{"dataSets": [], "timings": {{}}}},
+    }}
+    def answer(request):
+        entry(request=request)
+        result = results.get(request["operation"], {{"output": request.get("output")}})
+        send(request, ok=True, result=result)
+    serve(answer)
+    """
+
+
+def with_root(value: Any, root: str) -> Any:
+    if isinstance(value, str):
+        return value.replace("{root}", root)
+    if isinstance(value, list):
+        return [with_root(item, root) for item in value]
+    if isinstance(value, dict):
+        return {key: with_root(item, root) for key, item in value.items()}
+    return value
+
+
+def at_pointer(value: Any, pointer: str) -> Any:
+    for key in pointer.split("/")[1:]:
+        value = value[int(key)] if isinstance(value, list) else value[key]
+    return value
+
+
+def scenario_call(client: HostClient, operation: str, fields: dict[str, Any]) -> None:
+    arguments = wire_to_python(fields)
+    if operation == "export":
+        client.export(**export_args(arguments.pop("output"), **arguments))
+    elif operation == "still":
+        stills = [(alpha2.ticks(still["time"]), still.get("output")) for still in fields["stills"]]
+        del arguments["stills"]
+        client.stills(project_document(), stills, **arguments)
+    elif operation == "conform":
+        client.conform(project_document(), **arguments)
+    elif operation == "extract":
+        plugin = {**arguments.pop("plugin"), "sha256": "0" * 64}
+        request = {"extractor": "example.levels", "version": 1}
+        client.extract(project_document(), request, plugin=plugin, **arguments)
+    else:
+        pytest.fail(f"no call for operation {operation}")
+
+
+def run_request_paths(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path / "host", paths_host(log)))
+    client.capabilities()
+    host_directory = os.getcwd()
+    sent: list[tuple[str, Any, dict[str, Any]]] = []
+    for directory in scenario["given"]["directories"]:
+        (tmp_path / directory).mkdir()
+        os.chdir(tmp_path / directory)
+        for request, expect in zip(
+            scenario["given"]["requests"], scenario["expect"]["requests"], strict=True
+        ):
+            given = with_root(request["fields"], str(tmp_path))
+            sent.append((os.getcwd(), given, expect))
+            scenario_call(client, request["operation"], given)
+    lines = [json.loads(line) for line in lines_in(log)]
+    starts = [line for line in lines if line.get("start")]
+    assert len(starts) == scenario["expect"]["hosts"]
+    received = [
+        line
+        for line in lines
+        if "request" in line and line["request"]["operation"] != "capabilities"
+    ]
+    assert len(received) == len(sent)
+    for line, (caller, given, expect) in zip(received, sent, strict=True):
+        assert (line["pid"], line["cwd"]) == (starts[0]["pid"], host_directory)
+        for pointer in expect["resolved"]:
+            path = at_pointer(given, pointer)
+            absolute = (
+                os.path.normpath(os.path.join(caller, path))
+                if sys.platform == "win32"
+                else caller + "/" + path
+            )
+            assert at_pointer(line["request"], pointer) == absolute, pointer
+        for pointer in expect["unchanged"]:
+            assert at_pointer(line["request"], pointer) == at_pointer(given, pointer), pointer
+
+
+needs_fork = pytest.mark.skipif(not hasattr(os, "fork"), reason="this platform has no os.fork")
+
+# The child runs only the thread that forked, which is what the client prepares it for.
+QUIET_FORK = pytest.mark.filterwarnings(
+    "ignore:This process .* is multi-threaded:DeprecationWarning"
+)
+
+
+def fork_host(log: Path) -> str:
+    """Records its start, each request and the end of its input; an output named ``slow`` takes a
+    second."""
+    return f"""
+    pid = str(os.getpid())
+    record({str(log)!r}, "start " + pid)
+    def answer(request):
+        output = os.path.basename(request.get("output") or "")
+        record({str(log)!r}, " ".join(("request", pid, request["operation"], output)))
+        if request["operation"] == "capabilities":
+            send(request, ok=True, result={{"status": "ready", "capabilities": {{}}, "effectCatalog": {{}}}})
+            return
+        if output.startswith("slow"):
+            time.sleep(1)
+        send(request, ok=True, result={{"output": request["output"], "pid": os.getpid()}})
+    serve(answer)
+    record({str(log)!r}, "end of input " + pid)
+    """
+
+
+def host_requests(log: Path) -> list[list[str]]:
+    """The operations each host served, in the order the hosts started."""
+    served: dict[str, list[str]] = {}
+    for line in lines_in(log):
+        words = line.split(" ")
+        if words[0] == "start":
+            served[words[1]] = []
+        elif words[0] == "request":
+            served[words[1]].append(words[2])
+    return list(served.values())
+
+
+def in_forked_child(call: Callable[[], object], seconds: int = 10) -> str:
+    """Runs ``call`` in a forked child under an alarm; returns how it ended there."""
+    reader, writer = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(reader)
+        outcome = "?"
+        try:
+
+            def alarm(*_: object) -> None:
+                raise TimeoutError
+
+            signal.signal(signal.SIGALRM, alarm)
+            signal.alarm(seconds)
+            call()
+            outcome = "returned"
+        except TimeoutError:
+            outcome = "timed out"
+        except BaseException as error:  # noqa: BLE001 - reported to the parent
+            outcome = "raised " + repr(error)
+        finally:
+            os.write(writer, outcome.encode())
+            os._exit(0)
+    os.close(writer)
+    data = b""
+    while chunk := os.read(reader, 4096):
+        data += chunk
+    os.close(reader)
+    os.waitpid(pid, 0)
+    return data.decode()
+
+
+@needs_fork
+@QUIET_FORK
+@pytest.mark.parametrize("video_decode", [None, "software"], ids=["same-key", "other-key"])
+def test_a_forked_child_starts_its_own_host_and_the_parent_keeps_its_own(
+    tmp_path: Path, fake_host: FakeHost, video_decode: str | None
+) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, fork_host(log)))
+    client.export(**export_args("parent-1.mp4"))
+    outcome = in_forked_child(
+        lambda: client.export(**export_args("child.mp4", video_decode=video_decode))
+    )
+    client.export(**export_args("parent-2.mp4"))
+    assert outcome == "returned"
+    assert host_requests(log) == [["export", "export"], ["export"]]
+    # The child's host ends with the child.
+    wait_until(lambda: f"end of input {starts_in(log)[1]}" in lines_in(log))
+
+
+def report_through(host_path: str, output: str, results: Any) -> None:
+    results.put("capabilities " + alpha2.capabilities(host_path=host_path)["status"])
+    alpha2.export(**export_args(output), host_path=host_path)
+    results.put("export returned")
+
+
+@needs_fork
+@QUIET_FORK
+def test_a_fork_context_worker_uses_the_module_level_client(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    import multiprocessing
+
+    log = tmp_path / "log"
+    host_path = fake_host(tmp_path, fork_host(log))
+    assert alpha2.capabilities(host_path=host_path)["status"] == "ready"
+    context = multiprocessing.get_context("fork")
+    results: Any = context.Queue()
+    worker = context.Process(
+        target=report_through, args=(host_path, str(tmp_path / "child.mp4"), results)
+    )
+    worker.start()
+    worker.join(10)
+    hung = worker.is_alive()
+    if hung:
+        worker.kill()
+        worker.join()
+    assert not hung, "the worker did not finish within 10 s"
+    assert [results.get(timeout=5), results.get(timeout=5)] == [
+        "capabilities ready",
+        "export returned",
+    ]
+
+
+@needs_fork
+@QUIET_FORK
+def test_a_parent_that_closes_its_client_ends_its_host_while_a_forked_child_lives(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, fork_host(log)))
+    client.export(**export_args("parent.mp4"))
+    release, hold = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(hold)
+        os.read(release, 1)
+        os._exit(0)
+    os.close(release)
+    try:
+        started = time.monotonic()
+        client.close()
+        closed_in = time.monotonic() - started
+    finally:
+        os.close(hold)
+        os.waitpid(pid, 0)
+    assert lines_in(log)[-1] == f"end of input {starts_in(log)[0]}"
+    assert closed_in < _HOST_SHUTDOWN_TIMEOUT
+
+
+@needs_fork
+@QUIET_FORK
+def test_a_fork_while_the_parents_host_is_busy_leaves_both_requests_to_finish(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, fork_host(log)))
+    with ThreadPoolExecutor(1) as pool:
+        busy = pool.submit(client.export, **export_args("slow.mp4"))
+        wait_until(lambda: len(lines_in(log)) == 2)
+        outcome = in_forked_child(lambda: client.export(**export_args("child.mp4")))
+        assert busy.result()["output"] == str(Path.cwd() / "slow.mp4")
+    assert outcome == "returned"
+    assert host_requests(log) == [["export"], ["export"]]
+
+
+def run_fork(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    if not hasattr(os, "fork"):
+        pytest.skip("this platform has no os.fork")
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, fork_host(log)))
+    calls: dict[str, Callable[[], object]] = {
+        "capabilities": client.capabilities,
+        "export": lambda: client.export(**export_args("out.mp4")),
+    }
+    given = scenario["given"]
+    for operation in given["parent"]:
+        calls[operation]()
+
+    def child() -> None:
+        for operation in given["child"]:
+            calls[operation]()
+
+    outcome = in_forked_child(child, given["childSeconds"])
+    for operation in given["parentAfter"]:
+        calls[operation]()
+    assert outcome == scenario["expect"]["child"]
+    assert host_requests(log) == scenario["expect"]["hosts"]
+
+
+SCENARIO_DRIVERS: dict[str, Callable[[dict[str, Any], Path, FakeHost], None]] = {
+    "request-paths": run_request_paths,
+    "fork": run_fork,
+}
+
+
+@QUIET_FORK
+@pytest.mark.parametrize(
+    "scenario", CLIENT_SCENARIOS, ids=[scenario["id"] for scenario in CLIENT_SCENARIOS]
+)
+def test_client_behavior_scenario(
+    scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost
+) -> None:
+    driver = SCENARIO_DRIVERS.get(scenario["kind"])
+    assert driver is not None, f"no driver for scenario kind {scenario['kind']}"
+    driver(scenario, tmp_path, fake_host)

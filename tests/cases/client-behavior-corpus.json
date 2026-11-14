@@ -1,0 +1,134 @@
+[
+  {
+    "id": "relative-paths-follow-the-caller",
+    "kind": "request-paths",
+    "given": {
+      "directories": ["first", "second"],
+      "requests": [
+        {
+          "operation": "export",
+          "fields": {
+            "assets": {
+              "a": "clip.mp4",
+              "b": "../shared/b.mp4",
+              "c": "{root}/elsewhere/c.mp4"
+            },
+            "proxies": { "a": [{ "path": "proxies/clip.mov" }] },
+            "frames": { "seq": ["frames/1.png", null, "frames/3.png"] },
+            "resources": { "seq": { "index.json": "resources/index.json" } },
+            "effectAssets": { "lut": "luts/look.cube" },
+            "fonts": ["fonts/Inter.ttf"],
+            "renderCache": { "directory": "cache" },
+            "output": "out.mp4"
+          }
+        },
+        {
+          "operation": "still",
+          "fields": {
+            "assets": { "a": "clip.mp4" },
+            "stills": [{ "time": 0, "output": "frame.png" }, { "time": 4000 }]
+          }
+        },
+        {
+          "operation": "conform",
+          "fields": {
+            "assets": { "a": "clip.mp4" },
+            "proxies": { "a": [{ "path": "proxies/clip.mov" }] },
+            "frames": { "seq": ["frames/1.png", null] }
+          }
+        },
+        {
+          "operation": "extract",
+          "fields": {
+            "assets": { "a": "clip.mp4" },
+            "fonts": ["fonts/Inter.ttf"],
+            "plugin": { "manifest": "plugins/levels/manifest.json" }
+          }
+        },
+        {
+          "operation": "extract",
+          "fields": {
+            "plugin": { "manifest": "https://plugins.example/levels/manifest.json" }
+          }
+        },
+        {
+          "operation": "extract",
+          "fields": {
+            "plugin": { "manifest": "file:///plugins/levels/manifest.json" }
+          }
+        }
+      ]
+    },
+    "expect": {
+      "hosts": 1,
+      "requests": [
+        {
+          "resolved": [
+            "/assets/a",
+            "/assets/b",
+            "/proxies/a/0/path",
+            "/frames/seq/0",
+            "/frames/seq/2",
+            "/resources/seq/index.json",
+            "/effectAssets/lut",
+            "/fonts/0",
+            "/renderCache/directory",
+            "/output"
+          ],
+          "unchanged": ["/assets/c", "/frames/seq/1"]
+        },
+        {
+          "resolved": ["/assets/a", "/stills/0/output"],
+          "unchanged": ["/stills/1"]
+        },
+        {
+          "resolved": ["/assets/a", "/proxies/a/0/path", "/frames/seq/0"],
+          "unchanged": ["/frames/seq/1"]
+        },
+        {
+          "resolved": ["/assets/a", "/fonts/0", "/plugin/manifest"],
+          "unchanged": []
+        },
+        { "resolved": [], "unchanged": ["/plugin/manifest"] },
+        { "resolved": [], "unchanged": ["/plugin/manifest"] }
+      ]
+    }
+  },
+  {
+    "id": "compose-font-paths-follow-the-caller",
+    "kind": "request-paths",
+    "clients": ["node"],
+    "given": {
+      "directories": ["first", "second"],
+      "requests": [
+        {
+          "operation": "compose",
+          "fields": {
+            "action": "compile",
+            "spec": {},
+            "fonts": ["fonts/Inter.ttf", "{root}/fonts/Noto.ttf"]
+          }
+        }
+      ]
+    },
+    "expect": {
+      "hosts": 1,
+      "requests": [{ "resolved": ["/fonts/0"], "unchanged": ["/fonts/1"] }]
+    }
+  },
+  {
+    "id": "forked-child-starts-its-own-host",
+    "kind": "fork",
+    "clients": ["python"],
+    "given": {
+      "parent": ["capabilities", "export"],
+      "child": ["capabilities", "export"],
+      "childSeconds": 10,
+      "parentAfter": ["export"]
+    },
+    "expect": {
+      "child": "returned",
+      "hosts": [["capabilities", "export", "export"], ["export"]]
+    }
+  }
+]

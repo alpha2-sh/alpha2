@@ -462,13 +462,14 @@ const QUEUE_HOST = (
   log,
   { answerMs = 0, ignoreTerm = false } = {},
 ) => `import { appendFileSync } from "node:fs";
+import { basename } from "node:path";
 import { progress, respond, serve } from ${IO};
 const record = (line) => appendFileSync(${JSON.stringify(log)}, line + "\\n");
 record("start " + process.pid);
 process.on("SIGTERM", () => { if (!${ignoreTerm}) process.exit(0); });
 if (${ignoreTerm}) setInterval(() => {}, 1_000);
 serve((request) => {
-  record("request " + request.output);
+  record("request " + basename(request.output));
   progress(request, { phase: "frames", completed: 0, total: 1 });
   setTimeout(() => respond(request, { ok: true, result: { output: request.output } }), ${answerMs});
 }, ${ignoreTerm} ? { onEnd: () => {} } : {});
@@ -2881,3 +2882,121 @@ test("a request goes only to a host started with the environment it would start 
     else process.env.ALPHA2_NODE_TEST_SETTING = saved;
   }
 });
+
+const CLIENT_SCENARIOS = JSON.parse(
+  await readFile(
+    new URL(
+      "../../../tests/cases/client-behavior-corpus.json",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+).filter((scenario) => scenario.clients?.includes("node") ?? true);
+
+/** Logs its start and every request with its pid and working directory, and answers each. */
+const PATHS_HOST = (log) => `import { appendFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+const record = (entry) => appendFileSync(${JSON.stringify(log)}, JSON.stringify({ pid: process.pid, cwd: process.cwd(), ...entry }) + "\\n");
+record({ start: true });
+const results = {
+  capabilities: { status: "ready", capabilities: {}, effectCatalog: {} },
+  still: { stills: [] },
+  conform: { catalog: {}, report: {} },
+  extract: { dataSets: [], timings: {} },
+  compose: {},
+};
+serve((request) => {
+  record({ request });
+  respond(request, { ok: true, result: results[request.operation] ?? { output: request.output } });
+});
+`;
+
+function withRoot(value, root) {
+  if (typeof value === "string") return value.replace("{root}", root);
+  if (Array.isArray(value)) return value.map((item) => withRoot(item, root));
+  if (value !== null && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, withRoot(item, root)]),
+    );
+  return value;
+}
+
+function atPointer(value, pointer) {
+  return pointer
+    .split("/")
+    .slice(1)
+    .reduce((node, key) => node?.[key], value);
+}
+
+const SCENARIO_CALLS = {
+  export: (client, fields) =>
+    client.exportProject(exportRequest(fields.output, fields)),
+  still: (client, fields) =>
+    client.stills({ project: exportRequest().project, ...fields }),
+  conform: (client, fields) =>
+    client.conform({ project: exportRequest().project, ...fields }),
+  extract: (client, fields) =>
+    client.extract({
+      project: exportRequest().project,
+      request: { extractor: "example.levels", version: 1 },
+      ...fields,
+      plugin: { ...fields.plugin, sha256: "0".repeat(64) },
+    }),
+  compose: (client, { action, ...fields }) => client.compose(action, fields),
+};
+
+const SCENARIO_DRIVERS = {
+  async "request-paths"(scenario) {
+    const root = await scratch("alpha2-node-request-paths-");
+    const log = join(root, "log");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(join(root, "host"), PATHS_HOST(log)),
+    });
+    await client.getCapabilities();
+    const hostDirectory = process.cwd();
+    const sent = [];
+    for (const directory of scenario.given.directories) {
+      await mkdir(join(root, directory));
+      process.chdir(join(root, directory));
+      for (const [index, request] of scenario.given.requests.entries()) {
+        const given = withRoot(request.fields, root);
+        const expect = scenario.expect.requests[index];
+        sent.push({ cwd: process.cwd(), given, expect });
+        await SCENARIO_CALLS[request.operation](client, given);
+      }
+    }
+    const lines = (await startsIn(log)).map((line) => JSON.parse(line));
+    const starts = lines.filter((line) => line.start);
+    assert.equal(starts.length, scenario.expect.hosts);
+    const received = lines.filter(
+      (line) => line.request && line.request.operation !== "capabilities",
+    );
+    assert.equal(received.length, sent.length);
+    received.forEach(({ pid, cwd, request }, index) => {
+      assert.equal(pid, starts[0].pid);
+      assert.equal(cwd, hostDirectory);
+      const { cwd: caller, given, expect } = sent[index];
+      for (const pointer of expect.resolved) {
+        const path = atPointer(given, pointer);
+        const absolute =
+          process.platform === "win32"
+            ? resolve(caller, path)
+            : `${caller}/${path}`;
+        assert.equal(atPointer(request, pointer), absolute, pointer);
+      }
+      for (const pointer of expect.unchanged)
+        assert.deepEqual(
+          atPointer(request, pointer),
+          atPointer(given, pointer),
+          pointer,
+        );
+    });
+  },
+};
+
+for (const scenario of CLIENT_SCENARIOS)
+  test(`client behavior scenario ${scenario.id}`, async () => {
+    const driver = SCENARIO_DRIVERS[scenario.kind];
+    assert.ok(driver, `no driver for scenario kind ${scenario.kind}`);
+    await driver(scenario);
+  });

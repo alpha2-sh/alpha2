@@ -279,6 +279,18 @@ def test_a_still_is_a_png_of_the_canvas_in_the_projects_colors(
         client.stills(SOLID, [(0, output), (1, output)])
 
 
+def test_a_relative_output_is_written_in_the_directory_the_call_was_made_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with HostClient(host_path=HOST, renderer="cpu") as cpu:
+        for name in ("first", "second"):
+            (tmp_path / name).mkdir()
+            monkeypatch.chdir(tmp_path / name)
+            result = cpu.still(SOLID, 0, "frame.png")
+            assert Path(result["stills"][0]["output"]) == (tmp_path / name / "frame.png").resolve()
+    assert read_rgba_png(tmp_path / "second" / "frame.png")[:2] == (64, 48)
+
+
 def test_a_still_without_an_output_returns_the_png_a_file_would_hold(
     client: HostClient, tmp_path: Path
 ) -> None:

@@ -2,7 +2,14 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants, existsSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
-import { delimiter, dirname, extname, join, resolve } from "node:path";
+import {
+  delimiter,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  resolve,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type {
@@ -1428,9 +1435,9 @@ export class Alpha2NodeClient {
         "conform",
         {
           project: request.project,
-          assets: request.assets ?? {},
+          assets: pathRecord(request.assets),
           proxies: proxiesPayload(request.proxies),
-          frames: request.frames ?? {},
+          frames: framesPayload(request.frames),
           purpose: (request.purpose ?? "export_original").replace(/_/g, "-"),
         },
         { videoDecode: this.#videoDecode, renderer: this.#renderer },
@@ -1455,7 +1462,17 @@ export class Alpha2NodeClient {
     return (
       await this.#request(
         "compose",
-        { ...fields, action },
+        Array.isArray(fields.fonts)
+          ? {
+              ...fields,
+              action,
+              fonts: fields.fonts.map((font: unknown) =>
+                typeof font === "string" && font !== ""
+                  ? absolutePath(font)
+                  : font,
+              ),
+            }
+          : { ...fields, action },
         { videoDecode: this.#videoDecode, renderer: this.#renderer },
         signal,
       )
@@ -1503,11 +1520,20 @@ export class Alpha2NodeClient {
     validateExportRequest(request);
     const videoDecode = request.videoDecode ?? this.#videoDecode;
     const renderer = request.renderer ?? this.#renderer;
+    const inputs = renderInputsPayload(request);
+    const output = absolutePath(request.output);
+    const renderCache =
+      request.renderCache === undefined
+        ? undefined
+        : {
+            ...request.renderCache,
+            directory: absolutePath(request.renderCache.directory),
+          };
     const run = (mode: VideoDecodeMode | undefined) =>
       this.#request(
         "export",
         {
-          ...renderInputsPayload(request),
+          ...inputs,
           startTicks: request.startTicks,
           endTicks: request.endTicks,
           frameRate: request.frameRate,
@@ -1532,9 +1558,9 @@ export class Alpha2NodeClient {
             : { audioCodec: request.audioCodec }),
           audioQuality: request.audioQuality,
           loudness: request.loudness,
-          renderCache: request.renderCache,
+          renderCache,
           ...(request.memory === undefined ? {} : { memory: request.memory }),
-          output: request.output,
+          output,
           overwrite: request.overwrite ?? false,
         },
         { videoDecode: mode, renderer },
@@ -1580,7 +1606,9 @@ export class Alpha2NodeClient {
       {
         ...renderInputsPayload(request),
         stills: request.stills.map(({ time, output }) =>
-          output === undefined ? { time } : { time, output },
+          output === undefined
+            ? { time }
+            : { time, output: absolutePath(output) },
         ),
         overwrite: request.overwrite ?? false,
         ...(request.alpha === true ? { alpha: true } : {}),
@@ -1642,6 +1670,8 @@ export class Alpha2NodeClient {
       );
     const problems = projectProblems(request.project);
     if (problems.length > 0) throw new Alpha2ProjectValidationError(problems);
+    validateMediaPaths(request, false);
+    checkFontPaths(request.fonts);
     let runs: Readonly<Record<string, unknown>>;
     if (extractor !== undefined) {
       const descriptor = extractor.describe();
@@ -1662,7 +1692,9 @@ export class Alpha2NodeClient {
         );
       runs = {
         plugin: {
-          manifest: plugin.manifest,
+          manifest: URL_SCHEME.test(plugin.manifest)
+            ? plugin.manifest
+            : absolutePath(plugin.manifest),
           sha256: plugin.sha256,
           allow_native: plugin.allowNative ?? false,
           force_wasm: plugin.forceWasm ?? false,
@@ -1674,10 +1706,10 @@ export class Alpha2NodeClient {
       "extract",
       {
         project: request.project,
-        assets: request.assets ?? {},
+        assets: pathRecord(request.assets),
         proxies: proxiesPayload(request.proxies),
         media: request.media ?? "original",
-        fonts: request.fonts ?? [],
+        fonts: (request.fonts ?? []).map(absolutePath),
         request: request.request,
         ...runs,
       },
@@ -1975,11 +2007,7 @@ function validateRenderInputs(request: RenderInputs): void {
       'media must be "original" or "proxies"',
     );
   }
-  if (
-    request.fonts !== undefined &&
-    (!Array.isArray(request.fonts) || !request.fonts.every(nonEmptyString))
-  )
-    invalidShape("fonts must be a list of font file paths");
+  checkFontPaths(request.fonts);
   for (const resource of request.project.effect_resources ?? []) {
     const path = request.effectAssets?.[resource.id];
     if (typeof path !== "string" || path.length === 0) {
@@ -1994,15 +2022,56 @@ function validateRenderInputs(request: RenderInputs): void {
 function renderInputsPayload(request: RenderInputs): Record<string, unknown> {
   return {
     project: request.project,
-    assets: request.assets,
+    assets: pathRecord(request.assets),
     proxies: proxiesPayload(request.proxies),
-    frames: request.frames ?? {},
-    resources: request.resources ?? {},
+    frames: framesPayload(request.frames),
+    resources: Object.fromEntries(
+      Object.entries(request.resources ?? {}).map(([id, files]) => [
+        id,
+        pathRecord(files),
+      ]),
+    ),
     media: request.media ?? "original",
-    effectAssets: request.effectAssets ?? {},
-    fonts: request.fonts ?? [],
+    effectAssets: pathRecord(request.effectAssets),
+    fonts: (request.fonts ?? []).map(absolutePath),
     effects: request.effects ?? [],
   };
+}
+
+const WINDOWS_ABSOLUTE = /^([A-Za-z]:[\\/]|[\\/]{2})/;
+
+/** A scheme of two or more letters, as the host tells a plugin manifest URL from a path. */
+const URL_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]+:/;
+
+/**
+ * `path` with a relative path resolved against the working directory now, since a host resolves
+ * one against the directory it started in. POSIX keeps `..` and links as they are.
+ */
+function absolutePath(path: string): string {
+  if (process.platform === "win32")
+    return WINDOWS_ABSOLUTE.test(path) ? path : resolve(path);
+  if (isAbsolute(path)) return path;
+  const cwd = process.cwd();
+  return cwd.endsWith("/") ? cwd + path : `${cwd}/${path}`;
+}
+
+function pathRecord(
+  record: Readonly<Record<string, string>> | undefined,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(record ?? {}).map(([id, path]) => [id, absolutePath(path)]),
+  );
+}
+
+function framesPayload(
+  frames: Readonly<Record<string, readonly (string | null)[]>> | undefined,
+): Record<string, (string | null)[]> {
+  return Object.fromEntries(
+    Object.entries(frames ?? {}).map(([id, files]) => [
+      id,
+      files.map((file) => (file === null ? null : absolutePath(file))),
+    ]),
+  );
 }
 
 function validateStillsRequest(request: StillsRequest): void {
@@ -2251,6 +2320,14 @@ function validateMediaPaths(
           `frames for source ${id} must be a list of frame file paths, null for a gap`,
         );
   }
+}
+
+function checkFontPaths(fonts: unknown): void {
+  if (
+    fonts !== undefined &&
+    (!Array.isArray(fonts) || !fonts.every(nonEmptyString))
+  )
+    invalidShape("fonts must be a list of font file paths");
 }
 
 function checkPathRecord(field: string, value: unknown, what: string): void {
@@ -3280,7 +3357,7 @@ function proxiesPayload(
     Object.entries(proxies ?? {}).map(([id, files]) => [
       id,
       files.map((file) => ({
-        path: file.path,
+        path: absolutePath(file.path),
         ...(file.madeFrom === undefined ? {} : { madeFrom: file.madeFrom }),
         ...(file.colorPipeline === undefined
           ? {}

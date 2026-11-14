@@ -225,7 +225,9 @@ def test_exporting_a_compiled_spec_sends_its_assets_fonts_and_loudness(
     compiled = c.Video(c.Media("talk.mp4"), loudness=-14).compile(facts=FACTS, fonts=[FONT])
     HostClient(host_path=host).export(compiled, tmp_path / "out.mp4")
     request = json.loads(recorded.read_text(encoding="utf-8"))
-    assert request["assets"] == compiled.assets
+    assert request["assets"] == {
+        key: str(Path.cwd() / path) for key, path in compiled.assets.items()
+    }
     assert request["fonts"] == [str(FONT)]
     assert request["loudness"] == {"targetLufs": -14.0, "truePeakCeilingDbtp": -1.0}
     assert request["endTicks"] == 12 * SECOND

@@ -105,6 +105,13 @@ All notable changes to this project are documented in this file.
   the browser: the frame-grid search tries at most 4,096 periods, and arithmetic that would
   overflow gives no grid instead of a panic.
 - A layout grid line of -32768 is refused instead of panicking the validator.
+- Both clients send request paths absolute, resolving a relative one against the working
+  directory at the time of the call. A kept host resolved it against the directory it started in,
+  so after a `chdir` a request could read another directory's media or, with `overwrite`, replace
+  another directory's output.
+- A Python process forked after using `alpha2` (including `multiprocessing` with the `fork` start
+  method) no longer hangs on its first request: the child starts its own hosts, and the parent's
+  hosts see the end of their input when the parent closes its client.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

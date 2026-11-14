@@ -17,12 +17,14 @@ import itertools
 import json
 import os
 import queue
+import re
 import signal as signals
 import subprocess
 import sys
 import threading
 import time
 import unicodedata
+import weakref
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -317,6 +319,20 @@ def _project_json(project: Mapping[str, Any]) -> str:
     return json.dumps(project, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 
+_WINDOWS_ABSOLUTE = re.compile(r"[A-Za-z]:[\\/]|[\\/]{2}")
+
+# A scheme of two or more letters, as the host tells a plugin manifest URL from a path.
+_URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]+:")
+
+
+def _absolute(text: str) -> str:
+    """``text`` with a relative path resolved against the working directory now, since a host
+    resolves one against the directory it started in. POSIX keeps ``..`` and links as they are."""
+    if sys.platform == "win32":
+        return text if _WINDOWS_ABSOLUTE.match(text) else os.path.abspath(text)
+    return text if os.path.isabs(text) else os.path.join(os.getcwd(), text)
+
+
 def _path_record(field: str, value: object, what: str) -> dict[str, str]:
     if value is None:
         return {}
@@ -327,7 +343,7 @@ def _path_record(field: str, value: object, what: str) -> dict[str, str]:
         text = os.fspath(path) if isinstance(path, (str, os.PathLike)) else None
         if not isinstance(key, str) or not isinstance(text, str) or not text:
             raise _invalid(f"{what} for {key} must be a non-empty string")
-        record[key] = text
+        record[key] = _absolute(text)
     return record
 
 
@@ -347,7 +363,7 @@ def _proxies_payload(proxies: object) -> dict[str, list[dict[str, Any]]]:
             text = os.fspath(path) if isinstance(path, (str, os.PathLike)) else None
             if not isinstance(text, str) or not text:
                 raise _invalid(message)
-            entry: dict[str, Any] = {"path": text}
+            entry: dict[str, Any] = {"path": _absolute(text)}
             if file.get("made_from") is not None:
                 entry["madeFrom"] = file["made_from"]
             if file.get("color_pipeline") is not None:
@@ -375,7 +391,7 @@ def _frames_payload(frames: object) -> dict[str, list[str | None]]:
             text = os.fspath(file) if isinstance(file, (str, os.PathLike)) else None
             if not isinstance(text, str) or not text:
                 raise _invalid(message)
-            entries.append(text)
+            entries.append(_absolute(text))
         payload[source] = entries
     return payload
 
@@ -412,7 +428,7 @@ def _request_inputs(
             text = os.fspath(font) if isinstance(font, (str, os.PathLike)) else None
             if not isinstance(text, str) or not text:
                 raise _invalid("fonts must be a list of font file paths")
-            font_paths.append(text)
+            font_paths.append(_absolute(text))
     for resource in project.get("effect_resources") or []:
         if not effect_payload.get(resource["id"]):
             raise Alpha2HostError(
@@ -546,7 +562,7 @@ def _render_cache(cache: object) -> dict[str, Any] | None:
         or any(key not in ("directory", "quota_bytes", "backlog") for key in cache)
     ):
         raise _invalid(message)
-    payload: dict[str, Any] = {"directory": text}
+    payload: dict[str, Any] = {"directory": _absolute(text)}
     if quota is not None:
         payload["quotaBytes"] = quota
     if backlog is not None:
@@ -625,6 +641,7 @@ class HostClient:
         self._pool = _Pool(self.host_path, concurrency)
         self._probes: dict[str, _Probe] = {}
         self._probes_lock = threading.Lock()
+        _clients.add(self)
 
     def capabilities(
         self,
@@ -873,7 +890,7 @@ class HostClient:
             "includeAudio": include_audio,
             "inputPolicy": input_policy,
             "strategy": strategy,
-            "output": output_text,
+            "output": _absolute(output_text),
             "overwrite": _flag("overwrite", overwrite),
         }
         named: tuple[tuple[str, object], ...] = (
@@ -988,12 +1005,13 @@ class HostClient:
             output_text = os.fspath(output) if isinstance(output, (str, os.PathLike)) else None
             if not isinstance(output_text, str) or not output_text:
                 raise _invalid("a still's output must not be empty")
+            absolute = _absolute(output_text)
             # Windows and macOS file systems are case- and normalization-insensitive.
-            key = unicodedata.normalize("NFC", os.path.abspath(output_text)).lower()
+            key = unicodedata.normalize("NFC", os.path.normpath(absolute)).lower()
             if key in outputs:
                 raise _invalid(f"two stills write one file: {outputs[key]} and {output_text}")
             outputs[key] = output_text
-            entries.append({"time": at, "output": output_text})
+            entries.append({"time": at, "output": absolute})
         payload: dict[str, Any] = {
             **_request_inputs(
                 project, assets, proxies, frames, resources, media, effect_assets, fonts, effects
@@ -1102,7 +1120,7 @@ class HostClient:
                 raise _invalid("plugin needs its manifest and the manifest's sha256")
             runs = {
                 "plugin": {
-                    "manifest": manifest,
+                    "manifest": manifest if _URL_SCHEME.match(manifest) else _absolute(manifest),
                     "sha256": sha256,
                     "allow_native": bool(plugin.get("allow_native", False)),
                     "force_wasm": bool(plugin.get("force_wasm", False)),
@@ -1383,6 +1401,19 @@ class _Host:
         except OSError:
             pass
 
+    def release_inherited(self, null: int) -> None:
+        """Points a forked child's copies of the pipe ends at ``null``, so the host sees the end of
+        its input when the parent closes its side. Never signals or waits on the parent's child."""
+        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+            if stream is not None:
+                try:
+                    os.dup2(null, stream.fileno())
+                except (OSError, ValueError):
+                    pass
+        self.alive = False
+        self.available = False
+        self.input_closed = True
+
 
 def _error_from_host(error: dict[str, Any], stderr: str, phase: ExportPhase) -> Alpha2HostError:
     failure = None
@@ -1417,6 +1448,17 @@ class _Pool:
         self._hosts: list[_Host] = []
         self._starting = 0
         self._waiting: collections.deque[object] = collections.deque()
+        _pools.add(self)
+
+    def forget_after_fork(self, null: int) -> None:
+        """Drops what a forked child inherited: no thread feeds its hosts and a parent thread may
+        have held the lock, so the child starts its own hosts."""
+        self._condition = threading.Condition()
+        for host in self._hosts:
+            host.release_inherited(null)
+        self._hosts = []
+        self._waiting = collections.deque()
+        self._starting = 0
 
     def received(self, host: _Host, kind: str, value: Any) -> None:
         with self._condition:
@@ -1991,6 +2033,36 @@ def _quarantine_check(binary: Path, *, again: bool = False) -> str | None:
 
 _shared_clients: dict[tuple[int, str], HostClient] = {}
 _shared_lock = threading.Lock()
+
+_clients: weakref.WeakSet[HostClient] = weakref.WeakSet()
+_pools: weakref.WeakSet[_Pool] = weakref.WeakSet()
+
+
+def _after_fork_in_child() -> None:
+    """Makes inherited clients usable in a forked child without taking a lock a parent thread may
+    have held at the fork."""
+    global _shared_lock, _quarantine_lock
+    _shared_lock = threading.Lock()
+    _quarantine_lock = threading.Lock()
+    _shared_clients.clear()
+    for client in list(_clients):
+        client._probes_lock = threading.Lock()
+        # A probe still running has no thread in the child; a finished report stays cached.
+        client._probes = {
+            key: probe
+            for key, probe in client._probes.items()
+            if probe.done.is_set() and probe.error is None
+        }
+    null = os.open(os.devnull, os.O_RDWR)
+    try:
+        for pool in list(_pools):
+            pool.forget_after_fork(null)
+    finally:
+        os.close(null)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_after_fork_in_child)
 
 
 def _shared_client(

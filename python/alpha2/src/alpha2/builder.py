@@ -325,7 +325,7 @@ class ProjectBuilder:
 
     def assets(self) -> dict[str, str]:
         """Each media source's id mapped to its locator, for an export's ``assets``. Relative paths
-        resolve against the exporting process's working directory."""
+        resolve against the working directory at the time of the call."""
         return {source["id"]: source["locator"] for source in self._sources if "locator" in source}
 
     def generated(self, generator: Generator, *, id: str | None = None) -> str:
