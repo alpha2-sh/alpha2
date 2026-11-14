@@ -989,26 +989,7 @@ fn frame_graph<'a>(
         });
     }
     let background = background_color(frame.background);
-    let mut suppressed = HashSet::new();
-    for transition in &frame.transitions {
-        let from = *nodes
-            .get(transition.from_clip)
-            .ok_or(RenderError::InvalidGraph)?;
-        let to = *nodes
-            .get(transition.to_clip)
-            .ok_or(RenderError::InvalidGraph)?;
-        let output = inputs.len();
-        inputs.push(FrameInput {
-            kind: FrameInputKind::Transition {
-                from,
-                to,
-                transition,
-            },
-            uses_backdrop: inputs[from].uses_backdrop || inputs[to].uses_backdrop,
-        });
-        nodes.insert(transition.to_clip, output);
-        suppressed.insert(transition.from_clip);
-    }
+    let suppressed = fold_transitions(frame, available, &mut nodes, &mut inputs)?;
     let mut layers = Vec::with_capacity(available.len() + captions.len());
     let mut captions = captions.iter().peekable();
     for (clip, textures) in available {
@@ -1062,6 +1043,100 @@ fn frame_graph<'a>(
         .set_cache_intent(output, CacheIntent::Auto)
         .map_err(GraphError::into_render_error)?;
     Ok(graph)
+}
+
+/// Adds a node per transition of `frame`, each replacing its `to` clip's node, and returns the
+/// `from` clips, which are drawn only through a transition.
+fn fold_transitions<'a>(
+    frame: &'a FrameDesc<'a>,
+    available: &[(&'a ActiveClip<'a>, ClipFrames<'a>)],
+    nodes: &mut HashMap<&'a alpha2_model::ClipId, usize>,
+    inputs: &mut Vec<FrameInput<'a>>,
+) -> Result<HashSet<&'a alpha2_model::ClipId>, RenderError> {
+    let mut suppressed = HashSet::new();
+    let mut fold = |transition: &'a ActiveTransition<'a>| {
+        let from = *nodes
+            .get(transition.from_clip)
+            .ok_or(RenderError::InvalidGraph)?;
+        let to = *nodes
+            .get(transition.to_clip)
+            .ok_or(RenderError::InvalidGraph)?;
+        let output = inputs.len();
+        inputs.push(FrameInput {
+            kind: FrameInputKind::Transition {
+                from,
+                to,
+                transition,
+            },
+            uses_backdrop: inputs[from].uses_backdrop || inputs[to].uses_backdrop,
+        });
+        nodes.insert(transition.to_clip, output);
+        suppressed.insert(transition.from_clip);
+        Ok::<_, RenderError>(())
+    };
+    if frame.transitions.len() > 1 {
+        for index in tournament_order(&frame.transitions, available)? {
+            fold(&frame.transitions[index])?;
+        }
+    } else {
+        for transition in &frame.transitions {
+            fold(transition)?;
+        }
+    }
+    Ok(suppressed)
+}
+
+/// Indices of `transitions` in the order the fold applies them.
+///
+/// A clip receives all of its incoming transitions, in the order of their `from` clips, before it
+/// feeds another, so overlaps of three or more clips draw one picture whatever the list order.
+/// Clips are ordered topologically over the edges `from -> to`, ties by frame order.
+fn tournament_order(
+    transitions: &[ActiveTransition<'_>],
+    available: &[(&ActiveClip<'_>, ClipFrames<'_>)],
+) -> Result<Vec<usize>, RenderError> {
+    let position = |id: &alpha2_model::ClipId| {
+        available
+            .iter()
+            .position(|(clip, _)| clip.clip_id == id)
+            .ok_or(RenderError::InvalidGraph)
+    };
+    let edges = transitions
+        .iter()
+        .map(|transition| {
+            Ok((
+                position(transition.from_clip)?,
+                position(transition.to_clip)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, RenderError>>()?;
+    let mut clips = edges
+        .iter()
+        .flat_map(|&(from, to)| [from, to])
+        .collect::<Vec<_>>();
+    clips.sort_unstable();
+    clips.dedup();
+    let mut incoming = clips
+        .iter()
+        .map(|clip| edges.iter().filter(|(_, to)| to == clip).count())
+        .collect::<Vec<_>>();
+    let mut rank = vec![usize::MAX; available.len()];
+    for step in 0..clips.len() {
+        // A cycle leaves no clip without pending incoming transitions.
+        let next = incoming
+            .iter()
+            .position(|&count| count == 0)
+            .ok_or(RenderError::InvalidGraph)?;
+        incoming[next] = usize::MAX;
+        rank[clips[next]] = step;
+        let feeds = edges.iter().filter(|(from, _)| *from == clips[next]);
+        for target in feeds.filter_map(|(_, to)| clips.binary_search(to).ok()) {
+            incoming[target] -= 1;
+        }
+    }
+    let mut order = (0..transitions.len()).collect::<Vec<_>>();
+    order.sort_by_key(|&index| (rank[edges[index].1], rank[edges[index].0]));
+    Ok(order)
 }
 
 const fn cache_intent(intent: alpha2_model::CacheIntent) -> CacheIntent {

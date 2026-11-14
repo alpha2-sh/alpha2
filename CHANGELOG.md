@@ -89,6 +89,10 @@ All notable changes to this project are documented in this file.
   gradients or patterns name one another by `href` in a ring, is refused as malformed instead of
   overflowing the stack or never finishing. Each such reference counts four levels against the
   nesting limit, and a mask, clip path or filter counts once per element that names it.
+- Three or more clips that overlap on one track draw every transition between them, and the picture
+  no longer depends on the order the transitions are listed in. A clip receives all of its incoming
+  transitions, the one from the clip that leads most first, before it feeds another transition.
+  Before, one transition could be dropped.
 - GPU renderer: a layer whose pixels are transparent leaves the picture below it unchanged. Before,
   each such layer re-stored the colors under it, so a stack of transparent overlays darkened the
   picture by up to a few code values and the GPU differed from the CPU renderer.

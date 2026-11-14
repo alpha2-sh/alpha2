@@ -22,7 +22,8 @@ pub struct FrameDesc<'a> {
     pub visual: Vec<ActiveClip<'a>>,
     /// Active audio clips in mix order.
     pub audio: Vec<ActiveClip<'a>>,
-    /// Active two-input transitions in track order.
+    /// Active two-input transitions in track order. The order is not significant: the engine
+    /// folds them in tournament order.
     pub transitions: Vec<ActiveTransition<'a>>,
     /// The cue each caption track shows, in track order.
     pub captions: Vec<ActiveCaption<'a>>,

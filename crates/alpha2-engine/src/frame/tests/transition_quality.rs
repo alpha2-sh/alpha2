@@ -262,3 +262,249 @@ fn chained_transitions_on_two_tracks_with_a_matted_endpoint_show_their_endpoints
         );
     }
 }
+
+fn fade_between(
+    from: &ActiveClip<'static>,
+    to: &ActiveClip<'static>,
+    progress: f32,
+) -> ActiveTransition<'static> {
+    ActiveTransition {
+        from_clip: from.clip_id,
+        to_clip: to.clip_id,
+        effect: ActiveEffect::new(
+            leak(ClipEffect {
+                id: "alpha2.transition.fade".into(),
+                version: 1,
+                resources: BTreeMap::new(),
+                params: BTreeMap::new(),
+            }),
+            MediaTime::ZERO,
+            alpha2_eval::SampleContext::NONE,
+        ),
+        progress,
+    }
+}
+
+const LIST_ORDERS: [[usize; 3]; 6] = [
+    [0, 1, 2],
+    [0, 2, 1],
+    [1, 0, 2],
+    [1, 2, 0],
+    [2, 0, 1],
+    [2, 1, 0],
+];
+
+type Tournament = fn(
+    &ActiveClip<'static>,
+    &ActiveClip<'static>,
+    &ActiveClip<'static>,
+    [f32; 3],
+) -> [ActiveTransition<'static>; 3];
+
+#[test]
+fn three_overlapping_clips_draw_one_picture_in_any_list_order() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    renderer.register_builtin_transitions().unwrap();
+    // B green, C blue, A red, drawn in that frame order.
+    let textures = [[0, 255, 0, 255], [0, 0, 255, 255], [255, 0, 0, 255]]
+        .map(|pixel| rgba_texture(&renderer, pixel));
+    let frames = Frames(
+        textures
+            .iter()
+            .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect(),
+    );
+    let size = RenderSize::new(4, 4).unwrap();
+    let full = || visual(Vec2::new(1.0, 1.0), 1.0);
+    let b = clip("b", 0, full(), ClipBlendMode::Normal);
+    let c = clip("c", 1, full(), ClipBlendMode::Normal);
+    let a = clip("a", 2, full(), ClipBlendMode::Normal);
+    let draw = |transitions: Vec<ActiveTransition<'static>>| {
+        let frame = FrameDesc {
+            background: Some(alpha2_model::Rgb::BLACK),
+            blend_space: alpha2_model::BlendSpace::SrgbEncoded,
+            time: MediaTime::ZERO,
+            visual: vec![b, c, a],
+            audio: vec![],
+            transitions,
+            captions: Vec::new(),
+        };
+        pixels(&renderer, size, &frame, &frames)[..4].to_vec()
+    };
+    // At progress 0.5 the clip led by both others draws half its first leader and a quarter of
+    // each other clip.
+    let tournaments: [(&str, [u8; 4], Tournament); 2] = [
+        (
+            "a leads b and c, b leads c",
+            [128, 64, 64, 255],
+            |b, c, a, p| {
+                [
+                    fade_between(b, c, p[0]),
+                    fade_between(a, b, p[1]),
+                    fade_between(a, c, p[2]),
+                ]
+            },
+        ),
+        (
+            "b leads c and a, c leads a",
+            [64, 128, 64, 255],
+            |b, c, a, p| {
+                [
+                    fade_between(b, c, p[0]),
+                    fade_between(b, a, p[1]),
+                    fade_between(c, a, p[2]),
+                ]
+            },
+        ),
+    ];
+    for (label, expected, tournament) in tournaments {
+        let listed = |order: [usize; 3], progress: [f32; 3]| {
+            let all = tournament(&b, &c, &a, progress);
+            order.map(|index| all[index]).to_vec()
+        };
+        let picture = draw(listed(LIST_ORDERS[0], [0.5; 3]));
+        assert_rgba8_near(&picture, &expected, 1);
+        for order in LIST_ORDERS {
+            assert_eq!(
+                draw(listed(order, [0.5; 3])),
+                picture,
+                "{label}, order {order:?}"
+            );
+            for moved in 0..3 {
+                let mut progress = [0.5; 3];
+                progress[moved] = 0.1;
+                assert_ne!(
+                    draw(listed(order, progress)),
+                    picture,
+                    "{label}, order {order:?}: transition {moved} is not drawn"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_cycle_of_transitions_is_refused() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    renderer.register_builtin_transitions().unwrap();
+    let textures = [[0, 255, 0, 255], [0, 0, 255, 255], [255, 0, 0, 255]]
+        .map(|pixel| rgba_texture(&renderer, pixel));
+    let frames = Frames(
+        textures
+            .iter()
+            .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()))
+            .collect(),
+    );
+    let full = || visual(Vec2::new(1.0, 1.0), 1.0);
+    let b = clip("b", 0, full(), ClipBlendMode::Normal);
+    let c = clip("c", 1, full(), ClipBlendMode::Normal);
+    let a = clip("a", 2, full(), ClipBlendMode::Normal);
+    let frame = FrameDesc {
+        background: Some(alpha2_model::Rgb::BLACK),
+        blend_space: alpha2_model::BlendSpace::SrgbEncoded,
+        time: MediaTime::ZERO,
+        visual: vec![b, c, a],
+        audio: vec![],
+        transitions: vec![
+            fade_between(&a, &b, 0.5),
+            fade_between(&b, &c, 0.5),
+            fade_between(&c, &a, 0.5),
+        ],
+        captions: Vec::new(),
+    };
+    assert!(matches!(
+        renderer.render_frame(RenderSize::new(4, 4).unwrap(), &frame, &frames),
+        Err(RenderError::InvalidGraph)
+    ));
+}
+
+/// A track whose clips start at 0, 1 and 2 seconds and overlap until 10 seconds, with a fade
+/// between each two, listed in `order`; transition `eased` has a late easing.
+fn three_clip_project(
+    pairs: [(&str, &str, i64); 3],
+    order: [usize; 3],
+    eased: Option<usize>,
+) -> crate::EngineProject {
+    let fill = |id: &str, red: u8, green: u8, blue: u8| {
+        format!(
+            r#"{{ "id": "{id}", "kind": "generated", "generator": {{ "type": "fill", "paint": {{
+                "type": "solid", "color": {{ "red": {red}, "green": {green}, "blue": {blue}, "alpha": 1 }} }} }} }}"#
+        )
+    };
+    let clip = |id: &str, source: &str, start: i64| {
+        format!(
+            r#"{{ "id": "{id}", "source_id": "{source}", "timeline_range": {{ "start": {start}, "end": 240000 }},
+                 "source_range": {{ "start": 0, "end": {} }} }}"#,
+            240_000 - start
+        )
+    };
+    let linear = r#"{ "type": "linear" }"#;
+    let late = r#"{ "type": "cubic_bezier", "x1": 0.9, "y1": 0.0, "x2": 1.0, "y2": 0.1 }"#;
+    let transitions = order
+        .iter()
+        .map(|&index| {
+            let (from, to, start) = pairs[index];
+            let easing = if eased == Some(index) { late } else { linear };
+            format!(
+                r#"{{ "from_clip": "{from}", "to_clip": "{to}", "timeline_range": {{ "start": {start}, "end": 240000 }},
+                     "easing": {easing}, "effect": {{ "id": "alpha2.transition.fade", "version": 1 }} }}"#
+            )
+        })
+        .collect::<Vec<_>>();
+    let document = format!(
+        r#"{{ "schema_version": 1, "id": "p", "name": "P",
+             "settings": {{ "width": 16, "height": 16, "frame_rate": {{ "num": 30, "den": 1 }},
+                            "sample_rate": 48000, "blend_space": "srgb_encoded" }},
+             "sources": [ {}, {}, {} ],
+             "timeline": {{ "tracks": [ {{ "id": "v", "name": "V", "kind": "video",
+               "clips": [ {}, {}, {} ],
+               "transitions": [ {} ] }} ] }} }}"#,
+        fill("green", 0, 1, 0),
+        fill("blue", 0, 0, 1),
+        fill("red", 1, 0, 0),
+        clip("b", "green", 0),
+        clip("c", "blue", 24_000),
+        clip("a", "red", 48_000),
+        transitions.join(", ")
+    );
+    let project = alpha2_model::Project::from_json(&document).expect("valid project");
+    crate::EngineProject::new(project).expect("indexed")
+}
+
+#[test]
+fn three_overlapping_clips_draw_one_picture_in_any_document_order() {
+    let renderer = alpha2_render::CpuRenderer::new(1);
+    let size = RenderSize::new(16, 16).unwrap();
+    let draw = |project: &crate::EngineProject| {
+        let frame = project.evaluate(MediaTime(144_000)).expect("frame");
+        renderer
+            .render_frame(size, &frame, &MissingFrames)
+            .expect("frame renders")
+            .texture
+            .expect("complete")
+            .read_rgba8()[..4]
+            .to_vec()
+    };
+    for pairs in [
+        [("b", "c", 24_000), ("a", "b", 48_000), ("a", "c", 48_000)],
+        [("b", "c", 24_000), ("b", "a", 48_000), ("c", "a", 48_000)],
+    ] {
+        let picture = draw(&three_clip_project(pairs, LIST_ORDERS[0], None));
+        for order in LIST_ORDERS {
+            assert_eq!(
+                draw(&three_clip_project(pairs, order, None)),
+                picture,
+                "{pairs:?}, document order {order:?}"
+            );
+            for eased in 0..3 {
+                assert_ne!(
+                    draw(&three_clip_project(pairs, order, Some(eased))),
+                    picture,
+                    "{pairs:?}, document order {order:?}: transition {eased} is not drawn"
+                );
+            }
+        }
+    }
+}
