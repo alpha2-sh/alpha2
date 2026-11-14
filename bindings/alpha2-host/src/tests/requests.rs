@@ -1331,6 +1331,23 @@ fn an_effect_request_lists_its_named_inputs_or_leaves_them_out() {
     assert!(error.to_string().contains("unknown field"), "{error}");
 }
 
+#[test]
+fn no_request_can_allow_every_decoder() {
+    for line in [
+        format_line(&json!({"allowEveryDecoder": true})),
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "operation": "capabilities",
+            "requestId": "decoders",
+            "allowEveryDecoder": true
+        })
+        .to_string(),
+    ] {
+        let error = parse_request(&line).map(drop).expect_err("refused");
+        assert!(error.message.contains("unknown field"), "{}", error.message);
+    }
+}
+
 fn format_line(fields: &Value) -> String {
     let mut request = json!({
         "protocolVersion": PROTOCOL_VERSION,

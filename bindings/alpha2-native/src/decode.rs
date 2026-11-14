@@ -1050,6 +1050,7 @@ fn open_audio_decoder(
     let parameters = stream.codecpar();
     let codec = AVCodec::find_decoder(parameters.codec_id)
         .ok_or_else(|| DecodeError::Unsupported("audio decoder is unavailable".into()))?;
+    allowed_decoder(&codec)?;
     let mut decoder = AVCodecContext::new(&codec);
     decoder.apply_codecpar(&parameters).map_err(adapter_error)?;
     decoder.set_pkt_timebase(stream.time_base);
@@ -1414,6 +1415,8 @@ impl NativeDecoder {
                     DecodeError::Unsupported("selected video codec has no decoder".into()),
                 )
             })?;
+            allowed_decoder(&preferred)
+                .map_err(|error| HardwareOpenError::new(NoHardwareConfig, error))?;
             if let Some(codecs) = spec.hardware_codecs {
                 let listed = hardware_codec_name(parameters.codec_id);
                 if !listed.is_some_and(|name| codecs.contains(&name)) {
@@ -1953,6 +1956,7 @@ pub(crate) fn software_video_decoder(
             "selected video codec has no decoder".into(),
         ));
     };
+    allowed_decoder(&preferred)?;
     let hardware_only =
         |codec: &AVCodecRef<'_>| HWACCEL_ONLY_DECODERS.contains(&&*codec.name().to_string_lossy());
     if !hardware_only(&preferred) {
@@ -2200,19 +2204,134 @@ fn check_hardware_sample_profile(
 pub(crate) const SOURCE_CONTAINERS: &CStr =
     c"mov,matroska,mpegts,avi,mp3,aac,wav,flac,ogg,png_pipe,jpeg_pipe,webp_pipe,gif";
 
-/// Opens a source with [`SOURCE_CONTAINERS`] and only the `file` protocol, so nothing
-/// reaches past a local path.
+/// Decoders a source may select, by `FFmpeg` name: the codecs alpha2 documents and tests and
+/// mainstream production codecs. A stream of any other codec is `Unsupported`, unless the process
+/// allowed every decoder ([`allow_every_decoder`]).
+pub const SOURCE_DECODERS: &[&str] = &[
+    // Video.
+    "h264",
+    "hevc",
+    "vp8",
+    "vp9",
+    "libvpx-vp9",
+    "av1",
+    "libdav1d",
+    "mpeg4",
+    "mpeg2video",
+    "mpeg1video",
+    "prores",
+    "dnxhd",
+    "ffv1",
+    "v210",
+    "mjpeg",
+    "qtrle",
+    "rawvideo",
+    "png",
+    "webp",
+    "gif",
+    // Audio.
+    "aac",
+    "aac_latm",
+    "mp3float",
+    "mp3",
+    "mp2",
+    "mp2float",
+    "opus",
+    "libopus",
+    "vorbis",
+    "flac",
+    "alac",
+    "ac3",
+    "eac3",
+    "dca",
+    "pcm_s16le",
+    "pcm_s16be",
+    "pcm_s24le",
+    "pcm_s24be",
+    "pcm_s32le",
+    "pcm_s32be",
+    "pcm_f32le",
+    "pcm_f32be",
+    "pcm_f64le",
+    "pcm_f64be",
+    "pcm_u8",
+    "pcm_s8",
+    "pcm_alaw",
+    "pcm_mulaw",
+];
+
+static EVERY_DECODER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Lets sources select every decoder of the linked `FFmpeg`, not only [`SOURCE_DECODERS`], for
+/// the rest of the process. A process setting for integrators who decode only trusted files.
+pub fn allow_every_decoder() {
+    EVERY_DECODER.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+pub(crate) fn set_every_decoder(every: bool) {
+    EVERY_DECODER.store(every, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether [`allow_every_decoder`] was called.
+#[must_use]
+pub fn every_decoder_allowed() -> bool {
+    EVERY_DECODER.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The [`SOURCE_DECODERS`] the linked `FFmpeg` has.
+#[must_use]
+pub fn source_decoders() -> Vec<&'static str> {
+    SOURCE_DECODERS
+        .iter()
+        .copied()
+        .filter(|name| {
+            CString::new(*name)
+                .ok()
+                .and_then(|name| AVCodec::find_decoder_by_name(&name))
+                .is_some()
+        })
+        .collect()
+}
+
+/// Refuses a decoder outside [`SOURCE_DECODERS`] unless every decoder is allowed.
+pub(crate) fn allowed_decoder(codec: &AVCodecRef<'_>) -> Result<(), DecodeError> {
+    let name = codec.name().to_string_lossy();
+    if every_decoder_allowed() || SOURCE_DECODERS.contains(&&*name) {
+        Ok(())
+    } else {
+        Err(DecodeError::Unsupported(format!(
+            "the {name} decoder is not one alpha2 decodes sources with"
+        )))
+    }
+}
+
+/// [`SOURCE_DECODERS`] as `FFmpeg`'s `codec_whitelist`, or `None` when every decoder is allowed.
+fn decoder_whitelist() -> Option<&'static CStr> {
+    static LIST: std::sync::OnceLock<CString> = std::sync::OnceLock::new();
+    (!every_decoder_allowed()).then(|| {
+        LIST.get_or_init(|| {
+            CString::new(SOURCE_DECODERS.join(",")).expect("decoder names have no NUL")
+        })
+        .as_c_str()
+    })
+}
+
+/// Opens a source with [`SOURCE_CONTAINERS`], only the `file` protocol, so nothing reaches past a
+/// local path, and probing with [`SOURCE_DECODERS`] only.
 pub(crate) fn open_input(path: &Path) -> Result<DemuxInput, DecodeError> {
     #[cfg(test)]
     INPUTS_OPENED.with(|opened| opened.set(opened.get() + 1));
     refuse_oversized_still(path)?;
-    alpha2_ffmpeg_bridge::open_input(path, SOURCE_CONTAINERS).map_err(|error| match error {
-        OpenInputError::Path(error) => DecodeError::Unsupported(format!("media path {error}")),
-        OpenInputError::Refused(format) => DecodeError::Unsupported(format!(
-            "the file is {format} input, which is not a container alpha2 reads"
-        )),
-        OpenInputError::Ffmpeg(error) => adapter_error(error),
-    })
+    alpha2_ffmpeg_bridge::open_input(path, SOURCE_CONTAINERS, decoder_whitelist()).map_err(
+        |error| match error {
+            OpenInputError::Path(error) => DecodeError::Unsupported(format!("media path {error}")),
+            OpenInputError::Refused(format) => DecodeError::Unsupported(format!(
+                "the file is {format} input, which is not a container alpha2 reads"
+            )),
+            OpenInputError::Ffmpeg(error) => adapter_error(error),
+        },
+    )
 }
 
 /// Refuses a PNG, JPEG or WebP whose header states a picture larger than alpha2 renders, since
@@ -2398,14 +2517,24 @@ fn metadata_text(
     (!value.is_empty()).then_some(value)
 }
 
+/// Whether stream `index` has a decoder a source may select.
+fn decoder_allowed(input: &DemuxInput, index: usize) -> bool {
+    input.streams().get(index).is_some_and(|stream| {
+        AVCodec::find_decoder(stream.codecpar().codec_id)
+            .is_some_and(|codec| allowed_decoder(&codec).is_ok())
+    })
+}
+
 /// The [`ProbeResult`] of an opened input, with `FFmpeg`'s best video and audio streams selected.
 pub(crate) fn probe_context(input: &DemuxInput, path: &Path) -> Result<ProbeResult, DecodeError> {
     let selected_video = input
         .best_stream(ffi::AVMEDIA_TYPE_VIDEO)
         .map_err(adapter_error)?;
+    // An audio track whose decoder is not allowed is left out like one without a decoder.
     let selected_audio = input
         .best_stream(ffi::AVMEDIA_TYPE_AUDIO)
-        .map_err(adapter_error)?;
+        .map_err(adapter_error)?
+        .filter(|&index| decoder_allowed(input, index));
     let streams = input
         .streams()
         .iter()

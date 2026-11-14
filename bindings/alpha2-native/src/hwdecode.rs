@@ -87,6 +87,7 @@ pub fn probe_vulkan_decode(
         .codecpar();
     let preferred = AVCodec::find_decoder(parameters.codec_id)
         .ok_or_else(|| DecodeError::Unsupported("selected video codec has no decoder".into()))?;
+    crate::decode::allowed_decoder(&preferred)?;
     // The preferred decoder may be software (libdav1d for AV1); the Vulkan configuration lives on
     // `FFmpeg`'s own decoder for the codec.
     let (codec, config) = crate::decode::registered_video_decoders(parameters.codec_id)

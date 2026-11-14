@@ -81,8 +81,9 @@ pub use convert::{
 };
 pub use decode::{
     DecodeStageTimings, DroppedLayer, NativeAudioDecoder, NativeDecoder, ProbeResult,
-    SOURCE_SAMPLE_RATES, alpha_dropped_reason, decodes_vp9_alpha, probe,
-    software_decode_unsupported, visit_packet_times,
+    SOURCE_DECODERS, SOURCE_SAMPLE_RATES, allow_every_decoder, alpha_dropped_reason,
+    decodes_vp9_alpha, every_decoder_allowed, probe, software_decode_unsupported, source_decoders,
+    visit_packet_times,
 };
 pub use encode::{EncodeStageTimings, NativeAvEncodeSink, NativeWavEncodeSink};
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]

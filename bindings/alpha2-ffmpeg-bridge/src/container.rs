@@ -234,7 +234,8 @@ impl std::fmt::Display for OpenInputError {
 impl std::error::Error for OpenInputError {}
 
 /// Opens `path` and reads its stream information using only the demuxers in `formats`
-/// (comma-separated `FFmpeg` short names) and only the `file` protocol.
+/// (comma-separated `FFmpeg` short names) and only the `file` protocol. With `decoders`
+/// (comma-separated `FFmpeg` decoder names), probing opens only those decoders.
 ///
 /// Still images pick their demuxer by signature. Otherwise `image2` claims any file named like an
 /// image before the JPEG demuxer has seen a large JPEG whole, and `formats` leaves `image2` out.
@@ -242,7 +243,11 @@ impl std::error::Error for OpenInputError {}
 /// # Errors
 /// [`OpenInputError::Path`] for an unusable path, [`OpenInputError::Refused`] for a container
 /// `formats` leaves out, else the `FFmpeg` failure.
-pub fn open_input(path: &Path, formats: &CStr) -> Result<DemuxInput, OpenInputError> {
+pub fn open_input(
+    path: &Path,
+    formats: &CStr,
+    decoders: Option<&CStr>,
+) -> Result<DemuxInput, OpenInputError> {
     let url = file_url(path).map_err(OpenInputError::Path)?;
     let url = url.as_c_str();
     crate::install_log_capture();
@@ -253,7 +258,7 @@ pub fn open_input(path: &Path, formats: &CStr) -> Result<DemuxInput, OpenInputEr
         .map_or(ptr::null(), |name| unsafe {
             ffi::av_find_input_format(name.as_ptr())
         });
-    open_with(url, formats, still).map_err(|failure| match failure {
+    open_with(url, formats, decoders, still).map_err(|failure| match failure {
         OpenFailure::Open(opened) => refused_format(path, url, formats).map_or(
             OpenInputError::Ffmpeg(RsmpegError::OpenInputError(opened)),
             OpenInputError::Refused,
@@ -285,6 +290,7 @@ enum OpenFailure {
 fn open_with(
     url: &CStr,
     formats: &CStr,
+    decoders: Option<&CStr>,
     format: *const ffi::AVInputFormat,
 ) -> Result<DemuxInput, OpenFailure> {
     let interrupt = Arc::new(InputInterrupt::default());
@@ -303,8 +309,12 @@ fn open_with(
             opaque: Arc::as_ptr(&interrupt).cast_mut().cast(),
         };
     }
-    let options =
+    let mut options =
         AVDictionary::new(c"format_whitelist", formats, 0).set(c"protocol_whitelist", c"file", 0);
+    // The format context hands its list to every decoder `avformat_find_stream_info` opens.
+    if let Some(decoders) = decoders {
+        options = options.set(c"codec_whitelist", decoders, 0);
+    }
     let mut options = options.into_raw().as_ptr();
     // SAFETY: `context` is fresh, `url` NUL-terminated, `format` null or a static demuxer, and
     // `options` a dictionary the call may consume; it frees and nulls `context` on failure.

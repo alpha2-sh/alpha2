@@ -285,7 +285,7 @@ fn exit_unflushed(code: u8) -> ! {
 fn run(host: &mut Option<Host>) -> Result<(), HostError> {
     #[cfg(windows)]
     configure_dx12_compiler();
-    let mut args = utf8_arguments(env::args_os().skip(1))?.into_iter();
+    let mut args = decoder_policy(utf8_arguments(env::args_os().skip(1))?).into_iter();
     match args.next().as_deref() {
         Some("serve") => {
             let options = ServeOptions::from_args(args)
@@ -308,6 +308,22 @@ fn run(host: &mut Option<Host>) -> Result<(), HostError> {
         }
         _ => Err(HostError::invalid_input(usage())),
     }
+}
+
+/// Takes `--allow-every-decoder` out of a `serve`, `export` or `conform` command line and applies
+/// it to the process. It is a process setting only; no request can set it.
+fn decoder_policy(mut arguments: Vec<String>) -> Vec<String> {
+    if matches!(
+        arguments.first().map(String::as_str),
+        Some("serve" | "export" | "conform")
+    ) && let Some(at) = arguments
+        .iter()
+        .position(|argument| argument == "--allow-every-decoder")
+    {
+        arguments.remove(at);
+        alpha2_native::allow_every_decoder();
+    }
+    arguments
 }
 
 /// `INVALID_INPUT` names the first argument that is not UTF-8.

@@ -1090,6 +1090,13 @@ export interface HostDecodeCapabilities {
    * auxiliary alpha decodes opaque.
    */
   readonly alpha: readonly string[];
+  /**
+   * The `FFmpeg` decoders a source may select, those of the host's list this runtime has. A stream
+   * of another codec conforms as `unsupported`, unless `everyDecoder`.
+   */
+  readonly sourceDecoders: readonly string[];
+  /** Whether the host was started with `--allow-every-decoder`, so any linked decoder may run. */
+  readonly everyDecoder: boolean;
 }
 
 /** What {@link Alpha2NodeClient.getCapabilities} reports about the host. */

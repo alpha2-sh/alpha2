@@ -1479,6 +1479,8 @@ pub fn decode_capabilities_json(
             "softwareDecoder": capability.software_decoder,
         })).collect::<Vec<_>>(),
         "alpha": alpha_decode_codecs(),
+        "sourceDecoders": alpha2_native::source_decoders(),
+        "everyDecoder": alpha2_native::every_decoder_allowed(),
     })
 }
 

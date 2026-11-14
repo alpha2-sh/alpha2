@@ -137,6 +137,13 @@ All notable changes to this project are documented in this file.
   do, instead of at the first clip. A project whose first clip starts at 2 s now exports those 2 s
   on a phone too. `alpha2_model::Project::default_export_range` states the rule:
   `[0, extent end)`.
+- Native sources decode only with a fixed list of FFmpeg decoders, the codecs alpha2 documents
+  and tests and mainstream production codecs (48 names, reported as `decode.sourceDecoders` by
+  `capabilities`); reading a file's stream information opens only those decoders too. A video of
+  another codec conforms as `unsupported` naming its decoder, and an audio track of another codec
+  is left out. `alpha2-host --allow-every-decoder` (`serve`, `export`, `conform`) lifts the list
+  for the process; no request can. Before, a file in an allowed container could select any of the
+  runtime's 506 decoders.
 
 ### Fixed
 
