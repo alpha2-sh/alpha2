@@ -615,13 +615,13 @@ fn a_session_in_presentation_order_is_not_held_back() {
 
 #[test]
 fn the_presentation_slack_reads_no_more_than_16_mib_of_first_packets() {
-    // Eight exact 2 MiB frames, then millisecond-rounded 30 fps frames in a 1/16000 time base.
+    // Eight exact 2 MiB frames, then frames of the same period rounded to 16 units.
     let bytes = 2 << 20;
     let exact = usize::try_from(alpha2_time::ROUNDING_SCAN_BYTES).expect("bytes") / bytes;
     assert_eq!(exact, 8);
     let mut timestamps = (0..8).map(|index| index * 640).collect::<Vec<i64>>();
     let mut last = timestamps[exact - 1];
-    for step in [528, 544, 528, 544] {
+    for step in [624, 656, 624, 656] {
         last += step;
         timestamps.push(last);
     }
