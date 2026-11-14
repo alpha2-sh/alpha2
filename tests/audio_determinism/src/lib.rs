@@ -167,7 +167,7 @@ pub fn browser_fixture() -> serde_json::Value {
     })
 }
 
-/// FNV-1a over waveform summary buckets of the noise source, then of [`signed_zeros`].
+/// FNV-1a over waveform summary buckets of the noise source, then of `signed_zeros`.
 ///
 /// # Panics
 /// Panics if the fixed summary shape is refused.
@@ -233,7 +233,7 @@ fn signed_zeros() -> Vec<Vec<f32>> {
     vec![left, right]
 }
 
-/// FNV-1a over the loudness reports of the fixed mix and of [`stepped_program`].
+/// FNV-1a over the loudness reports of the fixed mix and of `stepped_program`.
 ///
 /// The two-second mix is too short for a short-term window or loudness range, so the stepped
 /// program covers those.
@@ -268,7 +268,7 @@ pub fn loudness_hash() -> u64 {
     hash
 }
 
-/// The reports [`loudness_hash`] covers: the fixed mix, then [`stepped_program`].
+/// The reports [`loudness_hash`] covers: the fixed mix, then `stepped_program`.
 ///
 /// # Panics
 /// Panics if the fixed project is refused.

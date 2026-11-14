@@ -32,7 +32,7 @@ pub struct MixFailure {
     pub message: String,
     /// Failures in a row up to now; 0 once a later block mixed.
     pub consecutive: u32,
-    /// Whether the mix gave up after [`MAX_CONSECUTIVE_MIX_FAILURES`] failures in a row.
+    /// Whether the mix gave up after 10 failures in a row.
     pub stopped: bool,
 }
 

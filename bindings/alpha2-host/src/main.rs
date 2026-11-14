@@ -270,7 +270,7 @@ fn exit_now(code: u8) -> ! {
 }
 
 /// For a thread that must not wait for another's line; every line was flushed whole when written
-/// ([`Responder::line`]).
+/// ([`Responder::send`]).
 fn exit_unflushed(code: u8) -> ! {
     let _ = std::io::stderr().flush();
     #[cfg(feature = "hwdevice")]
