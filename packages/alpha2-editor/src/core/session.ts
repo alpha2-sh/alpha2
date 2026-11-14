@@ -16,6 +16,7 @@ import {
 import type { EditorDocument, Result } from "./document.js";
 import { executeCommand, executeEditResult } from "./commands.js";
 import { frozenValid, owned } from "./validated.js";
+import { sameJson } from "./sameness.js";
 import type { Command } from "./commands.js";
 /** An immutable view of an {@link EditorSession}; a new object after every change. */
 export interface EditorSnapshot {
@@ -246,15 +247,18 @@ export class EditorSession {
   }
   /**
    * Runs `command` on the committed document and commits the result as one undo step, cancelling an
-   * active gesture first. A refusal is returned, not thrown, and leaves the session unchanged. An
-   * empty transaction leaves it unchanged too.
+   * active gesture first. A refusal is returned, not thrown, and leaves the session unchanged. A
+   * command whose result serializes like the committed document leaves it unchanged too (history,
+   * redo and `revision` included) and returns the committed document.
    */
   dispatch(command: Command): Result<EditorDocument> {
     this.#active();
     this.#cancelGesture?.();
     const result = this.canExecute(command);
-    if (result.ok && result.value !== this.#document)
-      this.#commit(result.value);
+    if (!result.ok) return result;
+    if (sameJson(result.value, this.#document))
+      return { ok: true, value: this.#document };
+    this.#commit(result.value);
     return result;
   }
   /**
@@ -319,7 +323,7 @@ export class EditorSession {
   /**
    * Puts an extraction's data sets in the document as one undo step (a `data.put` for each,
    * replacing sets with their ids), cancelling an active gesture first. Returns the document,
-   * unchanged for a result without sets.
+   * unchanged (and no step added) for a result without sets or with sets equal to the ones held.
    *
    * Refusals leave the session unchanged. They are `missing_asset` for a source-anchored set
    * whose source is gone, `invalid_command` for a timeline-anchored set without `read`,
@@ -365,8 +369,10 @@ export class EditorSession {
       type: "transaction",
       commands: sets.map((dataSet) => ({ type: "data.put", dataSet })),
     });
-    if (applied.ok && applied.value !== this.#document)
-      this.#commit(applied.value, options.label ?? "extract");
+    if (!applied.ok) return applied;
+    if (sameJson(applied.value, this.#document))
+      return { ok: true, value: this.#document };
+    this.#commit(applied.value, options.label ?? "extract");
     return applied;
   }
   /**
@@ -510,9 +516,9 @@ export class EditorSession {
    * Starts a pointer gesture, cancelling an active one. Each `update` runs a command on the
    * gesture's starting document and, when valid, shows the result as the snapshot's `draft` without
    * touching history. `commit` validates the last candidate fully and commits it as one undo step,
-   * returning whether anything was committed; `cancel` discards it. A commit, cancel, dispatch,
-   * undo, redo, open, dispose or new `beginGesture` ends the gesture, after which `update` returns
-   * `stale_gesture`.
+   * returning whether anything was committed (nothing is when the candidate serializes like the
+   * starting document); `cancel` discards it. A commit, cancel, dispatch, undo, redo, open, dispose
+   * or new `beginGesture` ends the gesture, after which `update` returns `stale_gesture`.
    */
   beginGesture() {
     this.#active();
@@ -559,7 +565,7 @@ export class EditorSession {
         if (!active) return false;
         const value = candidate;
         const hadDraft = end();
-        if (value === base) {
+        if (sameJson(value, base)) {
           if (hadDraft) this.#emit();
           return false;
         }

@@ -1365,6 +1365,102 @@ test("pasting with nothing copied, or any command that changes nothing, keeps th
   assert.equal(e.document.project.name, "Renamed");
 });
 
+{
+  const levels = {
+    id: "level",
+    kind: "scalars",
+    anchor: { type: "timeline" },
+    channels: ["level"],
+    interpolation: "linear",
+    times: [0, 120000],
+    values: [0.25, 0.75],
+  };
+  /** A session with a redo step and the state each no-op below repeats. */
+  const withRedo = () => {
+    const e = createEditor({ document: simple() });
+    assert.ok(
+      e.dispatch({ type: "track.metadata", id: "t", patch: { syncLock: true } })
+        .ok,
+    );
+    assert.ok(e.dispatch({ type: "data.put", dataSet: levels }).ok);
+    e.clearHistory();
+    e.dispatch({ type: "project.update", patch: { name: "Renamed" } });
+    e.undo();
+    return e;
+  };
+  const history = (e) => {
+    const { revision, canUndo, canRedo } = e.getSnapshot();
+    return { revision, canUndo, canRedo };
+  };
+  const noops = {
+    "clip.move to the same start": { type: "clip.move", id: "c", at: 0 },
+    "clip.trim to the same end": {
+      type: "clip.trim",
+      id: "c",
+      edge: "end",
+      at: 1200000,
+    },
+    "clip.update with the value it has": {
+      type: "clip.update",
+      id: "c",
+      patch: { time_map: { type: "forward" } },
+    },
+    "track.metadata to the same flag": {
+      type: "track.metadata",
+      id: "t",
+      patch: { syncLock: true },
+    },
+    "data.put of an identical set": {
+      type: "data.put",
+      dataSet: structuredClone(levels),
+    },
+    "project.update to the same name": {
+      type: "project.update",
+      patch: { name: "Test" },
+    },
+  };
+  for (const [name, command] of Object.entries(noops))
+    test(`a command that changes nothing keeps the history: ${name}`, () => {
+      const e = withRedo();
+      const before = history(e);
+      const document = e.document;
+      const result = e.dispatch(command);
+      assert.ok(result.ok, result.error?.message);
+      assert.equal(result.value, document);
+      assert.equal(e.document, document);
+      assert.deepEqual(history(e), before);
+    });
+  test("a gesture that ends where it started commits nothing", () => {
+    const e = withRedo();
+    const before = history(e);
+    const gesture = e.beginGesture();
+    assert.ok(gesture.update({ type: "clip.move", id: "c", at: 120000 }).ok);
+    assert.ok(gesture.update({ type: "clip.move", id: "c", at: 0 }).ok);
+    assert.equal(gesture.commit(), false);
+    assert.deepEqual(history(e), before);
+  });
+  test("an extraction that puts sets equal to the held ones commits nothing", () => {
+    const e = withRedo();
+    const before = history(e);
+    const document = e.document;
+    const { read } = e.extractionProject();
+    const result = e.applyExtraction(
+      { dataSets: [structuredClone(levels)] },
+      { read },
+    );
+    assert.ok(result.ok, result.error?.message);
+    assert.equal(result.value, document);
+    assert.deepEqual(history(e), before);
+  });
+  test("a command that changes something still commits", () => {
+    const e = withRedo();
+    const before = history(e);
+    assert.ok(e.dispatch({ type: "clip.move", id: "c", at: 120000 }).ok);
+    assert.equal(history(e).revision, before.revision + 1);
+    assert.equal(history(e).canRedo, false);
+  });
+}
+
 test("a document is made and opened in time linear in its clips", async () => {
   // Guards against quadratic mask naming.
   const S = 120000;
