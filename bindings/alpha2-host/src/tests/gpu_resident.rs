@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(feature = "hwencode")]
 use alpha2_test_support::media::{PLANE_PSNR_FLOOR_DB, plane_check, plane_psnr};
 
 #[cfg(all(
