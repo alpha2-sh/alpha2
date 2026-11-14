@@ -112,6 +112,10 @@ All notable changes to this project are documented in this file.
 - A Python process forked after using `alpha2` (including `multiprocessing` with the `fork` start
   method) no longer hangs on its first request: the child starts its own hosts, and the parent's
   hosts see the end of their input when the parent closes its client.
+- A `compose` or `edit` request that panics inside the host is answered `INTERNAL`, and the host
+  counts it as ended and serves the next request; it was never answered and the host stayed busy.
+- A 10-bit export on a host whose renderer stores 8 bits is refused with `INVALID_INPUT`, a code the
+  protocol lists.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

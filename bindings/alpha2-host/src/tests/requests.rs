@@ -1631,6 +1631,10 @@ fn serve_standard_input() {
         });
         std::thread::sleep(Duration::from_millis(20));
     }
+    if std::env::var_os("ALPHA2_TEST_REQUEST_PANIC").is_some() {
+        crate::compose_request::INJECT_REQUEST_PANIC
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_SLOW_ENCODE_MS") {
         let milliseconds = milliseconds.parse().expect("milliseconds");
         *crate::encode::SERVE_SLOW_ENCODE
@@ -2143,4 +2147,106 @@ fn every_line_the_host_writes_is_ascii_and_reads_back_the_same() {
         "{text}"
     );
     assert_eq!(serde_json::from_str::<Value>(text).expect("JSON"), value);
+}
+
+#[test]
+fn a_request_that_panics_is_answered_and_the_host_serves_the_next() {
+    let edit = json!({
+        "protocolVersion": 2, "requestId": "P", "operation": "edit",
+        "project": {
+            "schema_version": 1, "id": "p", "name": "P",
+            "settings": {"width": 64, "height": 48, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [], "timeline": {"tracks": []}
+        },
+        "edit": {"op": "remove_ranges", "ranges": []}
+    });
+    let compose =
+        r#"{"protocolVersion":2,"requestId":"P","operation":"compose","action":"templates"}"#;
+    for first in [compose.to_owned(), edit.to_string()] {
+        let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_REQUEST_PANIC", "1")]);
+        assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+        serving.write(&first);
+        let answer = serving.message(Duration::from_secs(10));
+        assert_eq!(answer["requestId"], "P", "{answer}");
+        assert_eq!(answer["error"]["code"], "INTERNAL", "{answer}");
+        assert!(
+            answer["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("injected panic")),
+            "{answer}"
+        );
+        serving.write(r#"{"protocolVersion":2,"requestId":"st","operation":"status"}"#);
+        let status = serving.message(Duration::from_secs(10));
+        assert_eq!(
+            status["result"]["details"]["runningRequests"], 0,
+            "{status}"
+        );
+        assert_eq!(status["result"]["details"]["activity"], "idle", "{status}");
+        serving.write(&templates("next"));
+        let next = serving.message(Duration::from_secs(10));
+        assert_eq!(next["requestId"], "next", "{next}");
+        assert_eq!(next["ok"], true, "{next}");
+        assert_eq!(serving.finish(), Some(0));
+    }
+}
+
+#[test]
+fn an_unknown_operation_names_every_operation_the_host_takes() {
+    let error = parse_request(r#"{"protocolVersion":2,"requestId":"x","operation":"bogus"}"#)
+        .err()
+        .expect("refused");
+    assert_eq!(error.code, "INVALID_REQUEST");
+    for operation in [
+        "capabilities",
+        "export",
+        "conform",
+        "still",
+        "compose",
+        "edit",
+        "extract",
+        "cancel",
+        "status",
+    ] {
+        assert!(
+            error.message.contains(&format!("`{operation}`")),
+            "{operation}: {}",
+            error.message
+        );
+    }
+}
+
+/// An adapter whose intermediate is 8-bit refuses a 10-bit export with a code the protocol lists.
+#[test]
+fn ten_bit_output_on_an_eight_bit_renderer_is_invalid_input() {
+    let _gpu = gpu_test_lock();
+    crate::INJECT_RGBA8_INTERMEDIATE.with(|inject| inject.set(true));
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
+    assert_eq!(
+        host.device().renderer.intermediate_format(),
+        wgpu::TextureFormat::Rgba8Unorm
+    );
+    let directory = scratch_directory("ten-bit-on-eight");
+    let end = alpha2_time::TICKS_PER_SECOND / 10;
+    let request = json!({
+        "protocolVersion": 2, "operation": "export", "requestId": "U",
+        "project": {
+            "schema_version": 1, "id": "p", "name": "P",
+            "settings": {"width": 64, "height": 48, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [], "timeline": {"tracks": []}
+        },
+        "assets": {},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "prores",
+        "bitDepth": 10,
+        "output": directory.join("out.mov")
+    });
+    let error = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |_| Ok(()),
+        )
+        .expect_err("refused");
+    assert_eq!(error.code, "INVALID_INPUT", "{}", error.message);
 }

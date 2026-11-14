@@ -12,7 +12,7 @@
 //!
 //! Requests carry a caller-unique `requestId` and an `operation`: `capabilities`, `conform` (which
 //! media each source would read, without rendering), `export`, `still` (frames to PNG, as an
-//! export draws them), `compose`, `cancel` or `status`. Responses are
+//! export draws them), `compose`, `edit`, `extract`, `cancel` or `status`. Responses are
 //! `{protocolVersion, requestId, ok: true, result, hostState}` or
 //! `{protocolVersion, requestId, ok: false, error: {code, message}, hostState}`. During an export
 //! the host may emit `{protocolVersion, type: "progress", requestId, phase, completed, total}`,
@@ -649,6 +649,13 @@ fn gpu_init_error(error: alpha2_gpu::GpuError) -> HostError {
 
 const SHADER_COMPILER_CAUSE: &str = "shader-compiler";
 
+#[cfg(test)]
+thread_local! {
+    /// Gives the next GPU host this thread makes an 8-bit intermediate, as some adapters have.
+    pub(crate) static INJECT_RGBA8_INTERMEDIATE: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
 /// Picks among the DX12 adapters on Windows, the Vulkan adapters that can carry the shared video
 /// device on Linux, and the one Metal device on macOS ([`alpha2_gpu::rank_adapters`]). `software`
 /// says whether a software adapter is acceptable.
@@ -794,6 +801,12 @@ pub(crate) fn create_gpu_host_with_adapter(
     let gpu_memory_budget = alpha2_native_gpu::adapter_memory_budget(gpu.adapter());
     #[cfg(not(feature = "hwdevice"))]
     let gpu_memory_budget = None;
+    #[cfg(test)]
+    let gpu = if INJECT_RGBA8_INTERMEDIATE.with(std::cell::Cell::take) {
+        gpu.with_rgba8_intermediate()
+    } else {
+        gpu
+    };
     let mut renderer = Renderer::new(gpu);
     let pools_lowered = renderer.set_gpu_memory_budget(gpu_memory_budget);
     if let Some(budget) = gpu_memory_budget {
@@ -1589,7 +1602,19 @@ fn dispatch<'scope>(
             .stack_size(COMMAND_STACK_BYTES)
             .spawn_scoped(scope, move || {
                 let slot = SlotGuard(slots);
-                if let Err(error) = work.run(out, unusable) {
+                let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    work.run(out, unusable)
+                }))
+                .unwrap_or_else(|payload| {
+                    Err(HostError::new(
+                        "INTERNAL",
+                        format!(
+                            "the host panicked answering a request: {}",
+                            crate::failure::panic_message(&*payload)
+                        ),
+                    ))
+                });
+                if let Err(error) = ran {
                     failed
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
@@ -1641,9 +1666,14 @@ impl RequestWork {
         // Until the answer is written, a termination waits for this request instead of ending the
         // process.
         let guard = termination::terminations().begin_request(&request_id);
+        let mut ended = RequestEnd {
+            lifecycle: &lifecycle,
+            ended: false,
+        };
         let mut host = device.clone().map(Host::for_request);
         let missing = || HostError::new("INTERNAL", "the request has no GPU device to run on");
-        let response = match envelope {
+        let is_extract = matches!(envelope, Ok(crate::protocol::Request::Extract(_)));
+        let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match envelope {
             Ok(_) if guard.cancelled_before_start() => Err(cancelled_before_start(is_export)),
             Ok(crate::protocol::Request::Conform(request)) => {
                 crate::host::conform_media(request, policy)
@@ -1653,22 +1683,7 @@ impl RequestWork {
             }
             Ok(crate::protocol::Request::Edit(request)) => request.answer(),
             Ok(crate::protocol::Request::Extract(request)) => match host.as_mut() {
-                Some(host) => {
-                    let answer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        crate::extract_request::handle(host, *request, out, extract)
-                    }))
-                    .unwrap_or_else(|payload| {
-                        Err(HostError::new(
-                            "INTERNAL",
-                            format!(
-                                "the host panicked handling the request: {}",
-                                crate::failure::panic_message(&*payload)
-                            ),
-                        ))
-                    });
-                    host.end_extract();
-                    answer
-                }
+                Some(host) => crate::extract_request::handle(host, *request, out, extract),
                 None => Err(missing()),
             },
             Ok(request) => match host.as_mut() {
@@ -1693,7 +1708,20 @@ impl RequestWork {
                 None => Err(missing()),
             },
             Err(error) => Err(error),
-        };
+        }));
+        let response = handled.unwrap_or_else(|payload| {
+            let error = HostError::new(
+                "INTERNAL",
+                format!(
+                    "the host panicked handling the request: {}",
+                    crate::failure::panic_message(&*payload)
+                ),
+            );
+            Err(if is_export { fatal_error(error) } else { error })
+        });
+        if is_extract && let Some(host) = host.as_mut() {
+            host.end_extract();
+        }
         let attachments = host
             .as_mut()
             .map(|host| std::mem::take(&mut host.reply_attachments))
@@ -1701,6 +1729,7 @@ impl RequestWork {
             .unwrap_or_default();
         // Its effects and resources go back before the answer, for the next request.
         drop(host);
+        ended.ended = true;
         answer(
             &lifecycle,
             device.as_deref(),
@@ -1713,6 +1742,20 @@ impl RequestWork {
         // A termination ends the process here, once the last answer is out.
         drop(guard);
         Ok(())
+    }
+}
+
+/// Counts a request as ended when its thread unwinds before [`answer`] does.
+struct RequestEnd<'a> {
+    lifecycle: &'a Lifecycle,
+    ended: bool,
+}
+
+impl Drop for RequestEnd<'_> {
+    fn drop(&mut self) {
+        if !self.ended {
+            self.lifecycle.end_request();
+        }
     }
 }
 

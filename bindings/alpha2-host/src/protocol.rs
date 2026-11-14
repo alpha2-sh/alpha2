@@ -85,6 +85,8 @@ impl EditRequest {
     /// `INVALID_INPUT` for an invalid project or operation and for every refusal, `INTERNAL` for
     /// an edited project that fails validation; `details.refusal` names why.
     pub fn answer(&self) -> Result<Value, HostError> {
+        #[cfg(test)]
+        crate::compose_request::injected_panic("edit");
         let edited = alpha2_eval::edit::apply_json(self.project.text(), self.edit.get()).map_err(
             |failure| {
                 HostError::new(failure.code, failure.message)
@@ -740,7 +742,7 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             return Err(HostError::new(
                 "INVALID_REQUEST",
                 format!(
-                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`, `compose`, `extract`, `cancel`, `status`"
+                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`, `compose`, `edit`, `extract`, `cancel`, `status`"
                 ),
             ));
         }

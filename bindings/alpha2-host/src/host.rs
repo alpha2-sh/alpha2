@@ -1873,7 +1873,7 @@ impl Host {
             && self.renderer.intermediate_format() == wgpu::TextureFormat::Rgba8Unorm
         {
             return Err(code_tag(
-                "UNSUPPORTED",
+                "INVALID_INPUT",
                 "10-bit output needs the rgba16float intermediate; this renderer stores 8 bits",
             ));
         }
