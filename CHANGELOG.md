@@ -154,6 +154,9 @@ All notable changes to this project are documented in this file.
 - GPU renderer: a layer whose pixels are transparent leaves the picture below it unchanged. Before,
   each such layer re-stored the colors under it, so a stack of transparent overlays darkened the
   picture by up to a few code values and the GPU differed from the CPU renderer.
+- Plugin pack: the manifest carries `descriptor.json` as written. Serialized again, a long
+  decimal in it could read back one step off, so the host refused the packed plugin with
+  `PLUGIN_DESCRIPTOR_MISMATCH`.
 - Browser plugins: a batch of more emits than the engine's argument limit (about 65 thousand in
   Safari, about 120 thousand in Chrome) is taken whole instead of failing with `INVALID_EMIT`. A
   trap or an out-of-range pointer in `describe`, the input allocation, its copy or its free is a
