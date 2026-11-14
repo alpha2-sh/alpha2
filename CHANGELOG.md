@@ -147,6 +147,10 @@ All notable changes to this project are documented in this file.
 - GPU renderer: a layer whose pixels are transparent leaves the picture below it unchanged. Before,
   each such layer re-stored the colors under it, so a stack of transparent overlays darkened the
   picture by up to a few code values and the GPU differed from the CPU renderer.
+- Host: a `cancel` of a plugin extraction stops a running wasm call within about 50 ms and a
+  plugin download between chunks, instead of waiting for the call's deadline or the download's end
+  while the request held its slot. The wasm call deadline is measured in wall-clock time.
+  Connecting to a plugin server and waiting for its answer time out after 30 s each.
 - Host: a native plugin is loaded from the host's own copy of the bytes it checked, under
   `native/` in the private plugin cache, so the file cannot be swapped between the check and the
   load and a bare file name no longer goes through the system loader's search path. Each library is

@@ -141,6 +141,7 @@ fn loaded(
         params.as_object().cloned().unwrap_or_default(),
         policy,
         &mut Local,
+        &CancelToken::default(),
     )
 }
 
@@ -677,6 +678,7 @@ fn instantiated(module: &[u8], memory_bytes: u64) -> Result<wasm::WasmTransport,
         HashMap::new(),
         Vec::new(),
         &policy,
+        CancelToken::default(),
     )
 }
 
@@ -917,6 +919,7 @@ fn a_native_library_is_prepared_once_and_outlives_threads_it_left_running() {
         params.clone().unwrap_or_default(),
         &native_allowed(),
         &mut fetch,
+        &CancelToken::default(),
     )
     .expect("first load");
     run(&mut first, &json!({ "park_thread": true })).expect("first run");
@@ -929,6 +932,7 @@ fn a_native_library_is_prepared_once_and_outlives_threads_it_left_running() {
         params.unwrap_or_default(),
         &native_allowed(),
         &mut fetch,
+        &CancelToken::default(),
     )
     .expect("second load");
     run(&mut second, &json!({})).expect("second run");
@@ -970,6 +974,7 @@ fn load_a_native_library_by_bare_name() {
         serde_json::Map::new(),
         &native_allowed(),
         &mut Bare(PathBuf::from(file)),
+        &CancelToken::default(),
     )
     .expect("the checked library loads");
     run(&mut plugin, &json!({})).expect("run");
@@ -1011,4 +1016,50 @@ fn a_native_library_named_without_a_directory_loads_the_checked_file() {
     );
     std::fs::remove_dir_all(&dir).expect("cleanup");
     std::fs::remove_dir_all(&decoys).expect("cleanup");
+}
+
+#[test]
+fn a_cancel_stops_a_wasm_call_before_its_deadline_and_the_deadline_is_wall_clock() {
+    let manifest = manifest(1, true, false);
+    let cancel = CancelToken::default();
+    let params = json!({ "spin_at": 1 });
+    let policy = Policy {
+        call_deadline: std::time::Duration::from_secs(10),
+        ..Policy::default()
+    };
+    let mut plugin = load(
+        &parse_manifest(&manifest.to_string()).expect("manifest"),
+        params.as_object().cloned().unwrap_or_default(),
+        &policy,
+        &mut Local,
+        &cancel,
+    )
+    .expect("loads");
+    let started = std::time::Instant::now();
+    let failed = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            cancel.cancel();
+        });
+        run(&mut plugin, &params).expect_err("cancelled")
+    });
+    assert!(
+        matches!(&failed, alpha2_engine::extract::DriveError::Extractor(error)
+            if error.code == Some(CANCELLED)),
+        "{failed:?}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    let refused = load(
+        &parse_manifest(&manifest.to_string()).expect("manifest"),
+        serde_json::Map::new(),
+        &Policy::default(),
+        &mut Local,
+        &cancel,
+    )
+    .expect_err("cancelled before a file is read");
+    assert_eq!(refused.code, CANCELLED);
 }

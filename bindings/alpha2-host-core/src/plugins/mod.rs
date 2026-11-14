@@ -21,6 +21,7 @@ use alpha2_engine::extract::{
     ArtifactKind, AudioInput, Descriptor, Emitter, Extractor, ExtractorError, ManifestError,
     PassInfo, PluginArtifact, PluginManifest, RunContext, VideoFormat, VideoInput, WASM_TARGET,
 };
+use alpha2_media::CancelToken;
 use alpha2_model::{DataInterval, DataWord, MAX_DATA_CHANNELS, MAX_DATA_LABEL_BYTES, MadeByPlugin};
 use alpha2_plugin_abi::records::{Limits, Record, records};
 use alpha2_plugin_abi::{direction, status, video_format};
@@ -53,6 +54,10 @@ pub mod codes {
     /// The wasm module ran past its memory cap or table bound, or a call past its deadline.
     pub const LIMIT: &str = "PLUGIN_LIMIT";
 }
+
+/// The code of a load or call that stopped because the caller's cancel token was set. It is not a
+/// plugin code: the request ends as cancelled.
+pub const CANCELLED: &str = "CANCELLED";
 
 /// Every plugin error code.
 pub const PLUGIN_CODES: [&str; 11] = [
@@ -445,22 +450,34 @@ impl fmt::Debug for PluginExtractor {
 }
 
 /// Loads the artifact `policy` picks from `manifest`, fetching it and every resource through
-/// `fetch`, to run with `params`.
+/// `fetch`, to run with `params`. Once `cancel` is set, the load stops before the next file, and
+/// a wasm call of the plugin it returns stops within about 50 ms; a module compile and a native
+/// call run to their end.
 ///
 /// # Errors
-/// A [`PluginError`] for the first check that fails.
+/// A [`PluginError`] for the first check that fails, [`CANCELLED`] once `cancel` is set.
 pub fn load(
     manifest: &PluginManifest,
     params: serde_json::Map<String, serde_json::Value>,
     policy: &Policy,
     fetch: &mut dyn Fetch,
+    cancel: &CancelToken,
 ) -> Result<PluginExtractor, PluginError> {
     let artifact = select(manifest, policy, TARGET)?;
+    let stopped = || {
+        if cancel.is_cancelled() {
+            Err(PluginError::new(CANCELLED, "the plugin load was cancelled"))
+        } else {
+            Ok(())
+        }
+    };
     let mut resources = HashMap::new();
     for resource in &manifest.resources {
+        stopped()?;
         let (_, bytes) = read_verified(fetch, &resource.url, &resource.sha256, resource.bytes)?;
         resources.insert(resource.name.clone(), bytes);
     }
+    stopped()?;
     let (path, bytes) = read_verified(fetch, &artifact.url, &artifact.sha256, artifact.bytes)?;
     let caps = output_caps(&manifest.descriptor);
     let native = artifact.kind == ArtifactKind::Cdylib;
@@ -472,6 +489,7 @@ pub fn load(
             resources,
             caps,
             policy,
+            cancel.clone(),
         )?),
         ArtifactKind::Cdylib => Box::new(native::NativeTransport::new(
             &artifact.sha256,

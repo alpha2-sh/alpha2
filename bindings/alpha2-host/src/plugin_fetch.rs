@@ -18,6 +18,9 @@ use crate::plugin_policy::{Origin, PluginPolicy};
 
 /// How long one download may take, connecting included.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long connecting and waiting for the response head may each take; a cancel is seen only
+/// between body chunks, so this bounds how late it is seen before the body starts.
+const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// The cache size past which least recently used files are removed, when
 /// `ALPHA2_PLUGIN_CACHE_QUOTA` names none.
 const DEFAULT_CACHE_QUOTA: u64 = 4 * 1024 * 1024 * 1024;
@@ -221,6 +224,8 @@ fn agent() -> &'static ureq::Agent {
             .https_only(true)
             .max_redirects(0)
             .timeout_global(Some(DOWNLOAD_TIMEOUT))
+            .timeout_connect(Some(WAIT_TIMEOUT))
+            .timeout_recv_response(Some(WAIT_TIMEOUT))
             .tls_config(
                 ureq::tls::TlsConfig::builder()
                     .root_certs(ureq::tls::RootCerts::PlatformVerifier)
@@ -455,6 +460,7 @@ pub struct Fetcher {
     quota: u64,
     download: Arc<dyn Download>,
     policy: &'static PluginPolicy,
+    cancel: alpha2_media::CancelToken,
 }
 
 impl Fetcher {
@@ -478,7 +484,15 @@ impl Fetcher {
             quota: cache_quota(),
             download,
             policy,
+            cancel: alpha2_media::CancelToken::default(),
         }
+    }
+
+    /// Stops a download once `cancel` is set.
+    #[must_use]
+    pub fn with_cancel(mut self, cancel: alpha2_media::CancelToken) -> Self {
+        self.cancel = cancel;
+        self
     }
 
     /// The cache directory, created or checked private.
@@ -519,7 +533,8 @@ impl Fetcher {
             std::process::id(),
             PARTIALS.fetch_add(1, Ordering::Relaxed)
         ));
-        let written = self.download_into(url, &partial, sha256, size, &|| false);
+        let written =
+            self.download_into(url, &partial, sha256, size, &|| self.cancel.is_cancelled());
         let published = written.and_then(|()| match std::fs::rename(&partial, &file) {
             Ok(()) => Ok(()),
             Err(_) if holds(&file, sha256, size) => Ok(()),
@@ -564,7 +579,10 @@ impl Fetcher {
         let mut received = 0_u64;
         loop {
             if should_stop() {
-                return Err(PluginError::new("CANCELLED", "the download was stopped"));
+                return Err(PluginError::new(
+                    alpha2_host_core::plugins::CANCELLED,
+                    format!("the download of {} was cancelled", shown(url)),
+                ));
             }
             let n = match body.read(&mut buffer) {
                 Ok(0) => break,
@@ -855,6 +873,47 @@ mod tests {
             .fetch("a.wasm", &"0".repeat(64), 1 << 20)
             .expect_err("mismatch");
         assert_eq!(error.code, codes::HASH_MISMATCH);
+        assert_eq!(names(&cache.0), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_slow_body_stops_on_the_cancel() {
+        /// 64 KiB a millisecond.
+        struct Slow;
+        impl Read for Slow {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                std::thread::sleep(Duration::from_millis(1));
+                buffer.fill(7);
+                Ok(buffer.len())
+            }
+        }
+        struct Endless;
+        impl Download for Endless {
+            fn get(&self, _: &str) -> Result<Answer, String> {
+                Ok(Answer::Body(Box::new(Slow)))
+            }
+        }
+        let cache = Scratch::new("cancel");
+        let cancel = alpha2_media::CancelToken::default();
+        let mut fetcher = Fetcher::new(
+            Base::Url(MANIFEST.to_owned()),
+            Some(cache.0.clone()),
+            Arc::new(Endless),
+            &DEFAULT_POLICY,
+        )
+        .with_cancel(cancel.clone());
+        let started = std::time::Instant::now();
+        let error = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(100));
+                cancel.cancel();
+            });
+            fetcher
+                .fetch("a.wasm", &"0".repeat(64), 256 << 20)
+                .expect_err("cancelled")
+        });
+        assert_eq!(error.code, alpha2_host_core::plugins::CANCELLED, "{error}");
+        assert!(started.elapsed() < Duration::from_secs(10));
         assert_eq!(names(&cache.0), Vec::<String>::new());
     }
 

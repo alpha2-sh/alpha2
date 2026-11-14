@@ -542,11 +542,13 @@ pub fn handle(
         plugin,
         ..
     } = request;
+    // Taken first, so a cancel also stops the plugin's fetch and calls.
+    let cancel = crate::termination::export_cancel();
     // A plugin is fetched, checked and loaded before any media is read.
     let (descriptor, mut plugin) = match (descriptor, plugin) {
         (Some(descriptor), _) => (descriptor, None),
         (None, Some(plugin)) => {
-            let loaded = load_plugin(&plugin, &request, options)?;
+            let loaded = load_plugin(&plugin, &request, options, &cancel)?;
             (
                 alpha2_engine::extract::Extractor::describe(&loaded).clone(),
                 Some(loaded),
@@ -573,7 +575,6 @@ pub fn handle(
         media,
         request.input.source_id.as_ref(),
     )?;
-    let cancel = crate::termination::export_cancel();
     let renderer = alpha2_render::CpuRenderer::new(1);
     let source = request.input.source_id.clone();
     let path = |id: &alpha2_media::SourceId| paths.get(id.as_str()).cloned();
@@ -662,6 +663,9 @@ pub fn handle(
 }
 
 fn plugin_error(error: alpha2_host_core::plugins::PluginError) -> HostError {
+    if error.code == alpha2_host_core::plugins::CANCELLED {
+        return HostError::new(error.code, crate::protocol::cancelled(error.message));
+    }
     HostError::new(error.code, error.message)
 }
 
@@ -671,6 +675,7 @@ fn load_plugin(
     plugin: &PluginRequest,
     request: &ExtractRequest,
     options: ExtractOptions,
+    cancel: &CancelToken,
 ) -> Result<alpha2_host_core::plugins::PluginExtractor, HostError> {
     use alpha2_host_core::plugins;
     let operator = options.plugins;
@@ -691,23 +696,30 @@ fn load_plugin(
         crate::plugin_fetch::cache_directory(),
         download,
         operator,
-    );
-    plugins::load(&manifest, request.params.clone(), &policy, &mut fetcher)
-        .map_err(|error| {
-            if error.code == plugins::codes::NATIVE_REFUSED && plugin.allow_native {
-                plugins::PluginError::new(
-                    error.code,
-                    format!(
-                        "{} runs here only as native code, and this host was not started with \
+    )
+    .with_cancel(cancel.clone());
+    plugins::load(
+        &manifest,
+        request.params.clone(),
+        &policy,
+        &mut fetcher,
+        cancel,
+    )
+    .map_err(|error| {
+        if error.code == plugins::codes::NATIVE_REFUSED && plugin.allow_native {
+            plugins::PluginError::new(
+                error.code,
+                format!(
+                    "{} runs here only as native code, and this host was not started with \
                          --plugins native",
-                        manifest.id
-                    ),
-                )
-            } else {
-                error
-            }
-        })
-        .map_err(plugin_error)
+                    manifest.id
+                ),
+            )
+        } else {
+            error
+        }
+    })
+    .map_err(plugin_error)
 }
 
 fn extract_media_step() {
@@ -734,6 +746,9 @@ fn run_plugin(
         }
     };
     let failed = |error: ExtractorError| match error.code {
+        Some(code @ alpha2_host_core::plugins::CANCELLED) => {
+            HostError::new(code, crate::protocol::cancelled(error.message))
+        }
         Some(code) => HostError::new(code, error.message),
         None => HostError::new(
             "EXTRACTOR_FAILED",

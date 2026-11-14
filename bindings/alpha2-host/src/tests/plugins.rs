@@ -514,6 +514,47 @@ fn a_wasm_plugin_past_its_limits_fails_and_the_host_stays_ready() {
 }
 
 #[test]
+fn a_cancel_stops_a_wasm_plugin_call_long_before_its_deadline() {
+    let _gpu = gpu_test_lock();
+    let dir = scratch_directory("plugin-cancel");
+    let (manifest, sha256) = plugin_dir(&dir, "scripted", true, false);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[("ALPHA2_TEST_SERVE_ARGS", "--plugin-call-timeout 300000")],
+    );
+    serving.write(&extract(
+        "spin",
+        "alpha2.test.scripted",
+        &manifest,
+        &sha256,
+        &json!({}),
+        &json!({ "spin_at": 1 }),
+    ));
+    // The first delivery reports progress; the second never returns.
+    loop {
+        let message = serving.message(Duration::from_secs(120));
+        if message["requestId"] == "spin" && message["type"] == "progress" {
+            break;
+        }
+        assert!(message.get("ok").is_none(), "{message}");
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    let cancelled = Instant::now();
+    serving.write(
+        &json!({ "protocolVersion": 2, "requestId": "c", "operation": "cancel", "target": "spin" })
+            .to_string(),
+    );
+    let response = answer(&serving, "spin");
+    assert_eq!(response["error"]["code"], "CANCELLED", "{response}");
+    assert!(
+        cancelled.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        cancelled.elapsed()
+    );
+    assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
 fn a_manifest_naming_a_local_file_outside_its_directory_is_refused_unread() {
     let _gpu = gpu_test_lock();
     let dir = scratch_directory("plugin-outside");

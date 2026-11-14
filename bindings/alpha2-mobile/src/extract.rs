@@ -488,6 +488,11 @@ fn extract(
     )
     .map_err(|error| match error {
         RunError::Request(error) => Alpha2Error::invalid(error.to_string()),
+        RunError::Drive(alpha2_engine::extract::DriveError::Extractor(error))
+            if error.code == Some("CANCELLED") =>
+        {
+            Alpha2Error::Aborted
+        }
         RunError::Drive(alpha2_engine::extract::DriveError::Extractor(error)) => {
             Alpha2Error::Failed {
                 code: error.code.unwrap_or("EXTRACTOR_FAILED").into(),
@@ -512,7 +517,8 @@ fn extract(
 }
 
 /// The extractor a run uses, made on the run's thread.
-type MakeExtractor = Box<dyn FnOnce() -> Result<RunExtractor, Alpha2Error> + Send>;
+/// Makes the run's extractor; the token is the handle's cancel.
+type MakeExtractor = Box<dyn FnOnce(&CancelToken) -> Result<RunExtractor, Alpha2Error> + Send>;
 
 /// An extractor, and what its data records as `made_by.plugin`.
 pub(crate) struct RunExtractor {
@@ -536,7 +542,7 @@ impl Alpha2 {
         });
         let cancel = handle.job.cancel_token().clone();
         handle.job.spawn("alpha2-extract", move || {
-            let mut built = make()?;
+            let mut built = make(&cancel)?;
             let mut sets = extract(&self, &request, &mut *built.extractor, &cancel)?;
             for set in &mut sets {
                 if let (Some(plugin), Some(made_by)) = (&built.plugin, &mut set.made_by) {
@@ -599,7 +605,7 @@ impl Alpha2 {
             .map_err(|error| Alpha2Error::invalid(format!("invalid descriptor: {error}")))?;
         self.start_extraction(
             request,
-            Box::new(move || {
+            Box::new(move |_| {
                 Ok(RunExtractor {
                     extractor: Box::new(Foreign {
                         extractor,
@@ -862,7 +868,7 @@ mod tests {
     #[test]
     fn an_extractor_whose_making_panics_settles_as_internal() {
         let handle = engine()
-            .start_extraction(request(""), Box::new(|| panic!("no extractor")))
+            .start_extraction(request(""), Box::new(|_| panic!("no extractor")))
             .expect("started");
         match outcome(handle) {
             Err(Alpha2Error::Failed { code, reason }) => {
