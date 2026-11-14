@@ -1564,16 +1564,40 @@ export function createBrowserBridge(options) {
   // An audio start that missed its deadline and has not settled. A context that never resumes
   // (Firefox without usable output) or a stuck worklet would block Play, so video plays silent.
   let stalledAudio = null;
-  /** Whether `starting` settled within the deadline; a rejection propagates. */
+  /**
+   * Whether `starting` settled within the deadline. Sound that fails or misses it is reported once
+   * and playback goes on silent.
+   */
   async function audioStarts(starting) {
     let timer = 0;
     const started = await Promise.race([
-      starting.then(() => true),
+      starting.then(
+        () => true,
+        (error) => ({ error }),
+      ),
       new Promise((resolve) => {
         timer = setTimeout(() => resolve(false), AUDIO_START_TIMEOUT_MS);
       }),
     ]).finally(() => clearTimeout(timer));
-    if (started) return true;
+    if (started === true) return true;
+    if (started) {
+      mixer?.stop();
+      const reason =
+        started.error instanceof Error
+          ? started.error.message
+          : String(started.error);
+      onError(
+        new EditorError(
+          "audio_unavailable",
+          `Audio output could not start (${reason}); playing without sound`,
+          "play",
+          undefined,
+          true,
+          { cause: started.error },
+        ),
+      );
+      return false;
+    }
     stalledAudio = starting;
     const settle = () => {
       if (stalledAudio === starting) stalledAudio = null;
@@ -1757,7 +1781,7 @@ export function createBrowserBridge(options) {
     mixer.setMasterVolume(monitorVolume);
     mixer.setLatencyOffset(audioOffsetMs);
     stalledAudio = null;
-    supplier = new AudioWindowSupplier(library);
+    supplier = new AudioWindowSupplier(library, { onError });
     try {
       await engine.start();
       engine.setPreviewScale(previewScale);

@@ -1406,7 +1406,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
   /**
    * Opens `resource`'s primary audio track, or with `options.stream` the audio track at that
    * position among the file's audio tracks in container order (a clip's `audio.stream`). Rejects
-   * when there is no such track, with `RangeError` for more than {@link MAX_AUDIO_CHANNELS}
+   * with code `AUDIO_STREAM_MISSING` when there is no such track, with `RangeError` for more than {@link MAX_AUDIO_CHANNELS}
    * channels or a rate outside 1 kHz to 768 kHz, and with {@link DecodeUnavailableError} when this
    * browser cannot decode it.
    */
@@ -1427,10 +1427,13 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
         : ((await input.getAudioTracks())[options.stream] ?? null);
     if (track === null) {
       input.dispose();
-      throw new Error(
-        options.stream === undefined
-          ? "mediabunny input has no audio track"
-          : `mediabunny input has no audio stream ${options.stream}`,
+      throw Object.assign(
+        new Error(
+          options.stream === undefined
+            ? "mediabunny input has no audio track"
+            : `mediabunny input has no audio stream ${options.stream}`,
+        ),
+        { code: "AUDIO_STREAM_MISSING" },
       );
     }
     if (

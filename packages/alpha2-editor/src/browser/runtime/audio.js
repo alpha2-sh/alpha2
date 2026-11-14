@@ -19,6 +19,7 @@ import {
   useAudioRing,
 } from "alpha2/audio-worklet";
 import { MediabunnyAudioDecoder } from "alpha2/mediabunny";
+import { EditorError } from "../../core/document.js";
 import * as engineBinding from "alpha2/wasm";
 
 const TICKS_PER_SECOND = 120_000n;
@@ -74,9 +75,16 @@ export function audibleSources(project, library) {
 /**
  * Supplies bounded source windows requested by the engine. Page-synthesized audio keeps its
  * AudioBuffer, but only the requested slice enters wasm.
+ *
+ * With `onError` (preview), a stream this browser cannot decode or the file does not have plays
+ * silent for the rest of the session and is reported to it once; without it (export) its supply
+ * rejects.
  */
 export class AudioWindowSupplier {
   #library;
+  #onError;
+  /** Streams that play silent, by `laneKey`: the file found unplayable and the planes uploaded. */
+  #silentLanes = new Map();
   #engine = null;
   #sampleRate = 48_000;
   #generation = 0;
@@ -90,8 +98,9 @@ export class AudioWindowSupplier {
   /** The earliest tick each running `supply` needs, per source. */
   #inFlight = new Set();
 
-  constructor(library) {
+  constructor(library, { onError } = {}) {
     this.#library = library;
+    this.#onError = onError ?? null;
   }
 
   configure(engine, project) {
@@ -114,7 +123,16 @@ export class AudioWindowSupplier {
     }
   }
 
-  async supply(startSample, frames, { signal, forceSources = [] } = {}) {
+  /**
+   * Uploads what the engine needs for `frames` samples from `startSample`. `forceSources` are
+   * uploaded again even where the engine holds a window; `silentSources` are uploaded as silence
+   * that covers any channel selection.
+   */
+  async supply(
+    startSample,
+    frames,
+    { signal, forceSources = [], silentSources = new Set() } = {},
+  ) {
     const engine = this.#engine;
     if (!engine) throw new Error("audio supplier has no loaded project");
     throwIfAborted(signal);
@@ -178,6 +196,7 @@ export class AudioWindowSupplier {
               : { start, end: end + prefetch };
             await this.#supplyRange(sourceId, stream, start, end, window, {
               forced: forced.has(sourceId),
+              silent: silentSources.has(sourceId),
               generation,
               signal: combined.signal,
             });
@@ -218,7 +237,7 @@ export class AudioWindowSupplier {
     startTicks,
     endTicks,
     decodeWindow,
-    { forced, generation, signal },
+    { forced, silent, generation, signal },
   ) {
     const engine = this.#engine;
     const requiredStart = Math.max(
@@ -227,6 +246,20 @@ export class AudioWindowSupplier {
     );
     const requiredEnd = ticksToSampleCeil(endTicks, this.#sampleRate) + 2;
     // The engine extends, replaces and drops windows itself, so ask what it holds.
+    const uploadSilence = (planes) =>
+      engine.uploadAudioBlock(
+        sourceId,
+        BigInt(requiredStart),
+        this.#sampleRate,
+        planes,
+        new Float32Array(planes * Math.max(1, requiredEnd - requiredStart)),
+        false,
+        stream,
+      );
+    if (silent) {
+      uploadSilence(MAX_PLANES);
+      return;
+    }
     if (
       !forced &&
       JSON.parse(engine.audioRetainedWindows(sourceId, stream)).some(
@@ -239,44 +272,49 @@ export class AudioWindowSupplier {
 
     const asset = this.#library.get(sourceId);
     if (!asset) throw new Error(`audio source ${sourceId} is unavailable`);
-    // A page-made `AudioBuffer` is a single stream.
-    const missingStream = asset.audioBuffer && (stream ?? 0) > 0;
-    if (
-      (asset.audioDecodable === false && !asset.audioBuffer) ||
-      missingStream
-    ) {
-      // Undecodable here (`RuntimeAsset.audioDecodable`): silent, though the document keeps it.
-      // As many planes as the stream has, so a clip's channel selection still finds its planes.
-      const planes = missingStream ? 1 : streamPlanes(asset, stream);
-      engine.uploadAudioBlock(
-        sourceId,
-        BigInt(requiredStart),
-        this.#sampleRate,
-        planes,
-        new Float32Array(planes * Math.max(1, requiredEnd - requiredStart)),
-        false,
-        stream,
-      );
+    // A page-made `AudioBuffer` is a single stream; another stream of it is covering silence.
+    if (asset.audioBuffer && (stream ?? 0) > 0) {
+      uploadSilence(MAX_PLANES);
       return;
     }
-    const block = asset.audioBuffer
-      ? blockFromAudioBuffer(
-          sourceId,
-          asset.audioBuffer,
-          decodeWindow.start,
-          decodeWindow.end,
-          this.#sampleRate,
-          generation,
-        )
-      : await this.#decode(
-          sourceId,
-          stream,
-          asset,
-          decodeWindow.start,
-          decodeWindow.end,
-          generation,
-          signal,
-        );
+    if (asset.audioDecodable === false && !asset.audioBuffer) {
+      // Undecodable here (`RuntimeAsset.audioDecodable`): silent, though the document keeps it.
+      // As many planes as the stream has, so a clip's channel selection still finds its planes.
+      uploadSilence(streamPlanes(asset, stream));
+      return;
+    }
+    const lane = laneKey(sourceId, stream);
+    const silenced = this.#silentLanes.get(lane);
+    if (silenced && silenced.file === asset.file) {
+      uploadSilence(silenced.planes);
+      return;
+    }
+    let block;
+    try {
+      block = asset.audioBuffer
+        ? blockFromAudioBuffer(
+            sourceId,
+            asset.audioBuffer,
+            decodeWindow.start,
+            decodeWindow.end,
+            this.#sampleRate,
+            generation,
+          )
+        : await this.#decode(
+            sourceId,
+            stream,
+            asset,
+            decodeWindow.start,
+            decodeWindow.end,
+            generation,
+            signal,
+          );
+    } catch (error) {
+      const planes = this.#silence(lane, sourceId, stream, asset, error);
+      if (planes === null) throw error;
+      uploadSilence(planes);
+      return;
+    }
     throwIfAborted(signal);
     if (generation !== this.#generation) return;
     engine.uploadAudioBlock(
@@ -288,6 +326,38 @@ export class AudioWindowSupplier {
       false,
       stream,
     );
+  }
+
+  /**
+   * Marks `lane` silent when `error` says this browser cannot decode its stream or the file lacks
+   * it, reporting it once; returns the planes its silence takes, or null to let `error` through.
+   */
+  #silence(lane, sourceId, stream, asset, error) {
+    const code = error?.code;
+    if (
+      !this.#onError ||
+      !asset.file ||
+      (code !== "DECODE_UNAVAILABLE" && code !== "AUDIO_STREAM_MISSING")
+    )
+      return null;
+    // A stream the file lacks covers any channel selection; playing another stream would guess.
+    const planes =
+      code === "AUDIO_STREAM_MISSING"
+        ? MAX_PLANES
+        : streamPlanes(asset, stream);
+    this.#silentLanes.set(lane, { file: asset.file, planes });
+    const which = stream === undefined ? "" : ` (audio stream ${stream})`;
+    this.#onError(
+      new EditorError(
+        "audio_unavailable",
+        `The sound of ${sourceId}${which} cannot be played here (${error.message}); it plays silent`,
+        "play",
+        sourceId,
+        true,
+        { cause: error },
+      ),
+    );
+    return planes;
   }
 
   async close() {
@@ -327,6 +397,11 @@ export class AudioWindowSupplier {
           stream === undefined ? {} : { stream },
         ),
       };
+      // A failed open is not kept, so the next supply opens again (or plays silent).
+      const opened = entry;
+      opened.promise.catch(() => {
+        if (this.#decoders.get(lane) === opened) this.#decoders.delete(lane);
+      });
       this.#decoders.set(lane, entry);
     }
     const decoder = await entry.promise;
@@ -365,6 +440,8 @@ export function missingAudioSources(engine) {
 
 const RING_SECONDS = 0.5;
 const PUMP_INTERVAL_MS = 40;
+/** Mixes in a row that may wait for the same missing sources before they play silent. */
+const MAX_WAITING_MIXES = 3;
 
 /**
  * Preview transport for engine-mixed audio. A timer keeps the shared ring ahead of the audio
@@ -541,6 +618,8 @@ export class EngineAudioMixer {
     } catch (error) {
       // A stop or close during the first block's decode ends this start quietly.
       if (signal.aborted) return;
+      // Nothing may play from a ring this start filled in part.
+      this.stop();
       throw error;
     } finally {
       if (this.#transport.signal === signal) this.#priming = false;
@@ -593,24 +672,57 @@ export class EngineAudioMixer {
   #source(signal) {
     const engine = this.#engine;
     const supplier = this.#supplier;
+    const onError = this.#onError;
     const volume = () => this.volume;
+    // Sources still missing after a forced supply, mixes in a row they held up, and the sources
+    // that play silent for the rest of this start.
+    let waitingFor = "",
+      waits = 0;
+    const silent = new Set();
     return {
       sampleRate: this.#sampleRate,
       channels: 2,
       mix: async (startSample, frames) => {
-        await supplier.supply(startSample, frames, { signal });
+        await supplier.supply(startSample, frames, {
+          signal,
+          silentSources: silent,
+        });
         let planes = mixBlock(engine, startSample, frames, true);
         let missing = missingAudioSources(engine);
         if (missing.length > 0) {
           await supplier.supply(startSample, frames, {
             signal,
             forceSources: missing,
+            silentSources: silent,
           });
           planes = mixBlock(engine, startSample, frames, true);
           missing = missingAudioSources(engine);
         }
-        if (missing.length > 0)
+        const key = JSON.stringify([...missing].sort());
+        waits = missing.length > 0 && key === waitingFor ? waits + 1 : 1;
+        waitingFor = missing.length > 0 ? key : "";
+        if (missing.length > 0 && waits <= MAX_WAITING_MIXES)
           return { kind: "waiting", missingSources: missing };
+        if (missing.length > 0) {
+          // A source that never arrives would hold the other lanes back forever.
+          for (const id of missing) silent.add(id);
+          onError?.(
+            new EditorError(
+              "audio_unavailable",
+              `No sound arrives from ${missing.join(", ")}; ${missing.length === 1 ? "it plays" : "they play"} silent until playback starts again`,
+              "play",
+              missing[0],
+            ),
+          );
+          await supplier.supply(startSample, frames, {
+            signal,
+            forceSources: missing,
+            silentSources: silent,
+          });
+          planes = mixBlock(engine, startSample, frames, true);
+          waitingFor = "";
+          waits = 0;
+        }
         // Preview volume is a monitor control, not part of the project.
         const level = volume();
         if (level !== 1) {

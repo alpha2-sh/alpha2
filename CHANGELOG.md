@@ -43,6 +43,11 @@ All notable changes to this project are documented in this file.
 - Editor: a source this browser cannot decode is supplied as silence with as many channels as its
   stream, and page-made audio keeps every channel up to 24, so a clip that selects channels of it
   no longer makes the mix report the source missing (silent preview, failed export).
+- Editor: preview audio failures stay with their lane. A stream this browser cannot decode, or one
+  the file it reads (a proxy, say) does not have, plays silent and is reported once as
+  `audio_unavailable`; a source whose sound does not arrive for a few mixes plays silent until the
+  next start instead of holding every lane back; a decoder that failed to open is tried again; and
+  an audio start that fails plays the picture silent with one report instead of rejecting `play()`.
 
 ## [0.6.0] - 2026-11-08
 

@@ -10,6 +10,7 @@ import {
 } from "./extract.mjs";
 import {
   editorApplyEdit,
+  editorAudioLaneFailure,
   editorConformStaleData,
   pluginEditorExtract,
 } from "./editor.mjs";
@@ -123,6 +124,7 @@ export const cases = {
   "plugin-editor-extract": pluginEditorExtract,
   "editor-apply-edit": editorApplyEdit,
   "editor-conform-stale-data": editorConformStaleData,
+  "editor-audio-lane-failure": editorAudioLaneFailure,
   "webgpu-smoke": () => smoke(false),
   "webgl2-smoke": () => smoke(true),
   "webgl-context-loss": webglContextLoss,

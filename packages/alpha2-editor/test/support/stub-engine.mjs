@@ -99,8 +99,8 @@ export class Engine {
       globalThis.stubEngine.degraded?.(this, seconds) ?? [];
     return { rendered: true, unchanged, degradedSources };
   }
-  audible() {
-    return false;
+  audible(policy, rate) {
+    return globalThis.stubEngine.audible?.(policy, rate) ?? false;
   }
   playbackClock(policy, frameRate, rate, tick, now) {
     const custom = globalThis.stubEngine.clock;

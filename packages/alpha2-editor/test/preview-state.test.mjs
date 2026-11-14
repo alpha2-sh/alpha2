@@ -423,6 +423,44 @@ test(
 );
 
 test(
+  "Play whose audio start fails plays the picture silent and reports it once",
+  { skip },
+  async (t) => {
+    const { editor, bridge, reported } = await session();
+    addColor(editor);
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(await bridge.seek(0), true);
+    globalThis.stubEngine.audible = () => true;
+    t.after(() => delete globalThis.stubEngine.audible);
+    const mixer = globalThis.stubEngine.mixers.at(-1);
+    let stopped = 0;
+    const stop = mixer.stop.bind(mixer);
+    mixer.stop = () => {
+      stopped += 1;
+      stop();
+    };
+    mixer.resume = async () => {};
+    mixer.start = async () => {
+      throw new Error("the worklet could not start");
+    };
+    const before = stopped;
+    await bridge.play();
+    assert.equal(bridge.playing, true);
+    assert.ok(stopped > before, "the failed start is stopped");
+    assert.deepEqual(
+      reported.map((e) => [e.code, e.cause?.message]),
+      [["audio_unavailable", "the worklet could not start"]],
+    );
+    const at = bridge.tick;
+    await settle(60);
+    assert.ok(bridge.tick > at, "the picture plays on the wall clock");
+    bridge.pause();
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
   "a kept proxy whose staging never settles does not hold up disposal",
   { skip },
   async () => {

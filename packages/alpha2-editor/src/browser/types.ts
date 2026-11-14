@@ -548,8 +548,12 @@ export interface BrowserBridge {
    * Plays from the playhead at `rate` (negative plays backwards) under a playback `policy`
    * (default `drop_video_keep_audio`), stopping at the end of the export range (else of the
    * content), or looping with `loop`. Sound plays only at rate 1 under a policy that allows it;
-   * when it cannot start within 3 s the picture plays silently and `onError` hears why. Rejects
-   * for a zero or non-finite rate (`invalid_rate`) and an unknown policy (`invalid_policy`).
+   * when it fails to start or cannot start within 3 s the picture plays silently and `onError`
+   * hears why (`audio_unavailable`). A source whose stream this browser cannot decode, or which
+   * the file it reads (a proxy, say) does not have, plays silent and is reported once; so is a
+   * source whose sound does not arrive for a few mixes in a row, until playback starts again.
+   * Rejects for a zero or non-finite rate (`invalid_rate`) and an unknown policy
+   * (`invalid_policy`).
    */
   play(
     rate?: number,

@@ -121,3 +121,55 @@ report({
 await bridge.dispose();
 `;
 }
+
+// Preview with sound on, where one clip names an audio stream its file does not have: that lane
+// plays silent and is reported once, while the picture and the other clip's sound play on.
+export function editorAudioLaneFailure() {
+  return `${prelude}
+const twoStreams = await (await fetch("/tests/corpus/audio-two-streams.mov")).blob();
+const tone = new AudioBuffer({ numberOfChannels: 2, length: 96000, sampleRate: 48000 });
+tone.getChannelData(0).fill(0.25);
+tone.getChannelData(1).fill(0.25);
+const mediaAdapter = {
+  async stage(file) {
+    const runtime = file.name === "tone"
+      ? { id: "tone", kind: "audio", name: "tone", audioBuffer: tone, hasAudio: true, duration: 2 }
+      : { id: "mics", kind: "audio", name: "mics", file, hasAudio: true, audioDecodable: true, duration: 2 };
+    return { runtime, description: {}, dispose() {} };
+  },
+};
+const errors = [];
+const editor = createEditor();
+const bridge = createBrowserBridge({ editor, runtimeAssets, mediaAdapter, onError: (error) => errors.push(error) });
+await bridge.importFiles([new File([""], "tone"), new File([twoStreams], "mics")]);
+const span = { start: 0, end: 240000 };
+const color = { id: "color", kind: "generated", generator: { type: "fill",
+  paint: { type: "solid", color: { red: 0.2, green: 0.4, blue: 0.8, alpha: 1 } } } };
+const result = editor.dispatch({ type: "transaction", commands: [
+  { type: "asset.put", asset: { id: "color", kind: "generated", name: "Color", contentRevision: 0 }, source: color },
+  { type: "track.add", track: { id: "v", kind: "video", name: "V", clips: [
+    { id: "picture", source_id: "color", timeline_range: span, source_range: span } ] } },
+  { type: "track.add", track: { id: "a", kind: "audio", name: "A", clips: [
+    { id: "tone-clip", source_id: "tone", timeline_range: span, source_range: span },
+    { id: "mics-clip", source_id: "mics", timeline_range: span, source_range: span, audio: { stream: 5 } } ] } },
+] });
+if (!result.ok) throw result.error;
+const canvas = document.createElement("canvas");
+await bridge.bindPreview(canvas);
+await bridge.play();
+const startTick = bridge.tick;
+await new Promise((resolve) => setTimeout(resolve, 1500));
+const playingWithSound = bridge.diagnostics?.host.audioLatencySource ?? null;
+const advanced = bridge.tick - startTick;
+bridge.pause();
+const reported = errors.map((error) => [error.code, error.entityId ?? null]);
+if (reported.some(([code]) => code === "audio_unavailable") && /did not start|could not start/.test(errors[0]?.message ?? ""))
+  skip("audio-autostart", "audio output did not start in this browser: " + errors[0].message);
+report({
+  ok: reported.length === 1 && reported[0][0] === "audio_unavailable" && reported[0][1] === "mics"
+    && playingWithSound !== null && advanced > 60000,
+  reported, playingWithSound, advanced, firstError: errors[0]?.message ?? null,
+});
+await bridge.dispose();
+`;
+}
