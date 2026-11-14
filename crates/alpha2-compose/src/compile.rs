@@ -1,18 +1,19 @@
 //! Placing primitives on the timeline: lengths, areas, lanes, and the
 //! project they become.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use alpha2_media::SourceId;
 use alpha2_model::{
     Animated, AnimatedPoint, CaptionCue, Captions, Clip, ClipComposition, ClipEffect, ClipId,
     ClipTransition, Composition, CompositionId, CompositionNode, Ducking, Easing, EffectValue,
-    FontSizeFit, Generator, Interpolation, Keyframe, LayoutNode, LineClamp, LoopMode,
-    MediaKind as ModelKind, MediaSource, MergeLayer, NodeId, NodeOp, Paint, Project, ProjectId,
-    ProjectSettings, RangeShape, RangeUnits, RectangleGeometry, Rgb, Rgba, ShapeGeometry,
-    ShapeMask, TextAlign, TextAnimator, TextAnimatorProperties, TextBackground, TextSelector,
-    TextStyle, TimeMap, TimeScale, Timeline, Track, TrackId, TrackKind, Vec2, VisualProperties,
+    ErrorSubject, FontSizeFit, Generator, Interpolation, Keyframe, LayoutNode, LineClamp, LoopMode,
+    MediaKind as ModelKind, MediaSource, MergeLayer, ModelError, NodeId, NodeOp, Paint, Project,
+    ProjectId, ProjectSettings, RangeShape, RangeUnits, RectangleGeometry, Rgb, Rgba,
+    ShapeGeometry, ShapeMask, TextAlign, TextAnimator, TextAnimatorProperties, TextBackground,
+    TextSelector, TextStyle, TimeMap, TimeScale, Timeline, Track, TrackId, TrackKind, Vec2,
+    VisualProperties,
 };
 use alpha2_model::{
     Dash, EllipseGeometry, FillRule, GradientStop, PathGeometry, PolystarGeometry, ShapeItem,
@@ -138,10 +139,12 @@ struct Lane {
     duck: Option<(String, f32, String)>,
     /// A raw fragment's track, kept as written.
     raw: Option<Track>,
+    /// The spec path of the node that made it.
+    path: String,
 }
 
 impl Lane {
-    fn new(kind: TrackKind, owners: &BTreeSet<String>) -> Self {
+    fn new(kind: TrackKind, owners: &BTreeSet<String>, path: &str) -> Self {
         Self {
             kind,
             clips: Vec::new(),
@@ -150,6 +153,7 @@ impl Lane {
             owners: owners.clone(),
             duck: None,
             raw: None,
+            path: path.to_owned(),
         }
     }
 
@@ -263,6 +267,10 @@ pub(crate) struct Context<'a> {
     next_clip: u32,
     next_composition: u32,
     warnings: Vec<String>,
+    /// The paths of the nodes being emitted, innermost last.
+    here: Vec<String>,
+    /// The path of the node that made each generated or raw id.
+    made_by: HashMap<String, String>,
 }
 
 /// Frames a counter may count over, each a keyframe at most.
@@ -402,6 +410,8 @@ impl<'a> Context<'a> {
             next_clip: 0,
             next_composition: 0,
             warnings: Vec::new(),
+            here: Vec::new(),
+            made_by: HashMap::new(),
         })
     }
 
@@ -444,14 +454,33 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// The path of the node being emitted.
+    fn here(&self) -> &str {
+        self.here.last().map_or("spec", String::as_str)
+    }
+
+    /// Records the node being emitted as the maker of `id`.
+    fn made(&mut self, id: String) -> String {
+        if !self.made_by.contains_key(&id) {
+            self.made_by.insert(id.clone(), self.here().to_owned());
+        }
+        id
+    }
+
     fn clip_id(&mut self) -> ClipId {
-        ClipId::new(Self::fresh(&self.reserved, &mut self.next_clip, "c"))
-            .expect("a generated id is not empty")
+        let id = Self::fresh(&self.reserved, &mut self.next_clip, "c");
+        ClipId::new(self.made(id)).expect("a generated id is not empty")
     }
 
     fn source_id(&mut self) -> SourceId {
-        SourceId::new(Self::fresh(&self.reserved, &mut self.next_source, "s"))
-            .expect("a generated id is not empty")
+        let id = Self::fresh(&self.reserved, &mut self.next_source, "s");
+        SourceId::new(self.made(id)).expect("a generated id is not empty")
+    }
+
+    /// A fresh composition id `{prefix}{n}`.
+    fn composition_id(&mut self, prefix: &str) -> CompositionId {
+        let id = Self::fresh(&self.reserved, &mut self.next_composition, prefix);
+        CompositionId::new(self.made(id)).expect("a generated id is not empty")
     }
 
     /// The source of the file at `path`, read as `kind`.
@@ -486,12 +515,7 @@ impl<'a> Context<'a> {
         if let Some(id) = self.blur_compositions.get(&radius.to_bits()) {
             return id.clone();
         }
-        let id = CompositionId::new(Self::fresh(
-            &self.reserved,
-            &mut self.next_composition,
-            "blur",
-        ))
-        .expect("a generated id is not empty");
+        let id = self.composition_id("blur");
         let clip = NodeId::new("clip").expect("a literal id");
         let blur = NodeId::new("blur").expect("a literal id");
         let mut composition = Composition::new(id.clone());
@@ -623,19 +647,26 @@ impl<'a> Context<'a> {
         let mut slot = slot.clone();
         slot.owners.extend(prim.head().id.clone());
         self.resolve_motion(prim.head(), &mut slot);
+        self.here.push(prim.head().path.clone());
+        let emitted = self.emit_prim(prim, &slot, out);
+        self.here.pop();
+        emitted
+    }
+
+    fn emit_prim(&mut self, prim: &Prim, slot: &Slot, out: &mut Lanes) -> Result<(), ComposeError> {
         match prim {
-            Prim::Sequence(sequence) => self.emit_sequence(sequence, &slot, out),
-            Prim::Stack(stack) => self.emit_stack(stack, &slot, out),
-            Prim::Group(group) => self.emit_group(group, &slot, out),
-            Prim::Coverage(coverage) => self.emit_coverage(coverage, &slot, out),
-            Prim::Box(node) => self.emit_box(node, &slot, out),
-            Prim::Visual(visual) => self.emit_visual(visual, &slot, out),
+            Prim::Sequence(sequence) => self.emit_sequence(sequence, slot, out),
+            Prim::Stack(stack) => self.emit_stack(stack, slot, out),
+            Prim::Group(group) => self.emit_group(group, slot, out),
+            Prim::Coverage(coverage) => self.emit_coverage(coverage, slot, out),
+            Prim::Box(node) => self.emit_box(node, slot, out),
+            Prim::Visual(visual) => self.emit_visual(visual, slot, out),
             Prim::Captions(captions) => {
-                self.emit_captions(captions, &slot, out);
+                self.emit_captions(captions, slot, out);
                 Ok(())
             }
             Prim::Audio(audio) => {
-                self.emit_audio(audio, &slot, out);
+                self.emit_audio(audio, slot, out);
                 Ok(())
             }
             Prim::Raw(head, _) => Err(ComposeError::new(
@@ -984,12 +1015,7 @@ impl<'a> Context<'a> {
             input: Some(node),
             transform: self.group_transform(group, rect, len),
         });
-        let id = CompositionId::new(Self::fresh(
-            &self.reserved,
-            &mut self.next_composition,
-            "group",
-        ))
-        .expect("a generated id is not empty");
+        let id = self.composition_id("group");
         let mut composition = Composition::new(id.clone());
         composition.nodes = graph.nodes;
         composition.output = Some(node);
@@ -1021,7 +1047,7 @@ impl<'a> Context<'a> {
             let range = clip.timeline_range;
             self.apply_motion(&mut clip.visual, &opacity, &slot.motions, range);
         }
-        let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+        let mut lane = Lane::new(TrackKind::Video, &slot.owners, self.here());
         lane.clips.push(clip);
         out.visual.push(lane);
         Ok(())
@@ -1121,7 +1147,7 @@ impl<'a> Context<'a> {
                     self.apply_motion(&mut clip.visual, &opacity, &still.motions, whole);
                 }
                 let id = clip.id.clone();
-                let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+                let mut lane = Lane::new(TrackKind::Video, &slot.owners, self.here());
                 lane.clips.push(clip);
                 out.visual.push(lane);
                 (id, alpha2_model::MatteMode::Alpha)
@@ -1239,7 +1265,7 @@ impl<'a> Context<'a> {
             let whole = clip.timeline_range;
             self.apply_motion(&mut clip.visual, &opacity, &slot.motions, whole);
         }
-        let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+        let mut lane = Lane::new(TrackKind::Video, &slot.owners, self.here());
         lane.clips.push(clip);
         out.visual.push(lane);
     }
@@ -1896,7 +1922,7 @@ impl<'a> Context<'a> {
             sound.audio = clip.audio.clone();
             sound.time_map = clip.time_map;
             shift(&mut sound);
-            let mut lane = Lane::new(TrackKind::Audio, &BTreeSet::new());
+            let mut lane = Lane::new(TrackKind::Audio, &BTreeSet::new(), self.here());
             lane.clips.push(sound);
             out.audio.push(lane);
         }
@@ -2004,7 +2030,7 @@ impl<'a> Context<'a> {
             fade_out: visual.fade_out,
             ramp: slot.ramp,
         };
-        let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+        let mut lane = Lane::new(TrackKind::Video, &slot.owners, self.here());
         match &visual.content {
             Content::Video(video) => {
                 let plan = video_plan(video, &visual.head.path, slot.hold, slot.len)?;
@@ -2668,14 +2694,14 @@ impl<'a> Context<'a> {
                 opacity: constant(color.alpha),
             };
             let _ = width;
-            let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+            let mut lane = Lane::new(TrackKind::Video, &slot.owners, self.here());
             lane.clips.push(clip);
             out.visual.push(lane);
         }
         // Overlapping cues take a track each, as a caption track shows one at a time.
         let rows = alpha2_model::caption_rows(&cues).unwrap_or_else(|_| vec![cues]);
         for row in rows {
-            let mut lane = Lane::new(TrackKind::Caption, &slot.owners);
+            let mut lane = Lane::new(TrackKind::Caption, &slot.owners, self.here());
             lane.captions = Some(Captions {
                 from_words: None,
                 style: captions.style.clone(),
@@ -2715,7 +2741,7 @@ impl<'a> Context<'a> {
         clip.audio.fade_in = MediaTime::from_ticks(audio.fade_in.min(play));
         clip.audio.fade_out =
             MediaTime::from_ticks(audio.fade_out.min(play - clip.audio.fade_in.ticks()));
-        let mut lane = Lane::new(TrackKind::Audio, &slot.owners);
+        let mut lane = Lane::new(TrackKind::Audio, &slot.owners, self.here());
         lane.clips.push(clip);
         lane.duck = audio
             .duck_under
@@ -3886,6 +3912,28 @@ impl Opacity {
     }
 }
 
+/// A model refusal of the compiled project, reported at the node that made the refused object.
+pub(crate) fn model_refusal(error: &ModelError, made_by: &HashMap<String, String>) -> ComposeError {
+    let path_of = |id: &str| made_by.get(id).map_or("spec", String::as_str);
+    let path = error.subject().map_or("spec", |subject| match subject {
+        ErrorSubject::Clip(id) => path_of(id.as_str()),
+        ErrorSubject::Source(id) => path_of(id.as_str()),
+        ErrorSubject::Track(id) => path_of(id.as_str()),
+        ErrorSubject::Composition(id) => path_of(id.as_str()),
+        ErrorSubject::DataSet(id) => path_of(id.as_str()),
+        ErrorSubject::EffectResource(id) => path_of(id.as_str()),
+        _ => "spec",
+    });
+    let message = match error {
+        ModelError::OverlappingClips { first, .. } => format!(
+            "the compiled project is not valid: {error}; the other clip is {}'s",
+            path_of(first.as_str())
+        ),
+        _ => format!("the compiled project is not valid: {error}"),
+    };
+    ComposeError::new(path, message)
+}
+
 /// A project id from `name`: letters and digits, lowercased, words joined by `-`.
 fn project_id(name: &str) -> ProjectId {
     let slug = name
@@ -3972,9 +4020,25 @@ pub(crate) fn compile(
     let mut raw_sources = Vec::new();
     let mut raw_compositions = Vec::new();
     for prim in overlays.iter().chain(&audio) {
-        if let Prim::Raw(_, raw) = prim {
+        if let Prim::Raw(head, raw) = prim {
+            let ids = raw
+                .sources
+                .iter()
+                .map(|source| source.id.to_string())
+                .chain(raw.tracks.iter().flat_map(|track| {
+                    std::iter::once(track.id.to_string())
+                        .chain(track.clips.iter().map(|clip| clip.id.to_string()))
+                }))
+                .chain(
+                    raw.compositions
+                        .iter()
+                        .map(|composition| composition.id.to_string()),
+                );
+            for id in ids {
+                context.made_by.insert(id, head.path.clone());
+            }
             for track in &raw.tracks {
-                let mut lane = Lane::new(track.kind, &BTreeSet::new());
+                let mut lane = Lane::new(track.kind, &BTreeSet::new(), &prim.head().path);
                 lane.raw = Some(track.clone());
                 if track.kind == TrackKind::Audio {
                     lanes.audio.push(lane);
@@ -4048,6 +4112,12 @@ fn assemble(
                 .expect("not empty"),
         })
         .collect::<Vec<_>>();
+    for (lane, id) in ordered.iter().zip(&ids) {
+        context
+            .made_by
+            .entry(id.to_string())
+            .or_insert_with(|| lane.path.clone());
+    }
     let mut tracks = Vec::with_capacity(ordered.len());
     for (index, lane) in ordered.iter().enumerate() {
         if let Some(track) = &lane.raw {
@@ -4131,12 +4201,9 @@ fn assemble(
         timeline: Timeline { tracks },
         audio: alpha2_model::MasterAudio::default(),
     };
-    project.validate().map_err(|error| {
-        ComposeError::new(
-            "spec",
-            format!("the compiled project is not valid: {error}"),
-        )
-    })?;
+    project
+        .validate()
+        .map_err(|error| model_refusal(&error, &context.made_by))?;
     let mut assets = std::mem::take(&mut context.assets);
     assets.extend(raw_assets);
     let loudness = spec.loudness.map(|loudness| match loudness {

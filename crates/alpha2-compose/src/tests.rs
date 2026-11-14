@@ -1885,3 +1885,55 @@ fn the_sound_of_two_joined_clips_crosses_over_their_transition() {
         [(0, 2 * SECOND, "linear".to_owned()), (SECOND, 0, equal)]
     );
 }
+
+#[test]
+fn a_model_refusal_names_the_node_that_made_the_refused_object() {
+    let id = |text: &str| alpha2_model::ClipId::new(text.to_owned()).expect("an id");
+    let made_by = std::collections::HashMap::from([
+        ("c3".to_owned(), "spec.body.children[1]".to_owned()),
+        ("c7".to_owned(), "spec.overlays[0]".to_owned()),
+    ]);
+    let refusal = crate::compile::model_refusal(
+        &alpha2_model::ModelError::InvalidVisualProperties { clip: id("c3") },
+        &made_by,
+    );
+    assert_eq!(refusal.path, "spec.body.children[1]");
+    assert!(
+        refusal
+            .message
+            .starts_with("the compiled project is not valid: ")
+    );
+    let overlap = crate::compile::model_refusal(
+        &alpha2_model::ModelError::OverlappingClips {
+            track: alpha2_model::TrackId::new("t1".to_owned()).expect("an id"),
+            first: id("c3"),
+            second: id("c7"),
+        },
+        &made_by,
+    );
+    assert_eq!(overlap.path, "spec.overlays[0]");
+    assert!(
+        overlap
+            .message
+            .ends_with("the other clip is spec.body.children[1]'s"),
+        "{overlap}"
+    );
+    let unknown = crate::compile::model_refusal(
+        &alpha2_model::ModelError::InvalidVisualProperties { clip: id("c9") },
+        &made_by,
+    );
+    assert_eq!(unknown.path, "spec");
+
+    // A layout tree past the model's node limit is reported at its layout node.
+    let leaves = vec![json!({"text": {"mode": "constant", "value": "x"}}); 300];
+    let error = compile_error(
+        &json!({"duration": 1, "body": {"type": "stack", "children": [
+            {"type": "color"},
+            {"type": "layout", "root": {"children": leaves}},
+        ]}}),
+    );
+    assert!(
+        error.starts_with("spec.body.children[1]: the compiled project is not valid"),
+        "{error}"
+    );
+}

@@ -80,7 +80,8 @@ pub use effect_spec::{
     EffectProblem, EffectSpec, builtin_effect, builtin_effects, builtin_effects_json,
 };
 pub use error::{
-    DataOwner, EffectOwner, ModelError, ProjectLoadError, ProjectWriteError, ShapeOwner,
+    DataOwner, EffectOwner, ErrorSubject, ModelError, ProjectLoadError, ProjectWriteError,
+    ShapeOwner,
 };
 pub use fingerprint::{AudioStreamShape, MediaFingerprint, StreamTopology, VideoStreamShape};
 pub use generator::{Generator, GradientStop, MAX_GRADIENT_STOPS, Paint, Rgba, Spread};

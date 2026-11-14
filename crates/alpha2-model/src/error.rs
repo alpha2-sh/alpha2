@@ -622,6 +622,121 @@ pub enum ModelError {
     },
 }
 
+/// The document object a [`ModelError`] is about, by id.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorSubject<'a> {
+    /// A timeline clip.
+    Clip(&'a ClipId),
+    /// A media source.
+    Source(&'a SourceId),
+    /// A track.
+    Track(&'a TrackId),
+    /// A composition.
+    Composition(&'a CompositionId),
+    /// A data set.
+    DataSet(&'a DataSetId),
+    /// An effect resource.
+    EffectResource(&'a EffectResourceId),
+}
+
+impl ModelError {
+    /// The document object this error is about, or `None` for one about the whole project.
+    ///
+    /// An overlap names its second clip, a duplicate transition its track.
+    #[must_use]
+    pub const fn subject(&self) -> Option<ErrorSubject<'_>> {
+        use ErrorSubject::{Clip, Composition, DataSet, EffectResource, Source, Track};
+        Some(match self {
+            Self::UnsupportedSchemaVersion { .. }
+            | Self::TooManyDataSets { .. }
+            | Self::EmptyIdentifier
+            | Self::InvalidMasterAudio
+            | Self::TooManyInlinedNodes { .. }
+            | Self::TooManyCompositions { .. }
+            | Self::TooManySources { .. }
+            | Self::TooManyTracks { .. }
+            | Self::TooManyClips { .. }
+            | Self::TooManyAudioEffects { .. }
+            | Self::TooMuchAudioDelay { .. }
+            | Self::ZeroCanvasDimension
+            | Self::CanvasDimensionTooLarge { .. }
+            | Self::CanvasPixelBudgetExceeded { .. }
+            | Self::InvalidBackground
+            | Self::InvalidColorPipeline
+            | Self::UnsupportedSampleRate { .. } => return None,
+            Self::DuplicateDataSetId(data) | Self::InvalidDataSet { data, .. } => DataSet(data),
+            Self::InvalidDataBinding { owner, .. } => match owner {
+                DataOwner::Clip(clip) | DataOwner::Transition { from: clip, .. } => Clip(clip),
+                DataOwner::Track(track) => Track(track),
+                DataOwner::Master => return None,
+                DataOwner::Node { composition, .. } => Composition(composition),
+                DataOwner::Source(source) => Source(source),
+            },
+            Self::InvalidShape { owner, .. } | Self::InvalidLayout { owner, .. } => match owner {
+                ShapeOwner::Source(source) => Source(source),
+                ShapeOwner::Clip(clip) => Clip(clip),
+                ShapeOwner::Node { composition, .. } => Composition(composition),
+            },
+            Self::InvalidEffect { owner, .. } => match &**owner {
+                EffectOwner::Node { composition, .. } => Composition(composition),
+                EffectOwner::Transition { from, .. } => Clip(from),
+            },
+            Self::DuplicateSourceId(source)
+            | Self::EmptyLocator { source }
+            | Self::AudioOnImage { source }
+            | Self::InvalidProvider { source }
+            | Self::InvalidFingerprint { source }
+            | Self::ContradictoryColor { source }
+            | Self::InvalidGenerator { source }
+            | Self::InvalidCompositionSource { source } => Source(source),
+            Self::DuplicateEffectResourceId(resource)
+            | Self::EmptyEffectResourceLocator { resource } => EffectResource(resource),
+            Self::DuplicateTrackId(track)
+            | Self::InvalidTrackAudio { track }
+            | Self::InvalidDuckingSidechain { track, .. }
+            | Self::InvalidCaptions { track }
+            | Self::UnknownCaptionStyle { track, .. }
+            | Self::InvalidCaptionCueStyle { track, .. }
+            | Self::InvalidClipTransition { track }
+            | Self::TransitionCycle { track, .. }
+            | Self::DuplicateTransition { track, .. }
+            | Self::TooManyClipsOnTrack { track, .. }
+            | Self::TooManyCaptionCues { track, .. }
+            | Self::TooManyTransitions { track, .. } => Track(track),
+            Self::DuplicateClipId(clip)
+            | Self::UnknownEffectResource { clip, .. }
+            | Self::EmptyClipRange { clip }
+            | Self::NegativeClipRange { clip }
+            | Self::OverlappingClips { second: clip, .. }
+            | Self::UnknownClipSource { clip, .. }
+            | Self::IncompatibleClipSource { clip, .. }
+            | Self::InvalidVisualProperties { clip }
+            | Self::InvalidAudioProperties { clip }
+            | Self::UnknownComposition { clip, .. }
+            | Self::InvalidClipComposition { clip }
+            | Self::FrameDrawsTooManyNodes { clip, .. }
+            | Self::InvalidClipMask { clip }
+            | Self::InvalidTimeMap { clip }
+            | Self::InvalidMatte { clip } => Clip(clip),
+            Self::DuplicateCompositionId(composition)
+            | Self::InvalidNodeId { composition, .. }
+            | Self::DuplicateNodeId { composition, .. }
+            | Self::TooManyCompositionNodes { composition, .. }
+            | Self::InvalidNode { composition, .. }
+            | Self::UnknownNodeInput { composition, .. }
+            | Self::CompositionCycle { composition, .. }
+            | Self::UnknownCompositionOutput { composition, .. }
+            | Self::InvalidNodeSource { composition, .. }
+            | Self::InvalidCompositionPorts { composition }
+            | Self::UnknownGroupComposition { composition, .. }
+            | Self::CompositionUsesItself { composition }
+            | Self::CompositionNestedTooDeep { composition, .. }
+            | Self::UnknownNodeResource { composition, .. } => Composition(composition),
+        })
+    }
+}
+
 impl fmt::Display for ModelError {
     #[allow(clippy::too_many_lines)]
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

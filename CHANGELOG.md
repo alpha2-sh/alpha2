@@ -223,6 +223,8 @@ All notable changes to this project are documented in this file.
 - The sound of the two sides of a compose sequence join crosses over the transition (equal-power
   fades, or a clip's own longer fade); both sounds played at full level over the overlap and the
   outgoing one stopped without a fade.
+- A compiled compose project the model refuses is reported at the node that made the refused clip,
+  source, track or composition instead of at `spec`.
 
 ## [0.6.0] - 2026-11-08
 

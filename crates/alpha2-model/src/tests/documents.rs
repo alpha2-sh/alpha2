@@ -630,3 +630,34 @@ fn a_written_project_is_its_serialization() {
         serde_json::to_string(&project).expect("serializes")
     );
 }
+
+#[test]
+fn a_model_error_names_the_object_it_is_about() {
+    let clip = |text: &str| crate::ClipId::new(text.to_owned()).expect("an id");
+    let track = crate::TrackId::new("t".to_owned()).expect("an id");
+    let overlap = crate::ModelError::OverlappingClips {
+        track: track.clone(),
+        first: clip("a"),
+        second: clip("b"),
+    };
+    assert_eq!(
+        overlap.subject(),
+        Some(crate::ErrorSubject::Clip(&clip("b")))
+    );
+    let cues = crate::ModelError::TooManyCaptionCues {
+        track: track.clone(),
+        found: 2,
+        maximum: 1,
+    };
+    assert_eq!(cues.subject(), Some(crate::ErrorSubject::Track(&track)));
+    assert_eq!(crate::ModelError::ZeroCanvasDimension.subject(), None);
+    let mut project = project();
+    let mut second = project.timeline.tracks[0].clips[0].clone();
+    second.id = clip("second");
+    project.timeline.tracks[0].clips.push(second);
+    let error = project.validate().expect_err("the clips overlap");
+    assert_eq!(
+        error.subject(),
+        Some(crate::ErrorSubject::Clip(&clip("second")))
+    );
+}
