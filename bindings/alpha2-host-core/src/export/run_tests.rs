@@ -438,3 +438,174 @@ fn the_cpu_renderer_refuses_surface_frames() {
         "{result:?}"
     );
 }
+
+/// Pictures in presentation order, one per packet at the packet's time, released once a window
+/// deeper than any corpus file's reordering is full.
+#[derive(Default)]
+struct Ordered {
+    held: std::collections::BinaryHeap<std::cmp::Reverse<i64>>,
+    finished: bool,
+}
+
+impl VideoDecodeBackend for Ordered {
+    fn kind(&self) -> BackendKind {
+        BackendKind::Software
+    }
+
+    fn presentation_order(&self) -> bool {
+        true
+    }
+
+    fn submit(&mut self, packet: &Packet) -> Result<Submit, BackendError> {
+        self.held.push(std::cmp::Reverse(packet.pts));
+        Ok(Submit::Accepted)
+    }
+
+    fn receive(&mut self, _wait: bool) -> Result<Poll, BackendError> {
+        if self.held.len() <= 16 && !self.finished {
+            return Ok(Poll::Pending);
+        }
+        let Some(std::cmp::Reverse(pts)) = self.held.pop() else {
+            return Ok(Poll::Drained);
+        };
+        let plane = |width: u32| Plane {
+            bytes: Bytes::from(vec![128; (width * width) as usize]),
+            stride: width,
+            width,
+            height: width,
+        };
+        Ok(Poll::Frame(BackendFrame {
+            pts,
+            image: BackendImage::Cpu {
+                format: YuvFormat::I420,
+                planes: vec![plane(SIZE), plane(SIZE / 2), plane(SIZE / 2)],
+            },
+            coded: (SIZE, SIZE),
+            visible: None,
+            sample_aspect_ratio: None,
+            color: Some(alpha2_media::ColorMetadata::EXPORT),
+            chroma_location: Some(alpha2_media::ChromaLocation::Left),
+        }))
+    }
+
+    fn finish_input(&mut self) -> Result<(), BackendError> {
+        self.finished = true;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), BackendError> {
+        self.held.clear();
+        self.finished = false;
+        Ok(())
+    }
+}
+
+struct OrderedSessions;
+
+impl VideoBackends for OrderedSessions {
+    fn open(
+        &self,
+        _track: &TrackInfo,
+        _kind: BackendKind,
+    ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
+        Ok(Box::new(Ordered::default()))
+    }
+}
+
+fn corpus_stream(path: &std::path::Path) -> VideoStream {
+    VideoStream::open_file(path, Arc::new(OrderedSessions), StreamOptions::default())
+        .expect("opens")
+}
+
+/// The source frame the stream cursor shows at each of `times`, asked in the given order.
+fn cursor_picks(path: &std::path::Path, frames: &[i64], times: &[MediaTime]) -> Vec<usize> {
+    let path = path.to_owned();
+    let mut sources = StreamSources::new(move |_: &SourceId| {
+        Ok(SourceStream::Video(Box::new(corpus_stream(&path))))
+    });
+    let need = |media_time| FrameNeed {
+        reader: None,
+        clip_id: ClipId::new("c").expect("id"),
+        source_id: SourceId::new("v").expect("id"),
+        media_time,
+    };
+    times
+        .iter()
+        .zip(0_u64..)
+        .map(|(&time, index)| {
+            let Some(SourceFrame::Cpu(frame)) = sources
+                .frame(&need(time), index, &CancelToken::default())
+                .expect("decodes")
+            else {
+                panic!("a CPU frame");
+            };
+            frames
+                .iter()
+                .position(|&ticks| ticks == frame.pts.ticks())
+                .expect("a source frame")
+        })
+        .collect()
+}
+
+#[test]
+fn the_stream_cursor_shows_the_frames_of_the_frame_selection_table() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let table: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("tests/golden/frame-selection-corpus.json"))
+            .expect("tests/golden/frame-selection-corpus.json"),
+    )
+    .expect("json");
+    let int = |value: &serde_json::Value| value.as_i64().expect("an integer");
+    let mut replayed = 0;
+    for source in table["sources"].as_array().expect("sources") {
+        let name = source["file"].as_str().expect("file");
+        // No in-house reader opens MPEG-TS.
+        if name == "frame-rounding-23976.ts" {
+            continue;
+        }
+        let path = root.join("tests/corpus").join(name);
+        let frames = source["frameTicks"]
+            .as_array()
+            .expect("frameTicks")
+            .iter()
+            .map(int)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            corpus_stream(&path).presentation_slack().ticks(),
+            int(&source["slackTicks"]),
+            "{name}: slack"
+        );
+        for rate in source["rates"].as_array().expect("rates") {
+            let frame_rate = FrameRate::new(
+                u32::try_from(int(&rate["rate"]["num"])).expect("num"),
+                u32::try_from(int(&rate["rate"]["den"])).expect("den"),
+            )
+            .expect("rate");
+            let expected = rate["frames"]
+                .as_array()
+                .expect("frames")
+                .iter()
+                .map(|index| usize::try_from(int(index)).expect("index"))
+                .collect::<Vec<_>>();
+            let times = (0..expected.len())
+                .map(|index| {
+                    frame_rate
+                        .frame_start(i64::try_from(index).expect("index"))
+                        .expect("time")
+                })
+                .collect::<Vec<_>>();
+            let label = format!("{name} at {frame_rate:?}");
+            assert_eq!(
+                cursor_picks(&path, &frames, &times),
+                expected,
+                "{label}, in order"
+            );
+            let reversed = times.iter().rev().copied().collect::<Vec<_>>();
+            let mut sought = cursor_picks(&path, &frames, &reversed);
+            sought.reverse();
+            assert_eq!(sought, expected, "{label}, in reverse");
+            replayed += 1;
+        }
+    }
+    assert_eq!(replayed, 13 * 5);
+}

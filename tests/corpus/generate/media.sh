@@ -554,6 +554,8 @@ PATCH
   index() { echo "nullsrc=s=64x48:r=$1,format=yuv420p,geq=lum='16+$2*N':cb=128:cr=128"; }
   "${ENCODE[@]}" -f lavfi -i "$(index 30000/1001 3)" -frames:v 60 "${ROUND[@]}" frame-rounding-2997.mkv
   "${FFMPEG[@]}" -i frame-rounding-2997.mkv -c copy frame-rounding-2997-remux.mp4
+  "${FFMPEG[@]}" -i frame-rounding-2997.mkv -c copy -output_ts_offset 0.5 -fflags +bitexact \
+    frame-rounding-late.mkv
   for scale in 600 100; do
     "${ENCODE[@]}" -f lavfi -i "$(index 30000/1001 3)" -frames:v 60 "${ROUND[@]}" \
       -video_track_timescale "$scale" "frame-rounding-2997-$scale.mp4"
