@@ -1,5 +1,7 @@
 //! Builds a plugin crate for wasm32 and native targets and writes an upload-ready directory: the
-//! artifacts, the resources and `manifest.json` with relative URLs, SHA-256 hashes and sizes.
+//! artifacts, the resources and `manifest.json` with relative URLs, SHA-256 hashes and sizes, and
+//! beside them the licence files under `licenses/` and `THIRD_PARTY_NOTICES.txt`, which the
+//! manifest does not list.
 //!
 //! ```text
 //! cargo run -p alpha2-plugin-pack -- <plugin-dir> --out <dir> [--target <triple>]... [--no-native]
@@ -10,6 +12,7 @@
 //! targets default to the host's. Nothing is uploaded.
 
 mod check;
+mod notices;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -161,13 +164,7 @@ fn resources(plugin: &Path, out: &Path) -> Result<Vec<Value>, String> {
 fn pack(options: &Options) -> Result<PathBuf, String> {
     let manifest_path = options.plugin.join("Cargo.toml");
     let metadata: Value = serde_json::from_str(&run(cargo()
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--no-deps",
-            "--manifest-path",
-        ])
+        .args(["metadata", "--format-version", "1", "--manifest-path"])
         .arg(&manifest_path))?)
     .map_err(|error| error.to_string())?;
     let package = metadata["packages"]
@@ -222,6 +219,14 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
     }
 
     let resources = resources(&options.plugin, &options.out)?;
+    notices::copy_plugin_licences(&options.plugin, &options.out)?;
+    let root = package["id"].as_str().ok_or("the plugin crate has no id")?;
+    let notices_path = options.out.join("THIRD_PARTY_NOTICES.txt");
+    std::fs::write(
+        &notices_path,
+        notices::third_party_notices(&metadata, root)?,
+    )
+    .map_err(|error| format!("{}: {error}", notices_path.display()))?;
 
     let mut manifest = json!({
         "id": id,

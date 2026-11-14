@@ -6,6 +6,9 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Plugin pack: the upload-ready directory holds the plugin's licence files under `licenses/`
+  (the silence model's MIT licence included) and `THIRD_PARTY_NOTICES.txt` naming every crate
+  linked into the artifacts with its licence text.
 - An export result's `performance` splits `renderMs` into `setupMs` (with `encoderProbeMs`,
   `encoderOpenMs` and `loudnessMs`), `firstFrameMs` and `finishMs`, and reports `steadyFps`, the
   encode rate without start-up and finish.
