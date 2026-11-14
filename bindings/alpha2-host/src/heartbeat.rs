@@ -183,8 +183,9 @@ impl WorkerHeartbeat {
             {
                 self.stall_forever();
             }
+            // Once, as a defect would: the worker's own cleanup then runs.
             Some(InjectedStall::PanicAfterOperations(limit))
-                if self.operations.fetch_add(1, Ordering::Relaxed) >= limit =>
+                if self.operations.fetch_add(1, Ordering::Relaxed) == limit =>
             {
                 panic!("injected decoder panic");
             }
@@ -527,9 +528,12 @@ pub fn run_watched<T: Send + 'static>(
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = join.join();
+                let message = join.join().err().map_or_else(
+                    || "no message".to_owned(),
+                    |payload| crate::failure::panic_message(&*payload).to_owned(),
+                );
                 return Err(format!(
-                    "{}the {} panicked",
+                    "{}the {} panicked: {message}",
                     crate::protocol::internal_tag(),
                     watched.what
                 ));

@@ -1483,7 +1483,19 @@ fn serve_requests(
     let slots = Slots::new(serving.max_running);
     let failed = Mutex::new(None);
     let served = std::thread::scope(|scope| {
-        dispatch(scope, serving, requests, out, unusable, &slots, &failed)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            dispatch(scope, serving, requests, out, unusable, &slots, &failed)
+        }))
+        .unwrap_or_else(|payload| {
+            let error = HostError::new(
+                "INTERNAL",
+                format!(
+                    "the request dispatcher panicked: {}",
+                    crate::failure::panic_message(&*payload)
+                ),
+            );
+            Err(write_fatal(error, out).unwrap_or_else(|unwritten| unwritten))
+        })
     });
     match failed.into_inner().unwrap_or_else(PoisonError::into_inner) {
         Some(error) => Err(error),
@@ -1544,6 +1556,11 @@ fn dispatch<'scope>(
                 }
                 lifecycle.drain(DrainReason::InputClosed, out)?;
                 return Ok(Served::InputEnded);
+            }
+            // The running requests answer; those written after the failure are lost.
+            InputFrame::Failed(error) => {
+                slots.wait_idle(None);
+                return Err(write_fatal(error, out)?);
             }
             input => envelope_of(input),
         };
@@ -2029,7 +2046,9 @@ fn envelope_of(input: InputFrame) -> Envelope {
             )),
             true,
         ),
-        InputFrame::End => unreachable!("the end of input is no request"),
+        InputFrame::End | InputFrame::Failed(_) => {
+            unreachable!("the end of input is no request")
+        }
     }
 }
 
@@ -2104,7 +2123,7 @@ fn retire(
         }
         match requests.next_within(deadline.saturating_duration_since(now).min(DISPATCH_POLL)) {
             None => {}
-            Some(InputFrame::End) => break,
+            Some(InputFrame::End | InputFrame::Failed(_)) => break,
             Some(input) => refuse_frame(out, &input, reason, lifecycle)?,
         }
     }
@@ -2122,7 +2141,7 @@ fn refuse_queued(
     lifecycle: &Lifecycle,
 ) -> Result<(), HostError> {
     while let Some(input) = requests.queued() {
-        if matches!(input, InputFrame::End) {
+        if matches!(input, InputFrame::End | InputFrame::Failed(_)) {
             break;
         }
         refuse_frame(out, &input, reason, lifecycle)?;
@@ -2141,7 +2160,7 @@ fn refuse_frame(
             request_id_from_header(header),
             operation_from_header(header).as_deref() == Some("export"),
         ),
-        InputFrame::TooLarge(_) | InputFrame::NotUtf8 | InputFrame::End => {
+        InputFrame::TooLarge(_) | InputFrame::NotUtf8 | InputFrame::End | InputFrame::Failed(_) => {
             ("unknown".to_owned(), false)
         }
     };

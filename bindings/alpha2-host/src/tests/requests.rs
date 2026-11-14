@@ -321,6 +321,7 @@ fn a_frame_over_the_limit_is_skipped_and_the_next_is_read_whole() {
             } => format!("refused: {reason}"),
             InputFrame::TooLarge(bytes) => format!("too large {bytes}"),
             InputFrame::NotUtf8 => "not utf-8".to_owned(),
+            InputFrame::Failed(error) => format!("failed: {}", error.message),
         });
     }
     assert_eq!(
@@ -742,6 +743,48 @@ fn a_retiring_host_answers_what_it_read_then_stops_and_answers_what_runs() {
         .map(|entry| entry.expect("entry").file_name())
         .collect::<Vec<_>>();
     assert!(left.is_empty(), "the stopped export left {left:?}");
+}
+
+/// Fails with `Other` after the bytes it was given, as a broken pipe would.
+struct FailingInput(std::io::Cursor<Vec<u8>>);
+
+impl std::io::Read for FailingInput {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self.0.read(buffer)? {
+            0 => Err(std::io::Error::other("injected read failure")),
+            read => Ok(read),
+        }
+    }
+}
+
+#[test]
+fn a_read_error_in_the_middle_of_a_frame_is_answered_with_a_fatal_and_ends_serve() {
+    let mut input = crate::serve_io::frames_of_lines(templates("first").as_bytes());
+    let second = crate::serve_io::frames_of_lines(templates("second").as_bytes());
+    input.extend_from_slice(&second[..second.len() / 2]);
+    let output = crate::serve_io::Captured::default();
+    let out = output.responder();
+    let mut serving = Serving::new(VideoDecodePolicy::Software);
+    serving.create = no_gpu;
+    let requests = crate::serve_io::requests_from(
+        &mut FailingInput(std::io::Cursor::new(input)),
+        &out,
+        &serving.lifecycle,
+    );
+    let error = serve_requests(&mut serving, &requests, &out, &|_| None)
+        .expect_err("a read error is no end of input");
+    assert_eq!(error.code, "IO_ERROR");
+    assert!(
+        error.message.contains("injected read failure"),
+        "{}",
+        error.message
+    );
+    let messages = crate::serve_io::messages_of(&output.bytes());
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_eq!(messages[0].0["requestId"], "first");
+    assert_eq!(messages[0].0["ok"], true);
+    assert_eq!(messages[1].0["type"], "fatal");
+    assert_eq!(messages[1].0["error"]["code"], "IO_ERROR");
 }
 
 #[test]

@@ -902,7 +902,21 @@ impl EncodeWorker {
                 #[cfg(test)]
                 slow_video,
             };
-            run_encode_worker(&mut state);
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_encode_worker(&mut state);
+            })) {
+                // Not an encoder refusal: a retry policy must not switch encoders for a defect.
+                let error = format!(
+                    "{}the encode worker panicked: {}",
+                    crate::protocol::internal_tag(),
+                    crate::failure::panic_message(&*payload)
+                );
+                state.failure.record(&error);
+                state.cancel.cancel();
+                let _ = state.results.send(EncodeWorkerEvent::Failed(error));
+                let _work = state.heartbeat.begin_work();
+                state.sink.abort();
+            }
             let _work = worker_heartbeat.begin_teardown();
             drop(state);
         };
@@ -1060,7 +1074,10 @@ impl EncodeWorker {
             thread::sleep(ENCODE_JOIN_POLL);
         }
         if self.join.take().is_some_and(|join| join.join().is_err()) {
-            return Err(encode_error("encode worker panicked"));
+            return Err(format!(
+                "{}the encode worker panicked in its teardown",
+                crate::protocol::internal_tag()
+            ));
         }
         Ok(())
     }

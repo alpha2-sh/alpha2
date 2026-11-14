@@ -208,8 +208,10 @@ pub(crate) enum InputFrame {
     /// A frame of this many bytes, over a limit of [`REQUEST_LIMITS`].
     TooLarge(u64),
     NotUtf8,
-    /// Stdin ended or failed.
+    /// Stdin ended.
     End,
+    /// Reading stdin failed, or the reader panicked: what was written after is lost.
+    Failed(HostError),
 }
 
 impl InputFrame {
@@ -224,7 +226,7 @@ impl InputFrame {
                         attachments.iter().map(|part| part.bytes.len()).sum()
                     })
             }
-            Self::TooLarge(_) | Self::NotUtf8 | Self::End => 0,
+            Self::TooLarge(_) | Self::NotUtf8 | Self::End | Self::Failed(_) => 0,
         }
     }
 }
@@ -356,11 +358,18 @@ pub(crate) fn read_requests(
                 header_bytes,
                 attachment_bytes,
             }) => InputFrame::TooLarge(u64::from(header_bytes) + u64::from(attachment_bytes)),
-            // A read error ends the input as its end would.
-            Ok(ReadFrame::End) | Err(_) => {
+            Ok(ReadFrame::End) => {
                 // No acknowledgement can arrive any more.
                 crate::extract_request::close_ack_routes();
                 frames.send(InputFrame::End);
+                return;
+            }
+            Err(error) => {
+                crate::extract_request::close_ack_routes();
+                frames.send(InputFrame::Failed(HostError::new(
+                    "IO_ERROR",
+                    format!("reading requests failed: {error}"),
+                )));
                 return;
             }
         };
@@ -445,16 +454,48 @@ pub(crate) fn start_reader(
     std::thread::Builder::new()
         .name("alpha2-requests".to_owned())
         .spawn(move || {
-            read_requests(&mut std::io::stdin().lock(), &sender, &out, &lifecycle);
+            read_requests_guarded(&mut std::io::stdin().lock(), &sender, &out, &lifecycle);
         })
         .map_err(HostError::io)?;
     Ok(requests)
 }
 
+/// [`read_requests`], whose panic ends the input as a failure the dispatcher reports.
+fn read_requests_guarded(
+    input: &mut impl Read,
+    frames: &FrameSender,
+    out: &Responder,
+    lifecycle: &Lifecycle,
+) {
+    let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        read_requests(input, frames, out, lifecycle);
+    }));
+    if let Err(payload) = read {
+        crate::extract_request::close_ack_routes();
+        frames.send(InputFrame::Failed(HostError::new(
+            "INTERNAL",
+            format!(
+                "the request reader panicked: {}",
+                crate::failure::panic_message(&*payload)
+            ),
+        )));
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn requests_of(input: &[u8], out: &Responder, lifecycle: &Lifecycle) -> Requests {
+    requests_from(&mut &input[..], out, lifecycle)
+}
+
+/// [`requests_of`] from any reader.
+#[cfg(test)]
+pub(crate) fn requests_from(
+    input: &mut impl Read,
+    out: &Responder,
+    lifecycle: &Lifecycle,
+) -> Requests {
     let (sender, requests) = request_queue();
-    read_requests(&mut &input[..], &sender, out, lifecycle);
+    read_requests_guarded(input, &sender, out, lifecycle);
     requests
 }
 

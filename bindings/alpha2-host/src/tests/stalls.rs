@@ -1000,3 +1000,61 @@ fn a_copy_plan_whose_source_stops_answering_fails_as_a_decode_stall() {
     }
     std::fs::remove_dir_all(&directory).ok();
 }
+
+/// A disconnect read as an encoder failure would send a retry policy to the software encoder.
+#[test]
+fn an_encode_worker_that_panics_fails_the_export_as_internal_with_its_message() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("encode-panic");
+    let output = directory.join("out.mp4");
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    crate::encode::INJECT_ENCODE_STALL.set(Some((
+        crate::heartbeat::InjectedStall::PanicAfterOperations(3),
+        Duration::from_secs(30),
+    )));
+    let error = within(
+        Duration::from_secs(120),
+        "an export whose encoder panics",
+        || {
+            host.handle(encode_stall_request(&output), &mut |_| Ok(()))
+                .expect_err("an export whose encoder panics fails")
+        },
+    );
+    assert_eq!(error.code, "INTERNAL", "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains("the encode worker panicked: injected decoder panic"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        error.failure.expect("a failure report")["hostCode"],
+        "INTERNAL"
+    );
+    assert!(!output.exists());
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn a_watched_body_that_panics_is_reported_with_its_message() {
+    let cancel = CancelToken::default();
+    let watched = crate::heartbeat::Watched {
+        what: "packet copy",
+        heartbeat: Arc::new(crate::heartbeat::WorkerHeartbeat::default()),
+        limit: Duration::from_secs(30),
+        cancel: &cancel,
+    };
+    let error = crate::heartbeat::run_watched(
+        &watched,
+        |_| -> () { panic!("injected copy panic") },
+        &mut |_| Ok(()),
+        &|_| "stalled".to_owned(),
+    )
+    .expect_err("the body panicked");
+    assert!(
+        error.contains("the packet copy panicked: injected copy panic"),
+        "{error}"
+    );
+    assert_eq!(HostError::classify(error).code, "INTERNAL");
+}

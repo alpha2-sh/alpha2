@@ -622,10 +622,18 @@ impl MemoryWatchdog {
                     }
                 }
             });
-        Self {
-            stop: spawned.ok().map(|handle| (sender, handle)),
-            watched,
-        }
+        let stop = match spawned {
+            Ok(handle) => Some((sender, handle)),
+            Err(error) => {
+                watchdogs().retain(|known| *known != watched);
+                alpha2_os::diagnostic!(
+                    "alpha2-host: the memory watchdog did not start, so the kernel may end the \
+                     host at the cgroup limit: {error}"
+                );
+                None
+            }
+        };
+        Self { stop, watched }
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]

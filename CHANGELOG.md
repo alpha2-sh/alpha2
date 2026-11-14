@@ -406,6 +406,11 @@ All notable changes to this project are documented in this file.
 - A host whose request panicked answers it `INTERNAL` and drains with the new reason `defect`:
   running requests finish and new ones are answered `HOST_RETIRING`. Before, it went on serving
   with whatever shared state the unwind left.
+- A failed read of `serve`'s input is a `fatal` (`IO_ERROR`, exit status 1) instead of a quiet end
+  of input, a panic of the request reader or dispatcher is a `fatal` with `INTERNAL`, and an encode
+  worker that panics fails its export with `INTERNAL` and the panic message instead of
+  `ENCODE_ERROR`, which a retry policy read as a reason to switch encoders. A panicking watched
+  worker's message is kept, and a memory watchdog that cannot start says so.
 
 ## [0.6.0] - 2026-11-08
 
