@@ -48,6 +48,10 @@ All notable changes to this project are documented in this file.
   the oldest waiting request is considered, so a request of other modes (such as the software
   rerun after `DECODE_STALLED`) no longer waits behind every younger request of the busy host's
   modes. The host protocol's "Keeping hosts" states the rule.
+- `alpha2-extensions` requires the exact versions of the converters its cost budgets are written
+  against (roxmltree, usvg, resvg, tiny-skia, the hayro crates, velato, exr, zip and their peers). A
+  build that needs another version of one of them fails to resolve instead of running unmodeled
+  code.
 
 ### Fixed
 
