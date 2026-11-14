@@ -179,6 +179,11 @@ All notable changes to this project are documented in this file.
   toward 256 MiB of image bytes and four canvases of declared pixels, and a registered image is
   read once however often it is drawn. The provider budget sees the images an SVG or PDF source
   holds and the composition a Lottie source holds, so it can close them when they are off screen.
+- A PDF page is checked for what drawing it costs before it is converted: every invocation of a
+  form, tiling pattern, soft mask or Type 3 glyph counts, a page may draw 262,144 paths, glyphs and
+  images, decode four canvases of image pixels and write 256 MiB of image data, its content streams
+  may decode to 32 MiB together, a form that invokes itself is refused, and resources a page
+  inherits are checked too.
 
 ## [0.6.0] - 2026-11-08
 

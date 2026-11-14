@@ -1,7 +1,11 @@
-use std::io::Write as _;
-
 use alpha2_model::Rgba;
 
+use std::io::Write as _;
+
+use super::hostile::{
+    pdf_content_bomb, pdf_forms, pdf_image_draws, pdf_one_page, pdf_self_invoking_form,
+    pdf_stream as stream, pdf_type3_glyphs,
+};
 use super::*;
 
 const WHITE: Rgba = Rgba::new(1.0, 1.0, 1.0, 1.0);
@@ -12,41 +16,7 @@ fn pdf_source(page: u32, background: Rgba) -> ProviderSource {
 
 /// A one-page document of `content` with `resources` and `extra` objects numbered from 5.
 fn one_page(resources: &str, content: &[u8], extra: &[Vec<u8>]) -> Arc<[u8]> {
-    let mut objects = vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 60 30] /Resources {resources} /Contents 4 0 R >>")
-            .into_bytes(),
-        stream("", content),
-    ];
-    objects.extend_from_slice(extra);
-    let mut out = b"%PDF-1.4\n".to_vec();
-    let mut offsets = Vec::new();
-    for (index, object) in objects.iter().enumerate() {
-        offsets.push(out.len());
-        writeln!(out, "{} 0 obj", index + 1).expect("write");
-        out.extend_from_slice(object);
-        out.extend_from_slice(b"\nendobj\n");
-    }
-    let xref = out.len();
-    write!(out, "xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).expect("write");
-    for offset in offsets {
-        writeln!(out, "{offset:010} 00000 n ").expect("write");
-    }
-    write!(
-        out,
-        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
-        objects.len() + 1
-    )
-    .expect("write");
-    out.into()
-}
-
-fn stream(entries: &str, data: &[u8]) -> Vec<u8> {
-    let mut object = format!("<< {entries} /Length {} >>\nstream\n", data.len()).into_bytes();
-    object.extend_from_slice(data);
-    object.extend_from_slice(b"\nendstream");
-    object
+    pdf_one_page(resources, content, extra).into()
 }
 
 fn open(
@@ -178,6 +148,61 @@ fn text_in_a_font_the_pdf_does_not_embed_is_drawn_with_a_standard_font_and_repor
         }]
     );
     assert_eq!(drawn("Courier"), Vec::new());
+}
+
+fn refused_saying(file: Vec<u8>, says: &str) {
+    match open(file.into(), &pdf_source(1, WHITE)) {
+        Err(ExtensionError::Budget(reason)) if reason.contains(says) => {}
+        other => panic!("expected `too large: ...{says}...`, got {:?}", other.err()),
+    }
+}
+
+#[test]
+fn a_page_is_held_to_what_its_forms_draw_each_time_they_are_invoked() {
+    // 97,336 rectangles open; a million are refused before hayro converts the page.
+    open(pdf_forms(46, 3).into(), &pdf_source(1, WHITE)).expect("46^3 draws open");
+    refused_saying(pdf_forms(100, 3), "the page draws more than 262144");
+    refused_saying(pdf_self_invoking_form(), "draws itself");
+}
+
+#[test]
+fn a_page_of_a_billion_form_invocations_is_refused_before_it_is_converted() {
+    refused_saying(pdf_forms(1000, 3), "the page draws more than 262144");
+}
+
+#[test]
+fn a_page_is_held_to_the_pixels_and_data_its_image_draws_write() {
+    // A flat 4 MP image drawn 10 times opens; 100 times it decodes 400 MP.
+    open(
+        pdf_image_draws(2000, true, false, 10).into(),
+        &pdf_source(1, WHITE),
+    )
+    .expect("ten draws open");
+    refused_saying(
+        pdf_image_draws(2000, true, false, 100),
+        "image draws decode more than",
+    );
+    refused_saying(
+        pdf_image_draws(1000, false, true, 1000),
+        "image draws decode more than",
+    );
+}
+
+#[test]
+fn a_page_is_held_to_what_its_type3_glyphs_draw() {
+    open(pdf_type3_glyphs(10, 100).into(), &pdf_source(1, WHITE)).expect("small text opens");
+    refused_saying(
+        pdf_type3_glyphs(1000, 10_000),
+        "the page draws more than 262144",
+    );
+}
+
+#[test]
+fn a_page_is_held_to_what_its_content_streams_decode_to_together() {
+    refused_saying(
+        pdf_content_bomb(250 << 20),
+        "content streams decode to more than 33554432",
+    );
 }
 
 #[test]

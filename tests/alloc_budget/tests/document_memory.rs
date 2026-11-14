@@ -345,12 +345,46 @@ fn a_pdf_page_whose_streams_or_images_decode_past_the_limit_is_refused_holding_l
         #[allow(clippy::cast_precision_loss)]
         let held = held * bytes.len() as f64;
         eprintln!("{what}: held {held:.0} bytes");
-        // Covers the file hayro parses and the scan's 64 KiB decode buffers.
+        // Covers the file hayro parses, the scan's 64 KiB decode buffers, and the 32 MiB of
+        // content a page's streams may decode to, which the scan keeps to read.
         assert!(
-            held < 16.0 * 1024.0 * 1024.0,
+            held < 48.0 * 1024.0 * 1024.0,
             "{what}: held {held:.0} bytes"
         );
     }
+}
+
+#[cfg(feature = "pdf")]
+#[test]
+fn a_pdf_page_of_a_billion_form_invocations_is_refused_holding_little() {
+    // The page invokes a form 1000 times, it the next 1000 times, and that one a rectangle.
+    let invoke = |form: usize| format!("/F{form} Do\n").repeat(1000).into_bytes();
+    let form = |resources: &str, content: &[u8]| {
+        pdf_stream(
+            &format!(
+                "/Type /XObject /Subtype /Form /BBox [0 0 60 30] /Resources {resources} /Filter /FlateDecode"
+            ),
+            &zlib(content, 1),
+        )
+    };
+    let bytes = pdf(
+        "<< /XObject << /F1 5 0 R >> >>",
+        &invoke(1),
+        &[
+            form("<< /XObject << /F2 6 0 R >> >>", &invoke(2)),
+            form("<< /XObject << /F3 7 0 R >> >>", &invoke(3)),
+            form("<< >>", b"0 0 1 1 re f"),
+        ],
+    );
+    let (opened, held) = peak_ratio(&bytes, || open_pdf(&bytes));
+    assert!(
+        matches!(&opened, Err(ExtensionError::Budget(reason)) if reason.contains("draws more than")),
+        "{opened:?}"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let held = held * bytes.len() as f64;
+    eprintln!("held {held:.0} bytes");
+    assert!(held < 16.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
 }
 
 #[cfg(feature = "pdf")]

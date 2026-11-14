@@ -354,3 +354,144 @@ fn zlib_zeros(length: usize) -> Vec<u8> {
         .extend_from_slice(&((sum << 16) | 1).to_be_bytes());
     bits.bytes
 }
+
+/// A one-page document of `content` with `resources` and `extra` objects numbered from 5.
+#[cfg(feature = "pdf")]
+pub(crate) fn pdf_one_page(resources: &str, content: &[u8], extra: &[Vec<u8>]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut objects = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 60 30] /Resources {resources} /Contents 4 0 R >>")
+            .into_bytes(),
+        pdf_stream("", content),
+    ];
+    objects.extend_from_slice(extra);
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        writeln!(out, "{} 0 obj", index + 1).expect("write");
+        out.extend_from_slice(object);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    write!(out, "xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).expect("write");
+    for offset in offsets {
+        writeln!(out, "{offset:010} 00000 n ").expect("write");
+    }
+    write!(
+        out,
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        objects.len() + 1
+    )
+    .expect("write");
+    out
+}
+
+/// A stream object of `data` with the dictionary `entries`.
+#[cfg(feature = "pdf")]
+pub(crate) fn pdf_stream(entries: &str, data: &[u8]) -> Vec<u8> {
+    let mut object = format!("<< {entries} /Length {} >>\nstream\n", data.len()).into_bytes();
+    object.extend_from_slice(data);
+    object.extend_from_slice(b"\nendstream");
+    object
+}
+
+#[cfg(feature = "pdf")]
+fn pdf_flate(data: &[u8]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(data).expect("compress");
+    encoder.finish().expect("compressed")
+}
+
+/// A page that invokes a form `fan` times, each form the next one `fan` times, `levels` forms
+/// deep; the last fills one rectangle.
+#[cfg(feature = "pdf")]
+pub(crate) fn pdf_forms(fan: usize, levels: usize) -> Vec<u8> {
+    let invoke = |form: usize| format!("/F{form} Do\n").repeat(fan).into_bytes();
+    let forms: Vec<Vec<u8>> = (1..=levels)
+        .map(|level| {
+            let (resources, content) = if level < levels {
+                (
+                    format!("<< /XObject << /F{} {} 0 R >> >>", level + 1, level + 5),
+                    invoke(level + 1),
+                )
+            } else {
+                ("<< >>".to_owned(), b"0 0 1 1 re f".to_vec())
+            };
+            pdf_stream(
+                &format!(
+                    "/Type /XObject /Subtype /Form /BBox [0 0 60 30] /Resources {resources} /Filter /FlateDecode"
+                ),
+                &pdf_flate(&content),
+            )
+        })
+        .collect();
+    pdf_one_page("<< /XObject << /F1 5 0 R >> >>", &invoke(1), &forms)
+}
+
+/// A page whose form invokes itself.
+#[cfg(feature = "pdf")]
+pub(crate) fn pdf_self_invoking_form() -> Vec<u8> {
+    let form = pdf_stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 60 30] /Resources << /XObject << /F1 5 0 R >> >>",
+        b"0 0 1 1 re f /F1 Do /F1 Do",
+    );
+    pdf_one_page("<< /XObject << /F1 5 0 R >> >>", b"/F1 Do", &[form])
+}
+
+/// A page that draws one `side` by `side` image `draws` times, gray or RGB, of noise or flat.
+#[cfg(feature = "pdf")]
+pub(crate) fn pdf_image_draws(side: usize, rgb: bool, noise: bool, draws: usize) -> Vec<u8> {
+    let channels = if rgb { 3 } else { 1 };
+    let mut state = 0x2545_f491_u32;
+    let samples: Vec<u8> = (0..side * side * channels)
+        .map(|_| {
+            if !noise {
+                return 0x80;
+            }
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state.to_le_bytes()[0]
+        })
+        .collect();
+    let space = if rgb { "/DeviceRGB" } else { "/DeviceGray" };
+    let image = pdf_stream(
+        &format!(
+            "/Type /XObject /Subtype /Image /Width {side} /Height {side} /ColorSpace {space} /BitsPerComponent 8 /Filter /FlateDecode"
+        ),
+        &pdf_flate(&samples),
+    );
+    pdf_one_page(
+        "<< /XObject << /Im 5 0 R >> >>",
+        &b"q 60 0 0 30 0 0 cm /Im Do Q\n".repeat(draws),
+        &[image],
+    )
+}
+
+/// A page that shows `shown` glyphs of a Type 3 font whose glyph fills `fills` rectangles.
+#[cfg(feature = "pdf")]
+pub(crate) fn pdf_type3_glyphs(fills: usize, shown: usize) -> Vec<u8> {
+    let font = b"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 1 1] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 6 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [1] >>".to_vec();
+    let glyph = pdf_stream(
+        "",
+        &[b"1 0 d0 ".as_slice(), &b"0 0 1 1 re f ".repeat(fills)].concat(),
+    );
+    let text = [b"BT /T 1 Tf (".as_slice(), &b"a".repeat(shown), b") Tj ET"].concat();
+    pdf_one_page("<< /Font << /T 5 0 R >> >>", &text, &[font, glyph])
+}
+
+/// A page whose form inflates to `bytes` of stroked lines.
+#[cfg(feature = "pdf")]
+pub(crate) fn pdf_content_bomb(bytes: usize) -> Vec<u8> {
+    let line = b"0 0 m 1 1 l S\n";
+    let content = line.repeat(bytes / line.len());
+    let form = pdf_stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 60 30] /Filter /FlateDecode",
+        &pdf_flate(&content),
+    );
+    pdf_one_page("<< /XObject << /F1 5 0 R >> >>", b"/F1 Do", &[form])
+}

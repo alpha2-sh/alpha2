@@ -17,6 +17,7 @@ fn main() -> std::io::Result<()> {
     let seeds = match target.as_str() {
         "extension_svg" => svg_seeds(),
         "extension_exr" => exr_seeds(),
+        "extension_pdf" => pdf_seeds(),
         _ => Vec::new(),
     };
     if seeds.is_empty() {
@@ -76,6 +77,26 @@ fn svg_seeds() -> Seeds {
 
 #[cfg(not(feature = "svg"))]
 fn svg_seeds() -> Seeds {
+    Vec::new()
+}
+
+#[cfg(feature = "pdf")]
+fn pdf_seeds() -> Seeds {
+    use hostile::{
+        pdf_content_bomb, pdf_forms, pdf_image_draws, pdf_self_invoking_form, pdf_type3_glyphs,
+    };
+    vec![
+        ("forms-1000.pdf", pdf_forms(1000, 3)),
+        ("forms-46.pdf", pdf_forms(46, 3)),
+        ("self-invoking-form.pdf", pdf_self_invoking_form()),
+        ("image-draws.pdf", pdf_image_draws(1000, false, true, 1000)),
+        ("type3-glyphs.pdf", pdf_type3_glyphs(1000, 10_000)),
+        ("content-bomb.pdf", pdf_content_bomb(250 << 20)),
+    ]
+}
+
+#[cfg(not(feature = "pdf"))]
+fn pdf_seeds() -> Seeds {
     Vec::new()
 }
 

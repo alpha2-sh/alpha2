@@ -84,7 +84,10 @@ seed() {
         { head -c 9 /dev/zero; cat "$file"; } >"$dir/$(basename "$file")"
       done
       ;;
-    extension_pdf) cp "$corpus"/*.pdf "$dir"/ ;;
+    extension_pdf)
+      cp "$corpus"/*.pdf "$dir"/
+      hostile "$target" "$dir"
+      ;;
     extension_latex)
       # A style byte, then the formula.
       index=0
