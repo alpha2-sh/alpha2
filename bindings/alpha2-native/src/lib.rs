@@ -81,8 +81,9 @@ pub use convert::{
 };
 pub use decode::{
     DecodeStageTimings, DroppedLayer, NativeAudioDecoder, NativeDecoder, ProbeResult,
-    SOURCE_SAMPLE_RATES, alpha_dropped_reason, decodes_vp9_alpha, probe,
-    software_decode_unsupported, visit_packet_times,
+    SOURCE_DECODERS, SOURCE_SAMPLE_RATES, allow_every_decoder, alpha_dropped_reason,
+    decodes_vp9_alpha, every_decoder_allowed, probe, software_decode_unsupported, source_decoders,
+    visit_packet_times,
 };
 pub use encode::{EncodeStageTimings, NativeAvEncodeSink, NativeWavEncodeSink};
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
@@ -90,8 +91,9 @@ pub use hwdecode::{VulkanDecodeProbe, probe_vulkan_decode};
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 pub use hwencode::{
     D3D12EncodeProbe, D3D12RateControlOpen, D3D12RateControlRunner, D3D12TestEncodeRunner,
-    D3D12VA_TEST_ENCODE_SIZE, d3d12va_encoder, d3d12va_timeouts, open_d3d12va_rate_control,
-    probe_d3d12va_encode, set_d3d12va_rate_control_runner, set_d3d12va_test_encode_runner,
+    D3D12VA_TEST_ENCODE_SIZE, d3d12va_busy, d3d12va_encoder, d3d12va_timeouts,
+    open_d3d12va_rate_control, probe_d3d12va_encode, set_d3d12va_rate_control_runner,
+    set_d3d12va_test_encode_runner,
 };
 #[cfg(feature = "hwencode")]
 pub use hwencode::{
@@ -119,6 +121,9 @@ pub struct FfmpegRuntimeIdentity {
     pub configuration: String,
     /// SDK release used by alpha2 release builds.
     pub pinned_sdk_release: &'static str,
+    /// Why hardware decode and encode interop is off: the loaded libavutil is another minor
+    /// release than the one the `FFmpeg` shims were compiled for.
+    pub interop_refusal: Option<&'static str>,
 }
 
 impl FfmpegRuntimeIdentity {
@@ -209,5 +214,6 @@ pub fn ffmpeg_runtime_identity() -> FfmpegRuntimeIdentity {
         version: alpha2_ffmpeg_bridge::runtime_version(),
         configuration: alpha2_ffmpeg_bridge::runtime_configuration(),
         pinned_sdk_release: "ffmpeg-8.1.3-shared-build5",
+        interop_refusal: alpha2_ffmpeg_bridge::hardware_interop_refusal(),
     }
 }

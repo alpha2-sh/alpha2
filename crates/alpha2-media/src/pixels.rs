@@ -188,6 +188,20 @@ impl PixelLayout {
         }
         planes
     }
+
+    /// Bytes one frame of this layout holds without padding, the sum over [`Self::planes`].
+    #[must_use]
+    pub fn frame_bytes(self, width: u32, height: u32) -> u64 {
+        self.planes(width, height)
+            .iter()
+            .fold(0_u64, |bytes, &(width, height, sample)| {
+                bytes.saturating_add(
+                    u64::from(width)
+                        .saturating_mul(u64::from(height))
+                        .saturating_mul(u64::from(sample)),
+                )
+            })
+    }
 }
 
 /// Why an output's pixels cannot be what was asked.

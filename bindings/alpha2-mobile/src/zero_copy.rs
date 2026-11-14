@@ -72,7 +72,7 @@ mod android {
                 let frames = GpuFrames {
                     decoders: Arc::new(AndroidVideo { output }),
                     import: Arc::new(AhbImport {
-                        importer,
+                        importer: Arc::new(importer),
                         imported: Arc::clone(&count),
                     }),
                     imported: count,
@@ -90,13 +90,26 @@ mod android {
 
     /// Imports Android decoder buffers on the renderer's device, counting them.
     struct AhbImport {
-        importer: AhbImporter,
+        importer: Arc<AhbImporter>,
         imported: Arc<AtomicU64>,
     }
 
-    /// Keeps a frame's plane textures until the renderer's work on them completes.
-    #[derive(Debug)]
-    struct PlaneLease(Arc<AhbPlanes>);
+    /// Keeps a frame's plane textures until the renderer's work on them completes. The renderer
+    /// drops it after its sampling finished, so the conversion is done and its decoder buffer is
+    /// let go then.
+    struct PlaneLease(Arc<AhbPlanes>, Arc<AhbImporter>);
+
+    impl std::fmt::Debug for PlaneLease {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.debug_tuple("PlaneLease").field(&self.0).finish()
+        }
+    }
+
+    impl Drop for PlaneLease {
+        fn drop(&mut self) {
+            let _ = self.1.collect();
+        }
+    }
 
     impl ExternalTextureLease for PlaneLease {
         fn retained_bytes(&self) -> u64 {
@@ -151,8 +164,12 @@ mod android {
                     alpha: 1.0,
                     color: facts.color,
                 },
-                Arc::new(PlaneLease(imported.lease)),
+                Arc::new(PlaneLease(imported.lease, Arc::clone(&self.importer))),
             )
+        }
+
+        fn collect(&self) {
+            let _ = self.importer.collect();
         }
     }
 }

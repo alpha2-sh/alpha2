@@ -138,6 +138,8 @@ pub(crate) struct IndexedTransition {
     pub(crate) easing: alpha2_model::Easing,
     pub(crate) effect: ClipEffect,
     pub(crate) track_order: usize,
+    /// Its position in its track's `transitions`, which orders transitions that start together.
+    pub(crate) list_order: usize,
 }
 
 #[derive(Clone, Debug)]

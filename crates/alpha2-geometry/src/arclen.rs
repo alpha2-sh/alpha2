@@ -36,7 +36,8 @@ fn segment_speed(segment: &PathSeg, t: f64) -> f64 {
     }
 }
 
-fn gauss(segment: &PathSeg, t0: f64, t1: f64) -> f64 {
+/// The 16-point Gauss estimate of the length of `segment` between `t0` and `t1`.
+pub(crate) fn gauss(segment: &PathSeg, t0: f64, t1: f64) -> f64 {
     let half = 0.5 * (t1 - t0);
     let middle = f64::midpoint(t0, t1);
     let mut sum = 0.0;
@@ -48,19 +49,33 @@ fn gauss(segment: &PathSeg, t0: f64, t1: f64) -> f64 {
     sum * half
 }
 
-fn adaptive(segment: &PathSeg, t0: f64, t1: f64, whole: f64, depth: u32) -> f64 {
+fn adaptive(
+    segment: &PathSeg,
+    (t0, t1): (f64, f64),
+    whole: f64,
+    tolerance: f64,
+    depth: u32,
+) -> f64 {
     let middle = f64::midpoint(t0, t1);
     let left = gauss(segment, t0, middle);
     let right = gauss(segment, middle, t1);
-    if depth >= MAX_DEPTH || (left + right - whole).abs() <= ACCURACY * 0.5 {
+    if depth >= MAX_DEPTH || (left + right - whole).abs() <= tolerance * 0.5 {
         return left + right;
     }
-    adaptive(segment, t0, middle, left, depth + 1) + adaptive(segment, middle, t1, right, depth + 1)
+    adaptive(segment, (t0, middle), left, tolerance, depth + 1)
+        + adaptive(segment, (middle, t1), right, tolerance, depth + 1)
 }
 
-/// The length of `segment` between parameters `t0` and `t1`.
+/// The length of `segment` between parameters `t0` and `t1`, within [`ACCURACY`].
 #[must_use]
 pub fn length_between(segment: &PathSeg, t0: f64, t1: f64) -> f64 {
+    length_within(segment, t0, t1, ACCURACY)
+}
+
+/// The length of `segment` between parameters `t0` and `t1`, within `tolerance` in the
+/// segment's units.
+#[must_use]
+pub fn length_within(segment: &PathSeg, t0: f64, t1: f64, tolerance: f64) -> f64 {
     if t1 <= t0 {
         return 0.0;
     }
@@ -68,7 +83,7 @@ pub fn length_between(segment: &PathSeg, t0: f64, t1: f64) -> f64 {
         return speed(line.p1 - line.p0) * (t1 - t0);
     }
     let whole = gauss(segment, t0, t1);
-    adaptive(segment, t0, t1, whole, 0)
+    adaptive(segment, (t0, t1), whole, tolerance, 0)
 }
 
 /// The length of the whole of `segment`.
@@ -105,6 +120,45 @@ pub fn parameter_at(segment: &PathSeg, distance: f64, total: f64) -> f64 {
             high = t;
         }
         t = f64::midpoint(low, high);
+    }
+    t
+}
+
+/// The parameter at which `segment` reaches `distance` of its `total` length, within `tolerance`
+/// in the segment's units. Clamped to 0 or 1 past the ends.
+///
+/// A safeguarded Newton iteration: it steps by the length error over the speed and falls back to
+/// bisection when a step leaves the bracket, so tight tolerances take few quadratures.
+#[must_use]
+pub fn parameter_within(segment: &PathSeg, distance: f64, total: f64, tolerance: f64) -> f64 {
+    if distance <= 0.0 || total <= 0.0 {
+        return 0.0;
+    }
+    if distance >= total {
+        return 1.0;
+    }
+    if let PathSeg::Line(_) = segment {
+        return distance / total;
+    }
+    let (mut low, mut high) = (0.0_f64, 1.0_f64);
+    let mut t = distance / total;
+    for _ in 0..60 {
+        let error = length_within(segment, 0.0, t, tolerance) - distance;
+        if error.abs() <= tolerance * 0.5 {
+            break;
+        }
+        if error < 0.0 {
+            low = t;
+        } else {
+            high = t;
+        }
+        let speed = segment_speed(segment, t);
+        let step = t - error / speed;
+        t = if speed > 0.0 && step > low && step < high {
+            step
+        } else {
+            f64::midpoint(low, high)
+        };
     }
     t
 }

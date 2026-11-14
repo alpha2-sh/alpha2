@@ -176,7 +176,7 @@ test(
   () => {
     withScratch((scratch) => {
       const { archive } = elfBundle(scratch, "linux-x64", { direct: true });
-      const result = run(smokeArchive, [archive, "linux-x64"]);
+      const result = run(smokeArchive, [archive, "linux-x64", "--loader-only"]);
       assert.equal(result.status, 0, result.stderr);
       assert.match(
         result.stdout,
@@ -203,9 +203,13 @@ test(
       );
       assert.match(hidden.stdout, /usage: alpha2/);
 
-      const result = run(smokeArchive, [archive, "linux-x64"], {
-        env: { ...process.env, LD_LIBRARY_PATH: lib },
-      });
+      const result = run(
+        smokeArchive,
+        [archive, "linux-x64", "--loader-only"],
+        {
+          env: { ...process.env, LD_LIBRARY_PATH: lib },
+        },
+      );
       assert.notEqual(result.status, 0, result.stdout);
       for (const name of ["alpha2", "alpha2-host"]) {
         assert.match(
@@ -246,17 +250,25 @@ test(
   () => {
     withScratch((scratch) => {
       const { archive } = elfBundle(scratch, "macos-arm64", { direct: true });
-      const rpath = run(smokeArchive, [archive, "macos-arm64"], {
-        env: stubOtool(scratch, "@rpath/libavcodec.62.dylib"),
-      });
+      const rpath = run(
+        smokeArchive,
+        [archive, "macos-arm64", "--loader-only"],
+        {
+          env: stubOtool(scratch, "@rpath/libavcodec.62.dylib"),
+        },
+      );
       assert.equal(rpath.status, 0, rpath.stderr);
 
-      const homebrew = run(smokeArchive, [archive, "macos-arm64"], {
-        env: stubOtool(
-          scratch,
-          "/opt/homebrew/opt/ffmpeg/lib/libavcodec.62.dylib",
-        ),
-      });
+      const homebrew = run(
+        smokeArchive,
+        [archive, "macos-arm64", "--loader-only"],
+        {
+          env: stubOtool(
+            scratch,
+            "/opt/homebrew/opt/ffmpeg/lib/libavcodec.62.dylib",
+          ),
+        },
+      );
       assert.notEqual(homebrew.status, 0, homebrew.stdout);
       assert.match(
         homebrew.stderr,
@@ -317,7 +329,11 @@ test(
   () => {
     withScratch((scratch) => {
       const archive = machoBundle(join(scratch, "rpath"), { rpath: true });
-      const passed = run(smokeArchive, [archive, "macos-arm64"]);
+      const passed = run(smokeArchive, [
+        archive,
+        "macos-arm64",
+        "--loader-only",
+      ]);
       assert.equal(passed.status, 0, passed.stderr);
       assert.match(
         passed.stdout,
@@ -327,7 +343,11 @@ test(
     withScratch((scratch) => {
       // The build folder still exists, so only the install names reveal the outside dependency.
       const archive = machoBundle(join(scratch, "absolute"), { rpath: false });
-      const failed = run(smokeArchive, [archive, "macos-arm64"]);
+      const failed = run(smokeArchive, [
+        archive,
+        "macos-arm64",
+        "--loader-only",
+      ]);
       assert.notEqual(failed.status, 0, failed.stdout);
       assert.match(
         failed.stderr,

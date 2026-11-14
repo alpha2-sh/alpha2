@@ -81,6 +81,42 @@ pub fn yuv420p_staging_bytes(size: RenderSize) -> Result<u64, RenderError> {
     Yuv420StagingLayout::new(size).map(|layout| layout.bytes + CANARY_BYTES)
 }
 
+/// The mapped buffer a layout readback ([`Renderer::begin_layout_readback`]) of a `size` frame in
+/// `format` takes, canary included: one aligned row of texels per row.
+///
+/// # Errors
+/// Returns [`RenderError::TextureReadback`] for a format the readback does not copy, or a size
+/// that overflows.
+pub fn layout_staging_bytes(
+    size: RenderSize,
+    format: wgpu::TextureFormat,
+) -> Result<u64, RenderError> {
+    let texel_bytes = match format {
+        wgpu::TextureFormat::Rgba16Float => 8,
+        wgpu::TextureFormat::Rgba8Unorm => 4,
+        _ => {
+            return Err(RenderError::TextureReadback(
+                ReadbackFailure::UnsupportedTarget,
+            ));
+        }
+    };
+    texel_staging(size, texel_bytes).map(|(_, bytes)| bytes)
+}
+
+/// The row pitch and the buffer size, canary included, of a texel readback.
+fn texel_staging(size: RenderSize, texel_bytes: u32) -> Result<(u32, u64), RenderError> {
+    let row_bytes = size
+        .width
+        .checked_mul(texel_bytes)
+        .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
+    let pitch = aligned_copy_row(row_bytes)?;
+    let bytes = u64::from(pitch)
+        .checked_mul(u64::from(size.height))
+        .and_then(|image| image.checked_add(CANARY_BYTES))
+        .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
+    Ok((pitch, bytes))
+}
+
 fn plane_rows(
     mapped: &[u8],
     (offset, pitch, width, rows): (u64, u32, u32, u32),
@@ -298,7 +334,7 @@ impl Renderer {
         let buffer =
             self.readback_buffers
                 .acquire(self.gpu.device(), buffer_size, "alpha2 RGBA8 readback");
-        let packed_texture = self.encode_readback_pack(target, &mut encoder);
+        let packed_texture = self.encode_readback_pack(target, &mut encoder)?;
         let copy_source = packed_texture
             .as_ref()
             .map_or(&target.texture, TextureLease::texture);
@@ -416,18 +452,9 @@ impl Renderer {
                 ));
             }
         };
-        let row_bytes = target
-            .size
-            .width
-            .checked_mul(texel_bytes)
-            .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
-        let pitch = aligned_copy_row(row_bytes)?;
-        let image_bytes = u64::from(pitch)
-            .checked_mul(u64::from(target.size.height))
-            .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
-        let buffer_size = image_bytes
-            .checked_add(CANARY_BYTES)
-            .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
+        let (pitch, buffer_size) = texel_staging(target.size, texel_bytes)?;
+        let image_bytes = buffer_size - CANARY_BYTES;
+        let row_bytes = target.size.width * texel_bytes;
         let mut encoder = self.command_encoder("alpha2 texel readback encoder");
         let buffer =
             self.readback_buffers
@@ -556,7 +583,7 @@ impl Renderer {
             encoder,
             &uniforms,
             uniform,
-        );
+        )?;
         encode_plane_copy(
             encoder,
             y_texture.texture(),
@@ -704,7 +731,7 @@ impl Renderer {
             u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
         );
         let uniform = uniforms.write(&uniform_bytes);
-        let cached = self.yuv_readback_pipeline();
+        let cached = self.yuv_readback_pipeline()?;
         let bind_group = self.yuv_pack_bind_group(target, cached, &uniforms, uniform);
         let luma_view = crate::pool::default_view(planes.luma);
         encode_yuv_render_pass(
@@ -764,8 +791,8 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         uniforms: &crate::uniform::UniformArenaLease,
         uniform: crate::uniform::UniformSlice,
-    ) {
-        let cached = self.yuv_readback_pipeline();
+    ) -> Result<(), RenderError> {
+        let cached = self.yuv_readback_pipeline()?;
         let bind_group = self.yuv_pack_bind_group(target, cached, uniforms, uniform);
         let [y_view, u_view, v_view] = plane_views;
         encode_yuv_render_pass(
@@ -782,10 +809,11 @@ impl Renderer {
             &bind_group,
             [u_view, v_view],
         );
+        Ok(())
     }
 
-    fn yuv_readback_pipeline(&self) -> &CachedYuvReadbackPipeline {
-        self.pipelines.yuv_readback.get_or_init(|| {
+    fn yuv_readback_pipeline(&self) -> Result<&CachedYuvReadbackPipeline, RenderError> {
+        crate::gpu_errors::checked_cell(&self.pipelines.yuv_readback, self.gpu.device(), || {
             let bind_group_layout =
                 self.gpu
                     .device()
@@ -862,9 +890,9 @@ impl Renderer {
         &self,
         target: &RenderedTexture,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> Option<TextureLease> {
+    ) -> Result<Option<TextureLease>, RenderError> {
         if target.format != wgpu::TextureFormat::Rgba16Float {
-            return None;
+            return Ok(None);
         }
         let texture = self.textures.acquire(
             self.gpu.device(),
@@ -872,7 +900,7 @@ impl Renderer {
             wgpu::TextureFormat::Rgba8Unorm,
             "alpha2 GPU-packed RGBA8 readback texture",
         );
-        let cached = self.readback_pack_pipeline();
+        let cached = self.readback_pack_pipeline()?;
         let bind_group = self
             .gpu
             .device()
@@ -905,11 +933,11 @@ impl Renderer {
             pass.set_bind_group(0, &bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        Some(texture)
+        Ok(Some(texture))
     }
 
-    fn readback_pack_pipeline(&self) -> &CachedPipeline {
-        self.pipelines.readback_pack.get_or_init(|| {
+    fn readback_pack_pipeline(&self) -> Result<&CachedPipeline, RenderError> {
+        crate::gpu_errors::checked_cell(&self.pipelines.readback_pack, self.gpu.device(), || {
             let bind_group_layout =
                 self.gpu
                     .device()
@@ -1030,9 +1058,7 @@ impl Rgba8Readback {
                 timeout: Some(self.timeout),
             })
             .map_err(crate::error::poll_error)?;
-        receiver
-            .recv()
-            .map_err(|_| RenderError::TextureReadback(ReadbackFailure::CallbackDropped))?
+        receive_mapped(&self.gpu, &receiver, self.timeout)?
     }
 
     /// Waits for this readback and returns tightly packed RGBA8 pixels.
@@ -1275,9 +1301,18 @@ impl Yuv420pReadback {
             let _ = sender.send(mapped);
         });
         self.wait_for_submission()?;
-        receiver
-            .recv()
-            .map_err(|_| RenderError::TextureReadback(ReadbackFailure::CallbackDropped))?
+        self.wait_for_mapped(&receiver)?
+    }
+
+    /// Waits for what a [`Self::map_async`] callback sends to `receiver`, after
+    /// [`Self::wait_for_submission`], polling the device, for at most the renderer's wait timeout.
+    ///
+    /// # Errors
+    /// [`RenderError::GpuTimeout`] when nothing arrives in time, and
+    /// [`ReadbackFailure::CallbackDropped`] when the callback was dropped without sending.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn wait_for_mapped<T>(&self, receiver: &mpsc::Receiver<T>) -> Result<T, RenderError> {
+        receive_mapped(&self.gpu, receiver, self.timeout)
     }
 
     /// Blocks until this readback's submission completes; may follow an earlier
@@ -1527,12 +1562,54 @@ impl Yuv420pReadback {
     }
 }
 
+/// A map callback runs on whichever thread's poll collected the mapping, possibly after this
+/// thread's own wait returned.
+#[cfg(not(target_arch = "wasm32"))]
+fn receive_mapped<T>(
+    gpu: &GpuContext,
+    receiver: &mpsc::Receiver<T>,
+    timeout: std::time::Duration,
+) -> Result<T, RenderError> {
+    crate::settle::receive_polling(receiver, timeout, || {
+        let _ = gpu.device().poll(wgpu::PollType::Poll);
+    })
+}
+
+/// How the next [`map_staging`] on this thread delivers its callback in tests.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum MapReport {
+    /// From another thread, after this delay.
+    Elsewhere(std::time::Duration),
+    Never,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MAP_REPORT: std::cell::Cell<Option<MapReport>> =
+        const { std::cell::Cell::new(None) };
+}
+
 fn map_staging(
     gpu: &GpuContext,
     buffer: &ReadbackBufferLease,
     requested: &AtomicBool,
     on_ready: impl FnOnce(Result<(), RenderError>) + Send + 'static,
 ) {
+    #[cfg(test)]
+    let on_ready = {
+        let report = MAP_REPORT.with(std::cell::Cell::take);
+        move |result: Result<(), RenderError>| match report {
+            None => on_ready(result),
+            Some(MapReport::Elsewhere(delay)) => {
+                std::thread::spawn(move || {
+                    std::thread::sleep(delay);
+                    on_ready(result);
+                });
+            }
+            Some(MapReport::Never) => std::mem::forget(on_ready),
+        }
+    };
     if requested.swap(true, Ordering::AcqRel) {
         on_ready(Err(RenderError::TextureReadback(
             ReadbackFailure::DuplicateMapRequest,

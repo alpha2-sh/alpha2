@@ -96,6 +96,7 @@
               "items": {
                 "$ref": "#/$defs/PointKeyframe"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -212,6 +213,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_EffectValue"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -328,6 +330,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_Vec2"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -445,6 +448,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_float"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -542,6 +546,7 @@
               "items": {
                 "$ref": "#/$defs/EqBand"
               },
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -645,6 +650,7 @@
             "minimum": 0,
             "type": "integer"
           },
+          "maxItems": 2,
           "type": [
             "array",
             "null"
@@ -656,6 +662,7 @@
           "items": {
             "$ref": "#/$defs/AudioEffect"
           },
+          "maxItems": 16,
           "type": "array"
         },
         "fade_in": {
@@ -842,6 +849,7 @@
           "items": {
             "$ref": "#/$defs/CaptionCue"
           },
+          "maxItems": 4096,
           "type": "array"
         },
         "from_words": {
@@ -982,6 +990,7 @@
           "items": {
             "$ref": "#/$defs/ShapeMask"
           },
+          "maxItems": 8,
           "type": "array"
         },
         "matte": {
@@ -1373,6 +1382,7 @@
           "items": {
             "$ref": "#/$defs/CompositionControl"
           },
+          "maxItems": 64,
           "type": "array"
         },
         "id": {
@@ -1384,6 +1394,7 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 16,
           "type": "array"
         },
         "nodes": {
@@ -1392,6 +1403,7 @@
           "items": {
             "$ref": "#/$defs/CompositionNode"
           },
+          "maxItems": 256,
           "type": "array"
         },
         "output": {
@@ -1496,6 +1508,7 @@
           "items": {
             "$ref": "#/$defs/Animated_float"
           },
+          "maxItems": 16,
           "type": "array"
         }
       },
@@ -1637,6 +1650,7 @@
               "items": {
                 "type": "string"
               },
+              "maxItems": 64,
               "type": "array"
             },
             "id": {
@@ -1680,6 +1694,7 @@
               "items": {
                 "$ref": "#/$defs/MediaTime"
               },
+              "maxItems": 4000000,
               "type": "array"
             },
             "values": {
@@ -1691,6 +1706,7 @@
                   "null"
                 ]
               },
+              "maxItems": 4000000,
               "type": "array"
             }
           },
@@ -1718,6 +1734,7 @@
               "items": {
                 "type": "string"
               },
+              "maxItems": 64,
               "type": "array"
             },
             "id": {
@@ -1761,6 +1778,7 @@
               "items": {
                 "$ref": "#/$defs/MediaTime"
               },
+              "maxItems": 4000000,
               "type": "array"
             },
             "values": {
@@ -1772,6 +1790,7 @@
                   "null"
                 ]
               },
+              "maxItems": 4000000,
               "type": "array"
             }
           },
@@ -1835,6 +1854,7 @@
               "items": {
                 "$ref": "#/$defs/MediaTime"
               },
+              "maxItems": 4000000,
               "type": "array"
             },
             "values": {
@@ -1846,6 +1866,7 @@
                   "null"
                 ]
               },
+              "maxItems": 4000000,
               "type": "array"
             }
           },
@@ -1904,6 +1925,7 @@
               "items": {
                 "$ref": "#/$defs/DataWord"
               },
+              "maxItems": 200000,
               "type": "array"
             }
           },
@@ -1932,6 +1954,7 @@
               "items": {
                 "$ref": "#/$defs/DataInterval"
               },
+              "maxItems": 200000,
               "type": "array"
             },
             "kind": {
@@ -2555,6 +2578,7 @@
               "items": {
                 "$ref": "#/$defs/ShapeItem"
               },
+              "maxItems": 1024,
               "type": "array"
             },
             "type": {
@@ -3144,6 +3168,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_Insets"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -3190,6 +3215,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_LayoutLength"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -3236,6 +3262,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_LayoutOffset"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -3282,6 +3309,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_LayoutSize"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -3328,6 +3356,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_Paint"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -3374,6 +3403,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_Path"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -3420,6 +3450,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_Rgba"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -3466,6 +3497,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_string"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -3672,6 +3704,7 @@
           "items": {
             "$ref": "#/$defs/LayoutNode"
           },
+          "maxItems": 256,
           "type": "array"
         },
         "column_gap": {
@@ -4108,6 +4141,7 @@
           "items": {
             "$ref": "#/$defs/TextShadow"
           },
+          "maxItems": 4,
           "type": [
             "array",
             "null"
@@ -4129,6 +4163,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
+          "maxItems": 4,
           "type": [
             "array",
             "null"
@@ -4161,6 +4196,7 @@
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
+          "maxItems": 8,
           "type": "array"
         },
         "translate": {
@@ -4222,6 +4258,7 @@
           "items": {
             "$ref": "#/$defs/ShapeItem"
           },
+          "maxItems": 1024,
           "type": "array"
         }
       },
@@ -4459,6 +4496,7 @@
           "items": {
             "$ref": "#/$defs/AudioEffect"
           },
+          "maxItems": 16,
           "type": "array"
         },
         "gain": {
@@ -4865,6 +4903,7 @@
                 ]
               },
               "description": "The images the effect samples besides its input, by the names its definition declares\n(`sample_<name>` in its shader); at most [`MAX_EFFECT_INPUTS`]. An undeclared name, or a\ndeclared one left out, is invalid for a built-in and fails the frames that draw the\nnode otherwise.",
+              "maxProperties": 8,
               "type": "object"
             },
             "type": {
@@ -4994,6 +5033,7 @@
               "items": {
                 "$ref": "#/$defs/MergeLayer"
               },
+              "maxItems": 32,
               "type": "array"
             },
             "type": {
@@ -5070,6 +5110,7 @@
               "items": {
                 "$ref": "#/$defs/ShapeMask"
               },
+              "maxItems": 8,
               "type": "array"
             },
             "type": {
@@ -5111,6 +5152,7 @@
                   }
                 ]
               },
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -5207,6 +5249,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
+              "maxItems": 8,
               "type": "array"
             },
             "type": {
@@ -5245,6 +5288,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
+              "maxItems": 8,
               "type": "array"
             },
             "type": {
@@ -5279,6 +5323,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
+              "maxItems": 8,
               "type": "array"
             },
             "type": {
@@ -5307,6 +5352,7 @@
           "items": {
             "$ref": "#/$defs/Subpath"
           },
+          "maxItems": 256,
           "type": "array"
         }
       },
@@ -5544,6 +5590,7 @@
                   "null"
                 ]
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "missing": {
@@ -6007,6 +6054,7 @@
               "items": {
                 "$ref": "#/$defs/ShapeItem"
               },
+              "maxItems": 1024,
               "type": "array"
             },
             "transform": {
@@ -6504,6 +6552,7 @@
           "items": {
             "$ref": "#/$defs/PathVertex"
           },
+          "maxItems": 4096,
           "type": "array"
         }
       },
@@ -6608,7 +6657,7 @@
               "type": "null"
             }
           ],
-          "description": "Scales the character about its centre; 1 is none. Each axis in `[0, 10]`."
+          "description": "Scales the character about its centre; 1 is none. Each axis in `[0, 10]`. The scales of\nseveral animators multiply, and the product is at most 10 on each axis."
         },
         "stroke": {
           "anyOf": [
@@ -6666,6 +6715,7 @@
           "items": {
             "$ref": "#/$defs/TextRun"
           },
+          "maxItems": 512,
           "type": "array"
         }
       ],
@@ -6680,6 +6730,7 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 8,
           "type": "array"
         },
         "text": {
@@ -6880,13 +6931,14 @@
             "x": 0.5,
             "y": 1.0
           },
-          "description": "The point of the text, background included, placed at `position`; `(0.5, 1)` is its\nbottom centre."
+          "description": "The point of the text, background included, placed at `position`; `(0.5, 1)` is its\nbottom centre. Each coordinate within [`MAX_TEXT_POSITION`]."
         },
         "animators": {
           "description": "Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].\nKeyframes are in the holder's time (since a caption cue's start, or a text generator's\npicture time). They never change line layout.",
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
+          "maxItems": 8,
           "type": "array"
         },
         "background": {
@@ -6989,13 +7041,14 @@
             "x": 0.5,
             "y": 0.92
           },
-          "description": "Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right."
+          "description": "Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right;\neach coordinate within [`MAX_TEXT_POSITION`]."
         },
         "shadows": {
           "description": "Shadows of the glyphs and strokes, the first on top, as CSS `text-shadow` lists them. At\nmost [`MAX_TEXT_SHADOWS`].",
           "items": {
             "$ref": "#/$defs/TextShadow"
           },
+          "maxItems": 4,
           "type": "array"
         },
         "strokes": {
@@ -7003,6 +7056,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
+          "maxItems": 4,
           "type": "array"
         }
       },
@@ -7039,6 +7093,7 @@
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
+          "maxItems": 8,
           "type": [
             "array",
             "null"
@@ -7161,6 +7216,7 @@
           "items": {
             "$ref": "#/$defs/TextShadow"
           },
+          "maxItems": 4,
           "type": [
             "array",
             "null"
@@ -7171,6 +7227,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
+          "maxItems": 4,
           "type": [
             "array",
             "null"
@@ -7328,6 +7385,7 @@
           "items": {
             "$ref": "#/$defs/Track"
           },
+          "maxItems": 256,
           "type": "array"
         }
       },
@@ -7376,6 +7434,7 @@
           "items": {
             "$ref": "#/$defs/Clip"
           },
+          "maxItems": 4096,
           "type": "array"
         },
         "id": {
@@ -7396,6 +7455,7 @@
           "items": {
             "$ref": "#/$defs/ClipTransition"
           },
+          "maxItems": 4096,
           "type": "array"
         }
       },
@@ -7428,6 +7488,7 @@
           "items": {
             "$ref": "#/$defs/AudioEffect"
           },
+          "maxItems": 16,
           "type": "array"
         },
         "gain": {
@@ -7684,6 +7745,7 @@
       "items": {
         "$ref": "#/$defs/Composition"
       },
+      "maxItems": 10000,
       "type": "array"
     },
     "data": {
@@ -7692,6 +7754,7 @@
       "items": {
         "$ref": "#/$defs/DataSet"
       },
+      "maxItems": 256,
       "type": "array"
     },
     "effect_resources": {
@@ -7700,6 +7763,7 @@
       "items": {
         "$ref": "#/$defs/EffectResource"
       },
+      "maxItems": 10000,
       "type": "array"
     },
     "id": {
@@ -7727,6 +7791,7 @@
       "items": {
         "$ref": "#/$defs/MediaSource"
       },
+      "maxItems": 100000,
       "type": "array"
     },
     "timeline": {

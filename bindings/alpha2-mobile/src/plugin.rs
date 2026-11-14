@@ -15,6 +15,9 @@ use crate::extract::{ExtractRequest, ExtractionHandle, RunExtractor};
 use crate::session::Alpha2;
 
 fn plugin_error(error: PluginError) -> Alpha2Error {
+    if error.code == alpha2_host_core::plugins::CANCELLED {
+        return Alpha2Error::Aborted;
+    }
     Alpha2Error::Failed {
         code: error.code.into(),
         reason: error.message,
@@ -124,10 +127,16 @@ impl Alpha2 {
                 .map_err(|error| Alpha2Error::invalid(format!("invalid request: {error}")))?;
         self.start_extraction(
             request,
-            Box::new(move || {
+            Box::new(move |cancel| {
                 let mut bundled = Bundled(plugin.directory.clone());
-                let extractor = load(&plugin.manifest, run.params, &plugin.policy, &mut bundled)
-                    .map_err(plugin_error)?;
+                let extractor = load(
+                    &plugin.manifest,
+                    run.params,
+                    &plugin.policy,
+                    &mut bundled,
+                    cancel,
+                )
+                .map_err(plugin_error)?;
                 let made_by = extractor.made_by().clone();
                 Ok(RunExtractor {
                     extractor: Box::new(extractor),

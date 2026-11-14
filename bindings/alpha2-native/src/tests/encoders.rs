@@ -409,7 +409,7 @@ fn codec_threading_policy_and_unused_option_guard_are_explicit() {
     }
     assert_eq!(
         unused_option_names(Some(video_decoder_options(1))).as_deref(),
-        Some("threads, flags")
+        Some("threads, flags, max_pixels")
     );
 
     let misspelled = AVDictionary::new(c"threadz", c"auto", 0);
@@ -852,6 +852,7 @@ fn a_runtime_other_than_the_pinned_sdk_says_why() {
         version: version.to_owned(),
         configuration: configuration.to_owned(),
         pinned_sdk_release: "ffmpeg-8.1.3-shared-build5",
+        interop_refusal: None,
     };
     let pinned = "--disable-gpl --disable-nonfree --disable-autodetect --enable-libdav1d \
                   --enable-libopus --enable-libvpx --enable-libsvtav1 --enable-videotoolbox";
@@ -1565,4 +1566,101 @@ fn the_reserve_scales_with_the_budget() {
         (5, 12),
         "{workstation:?}"
     );
+}
+
+#[test]
+fn an_nvenc_capability_refusal_is_unsuitable_not_absent() {
+    use crate::capabilities::classify_open_failure;
+    for warning in [
+        "Max B-frames 2 exceed 0",
+        "Width 8192 exceeds 4096",
+        "10 bit encode not supported",
+    ] {
+        assert_eq!(
+            classify_open_failure(
+                "hevc_nvenc",
+                "Generic error in an external library",
+                &[
+                    log_line("hevc_nvenc", warning),
+                    log_line("hevc_nvenc", "No capable devices found")
+                ]
+            ),
+            OpenFailureKind::Unsuitable,
+            "{warning}"
+        );
+    }
+}
+
+/// A device limit below the B-frames asked for, emulated by asking for more than any NVENC
+/// device has.
+#[test]
+fn an_nvenc_device_with_fewer_b_frames_opens_without_them() {
+    crate::require_pinned_ffmpeg_for_tests();
+    let ask_for = |b_frames| {
+        crate::capabilities::FORCED_B_FRAMES.with(|forced| forced.set(b_frames));
+    };
+    for (codec, name) in [
+        (NativeVideoCodec::H264, "h264_nvenc"),
+        (NativeVideoCodec::Hevc, "hevc_nvenc"),
+    ] {
+        let Some(candidate) = crate::capabilities::registered_video_encoders(codec)
+            .into_iter()
+            .find(|candidate| candidate.name() == name)
+        else {
+            continue;
+        };
+        if let Err(refusal) = crate::capabilities::probe_open(&candidate, name) {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::Nvenc,
+                "{name} does not encode here: {refusal:?}"
+            );
+            return;
+        }
+        ask_for(Some(16));
+        let probed = crate::capabilities::probe_open(&candidate, name);
+        let path = output_path(&format!("{name}-b-frames")).with_extension("mp4");
+        let _ = fs::remove_file(&path);
+        let mut config = super::av_config(48_000).video;
+        config.codec = codec;
+        config.width = 256;
+        config.height = 144;
+        let sink =
+            NativeVideoEncodeSink::create_with_encoder_threads(&path, config, Some(name), &|_| 1);
+        ask_for(None);
+        probed.expect("the probe opens again without B-frames");
+        let sink = sink.expect("the export opens again without B-frames");
+        assert_eq!(sink.selection().encoder_name, name);
+        drop(sink);
+        let _ = fs::remove_file(&path);
+    }
+}
+
+#[test]
+fn an_encoder_a_probe_passed_over_is_listed_beside_the_one_that_opened() {
+    let opened = crate::NativeVideoEncoderSelection {
+        encoder_name: "libx264".to_owned(),
+        class: NativeEncoderClass::Software,
+        hardware_accelerated: false,
+        rejected: Vec::new(),
+        rate_control: crate::AppliedRateControl::Bitrate,
+        quantizer_refused: None,
+        software_threads: Some(4),
+        pixels: alpha2_media::PixelLayout::YUV420P,
+    };
+    let selection = crate::capabilities::with_probe_refusals(
+        opened,
+        vec![alpha2_media::EncoderRefusal {
+            encoder: "h264_nvenc".to_owned(),
+            hardware_accelerated: true,
+            kind: OpenFailureKind::Absent,
+            reason: "No capable devices found".to_owned(),
+        }],
+    );
+    assert_eq!(selection.encoder_name, "libx264");
+    assert_eq!(selection.rejected.len(), 1);
+    let passed_over = &selection.rejected[0];
+    assert_eq!(passed_over.encoder_name, "h264_nvenc");
+    assert!(passed_over.hardware_accelerated);
+    assert_eq!(passed_over.kind, OpenFailureKind::Absent);
+    assert_eq!(passed_over.detail, "No capable devices found");
 }

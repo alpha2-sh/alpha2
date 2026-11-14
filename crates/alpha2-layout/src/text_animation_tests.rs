@@ -320,6 +320,40 @@ fn animators_apply_in_order() {
     assert!(identity.iter().all(ClusterState::is_identity));
 }
 
+#[test]
+fn compounded_scales_keep_one_animators_limit() {
+    assert_eq!(
+        MAX_CLUSTER_SCALE,
+        *alpha2_model::ANIMATOR_SCALE_RANGE.end(),
+        "a state takes the limit of one animator"
+    );
+    let layout = row(4);
+    let scaled = |scale: [f32; 2]| SampledAnimator {
+        scale: Some(scale),
+        ..animator(range(RangeShape::Square, RangeUnits::Percent, 0.0, 100.0))
+    };
+    let (states, _) = cluster_states(
+        &layout,
+        &[],
+        &[scaled([10.0, 10.0]), scaled([10.0, 0.5])],
+        MediaTime::ZERO,
+        20.0,
+    );
+    for state in &states {
+        assert_eq!(state.scale, [10.0, 5.0]);
+    }
+    let (states, _) = cluster_states(
+        &layout,
+        &[],
+        &[scaled([2.5, 0.5]), scaled([4.0, 3.0])],
+        MediaTime::ZERO,
+        20.0,
+    );
+    for state in &states {
+        assert_eq!(state.scale, [10.0, 1.5]);
+    }
+}
+
 /// [`row`] cut after `count` clusters by a clamp: an ellipsis cluster ends the line.
 fn cut_row(count: usize) -> TextLayout {
     let mut layout = row(count);

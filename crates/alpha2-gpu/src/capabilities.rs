@@ -41,8 +41,6 @@ pub struct Capabilities {
     /// Whether the adapter rasterizes on the CPU (lavapipe, llvmpipe, `SwiftShader`, WARP),
     /// where shaders pay full cost per pixel regardless of skipped branches.
     pub software_rasterizer: bool,
-    /// Whether `Rgba16Float` render targets support hardware blending.
-    pub half_float_blendable: bool,
     /// The DX12 shader compiler (`FXC`, `DXC <path>`, ...); empty on other backends.
     pub shader_compiler: String,
 }
@@ -72,7 +70,6 @@ impl Capabilities {
             driver: driver.into(),
             driver_info: driver_info.into(),
             software_rasterizer: false,
-            half_float_blendable: intermediate_format == IntermediateFormat::Rgba16Float,
             shader_compiler: shader_compiler.into(),
         }
     }
@@ -109,12 +106,6 @@ impl Capabilities {
         Self {
             tier: tier_for(&adapter.get_downlevel_capabilities()),
             intermediate_format: intermediate_format_for(half_float),
-            half_float_blendable: half_float
-                .allowed_usages
-                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
-                && half_float
-                    .flags
-                    .contains(wgpu::TextureFormatFeatureFlags::BLENDABLE),
             adapter_name: info.name,
             max_texture_dimension_2d: device.limits().max_texture_dimension_2d,
             timestamp_queries: device.features().contains(wgpu::Features::TIMESTAMP_QUERY),
@@ -153,16 +144,18 @@ pub fn software_renderer_name(name: &str) -> bool {
         .any(|software| name.contains(software))
 }
 
-/// Half float when `Rgba16Float` can be rendered to, filtered and copied, otherwise 8-bit. The
-/// tier is irrelevant: tier B GL adapters with half-float color buffers still get half float.
+/// Half float when `Rgba16Float` can be rendered to, blended, filtered and copied, otherwise
+/// 8-bit, since vector layers blend into the intermediate. The tier is irrelevant: tier B GL
+/// adapters with blendable half-float color buffers still get half float.
 fn intermediate_format_for(half_float: wgpu::TextureFormatFeatures) -> IntermediateFormat {
     let required = wgpu::TextureUsages::RENDER_ATTACHMENT
         | wgpu::TextureUsages::TEXTURE_BINDING
         | wgpu::TextureUsages::COPY_SRC;
     if half_float.allowed_usages.contains(required)
-        && half_float
-            .flags
-            .contains(wgpu::TextureFormatFeatureFlags::FILTERABLE)
+        && half_float.flags.contains(
+            wgpu::TextureFormatFeatureFlags::FILTERABLE
+                | wgpu::TextureFormatFeatureFlags::BLENDABLE,
+        )
     {
         IntermediateFormat::Rgba16Float
     } else {
@@ -192,10 +185,11 @@ mod tests {
     }
 
     #[test]
-    fn half_float_is_the_intermediate_only_where_it_renders_filters_and_copies() {
+    fn half_float_is_the_intermediate_only_where_it_renders_blends_filters_and_copies() {
         let required = Usages::RENDER_ATTACHMENT | Usages::TEXTURE_BINDING | Usages::COPY_SRC;
+        let flags = Flags::FILTERABLE | Flags::BLENDABLE;
         assert_eq!(
-            intermediate_format_for(half_float(required | Usages::COPY_DST, Flags::FILTERABLE)),
+            intermediate_format_for(half_float(required | Usages::COPY_DST, flags)),
             IntermediateFormat::Rgba16Float
         );
         for missing in [
@@ -204,16 +198,18 @@ mod tests {
             Usages::COPY_SRC,
         ] {
             assert_eq!(
-                intermediate_format_for(half_float(required - missing, Flags::FILTERABLE)),
+                intermediate_format_for(half_float(required - missing, flags)),
                 IntermediateFormat::Rgba8Unorm,
                 "without {missing:?}"
             );
         }
-        assert_eq!(
-            intermediate_format_for(half_float(required, Flags::empty())),
-            IntermediateFormat::Rgba8Unorm,
-            "without filtering"
-        );
+        for missing in [Flags::FILTERABLE, Flags::BLENDABLE] {
+            assert_eq!(
+                intermediate_format_for(half_float(required, flags - missing)),
+                IntermediateFormat::Rgba8Unorm,
+                "without {missing:?}"
+            );
+        }
         // No half float at all, as a WebGL2 context without a float colour buffer.
         assert_eq!(
             intermediate_format_for(half_float(Usages::empty(), Flags::empty())),

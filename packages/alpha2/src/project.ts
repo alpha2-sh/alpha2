@@ -103,6 +103,15 @@ import {
   MAX_RUN_CLASSES,
   MAX_TEXT_ANIMATORS,
   MAX_TEXT_RUNS,
+  MAX_LOOP_PASSES,
+  MAX_ANIMATOR_OFFSET,
+  MAX_ASPECT_RATIO,
+  MAX_FLEX_FACTOR,
+  MAX_LAYOUT_FRACTION,
+  MAX_LAYOUT_PERCENT,
+  MAX_LAYOUT_PX,
+  MAX_TEXT_POSITION,
+  MIN_ASPECT_RATIO,
   MIN_RANGE_PERCENT,
   MAX_TEXT_SHADOW_BLUR,
   MAX_TEXT_SHADOW_OFFSET,
@@ -685,6 +694,12 @@ function clipProblems(
   if (!freezesInside(clip.time_map, clip.source_range)) {
     problems.push(`clip ${clipId} freezes outside its source range`);
   }
+  const passes = loopPasses(clip);
+  if (passes > BigInt(MAX_LOOP_PASSES)) {
+    problems.push(
+      `clip ${clipId} loops ${passes} times; the maximum is ${MAX_LOOP_PASSES}`,
+    );
+  }
   const sourceId = text(clip.source_id);
   const source = catalog.sources.get(sourceId);
   if (source === undefined || !isRecord(source)) {
@@ -1085,7 +1100,7 @@ export function validateProjectJson(json: string): string[] {
   }
   const read = readJsonText(json);
   if (read === undefined) {
-    return [`project JSON nests deeper than ${MAX_JSON_DEPTH} levels`];
+    return [TOO_DEEP];
   }
   return projectProblems(read.value as Project, read.spelling);
 }
@@ -1133,13 +1148,34 @@ function shapeProblems(
   reusingShapes = reuse;
   try {
     const read = checkShape(shapeRoot, value, "project", problems, spelling);
-    return { problems, read };
+    return { problems: tooDeep ? [TOO_DEEP] : problems, read };
   } finally {
     reusingShapes = false;
+    shapeDepth = 0;
+    tooDeep = false;
   }
 }
 
 let reusingShapes = false;
+// Arrays and objects the shape walk is inside; past `MAX_JSON_DEPTH` it stops descending.
+let shapeDepth = 0;
+let tooDeep = false;
+const TOO_DEEP = `project JSON nests deeper than ${MAX_JSON_DEPTH} levels`;
+
+/** Runs `walk` one container deeper, or reports the depth problem without running it. */
+function nested<T>(value: T, problems: string[], walk: () => T): T {
+  if (shapeDepth >= MAX_JSON_DEPTH) {
+    tooDeep = true;
+    problems.push(TOO_DEEP);
+    return value;
+  }
+  shapeDepth += 1;
+  try {
+    return walk();
+  } finally {
+    shapeDepth -= 1;
+  }
+}
 
 // Cross-field rules the schema cannot state but the engine's parser enforces.
 const FRAME_RATE_SHAPE = (shapeRoot.$defs as Record<string, ShapeNode>)
@@ -1655,6 +1691,135 @@ function canonicalWalk(node: ShapeNode, value: unknown): unknown {
   return read === undefined ? value : { ...value, ...read };
 }
 
+/**
+ * `next` with every part that equals the matching part of `previous` replaced by that part, so
+ * a project an engine edit wrote keeps the objects of the project it was computed from wherever
+ * the edit changed nothing. A field one side omits counts as its schema default, as the engine
+ * reads it; arrays match items by string `id` when they have one, else by position. Both projects
+ * must be valid. The result reads as `next` does, though parts taken from `previous` keep its
+ * spelling of defaults.
+ */
+export function shareUnchangedParts<T extends Project>(
+  previous: Project,
+  next: T,
+): T {
+  return shareAt(shapeRoot, previous, next) as T;
+}
+
+const idOfItem = (item: unknown): unknown =>
+  isRecord(item) ? item.id : undefined;
+
+/** Whether `value` can be an instance of variant `node`, judged by its constant fields. */
+function fitsVariant(node: ShapeNode, value: unknown): boolean {
+  const schema = resolveShape(node);
+  if ("const" in schema) return value === schema.const;
+  if (schema.type === "null") return value === null;
+  if (schema.type === "array") return Array.isArray(value);
+  if (schema.type === "object" || schema.properties !== undefined) {
+    if (!isRecord(value)) return false;
+    const properties = (schema.properties ?? {}) as Record<string, ShapeNode>;
+    return Object.entries(properties).every(([key, field]) => {
+      const constant = resolveShape(field);
+      return !("const" in constant) || value[key] === constant.const;
+    });
+  }
+  if (schema.type === "string") return typeof value === "string";
+  if (schema.type === "number" || schema.type === "integer")
+    return typeof value === "number";
+  if (schema.type === "boolean") return typeof value === "boolean";
+  return true;
+}
+
+/** Whether `value` is the default of `field`, or `field` has none and `value` is absent. */
+function isFieldDefault(field: ShapeNode | boolean, value: unknown): boolean {
+  if (typeof field !== "object" || field.default === undefined)
+    return value === undefined;
+  return (
+    value === undefined ||
+    shareAt(field, field.default, value) === field.default
+  );
+}
+
+function shareAt(
+  node: ShapeNode | boolean,
+  previous: unknown,
+  next: unknown,
+): unknown {
+  if (previous === next) return previous;
+  if (typeof node !== "object") return next;
+  const schema = resolveShape(node);
+  const variants = (schema.oneOf ?? schema.anyOf) as ShapeNode[] | undefined;
+  if (variants !== undefined) {
+    const variant = variants.find((candidate) => fitsVariant(candidate, next));
+    return variant === undefined || !fitsVariant(variant, previous)
+      ? next
+      : shareAt(variant, previous, next);
+  }
+  if (
+    typeof next !== "object" ||
+    next === null ||
+    typeof previous !== "object" ||
+    previous === null
+  )
+    return next;
+  if (Array.isArray(next)) {
+    if (!Array.isArray(previous)) return next;
+    let same = next.length === previous.length;
+    let nested = false;
+    for (let index = 0; same && index < next.length; index++) {
+      const item: unknown = next[index];
+      if (typeof item === "object" && item !== null) nested = true;
+      else if (item !== previous[index]) same = false;
+    }
+    if (same && !nested) return previous;
+    const prefix = schema.prefixItems as ShapeNode[] | undefined;
+    const rest = (schema.items ?? true) as ShapeNode | boolean;
+    let byId: Map<unknown, unknown> | undefined;
+    const items = next.map((item: unknown, index) => {
+      const id = idOfItem(item);
+      let counterpart: unknown = previous[index];
+      if (typeof id === "string" && idOfItem(counterpart) !== id) {
+        byId ??= new Map(
+          previous.map((other: unknown) => [idOfItem(other), other]),
+        );
+        counterpart = byId.get(id);
+      }
+      const field =
+        prefix !== undefined && index < prefix.length ? prefix[index] : rest;
+      const shared =
+        counterpart === undefined ? item : shareAt(field, counterpart, item);
+      if (shared !== previous[index]) same = false;
+      return shared;
+    });
+    return same ? previous : items;
+  }
+  if (Array.isArray(previous) || !isRecord(next) || !isRecord(previous))
+    return next;
+  const properties = (schema.properties ?? {}) as Record<string, ShapeNode>;
+  const extra = (schema.additionalProperties ?? true) as ShapeNode | boolean;
+  const fieldOf = (key: string) =>
+    Object.hasOwn(properties, key) ? properties[key] : extra;
+  let same = true;
+  const read: Record<string, unknown> = {};
+  for (const key of Object.keys(next)) {
+    const value = next[key];
+    if (value === undefined) continue;
+    const before = previous[key];
+    if (before === undefined) {
+      if (!isFieldDefault(fieldOf(key), value)) same = false;
+      read[key] = value;
+      continue;
+    }
+    const shared = shareAt(fieldOf(key), before, value);
+    if (shared !== before) same = false;
+    read[key] = shared;
+  }
+  for (const key of Object.keys(previous))
+    if (next[key] === undefined && !isFieldDefault(fieldOf(key), previous[key]))
+      same = false;
+  return same ? previous : read;
+}
+
 function walkShape(
   node: ShapeNode,
   value: unknown,
@@ -1719,10 +1884,14 @@ function walkShape(
       problems.push(`${path} must be well-formed Unicode`);
     }
   } else if (Array.isArray(value)) {
-    return checkArrayShape(schema, value, path, problems, spelling);
+    return nested<unknown>(value, problems, () =>
+      checkArrayShape(schema, value, path, problems, spelling),
+    );
   } else if (isRecord(value)) {
     const before = problems.length;
-    const read = checkObjectShape(schema, value, path, problems, spelling);
+    const read = nested<unknown>(value, problems, () =>
+      checkObjectShape(schema, value, path, problems, spelling),
+    );
     if (
       schema === FRAME_RATE_SHAPE &&
       problems.length === before &&
@@ -1911,10 +2080,27 @@ function checkArrayShape(
     problems.push(`${path} must have at most ${schema.maxItems} items`);
   }
   const prefix = (schema.prefixItems ?? []) as readonly ShapeNode[];
+  const scalar =
+    prefix.length === 0 && schema.items !== undefined
+      ? plainScalar(schema.items as ShapeNode)
+      : undefined;
   let changed = false;
-  const read = value.map((item, index) => {
+  // By index rather than `map`, so a hole is read as `undefined` and fails its item shape.
+  const read: unknown[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
+    // Valid numbers of a plain number schema need no path or generic walk.
+    const quick = scalar?.(item, numbers?.get(index));
+    if (quick !== undefined) {
+      if (quick !== item) changed = true;
+      read.push(quick);
+      continue;
+    }
     const itemSchema = prefix[index] ?? (schema.items as ShapeNode | undefined);
-    if (itemSchema === undefined) return item;
+    if (itemSchema === undefined) {
+      read.push(item);
+      continue;
+    }
     const itemRead = checkShape(
       itemSchema,
       item,
@@ -1924,12 +2110,72 @@ function checkArrayShape(
       numbers?.get(index),
     );
     if (itemRead !== item) changed = true;
-    return itemRead;
-  });
+    read.push(itemRead);
+  }
   return !changed && reusingShapes && sealed(value)
     ? (value as unknown[])
     : read;
 }
+
+/**
+ * For an item schema that is only a number, integer or null type, a reader that returns a valid
+ * item as the generic walk reads it, and `undefined` for anything it leaves to that walk.
+ */
+function plainScalar(
+  node: ShapeNode,
+): ((item: unknown, texts?: readonly string[]) => unknown) | undefined {
+  const known = plainScalars.get(node);
+  if (known !== undefined || plainScalars.has(node)) return known ?? undefined;
+  const schema = resolveShape(node);
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+  const plain =
+    !SHAPE_READERS.has(schema) &&
+    schema.oneOf === undefined &&
+    schema.anyOf === undefined &&
+    !("const" in schema) &&
+    schema.enum === undefined &&
+    schema.minimum === undefined &&
+    schema.maximum === undefined &&
+    types.every(
+      (type) => type === "number" || type === "integer" || type === "null",
+    ) &&
+    !(types.includes("number") && types.includes("integer"));
+  let reader:
+    ((item: unknown, texts?: readonly string[]) => unknown) | undefined;
+  if (plain) {
+    const nullable = types.includes("null");
+    const float = schema.format === "float";
+    const { min, max } = types.includes("integer")
+      ? integerBounds(schema)
+      : { min: undefined, max: undefined };
+    const low = min === undefined ? -Infinity : Number(min);
+    const high = max === undefined ? Infinity : Number(max);
+    reader = types.includes("integer")
+      ? (item, texts) =>
+          (nullable && item === null) ||
+          (texts === undefined &&
+            Number.isSafeInteger(item) &&
+            (item as number) >= low &&
+            (item as number) <= high)
+            ? item
+            : undefined
+      : (item) =>
+          nullable && item === null
+            ? item
+            : typeof item === "number" && Number.isFinite(item)
+              ? float
+                ? Math.fround(item)
+                : item
+              : undefined;
+  }
+  plainScalars.set(node, reader);
+  return reader;
+}
+
+const plainScalars = new Map<
+  ShapeNode,
+  ((item: unknown, texts?: readonly string[]) => unknown) | undefined
+>();
 
 function checkObjectShape(
   schema: ShapeNode,
@@ -1949,6 +2195,14 @@ function checkObjectShape(
   // `JSON.stringify` drops `undefined`, so it counts as omitted.
   for (const name of (schema.required ?? []) as readonly string[]) {
     if (value[name] === undefined) problems.push(`${path}.${name} is required`);
+  }
+  if (typeof schema.maxProperties === "number") {
+    const present = Object.values(value).filter((item) => item !== undefined);
+    if (present.length > schema.maxProperties) {
+      problems.push(
+        `${path} must have at most ${schema.maxProperties} properties`,
+      );
+    }
   }
   const extra = schema.additionalProperties;
   const read: Record<string, unknown> = {};
@@ -2216,6 +2470,20 @@ function freezesInside(timeMap: unknown, sourceRange: unknown): boolean {
   );
 }
 
+/** Passes of a valid looping clip, rounded up, as `loop_passes`; else 0. */
+function loopPasses(clip: Record<string, unknown>): bigint {
+  const map = clip.time_map;
+  if (!isRecord(map) || map.type !== "loop") return 0n;
+  if (!validRange(clip.timeline_range) || !validRange(clip.source_range))
+    return 0n;
+  const length = (range: unknown): bigint => {
+    const { start, end } = range as { start: number; end: number };
+    return BigInt(end) - BigInt(start);
+  };
+  const source = length(clip.source_range);
+  return (length(clip.timeline_range) + source - 1n) / source;
+}
+
 function rangeStart(range: unknown): number {
   return isRecord(range) && finiteNumber(range.start) ? range.start : 0;
 }
@@ -2274,6 +2542,15 @@ function validRgb(value: unknown): boolean {
       (component) =>
         finiteNumber(component) && component >= 0 && component <= 1,
     )
+  );
+}
+
+/** Mirrors the `position` and `anchor` check of `TextStyle::is_valid`. */
+function textPosition(value: unknown): boolean {
+  return (
+    validVec2(value) &&
+    Math.abs((value as Vec2).x) <= MAX_TEXT_POSITION &&
+    Math.abs((value as Vec2).y) <= MAX_TEXT_POSITION
   );
 }
 
@@ -2973,8 +3250,8 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
     within(style.letter_spacing ?? 0, MIN_LETTER_SPACING, MAX_LETTER_SPACING) &&
     validFontWeight(style.font_weight ?? 400) &&
     within(style.max_width ?? 0.9, 0, 1, true) &&
-    (style.position === undefined || validVec2(style.position)) &&
-    (style.anchor === undefined || validVec2(style.anchor)) &&
+    (style.position === undefined || textPosition(style.position)) &&
+    (style.anchor === undefined || textPosition(style.anchor)) &&
     (style.strokes === undefined || validTextStrokes(style.strokes)) &&
     (style.shadows === undefined || validTextShadows(style.shadows)) &&
     (style.animators === undefined ||
@@ -3093,7 +3370,7 @@ function validAnimatorProperties(properties: unknown): boolean {
     return values !== undefined && values.every(validRgba);
   };
   return (
-    vec2(properties.offset, -Infinity, Infinity) &&
+    vec2(properties.offset, -MAX_ANIMATOR_OFFSET, MAX_ANIMATOR_OFFSET) &&
     vec2(properties.scale, 0, MAX_ANIMATOR_SCALE) &&
     validScalarAnimation(properties.rotation_degrees) &&
     validScalarAnimation(properties.opacity, 0, 1) &&
@@ -3603,6 +3880,17 @@ function layoutScalarIssue(
   );
 }
 
+/** Mirrors `LayoutLength::in_bounds`: finite and within its unit's bound. */
+function lengthInBounds(length: Length): boolean {
+  const bound =
+    length.unit === "px"
+      ? MAX_LAYOUT_PX
+      : length.unit === "percent"
+        ? MAX_LAYOUT_PERCENT
+        : MAX_LAYOUT_FRACTION;
+  return finiteNumber(length.value) && Math.abs(length.value) <= bound;
+}
+
 function layoutSizeIssue(
   animation: unknown,
   at: string,
@@ -3611,7 +3899,7 @@ function layoutSizeIssue(
   return layoutAnimatedIssue(animation, at, (value) => {
     const length = lengthOf(value);
     return (
-      length !== undefined && finiteNumber(length.value) && check(length.value)
+      length !== undefined && lengthInBounds(length) && check(length.value)
     );
   });
 }
@@ -3629,9 +3917,7 @@ function layoutInsetsIssue(
       (["top", "right", "bottom", "left"] as const).every((side) => {
         const length = lengthOf(value[side]);
         return (
-          length !== undefined &&
-          finiteNumber(length.value) &&
-          check(length.value)
+          length !== undefined && lengthInBounds(length) && check(length.value)
         );
       }),
   );
@@ -3704,18 +3990,18 @@ function layoutFieldsIssue(
   }
   if (
     present(node.aspect_ratio) &&
-    !(finiteNumber(node.aspect_ratio) && node.aspect_ratio > 0)
+    !(
+      finiteNumber(node.aspect_ratio) &&
+      node.aspect_ratio >= MIN_ASPECT_RATIO &&
+      node.aspect_ratio <= MAX_ASPECT_RATIO
+    )
   ) {
     return { at: field("aspect_ratio"), problem: LAYOUT_PROBLEM.outOfRange };
   }
   const item =
     layoutInsetsIssue(node.margin, field("margin"), anyValue) ??
-    layoutScalarIssue(node.flex_grow, field("flex_grow"), nonNegativeValue) ??
-    layoutScalarIssue(
-      node.flex_shrink,
-      field("flex_shrink"),
-      nonNegativeValue,
-    ) ??
+    layoutScalarIssue(node.flex_grow, field("flex_grow"), flexFactor) ??
+    layoutScalarIssue(node.flex_shrink, field("flex_shrink"), flexFactor) ??
     layoutLengthIssue(node.flex_basis, field("flex_basis"), nonNegativeValue);
   if (item) return item;
   if (isRecord(node.inset)) {
@@ -3730,14 +4016,16 @@ function layoutFieldsIssue(
   }
   return (
     layoutScalarIssue(node.opacity, field("opacity"), unitValue) ??
-    layoutAnimatedIssue(
-      node.translate,
-      field("translate"),
-      (value) =>
-        isRecord(value) &&
-        finiteNumber(lengthOf(value.x)?.value) &&
-        finiteNumber(lengthOf(value.y)?.value),
-    ) ??
+    layoutAnimatedIssue(node.translate, field("translate"), (value) => {
+      if (!isRecord(value)) return false;
+      const [x, y] = [lengthOf(value.x), lengthOf(value.y)];
+      return (
+        x !== undefined &&
+        y !== undefined &&
+        lengthInBounds(x) &&
+        lengthInBounds(y)
+      );
+    }) ??
     layoutAnimatedIssue(node.scale, field("scale"), validVec2) ??
     layoutScalarIssue(
       node.rotation_degrees,
@@ -3787,7 +4075,7 @@ function trackProblem(
     !parts.every(
       ({ lengths, share }) =>
         lengths.every(
-          (length) => Number.isFinite(length.value) && length.value >= 0,
+          (length) => lengthInBounds(length) && length.value >= 0,
         ) &&
         (share === undefined || (Number.isFinite(share) && share > 0)),
     )
@@ -4035,6 +4323,8 @@ function shapeItemIssue(
 
 const unitValue = (value: number): boolean => value >= 0 && value <= 1;
 const nonNegativeValue = (value: number): boolean => value >= 0;
+const flexFactor = (value: number): boolean =>
+  value >= 0 && value <= MAX_FLEX_FACTOR;
 const anyValue = (): boolean => true;
 
 // Keyframe problems first, then values. A missing value takes its (valid) default.

@@ -27,6 +27,10 @@
     "description": "A Khronos validation layer older than 1.4.",
     "probe": "the loaded validation layer is older than 1.4 (only the hazard test wants it)"
   },
+  "vulkan-queue-transfer": {
+    "description": "FFmpeg moves Vulkan frames with a queue transfer, which advances their timeline semaphores.",
+    "probe": "a downloaded FFmpeg Vulkan frame has no timeline value at zero (VK_EXT_host_image_copy copies through the host and signals nothing)"
+  },
   "d3d12-video": {
     "description": "D3D12VA decode on the renderer's D3D12 device.",
     "probe": "a DX12 adapter accepts SharedD3D12Context::from_gpu (native, native-gpu); host: hardware_decode_ready() on an Auto host"
@@ -95,6 +99,10 @@
     "description": "The pinned ffmpeg and ffprobe executables (scripts/fetch-ffmpeg-tools.sh).",
     "probe": "ALPHA2_FFPROBE and ALPHA2_FFMPEG name executables that report the pinned FFmpeg version"
   },
+  "previous-ffmpeg-sdk": {
+    "description": "An FFmpeg 8.0 SDK in the SDK cache beside the pinned one.",
+    "probe": "an ffmpeg-8.0.* release under ALPHA2_FFMPEG_CACHE (default target/ffmpeg-sdk-cache) has sdk/<target>/include"
+  },
   "c-compiler": {
     "description": "A C compiler that builds shared libraries.",
     "probe": "$CC (or cc) builds a shared library"
@@ -106,6 +114,10 @@
   "unorm16": {
     "description": "16-bit normalized textures on the test device.",
     "probe": "the test device has TEXTURE_FORMAT_16BIT_NORM"
+  },
+  "half-float-blend": {
+    "description": "Blending into 16-bit float targets on the test device.",
+    "probe": "the test device's capabilities report half_float_blendable"
   },
   "timestamp-query": {
     "description": "GPU timestamp queries on the test device.",
@@ -126,6 +138,10 @@
   "python": {
     "description": "A Python that imports alpha2.",
     "probe": "a Python that imports alpha2 (host-cli-parity)"
+  },
+  "native-test-hooks": {
+    "description": "The test hooks of a debug build of the Python native module.",
+    "probe": "alpha2._native has _panic"
   },
   "host": {
     "description": "A built alpha2-host.",

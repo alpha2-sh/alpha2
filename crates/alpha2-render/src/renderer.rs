@@ -41,6 +41,9 @@ pub struct Renderer {
     /// Test-only: composite pipeline log.
     #[cfg(test)]
     pub(crate) composite_pipelines: Mutex<crate::composite::CompositePipelineLog>,
+    /// Test-only: the next lazily created composite or effect pipeline fails to create.
+    #[cfg(test)]
+    pub(crate) fail_next_pipeline: std::sync::atomic::AtomicBool,
     pub(crate) retired_leases: Arc<crate::yuv::RetiredLeases>,
     pub(crate) gpu_wait_timeout: Duration,
     /// Read once because every field read crosses into JavaScript on the browser backend.
@@ -376,6 +379,8 @@ impl Renderer {
             vector_page_rows: std::sync::atomic::AtomicU32::new(0),
             #[cfg(test)]
             composite_pipelines: Mutex::new(crate::composite::CompositePipelineLog::default()),
+            #[cfg(test)]
+            fail_next_pipeline: std::sync::atomic::AtomicBool::new(false),
             retired_leases: Arc::new(crate::yuv::RetiredLeases::default()),
             gpu_wait_timeout: crate::error::DEFAULT_GPU_WAIT_TIMEOUT,
             limits,

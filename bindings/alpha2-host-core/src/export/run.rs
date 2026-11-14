@@ -1,8 +1,8 @@
 //! The export loop: frame needs in, decoded and prepared frames into the store, rendered planes
 //! out to the encoder.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, Weak};
 
 use alpha2_engine::{
     EngineProject, ExportPlaneStep, Exporter, FrameProvider, FramesWithText, TextTextures,
@@ -14,9 +14,9 @@ use alpha2_time::MediaTime;
 
 use super::budget::FrameBudget;
 use super::prepare::{GpuSource, SurfaceImport, prepare_cpu, prepare_gpu};
-use crate::cursor::{DecodeCursorKey, decode_cursor_key};
+use crate::cursor::{CursorReads, DecodeCursorKey, decode_cursor_key};
 use crate::encode::PlaneBuffer;
-use crate::video_stream::{BackendImage, FrameFacts, StreamFrame, SurfaceLease};
+use crate::video_stream::{BackendImage, DroppedLayer, FrameFacts, StreamFrame, SurfaceLease};
 use alpha2_engine::frame_store::FrameStore;
 
 /// Steps an export may wait on the same frame, refilling between them, before it fails: a frame
@@ -75,6 +75,15 @@ pub trait SourceFrames {
         index: u64,
         cancel: &CancelToken,
     ) -> Result<Option<SourceFrame>, String>;
+
+    /// Lets go of what only frames before timeline `time` read; called before the frame at `time`
+    /// is decoded.
+    fn release_finished(&mut self, _time: MediaTime) {}
+
+    /// Bytes of decoded frames held outside the prepared-frame cache.
+    fn held_bytes(&self) -> u64 {
+        0
+    }
 }
 
 /// Where rendered pictures go: the video encoder.
@@ -90,6 +99,14 @@ pub trait VideoSink {
         layout: PixelLayout,
         planes: &[PlaneBuffer],
     ) -> Result<(), EncodeError>;
+
+    /// Finishes the frames the encoder holds, before the export waits. The default does nothing.
+    ///
+    /// # Errors
+    /// An encoder or output failure.
+    fn settle(&mut self) -> Result<(), EncodeError> {
+        Ok(())
+    }
 }
 
 /// Why an export stopped.
@@ -164,16 +181,18 @@ impl SourceFrameCache {
         }
     }
 
-    /// Takes `budget`'s bytes as the cache's budget, evicting at once to fit, but never less than
-    /// the last output frame's working set: a budget lowered under memory pressure evicts every
-    /// other frame and still lets the next frame of the same shape render.
-    pub fn follow(&mut self, budget: &FrameBudget) {
+    /// Takes `budget`'s bytes less the `held` bytes the sources keep as the cache's budget,
+    /// evicting at once to fit, but never less than the last output frame's working set: a budget
+    /// lowered under memory pressure evicts every other frame and still lets the next frame of
+    /// the same shape render.
+    pub fn follow(&mut self, budget: &FrameBudget, held: u64) {
+        let bytes = budget.bytes().saturating_sub(held);
         match self {
             Self::Gpu(store) => {
-                store.set_video_byte_budget(budget.bytes().max(store.last_working_set_bytes()));
+                store.set_video_byte_budget(bytes.max(store.last_working_set_bytes()));
             }
             Self::Cpu(store) => {
-                store.set_video_byte_budget(budget.bytes().max(store.last_working_set_bytes()));
+                store.set_video_byte_budget(bytes.max(store.last_working_set_bytes()));
             }
         }
     }
@@ -230,8 +249,9 @@ impl SourceFrameCache {
 /// Renders every frame of `exporter` into `sink`, decoding sources through `sources`.
 ///
 /// Frames wait for their sources and never repeat a late one, so output does not depend on
-/// decode timing. Decoded frames stay within `budget`, read before every frame. `progress` is
-/// told after each frame.
+/// decode timing. Decoded frames stay within `budget`, read before every frame. `before_frame`
+/// runs at the top of every turn with the sink (it may block, as a host's pause does), and
+/// `progress` is told after each frame.
 ///
 /// # Errors
 /// Cancellation, a source or render failure, a frame whose sources never arrive, or a sink
@@ -245,6 +265,7 @@ pub fn export_video(
     sources: &mut dyn SourceFrames,
     sink: &mut dyn VideoSink,
     (budget, cancel): (&FrameBudget, &CancelToken),
+    before_frame: &mut dyn FnMut(&mut dyn VideoSink) -> Result<(), EncodeError>,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<(), ExportError> {
     let size = exporter
@@ -268,6 +289,7 @@ pub fn export_video(
         .collect::<Vec<_>>();
     let mut refills = 0;
     loop {
+        before_frame(sink).map_err(ExportError::Encode)?;
         if cancel.is_cancelled() {
             return Err(ExportError::Cancelled);
         }
@@ -277,7 +299,8 @@ pub fn export_video(
         let Some(frame) = needs.first() else {
             return Ok(());
         };
-        store.follow(budget);
+        sources.release_finished(frame.time);
+        store.follow(budget, sources.held_bytes());
         fill(
             &mut store,
             renderer,
@@ -413,9 +436,22 @@ fn fill(
 
 /// Opens one [`crate::video_stream::VideoStream`] per cursor and keeps decoding forward while
 /// requests stay within the sequential gap, seeking otherwise.
+///
+/// A cursor its reads say is finished is closed, at most a set number of video streams stay open,
+/// and one decoded still serves every cursor of its source. A closed cursor reopens with a seek.
 pub struct StreamSources<F> {
     open: F,
     streams: HashMap<DecodeCursorKey, Cursor>,
+    /// When each cursor reads, which closes a finished one.
+    reads: Option<CursorReads>,
+    /// Video streams open at most, beyond the ones the current output frame reads.
+    session_limit: Option<usize>,
+    /// Each still source's decoded picture while a cursor holds it.
+    stills: HashMap<SourceId, Weak<DecodedVideoFrame>>,
+    /// Sources that opened as something other than a video stream.
+    not_video: HashSet<SourceId>,
+    /// What each source's pictures go without, noted when it first opens.
+    dropped: BTreeMap<SourceId, DroppedLayer>,
     /// Prepares the decoder surfaces the streams produce.
     surfaces: Option<Arc<dyn SurfaceImport>>,
     /// Supplies the extension sources.
@@ -433,10 +469,12 @@ pub enum SourceStream {
     AudioOnly,
 }
 
-/// One cursor's source, the time it was last asked for and the frame it answered.
+/// One cursor's source, the time it was last asked for and the frame it answered, and the output
+/// frame that last read it.
 struct Cursor {
     stream: SourceStream,
     last: Option<(MediaTime, StreamFrame)>,
+    used: u64,
 }
 
 impl<F> StreamSources<F>
@@ -448,10 +486,103 @@ where
         Self {
             open,
             streams: HashMap::new(),
+            reads: None,
+            session_limit: None,
+            stills: HashMap::new(),
+            not_video: HashSet::new(),
+            dropped: BTreeMap::new(),
             surfaces: None,
             #[cfg(feature = "providers")]
             providers: None,
         }
+    }
+
+    /// Closes a cursor once `reads` say it reads nothing more ([`SourceFrames::release_finished`]).
+    /// A cursor `reads` does not know is never closed this way.
+    #[must_use]
+    pub fn with_reads(mut self, reads: CursorReads) -> Self {
+        self.reads = Some(reads);
+        self
+    }
+
+    /// Before opening a video stream while `limit` are open, closes the one read longest ago that
+    /// the current output frame does not read.
+    #[must_use]
+    pub fn with_session_limit(mut self, limit: usize) -> Self {
+        self.session_limit = Some(limit.max(1));
+        self
+    }
+
+    /// Video streams open now.
+    #[must_use]
+    pub fn open_streams(&self) -> usize {
+        self.streams
+            .values()
+            .filter(|cursor| matches!(cursor.stream, SourceStream::Video(_)))
+            .count()
+    }
+
+    /// Closes the least recently read video stream other than those output frame `index` read,
+    /// while `limit` or more are open.
+    fn make_room(&mut self, limit: usize, index: u64) {
+        while self.open_streams() >= limit {
+            let Some(oldest) = self
+                .streams
+                .iter()
+                .filter(|(_, cursor)| {
+                    cursor.used != index && matches!(cursor.stream, SourceStream::Video(_))
+                })
+                .min_by_key(|(_, cursor)| cursor.used)
+                .map(|(key, _)| key.clone())
+            else {
+                return;
+            };
+            self.streams.remove(&oldest);
+            self.collect_surfaces();
+        }
+    }
+
+    /// Lets the surface import free what the closed streams' frames held.
+    fn collect_surfaces(&self) {
+        if let Some(import) = &self.surfaces {
+            import.collect();
+        }
+    }
+
+    /// Opens `source`'s stream, reusing a still another cursor holds.
+    fn open_stream(&mut self, source: &SourceId, index: u64) -> Result<SourceStream, String> {
+        if let Some(still) = self.stills.get(source).and_then(Weak::upgrade) {
+            return Ok(SourceStream::Still(still));
+        }
+        if let Some(limit) = self.session_limit
+            && !self.not_video.contains(source)
+        {
+            self.make_room(limit, index);
+        }
+        let stream = (self.open)(source)?;
+        match &stream {
+            SourceStream::Still(still) => {
+                self.stills.insert(source.clone(), Arc::downgrade(still));
+                self.not_video.insert(source.clone());
+            }
+            SourceStream::AudioOnly => {
+                self.not_video.insert(source.clone());
+            }
+            SourceStream::Video(video) => {
+                if let Some(dropped) = video.dropped_layer() {
+                    self.dropped
+                        .entry(source.clone())
+                        .or_insert_with(|| dropped.clone());
+                }
+            }
+        }
+        Ok(stream)
+    }
+
+    /// What the pictures of each source opened so far go without, one entry per source.
+    #[must_use]
+    pub const fn dropped_layers(&self) -> &BTreeMap<SourceId, DroppedLayer> {
+        &self.dropped
     }
 
     /// Prepares the decoder surfaces the streams produce with `import`; without it a surface
@@ -497,14 +628,21 @@ where
                 .map_err(|error| error.to_string());
         }
         if !self.streams.contains_key(&cursor) {
-            let stream = (self.open)(&need.source_id)?;
-            self.streams
-                .insert(cursor.clone(), Cursor { stream, last: None });
+            let stream = self.open_stream(&need.source_id, index)?;
+            self.streams.insert(
+                cursor.clone(),
+                Cursor {
+                    stream,
+                    last: None,
+                    used: index,
+                },
+            );
         }
         let entry = self
             .streams
             .get_mut(&cursor)
             .ok_or_else(|| "the stream was not opened".to_owned())?;
+        entry.used = index;
         let stream = match &mut entry.stream {
             SourceStream::Still(frame) => return Ok(Some(SourceFrame::Cpu(Arc::clone(frame)))),
             SourceStream::AudioOnly => return Ok(None),
@@ -521,6 +659,39 @@ where
         };
         entry.last = Some((time, frame.clone()));
         source_frame(frame, self.surfaces.as_ref()).map(Some)
+    }
+
+    fn release_finished(&mut self, time: MediaTime) {
+        if let Some(reads) = &self.reads {
+            let open = self.streams.len();
+            self.streams
+                .retain(|cursor, _| !reads.finished(cursor, time));
+            if self.streams.len() < open {
+                self.collect_surfaces();
+            }
+        }
+    }
+
+    fn held_bytes(&self) -> u64 {
+        let mut stills = HashSet::new();
+        self.streams
+            .values()
+            .map(|cursor| match &cursor.stream {
+                SourceStream::Video(stream) => {
+                    stream.lookahead_bytes()
+                        + cursor
+                            .last
+                            .as_ref()
+                            .map_or(0, |(_, frame)| frame.retained_bytes())
+                }
+                SourceStream::Still(still) if stills.insert(Arc::as_ptr(still)) => still
+                    .planes
+                    .iter()
+                    .map(|plane| plane.bytes.len() as u64)
+                    .sum(),
+                SourceStream::Still(_) | SourceStream::AudioOnly => 0,
+            })
+            .sum()
     }
 }
 
@@ -547,7 +718,8 @@ fn source_frame(
 }
 
 /// The frame shown at `time`, decoding forward from where `stream` is; `previous` is the frame it
-/// last answered, still shown when no later frame is due.
+/// last answered, still shown when no later frame is due. That holds for a `previous` later than
+/// `time` too: a seek before the stream's first frame answers that frame, shown until it is due.
 fn decode_forward(
     stream: &mut crate::video_stream::VideoStream,
     time: MediaTime,
@@ -555,14 +727,11 @@ fn decode_forward(
     cancel: &CancelToken,
 ) -> Result<StreamFrame, String> {
     let deadline = time.presentation_deadline(stream.presentation_slack());
-    let mut shown = previous.filter(|frame| frame.facts.pts <= deadline);
-    loop {
-        match stream.peek_pts(cancel).map_err(|error| error.to_string())? {
-            Some(pts) if pts <= deadline || shown.is_none() => {
-                shown = stream.next(cancel).map_err(|error| error.to_string())?;
-            }
-            _ => break,
-        }
+    let mut shown = previous;
+    while let Some(pts) = stream.peek_pts(cancel).map_err(|error| error.to_string())?
+        && pts <= deadline
+    {
+        shown = stream.next(cancel).map_err(|error| error.to_string())?;
     }
     match shown {
         Some(frame) => Ok(frame),

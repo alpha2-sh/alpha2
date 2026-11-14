@@ -1,3 +1,5 @@
+//! A runtime effect a request carries.
+
 use alpha2_gpu::CapabilityTier;
 use alpha2_render::{
     EffectDef, EffectKind, EffectResourceKind, InputSpec, ParamSpec, ParamType, ParamUnit,
@@ -10,95 +12,136 @@ use serde_json::Value;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EffectRequest {
+    /// The effect's id, which clips name.
     pub id: String,
+    /// Bumped when the effect's output changes.
     pub version: u32,
+    /// An effect or a transition.
     pub kind: EffectKindRequest,
     /// Images the effect samples besides its source, by name.
     #[serde(default)]
     pub inputs: Vec<InputRequest>,
+    /// The parameters clips set, in order.
     #[serde(default)]
     pub params: Vec<ParameterRequest>,
+    /// Tables the effect samples, by name.
     #[serde(default)]
     pub resources: Vec<ResourceRequest>,
+    /// The WGSL body the engine wraps into a shader.
     pub wgsl_body: String,
     /// Defaults to tier B when omitted.
     #[serde(default = "default_tier")]
     pub tier_min: TierRequest,
+    /// The license the author ships the effect under.
     #[serde(default)]
     pub license: Option<String>,
 }
 
+/// An image an effect samples besides its source.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct InputRequest {
+    /// The name the body samples it by.
     pub name: String,
 }
 
+/// A table an effect samples.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceRequest {
+    /// The name the body samples it by.
     pub name: String,
+    /// What the table is.
     pub kind: ResourceKindRequest,
 }
 
+/// The kinds of table an effect samples.
 #[derive(Copy, Clone, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ResourceKindRequest {
+    /// A 3D lookup table.
     Lut3d,
 }
 
+/// Whether the effect draws one clip or the cut between two.
 #[derive(Copy, Clone, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EffectKindRequest {
+    /// Draws one clip.
     Effect,
+    /// Draws the cut between two clips.
     Transition,
 }
 
+/// The least capable GPU tier the effect runs on.
 #[derive(Copy, Clone, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TierRequest {
+    /// Tier A.
     A,
+    /// Tier B.
     B,
 }
 
+/// A parameter of a runtime effect.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParameterRequest {
+    /// The name the body reads it by.
     pub name: String,
+    /// The value's shape.
     #[serde(rename = "type")]
     pub param_type: ParameterTypeRequest,
     /// A number for `float`, an array of 2 or 4 numbers for `vec2`/`vec4`/`color`, a
     /// non-negative index for `enum`, and a boolean for `bool`.
     pub default: Value,
+    /// The least value an editor offers.
     #[serde(default)]
     pub min: Option<f32>,
+    /// The greatest value an editor offers.
     #[serde(default)]
     pub max: Option<f32>,
+    /// The step an editor moves by.
     #[serde(default)]
     pub step: Option<f32>,
+    /// How an editor shows the value.
     pub unit: ParameterUnitRequest,
+    /// The names of an `enum` parameter's values, by index.
     #[serde(default)]
     pub enum_values: Vec<String>,
 }
 
+/// The shape of a parameter's value.
 #[derive(Copy, Clone, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ParameterTypeRequest {
+    /// One number.
     Float,
+    /// Two numbers.
     Vec2,
+    /// Four numbers.
     Vec4,
+    /// Linear RGBA.
     Color,
+    /// An index into the parameter's names.
     Enum,
+    /// True or false.
     Bool,
 }
 
+/// How an editor shows a parameter.
 #[derive(Copy, Clone, Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ParameterUnitRequest {
+    /// A number in `0..=1`.
     Normalized,
+    /// An angle in degrees.
     Degrees,
+    /// A color.
     Color,
+    /// One of the parameter's names.
     Enum,
+    /// True or false.
     Bool,
 }
 
@@ -202,7 +245,7 @@ impl ParameterRequest {
 ///
 /// # Errors
 /// Names the parameter when the default has the wrong shape or a non-numeric element.
-pub fn value<const N: usize>(json: &Value, name: &str) -> Result<[f32; N], String> {
+fn value<const N: usize>(json: &Value, name: &str) -> Result<[f32; N], String> {
     let values: Vec<Value> = if N == 1 && !json.is_array() {
         vec![json.clone()]
     } else {
@@ -221,6 +264,6 @@ pub fn value<const N: usize>(json: &Value, name: &str) -> Result<[f32; N], Strin
     Ok(output)
 }
 
-pub fn default_tier() -> TierRequest {
+fn default_tier() -> TierRequest {
     TierRequest::B
 }

@@ -5,6 +5,9 @@
 //! it, the skip fails instead. Other skips are printed and, if `ALPHA2_SKIP_LOG` is an absolute
 //! path, appended there as JSON lines. Tests that never apply to an OS stay `#[cfg]`-gated.
 
+pub mod extract;
+pub mod media;
+
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
@@ -27,6 +30,8 @@ pub enum Capability {
     VulkanValidation,
     /// A Khronos validation layer older than 1.4.
     OldVulkanValidationLayer,
+    /// `FFmpeg` moves Vulkan frames with a queue transfer, which advances their timeline semaphores.
+    VulkanQueueTransfer,
     /// D3D12VA decode on the renderer's D3D12 device.
     D3d12Video,
     /// D3D12VA H.264 encode on an accepted adapter.
@@ -55,6 +60,8 @@ pub enum Capability {
     Openh264,
     /// The pinned `ffmpeg` and `ffprobe` executables (`ALPHA2_FFMPEG`, `ALPHA2_FFPROBE`).
     FfmpegTools,
+    /// An `FFmpeg` 8.0 SDK in the SDK cache beside the pinned one.
+    PreviousFfmpegSdk,
     /// A GPU that presents to the platform's native windows (an app's surface or layer).
     WindowPresent,
     /// A VP9 or AV1 video encoder, which `WebM` output needs.
@@ -67,6 +74,8 @@ pub enum Capability {
     MultiAdapter,
     /// 16-bit normalized textures on the test device.
     Unorm16,
+    /// Blending into 16-bit float targets on the test device.
+    HalfFloatBlend,
     /// GPU timestamp queries on the test device.
     TimestampQuery,
     /// A GPU stall the render stall calibration can measure.
@@ -77,6 +86,8 @@ pub enum Capability {
     Browser,
     /// A Python that imports alpha2.
     Python,
+    /// The test hooks of a debug build of the Python native module.
+    NativeTestHooks,
     /// A built alpha2-host.
     Host,
     /// A host that renders on the GPU.
@@ -135,6 +146,7 @@ impl Capability {
         Self::VulkanVideoEncodeHevc,
         Self::VulkanValidation,
         Self::OldVulkanValidationLayer,
+        Self::VulkanQueueTransfer,
         Self::D3d12Video,
         Self::D3d12Encode,
         Self::D3d12DebugLayer,
@@ -149,17 +161,20 @@ impl Capability {
         Self::HardwareH264Encode,
         Self::Openh264,
         Self::FfmpegTools,
+        Self::PreviousFfmpegSdk,
         Self::WindowPresent,
         Self::WebmEncode,
         Self::HardwareVideoDecode,
         Self::CCompiler,
         Self::MultiAdapter,
         Self::Unorm16,
+        Self::HalfFloatBlend,
         Self::TimestampQuery,
         Self::MeasurableGpuStall,
         Self::Wasm,
         Self::Browser,
         Self::Python,
+        Self::NativeTestHooks,
         Self::Host,
         Self::GpuRenderer,
         Self::H264,
@@ -196,6 +211,7 @@ impl Capability {
             Self::VulkanVideoEncodeHevc => "vulkan-video-encode-hevc",
             Self::VulkanValidation => "vulkan-validation",
             Self::OldVulkanValidationLayer => "old-vulkan-validation-layer",
+            Self::VulkanQueueTransfer => "vulkan-queue-transfer",
             Self::D3d12Video => "d3d12-video",
             Self::D3d12Encode => "d3d12-encode",
             Self::D3d12DebugLayer => "d3d12-debug-layer",
@@ -210,17 +226,20 @@ impl Capability {
             Self::HardwareH264Encode => "hardware-h264-encode",
             Self::Openh264 => "openh264",
             Self::FfmpegTools => "ffmpeg-tools",
+            Self::PreviousFfmpegSdk => "previous-ffmpeg-sdk",
             Self::WindowPresent => "window-present",
             Self::WebmEncode => "webm-encode",
             Self::HardwareVideoDecode => "hardware-video-decode",
             Self::CCompiler => "c-compiler",
             Self::MultiAdapter => "multi-adapter",
             Self::Unorm16 => "unorm16",
+            Self::HalfFloatBlend => "half-float-blend",
             Self::TimestampQuery => "timestamp-query",
             Self::MeasurableGpuStall => "measurable-gpu-stall",
             Self::Wasm => "wasm",
             Self::Browser => "browser",
             Self::Python => "python",
+            Self::NativeTestHooks => "native-test-hooks",
             Self::Host => "host",
             Self::GpuRenderer => "gpu-renderer",
             Self::H264 => "h264",

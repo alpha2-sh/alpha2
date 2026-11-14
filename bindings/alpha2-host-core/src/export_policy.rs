@@ -1,6 +1,7 @@
 //! Export policy every native host applies: the H.264 profile ladder platform encoders are tried
 //! with, and whether and how a failed export is retried.
 
+use alpha2_media::FailureClass;
 use alpha2_time::FrameRate;
 
 /// An H.264 profile a platform encoder is asked for.
@@ -155,8 +156,8 @@ pub enum AttemptEncoder {
 /// A classified export failure, as the retry policy reads it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttemptFailure {
-    /// The engine's error code (`DEVICE_LOST`, `OUT_OF_MEMORY`, ...).
-    pub code: String,
+    /// Its class.
+    pub code: FailureClass,
     /// The phase it failed in (`prepare`, `decode`, `render`, `encode`, `publish`).
     pub phase: String,
     /// The export frame it failed at, when known.
@@ -183,7 +184,7 @@ pub struct AttemptOutcome {
 pub struct RetryOptions {
     /// Total attempts, the first included.
     pub max_attempts: usize,
-    /// Whether an attempt can run on the CPU renderer.
+    /// Whether an attempt can run on the CPU renderer. Default false.
     pub cpu_renderer: bool,
     /// Whether a software video encoder exists for the export's codec.
     pub software_encoder: bool,
@@ -193,7 +194,7 @@ impl Default for RetryOptions {
     fn default() -> Self {
         Self {
             max_attempts: 3,
-            cpu_renderer: true,
+            cpu_renderer: false,
             software_encoder: true,
         }
     }
@@ -219,27 +220,27 @@ pub enum RetryDecision {
     Stop {
         /// Why, for the report.
         reason: String,
-        /// The code the export fails with.
-        code: Option<String>,
+        /// The class the export fails with.
+        code: Option<FailureClass>,
     },
 }
 
-const PERMANENT: [&str; 7] = [
-    "CANCELLED",
-    "INVALID_INPUT",
-    "VALIDATION_FAILED",
-    "RESOURCE_LIMIT",
-    "STORAGE_QUOTA_EXCEEDED",
-    "OUTPUT_IO_FAILED",
-    "DEVICE_HUNG",
+const PERMANENT: [FailureClass; 7] = [
+    FailureClass::Cancelled,
+    FailureClass::InvalidInput,
+    FailureClass::ValidationFailed,
+    FailureClass::ResourceLimit,
+    FailureClass::StorageQuotaExceeded,
+    FailureClass::OutputIoFailed,
+    FailureClass::DeviceHung,
 ];
-const MEMORY: [&str; 2] = ["OUT_OF_MEMORY", "ALLOCATION_FAILED"];
-const GPU_LOSSES: [&str; 2] = ["DEVICE_LOST", "GPU_TIMEOUT"];
+const MEMORY: [FailureClass; 2] = [FailureClass::OutOfMemory, FailureClass::AllocationFailed];
+const GPU_LOSSES: [FailureClass; 2] = [FailureClass::DeviceLost, FailureClass::GpuTimeout];
 
 /// Whether a retry could help `failure` at all (the CPU renderer aside).
 #[must_use]
 pub fn retryable(failure: &AttemptFailure) -> bool {
-    !PERMANENT.contains(&failure.code.as_str()) && failure.phase != "download"
+    !PERMANENT.contains(&failure.code) && failure.phase != "download"
 }
 
 fn backoff(failed: usize) -> u64 {
@@ -251,8 +252,9 @@ fn backoff(failed: usize) -> u64 {
 /// An export is retried whole on a fresh device; attempts change the in-flight budget, the
 /// renderer and the video encoder, never the output settings. A GPU that hangs on the export's
 /// own work moves to the CPU renderer; memory exhaustion steps down a profile; an encode failure
-/// retries once in software; a busy resource waits; anything else transient retries unchanged and
-/// steps down only when it recurs at the same point.
+/// retries once in software; a busy resource waits; an engine fault (`DEFECT`) retries once,
+/// unchanged and at once; anything else transient retries unchanged and steps down only when it
+/// recurs at the same point.
 // One rule after another, in the reference policy's order.
 #[allow(clippy::too_many_lines)]
 #[must_use]
@@ -264,11 +266,11 @@ pub fn decide_retry(history: &[AttemptOutcome], options: RetryOptions) -> RetryD
         };
     };
     let failure = &last.failure;
-    let code = failure.code.as_str();
+    let code = failure.code;
     let mut note = "";
-    let stop = |why: String, note: &str, final_code: &str| RetryDecision::Stop {
+    let stop = |why: String, note: &str, final_code: FailureClass| RetryDecision::Stop {
         reason: format!("{why}{note}"),
-        code: Some(final_code.to_owned()),
+        code: Some(final_code),
     };
     let attempts_left = history.len() < options.max_attempts;
     let index = RETRY_PROFILES
@@ -295,11 +297,11 @@ pub fn decide_retry(history: &[AttemptOutcome], options: RetryOptions) -> RetryD
     let recurred_loss = GPU_LOSSES.contains(&code)
         && previous.is_some_and(|previous| {
             previous.renderer == AttemptRenderer::Gpu
-                && (GPU_LOSSES.contains(&previous.failure.code.as_str())
-                    || previous.failure.code == "DEVICE_HUNG")
+                && (GPU_LOSSES.contains(&previous.failure.code)
+                    || previous.failure.code == FailureClass::DeviceHung)
                 && previous.failure.frame == failure.frame
         });
-    if code == "DEVICE_HUNG" || recurred_loss {
+    if code == FailureClass::DeviceHung || recurred_loss {
         if last.renderer == AttemptRenderer::Gpu && options.cpu_renderer && attempts_left {
             return retry(
                 format!(
@@ -320,7 +322,35 @@ pub fn decide_retry(history: &[AttemptOutcome], options: RetryOptions) -> RetryD
         return stop(
             format!("{code}: the export's own GPU work stops the GPU, and {why}"),
             note,
-            "DEVICE_HUNG",
+            FailureClass::DeviceHung,
+        );
+    }
+    if code == FailureClass::Defect {
+        let defects = history
+            .iter()
+            .filter(|attempt| attempt.failure.code == FailureClass::Defect)
+            .count();
+        if defects > 1 {
+            return stop(
+                "DEFECT again on a fresh attempt: the engine fails this export the same way".into(),
+                note,
+                code,
+            );
+        }
+        if !attempts_left {
+            return stop(
+                format!("all {} attempts failed", options.max_attempts),
+                note,
+                code,
+            );
+        }
+        return retry(
+            "DEFECT: an engine fault; retrying once on a fresh host".into(),
+            note,
+            None,
+            None,
+            None,
+            Some(0),
         );
     }
     if !retryable(failure) {
@@ -370,7 +400,7 @@ pub fn decide_retry(history: &[AttemptOutcome], options: RetryOptions) -> RetryD
         }
         note = " (no software video encoder to switch to)";
     }
-    if code == "RESOURCE_BUSY" {
+    if code == FailureClass::ResourceBusy {
         let delay = failure
             .retry_after_ms
             .unwrap_or(0)

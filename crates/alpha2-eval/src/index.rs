@@ -21,6 +21,8 @@ pub struct ActiveIndex {
     pub(crate) max_active: usize,
     /// The project's data sets and clips by id, for data bindings.
     pub(crate) data: crate::DataIndex,
+    /// Whether the compositions together exceed [`crate::MAX_PLAN_BYTES`], so none draws.
+    pub(crate) plans_too_large: bool,
 }
 
 impl ActiveIndex {
@@ -56,7 +58,7 @@ impl ActiveIndex {
             &project.sources,
             (project.settings.width, project.settings.height),
         );
-        let (plans, source_plans) = compile_plans(project, &lookup);
+        let (plans, source_plans, plans_too_large) = compile_plans(project, &lookup);
         let sources = project
             .sources
             .iter()
@@ -109,19 +111,17 @@ impl ActiveIndex {
                     clip_order,
                 });
             }
-            transitions.extend(
-                track
-                    .transitions
-                    .iter()
-                    .map(|transition| IndexedTransition {
-                        from_clip: transition.from_clip.clone(),
-                        to_clip: transition.to_clip.clone(),
-                        timeline_range: transition.timeline_range,
-                        easing: transition.easing,
-                        effect: transition.effect.clone(),
-                        track_order,
-                    }),
-            );
+            transitions.extend(track.transitions.iter().enumerate().map(
+                |(list_order, transition)| IndexedTransition {
+                    from_clip: transition.from_clip.clone(),
+                    to_clip: transition.to_clip.clone(),
+                    timeline_range: transition.timeline_range,
+                    easing: transition.easing,
+                    effect: transition.effect.clone(),
+                    track_order,
+                    list_order,
+                },
+            ));
         }
         let captions = project
             .timeline
@@ -132,12 +132,13 @@ impl ActiveIndex {
                 track.captions.as_ref().map(|captions| {
                     let mut shown = captions.clone();
                     if shown.from_words.is_some() {
-                        shown.cues = crate::caption_cues(project, captions);
+                        shown.cues = crate::caption_cues(project, &track.id, captions)
+                            .map_err(EvalError::InvalidProject)?;
                     }
-                    IndexedCaptions::new(track.id.clone(), track_order, shown)
+                    Ok(IndexedCaptions::new(track.id.clone(), track_order, shown))
                 })
             })
-            .collect();
+            .collect::<Result<_, EvalError>>()?;
         entries.sort_unstable_by_key(|entry| {
             (
                 entry.timeline_range.start(),
@@ -148,7 +149,11 @@ impl ActiveIndex {
         let max_active = deepest_overlap(&entries);
         let (nodes, root) = build_tree(entries);
         transitions.sort_unstable_by_key(|transition| {
-            (transition.timeline_range.start(), transition.track_order)
+            (
+                transition.timeline_range.start(),
+                transition.track_order,
+                transition.list_order,
+            )
         });
         Ok(Self {
             project_id: project.id.clone(),
@@ -158,7 +163,61 @@ impl ActiveIndex {
             captions,
             max_active,
             data: crate::DataIndex::new(project),
+            plans_too_large,
         })
+    }
+
+    /// The errors [`crate::evaluate`] would return in `range` because a clip shows a composition
+    /// that cannot draw, one per clip, in the order the clips start. An export checks its range
+    /// with this before its first frame instead of failing at the frame that shows the clip. When
+    /// the compositions together exceed [`crate::MAX_PLAN_BYTES`] (see [`Self::plans_too_large`])
+    /// only the first is listed, since the cause is the whole document.
+    #[must_use]
+    pub fn plan_errors(&self, range: TimeRange) -> Vec<EvalError> {
+        let mut found = Vec::new();
+        for entry in self.nodes.iter().map(IntervalNode::entry) {
+            if entry.track_kind != alpha2_model::TrackKind::Video
+                || entry.timeline_range.intersection(range).is_none()
+            {
+                continue;
+            }
+            let own = entry
+                .composition
+                .as_ref()
+                .map(|indexed| (&indexed.reference.id, &indexed.plan));
+            let shown = entry
+                .source_composition
+                .as_ref()
+                .map(|(id, plan)| (id, plan));
+            if let Some((composition, Err(reason))) = own
+                .into_iter()
+                .chain(shown)
+                .map(|(id, plan)| (id, plan.as_ref().as_ref()))
+                .find(|(_, plan)| plan.is_err())
+            {
+                found.push((
+                    entry.timeline_range.start(),
+                    entry.track_order,
+                    EvalError::IncompleteComposition {
+                        clip: entry.clip_id.clone(),
+                        composition: composition.clone(),
+                        reason: reason.clone(),
+                    },
+                ));
+            }
+        }
+        found.sort_by_key(|(start, track, _)| (*start, *track));
+        if self.plans_too_large {
+            found.truncate(1);
+        }
+        found.into_iter().map(|(_, _, error)| error).collect()
+    }
+
+    /// Whether the project's compositions together exceed [`crate::MAX_PLAN_BYTES`], so no clip's
+    /// composition draws: an issue of the whole document.
+    #[must_use]
+    pub const fn plans_too_large(&self) -> bool {
+        self.plans_too_large
     }
 
     /// Returns the project identity used to build this index.
@@ -340,7 +399,7 @@ type Plans<'a> = std::collections::HashMap<&'a CompositionId, PlanSlot>;
 fn compile_plans<'a>(
     project: &'a Project,
     lookup: &crate::composition::Lookup<'a>,
-) -> (Plans<'a>, Plans<'a>) {
+) -> (Plans<'a>, Plans<'a>, bool) {
     let shown = project
         .timeline
         .tracks
@@ -357,7 +416,18 @@ fn compile_plans<'a>(
     let mut budget = crate::composition::PlanBudget::new(crate::MAX_PLAN_BYTES);
     let mut plans = Plans::new();
     let mut source_plans = Plans::new();
+    let refused = std::sync::Arc::new(Err(crate::PlanError::TooLarge));
     for composition in &project.compositions {
+        // Past the budget nothing draws, so nothing more is compiled.
+        if budget.exceeded() {
+            if shown.contains(&composition.id) {
+                plans.insert(&composition.id, std::sync::Arc::clone(&refused));
+            }
+            if sourced.contains(&composition.id) {
+                source_plans.insert(&composition.id, std::sync::Arc::clone(&refused));
+            }
+            continue;
+        }
         if shown.contains(&composition.id) {
             let plan =
                 crate::composition::plan_composition_within(composition, lookup, &mut budget);
@@ -373,12 +443,11 @@ fn compile_plans<'a>(
         }
     }
     if budget.exceeded() {
-        let refused = std::sync::Arc::new(Err(crate::PlanError::TooLarge));
         for plan in plans.values_mut().chain(source_plans.values_mut()) {
             *plan = std::sync::Arc::clone(&refused);
         }
     }
-    (plans, source_plans)
+    (plans, source_plans, budget.exceeded())
 }
 
 fn source_composition_of(

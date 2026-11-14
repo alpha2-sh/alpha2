@@ -16,7 +16,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-struct OwnedPlanes {
+pub(super) struct OwnedPlanes {
     format: YuvFormat,
     planes: Vec<(Vec<u8>, u32)>,
     alpha: Option<(Vec<u8>, u32)>,
@@ -52,7 +52,7 @@ impl YuvPlanes for OwnedPlanes {
 }
 
 /// A frame of `format` whose planes hold smooth ramps and noise.
-fn frame(format: YuvFormat, size: RenderSize, color: ColorMetadata) -> OwnedPlanes {
+pub(super) fn frame(format: YuvFormat, size: RenderSize, color: ColorMetadata) -> OwnedPlanes {
     let bytes = format.bytes_per_sample() as usize;
     let maximum = (1_u32 << format.bit_depth) - 1;
     let shift = if format.msb_aligned {
@@ -106,7 +106,11 @@ fn frame(format: YuvFormat, size: RenderSize, color: ColorMetadata) -> OwnedPlan
     }
 }
 
-fn sdr(matrix: ColorMatrix, range: ColorRange, primaries: ColorPrimaries) -> ColorMetadata {
+pub(super) fn sdr(
+    matrix: ColorMatrix,
+    range: ColorRange,
+    primaries: ColorPrimaries,
+) -> ColorMetadata {
     ColorMetadata {
         primaries,
         transfer: TransferFunction::Bt709,
@@ -389,4 +393,172 @@ fn rgba_sources_present_alike() {
             &source,
         );
     }
+}
+
+#[test]
+fn the_table_path_equals_the_per_pixel_path() {
+    use crate::RenderControls;
+
+    let bt709 = sdr(
+        ColorMatrix::Bt709,
+        ColorRange::Limited,
+        ColorPrimaries::Bt709,
+    );
+    let canvas = sized(24, 16);
+    // Grids from 1x1 (upscaled, same size) to 8x8, and uneven ones through the aspect ratio.
+    let sources = [
+        (sized(16, 12), None, (1, 1)),
+        (canvas, None, (1, 1)),
+        (sized(60, 40), None, (1, 1)),
+        (sized(96, 64), Some((5, 3, 80, 52)), (4, 3)),
+        (sized(132, 88), None, (1, 2)),
+        (sized(192, 128), None, (1, 1)),
+    ];
+    let sitings = [
+        ChromaLocation::Left,
+        ChromaLocation::Center,
+        ChromaLocation::TopLeft,
+        ChromaLocation::Unspecified,
+    ];
+    for budget in [64, 12] {
+        // Bands of three rows put seams inside every picture.
+        let renderer = crate::CpuRenderer::with_band_rows(2, 3);
+        renderer.set_quality_controls(budget, 1);
+        for format in [YuvFormat::I420, YuvFormat::NV12, YuvFormat::P010] {
+            for &(size, crop, sample_aspect_ratio) in &sources {
+                for exif in 1..=8 {
+                    let presentation = SourcePresentation {
+                        visible_rect: crop.map_or(
+                            SourcePresentation::identity(size).visible_rect,
+                            |(x, y, width, height)| Rect {
+                                x,
+                                y,
+                                width,
+                                height,
+                            },
+                        ),
+                        orientation: Orientation::from_exif(exif).expect("orientation"),
+                        sample_aspect_ratio,
+                        chroma_siting: sitings[usize::from(exif) % sitings.len()],
+                        ..presentation(size, canvas)
+                    };
+                    let (source, _) = renderer
+                        .present_yuv(
+                            Arc::new(frame(format, size, bt709)),
+                            presentation,
+                            ColorPolicy::RejectHdr,
+                        )
+                        .expect("present");
+                    assert!(
+                        source.presented_by(&renderer, true).stored_bits()
+                            == source.presented_by(&renderer, false).stored_bits(),
+                        "{format:?} {size:?} crop {crop:?} aspect {sample_aspect_ratio:?} exif \
+                         {exif} budget {budget}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_rgba_table_path_equals_the_per_pixel_path() {
+    use crate::RenderControls;
+
+    let canvas = sized(24, 16);
+    for budget in [64, 12] {
+        let renderer = crate::CpuRenderer::with_band_rows(2, 3);
+        renderer.set_quality_controls(budget, 1);
+        for size in [sized(16, 12), canvas, sized(60, 40), sized(192, 128)] {
+            let card = super::cpu_parity::test_card(size, false);
+            // Straight alpha reads the card as straight color: translucent corners stay soft.
+            for alpha in [SourceAlpha::Straight, SourceAlpha::Premultiplied] {
+                for exif in 1..=8 {
+                    let presentation = SourcePresentation {
+                        orientation: Orientation::from_exif(exif).expect("orientation"),
+                        sample_aspect_ratio: if exif % 3 == 0 { (4, 3) } else { (1, 1) },
+                        ..presentation(size, canvas)
+                    };
+                    let source = renderer
+                        .present_rgba8(Arc::new(card.clone()), size, 0, presentation, alpha)
+                        .expect("present");
+                    assert!(
+                        source.presented_by(&renderer, true).stored_bits()
+                            == source.presented_by(&renderer, false).stored_bits(),
+                        "{size:?} {alpha:?} exif {exif} budget {budget}"
+                    );
+                }
+            }
+            // Linear half floats past both ends of `0..1`.
+            let linear = card
+                .iter()
+                .flat_map(|&code| {
+                    half::f16::from_f32(f32::from(code) / 200.0 - 0.1)
+                        .to_bits()
+                        .to_le_bytes()
+                })
+                .collect::<Vec<u8>>();
+            for exif in [1, 6] {
+                let presentation = SourcePresentation {
+                    orientation: Orientation::from_exif(exif).expect("orientation"),
+                    ..presentation(size, canvas)
+                };
+                let source = renderer
+                    .present_linear_rgba16f(Arc::new(linear.clone()), size, 0, presentation)
+                    .expect("present");
+                assert!(
+                    source.presented_by(&renderer, true).stored_bits()
+                        == source.presented_by(&renderer, false).stored_bits(),
+                    "linear {size:?} exif {exif} budget {budget}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_cpu_reads_an_unspecified_siting_of_horizontally_subsampled_chroma_as_left() {
+    let parity = Parity::new();
+    let color = sdr(
+        ColorMatrix::Bt709,
+        ColorRange::Limited,
+        ColorPrimaries::Bt709,
+    );
+    let size = sized(64, 48);
+    let drawn = |format, siting| {
+        let presentation = SourcePresentation {
+            chroma_siting: siting,
+            ..presentation(size, size)
+        };
+        let (source, _) = parity
+            .cpu
+            .present_yuv(
+                Arc::new(frame(format, size, color)),
+                presentation,
+                ColorPolicy::RejectHdr,
+            )
+            .expect("CPU presents");
+        parity
+            .cpu
+            .execute_graph(&identity_graph(SourceView::cpu(&source), size))
+            .expect("CPU draws")
+            .read_rgba8()
+    };
+    for format in [YuvFormat::planar(1, 0, 10), YuvFormat::planar(2, 0, 8)] {
+        let unspecified = drawn(format, ChromaLocation::Unspecified);
+        assert_eq!(
+            unspecified,
+            drawn(format, ChromaLocation::Left),
+            "{format:?}"
+        );
+        assert_ne!(
+            unspecified,
+            drawn(format, ChromaLocation::Center),
+            "{format:?}"
+        );
+    }
+    assert_eq!(
+        drawn(YuvFormat::I420, ChromaLocation::Unspecified),
+        drawn(YuvFormat::I420, ChromaLocation::Center)
+    );
 }

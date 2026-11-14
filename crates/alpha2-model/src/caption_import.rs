@@ -13,7 +13,10 @@
 //! converted twice) end one line.
 //!
 //! Reading is linear in file size. Files over [`MAX_CAPTION_FILE_BYTES`] or with more than
-//! [`MAX_CAPTION_FILE_CUES`] cues are refused early.
+//! [`MAX_CAPTION_FILE_CUES`] cues are refused early. A block over [`MAX_CUE_BLOCK_BYTES`] or
+//! [`MAX_CUE_BLOCK_LINES`] is skipped without being held. One pass over a cue's markup gives both
+//! its text and its runs; a cue with more than [`MAX_OPEN_TAGS`] tags open, [`MAX_HELD_CLASSES`]
+//! classes held or [`MAX_TEXT_RUNS`] runs is imported as plain text.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap};
@@ -32,6 +35,18 @@ pub const MAX_CAPTION_FILE_BYTES: usize = MAX_PROJECT_JSON_BYTES;
 /// The most cues read from one subtitle file: a day of continuous captions at one cue every
 /// 1.3 s.
 pub const MAX_CAPTION_FILE_CUES: usize = 65_536;
+
+/// The longest block read as a cue, in bytes; a longer one is skipped.
+pub const MAX_CUE_BLOCK_BYTES: usize = 65_536;
+
+/// The most lines of a block read as a cue; a longer one is skipped.
+pub const MAX_CUE_BLOCK_LINES: usize = 1_024;
+
+/// The most WebVTT tags open at once in a cue whose markup is kept.
+pub const MAX_OPEN_TAGS: usize = 32;
+
+/// The most distinct classes the open tags of a cue whose markup is kept give at once.
+pub const MAX_HELD_CLASSES: usize = 64;
 
 /// Cues read from a subtitle file.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -55,7 +70,8 @@ pub struct ImportNotes {
     /// Class names a run cannot carry (not `A-Z a-z 0-9 _ -`, longer than 64 bytes, or past
     /// [`MAX_RUN_CLASSES`]).
     pub dropped_classes: usize,
-    /// Cues with more than [`MAX_TEXT_RUNS`] runs, imported as plain text.
+    /// Cues imported as plain text because their markup had more than [`MAX_TEXT_RUNS`] runs,
+    /// 32 tags open or 64 classes held.
     pub flattened: usize,
 }
 
@@ -119,7 +135,11 @@ const TICKS_PER_MILLISECOND: i64 = TICKS_PER_SECOND / 1_000;
 pub fn parse_srt(text: &str) -> Result<ImportedCaptions, CaptionImportError> {
     check_file_size(text)?;
     let mut imported = ImportedCaptions::default();
-    for block in blocks(text) {
+    for block in Blocks::new(text) {
+        let Some(block) = block else {
+            imported.skipped += 1;
+            continue;
+        };
         let mut lines = block.iter().copied();
         let Some(mut first) = lines.next() else {
             continue;
@@ -135,14 +155,9 @@ pub fn parse_srt(text: &str) -> Result<ImportedCaptions, CaptionImportError> {
             }
         }
         let body = lines.collect::<Vec<_>>();
-        let text = body
-            .iter()
-            .map(|line| strip_srt_markup(line))
-            .collect::<Vec<_>>()
-            .join("\n");
         let range = timing(first);
         let marked = range.map(|_| srt_markup(&body));
-        imported.read(range, &text, marked)?;
+        imported.read(range, marked)?;
     }
     imported.cues.sort_by_key(|cue| cue.timeline_range.start());
     Ok(imported)
@@ -164,15 +179,19 @@ pub fn parse_webvtt(text: &str) -> Result<ImportedCaptions, CaptionImportError> 
         return Err(CaptionImportError::MissingWebVttHeader);
     }
     let mut imported = ImportedCaptions::default();
-    let mut blocks = blocks(text).into_iter();
+    let mut blocks = Blocks::new(text);
     // The header is the first block up to a timing line; as in the WebVTT parser, a cue may
-    // follow it without a blank line.
-    let header = blocks.next().unwrap_or_default();
+    // follow it without a blank line. An oversized header holds no cue that is read.
+    let header = blocks.next().flatten().unwrap_or_default();
     let cue_under_header = header
         .iter()
         .position(|line| line.contains("-->"))
-        .map(|start| header[start..].to_vec());
+        .map(|start| Some(header[start..].to_vec()));
     for block in cue_under_header.into_iter().chain(blocks) {
+        let Some(block) = block else {
+            imported.skipped += 1;
+            continue;
+        };
         let first = block[0];
         if ["NOTE", "STYLE", "REGION"].iter().any(|keyword| {
             first
@@ -190,52 +209,46 @@ pub fn parse_webvtt(text: &str) -> Result<ImportedCaptions, CaptionImportError> 
             imported.skipped += 1;
             continue;
         };
-        let text = body
-            .iter()
-            .map(|line| decode_references(&strip_tags(line)))
-            .collect::<Vec<_>>()
-            .join("\n");
         let range = timing(timing_line);
         let marked = range.map(|range| vtt_markup(&body.join("\n"), range));
-        imported.read(range, &text, marked)?;
+        imported.read(range, marked)?;
     }
     imported.cues.sort_by_key(|cue| cue.timeline_range.start());
     Ok(imported)
 }
 
 impl ImportedCaptions {
-    /// Keeps a block's cue, or counts it skipped when its timing or text is invalid. `text` is
-    /// the cue text without markup; `marked` supplies runs and speaker when the markup has any.
+    /// Keeps a block's cue, or counts it skipped when its timing or text is invalid. `marked` is
+    /// the cue's text with the speaker and runs its markup gives.
     fn read(
         &mut self,
         range: Option<TimeRange>,
-        text: &str,
         marked: Option<Marked>,
     ) -> Result<(), CaptionImportError> {
-        match (range, cue_text(text)) {
-            (Some(range), Some(text)) => {
-                if self.cues.len() == MAX_CAPTION_FILE_CUES {
-                    return Err(CaptionImportError::TooManyCues {
-                        maximum: MAX_CAPTION_FILE_CUES,
-                    });
-                }
-                let mut cue = CaptionCue::new(range, text);
-                if let Some(marked) = marked {
-                    let notes = &mut self.notes;
-                    notes.extra_voices += marked.notes.extra_voices;
-                    notes.dropped_timestamps += marked.notes.dropped_timestamps;
-                    notes.dropped_classes += marked.notes.dropped_classes;
-                    cue.speaker = marked.speaker;
-                    match marked.runs {
-                        Some(runs) if runs.len() > MAX_TEXT_RUNS => notes.flattened += 1,
-                        Some(runs) => cue.text = TextContent::Runs(runs),
-                        None => {}
-                    }
-                }
-                self.cues.push(cue);
-            }
-            _ => self.skipped += 1,
+        let (Some(range), Some(marked)) = (range, marked) else {
+            self.skipped += 1;
+            return Ok(());
+        };
+        let Some(text) = cue_text(&marked.text) else {
+            self.skipped += 1;
+            return Ok(());
+        };
+        if self.cues.len() == MAX_CAPTION_FILE_CUES {
+            return Err(CaptionImportError::TooManyCues {
+                maximum: MAX_CAPTION_FILE_CUES,
+            });
         }
+        let mut cue = CaptionCue::new(range, text);
+        let notes = &mut self.notes;
+        notes.extra_voices += marked.notes.extra_voices;
+        notes.dropped_timestamps += marked.notes.dropped_timestamps;
+        notes.dropped_classes += marked.notes.dropped_classes;
+        notes.flattened += marked.notes.flattened;
+        cue.speaker = marked.speaker;
+        if let Some(runs) = marked.runs.filter(|runs| !runs.is_empty()) {
+            cue.text = TextContent::Runs(runs);
+        }
+        self.cues.push(cue);
         Ok(())
     }
 }
@@ -292,58 +305,105 @@ pub fn caption_rows(cues: &[CaptionCue]) -> Result<Vec<Vec<CaptionCue>>, Caption
     Ok(rows)
 }
 
-/// Blank-line-separated blocks of lines.
-fn blocks(text: &str) -> Vec<Vec<&str>> {
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut blocks = Vec::new();
-    let mut current = Vec::new();
-    for line in lines(text) {
-        if line.trim().is_empty() {
-            if !current.is_empty() {
-                blocks.push(std::mem::take(&mut current));
-            }
-        } else {
-            current.push(line);
-        }
-    }
-    if !current.is_empty() {
-        blocks.push(current);
-    }
-    blocks
+/// Blank-line-separated blocks of lines, one at a time. `None` stands for a block over
+/// [`MAX_CUE_BLOCK_BYTES`] or [`MAX_CUE_BLOCK_LINES`], whose lines are not kept.
+struct Blocks<'a> {
+    lines: Lines<'a>,
 }
 
-/// The lines of `text`. LF, CR or CRLF ends a line, as does a run of CRs followed by LF. A CR
-/// run without a following LF ends a line per CR.
-fn lines(text: &str) -> Vec<&str> {
-    let bytes = text.as_bytes();
-    let mut lines = Vec::new();
-    let (mut start, mut at) = (0, 0);
-    while at < bytes.len() {
-        match bytes[at] {
-            b'\n' => {
-                lines.push(&text[start..at]);
-                at += 1;
-                start = at;
-            }
-            b'\r' => {
-                let returns = bytes[at..]
-                    .iter()
-                    .take_while(|&&byte| byte == b'\r')
-                    .count();
-                lines.push(&text[start..at]);
-                at += returns;
-                if bytes.get(at) == Some(&b'\n') {
-                    at += 1;
-                } else {
-                    lines.extend(std::iter::repeat_n("", returns - 1));
-                }
-                start = at;
-            }
-            _ => at += 1,
+impl<'a> Blocks<'a> {
+    fn new(text: &'a str) -> Self {
+        Self {
+            lines: Lines {
+                text: text.strip_prefix('\u{feff}').unwrap_or(text),
+                at: 0,
+                pending_blanks: 0,
+                done: false,
+            },
         }
     }
-    lines.push(&text[start..]);
-    lines
+}
+
+impl<'a> Iterator for Blocks<'a> {
+    type Item = Option<Vec<&'a str>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut block = Vec::new();
+        let mut bytes = 0_usize;
+        let mut oversized = false;
+        for line in self.lines.by_ref() {
+            if line.trim().is_empty() {
+                if oversized || !block.is_empty() {
+                    break;
+                }
+                continue;
+            }
+            if oversized {
+                continue;
+            }
+            bytes += line.len() + 1;
+            if bytes > MAX_CUE_BLOCK_BYTES || block.len() == MAX_CUE_BLOCK_LINES {
+                oversized = true;
+                block = Vec::new();
+                continue;
+            }
+            block.push(line);
+        }
+        if oversized {
+            Some(None)
+        } else {
+            (!block.is_empty()).then_some(Some(block))
+        }
+    }
+}
+
+/// The lines of a text. LF, CR or CRLF ends a line, as does a run of CRs followed by LF. A CR
+/// run without a following LF ends a line per CR.
+struct Lines<'a> {
+    text: &'a str,
+    at: usize,
+    /// Empty lines still owed by a CR run.
+    pending_blanks: usize,
+    done: bool,
+}
+
+impl<'a> Iterator for Lines<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<&'a str> {
+        if self.pending_blanks > 0 {
+            self.pending_blanks -= 1;
+            return Some("");
+        }
+        if self.done {
+            return None;
+        }
+        let bytes = self.text.as_bytes();
+        let start = self.at;
+        let Some(end) = bytes[start..]
+            .iter()
+            .position(|&byte| matches!(byte, b'\n' | b'\r'))
+            .map(|offset| start + offset)
+        else {
+            self.done = true;
+            return Some(&self.text[start..]);
+        };
+        if bytes[end] == b'\n' {
+            self.at = end + 1;
+        } else {
+            let returns = bytes[end..]
+                .iter()
+                .take_while(|&&byte| byte == b'\r')
+                .count();
+            self.at = end + returns;
+            if bytes.get(self.at) == Some(&b'\n') {
+                self.at += 1;
+            } else {
+                self.pending_blanks = returns - 1;
+            }
+        }
+        Some(&self.text[start..end])
+    }
 }
 
 /// `start --> end`, ignoring anything after the end time (WebVTT settings).
@@ -390,66 +450,6 @@ fn timestamp(text: &str) -> Option<MediaTime> {
 fn cue_text(text: &str) -> Option<String> {
     let text = text.trim_matches('\n').to_owned();
     (!text.trim().is_empty() && text.len() <= MAX_TEXT_CONTENT_BYTES).then_some(text)
-}
-
-/// SRT text without `<...>` tags or `{\...}` override blocks.
-fn strip_srt_markup(line: &str) -> String {
-    let mut output = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(start) = rest.find("{\\") {
-        output.push_str(&rest[..start]);
-        match rest[start..].find('}') {
-            Some(end) => rest = &rest[start + end + 1..],
-            None => {
-                rest = "";
-            }
-        }
-    }
-    output.push_str(rest);
-    strip_srt_tags(&output)
-}
-
-/// SRT text without its tags: `<`, an optional `/`, a letter, then anything but `<` up to
-/// `>`. Any other `<` is text, since SubRip has no escape for it.
-fn strip_srt_tags(line: &str) -> String {
-    let mut output = String::with_capacity(line.len());
-    let mut rest = line;
-    while let Some(start) = rest.find('<') {
-        output.push_str(&rest[..start]);
-        let tag = &rest[start + 1..];
-        let name = tag.strip_prefix('/').unwrap_or(tag);
-        // Each `<` looks ahead only to the next `<` or `>`, keeping a line linear in its length.
-        let end = tag.find(['<', '>']);
-        match end {
-            Some(end)
-                if tag.as_bytes()[end] == b'>'
-                    && name.starts_with(|character: char| character.is_ascii_alphabetic()) =>
-            {
-                rest = &tag[end + 1..];
-            }
-            _ => {
-                output.push('<');
-                rest = tag;
-            }
-        }
-    }
-    output.push_str(rest);
-    output
-}
-
-/// WebVTT text without `<...>` tags: in WebVTT a `<` always opens one.
-fn strip_tags(line: &str) -> String {
-    let mut output = String::with_capacity(line.len());
-    let mut depth = false;
-    for character in line.chars() {
-        match character {
-            '<' => depth = true,
-            '>' if depth => depth = false,
-            _ if !depth => output.push(character),
-            _ => {}
-        }
-    }
-    output
 }
 
 /// Decodes WebVTT's named and numeric character references; unknown ones stay as written.
@@ -499,23 +499,55 @@ fn reference(name: &str) -> Option<char> {
     }
 }
 
-/// What a cue's markup says: its speaker, its runs when any carries a class or a time (else
-/// the plain text stands), and what was dropped.
+/// A cue's text and what its markup says: its speaker, its runs when any carries a class or a
+/// time (else the plain text stands), and what was dropped.
 struct Marked {
+    text: String,
     speaker: Option<String>,
     runs: Option<Vec<TextRun>>,
     notes: ImportNotes,
 }
 
-/// Builds a cue's runs from text pieces, each with its open classes and time segment.
-#[derive(Default)]
+/// Builds a cue's text and runs from text pieces, each with its open classes and time segment.
+/// Markup stops being tracked (the cue is imported as plain text) past [`MAX_TEXT_RUNS`] pieces
+/// beyond what trimming can remove.
 struct Runs {
+    text: String,
     pieces: Vec<(String, Vec<String>, usize)>,
+    tracking: bool,
     notes: ImportNotes,
 }
 
 impl Runs {
+    fn new() -> Self {
+        Self {
+            text: String::new(),
+            pieces: Vec::new(),
+            tracking: true,
+            notes: ImportNotes::default(),
+        }
+    }
+
+    /// Stops tracking markup: the cue is imported as plain text.
+    fn flatten(&mut self) {
+        if self.tracking {
+            self.tracking = false;
+            self.pieces = Vec::new();
+            self.notes.flattened += 1;
+        }
+    }
+
     fn push(&mut self, text: &str, classes: &[String], segment: usize) {
+        self.text.push_str(text);
+        if !self.tracking {
+            return;
+        }
+        // Leading line feeds are trimmed from the runs as `cue_text` trims them from the text.
+        let text = if self.pieces.is_empty() {
+            text.trim_start_matches('\n')
+        } else {
+            text
+        };
         if text.is_empty() {
             return;
         }
@@ -523,26 +555,22 @@ impl Runs {
             Some((held, open, at)) if open.as_slice() == classes && *at == segment => {
                 held.push_str(text);
             }
-            _ => self
-                .pieces
-                .push((text.to_owned(), classes.to_vec(), segment)),
+            _ => {
+                // Two more than the limit: trailing line feeds can still remove one.
+                if self.pieces.len() > MAX_TEXT_RUNS + 1 {
+                    self.flatten();
+                    return;
+                }
+                self.pieces
+                    .push((text.to_owned(), classes.to_vec(), segment));
+            }
         }
     }
 
-    /// The runs, timed by `bounds` (each segment's start, then the end, in ticks from the cue's
-    /// start), with surrounding blank lines trimmed as for plain cue text. `None` when no run
-    /// carries a class or a time.
-    fn finish(mut self, bounds: &[i64]) -> (Option<Vec<TextRun>>, ImportNotes) {
-        // Trim leading and trailing line feeds across pieces, as `cue_text` trims the plain text.
-        while let Some(first) = self.pieces.first_mut() {
-            let trimmed = first.0.trim_start_matches('\n').len();
-            first.0.drain(..first.0.len() - trimmed);
-            if first.0.is_empty() {
-                self.pieces.remove(0);
-            } else {
-                break;
-            }
-        }
+    /// The text and runs, timed by `bounds` (each segment's start, then the end, in ticks from
+    /// the cue's start), with trailing line feeds trimmed as for plain cue text. No runs when
+    /// none carries a class or a time.
+    fn finish(mut self, speaker: Option<String>, bounds: &[i64]) -> Marked {
         while let Some(last) = self.pieces.last_mut() {
             let kept = last.0.trim_end_matches('\n').len();
             last.0.truncate(kept);
@@ -552,29 +580,41 @@ impl Runs {
                 break;
             }
         }
-        let timed = bounds.len() > 2;
-        if !timed && self.pieces.iter().all(|(_, classes, _)| classes.is_empty()) {
-            return (None, self.notes);
+        if self.pieces.len() > MAX_TEXT_RUNS {
+            self.flatten();
         }
-        let runs = self
-            .pieces
-            .into_iter()
-            .map(|(text, mut class, segment)| {
-                if class.len() > MAX_RUN_CLASSES {
-                    self.notes.dropped_classes += class.len() - MAX_RUN_CLASSES;
-                    class.truncate(MAX_RUN_CLASSES);
-                }
-                TextRun {
-                    text,
-                    class,
-                    time: timed.then(|| RunTime {
-                        start: MediaTime(bounds[segment]),
-                        end: MediaTime(bounds[segment + 1]),
-                    }),
-                }
-            })
-            .collect();
-        (Some(runs), self.notes)
+        let timed = bounds.len() > 2;
+        let runs = (self.tracking
+            && (timed
+                || self
+                    .pieces
+                    .iter()
+                    .any(|(_, classes, _)| !classes.is_empty())))
+        .then(|| {
+            self.pieces
+                .into_iter()
+                .map(|(text, mut class, segment)| {
+                    if class.len() > MAX_RUN_CLASSES {
+                        self.notes.dropped_classes += class.len() - MAX_RUN_CLASSES;
+                        class.truncate(MAX_RUN_CLASSES);
+                    }
+                    TextRun {
+                        text,
+                        class,
+                        time: timed.then(|| RunTime {
+                            start: MediaTime(bounds[segment]),
+                            end: MediaTime(bounds[segment + 1]),
+                        }),
+                    }
+                })
+                .collect()
+        });
+        Marked {
+            text: self.text,
+            speaker,
+            runs,
+            notes: self.notes,
+        }
     }
 }
 
@@ -595,37 +635,27 @@ fn tag_classes(names: &str, notes: &mut ImportNotes) -> Vec<String> {
         .collect()
 }
 
-/// A WebVTT cue body's markup for a cue over `range`: voices, classes, bold, italic and
-/// underline as run classes, and inline timestamps splitting the runs.
+/// A WebVTT cue body's text and markup for a cue over `range`: voices, classes, bold, italic and
+/// underline as run classes, and inline timestamps splitting the runs. A `<` with no `>` after it
+/// ends the cue text, as the WebVTT cue text tokenizer does. Linear in the body: each open tag
+/// records how many classes it added, and closing it truncates them.
 fn vtt_markup(body: &str, range: TimeRange) -> Marked {
     let start = range.start().ticks();
     let duration = range.duration().map_or(0, MediaTime::ticks);
-    let mut runs = Runs::default();
+    let mut runs = Runs::new();
     let mut speaker = None;
-    // The tags open, each with the classes it gives, innermost last.
-    let mut open: Vec<(String, Vec<String>)> = Vec::new();
+    // The tags open, each with the length of `classes` before it opened, innermost last.
+    let mut open: Vec<(&str, usize)> = Vec::new();
+    // The distinct classes the open tags give, in order.
+    let mut classes: Vec<String> = Vec::new();
     let mut bounds = vec![0_i64];
     let mut rest = body;
-    let classes = |open: &[(String, Vec<String>)]| {
-        open.iter()
-            .flat_map(|(_, classes)| classes.iter().cloned())
-            .fold(Vec::<String>::new(), |mut all, class| {
-                if !all.contains(&class) {
-                    all.push(class);
-                }
-                all
-            })
-    };
     loop {
         let Some(at) = rest.find('<') else {
-            runs.push(&decode_references(rest), &classes(&open), bounds.len() - 1);
+            runs.push(&decode_references(rest), &classes, bounds.len() - 1);
             break;
         };
-        runs.push(
-            &decode_references(&rest[..at]),
-            &classes(&open),
-            bounds.len() - 1,
-        );
+        runs.push(&decode_references(&rest[..at]), &classes, bounds.len() - 1);
         let Some(end) = rest[at..].find('>') else {
             break;
         };
@@ -633,7 +663,8 @@ fn vtt_markup(body: &str, range: TimeRange) -> Marked {
         rest = &rest[at + end + 1..];
         if let Some(name) = tag.strip_prefix('/') {
             let name = name.trim();
-            if let Some(index) = open.iter().rposition(|(open, _)| open == name) {
+            if let Some(index) = open.iter().rposition(|(open, _)| *open == name) {
+                classes.truncate(open[index].1);
                 open.truncate(index);
             }
             continue;
@@ -645,7 +676,9 @@ fn vtt_markup(body: &str, range: TimeRange) -> Marked {
                     if time.ticks() - start > *bounds.last().unwrap_or(&0)
                         && time.ticks() - start < duration =>
                 {
-                    bounds.push(time.ticks() - start);
+                    if runs.tracking {
+                        bounds.push(time.ticks() - start);
+                    }
                 }
                 _ => runs.notes.dropped_timestamps += 1,
             }
@@ -675,21 +708,33 @@ fn vtt_markup(body: &str, range: TimeRange) -> Marked {
             }
             _ => Vec::new(),
         };
-        open.push((name.to_owned(), given));
+        if !runs.tracking {
+            continue;
+        }
+        if open.len() == MAX_OPEN_TAGS {
+            runs.flatten();
+            continue;
+        }
+        open.push((name, classes.len()));
+        for class in given {
+            if !classes.contains(&class) {
+                if classes.len() == MAX_HELD_CLASSES {
+                    runs.flatten();
+                    break;
+                }
+                classes.push(class);
+            }
+        }
     }
     bounds.push(duration);
-    let (runs, notes) = runs.finish(&bounds);
-    Marked {
-        speaker: speaker.filter(|speaker| speaker.len() <= crate::MAX_CAPTION_NAME_BYTES),
-        runs,
-        notes,
-    }
+    let speaker = speaker.filter(|speaker| speaker.len() <= crate::MAX_CAPTION_NAME_BYTES);
+    runs.finish(speaker, &bounds)
 }
 
 /// An SRT cue body's markup: `<b>`, `<i>` and `<u>` as run classes; other tags and override
 /// blocks dropped.
 fn srt_markup(body: &[&str]) -> Marked {
-    let mut runs = Runs::default();
+    let mut runs = Runs::new();
     let mut open: Vec<String> = Vec::new();
     for (index, line) in body.iter().enumerate() {
         if index > 0 {
@@ -731,12 +776,7 @@ fn srt_markup(body: &[&str]) -> Marked {
         }
         runs.push(rest, &open, 0);
     }
-    let (runs, notes) = runs.finish(&[0, 0]);
-    Marked {
-        speaker: None,
-        runs,
-        notes,
-    }
+    runs.finish(None, &[0, 0])
 }
 
 /// SRT text without its `{\...}` override blocks.

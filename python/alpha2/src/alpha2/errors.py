@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from ._native import InternalError as Alpha2InternalError
+
 __all__ = [
     "Alpha2AbortError",
     "Alpha2ComposeError",
@@ -17,6 +19,7 @@ __all__ = [
     "Alpha2GpuInitializationError",
     "Alpha2HostError",
     "Alpha2HostInstallError",
+    "Alpha2InternalError",
     "Alpha2ProjectValidationError",
     "ExportPhase",
     "failure_class_of_code",
@@ -69,6 +72,7 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "PLUGIN_ABI_UNSUPPORTED": _PERMANENT,
     "PLUGIN_NO_ARTIFACT": _PERMANENT,
     "PLUGIN_NATIVE_REFUSED": _PERMANENT,
+    "PLUGIN_REFUSED": _PERMANENT,
     "PLUGIN_DESCRIPTOR_MISMATCH": _PERMANENT,
     "PLUGIN_UNSUPPORTED_FEATURE": _PERMANENT,
     "PLUGIN_LOAD_FAILED": _PERMANENT,
@@ -79,9 +83,11 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "GPU_INIT_FAILED": _UNKNOWN,
     "ENCODE_ERROR": _UNKNOWN,
     "ENCODER_BUSY": ("RESOURCE_BUSY", "gpu"),
-    "INTERNAL": _UNKNOWN,
+    # A caught panic of the host.
+    "INTERNAL": ("DEFECT", "unknown"),
     "ALPHA2_ERROR": _UNKNOWN,
     "HOST_NOT_FOUND": _PERMANENT,
+    "HOST_VERSION_MISMATCH": _PERMANENT,
     "HOST_NOT_EXECUTABLE": _PERMANENT,
     "HOST_LOAD_FAILED": _PERMANENT,
     "HOST_START_FAILED": _UNKNOWN,
@@ -260,8 +266,9 @@ class Alpha2EditError(ValueError):
 
     ``refusal`` names why in snake case: ``invalid_project``, ``invalid_request``,
     ``unknown_data``, ``wrong_kind``, ``unknown_target``, ``empty_target``, ``missing_anchor``,
-    ``invalid_range``, ``nothing_to_bake``, ``correction_not_bakeable``, ``matte_source``,
-    ``read_through`` or ``invalid_result``.
+    ``invalid_range``, ``nothing_to_bake``, ``correction_not_bakeable``, ``unbounded_parameter``,
+    ``matte_source``, ``read_through``, ``in_transition``, ``in_fade``, ``too_many_clips``,
+    ``too_many_cues``, ``result_too_large`` or ``invalid_result``.
     """
 
     code: str

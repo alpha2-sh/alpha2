@@ -32,6 +32,9 @@ sys.modules["build_wheel"] = build_wheel
 spec.loader.exec_module(build_wheel)
 
 
+LOCK = b'name = "alpha2-ffmpeg-lgpl-runtime"\nlicense = "LGPL-2.1-or-later"\n'
+
+
 def elf(*versions: str) -> bytes:
     return b"\x7fELF" + b"\x00" * 60 + b"".join(f"GLIBC_{v}\x00".encode() for v in versions)
 
@@ -83,6 +86,10 @@ def test_a_linux_archive_becomes_a_manylinux_wheel_of_its_libraries_sonames(
             "lib/libavutil.so.60.26.103": elf("2.35"),
             "LICENSE.md": b"MIT",
             "licenses/FFmpeg/COPYING.LGPLv2.1": b"LGPL",
+            "licenses/rust-crate-licenses.md": b"crates",
+            "compliance/FFMPEG-RUNTIME.toml": LOCK,
+            "compliance/THIRD_PARTY_NOTICES.md": b"notices",
+            "compliance/TOOLCHAIN.txt": b"1.99.0",
         },
         {
             "lib/libavutil.so.60": "libavutil.so.60.26.103",
@@ -100,6 +107,27 @@ def test_a_linux_archive_becomes_a_manylinux_wheel_of_its_libraries_sonames(
             assert (bundle.getinfo(name).external_attr >> 16) & 0o777 == 0o755, name
         assert (bundle.getinfo("alpha2_host/__init__.py").external_attr >> 16) & 0o111 == 0
         assert "alpha2_host/licenses/FFmpeg/COPYING.LGPLv2.1" in names
+        licenses = [
+            "LICENSE.md",
+            "compliance/THIRD_PARTY_NOTICES.md",
+            "licenses/FFmpeg/COPYING.LGPLv2.1",
+            "licenses/rust-crate-licenses.md",
+        ]
+        dist_info = "alpha2_host-0.4.2.dist-info"
+        assert (
+            sorted(
+                name.removeprefix(f"{dist_info}/licenses/")
+                for name in names
+                if name.startswith(f"{dist_info}/licenses/")
+            )
+            == licenses
+        )
+        assert bundle.read(f"{dist_info}/licenses/compliance/THIRD_PARTY_NOTICES.md") == b"notices"
+        fields = bundle.read(f"{dist_info}/METADATA").decode().split("\n\n")[0].splitlines()
+        assert "License-Expression: MIT AND LGPL-2.1-or-later" in fields
+        assert [field for field in fields if field.startswith("License-File: ")] == [
+            f"License-File: {name}" for name in licenses
+        ]
         assert (
             "Tag: py3-none-manylinux_2_35_x86_64"
             in bundle.read("alpha2_host-0.4.2.dist-info/WHEEL").decode()
@@ -119,7 +147,11 @@ def test_a_macos_archive_is_tagged_with_its_minimum_os_and_a_prerelease_in_pytho
     source = archive(
         tmp_path,
         "alpha2-0.5.0-rc.1-macos-arm64-bundled.tar.gz",
-        {"bin/alpha2-host": macho(13, 0), "lib/libavutil.60.26.103.dylib": macho(14, 0)},
+        {
+            "bin/alpha2-host": macho(13, 0),
+            "lib/libavutil.60.26.103.dylib": macho(14, 0),
+            "compliance/FFMPEG-RUNTIME.toml": LOCK,
+        },
         {
             "lib/libavutil.60.dylib": "libavutil.60.26.103.dylib",
             "lib/libavutil.dylib": "libavutil.60.26.103.dylib",
@@ -147,6 +179,7 @@ def test_a_windows_archive_becomes_a_win_amd64_wheel(tmp_path: Path) -> None:
         "bin/avutil-60.dll": b"MZ avutil",
         "bin/dxcompiler.dll": b"MZ dxc",
         "LICENSE.md": b"MIT",
+        "compliance/FFMPEG-RUNTIME.toml": LOCK,
     }
     source = tmp_path / f"{base}.zip"
     with zipfile.ZipFile(source, "w") as bundle:
@@ -182,6 +215,11 @@ def test_an_archive_that_is_not_a_bundled_release_is_refused(tmp_path: Path) -> 
     empty = archive(tmp_path, "alpha2-0.4.2-linux-x64-bundled.tar.gz", {"bin/alpha2": elf()}, {})
     with pytest.raises(SystemExit, match="bin/alpha2-host"):
         build_wheel.build(str(empty), str(tmp_path / "out"))
+    unlicensed = archive(
+        tmp_path, "alpha2-0.4.2-linux-x64-bundled.tar.gz", {"bin/alpha2-host": elf("2.17")}, {}
+    )
+    with pytest.raises(SystemExit, match=r"FFMPEG-RUNTIME\.toml"):
+        build_wheel.build(str(unlicensed), str(tmp_path / "out"))
 
 
 def test_the_host_the_wheel_installed_is_found_after_alpha2_host_path_and_before_the_cache(

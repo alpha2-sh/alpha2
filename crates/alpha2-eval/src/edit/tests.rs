@@ -23,8 +23,8 @@ fn keyed(times: &[(i64, f64)], curve: &Value) -> Value {
     json!({ "mode": "keyframes", "keyframes": times.iter().map(|(time, value)| json!({ "time": time * FRAME, "value": value, "interpolation": curve })).collect::<Vec<_>>() })
 }
 
-/// One clip of each time map on its own track, with keyframes, a mask, a transition, captions,
-/// an audio clip and a timeline-anchored binding.
+/// One clip of each time map on its own track, with keyframes, a mask, a keyed transition,
+/// captions, an audio clip and a timeline-anchored binding.
 pub(super) fn corpus() -> Value {
     let linear = json!({ "type": "linear" });
     let eased = json!({ "type": "cubic_bezier", "x1": 0.42, "y1": 0.0, "x2": 0.58, "y2": 1.0 });
@@ -75,6 +75,9 @@ pub(super) fn corpus() -> Value {
     let mut a = clip("ta", "v", (0, 40), (0, 40), &json!({ "type": "forward" }));
     a["visual"] = json!({ "opacity": { "mode": "data", "data": "beat", "channel": "level" } });
     let b = clip("tb", "w", (30, 80), (0, 50), &json!({ "type": "forward" }));
+    let angle = json!({ "mode": "keyframes", "keyframes": [
+        { "time": 30 * FRAME, "value": { "type": "float", "value": 0.0 }, "interpolation": linear },
+        { "time": 40 * FRAME, "value": { "type": "float", "value": 90.0 }, "interpolation": linear } ] });
     let mut audio = clip("au", "a", (0, 90), (0, 90), &json!({ "type": "forward" }));
     audio["audio"] = json!({ "gain": keyed(&[(0, 0.5), (90, 1.0)], &linear) });
     json!({
@@ -94,7 +97,8 @@ pub(super) fn corpus() -> Value {
             { "id": "t-frz", "name": "Z", "kind": "video", "clips": [freeze] },
             { "id": "t-mix", "name": "M", "kind": "video", "clips": [a, b], "transitions": [
                 { "from_clip": "ta", "to_clip": "tb", "timeline_range": { "start": 30 * FRAME, "end": 40 * FRAME },
-                  "easing": { "type": "linear" }, "effect": { "id": "alpha2.transition.fade", "version": 1 } } ] },
+                  "easing": { "type": "linear" }, "effect": { "id": "alpha2.transition.angular", "version": 1,
+                  "params": { "starting_angle": angle } } } ] },
             { "id": "t-audio", "name": "A", "kind": "audio", "clips": [audio] },
             { "id": "t-subs", "name": "C", "kind": "caption", "captions": { "cues": [
                 { "timeline_range": { "start": 2 * FRAME, "end": 22 * FRAME }, "text": [
@@ -154,18 +158,16 @@ pub(super) fn state(project: &Project, time: i64) -> Vec<String> {
             matte
         ));
     }
+    let bus = |animation| crate::sample_scalar(animation, MediaTime(time), &context);
     for track in &project.timeline.tracks {
         out.push(format!(
             "track {} gain {} pan {}",
             track.id,
-            crate::sample_scalar(&track.audio.gain, MediaTime(time), &context),
-            crate::sample_scalar(&track.audio.pan, MediaTime(time), &context)
+            bus(&track.audio.gain),
+            bus(&track.audio.pan)
         ));
     }
-    out.push(format!(
-        "master gain {}",
-        crate::sample_scalar(&project.audio.gain, MediaTime(time), &context)
-    ));
+    out.push(format!("master gain {}", bus(&project.audio.gain)));
     for clip in &frame.audio {
         let original = project
             .timeline
@@ -182,7 +184,12 @@ pub(super) fn state(project: &Project, time: i64) -> Vec<String> {
         ));
     }
     for transition in &frame.transitions {
-        out.push(format!("transition {}", transition.progress));
+        let params = transition
+            .effect
+            .params()
+            .map(|(name, value)| format!("{name}={value:?}"))
+            .collect::<Vec<_>>();
+        out.push(format!("transition {} {params:?}", transition.progress));
     }
     for caption in &frame.captions {
         let spoken = match caption.text {
@@ -202,6 +209,26 @@ pub(super) fn state(project: &Project, time: i64) -> Vec<String> {
         out.push(format!("caption {} {spoken}", caption.text.text()));
     }
     out
+}
+
+/// Whether two [`state`]s agree. Keys a cut adds to a bus curve hold `f32` samples of it, so bus
+/// lines (`track ...`, `master gain ...`) agree within 1e-6; every other line exactly.
+pub(super) fn same_state(before: &[String], after: &[String]) -> bool {
+    let bus = |line: &str| line.starts_with("track ") || line.starts_with("master gain ");
+    let close = |before: &str, after: &str| {
+        before.split(' ').count() == after.split(' ').count()
+            && before.split(' ').zip(after.split(' ')).all(|(a, b)| {
+                match (a.parse::<f32>(), b.parse::<f32>()) {
+                    (Ok(a), Ok(b)) => (a - b).abs() < 1e-6,
+                    _ => a == b,
+                }
+            })
+    };
+    before.len() == after.len()
+        && before
+            .iter()
+            .zip(after)
+            .all(|(before, after)| before == after || (bus(before) && close(before, after)))
 }
 
 pub(super) fn kept_moments_hold(
@@ -254,10 +281,10 @@ pub(super) fn kept_moments_hold(
             if mixed {
                 continue;
             }
-            assert_eq!(
-                state(original, tick),
-                state(edited, at),
-                "kept time {tick} now at {at}"
+            let (before, after) = (state(original, tick), state(edited, at));
+            assert!(
+                same_state(&before, &after),
+                "kept time {tick} now at {at}\n{before:#?}\n{after:#?}"
             );
         }
     }
@@ -688,4 +715,320 @@ fn an_empty_sample_set_survives_a_timeline_ripple() {
         panic!("points");
     };
     assert!(samples.times.is_empty() && samples.values.is_empty());
+}
+
+/// A timeline `points` data set of `samples` samples of `channels` pseudo-random coordinates.
+fn points_set(json: &mut String, id: &str, channels: usize, samples: usize, state: &mut u64) {
+    use std::fmt::Write as _;
+    write!(json, r#"{{"id":"{id}","anchor":{{"type":"timeline"}},"kind":"points","interpolation":"hold","channels":["#).expect("writes");
+    for channel in 0..channels {
+        write!(json, "{}\"k{channel}\"", if channel > 0 { "," } else { "" }).expect("writes");
+    }
+    json.push_str(r#"],"times":["#);
+    for sample in 0..samples {
+        write!(
+            json,
+            "{}{}",
+            if sample > 0 { "," } else { "" },
+            sample * 4004
+        )
+        .expect("writes");
+    }
+    json.push_str(r#"],"values":["#);
+    for value in 0..samples * channels * 2 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        #[allow(clippy::cast_precision_loss)]
+        let coordinate = 0.25 + (*state >> 40) as f32 / (1_u64 << 25) as f32;
+        write!(json, "{}{coordinate}", if value > 0 { "," } else { "" }).expect("writes");
+    }
+    json.push_str("]}");
+}
+
+/// A project just under the document cap with a clip that follows a 20,000-sample data set,
+/// which `bake` turns into keyframes.
+pub(super) fn project_near_the_cap() -> String {
+    let cap = alpha2_model::MAX_PROJECT_JSON_BYTES;
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    let tracked = 20_000_usize;
+    let mut json = String::with_capacity(cap);
+    json.push_str(r#"{"schema_version":1,"id":"p","name":"p","settings":{"width":1920,"height":1080,"frame_rate":{"num":30,"den":1},"sample_rate":48000,"background":{"red":0.0,"green":0.0,"blue":0.0}},"sources":[{"id":"v","locator":"asset://v","kind":"video"}],"data":["#);
+    points_set(&mut json, "track", 1, tracked, &mut state);
+    json.push(',');
+    points_set(&mut json, "full", 64, 31_250, &mut state);
+    json.push(',');
+    let follow = r#"{"mode":"data","data":"track","channel":"k0"}"#;
+    let tail = format!(
+        r#"],"timeline":{{"tracks":[{{"id":"t","name":"V","kind":"video","clips":[{{"id":"c0","source_id":"v","timeline_range":{{"start":0,"end":{end}}},"source_range":{{"start":0,"end":{end}}},"visual":{{"position":{follow},"scale":{follow}}}}}]}}]}}}}"#,
+        end = tracked * 4004
+    );
+    let room = cap - json.len() - tail.len() - 200_000;
+    // About 11 bytes a value, 128 values a sample.
+    points_set(&mut json, "rest", 64, room / (128 * 11), &mut state);
+    json.push_str(&tail);
+    assert!(json.len() <= cap, "{} bytes", json.len());
+    json
+}
+
+#[test]
+fn an_edit_that_grows_a_project_past_the_document_cap_is_refused() {
+    let json = project_near_the_cap();
+    Project::from_json(&json).expect("the input loads");
+    let request = r#"{"op":"bake","targets":[{"clip":"c0","property":"visual.position"},{"clip":"c0","property":"visual.scale"}]}"#;
+    let Err(failure) = apply_json(&json, request) else {
+        panic!("the edit applied");
+    };
+    assert_eq!(
+        (failure.code, failure.refusal),
+        ("INVALID_INPUT", "result_too_large"),
+        "{failure}"
+    );
+}
+
+#[test]
+fn a_rippled_transition_takes_its_keyed_parameters_along() {
+    let project = load(&corpus());
+    let (edited, _) = remove(
+        &project,
+        timeline_list(&[(10, 20)]),
+        Target::Track(alpha2_model::TrackId::new("t-fwd").expect("id")),
+        Ripple::Timeline,
+    );
+    let angle = |project: &Project, frame: i64| {
+        let index = ActiveIndex::build(project).expect("index");
+        let frame = evaluate(project, &index, MediaTime(frame * FRAME)).expect("frame");
+        frame
+            .transitions
+            .first()
+            .and_then(|transition| transition.effect.param("starting_angle"))
+            .map(|value| format!("{value:?}"))
+    };
+    for frame in 30..40 {
+        assert!(angle(&project, frame).is_some(), "frame {frame}");
+        assert_eq!(
+            angle(&project, frame),
+            angle(&edited, frame - 10),
+            "frame {frame}"
+        );
+    }
+}
+
+#[test]
+fn a_ripple_keeps_every_key_of_a_clip_it_only_moves() {
+    let opacity = |frames: &[i64]| {
+        let keys = frames
+            .iter()
+            .map(|frame| {
+                (
+                    *frame,
+                    0.5 + 0.001 * f64::from(i32::try_from(*frame).expect("frame")),
+                )
+            })
+            .collect::<Vec<_>>();
+        json!({ "opacity": keyed(&keys, &json!({ "type": "linear" })) })
+    };
+    let forward = json!({ "type": "forward" });
+    let mut early = clip("early", "v", (0, 1), (0, 1), &forward);
+    early["visual"] = opacity(&[0, 50, 60, 70]);
+    let cut = clip("cut", "v", (1, 10), (1, 10), &forward);
+    let mut moved = clip("moved", "v", (20, 40), (20, 40), &forward);
+    moved["visual"] = opacity(&[0, 10, 25, 50, 60, 70]);
+    let project = load(&json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": { "width": 640, "height": 360, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+        "sources": [{ "id": "v", "kind": "video", "locator": "v.mp4" }],
+        "timeline": { "tracks": [{ "id": "t", "name": "T", "kind": "video", "clips": [early, cut, moved] }] }
+    }));
+    let keys = |project: &Project, id: &str| {
+        let clip = project.timeline.tracks[0]
+            .clips
+            .iter()
+            .find(|clip| clip.id.as_str() == id)
+            .expect("clip");
+        match &clip.visual.opacity {
+            alpha2_model::Animated::Keyframes { keyframes } => keyframes
+                .iter()
+                .map(|key| key.time.ticks() / FRAME)
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        }
+    };
+    let target = Target::Track(alpha2_model::TrackId::new("t").expect("id"));
+    for ripple in [Ripple::Track, Ripple::Timeline, Ripple::None] {
+        let (edited, report) = remove(&project, timeline_list(&[(2, 4)]), target.clone(), ripple);
+        assert_eq!(keys(&edited, "early"), [0, 50, 60, 70], "{ripple:?}");
+        let shift = if ripple == Ripple::None { 0 } else { 2 };
+        assert_eq!(
+            keys(&edited, "moved"),
+            [0, 10, 25, 50, 60, 70].map(|frame| frame - shift),
+            "{ripple:?}"
+        );
+        kept_moments_hold(&project, &edited, &report, ripple != Ripple::None);
+    }
+}
+
+fn gain_project(keys: &Value) -> Project {
+    load(&json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": { "width": 640, "height": 360, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+        "sources": [{ "id": "a", "kind": "audio", "locator": "a.m4a" }],
+        "timeline": { "tracks": [{ "id": "t-audio", "name": "A", "kind": "audio",
+            "clips": [clip("au", "a", (0, 600), (0, 600), &json!({ "type": "forward" }))],
+            "audio": { "gain": keys, "pan": keys } }] },
+        "audio": { "gain": keys }
+    }))
+}
+
+/// The largest change of the track gain, track pan and master gain over kept ticks.
+fn worst_bus_change(original: &Project, edited: &Project, removed: &[(i64, i64)]) -> [f32; 3] {
+    let removed = removed
+        .iter()
+        .map(|(from, to)| (from * FRAME, to * FRAME))
+        .collect::<Vec<_>>();
+    let values = |project: &Project, tick: i64| {
+        let track = &project.timeline.tracks[0].audio;
+        [&track.gain, &track.pan, &project.audio.gain].map(|animation| {
+            crate::sample_scalar(animation, MediaTime(tick), &crate::SampleContext::NONE)
+        })
+    };
+    let mut worst = [0.0_f32; 3];
+    for tick in (0..600 * FRAME).step_by(997) {
+        let Some(at) = new_time(tick, &removed) else {
+            continue;
+        };
+        let (before, after) = (values(original, tick), values(edited, at));
+        for place in 0..3 {
+            worst[place] = worst[place].max((before[place] - after[place]).abs());
+        }
+    }
+    worst
+}
+
+#[test]
+fn a_ripple_keeps_hold_linear_and_eased_bus_curves() {
+    let hold = json!({ "type": "hold" });
+    let linear = json!({ "type": "linear" });
+    let eased = json!({ "type": "cubic_bezier", "x1": 0.42, "y1": 0.0, "x2": 0.58, "y2": 1.0 });
+    let overshoot = json!({ "type": "cubic_bezier", "x1": 0.3, "y1": -0.4, "x2": 0.6, "y2": 1.3 });
+    let mixed = json!({ "mode": "keyframes", "keyframes": [
+        { "time": 0, "value": 0.2, "interpolation": eased },
+        { "time": 100 * FRAME, "value": 0.9, "interpolation": hold },
+        { "time": 200 * FRAME, "value": 0.4, "interpolation": overshoot },
+        { "time": 400 * FRAME, "value": 0.6, "interpolation": linear },
+        { "time": 500 * FRAME, "value": 0.1, "interpolation": linear } ] });
+    for keys in [
+        keyed(&[(0, 0.2), (300, 1.0)], &hold),
+        keyed(&[(0, 0.2), (300, 1.0)], &linear),
+        keyed(&[(0, 0.0), (300, 1.0)], &eased),
+        mixed,
+    ] {
+        let project = gain_project(&keys);
+        for ranges in [
+            vec![(120, 180)],
+            vec![(20, 30), (40, 45), (90, 150), (220, 230), (390, 410)],
+        ] {
+            let target = Target::Track(alpha2_model::TrackId::new("t-audio").expect("id"));
+            for ripple in [Ripple::Track, Ripple::Timeline] {
+                let (edited, _) = remove(&project, timeline_list(&ranges), target.clone(), ripple);
+                let [gain, pan, master] = worst_bus_change(&project, &edited, &ranges);
+                assert!(
+                    gain < 1e-6 && pan < 1e-6,
+                    "{keys} {ranges:?} {ripple:?}: {gain} {pan}"
+                );
+                if ripple == Ripple::Timeline {
+                    assert!(master < 1e-6, "{keys} {ranges:?}: master {master}");
+                } else {
+                    assert_eq!(edited.audio.gain, project.audio.gain);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn kept_moments_hold_with_bus_automation_under_a_timeline_ripple() {
+    let mut document = corpus();
+    let hold = json!({ "type": "hold" });
+    let eased = json!({ "type": "cubic_bezier", "x1": 0.42, "y1": 0.0, "x2": 0.58, "y2": 1.0 });
+    document["timeline"]["tracks"][7]["audio"] = json!({
+        "gain": keyed(&[(0, 0.2), (80, 1.0)], &hold),
+        "pan": keyed(&[(0, -0.5), (70, 0.5)], &eased) });
+    document["audio"] = json!({ "gain": keyed(&[(10, 0.5), (60, 1.0)], &eased) });
+    let project = load(&document);
+    for ranges in [
+        vec![(5, 9)],
+        vec![(13, 17), (31, 36), (61, 64)],
+        vec![(0, 3), (45, 52)],
+    ] {
+        let (edited, report) = remove(
+            &project,
+            timeline_list(&ranges),
+            Target::Track(alpha2_model::TrackId::new("t-fwd").expect("id")),
+            Ripple::Timeline,
+        );
+        kept_moments_hold(&project, &edited, &report, true);
+    }
+}
+
+#[test]
+fn a_timeline_sample_set_reads_as_before_at_every_kept_tick() {
+    for interpolation in ["linear", "hold"] {
+        let project = load(&json!({
+            "schema_version": 1, "id": "p", "name": "P",
+            "settings": { "width": 640, "height": 360, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+            "sources": [{ "id": "a", "kind": "audio", "locator": "a.m4a" }],
+            "timeline": { "tracks": [{ "id": "t-audio", "name": "A", "kind": "audio",
+                "clips": [clip("au", "a", (0, 600), (0, 600), &json!({ "type": "forward" }))] }] },
+            "data": [{ "id": "ramp", "anchor": { "type": "timeline" }, "kind": "points",
+                       "interpolation": interpolation, "channels": ["x", "y"],
+                       "times": [0, 100 * FRAME, 300 * FRAME],
+                       "values": [0.0, 1.0, 4.0, 5.0, 10.0, 3.0, 6.0, 2.0, 2.0, 8.0, null, null] }]
+        }));
+        let read = |project: &Project, tick: i64| {
+            let samples = project.data[0].values.samples().expect("samples");
+            (0..2)
+                .map(|channel| crate::sample_channel(samples, channel, 2, MediaTime(tick)))
+                .collect::<Vec<_>>()
+        };
+        let target = Target::Track(alpha2_model::TrackId::new("t-audio").expect("id"));
+        for ranges in [
+            vec![(120, 180)],
+            vec![(10, 20), (90, 110), (250, 260)],
+            vec![(280, 350)],
+            vec![(400, 450)],
+        ] {
+            let (edited, _) = remove(
+                &project,
+                timeline_list(&ranges),
+                target.clone(),
+                Ripple::Timeline,
+            );
+            let removed = ranges
+                .iter()
+                .map(|(from, to)| (from * FRAME, to * FRAME))
+                .collect::<Vec<_>>();
+            for tick in (0..600 * FRAME).step_by(331) {
+                let Some(at) = new_time(tick, &removed) else {
+                    continue;
+                };
+                let (before, after) = (read(&project, tick), read(&edited, at));
+                let close =
+                    before
+                        .iter()
+                        .zip(&after)
+                        .all(|(before, after)| match (before, after) {
+                            (Some(before), Some(after)) => {
+                                before.iter().zip(after).all(|(a, b)| (a - b).abs() < 1e-5)
+                            }
+                            (None, None) => true,
+                            _ => false,
+                        });
+                assert!(
+                    close,
+                    "{interpolation} {ranges:?} at {tick}: {before:?} {after:?}"
+                );
+            }
+        }
+    }
 }

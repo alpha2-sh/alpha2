@@ -7,7 +7,7 @@ use alpha2_model::{
     CaptionCue, CubicBezier, Easing, EffectValue, LayoutNode, Paint, Rgba, RunState, TextShadow,
     TextStroke, TextStyle, TextUnit,
 };
-use alpha2_time::MediaTime;
+use alpha2_time::{MAX_SERIALIZED_TICKS, MediaTime};
 
 use crate::ComposeError;
 use crate::compile::Context;
@@ -264,6 +264,52 @@ pub(crate) enum GeometryPrim {
     Path(alpha2_model::Path),
 }
 
+impl MaskShapePrim {
+    /// Its animations' last keys from the start of a span `length` long.
+    pub(crate) fn last_keys(&self, length: i64) -> Vec<Option<i64>> {
+        use crate::compile::last_key;
+        let mut last = match &self.geometry {
+            GeometryPrim::Rect {
+                center,
+                size,
+                corner,
+                rotation,
+            } => vec![
+                last_key(center, length),
+                last_key(size, length),
+                last_key(corner, length),
+                last_key(rotation, length),
+            ],
+            GeometryPrim::Ellipse {
+                center,
+                size,
+                rotation,
+            } => vec![
+                last_key(center, length),
+                last_key(size, length),
+                last_key(rotation, length),
+            ],
+            GeometryPrim::Polystar {
+                center,
+                outer,
+                inner,
+                roundness,
+                rotation,
+                ..
+            } => vec![
+                last_key(center, length),
+                last_key(outer, length),
+                last_key(inner, length),
+                last_key(roundness, length),
+                last_key(rotation, length),
+            ],
+            GeometryPrim::Path(_) => Vec::new(),
+        };
+        last.push(last_key(&self.feather, length));
+        last
+    }
+}
+
 /// A paint with its theme colors resolved and positions in the area's unit square.
 #[derive(Clone, Debug)]
 pub(crate) enum PaintPrim {
@@ -447,6 +493,21 @@ pub(crate) fn seconds_to_ticks(seconds: f64) -> i64 {
     (seconds * alpha2_time::TICKS_PER_SECOND as f64).round() as i64
 }
 
+/// The latest time a project holds, for messages.
+pub(crate) fn latest_time() -> String {
+    format!(
+        "the latest time a project holds ({MAX_SERIALIZED_TICKS} ticks, {} s)",
+        MAX_SERIALIZED_TICKS / alpha2_time::TICKS_PER_SECOND
+    )
+}
+
+/// `a + b` ticks, refused at `path` past the latest time a project holds.
+pub(crate) fn add_ticks(a: i64, b: i64, path: &str) -> Result<i64, ComposeError> {
+    a.checked_add(b)
+        .filter(|sum| *sum <= MAX_SERIALIZED_TICKS)
+        .ok_or_else(|| ComposeError::new(path, format!("it ends past {}", latest_time())))
+}
+
 /// The most units of a revealed text changing at once, which keeps the range selector's
 /// offset inside the indices a project allows.
 const REVEAL_MAX_OVERLAP: i64 = 1024;
@@ -512,16 +573,45 @@ impl Context<'_> {
         ComposeError::new(path, message)
     }
 
-    /// Seconds a field holds as ticks: finite and not negative.
+    /// Seconds a field holds as ticks: finite, not negative, and no later than a project holds.
     pub(crate) fn time(path: &str, field: &str, seconds: f64) -> Result<i64, ComposeError> {
-        if seconds.is_finite() && seconds >= 0.0 {
-            Ok(seconds_to_ticks(seconds))
-        } else {
-            Err(Self::error(
+        if !(seconds.is_finite() && seconds >= 0.0) {
+            return Err(Self::error(
                 &format!("{path}.{field}"),
                 format!("{seconds} is not a time: seconds are finite and not negative"),
-            ))
+            ));
         }
+        let ticks = seconds_to_ticks(seconds);
+        if ticks > MAX_SERIALIZED_TICKS {
+            return Err(Self::error(
+                &format!("{path}.{field}"),
+                format!("{seconds} s is past {}", latest_time()),
+            ));
+        }
+        Ok(ticks)
+    }
+
+    /// The duration the facts give for `file`, refused at `field` of the node when absent or
+    /// out of range.
+    pub(crate) fn facts_duration(&self, file: &str, field: &str) -> Result<i64, ComposeError> {
+        let ticks = self
+            .facts
+            .media
+            .get(file)
+            .and_then(|facts| facts.duration_ticks)
+            .ok_or_else(|| Self::error(field, format!(
+                "no duration for \"{file}\" in the facts; gather them for every file `requirements` lists"
+            )))?;
+        if !(0..=MAX_SERIALIZED_TICKS).contains(&ticks) {
+            return Err(Self::error(
+                field,
+                format!(
+                    "the facts give \"{file}\" a duration of {ticks} ticks; a duration is 0 to {}",
+                    latest_time()
+                ),
+            ));
+        }
+        Ok(ticks)
     }
 
     fn optional_time(
@@ -573,6 +663,21 @@ impl Context<'_> {
         }
     }
 
+    /// Refuses `text` longer than one text holds, at `path`.
+    fn text_length(text: &str, path: &str) -> Result<(), ComposeError> {
+        if text.len() > alpha2_model::MAX_TEXT_CONTENT_BYTES {
+            return Err(Self::error(
+                path,
+                format!(
+                    "the text is {} bytes, and a text holds at most {}",
+                    text.len(),
+                    alpha2_model::MAX_TEXT_CONTENT_BYTES
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// The theme size `fraction` in pixels.
     pub(crate) fn theme_px(&self, fraction: f32) -> f32 {
         fraction * self.short_side()
@@ -598,6 +703,23 @@ impl Context<'_> {
             Some(TransitionChoice::Given(transition)) => Some(transition.clone()),
         };
         if let Some(transition) = &transition {
+            let effect = alpha2_model::ClipEffect {
+                id: crate::compile::transition_effect_id(&transition.kind),
+                version: transition.version.unwrap_or(1),
+                params: transition.params.clone(),
+                resources: BTreeMap::new(),
+            };
+            alpha2_model::check_builtin_effect(&effect, alpha2_model::EffectKind::Transition)
+                .map_err(|problem| {
+                    Self::error(
+                        &format!("{path}.transition"),
+                        format!(
+                            "the transition \"{}\" ({}) {problem}; schema/effects.v1.json lists \
+                             the transitions",
+                            transition.kind, effect.id
+                        ),
+                    )
+                })?;
             let ticks = Self::time(
                 &format!("{path}.transition"),
                 "duration",
@@ -658,7 +780,7 @@ impl Context<'_> {
                 }
                 let at = Self::optional_time(path, "at", ramp.at)?.unwrap_or(0);
                 let end = match Self::optional_time(path, "duration", ramp.duration)? {
-                    Some(duration) => KeyTime::Ticks(at + duration),
+                    Some(duration) => KeyTime::Ticks(add_ticks(at, duration, path)?),
                     None => KeyTime::End,
                 };
                 Ok(AnimPrim::Keys(vec![
@@ -907,17 +1029,26 @@ impl Context<'_> {
                 ),
             }))),
             Node::Captions(captions) => self.lower_captions(captions, path),
-            Node::Layout(layout) => Ok(Prim::Visual(Box::new(Visual {
-                head: Self::head(path, layout.id.as_ref(), layout.at, layout.duration)?,
-                inset: inset_sides(layout.inset),
-                fit: Fit::Contain,
-                align: layout.align.unwrap_or_default(),
-                opacity: 1.0,
-                fade_in: 0,
-                fade_out: 0,
-                zoom: None,
-                content: Content::Layout(layout.root.clone()),
-            }))),
+            Node::Layout(layout) => {
+                let (width, height) = self.canvas();
+                let tree = alpha2_model::Generator::Layout {
+                    root: layout.root.clone(),
+                };
+                tree.validate_on(width, height).map_err(|issue| {
+                    Self::error(&format!("{path}.root"), crate::compile::issue_text(&issue))
+                })?;
+                Ok(Prim::Visual(Box::new(Visual {
+                    head: Self::head(path, layout.id.as_ref(), layout.at, layout.duration)?,
+                    inset: inset_sides(layout.inset),
+                    fit: Fit::Contain,
+                    align: layout.align.unwrap_or_default(),
+                    opacity: 1.0,
+                    fade_in: 0,
+                    fade_out: 0,
+                    zoom: None,
+                    content: Content::Layout(layout.root.clone()),
+                })))
+            }
             Node::Audio(audio) => self.lower_audio(audio, path),
             Node::Raw(raw) => Ok(Prim::Raw(
                 Head {
@@ -1562,7 +1693,7 @@ impl Context<'_> {
             },
             FileKind::Video => {
                 let facts = facts.ok_or_else(|| missing("media facts"))?;
-                let end = facts.duration_ticks.ok_or_else(|| missing("duration"))?;
+                let end = self.facts_duration(&media.path, &format!("{path}.path"))?;
                 let trim_start =
                     Self::optional_time(path, "trim_start", media.trim_start)?.unwrap_or(0);
                 let trim_end =
@@ -1603,7 +1734,11 @@ impl Context<'_> {
                         .volume
                         .map_or(Ok(1.0), |volume| Self::gain(path, "volume", volume))?,
                     muted: media.muted,
-                    has_audio: facts.has_audio,
+                    has_audio: match facts.has_audio {
+                        Some(has_audio) => has_audio,
+                        None if media.muted => false,
+                        None => return Err(missing("has_audio")),
+                    },
                     blur,
                     frame_ticks,
                 })
@@ -1756,6 +1891,7 @@ impl Context<'_> {
         if text.text.is_empty() {
             return Err(Self::error(&format!("{path}.text"), "text is not empty"));
         }
+        Self::text_length(&text.text, &format!("{path}.text"))?;
         let font_px = match &text.font_size {
             Some(size) => self.size_px(&format!("{path}.font_size"), size)?,
             None => self.role_size(text.style),
@@ -2048,6 +2184,7 @@ impl Context<'_> {
             if cue.text.trim().is_empty() {
                 return Err(Self::error(&format!("{at}.text"), "a cue has text"));
             }
+            Self::text_length(&cue.text, &format!("{at}.text"))?;
             let mut caption = crate::compile::cue(start, end, cue.text.clone());
             caption.speaker.clone_from(&cue.speaker);
             out.push(caption);
@@ -2124,14 +2261,7 @@ impl Context<'_> {
         fades: (f64, f64),
     ) -> Result<Prim, ComposeError> {
         let path = head.path.clone();
-        let end = self
-            .facts
-            .media
-            .get(file)
-            .and_then(|facts| facts.duration_ticks)
-            .ok_or_else(|| Self::error(&format!("{path}.path"), format!(
-                "no duration for \"{file}\" in the facts; gather them for every file `requirements` lists"
-            )))?;
+        let end = self.facts_duration(file, &format!("{path}.path"))?;
         let trim_start = Self::optional_time(&path, "trim_start", trim_start)?.unwrap_or(0);
         let trim_end = Self::optional_time(&path, "trim_end", trim_end)?.unwrap_or(end);
         if trim_end <= trim_start {
@@ -2175,27 +2305,35 @@ impl Context<'_> {
             .as_ref()
             .map_or(0.0, |transition| transition.duration);
         let slides = slideshow.items.len();
+        let field = if slideshow.seconds.is_none() && slideshow.fit_to.is_some() {
+            "fit_to"
+        } else {
+            "seconds"
+        };
         #[allow(clippy::cast_precision_loss)]
         let seconds = match (slideshow.seconds, &slideshow.fit_to) {
             (Some(seconds), _) => seconds,
             (None, Some(file)) => {
-                let length = self
-                    .facts
-                    .media
-                    .get(file)
-                    .and_then(|facts| facts.duration_ticks)
-                    .ok_or_else(|| Self::error(&format!("{path}.fit_to"), format!(
-                        "no duration for \"{file}\" in the facts; gather them for every file `requirements` lists"
-                    )))?;
+                let length = self.facts_duration(file, &format!("{path}.fit_to"))?;
                 (crate::compile::seconds(length) - overlap) / slides as f64 + overlap
             }
             (None, None) => self.theme.still_seconds,
         };
         if !(seconds.is_finite() && seconds > overlap) {
             return Err(Self::error(
-                &format!("{path}.seconds"),
+                &format!("{path}.{field}"),
                 format!(
                     "each slide lasts {seconds} s, which is not longer than its {overlap} s transition"
+                ),
+            ));
+        }
+        // A middle slide is joined at both ends, so its two transitions must not overlap.
+        if slides >= 3 && seconds < 2.0 * overlap {
+            return Err(Self::error(
+                &format!("{path}.{field}"),
+                format!(
+                    "each slide lasts {seconds} s, shorter than the two {overlap} s transitions \
+                     around a middle slide"
                 ),
             ));
         }

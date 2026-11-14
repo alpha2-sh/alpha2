@@ -10,6 +10,8 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { readdirSync, readFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -26,13 +28,24 @@ import {
   resolveHostBinary,
 } from "../dist/index.js";
 import {
+  encodeMessage,
+  HOST_MAGIC,
+  HostWire,
+  MAX_HEADER_BYTES,
+} from "../dist/host-wire.js";
+import {
   createRequest,
   describeExit,
   loaderRefused,
   parseHostMessage,
   windowsPolicyBlocked,
 } from "../dist/protocol.js";
+import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { failureOf } from "alpha2/export-failure";
+import { hostTarget, installOpenH264 } from "../dist/index.js";
+import { OPENH264_TARGETS } from "../dist/install.js";
+import { assertScalesBelow } from "../../../scripts/lib/timing.mjs";
 import { decideRetry, RETRY_PROFILES } from "alpha2/export-retry";
 
 const scratchDirectories = [];
@@ -100,7 +113,41 @@ test("shared Rust and Node protocol corpus agrees", async () => {
         message,
         fixture.name,
       );
+      assert.deepEqual(await readFrames(encodeMessage(message).data), {
+        messages: [message],
+        invalid: [],
+      });
     }
+  }
+});
+
+/** What a wire reads from `frames` written after the magic. */
+async function readFrames(frames) {
+  const output = new PassThrough();
+  const read = { messages: [], invalid: [] };
+  const wire = new HostWire(new PassThrough(), output, {
+    message: (message) => read.messages.push(message),
+    invalid: (cause) => read.invalid.push(cause.message),
+    diagnostic: () => {},
+    foreign: () => {},
+  });
+  output.write(Buffer.concat([HOST_MAGIC, frames]));
+  await new Promise((resolve) => setImmediate(resolve));
+  wire.close();
+  return read;
+}
+
+test("a header at the host's response limit is awaited and one byte more is refused", async () => {
+  assert.equal(MAX_HEADER_BYTES, 256 * 1024 * 1024);
+  for (const bytes of [MAX_HEADER_BYTES, MAX_HEADER_BYTES + 1]) {
+    const prefix = Buffer.alloc(8);
+    prefix.writeUInt32LE(bytes, 0);
+    const read = await readFrames(prefix);
+    assert.deepEqual(read.messages, []);
+    assert.deepEqual(
+      read.invalid,
+      bytes > MAX_HEADER_BYTES ? [`a frame header of ${bytes} bytes`] : [],
+    );
   }
 });
 
@@ -283,6 +330,61 @@ test("a CONFORM_FAILED error carries the host's report", async () => {
     }),
   );
   assert.deepEqual(message.error.details, report);
+});
+
+test("conform sends the purpose in the spelling the report uses", async () => {
+  const root = await scratch("alpha2-node-purpose-");
+  const log = join(root, "requests");
+  const hostPath = await fakeHost(
+    root,
+    `import { appendFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+serve((request) => {
+  appendFileSync(${JSON.stringify(log)}, JSON.stringify(request) + "\\n");
+  respond(request, { ok: true, result: { catalog: { assets: [] }, report: { purpose: request.purpose, ready: true, sources: [] } } });
+});
+`,
+  );
+  const client = new Alpha2NodeClient({ hostPath });
+  const project = exportRequest("x.mp4").project;
+  const answered = await client.conform({ project, purpose: "preview_proxy" });
+  await client.conform({ project, purpose: answered.report.purpose });
+  await client.conform({ project });
+  const sent = (await readFile(log, "utf8"))
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line).purpose);
+  assert.deepEqual(sent, ["preview_proxy", "preview_proxy", "export_original"]);
+});
+
+test("a loudness target without a ceiling leaves the ceiling to the host", async () => {
+  const root = await scratch("alpha2-node-loudness-");
+  const log = join(root, "requests");
+  const hostPath = await fakeHost(
+    root,
+    `import { appendFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+serve((request) => {
+  appendFileSync(${JSON.stringify(log)}, JSON.stringify(request.loudness) + "\\n");
+  respond(request, { ok: true, result: {} });
+});
+`,
+  );
+  const client = new Alpha2NodeClient({ hostPath });
+  await client.exportProject(
+    exportRequest(join(root, "out.mp4"), { loudness: { targetLufs: -16 } }),
+  );
+  assert.deepEqual(JSON.parse(await readFile(log, "utf8")), {
+    targetLufs: -16,
+  });
+  await assert.rejects(
+    client.exportProject(
+      exportRequest(join(root, "out.mp4"), {
+        loudness: { targetLufs: -16, truePeakCeilingDbtp: 1 },
+      }),
+    ),
+    { code: "INVALID_INPUT" },
+  );
 });
 
 test("binary resolution maps Electron ASAR paths to unpacked resources", async () => {
@@ -818,8 +920,8 @@ test("a frame the host writes in pieces is read whole", async () => {
   const root = await scratch("alpha2-node-split-frames-");
   const hostPath = await fakeHost(
     root,
-    `import { MAGIC, frame, requests } from ${IO};
-const ready = frame({ protocolVersion: 2, type: "state", state: "ready", reason: "started", details: {} });
+    `import { HOST_VERSION, MAGIC, frame, requests } from ${IO};
+const ready = frame({ protocolVersion: 2, type: "state", state: "ready", reason: "started", details: { hostVersion: HOST_VERSION } });
 const bytes = Buffer.concat([MAGIC, ready]);
 const trickle = (data, done) => {
   if (data.length === 0) return done();
@@ -1151,6 +1253,46 @@ test("an auto export whose hardware decoder stalls runs again in software", asyn
   assert.deepEqual(result, { frames: 9 });
 });
 
+test("progress marks where an export started over", async () => {
+  const root = await scratch("alpha2-node-restarted-");
+  const hostPath = await fakeHost(
+    root,
+    `import { progress, respond, serve } from ${IO};
+serve((request) => {
+  const report = (completed, extra = {}) =>
+    progress(request, { phase: "frames", completed, total: 9, ...extra });
+  if (process.env.ALPHA2_VIDEO_DECODE === "software") {
+    report(0);
+    report(9);
+    respond(request, { ok: true, result: { frames: 9 } });
+  } else {
+    report(4);
+    // The host's own restart on the readback path.
+    report(0, { restarted: true });
+    report(2);
+    respond(request, { ok: false, error: { code: "DECODE_STALLED", message: "decode shard 0 has been inside one decoder operation for 40001 ms", failure: { code: "GPU_TIMEOUT", origin: "native-host", operation: "export", backend: "native", phase: "decode", resource: "gpu" } } });
+  }
+});
+`,
+  );
+  const reports = [];
+  const client = new Alpha2NodeClient({ hostPath, videoDecode: "auto" });
+  await client.exportProject(
+    exportRequest(join(root, "out.mp4"), {
+      onProgress: ({ completed, restarted }) =>
+        reports.push([completed, restarted === true]),
+    }),
+  );
+  // The software rerun's first report is marked by the client.
+  assert.deepEqual(reports, [
+    [4, false],
+    [0, true],
+    [2, false],
+    [0, true],
+    [9, false],
+  ]);
+});
+
 test("a software run after a stall that fails too keeps the stall", async () => {
   const root = await scratch("alpha2-node-stall-then-fail-");
   const hostPath = await fakeHost(
@@ -1341,6 +1483,66 @@ test("a decode mode that is not one is refused before a host starts", async () =
     getCapabilities({ hostPath, videoDecode: "gpu" }),
     refused,
   );
+  assert.deepEqual(await startsIn(starts), []);
+});
+
+test("the plugins option becomes the serve flags of every host, and a malformed one starts none", async () => {
+  const root = await scratch("alpha2-node-plugin-flags-");
+  const starts = join(root, "starts");
+  const hostPath = await fakeHost(
+    root,
+    `import { appendFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+appendFileSync(${JSON.stringify(starts)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+serve((request) => respond(request, { ok: true, result: { status: "ready", capabilities: {}, effectCatalog: {} } }));
+`,
+  );
+  const flagsOf = async (plugins) => {
+    await rm(starts, { force: true });
+    const client = new Alpha2NodeClient({ hostPath, plugins, cwd: root });
+    try {
+      await client.getCapabilities();
+    } finally {
+      await client.close();
+    }
+    return (await startsIn(starts)).map((line) => JSON.parse(line));
+  };
+  assert.deepEqual(await flagsOf(undefined), [[]]);
+  assert.deepEqual(
+    await flagsOf({
+      mode: "native",
+      origins: ["https://a.example", "https://b.example:8443"],
+      root: "plugins",
+    }),
+    [
+      [
+        "--plugins",
+        "native",
+        "--plugin-origins",
+        "https://a.example,https://b.example:8443",
+        "--plugin-root",
+        join(root, "plugins"),
+      ],
+    ],
+  );
+  assert.deepEqual(await flagsOf({ origins: "none", root: "none" }), [
+    ["--plugin-origins", "none", "--plugin-root", "none"],
+  ]);
+  await rm(starts, { force: true });
+  for (const plugins of [
+    { mode: "all" },
+    { origins: [] },
+    { origins: ["http://a.example"] },
+    { origins: "https://a.example" },
+    { root: "" },
+    "native",
+  ])
+    assert.throws(
+      () => new Alpha2NodeClient({ hostPath, plugins }),
+      (error) =>
+        error.code === "INVALID_INPUT" && /^plugins/.test(error.message),
+      JSON.stringify(plugins),
+    );
   assert.deepEqual(await startsIn(starts), []);
 });
 
@@ -2733,8 +2935,6 @@ test("a host that exits while idle is replaced by a new one", async () => {
   });
   const first = await exported(client);
   await waitUntil(() => !alive(first.pid), "the host to exit");
-  // Windows reports the process gone before Node delivers its exit event to the client.
-  await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
   const second = await exported(client);
   assert.notEqual(second.pid, first.pid);
 });
@@ -2775,6 +2975,27 @@ test("a request answered HOST_RETIRING is sent again to another host, a few time
       line.startsWith("request"),
     ).length,
     4,
+  );
+});
+
+test("queued requests are dispatched with work that grows linearly with the queue", async () => {
+  const root = await scratch("alpha2-node-pool-queue-");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(root, POOLED_HOST(join(root, "log"))),
+    concurrency: 1,
+  });
+  await exported(client);
+  // The large size queues 10,000 requests at once.
+  await assertScalesBelow(
+    "dispatching a queue of requests",
+    1_250,
+    (size) => size,
+    (size) =>
+      Promise.all(
+        Array.from({ length: size }, () =>
+          client.exportProject(exportRequest("out.mp4")),
+        ),
+      ),
   );
 });
 
@@ -2980,6 +3201,10 @@ const corpusValue = (value) =>
       ? CORPUS_NUMBERS[value]
       : value;
 
+const CLIENT_VERSION = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+).version;
+
 const CLIENT_SCENARIOS = JSON.parse(
   await readFile(
     new URL(
@@ -3042,7 +3267,453 @@ const SCENARIO_CALLS = {
   compose: (client, { action, ...fields }) => client.compose(action, fields),
 };
 
+/** Records its pid, writes `stdout` and `stderr` before any frame, then waits for its input. */
+const PREAMBLE_HOST = (
+  pids,
+  { stdout = "", stderr = "" },
+) => `import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");
+process.stderr.write(${JSON.stringify(stderr)});
+process.stdout.write(${JSON.stringify(stdout)});
+process.stdin.resume();
+process.stdin.on("end", () => process.exit(0));
+`;
+
+/** Records its pid, then reports ready naming `hostVersion` (none when null) and serves. */
+const VERSIONED_HOST = (
+  pids,
+  hostVersion,
+) => `import { appendFileSync } from "node:fs";
+import { requests, respond, send } from ${IO};
+appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");
+send({ type: "state", state: "ready", reason: "started", details: ${JSON.stringify(hostVersion === null ? {} : { hostVersion })} });
+requests((request) => respond(request, { ok: true, result: { output: request.output } }));
+`;
+
+async function refusal(client) {
+  return client.exportProject(exportRequest("out.mp4")).then(
+    () => assert.fail("the export resolved"),
+    (cause) => cause,
+  );
+}
+
+async function assertHostsEnded(pids) {
+  const started = (await startsIn(pids)).map(Number);
+  assert.ok(started.length > 0, "no host started");
+  for (const pid of started)
+    await waitUntil(() => !alive(pid), `host ${pid} ended`);
+}
+
+/** Records its pid and each request; exits 50 ms after an answer when `exits` is set. */
+const MORTAL_HOST = (log, exits) =>
+  POOLED_HOST(log, exits ? "setTimeout(() => process.exit(0), 50);" : "");
+
+/**
+ * The first host to start retires as a host does after a caught panic: it says it is draining
+ * with reason `defect`, answers `INTERNAL` (with `report` as the failure of an export), and refuses
+ * later requests until its input ends. Every other host answers with its pid.
+ */
+const DEFECT_HOST = (
+  log,
+  marker,
+  report,
+) => `import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { drain, respond, serve } from ${IO};
+appendFileSync(${JSON.stringify(log)}, "start " + process.pid + "\\n");
+if (!existsSync(${JSON.stringify(marker)})) writeFileSync(${JSON.stringify(marker)}, String(process.pid));
+const first = readFileSync(${JSON.stringify(marker)}, "utf8") === String(process.pid);
+let answered = false;
+serve((request) => {
+  appendFileSync(${JSON.stringify(log)}, "request " + process.pid + "\\n");
+  if (!first) return respond(request, { ok: true, result: { pid: process.pid } });
+  if (answered)
+    return respond(request, { ok: false, hostState: "draining", error: { code: "HOST_RETIRING", message: "the host is draining" } });
+  answered = true;
+  drain("defect");
+  const failure = request.operation === "export" ? { failure: ${JSON.stringify(report)} } : {};
+  respond(request, { ok: false, hostState: "draining", error: { code: "INTERNAL", message: "injected panic", ...failure } });
+});
+`;
+
+/** Reports ready, then exits when the first bytes of a request arrive. */
+const READING_HOST = (log) => `import { appendFileSync } from "node:fs";
+import { ready } from ${IO};
+appendFileSync(${JSON.stringify(log)}, "start " + process.pid + "\\n");
+ready();
+process.stdin.once("data", () => process.exit(1));
+`;
+
+/**
+ * Waits until `pid` has ended. On Linux it blocks the event loop until the process is a zombie, so
+ * the client has not yet seen the exit when the next request is made, as on Windows.
+ */
+async function endedUnseen(pid) {
+  if (process.platform !== "linux")
+    return waitUntil(() => !alive(pid), "the host to end");
+  const until = Date.now() + 5_000;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    // The leader of a threaded process is a zombie before its other threads release the pipes.
+    let ended;
+    try {
+      ended =
+        readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.[0] === "Z" &&
+        readdirSync(`/proc/${pid}/task`).length === 1;
+    } catch {
+      return;
+    }
+    if (ended) return;
+    if (Date.now() > until) assert.fail(`waited 5 s for host ${pid} to end`);
+    Atomics.wait(pause, 0, 0, 5);
+  }
+}
+
+function requestsOf(lines, pid) {
+  return lines.filter((line) => line === `request ${pid}`).length;
+}
+
+/** Answers, starts a sleeper that inherits its stdout and stderr, and exits. */
+const ABANDONING_HOST = (log) => `import { spawn } from "node:child_process";
+import { appendFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+const record = (line) => appendFileSync(${JSON.stringify(log)}, line + "\\n");
+record("start " + process.pid);
+serve((request) => {
+  respond(request, { ok: true, result: { pid: process.pid } }, () => {
+    const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+      stdio: ["ignore", "inherit", "inherit"],
+      detached: true,
+    });
+    record("sleeper " + sleeper.pid);
+    sleeper.unref();
+    process.exit(0);
+  });
+});
+`;
+
+/** Answers each request 20 ms after it arrives. */
+const SLOW_HOST = `import { respond, serve } from ${IO};
+serve((request) => setTimeout(() => respond(request, { ok: true, result: { pid: process.pid } }), 20));
+`;
+
+/** Answers with its pid and the cache directory it was started with, counting its requests. */
+const CACHE_HOST = `import { respond, serve } from ${IO};
+let served = 0;
+serve((request) => {
+  served += 1;
+  const report = { pid: process.pid, served, cache: process.env.ALPHA2_HOST_CACHE_DIR ?? null };
+  respond(request, { ok: true, result: request.operation === "capabilities" ? { status: "ready", ...report } : report });
+});
+`;
+
+/** `printf abracadabra | bzip2 -9`, a stand-in for Cisco's archive (as in install.test.mjs). */
+const STAND_IN_OPENH264 = Buffer.from(
+  "425a6839314159265359236d4bd800000101803c001000200030cd00947a" +
+    "9ea52c8478bb9229c284811b6a5ec0",
+  "hex",
+);
+
+/** Serves the stand-in OpenH264 archive and points this platform's table entry at it. */
+async function serveStandInOpenH264() {
+  const target = hostTarget();
+  const original = OPENH264_TARGETS[target];
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  OPENH264_TARGETS[target] = {
+    ...original,
+    archiveSha256: digest(STAND_IN_OPENH264),
+    librarySha256: digest("abracadabra"),
+  };
+  const server = createServer((request, response) => {
+    const found = request.url === `/${OPENH264_TARGETS[target].archive}`;
+    response.writeHead(found ? 200 : 404);
+    response.end(found ? STAND_IN_OPENH264 : undefined);
+  });
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  return {
+    downloadUrl: `http://127.0.0.1:${server.address().port}`,
+    restore: () => {
+      OPENH264_TARGETS[target] = original;
+      server.close();
+    },
+  };
+}
+
 const SCENARIO_DRIVERS = {
+  async "cache-directory"(scenario) {
+    const root = await scratch("alpha2-node-cache-directory-");
+    // The fake host starts from the calling directory, so that is where relative paths point.
+    const hostPath = await fakeHost(root, CACHE_HOST);
+    const caller = process.cwd();
+    const named = new Alpha2NodeClient({
+      hostPath,
+      cacheDirectory: scenario.given.option,
+    });
+    assert.equal(
+      (await exported(named)).cache,
+      resolve(caller, scenario.given.option),
+    );
+    const saved = process.env.ALPHA2_HOST_CACHE_DIR;
+    process.env.ALPHA2_HOST_CACHE_DIR = scenario.given.environment;
+    try {
+      const inherited = new Alpha2NodeClient({ hostPath });
+      assert.equal(
+        (await exported(inherited)).cache,
+        resolve(caller, scenario.given.environment),
+      );
+    } finally {
+      if (saved === undefined) delete process.env.ALPHA2_HOST_CACHE_DIR;
+      else process.env.ALPHA2_HOST_CACHE_DIR = saved;
+    }
+  },
+  async "install-generation"(scenario) {
+    const root = await scratch("alpha2-node-install-generation-");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(root, CACHE_HOST),
+    });
+    const before = await client.getCapabilities();
+    const served = await serveStandInOpenH264();
+    try {
+      const installed = await installOpenH264({
+        cacheDirectory: join(root, "cache"),
+        downloadUrl: served.downloadUrl,
+      });
+      assert.equal(installed.downloaded, true);
+    } finally {
+      served.restore();
+    }
+    const after = await client.getCapabilities();
+    const exportedAfter = await exported(client);
+    assert.notEqual(after.pid, before.pid);
+    assert.equal(exportedAfter.pid, after.pid);
+    assert.equal(new Set([before.pid, after.pid]).size, scenario.expect.hosts);
+  },
+  async "arrival-order"(scenario) {
+    const { given } = scenario;
+    const root = await scratch("alpha2-node-arrival-order-");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(root, SLOW_HOST),
+      concurrency: given.concurrency,
+    });
+    const completed = [];
+    const keep = given.thenKeepPending;
+    let submitted = 0;
+    const run = (label, videoDecode) =>
+      exported(client, { videoDecode }).then(() => {
+        completed.push(label);
+        if (label === "stream" && submitted < keep.total) return stream();
+      });
+    const stream = () => {
+      submitted += 1;
+      return run("stream", keep.videoDecode);
+    };
+    const all = [run("first", given.first), run("second", given.second)];
+    for (let index = 0; index < keep.depth; index += 1) all.push(stream());
+    await Promise.all(all);
+    assert.equal(
+      completed.indexOf("second") + 1,
+      scenario.expect.secondCompletes,
+      completed.join(" "),
+    );
+  },
+  async "grandchild-holds-the-pipes"(scenario) {
+    const root = await scratch("alpha2-node-grandchild-");
+    const log = join(root, "log");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(root, ABANDONING_HOST(log)),
+      concurrency: scenario.given.concurrency,
+    });
+    const sleepers = async () =>
+      (await startsIn(log))
+        .filter((line) => line.startsWith("sleeper "))
+        .map((line) => Number(line.split(" ")[1]));
+    try {
+      const first = await exported(client);
+      await waitUntil(() => !alive(first.pid), "the host to exit");
+      let started = Date.now();
+      const next = await exported(client);
+      assert.notEqual(next.pid, first.pid);
+      assert.ok(
+        Date.now() - started < scenario.expect.withinMs,
+        `the next request took ${Date.now() - started} ms`,
+      );
+      started = Date.now();
+      await client.close();
+      assert.ok(
+        Date.now() - started < scenario.expect.closeWithinMs,
+        `close took ${Date.now() - started} ms`,
+      );
+    } finally {
+      for (const pid of await sleepers()) if (alive(pid)) process.kill(pid);
+    }
+  },
+  async "dead-idle-host"(scenario) {
+    for (const end of scenario.given.ends) {
+      const root = await scratch("alpha2-node-dead-idle-host-");
+      const log = join(root, "log");
+      const client = new Alpha2NodeClient({
+        hostPath: await fakeHost(
+          root,
+          MORTAL_HOST(log, end === "exits after answering"),
+        ),
+      });
+      let first = await exported(client);
+      for (
+        let index = 0;
+        index < scenario.given.requestsAfterEach;
+        index += 1
+      ) {
+        if (end !== "exits after answering") process.kill(first.pid, "SIGKILL");
+        if (end !== "killed") await endedUnseen(first.pid);
+        const next = await exported(client).then(
+          (result) => result,
+          (error) => error,
+        );
+        if (end === "killed" && next instanceof Error) {
+          assert.equal(next.code, "HOST_EXITED", next.message);
+          first = await exported(client);
+          continue;
+        }
+        assert.ok(!(next instanceof Error), String(next));
+        assert.notEqual(next.pid, first.pid);
+        assert.equal(
+          requestsOf(await startsIn(log), first.pid),
+          scenario.expect.firstHostRequests,
+        );
+        first = next;
+      }
+    }
+  },
+  async defect(scenario) {
+    for (const operation of scenario.given.operations) {
+      const root = await scratch(`alpha2-node-defect-${operation}-`);
+      const log = join(root, "log");
+      const client = new Alpha2NodeClient({
+        hostPath: await fakeHost(
+          root,
+          DEFECT_HOST(
+            log,
+            join(root, "first-host"),
+            scenario.given.failureReport.export,
+          ),
+        ),
+      });
+      const run = () =>
+        operation === "export"
+          ? exported(client)
+          : client.conform({ project: exportRequest("").project });
+      const error = await run().then(
+        () => assert.fail("the first request resolved"),
+        (cause) => cause,
+      );
+      assert.equal(error.code, scenario.expect.code, error.message);
+      assert.equal(error.failure.code, scenario.expect.failureCode);
+      if (operation === "export") {
+        const decision = decideRetry([
+          {
+            failure: error.failure,
+            profile: RETRY_PROFILES[0],
+            renderer: "gpu",
+            videoEncoder: "default",
+          },
+        ]);
+        assert.equal(decision.retry, scenario.expect.exportRetry.retry);
+        assert.equal(decision.delayMs, scenario.expect.exportRetry.delayMs);
+        assert.equal(
+          decision.profile.name,
+          scenario.expect.exportRetry.profile,
+        );
+      }
+      const next = await run();
+      const lines = await startsIn(log);
+      const [first, second] = lines
+        .filter((line) => line.startsWith("start "))
+        .map((line) => Number(line.split(" ")[1]));
+      assert.equal(requestsOf(lines, first), scenario.expect.firstHostRequests);
+      if (operation === "export") assert.equal(next.pid, second);
+      assert.notEqual(second, undefined, "a second host started");
+      assert.notEqual(second, first);
+      if (scenario.expect.firstHostEnded)
+        await waitUntil(() => !alive(first), "the retired host to end");
+      await client.close();
+    }
+  },
+  async "dies-reading"(scenario) {
+    const root = await scratch("alpha2-node-dies-reading-");
+    const log = join(root, "log");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(root, READING_HOST(log)),
+    });
+    const { project } = exportRequest("out.mp4");
+    const error = await client
+      .exportProject(
+        exportRequest("out.mp4", {
+          project: {
+            ...project,
+            name: "x".repeat(scenario.given.projectNameBytes),
+          },
+        }),
+      )
+      .then(
+        () => assert.fail("the export resolved"),
+        (cause) => cause,
+      );
+    assert.equal(error.code, scenario.expect.code, error.message);
+    assert.equal((await startsIn(log)).length, scenario.expect.hosts);
+  },
+  async "foreign-host"(scenario) {
+    const root = await scratch("alpha2-node-foreign-host-");
+    const pids = join(root, "pids");
+    const hostPath = await fakeHost(
+      root,
+      PREAMBLE_HOST(pids, { stdout: scenario.given.stdout }),
+    );
+    const client = new Alpha2NodeClient({
+      hostPath,
+      hostStartTimeoutMs: scenario.given.startTimeoutMs,
+    });
+    const started = Date.now();
+    const error = await refusal(client);
+    assert.ok(
+      Date.now() - started < scenario.expect.withinMs,
+      `took ${Date.now() - started} ms`,
+    );
+    assert.equal(error.code, scenario.expect.code, error.message);
+    for (const text of scenario.expect.messageContains)
+      assert.ok(error.message.includes(text), error.message);
+    if (scenario.expect.namesBinary)
+      assert.ok(error.message.includes(hostPath), error.message);
+    assert.equal(failureOf(error).code, "INVALID_INPUT");
+    if (scenario.expect.hostEnded) await assertHostsEnded(pids);
+  },
+  async "host-version"(scenario) {
+    for (const hostVersion of scenario.given.hostVersions) {
+      const root = await scratch("alpha2-node-host-version-");
+      const pids = join(root, "pids");
+      const hostPath = await fakeHost(root, VERSIONED_HOST(pids, hostVersion));
+      const client = new Alpha2NodeClient({ hostPath });
+      const error = await refusal(client);
+      assert.equal(error.code, scenario.expect.code, error.message);
+      if (scenario.expect.namesHostVersion && hostVersion !== null)
+        assert.ok(error.message.includes(hostVersion), error.message);
+      if (scenario.expect.namesClientVersion)
+        assert.ok(error.message.includes(CLIENT_VERSION), error.message);
+      if (scenario.expect.namesBinary)
+        assert.ok(error.message.includes(hostPath), error.message);
+      if (scenario.expect.hostEnded) await assertHostsEnded(pids);
+    }
+  },
+  async "start-timeout"(scenario) {
+    const root = await scratch("alpha2-node-start-timeout-");
+    const pids = join(root, "pids");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(root, PREAMBLE_HOST(pids, scenario.given)),
+      hostStartTimeoutMs: scenario.given.startTimeoutMs,
+    });
+    const error = await refusal(client);
+    assert.equal(error.code, scenario.expect.code, error.message);
+    for (const text of scenario.expect.stderrContains)
+      assert.ok(error.stderr?.includes(text), String(error.stderr));
+  },
   async "unsendable-emit"(scenario) {
     const root = await scratch("alpha2-node-unsendable-emit-");
     const log = join(root, "log");
@@ -3129,8 +3800,81 @@ const SCENARIO_DRIVERS = {
 };
 
 for (const scenario of CLIENT_SCENARIOS)
-  test(`client behavior scenario ${scenario.id}`, async () => {
-    const driver = SCENARIO_DRIVERS[scenario.kind];
-    assert.ok(driver, `no driver for scenario kind ${scenario.kind}`);
-    await driver(scenario);
+  test(
+    `client behavior scenario ${scenario.id}`,
+    {
+      skip:
+        scenario.platforms?.includes("posix") && process.platform === "win32"
+          ? "a POSIX scenario"
+          : false,
+    },
+    async () => {
+      const driver = SCENARIO_DRIVERS[scenario.kind];
+      assert.ok(driver, `no driver for scenario kind ${scenario.kind}`);
+      await driver(scenario);
+    },
+  );
+
+test("extract sends the render inputs, and only a timeline input needs every effect asset", async () => {
+  const root = await scratch("alpha2-node-extract-inputs-");
+  const log = join(root, "log");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(root, PATHS_HOST(log)),
   });
+  const project = JSON.parse(
+    await readFile(
+      new URL(
+        "../../../tests/cases/host-parity-effects-project.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const extractor = {
+    describe: () => ({
+      id: "example.levels",
+      version: 1,
+      input: { media: "video", from: ["source", "timeline"], format: "rgba8" },
+      params_schema: { type: "object" },
+      outputs: [],
+    }),
+  };
+  const run = (from, fields = {}) =>
+    client.extract(
+      {
+        project,
+        request: {
+          extractor: "example.levels",
+          version: 1,
+          input: {
+            from,
+            ...(from === "source" ? { source_id: "video" } : {}),
+            range: { start: 0, end: 4000 },
+          },
+          outputs: {},
+        },
+        assets: { video: "/media/v.mov", still: "/media/s.png" },
+        ...fields,
+      },
+      extractor,
+    );
+  await run("source");
+  await run("timeline", {
+    effectAssets: { grade: "/media/grade.cube" },
+    effects: [],
+  });
+  await assert.rejects(
+    run("timeline"),
+    (error) =>
+      error.code === "MISSING_INPUT" && /resource grade/.test(error.message),
+  );
+  const requests = (await startsIn(log))
+    .map((line) => JSON.parse(line))
+    .filter((line) => line.request?.operation === "extract")
+    .map((line) => line.request);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].effectAssets, {});
+  assert.deepEqual(requests[1].effectAssets, { grade: "/media/grade.cube" });
+  for (const field of ["frames", "resources", "effects", "fonts"])
+    assert.ok(field in requests[1], field);
+});

@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
-use crate::mp4::tests::corpus_dir;
-use crate::{ContainerReader, DemuxError, MatroskaReader};
+use crate::mp4::tests::{corpus_dir, packets};
+use crate::{ContainerReader, DemuxError, MatroskaReader, Packet};
 
 /// Opens `data` and reads and seeks every track; damaged data may fail but must not panic.
 fn exercise(data: Vec<u8>) -> Result<usize, DemuxError> {
@@ -75,4 +75,103 @@ fn hostile_sizes_are_refused_without_allocating() {
     not_matroska[0] = 0;
     assert!(MatroskaReader::new(Cursor::new(not_matroska)).is_err());
     assert!(MatroskaReader::new(Cursor::new(Vec::new())).is_err());
+}
+
+fn from_hex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).expect("hex"))
+        .collect()
+}
+
+/// The EBML header, an unknown-sized Segment and a Tracks element of `tracks` bytes (hex) that
+/// holds one entry, followed by `rest`.
+fn file(tracks: &str, rest: &str) -> Vec<u8> {
+    from_hex(&format!(
+        "1a45dfa38b4282886d6174726f736b611853806701ffffffffffffff1654ae6b{tracks}{rest}"
+    ))
+}
+
+/// A track entry for 16-bit stereo PCM at `rate` (a big-endian `f64` in hex).
+fn pcm_track(rate: &str) -> String {
+    format!("aaaea8d78101838102868d415f50434d2f494e542f4c4954e191b588{rate}9f810262648110")
+}
+
+const RATE_48K: &str = "40e7700000000000";
+
+fn only_packets(data: Vec<u8>) -> Vec<Packet> {
+    let mut reader = MatroskaReader::new(Cursor::new(data)).expect("opens");
+    let track = reader.tracks()[0].id;
+    packets(&mut reader, track)
+}
+
+#[test]
+fn a_block_whose_header_crosses_its_cluster_end_ends_the_cluster() {
+    // The cluster's last payload byte is the ID of a SimpleBlock or BlockGroup whose size byte
+    // lies after the cluster.
+    for element in ["a3", "a0"] {
+        let data = file(
+            &pcm_track(RATE_48K),
+            &format!("1f43b67584e78100{element}8100"),
+        );
+        assert_eq!(exercise(data).expect("reads"), 0);
+    }
+}
+
+#[test]
+fn a_dts_frame_shorter_than_its_header_has_no_duration() {
+    let dts = |frame: &str| {
+        let tracks = "a2aea0d781018381028685415f445453e191b58840e77000000000009f810262648110";
+        let bytes = frame.len() / 2;
+        let rest = format!(
+            "1f43b675{:02x}e78100a3{:02x}81000080{frame}",
+            0x89 + bytes,
+            0x84 + bytes
+        );
+        file(tracks, &rest)
+    };
+    for short in ["7ffe8001", "7ffe8001ff"] {
+        let packets = only_packets(dts(short));
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].duration, 0);
+    }
+    let packets = only_packets(dts("7ffe8001ffff"));
+    assert_eq!(packets.len(), 1);
+    assert!(packets[0].duration > 0);
+}
+
+#[test]
+fn an_avc_sequence_with_the_largest_dimensions_opens() {
+    // Both dimensions code 2^32 - 1 macroblocks, in field pictures.
+    let tracks = "cbaec9d78101838101868f565f4d504547342f49534f2f41564363a2a70142001effe1001867420\
+                  01edc0000030003fffffffc0000030007fffffff82001000468ce3c80e086b08140ba8130";
+    let reader = MatroskaReader::new(Cursor::new(file(tracks, ""))).expect("opens");
+    assert_eq!(reader.tracks().len(), 1);
+}
+
+#[test]
+fn the_most_negative_discard_padding_reads_at_any_rate() {
+    for (rate, discard) in [("41cdcd6500000000", u32::MAX), (RATE_48K, u32::MAX)] {
+        let rest = "1f43b6759ae78100a095a188810000000102030475a2888000000000000000";
+        let packets = only_packets(file(&pcm_track(rate), rest));
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].discard, (discard, 0));
+    }
+}
+
+#[test]
+fn hostile_matroska_inputs_read_and_seek_without_a_panic() {
+    for (_, input) in crate::mp4::tests::hostile_inputs("container_matroska") {
+        // The seek target, then the file.
+        let target = i64::from_le_bytes(input[..8].try_into().expect("8 bytes"));
+        let Ok(mut reader) = MatroskaReader::new(Cursor::new(input[8..].to_vec())) else {
+            continue;
+        };
+        for track in reader.tracks().to_vec() {
+            while let Ok(Some(_)) = reader.next_packet(track.id) {}
+            if reader.seek(track.id, target).is_ok() {
+                let _ = reader.next_packet(track.id);
+            }
+        }
+    }
 }

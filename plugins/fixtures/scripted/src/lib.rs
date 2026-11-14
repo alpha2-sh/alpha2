@@ -6,7 +6,10 @@
 //! makes that delivery fail, panic, never return, allocate without bound, or end the process; and
 //! `resource` names a resource whose UTF-8 text `end` emits as a word of `words`. As wasm,
 //! `flood` (`calls`, 0 for no end, and `ignore_refusal`) makes the second delivery call the host's
-//! `emit` that many times with one interval of `quiet`.
+//! `emit` that many times with one interval of `quiet`. As a native library, `park_thread: true`
+//! starts a thread at `begin` that runs the library's code until the process exits. `log`
+//! (`text`, `lines`) makes `begin` log `text` that many times, and `fail_message` replaces the
+//! message of `fail_at`.
 
 use alpha2_plugin_sdk::{Context, Emitter, Error, Extractor, Frame, Host};
 use serde_json::Value;
@@ -16,6 +19,7 @@ pub struct Scripted {
     per_delivery: Vec<Value>,
     at_end: Vec<Value>,
     fail_at: Option<u64>,
+    fail_message: Option<String>,
     panic_at: Option<u64>,
     spin_at: Option<u64>,
     hog_at: Option<u64>,
@@ -63,6 +67,25 @@ fn flood(_calls: u64, _ignore_refusal: bool) -> Result<(), Error> {
     Err("flood runs only as wasm".into())
 }
 
+/// A thread that wakes every millisecond in this library's code, after `destroy` too.
+#[cfg(not(target_arch = "wasm32"))]
+fn park_thread() -> Result<(), Error> {
+    std::thread::Builder::new()
+        .spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                std::hint::black_box(());
+            }
+        })
+        .map(drop)
+        .map_err(|error| error.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn park_thread() -> Result<(), Error> {
+    Err("park_thread runs only as a native library".into())
+}
+
 fn list(context: &Context, key: &str) -> Result<Vec<Value>, Error> {
     match context.params.get(key) {
         None => Ok(Vec::new()),
@@ -104,6 +127,15 @@ impl Extractor for Scripted {
 
     fn begin(context: &Context, host: &Host) -> Result<Self, Error> {
         let index = |key: &str| context.params.get(key).and_then(Value::as_u64);
+        if context.params.get("park_thread") == Some(&Value::Bool(true)) {
+            park_thread()?;
+        }
+        if let Some(log) = context.params.get("log") {
+            let text = log.get("text").and_then(Value::as_str).unwrap_or_default();
+            for _ in 0..log.get("lines").and_then(Value::as_u64).unwrap_or(1) {
+                host.log(alpha2_plugin_sdk::abi::log_level::INFO, text);
+            }
+        }
         let resource = match context.params.get("resource").and_then(Value::as_str) {
             None => None,
             Some(name) => {
@@ -117,6 +149,11 @@ impl Extractor for Scripted {
             per_delivery: list(context, "per_delivery")?,
             at_end: list(context, "at_end")?,
             fail_at: index("fail_at"),
+            fail_message: context
+                .params
+                .get("fail_message")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             panic_at: index("panic_at"),
             spin_at: index("spin_at"),
             hog_at: index("hog_at"),
@@ -143,7 +180,11 @@ impl Extractor for Scripted {
             "scripted panic at delivery {delivery}"
         );
         if self.fail_at == Some(delivery) {
-            return Err(format!("scripted failure at delivery {delivery}").into());
+            return Err(self
+                .fail_message
+                .clone()
+                .unwrap_or_else(|| format!("scripted failure at delivery {delivery}"))
+                .into());
         }
         if self.abort_at == Some(delivery) {
             std::process::abort();

@@ -138,6 +138,7 @@ impl<D: WindowedAudioDecoder> WindowedAudioSource<D> {
             };
             let request_time =
                 MediaTime::from_ticks(samples_to_ticks_ceil(seek_start, sample_rate));
+            crate::request_watch::beat_request();
             let result = self.decoder.seek(
                 DecodeRequest {
                     source: source.clone(),
@@ -183,6 +184,7 @@ impl<D: WindowedAudioDecoder> WindowedAudioSource<D> {
             if window_end >= end || self.ended {
                 break;
             }
+            crate::request_watch::beat_request();
             match self
                 .decoder
                 .decode_next(cancel)

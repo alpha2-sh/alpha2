@@ -293,20 +293,93 @@ const GPU_PROCESS_EXIT =
 
 /**
  * Pids are null when there was no GPU process and undefined when DevTools could not say. A GPU
- * process that only started during the page is not a restart.
+ * process that only started during the page is not a restart. `exitsBeforePage` counts the exits
+ * logged before the page was navigated to.
  *
  * @typedef {{ startPid: number | null | undefined, endPid: number | null | undefined,
- *   exits: number, restarted: boolean }} GpuProcessRecord
+ *   exits: number, exitsBeforePage: number, restarted: boolean }} GpuProcessRecord
  */
 
 /** @returns {GpuProcessRecord} */
-export function gpuProcessRecord({ startPid, endPid, exits }) {
+export function gpuProcessRecord({
+  startPid,
+  endPid,
+  exits,
+  exitsBeforePage = 0,
+}) {
   const changed =
     startPid !== null &&
     startPid !== undefined &&
     endPid !== undefined &&
     endPid !== startPid;
-  return { startPid, endPid, exits, restarted: exits > 0 || changed };
+  return {
+    startPid,
+    endPid,
+    exits,
+    exitsBeforePage,
+    restarted: exits > 0 || changed,
+  };
+}
+
+/**
+ * One run of a page: its reported result, or the error `runBrowserPage` threw (a timeout, a
+ * crash), and the GPU process record.
+ *
+ * @typedef {{ result?: object, error?: Error, gpuProcess?: GpuProcessRecord }} PageAttempt
+ */
+
+/**
+ * Runs a page and decides its outcome from the page's own result. A GPU process restart never
+ * turns a result into a skip by itself: an ok page stays ok with the record attached, and a page
+ * that failed while the GPU process restarted runs once more in a new browser. A clean second run
+ * passes and keeps the first run in `firstAttempt`; a second failure fails with both runs. Only a
+ * browser that lost its GPU process before the page started, on both runs, makes the case a
+ * `browser-gpu-process` skip. An error of a run without a restart is thrown as it was.
+ *
+ * @param {() => Promise<PageAttempt>} run
+ * @param {number} [causedExits] GPU process exits the case causes itself, which are no restart.
+ * @returns {Promise<object>} The result to report.
+ */
+export async function runWithGpuProcessRerun(run, causedExits) {
+  const restarted = (record) =>
+    record !== undefined &&
+    (causedExits === undefined ? record.restarted : record.exits > causedExits);
+  const failed = (attempt) =>
+    attempt.error !== undefined ||
+    (attempt.result.ok !== true && attempt.result.skipped === undefined);
+  const page = (attempt) => attempt.error?.message ?? attempt.result;
+  const first = await run();
+  if (!restarted(first.gpuProcess) || !failed(first)) {
+    if (first.error !== undefined) throw first.error;
+    return first.gpuProcess !== undefined &&
+      (causedExits !== undefined || restarted(first.gpuProcess))
+      ? { ...first.result, gpuProcess: first.gpuProcess }
+      : first.result;
+  }
+  const second = await run();
+  const firstAttempt = { page: page(first), gpuProcess: first.gpuProcess };
+  if (!failed(second))
+    return second.gpuProcess === undefined
+      ? { ...second.result, firstAttempt }
+      : { ...second.result, gpuProcess: second.gpuProcess, firstAttempt };
+  const attempts = [
+    firstAttempt,
+    { page: page(second), gpuProcess: second.gpuProcess },
+  ];
+  if (
+    [first, second].every((attempt) => attempt.gpuProcess?.exitsBeforePage > 0)
+  )
+    return {
+      skipped:
+        "gpu-process-lost: the browser's GPU process exited before the page started, in two browsers",
+      capability: "browser-gpu-process",
+      attempts,
+    };
+  const last = second.error?.message ?? JSON.stringify(second.result);
+  return {
+    error: `failed in two browsers; the GPU process restarted during the first run: ${last}`,
+    attempts,
+  };
 }
 
 /**
@@ -482,6 +555,7 @@ export async function runChromePage(
     }
     const started = await chromeProcesses(cdp);
     for (const pid of started?.pids ?? []) pids.add(pid);
+    let exitsBeforePage;
     try {
       if (onBrowser) onBrowser(await cdp.send("Browser.getVersion"));
       const { targetId } = await cdp.send("Target.createTarget", {
@@ -512,6 +586,7 @@ export async function runChromePage(
         );
       const deadline = Date.now() + timeoutMs;
       const remaining = () => Math.max(1, deadline - Date.now());
+      exitsBeforePage = gpuExits;
       await cdp.send("Page.navigate", { url }, sessionId);
       if (onPage)
         await cdp.within(
@@ -554,6 +629,7 @@ export async function runChromePage(
           startPid: started === null ? undefined : started.gpu,
           endPid: ended === null ? undefined : ended.gpu,
           exits: gpuExits,
+          exitsBeforePage: exitsBeforePage ?? gpuExits,
         }),
       );
       cdp.close();

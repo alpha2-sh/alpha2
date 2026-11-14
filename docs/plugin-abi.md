@@ -30,7 +30,7 @@ A plugin of kind `extractor` provides one extractor: the host runs the extractio
 [`schema/plugin-manifest.v1.json`](../schema/plugin-manifest.v1.json) is its JSON Schema.
 
 - `id` names both the plugin and its extractor, and equals `descriptor.id`. `version` is the package's semantic version; `descriptor.version` is the extractor's output-contract version. Ids starting `alpha2.` are kept for first-party plugins.
-- `artifacts` has one entry per build: `target` is `wasm32` for a wasm module (`type` `wasm`), or the Rust target triple of a native one (`type` `cdylib`, or `staticlib` for a library an app links at build time). A loader takes the native artifact for its own target when the caller allows native code for this plugin, else the wasm artifact, else fails with `PLUGIN_NO_ARTIFACT`.
+- `artifacts` has one entry per build: `target` is `wasm32` for a wasm module (`type` `wasm`), or the Rust target triple of a native one (`type` `cdylib`, or `staticlib` for a library an app links at build time). A loader takes the native artifact for its own target when native code is allowed (for `alpha2-host`: the operator started it with `--plugins native` and the request sets `allow_native`), else the wasm artifact, else fails with `PLUGIN_NO_ARTIFACT`.
 - `url` is a path under the manifest's own directory (`/`-separated, never climbing above it with `..`) or an absolute `https:` URL; a manifest with any other `url` is refused with `PLUGIN_LOAD_FAILED`. Every artifact and resource is pinned by `sha256` (64 lowercase hexadecimal digits) and `bytes`; a mismatch refuses the load.
 - `descriptor` is exactly what the artifact's `describe` returns; a loader refuses an artifact whose descriptor differs.
 
@@ -38,7 +38,7 @@ A plugin of kind `extractor` provides one extractor: the host runs the extractio
 
 A wasm artifact is sandboxed: it imports only the functions below, with no files, network or clock, and its run time is bounded. It has one memory, capped by the host and never larger than 2 GiB, and its tables together hold at most 1,048,576 elements. It is allowed once its hash matches. A loader refuses a module that uses relaxed SIMD, threads, shared memory, more than one memory or 64-bit memory, so the same module gives the same values on every runtime; it must not depend on the bit pattern of a NaN (emits refuse NaN anyway).
 
-A native artifact runs with the full rights of the process and is refused unless the caller allows native code for that plugin id. It must not bring libraries that collide with the host's own (FFmpeg under its standard names). Native builds may differ across targets in floating-point results.
+A native artifact runs with the full rights of the process and is refused unless native code is allowed: in `alpha2-host` the operator allowed it at start (`--plugins native`) and the request asks for it (`allow_native`); a program that loads plugins itself decides alone. It must not bring libraries that collide with the host's own (FFmpeg under its standard names). Native builds may differ across targets in floating-point results.
 
 ## Mobile apps
 
@@ -82,14 +82,14 @@ The host gives the plugin these functions:
 | --- | --- | --- |
 | `emit` | records | A batch of [emit records](#emit-records). Returns `0`, or `1` once the session has refused an emit; the plugin then returns `1` from the call it is in. |
 | `resource` | name | The bytes of a resource the manifest declares. |
-| `fail` | message | Why the call about to return `1` failed (UTF-8). |
-| `log` | level (0 debug, 1 info, 2 warn), message | A diagnostic (UTF-8). |
+| `fail` | message | Why the call about to return `1` failed (UTF-8); loaders keep the first 4096 bytes. |
+| `log` | level (0 debug, 1 info, 2 warn), message | A diagnostic (UTF-8); loaders write the first 2048 bytes of a line and 64 KiB per run, then one notice that further lines are dropped. |
 
 Within a pass, a value is emitted no further along the pass than what the pass has delivered; `end` may emit anywhere in the range. The session's other rules (finite values in range, one sample per time, words and intervals inside the range) are those of the extraction contract.
 
 ## Native artifacts
 
-A native artifact exports one symbol, `alpha2_plugin_v1`, a C function without arguments that returns a pointer to a static `Alpha2PluginV1` table (the header has the exact types). The table and the descriptor's bytes stay valid while the library is loaded. Both tables start with `abi` and `size`, the bytes of the table as the side that filled it knows it. A host refuses a plugin table that is shorter than its own or has a null entry with `PLUGIN_LOAD_FAILED`; every entry is required.
+A native artifact exports one symbol, `alpha2_plugin_v1`, a C function without arguments that returns a pointer to a static `Alpha2PluginV1` table (the header has the exact types). The table and the descriptor's bytes stay valid while the library is loaded. A loader loads each artifact once per process, from its own copy of the checked bytes, and never unloads it: `destroy` ends an instance, not the library, so a plugin keeps no per-run state in statics, and threads it starts may outlive the run. Both tables start with `abi` and `size`, the bytes of the table as the side that filled it knows it. A host refuses a plugin table that is shorter than its own or has a null entry with `PLUGIN_LOAD_FAILED`; every entry is required.
 
 - `create(host)` returns a new instance, or null. The host's `Alpha2HostV1` table stays valid until `destroy`, and every host function takes the table's `context` first. One run uses one instance; the host calls it from one thread at a time. A plugin calls the host functions only during a call the host made, on that call's thread.
 - Every other call takes the instance first. Pixels, samples, the context and the strings passed to the plugin are borrowed for the call. Records passed to `emit` are borrowed for that call alone.
@@ -154,4 +154,4 @@ A trap ends the run with `PLUGIN_TRAPPED`; running past the memory cap, the tabl
 
 ## Errors
 
-The same codes are used on every surface: `PLUGIN_FETCH_FAILED`, `PLUGIN_HASH_MISMATCH`, `PLUGIN_ABI_UNSUPPORTED`, `PLUGIN_NO_ARTIFACT` (with the targets the manifest offers), `PLUGIN_NATIVE_REFUSED`, `PLUGIN_DESCRIPTOR_MISMATCH`, `PLUGIN_UNSUPPORTED_FEATURE`, `PLUGIN_LOAD_FAILED`, `PLUGIN_TRAPPED` and `PLUGIN_LIMIT`. An emit the session refuses is `INVALID_EMIT`, and a call that returns `1` is `EXTRACTOR_FAILED` with the plugin's message, as for any extractor.
+The same codes are used on every surface: `PLUGIN_FETCH_FAILED`, `PLUGIN_HASH_MISMATCH`, `PLUGIN_ABI_UNSUPPORTED`, `PLUGIN_NO_ARTIFACT` (with the targets the manifest offers), `PLUGIN_NATIVE_REFUSED`, `PLUGIN_REFUSED` (the host's plugin policy), `PLUGIN_DESCRIPTOR_MISMATCH`, `PLUGIN_UNSUPPORTED_FEATURE`, `PLUGIN_LOAD_FAILED`, `PLUGIN_TRAPPED` and `PLUGIN_LIMIT`. An emit the session refuses is `INVALID_EMIT`, and a call that returns `1` is `EXTRACTOR_FAILED` with the plugin's message, as for any extractor.

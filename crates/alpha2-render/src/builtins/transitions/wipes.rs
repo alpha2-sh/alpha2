@@ -53,6 +53,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
                 float("smoothness", 0.5, 0.0, 1.0),
             ],
         ),
+        // Noise is per output pixel: a half-scale preview shows it twice as coarse.
         transition(
             "wind",
             WIND,
@@ -120,6 +121,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
                 float("smoothness", 1.6, 0.0, 5.0),
             ],
         ),
+        // Noise is per output pixel: a half-scale preview shows it twice as coarse.
         transition(
             "static-wipe",
             STATIC_WIPE,

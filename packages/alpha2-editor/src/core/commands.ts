@@ -16,6 +16,7 @@ import {
   acceptsInput,
   correspondingCompositions,
   ownComposition,
+  detachComposition,
   withEffectStack,
   withoutUndrawn,
   withInput,
@@ -36,7 +37,7 @@ import type {
   DataSet,
   DataReference,
 } from "alpha2/project";
-import { dataReferences } from "alpha2/project";
+import { dataReferences, shareUnchangedParts } from "alpha2/project";
 import type { AppliedEdit } from "alpha2/apply-edit";
 import {
   assertClipsUnread,
@@ -289,6 +290,12 @@ export type Command =
       readonly id: string;
       readonly ids: readonly string[];
     }
+  /**
+   * Gives clip `id` its own copy of its composition tree when another clip, source or group draws
+   * part of it, so a graph command on it changes only this clip. Effect commands do this
+   * themselves; graph commands name a composition and change every clip that shows it.
+   */
+  | { readonly type: "clip.detachComposition"; readonly id: string }
   /** Gives a clip without one a composition that shows its picture. */
   | {
       readonly type: "graph.create";
@@ -631,6 +638,26 @@ function shiftMarkers(
   if (markers.some((m) => m.time < 0))
     fail("The edit would move a marker before the timeline start");
   return { ...document, metadata: { ...document.metadata, markers } };
+}
+/**
+ * `document` with its markers moved as `result`'s ripple moved time, which happens only when the
+ * ripple reached every track: markers annotate the timeline clock as timeline-anchored data does.
+ */
+function followTimeline(
+  document: DraftDocument,
+  result: edit.EditResult,
+): DraftDocument {
+  const change = result.ok ? result.timeline : undefined;
+  if (!change?.everyTrack) return document;
+  if (change.removed)
+    return shiftMarkers(
+      document,
+      change.removed.end,
+      change.removed.start - change.removed.end,
+    );
+  return change.opened
+    ? shiftMarkers(document, change.opened.at, change.opened.length)
+    : document;
 }
 /** The metadata right part `newId` of split clip `leftId` inherits. */
 function afterSplit(
@@ -1007,12 +1034,7 @@ function reduce(
         );
         if (cut) next = afterSplit(next, command.splitId, cut.id);
       }
-      if (command.mode === "insert" && syncTracks.length)
-        next = shiftMarkers(
-          next,
-          command.at,
-          command.clip.timeline_range.end - command.clip.timeline_range.start,
-        );
+      next = followTimeline(next, result);
       return withCopiedGraphs(next, owned.copies);
     }
     case "clip.slip":
@@ -1036,16 +1058,7 @@ function reduce(
         ...(command.keyframes ? { keyframes: command.keyframes } : {}),
       });
       const made = edited(result, command, command.id);
-      const next = { ...document, project: made };
-      // Timeline markers move with a ripple that reaches other tracks.
-      const before = found.clip.timeline_range;
-      return syncTracks.length
-        ? shiftMarkers(
-            next,
-            before.end,
-            before.start + command.duration - before.end,
-          )
-        : next;
+      return followTimeline({ ...document, project: made }, result);
     }
     case "marker.add":
       if (document.metadata.markers.some((m) => m.id === command.marker.id))
@@ -1137,24 +1150,7 @@ function reduce(
         command.type === "clip.delete" && !command.ripple && result.ok
           ? result.project
           : edited(result, command, command.id);
-      let next = { ...document, project: made };
-      // Timeline markers move with a ripple that reaches other tracks.
-      if (syncTracks.length && found) {
-        const before = found.clip.timeline_range;
-        if (command.type === "clip.trim") {
-          if (command.edge === "end")
-            next = shiftMarkers(next, before.end, command.at - before.end);
-          else
-            next = shiftMarkers(
-              next,
-              Math.max(before.start, command.at),
-              before.start - command.at,
-            );
-        } else if (command.type === "clip.delete") {
-          const gap = edit.rippleDeleteSpan(project, command.id)!;
-          next = shiftMarkers(next, gap.end, gap.start - gap.end);
-        }
-      }
+      let next = followTimeline({ ...document, project: made }, result);
       if (command.type === "clip.split")
         next = afterSplit(next, command.newId, command.id);
       return next;
@@ -1172,7 +1168,9 @@ function reduce(
     case "effect.reorder": {
       const found = indexDocument(document).clips.get(command.id);
       if (!found) fail("Unknown clip", command.id);
-      const current = effectStack(project, found.clip);
+      // Another clip may show the same composition; the edit is this clip's alone.
+      const detached = detachComposition(project, command.id);
+      const current = effectStack(detached.project, found.clip);
       if (!current)
         fail(
           "The clip's composition is a graph, not an effect stack; edit it as a graph",
@@ -1202,10 +1200,22 @@ function reduce(
             bypass: command.bypass ?? stack[i].bypass,
           };
       }
-      return {
-        ...document,
-        project: withEffectStack(project, command.id, stack),
-      };
+      return withCopiedGraphs(
+        {
+          ...document,
+          project: withEffectStack(detached.project, command.id, stack),
+        },
+        detached.copies,
+      );
+    }
+    case "clip.detachComposition": {
+      if (!indexDocument(document).clips.has(command.id))
+        fail("Unknown clip", command.id);
+      const detached = detachComposition(project, command.id);
+      return withCopiedGraphs(
+        { ...document, project: detached.project },
+        detached.copies,
+      );
     }
     case "graph.create": {
       const found = indexDocument(document).clips.get(command.clipId);
@@ -1826,32 +1836,77 @@ function assertLocksKept(
       );
   }
 }
-/** `document` without the editor metadata of clips the project no longer has. */
-function withoutRemovedClips(
-  document: DraftDocument,
-  before: Project,
+/**
+ * `next` without the editor metadata of the clips and tracks `before` has and `next` lost: their
+ * metadata entries and instance id lists. A clip that moved keeps its id and its metadata. Costs the
+ * tracks that are not the same objects in both.
+ */
+function withoutRemovedMetadata(
+  before: DraftDocument,
+  next: DraftDocument,
 ): DraftDocument {
-  const kept = indexDocument(document).clips;
-  const removed = [...indexDocument({ project: before }).clips.keys()].filter(
-    (id) => !kept.has(id),
-  );
-  if (!removed.length) return document;
-  const clips = { ...document.metadata.clips };
-  const instanceIds = { ...document.metadata.instanceIds };
-  for (const id of removed) {
-    delete clips[id];
-    delete instanceIds[`${id}/masks`];
-  }
+  const old = before.project.timeline.tracks;
+  const now = next.project.timeline.tracks;
+  if (old === now) return next;
+  const kept = new Set<Track>(now);
+  const changed = old.filter((track) => !kept.has(track));
+  if (!changed.length) return next;
+  const unchanged = new Set<Track>(old);
+  const added = now.filter((track) => !unchanged.has(track));
+  const byId = new Map(added.map((track) => [track.id, track]));
+  // A track whose clips keep their ids in place (a move or trim) loses no clip.
+  const sameIds = (before: Track) => {
+    const track = byId.get(before.id);
+    const after = track?.clips ?? [];
+    const clips = before.clips ?? [];
+    return (
+      track !== undefined &&
+      clips.length === after.length &&
+      clips.every((clip, index) => clip.id === after[index].id)
+    );
+  };
+  const losing = changed.filter((track) => !sameIds(track));
+  if (!losing.length) return next;
+  const present = new Set<string>();
+  for (const track of added)
+    for (const clip of track.clips ?? []) present.add(clip.id);
+  const trackIds = new Set(now.map((track) => track.id));
+  const clips = losing
+    .flatMap((track) => (track.clips ?? []).map((clip) => clip.id))
+    .filter((id) => !present.has(id));
+  const tracks = losing
+    .map((track) => track.id)
+    .filter((id) => !trackIds.has(id));
+  const { metadata } = next;
+  const stale = [
+    ...clips.map((id) => `${id}/masks`),
+    ...tracks.flatMap((id) => [`${id}/cues`, `${id}/transitions`]),
+  ].filter((key) => key in metadata.instanceIds);
+  const named = clips.filter((id) => id in metadata.clips);
+  const flagged = tracks.filter((id) => id in metadata.tracks);
+  if (!stale.length && !named.length && !flagged.length) return next;
+  const instanceIds = { ...metadata.instanceIds };
+  for (const key of stale) delete instanceIds[key];
+  const clipMetadata = { ...metadata.clips };
+  for (const id of named) delete clipMetadata[id];
+  const trackMetadata = { ...metadata.tracks };
+  for (const id of flagged) delete trackMetadata[id];
   return {
-    ...document,
-    metadata: { ...document.metadata, clips, instanceIds },
+    ...next,
+    metadata: {
+      ...metadata,
+      instanceIds,
+      clips: clipMetadata,
+      tracks: trackMetadata,
+    },
   };
 }
 /**
  * Puts an engine edit result (`alpha2/apply-edit` `AppliedEdit`, computed from `document`'s
  * project) in `document`, then runs `then` on it as one transaction. Clips the edit created get the
  * editor metadata of the clip each was cut from (`report.created[].from`); removed clips lose
- * theirs. The engine's project is kept as it is.
+ * theirs. Every part the edit left equal to `document`'s keeps `document`'s object, so a locked
+ * track the edit did not touch passes the lock check; the rest is the engine's project as written.
  *
  * Never throws. A refusal is `{ ok: false }` with an `EditorError`, `locked` for a change to a
  * locked track, `invalid_result` for a result that does not validate (an engine defect), or the
@@ -1865,15 +1920,22 @@ export function executeEditResult(
   let edited: EditorDocument;
   try {
     edited = withValidated(() => {
-      let next: DraftDocument = withoutRemovedClips(
-        {
-          ...document,
-          project: JSON.parse(applied.projectJson) as Project,
-        },
-        document.project,
-      );
+      let next: DraftDocument = withoutRemovedMetadata(document, {
+        ...document,
+        project: shareUnchangedParts(
+          document.project,
+          JSON.parse(applied.projectJson) as Project,
+        ),
+      });
       for (const created of applied.report.created)
         next = afterSplit(next, created.id, created.from);
+      // What the edit stopped drawing goes, with its graph layout and names.
+      const undrawn = withoutUndrawn(document.project, next.project);
+      if (undrawn.removed.size)
+        next = withoutGraphs(
+          { ...next, project: undrawn.project },
+          undrawn.removed,
+        );
       assertLocksKept(document, next, { type: "edit" });
       const result = freeze(withInstanceIds(canonicalDocument(next)));
       try {
@@ -1924,7 +1986,10 @@ export function executeCommand(
 ): Result<EditorDocument> {
   try {
     return withValidated(() => {
-      const reduced = apply(document, structuredClone(command));
+      const reduced = withoutRemovedMetadata(
+        document,
+        apply(document, structuredClone(command)),
+      );
       // A clip owns the composition it shows: what the command stopped drawing goes.
       const undrawn = withoutUndrawn(document.project, reduced.project);
       // Canonicalize what the command brought in.

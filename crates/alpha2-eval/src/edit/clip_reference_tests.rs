@@ -1,7 +1,7 @@
 use super::tests::{FRAME, clip, corpus, kept_moments_hold, load, remove, timeline_list};
 use super::*;
 use crate::{ActiveIndex, evaluate};
-use alpha2_model::Project;
+use alpha2_model::{Project, TimelineValue};
 use alpha2_time::MediaTime;
 use serde_json::{Value, json};
 
@@ -44,6 +44,23 @@ fn edited(project: &Project, request: &Value) -> Project {
     )
     .expect("the edit applies");
     Project::from_json(&edited.project).expect("valid result")
+}
+
+/// The cuts a `split_at` left out, as `(clip, time, reason)`.
+fn skips(project: &Project, request: &Value) -> Vec<(String, i64, SkipReason)> {
+    let request: EditRequest = serde_json::from_value(request.clone()).expect("request");
+    let (_, report) = apply(project, &request).expect("the split applies");
+    report
+        .skipped
+        .into_iter()
+        .map(|skip| {
+            (
+                skip.clip.as_str().to_owned(),
+                skip.time.ticks(),
+                skip.reason,
+            )
+        })
+        .collect()
 }
 
 fn refusal(project: &Project, request: &Value) -> (&'static str, &'static str) {
@@ -165,12 +182,14 @@ fn a_ripple_through_a_matte_pair_keeps_each_part_matted_by_its_counterpart() {
 }
 
 #[test]
-fn splitting_a_matte_source_alone_is_refused() {
+fn splitting_a_matte_source_alone_skips_the_cut() {
     let project = matte_pair((0, 60), (0, 60));
     assert_eq!(
-        refusal(&project, &split_frames(&[20], &["ms"])),
-        ("INVALID_INPUT", "matte_source")
+        skips(&project, &split_frames(&[20], &["ms"])),
+        [("ms".to_owned(), 20 * FRAME, SkipReason::MatteSource)]
     );
+    // Cut alike, the pair splits.
+    assert_eq!(skips(&project, &split_frames(&[20], &["ms", "mm"])), []);
 }
 
 #[test]
@@ -196,11 +215,11 @@ fn removing_a_whole_matte_source_from_under_its_clip_is_refused() {
 }
 
 #[test]
-fn cutting_a_matte_source_where_it_overhangs_its_clip_is_refused() {
+fn cutting_a_matte_source_where_it_overhangs_its_clip_skips_the_cut() {
     let project = matte_pair((0, 80), (0, 60));
     assert_eq!(
-        refusal(&project, &split_frames(&[70], &["ms"])),
-        ("INVALID_INPUT", "matte_source")
+        skips(&project, &split_frames(&[70], &["ms"])),
+        [("ms".to_owned(), 70 * FRAME, SkipReason::MatteSource)]
     );
 }
 
@@ -272,12 +291,15 @@ fn removing_the_clip_a_follower_reads_through_is_refused() {
 }
 
 #[test]
-fn splitting_a_reversed_reader_alone_is_refused() {
+fn splitting_a_reversed_reader_alone_skips_the_cut() {
     let project = follower(&json!({ "type": "reverse" }), (0, 50), (0, 50));
     assert_eq!(
-        refusal(&project, &split_frames(&[20], &["a"])),
-        ("INVALID_INPUT", "read_through")
+        skips(&project, &split_frames(&[20], &["a"])),
+        [("a".to_owned(), 20 * FRAME, SkipReason::ReadThrough)]
     );
+    // A follower that lies on one side of the cut does not stop it.
+    let project = follower(&json!({ "type": "reverse" }), (0, 50), (25, 50));
+    assert_eq!(skips(&project, &split_frames(&[20], &["a"])), []);
 }
 
 #[test]

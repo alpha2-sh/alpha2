@@ -26,7 +26,10 @@ pub const ROUNDING_SCAN_BYTES: u64 = 16 * 1024 * 1024;
 /// frame interval into two lengths one unit apart (29.97 fps in milliseconds is 33 and 34 ms), so
 /// the unit is the GCD of the differences between intervals. Equal intervals mean exact frames.
 /// Differences of at least half the shortest interval are a variable frame rate, not rounding.
-/// Fewer than three distinct timestamps return 0.
+/// The unit also has to explain the timestamps: every one lies on the first's grid of units, and
+/// one constant period, frames skipped allowed, places each within a unit of it. Otherwise
+/// (stills held for unequal times, two exact frame rates mixed) the gaps are real and 0 is
+/// returned. Fewer than three distinct timestamps return 0.
 #[must_use]
 pub fn rounding_quantum(timestamps: &[i64]) -> i64 {
     let mut sorted = timestamps.to_vec();
@@ -42,10 +45,82 @@ pub fn rounding_quantum(timestamps: &[i64]) -> i64 {
     let quantum = intervals.iter().fold(0_i128, |quantum, &interval| {
         gcd(quantum, (interval - first).abs())
     });
-    if quantum == 0 || quantum.saturating_mul(2) >= shortest {
+    if quantum == 0
+        || quantum.saturating_mul(2) >= shortest
+        || !fits_one_period(&sorted, &intervals, shortest, quantum)
+    {
         return 0;
     }
     i64::try_from(quantum).unwrap_or(0)
+}
+
+/// A numerator and a positive denominator.
+type Fraction = (i128, i128);
+
+/// Whether `sorted` is one constant period rounded to `unit`: every timestamp congruent to the
+/// first modulo `unit`, and a period `P` with `|(t_k - t_j) - (N_k - N_j) P| <= unit` for every
+/// pair, `N` counting frames. An interval is `round(d / p0)` frames, `p0` the mean of the
+/// intervals within a unit of the shortest. An overflow means no period.
+fn fits_one_period(sorted: &[i64], intervals: &[i128], shortest: i128, unit: i128) -> bool {
+    let first = i128::from(sorted[0]);
+    if sorted
+        .iter()
+        .any(|&time| (i128::from(time) - first).rem_euclid(unit) != 0)
+    {
+        return false;
+    }
+    let (sum, count) = intervals
+        .iter()
+        .filter(|&&interval| interval - shortest <= unit)
+        .fold((0_i128, 0_i128), |(sum, count), &interval| {
+            (sum.saturating_add(interval), count + 1)
+        });
+    let mut frames = vec![0_i128];
+    for &interval in intervals {
+        // round(interval * count / sum), halves up.
+        let Some(scaled) = interval
+            .checked_mul(2 * count)
+            .and_then(|twice| twice.checked_add(sum))
+        else {
+            return false;
+        };
+        let Some(next) = frames
+            .last()
+            .and_then(|&last| last.checked_add(scaled / (2 * sum)))
+        else {
+            return false;
+        };
+        frames.push(next);
+    }
+    // The largest lower bound and the smallest upper bound on P, as fractions.
+    let (mut low, mut high): (Option<Fraction>, Option<Fraction>) = (None, None);
+    let below = |a: Fraction, b: Fraction| -> Option<bool> {
+        Some(a.0.checked_mul(b.1)? < b.0.checked_mul(a.1)?)
+    };
+    for j in 0..sorted.len() {
+        for k in j + 1..sorted.len() {
+            let span = i128::from(sorted[k]) - i128::from(sorted[j]);
+            let count = frames[k] - frames[j];
+            if count <= 0 {
+                return false;
+            }
+            let (from, to) = ((span - unit, count), (span + unit, count));
+            match low.map(|low| below(low, from)) {
+                None | Some(Some(true)) => low = Some(from),
+                Some(Some(false)) => {}
+                Some(None) => return false,
+            }
+            match high.map(|high| below(to, high)) {
+                None | Some(Some(true)) => high = Some(to),
+                Some(Some(false)) => {}
+                Some(None) => return false,
+            }
+        }
+    }
+    match (low, high) {
+        (Some(low), Some(high)) => below(high, low) == Some(false),
+        _ => false,
+    }
 }
 
 fn gcd(mut a: i128, mut b: i128) -> i128 {
@@ -254,5 +329,34 @@ mod tests {
         assert_eq!(rounding_quantum(&[0, 33]), 0);
         assert_eq!(rounding_quantum(&[]), 0);
         assert_eq!(rounding_quantum(&[i64::MIN, 0, i64::MAX]), 1);
+    }
+
+    #[test]
+    fn a_coarse_unit_counts_only_when_one_period_explains_the_timestamps() {
+        // Stills held 3, 3, 3, 4, 4 and 4 s: gaps of whole seconds, not a rounding.
+        let stills = |units: i64| {
+            [0, 3, 6, 9, 13, 17, 21]
+                .iter()
+                .map(|second| second * units)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rounding_quantum(&stills(90_000)), 0);
+        assert_eq!(rounding_quantum(&stills(1_000)), 0);
+        // Exact 29.97 and 23.976 fps frames mixed in 1/90000 (3003 and 3754).
+        assert_eq!(
+            rounding_quantum(&[0, 3_003, 6_757, 9_760, 13_514, 16_517]),
+            0
+        );
+        // Stills at 0, 3, 7, 10 and 14 s are also a 3.5 s period rounded to seconds.
+        assert_eq!(
+            rounding_quantum(&[0, 270_000, 630_000, 900_000, 1_260_000]),
+            90_000
+        );
+        // AAC in Matroska copied into a 1/48000 track: 0, 1024, then every frame 8 short.
+        let remux = [0, 1_024]
+            .into_iter()
+            .chain((2..64).map(|k| k * 1_024 - 8))
+            .collect::<Vec<_>>();
+        assert_eq!(rounding_quantum(&remux), 8);
     }
 }

@@ -166,7 +166,8 @@ impl SourceTimeline {
     }
 
     /// Places `planes`, decoded at `rate`, from source sample `at`, which is never before
-    /// [`expected`](Self::expected) (the caller drops overlaps).
+    /// [`expected`](Self::expected) (the caller drops overlaps). `at` comes from a timestamp that
+    /// passed [`audio_timestamp_in_range`](crate::recovery::audio_timestamp_in_range).
     ///
     /// # Errors
     /// A rate the resampler cannot take, or planes of the wrong shape.

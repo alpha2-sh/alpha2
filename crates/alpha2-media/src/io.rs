@@ -384,6 +384,21 @@ pub enum ChromaLocation {
     TopLeft,
 }
 
+impl ChromaLocation {
+    /// The siting chroma of `format` is read at. An unspecified siting of chroma subsampled
+    /// horizontally only (4:2:2, 4:1:1) is [`Self::Left`], co-sited with even luma columns as
+    /// BT.601 and BT.709 site it; otherwise it is kept (unspecified 4:2:0 reads as centred).
+    #[must_use]
+    pub const fn resolved_for(self, format: YuvFormat) -> Self {
+        match self {
+            Self::Unspecified if format.chroma_shift_x > 0 && format.chroma_shift_y == 0 => {
+                Self::Left
+            }
+            other => other,
+        }
+    }
+}
+
 /// One decoded image plane.
 ///
 /// Bytes are shared so decoders can hand over reference-counted memory without copying.

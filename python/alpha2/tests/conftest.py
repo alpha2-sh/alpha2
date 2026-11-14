@@ -13,6 +13,8 @@ from typing import Any, NoReturn, Protocol
 
 import pytest
 
+from alpha2 import _native
+
 ROOT = Path(__file__).resolve().parents[3]
 
 CAPABILITIES: dict[str, Any] = json.loads(
@@ -74,7 +76,9 @@ def corpus(name: str) -> Any:
     return json.loads((ROOT / "tests" / "cases" / name).read_text(encoding="utf-8"))
 
 
-HOST_PRELUDE = """\
+HOST_PRELUDE = (
+    f"HOST_VERSION = {_native.__version__!r}\n"
+    + """\
 import json, os, signal, struct, sys, time
 # As the real host reads and writes: UTF-8 and bare newlines, whatever the platform's defaults are.
 sys.stdin.reconfigure(encoding="utf-8")
@@ -104,6 +108,7 @@ def read_message():
     sys.stdin.buffer.read(attachment_bytes)
     return json.loads(header), header
 def state(state="ready", reason="started", **details):
+    details = {"hostVersion": HOST_VERSION, **details}
     write_message({"type": "state", "state": state, "reason": reason, "details": details})
 def send(request, **message):
     if "ok" in message:
@@ -119,6 +124,7 @@ def serve(answer):
         if received[0]["operation"] != "cancel":
             answer(received[0])
 """
+)
 
 
 class FakeHost(Protocol):

@@ -8,7 +8,7 @@
 
 use alpha2_eval::{SampledAnimator, SampledSelector};
 use alpha2_model::{RangeShape, RangeUnits, RunState, TextRun, TextUnit};
-use alpha2_text::{ClusterState, ColorMix, TextLayout};
+use alpha2_text::{ClusterState, ColorMix, MAX_CLUSTER_SCALE, TextLayout};
 use alpha2_time::MediaTime;
 
 /// The selection in `[0, 1]` that `selector` gives each cluster of `layout`, at `time` for a
@@ -306,6 +306,8 @@ fn text_states(
     for (state, degrees) in states.iter_mut().zip(degrees) {
         state.rotation = degrees.to_radians();
         state.opacity = state.opacity.clamp(0.0, 1.0);
+        // Scales of several animators multiply; the product keeps one animator's limit.
+        state.scale = state.scale.map(|axis| axis.min(MAX_CLUSTER_SCALE));
         identity &= state.is_identity();
         let mixes = [state.fill, state.stroke].map(|mix| {
             mix.map_or([1.0, 0.0, 0.0, 0.0, 0.0], |mix| {

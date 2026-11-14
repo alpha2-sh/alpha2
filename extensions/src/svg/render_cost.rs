@@ -11,10 +11,9 @@ use resvg::tiny_skia::{PathSegment, Rect, Transform};
 use resvg::usvg::{self, Group, Node, Paint, filter};
 
 use crate::api::ExtensionError;
-use crate::budget::{FLOOR_CANVAS, MAX_DRAWING};
-
-/// Most intermediate pixels (layers, masks, tiles, filter results) held at once: 1 GiB of RGBA8.
-pub(super) const MAX_HELD_PIXELS: f64 = 268_435_456.0;
+use crate::budget::{
+    FLOOR_CANVAS, MAX_DASHES, MAX_DRAWING, MAX_HELD_PIXELS, dash_geometry, fill_geometry,
+};
 
 /// Most node draws per render, counting repeats through patterns, masks, clips, and filters.
 /// Even an empty node costs resvg about a microsecond.
@@ -117,6 +116,104 @@ pub(super) fn check(
         )));
     }
     Ok(())
+}
+
+/// What scan converting a path costs at one transform: its edges that are not horizontal, the sum
+/// over device rows of the square of the edges active in each row, and its length in device
+/// pixels.
+struct Geometry {
+    segments: f64,
+    row_pairs: f64,
+    length: f64,
+}
+
+impl Geometry {
+    /// Counts `path` through `ts`, its edges widened by `grow` rows, over the rows of `target`;
+    /// a fill (`closes`) adds the edge that closes each subpath. A curve counts as the y-monotonic
+    /// edges it can split into, over its control points.
+    fn of(path: &usvg::Path, ts: Transform, target: Bounds, grow: f64, closes: bool) -> Self {
+        let device = |p: resvg::tiny_skia::Point| {
+            let mut p = p;
+            ts.map_point(&mut p);
+            (f64::from(p.x), f64::from(p.y))
+        };
+        let (top, bottom) = (target.top.floor(), target.bottom.ceil());
+        // Rows where edges start (+) and end (-), each with its weight.
+        let mut events: Vec<(f64, f64)> = Vec::new();
+        let mut segments = 0.0;
+        let mut length = 0.0;
+        let mut edge = |points: &[(f64, f64)], edges: f64, events: &mut Vec<(f64, f64)>| {
+            let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+            for window in points.windows(2) {
+                let ((x0, y0), (x1, y1)) = (window[0], window[1]);
+                length += ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+            }
+            for (_, y) in points {
+                low = low.min(*y);
+                high = high.max(*y);
+            }
+            // tiny-skia drops horizontal edges.
+            #[allow(clippy::float_cmp)]
+            if low == high {
+                return;
+            }
+            segments += edges;
+            let start = (low - grow).floor().max(top);
+            let end = ((high + grow).ceil()).max(start + 1.0).min(bottom);
+            if start < end && start.is_finite() && end.is_finite() {
+                events.push((start, edges));
+                events.push((end, -edges));
+            }
+        };
+        let (mut at, mut start) = ((0.0, 0.0), (0.0, 0.0));
+        for segment in path.data().segments() {
+            match segment {
+                PathSegment::MoveTo(p) => {
+                    if closes && at != start {
+                        edge(&[at, start], 1.0, &mut events);
+                    }
+                    at = device(p);
+                    start = at;
+                }
+                PathSegment::LineTo(p) => {
+                    let p = device(p);
+                    edge(&[at, p], 1.0, &mut events);
+                    at = p;
+                }
+                PathSegment::QuadTo(p1, p) => {
+                    let (p1, p) = (device(p1), device(p));
+                    edge(&[at, p1, p], 2.0, &mut events);
+                    at = p;
+                }
+                PathSegment::CubicTo(p1, p2, p) => {
+                    let (p1, p2, p) = (device(p1), device(p2), device(p));
+                    edge(&[at, p1, p2, p], 3.0, &mut events);
+                    at = p;
+                }
+                PathSegment::Close => {
+                    if at != start {
+                        edge(&[at, start], 1.0, &mut events);
+                    }
+                    at = start;
+                }
+            }
+        }
+        if closes && at != start {
+            edge(&[at, start], 1.0, &mut events);
+        }
+        events.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        let (mut row_pairs, mut active, mut row) = (0.0, 0.0, top);
+        for (at, change) in events {
+            row_pairs += active * active * (at - row);
+            active += change;
+            row = at;
+        }
+        Self {
+            segments,
+            row_pairs,
+            length,
+        }
+    }
 }
 
 /// A rectangle in device pixels.
@@ -330,6 +427,12 @@ impl Walk {
             let bounds = Bounds::through(path.bounding_box(), ts);
             self.segments(path, bounds, ts, target, 0.0);
             self.spend(area(bounds), weights::DRAW, || named("path", path.id()));
+            let geometry = Geometry::of(path, ts, target, 0.0, true);
+            self.spend(
+                fill_geometry(geometry.row_pairs, geometry.segments),
+                1.0,
+                || named("path", path.id()),
+            );
         }
         if let Some(stroke) = path.stroke() {
             self.paint(stroke.paint(), ts);
@@ -340,6 +443,20 @@ impl Walk {
                 * f64::from(sx.abs().max(sy.abs()));
             self.segments(path, bounds, ts, target, reach);
             self.spend(area(bounds), weights::DRAW, || named("path", path.id()));
+            // The outline has an edge on each side of every segment; dashes follow the path.
+            let geometry = Geometry::of(path, ts, target, reach, false);
+            let mut cost = fill_geometry(4.0 * geometry.row_pairs, 2.0 * geometry.segments);
+            if let Some(dashes) = stroke.dasharray() {
+                let period: f64 = dashes.iter().map(|dash| f64::from(*dash)).sum();
+                let scale = f64::from(sx.abs().max(sy.abs()));
+                let count = if period * scale > 0.0 {
+                    (geometry.length / (period * scale)).min(MAX_DASHES)
+                } else {
+                    MAX_DASHES
+                };
+                cost += dash_geometry(count);
+            }
+            self.spend(cost, 1.0, || named("path", path.id()));
         }
     }
 
@@ -507,6 +624,8 @@ impl Walk {
                         let bounds = Bounds::through(path.bounding_box(), ts);
                         self.segments(path, bounds, ts, target, 0.0);
                         let pixels = bounds.map_or(0.0, |b| b.whole(1.0).within(target).area());
+                        let geometry = Geometry::of(path, ts, target, 0.0, true);
+                        let pixels = pixels + fill_geometry(geometry.row_pairs, geometry.segments);
                         self.spend(pixels, weights::DRAW, || named("path", path.id()));
                     }
                 }

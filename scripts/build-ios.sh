@@ -4,7 +4,7 @@
 # packages/alpha2-swift links, with the privacy manifest. Refuses a library that calls a
 # required-reason API the manifest does not declare. PROFILE=debug builds unoptimized libraries.
 # ALPHA2_NOTICES names the Rust crate license notices (scripts/crate-licenses.mjs) each framework
-# ships beside its privacy manifest.
+# ships beside its privacy manifest, LICENSE.md and THIRD_PARTY_NOTICES.md.
 #
 #   scripts/build-ios.sh
 set -euo pipefail
@@ -26,7 +26,7 @@ mkdir -p "$build" "$package/Sources/Alpha2"
 cargo run --locked -q -p alpha2-uniffi-bindgen -- generate \
   --library "target/aarch64-apple-ios/$profile/libalpha2_mobile.a" --language swift --no-format \
   --out-dir "$build/swift"
-cp "$build/swift/Alpha2.swift" "$package/Sources/Alpha2/"
+cp "$build/swift/Alpha2.swift" "$package/Extensions/"*.swift "$package/Sources/Alpha2/"
 
 # Every required-reason API the library imports must have a reason in the manifest.
 declared=$(sed -n 's/.*<string>\(NSPrivacyAccessedAPICategory[A-Za-z]*\)<\/string>.*/\1/p' \
@@ -80,7 +80,7 @@ for target in "${slices[@]}"; do
 <key>MinimumOSVersion</key><string>17.0</string>
 </dict></plist>
 PLIST
-  cp "$package/PrivacyInfo.xcprivacy" "$framework/"
+  cp "$package/PrivacyInfo.xcprivacy" LICENSE.md THIRD_PARTY_NOTICES.md "$framework/"
   if [ -n "${ALPHA2_NOTICES:-}" ]; then
     cp "$ALPHA2_NOTICES" "$framework/rust-crate-licenses.md"
   fi
@@ -91,5 +91,6 @@ xcodebuild -create-xcframework "${frameworks[@]}" -output "$package/$module.xcfr
 # The package tests' fixtures.
 fixtures=$package/Tests/Alpha2Tests/Fixtures
 mkdir -p "$fixtures"
-cp tests/cases/host-parity-project.json tests/corpus/cross_topology_parity.png "$fixtures/"
+cp tests/cases/host-parity-project.json tests/cases/host-audio-export-project.json \
+  tests/corpus/cross_topology_parity.png "$fixtures/"
 echo "$package/$module.xcframework"

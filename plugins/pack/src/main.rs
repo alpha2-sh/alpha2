@@ -1,5 +1,7 @@
 //! Builds a plugin crate for wasm32 and native targets and writes an upload-ready directory: the
-//! artifacts, the resources and `manifest.json` with relative URLs, SHA-256 hashes and sizes.
+//! artifacts, the resources and `manifest.json` with relative URLs, SHA-256 hashes and sizes, and
+//! beside them the licence files under `licenses/` and `THIRD_PARTY_NOTICES.txt`, which the
+//! manifest does not list.
 //!
 //! ```text
 //! cargo run -p alpha2-plugin-pack -- <plugin-dir> --out <dir> [--target <triple>]... [--no-native]
@@ -10,6 +12,7 @@
 //! targets default to the host's. Nothing is uploaded.
 
 mod check;
+mod notices;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -161,13 +164,7 @@ fn resources(plugin: &Path, out: &Path) -> Result<Vec<Value>, String> {
 fn pack(options: &Options) -> Result<PathBuf, String> {
     let manifest_path = options.plugin.join("Cargo.toml");
     let metadata: Value = serde_json::from_str(&run(cargo()
-        .args([
-            "metadata",
-            "--format-version",
-            "1",
-            "--no-deps",
-            "--manifest-path",
-        ])
+        .args(["metadata", "--format-version", "1", "--manifest-path"])
         .arg(&manifest_path))?)
     .map_err(|error| error.to_string())?;
     let package = metadata["packages"]
@@ -191,7 +188,9 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
             .as_str()
             .ok_or("no target dir")?,
     );
-    let descriptor: Value = serde_json::from_slice(&read(&options.plugin.join("descriptor.json"))?)
+    let descriptor_text = String::from_utf8(read(&options.plugin.join("descriptor.json"))?)
+        .map_err(|_| "descriptor.json is not UTF-8".to_owned())?;
+    let descriptor: Value = serde_json::from_str(&descriptor_text)
         .map_err(|error| format!("descriptor.json: {error}"))?;
     let id = descriptor["id"]
         .as_str()
@@ -222,6 +221,14 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
     }
 
     let resources = resources(&options.plugin, &options.out)?;
+    notices::copy_plugin_licences(&options.plugin, &options.out)?;
+    let root = package["id"].as_str().ok_or("the plugin crate has no id")?;
+    let notices_path = options.out.join("THIRD_PARTY_NOTICES.txt");
+    std::fs::write(
+        &notices_path,
+        notices::third_party_notices(&metadata, root)?,
+    )
+    .map_err(|error| format!("{}: {error}", notices_path.display()))?;
 
     let mut manifest = json!({
         "id": id,
@@ -229,16 +236,26 @@ fn pack(options: &Options) -> Result<PathBuf, String> {
         "abi": "alpha2-plugin/1",
         "kind": "extractor",
         "artifacts": artifacts,
-        "descriptor": descriptor,
     });
     if !resources.is_empty() {
         manifest["resources"] = json!(resources);
     }
     let path = options.out.join("manifest.json");
-    let mut text = serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?;
-    text.push('\n');
+    let text = manifest_text(manifest, &descriptor_text)?;
     std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
     Ok(path)
+}
+
+/// The manifest's text with `descriptor` (the crate's `descriptor.json`) as written. The artifact
+/// returns those bytes from `describe`, and a loader compares the two parsed; a number serialized
+/// again may not parse back to the same value, so the bytes are kept.
+fn manifest_text(mut manifest: Value, descriptor: &str) -> Result<String, String> {
+    const PLACEHOLDER: &str = "alpha2-plugin-pack:descriptor";
+    manifest["descriptor"] = json!(PLACEHOLDER);
+    let text = serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?;
+    let mut text = text.replacen(&format!("\"{PLACEHOLDER}\""), descriptor.trim(), 1);
+    text.push('\n');
+    Ok(text)
 }
 
 fn main() -> ExitCode {
@@ -251,5 +268,23 @@ fn main() -> ExitCode {
             eprintln!("{error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_manifest_keeps_the_descriptor_text_as_written() {
+        // Serialized again, this number would read back one step lower.
+        let descriptor = r#"{ "id": "a.b", "params_schema": { "minimum": -99.999990023795055 } }"#;
+        let text =
+            manifest_text(json!({ "id": "a.b", "artifacts": [] }), descriptor).expect("manifest");
+        assert!(text.contains("-99.999990023795055"), "{text}");
+        let manifest: Value = serde_json::from_str(&text).expect("json");
+        let written: Value = serde_json::from_str(descriptor).expect("json");
+        assert_eq!(manifest["descriptor"], written);
+        assert_eq!(manifest["id"], "a.b");
     }
 }

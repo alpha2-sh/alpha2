@@ -62,6 +62,8 @@ pub struct Composition {
     pub id: CompositionId,
     /// The graph's nodes. Order has no meaning; a node may name a later node as its input.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_COMPOSITION_NODES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_COMPOSITION_NODES)))]
     pub nodes: Vec<CompositionNode>,
     /// The node whose image is the composition's picture. A composition without one saves but
     /// cannot be rendered.
@@ -70,9 +72,13 @@ pub struct Composition {
     /// The images a group node gives it, by name, in port order; its [`NodeOp::GroupInput`]
     /// nodes read them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_GROUP_INPUTS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_GROUP_INPUTS)))]
     pub inputs: Vec<String>,
     /// The node settings a group node may set, by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_COMPOSITION_CONTROLS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_COMPOSITION_CONTROLS)))]
     pub controls: Vec<CompositionControl>,
 }
 
@@ -181,6 +187,8 @@ pub enum NodeOp {
         /// declared one left out, is invalid for a built-in and fails the frames that draw the
         /// node otherwise.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        #[serde(deserialize_with = "crate::bounded::map::<_, _, _, { MAX_EFFECT_INPUTS }>")]
+        #[cfg_attr(feature = "schema", schemars(extend("maxProperties" = MAX_EFFECT_INPUTS)))]
         inputs: BTreeMap<String, Option<NodeId>>,
         /// The versioned effect and its parameters.
         effect: ClipEffect,
@@ -210,7 +218,11 @@ pub enum NodeOp {
     /// Ordered layers composited over transparency.
     Merge {
         /// Layers from bottom to top.
-        #[serde(default)]
+        #[serde(
+            default,
+            deserialize_with = "crate::bounded::seq::<_, _, { MAX_MERGE_LAYERS }>"
+        )]
+        #[cfg_attr(feature = "schema", schemars(length(max = MAX_MERGE_LAYERS)))]
         layers: Vec<MergeLayer>,
     },
     /// The input kept where a second image says.
@@ -231,6 +243,8 @@ pub enum NodeOp {
         input: Option<NodeId>,
         /// The shapes, combined in order; at most [`crate::MAX_CLIP_MASKS`]. Geometry is in the
         /// input image's normalized space.
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_CLIP_MASKS }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_CLIP_MASKS)))]
         masks: Vec<ShapeMask>,
     },
     /// Another composition drawn in this one's time as a group: its output, with group inputs
@@ -240,6 +254,8 @@ pub enum NodeOp {
         composition: CompositionId,
         /// The image for each of its inputs, in its port order.
         #[serde(default)]
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_GROUP_INPUTS }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_GROUP_INPUTS)))]
         inputs: Vec<Option<NodeId>>,
         /// Values for its controls, by name; unset controls keep the composition's own value. Keyed
         /// in composition time.

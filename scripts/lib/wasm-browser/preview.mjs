@@ -134,3 +134,97 @@ if (sized && deviceLost)
 report({ ok: sized && wrong === 0 && !deviceLost, ...details });
 `;
 }
+
+// A caller that presents on every animation frame without awaiting, over a 2160p source, keeps at
+// most one presentation running and one waiting, and the picture keeps advancing.
+export function previewEveryAnimationFrame() {
+  return `
+const { WorkerRenderBackend } = await import("/packages/alpha2/dist/worker.js");
+const { Alpha2Player } = await import("/packages/alpha2/dist/player.js");
+const [width, height] = [3840, 2160];
+const origin = location.origin;
+const source = \`
+import init, { WebEffectRegistry } from "\${origin}/packages/alpha2/wasm/alpha2_wasm.js";
+import { createWasmRenderWorkerHost, installRenderWorker } from "\${origin}/packages/alpha2/dist/worker.js";
+await init();
+installRenderWorker(self, createWasmRenderWorkerHost(WebEffectRegistry, \${JSON.stringify(JSON.stringify({
+  schema_version: 1, id: "uhd", name: "UHD",
+  settings: { width: 3840, height: 2160, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [{ id: "video", locator: "fixture://video", kind: "video" }],
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{ id: "c", source_id: "video",
+    timeline_range: { start: 0, end: 1200000 }, source_range: { start: 0, end: 1200000 } }] }] },
+}))}));
+self.postMessage({ type: "test-ready" });
+\`;
+const worker = new Worker(URL.createObjectURL(new Blob([source], { type: "text/javascript" })), { type: "module" });
+await new Promise((resolve, reject) => {
+  worker.addEventListener("message", function ready(event) {
+    if (event.data?.type === "test-ready") { worker.removeEventListener("message", ready); resolve(); }
+  });
+  worker.addEventListener("error", (event) => reject(new Error(event.message)), { once: true });
+});
+const backend = new WorkerRenderBackend(worker);
+let inFlight = 0;
+let mostInFlight = 0;
+let posted = 0;
+const drawn = [];
+const present = backend.present.bind(backend);
+backend.present = async (timeTicks) => {
+  posted += 1;
+  inFlight += 1;
+  mostInFlight = Math.max(mostInFlight, inFlight);
+  try {
+    const result = await present(timeTicks);
+    if (result.missingFrames.length === 0) drawn.push(result.presentedTimeTicks);
+    return result;
+  } finally {
+    inFlight -= 1;
+  }
+};
+const element = document.createElement("canvas");
+element.width = 640;
+element.height = 360;
+document.body.replaceChildren(element);
+const luma = new Uint8Array(width * height * 3 / 2);
+const player = new Alpha2Player(backend, {
+  onRefill: async (requests) => {
+    for (const request of requests) {
+      luma.fill(16 + Number((request.mediaTimeTicks / 4000n) % 200n), 0, width * height);
+      luma.fill(128, width * height);
+      await player.uploadVideoFrame({ sourceId: request.sourceId, requestedTimeTicks: request.mediaTimeTicks,
+        decodedTimeTicks: request.mediaTimeTicks, generation: request.generation,
+        frame: new VideoFrame(luma, { format: "I420", codedWidth: width, codedHeight: height, timestamp: 0,
+          colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false } }) });
+    }
+  },
+});
+await player.initialize(element.transferControlToOffscreen());
+const failures = [];
+let requested = 0;
+let mostOutstanding = 0;
+let outstanding = 0;
+const started = performance.now();
+await new Promise((resolve) => {
+  const tick = () => {
+    if (performance.now() - started > 3000) return resolve();
+    const time = BigInt(requested++) * 4000n;
+    outstanding += 1;
+    mostOutstanding = Math.max(mostOutstanding, outstanding);
+    player.present(time).catch((error) => failures.push(String(error?.message ?? error)))
+      .finally(() => (outstanding -= 1));
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+});
+const last = await player.present(BigInt(requested) * 4000n);
+player.dispose();
+worker.terminate();
+const advancing = drawn.every((time, index) => index === 0 || time > drawn[index - 1]);
+report({
+  ok: mostInFlight === 1 && failures.length === 0 && drawn.length >= 3 && advancing
+    && last?.presentedTimeTicks === BigInt(requested) * 4000n,
+  requested, posted, mostInFlight, mostOutstanding, drawnCount: drawn.length,
+  firstDrawn: String(drawn[0]), lastDrawn: String(drawn.at(-1)), failures: failures.slice(0, 3),
+});
+`;
+}

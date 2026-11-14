@@ -28,6 +28,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
             FILM_GRAIN,
             vec![
                 float("amount", 0.18, 0.0, 1.0),
+                // The cell size in project pixels: a half-scale preview draws half as many.
                 float("size", 1.4, 0.5, 6.0),
             ],
         ),

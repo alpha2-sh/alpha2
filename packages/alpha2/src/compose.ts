@@ -51,6 +51,7 @@ export interface ComposeFacts {
         readonly height?: number;
         readonly frame_rate?: { readonly num: number; readonly den: number };
         readonly duration_ticks?: number;
+        /** Required for a video that plays unmuted. */
         readonly has_audio?: boolean;
       }
     >

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alpha2_container::{Packet, TrackInfo, VideoCodec};
-use alpha2_host_core::parameter_sets::vp9_bit_depth;
+use alpha2_host_core::parameter_sets::vp9_format;
 use alpha2_host_core::video_stream::{
     BackendError, BackendFrame, BackendImage, BackendKind, Poll, Submit, VideoBackends,
     VideoDecodeBackend,
@@ -68,7 +68,8 @@ fn software_decoders(codec: VideoCodec) -> &'static [&'static str] {
 }
 
 /// The parameter sets of an `avcC` or `hvcC` record, each with an Annex B start code, split as
-/// `MediaCodec` takes them: `csd-0` (SPS, or VPS+SPS+PPS for HEVC) and `csd-1` (PPS for H.264).
+/// `MediaCodec` takes them: `csd-0` (SPS, or VPS+SPS+PPS of the base layer for HEVC) and `csd-1`
+/// (PPS for H.264).
 fn codec_specific_data(codec: VideoCodec, record: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut first = Vec::new();
     let mut second = Vec::new();
@@ -115,7 +116,7 @@ fn codec_specific_data(codec: VideoCodec, record: &[u8]) -> (Vec<u8>, Vec<u8>) {
                 for _ in 0..count {
                     let Some((nal, next)) = unit(at) else { break };
                     let kind = (nal.first().copied().unwrap_or(0) >> 1) & 0x3f;
-                    if (32..=34).contains(&kind) {
+                    if (32..=34).contains(&kind) && hevc_layer(nal) == 0 {
                         push(&mut first, nal);
                     }
                     at = next;
@@ -127,18 +128,42 @@ fn codec_specific_data(codec: VideoCodec, record: &[u8]) -> (Vec<u8>, Vec<u8>) {
     (first, second)
 }
 
-/// Bytes of each NAL length prefix in an `avcC` or `hvcC` track's packets.
-fn nal_length_size(codec: VideoCodec, record: &[u8]) -> Option<usize> {
+/// The `nuh_layer_id` of an HEVC NAL unit.
+fn hevc_layer(nal: &[u8]) -> u8 {
+    match nal {
+        [first, second, ..] => ((first & 1) << 5) | (second >> 3),
+        _ => 0,
+    }
+}
+
+/// How an `avcC` or `hvcC` track's packets reach the codec.
+#[derive(Clone, Copy, Debug)]
+struct NalFraming {
+    /// Bytes of each NAL length prefix.
+    length_size: usize,
+    /// Leave out the units of HEVC layers above the base layer. The platform decoders do not skip
+    /// them: given a stream with an alpha layer they decode no picture at all.
+    base_layer_only: bool,
+}
+
+fn nal_framing(codec: VideoCodec, record: &[u8]) -> Option<NalFraming> {
     let at = match codec {
         VideoCodec::H264 => 4,
         VideoCodec::Hevc => 21,
         _ => return None,
     };
-    record.get(at).map(|byte| usize::from(byte & 3) + 1)
+    record.get(at).map(|byte| NalFraming {
+        length_size: usize::from(byte & 3) + 1,
+        base_layer_only: codec == VideoCodec::Hevc,
+    })
 }
 
 /// `packet` with its NAL length prefixes turned into Annex B start codes.
-fn annex_b(packet: &[u8], length_size: usize) -> Result<Vec<u8>, BackendError> {
+fn annex_b(packet: &[u8], framing: NalFraming) -> Result<Vec<u8>, BackendError> {
+    let NalFraming {
+        length_size,
+        base_layer_only,
+    } = framing;
     let mut out = Vec::with_capacity(packet.len() + 16);
     let mut at = 0;
     while at < packet.len() {
@@ -152,9 +177,12 @@ fn annex_b(packet: &[u8], length_size: usize) -> Result<Vec<u8>, BackendError> {
         let nal = packet
             .get(at..at + length)
             .ok_or_else(|| BackendError::Corrupt("a NAL unit runs past the packet".into()))?;
+        at += length;
+        if base_layer_only && hevc_layer(nal) != 0 {
+            continue;
+        }
         out.extend_from_slice(&[0, 0, 0, 1]);
         out.extend_from_slice(nal);
-        at += length;
     }
     Ok(out)
 }
@@ -636,7 +664,7 @@ pub struct MediaCodecVideo {
     format: Format,
     kind: BackendKind,
     timescale: i64,
-    length_size: Option<usize>,
+    framing: Option<NalFraming>,
     layout: Option<Layout>,
     surface: Option<SurfaceOutput>,
     /// Whether 10-bit pictures may render into the surface.
@@ -761,7 +789,7 @@ impl MediaCodecVideo {
             format,
             kind,
             timescale: i64::from(track.timescale.max(1)),
-            length_size: nal_length_size(video.codec, &video.codec_private),
+            framing: nal_framing(video.codec, &video.codec_private),
             layout: None,
             surface,
             surface_ten_bit,
@@ -1085,7 +1113,7 @@ impl VideoDecodeBackend for MediaCodecVideo {
     fn submit(&mut self, packet: &Packet) -> Result<Submit, BackendError> {
         if self.depth == Depth::FirstFrame {
             self.depth = Depth::Eight;
-            if vp9_bit_depth(&packet.data).is_some_and(|depth| depth > 8) {
+            if vp9_format(&packet.data).is_some_and(|format| format.bit_depth > 8) {
                 self.restart_ten_bit()?;
             }
         }
@@ -1102,9 +1130,9 @@ impl VideoDecodeBackend for MediaCodecVideo {
             return Ok(Submit::Busy);
         };
         let converted;
-        let bytes = match self.length_size {
-            Some(size) => {
-                converted = annex_b(&packet.data, size)?;
+        let bytes = match self.framing {
+            Some(framing) => {
+                converted = annex_b(&packet.data, framing)?;
                 &converted[..]
             }
             None => &packet.data[..],
@@ -1190,7 +1218,65 @@ mod tests {
     use alpha2_host_core::video_stream::BackendError;
     use alpha2_media::YuvFormat;
 
-    use super::{Layout, media_image, read_picture};
+    use alpha2_container::{TrackKind, VideoCodec};
+
+    use super::{
+        Layout, NalFraming, annex_b, codec_specific_data, hevc_layer, media_image, nal_framing,
+        read_picture,
+    };
+
+    /// The type and layer of each unit of Annex B bytes with four-byte start codes.
+    fn units(bytes: &[u8]) -> Vec<(u8, u8)> {
+        let mut starts = bytes
+            .windows(4)
+            .enumerate()
+            .filter(|(_, window)| *window == [0, 0, 0, 1])
+            .map(|(at, _)| at)
+            .collect::<Vec<_>>();
+        starts.push(bytes.len());
+        starts
+            .windows(2)
+            .map(|pair| {
+                let nal = &bytes[pair[0] + 4..pair[1]];
+                ((nal[0] >> 1) & 0x3f, hevc_layer(nal))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_hevc_stream_with_an_alpha_layer_reaches_the_codec_as_its_base_layer() {
+        let mut reader =
+            alpha2_container::open(&alpha2_backend_conformance::corpus("hevc-alpha.mov"))
+                .expect("opens");
+        let track = reader
+            .tracks()
+            .iter()
+            .find(|track| track.kind == TrackKind::Video)
+            .cloned()
+            .expect("video");
+        let record = &track.video.as_ref().expect("video facts").codec_private;
+        let (first, second) = codec_specific_data(VideoCodec::Hevc, record);
+        assert_eq!(units(&first), [(32, 0), (33, 0), (34, 0)]);
+        assert_eq!(second, Vec::<u8>::new());
+        let framing = nal_framing(VideoCodec::Hevc, record).expect("length-prefixed");
+        let packet = reader
+            .next_packet(track.id)
+            .expect("reads")
+            .expect("a packet");
+        let every_layer = NalFraming {
+            base_layer_only: false,
+            ..framing
+        };
+        let all = units(&annex_b(&packet.data, every_layer).expect("converts"));
+        assert!(all.iter().any(|(_, layer)| *layer == 1), "{all:?}");
+        let base = units(&annex_b(&packet.data, framing).expect("converts"));
+        assert_eq!(
+            base,
+            all.into_iter()
+                .filter(|(_, layer)| *layer == 0)
+                .collect::<Vec<_>>()
+        );
+    }
 
     /// A `MediaImage2` of a 4x2 picture with YUV planes at `(offset, column, row)`.
     fn image(bit_depth: u32, allocated: u32, planes: [(u32, u32, u32); 3]) -> Vec<u8> {

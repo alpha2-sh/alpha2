@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
-from conftest import corpus, expand_repeats
+from conftest import ROOT, corpus, expand_repeats
 
 import alpha2
 from alpha2 import ProjectBuilder, _native, sequential_ids, ticks, to_ticks, validate_project
@@ -246,3 +248,26 @@ def test_a_faster_clip_can_keep_its_pitch() -> None:
     assert clip["id"] == clip_id
     assert clip["audio"] == {"preserve_pitch": True}
     assert validate_project(project) == []
+
+
+TIME_RULES = json.loads((ROOT / "tests/golden/time-rules-corpus.json").read_text(encoding="utf-8"))
+"""The engine's time rules, which the Rust and TypeScript suites replay too."""
+
+
+def test_seconds_round_to_ticks_as_the_engine_rounds_them() -> None:
+    for seconds, expected in TIME_RULES["secondsToTicks"]:
+        assert alpha2.seconds_to_ticks(seconds) == expected, seconds
+    # Halves away from zero; the largest double below a half is not a half.
+    assert alpha2.seconds_to_ticks(0.5 / alpha2.TICKS_PER_SECOND) == 1
+    assert alpha2.seconds_to_ticks(-0.5 / alpha2.TICKS_PER_SECOND) == -1
+    assert alpha2.seconds_to_ticks(0.49999999999999994 / alpha2.TICKS_PER_SECOND) == 0
+
+
+def test_frame_starts_are_where_the_engine_puts_them() -> None:
+    for grid in TIME_RULES["frames"]:
+        frames = alpha2.frames((grid["rate"]["num"], grid["rate"]["den"]))
+        for case in grid["cases"]:
+            label = (grid["rate"], case["tick"])
+            assert frames.start_ticks(case["frame"]) == case["frameStart"], label
+            assert frames.start_ticks(case["frame"]) <= case["tick"], label
+            assert case["tick"] < frames.start_ticks(case["frame"] + 1), label

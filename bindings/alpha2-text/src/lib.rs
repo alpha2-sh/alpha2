@@ -26,10 +26,11 @@ use unicode_segmentation::UnicodeSegmentation;
 
 mod animated;
 mod color;
+mod font_check;
 mod gradient;
 mod unicode_tables;
 
-pub use animated::{ClusterInfo, ClusterState, ColorMix, LineInfo, TextLayout};
+pub use animated::{ClusterInfo, ClusterState, ColorMix, LineInfo, MAX_CLUSTER_SCALE, TextLayout};
 pub use gradient::{TextGradient, TextGradientKind, TextGradientStop, TextSpread};
 
 const MAX_TEXT_BYTES: usize = 64 * 1024;
@@ -39,8 +40,45 @@ const MAX_LINE_HEIGHT: f32 = 10.0;
 const MAX_STROKE_EXTENT: f32 = 64.0;
 const MAX_STROKES: usize = 4;
 const MAX_BACKGROUND_PADDING: f32 = 256.0;
+/// The widest wrapping width and the largest raster side in pixels.
+pub const MAX_TEXT_BOX: u32 = 16_384;
+#[allow(clippy::cast_precision_loss)]
+const MAX_TEXT_BOX_PIXELS: f32 = MAX_TEXT_BOX as f32;
 /// In font sizes.
 const LETTER_SPACING_RANGE: std::ops::RangeInclusive<f32> = -0.5..=1.0;
+/// Bytes the planes of one raster may take together.
+const MAX_RASTER_BYTES: u64 = 1 << 30;
+
+/// The pixel count of a `width` x `height` raster whose planes hold `bytes_per_pixel` bytes per
+/// pixel together, or [`TextRasterError::TooLarge`] past the largest frame
+/// ([`alpha2_media::MAX_FRAME_PIXELS`]) or [`MAX_RASTER_BYTES`]. Checked before any plane exists.
+fn raster_pixels(width: u32, height: u32, bytes_per_pixel: u64) -> Result<usize, TextRasterError> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width > MAX_TEXT_BOX
+        || height > MAX_TEXT_BOX
+        || pixels > alpha2_media::MAX_FRAME_PIXELS
+        || pixels.saturating_mul(bytes_per_pixel) > MAX_RASTER_BYTES
+    {
+        return Err(TextRasterError::TooLarge);
+    }
+    usize::try_from(pixels).map_err(|_| TextRasterError::TooLarge)
+}
+
+/// Bytes per pixel every raster holds: coverage and the RGBA8 result, the split background plane
+/// when used, color glyph RGBA and the ink plane strokes dilate when color glyphs are placed, and
+/// one band per stroke.
+fn raster_bytes_per_pixel(request: &TextRasterRequest, colors: bool) -> u64 {
+    let split = request.split_background && request.background.is_some();
+    let strokes = request.strokes.len() as u64;
+    1 + 4
+        + if split { 4 } else { 0 }
+        + if colors {
+            4 + u64::from(strokes > 0)
+        } else {
+            0
+        }
+        + strokes
+}
 
 /// One caller-owned font registered in fallback order.
 #[derive(Clone, Debug)]
@@ -444,8 +482,7 @@ const WGHT: ttf_parser::Tag = ttf_parser::Tag::from_bytes(b"wght");
 impl LoadedFont {
     /// Validates the face and reads its family and weight; outlines are read lazily.
     fn parse(source: TextFont) -> Result<Self, TextRasterError> {
-        let face = ttf_parser::Face::parse(&source.bytes, source.face_index)
-            .map_err(|error| TextRasterError::InvalidFont(error.to_string()))?;
+        let face = parse_checked(&source.bytes, source.face_index)?;
         let weight = face.weight().to_number().clamp(1, 1000);
         let wght = face
             .variation_axes()
@@ -509,12 +546,28 @@ fn weight_order(weights: &[(u16, u16)], desired: u16) -> Vec<usize> {
 /// Checks that `bytes` hold an OpenType face at `face_index`, as [`TextRasterizer::add_font`]
 /// would, so a host can reject a file at import.
 ///
+/// Fonts are untrusted input: a collection may hold 256 faces, a glyph may expand to 1,024
+/// simple glyphs through its components, and a color glyph's painting may visit 16,384 paints.
+///
 /// # Errors
-/// Returns [`TextRasterError::InvalidFont`] with the parser's reason.
+/// Returns [`TextRasterError::InvalidFont`] with the parser's or the budget's reason.
 pub fn check_font(bytes: &[u8], face_index: u32) -> Result<(), TextRasterError> {
-    ttf_parser::Face::parse(bytes, face_index)
-        .map(|_| ())
-        .map_err(|error| TextRasterError::InvalidFont(error.to_string()))
+    parse_checked(bytes, face_index).map(drop)
+}
+
+fn parse_checked(bytes: &[u8], face_index: u32) -> Result<ttf_parser::Face<'_>, TextRasterError> {
+    if ttf_parser::fonts_in_collection(bytes)
+        .is_some_and(|faces| faces > font_check::MAX_COLLECTION_FACES)
+    {
+        return Err(TextRasterError::InvalidFont(format!(
+            "the font collection holds more than {} faces",
+            font_check::MAX_COLLECTION_FACES
+        )));
+    }
+    let face = ttf_parser::Face::parse(bytes, face_index)
+        .map_err(|error| TextRasterError::InvalidFont(error.to_string()))?;
+    font_check::check_face(&face).map_err(TextRasterError::InvalidFont)?;
+    Ok(face)
 }
 
 /// Number of faces in a font collection (`.ttc`, `.otc`), else 1.
@@ -1067,17 +1120,10 @@ impl TextRasterizer {
             .checked_mul(2)
             .and_then(|margins| box_height.checked_add(margins))
             .ok_or(TextRasterError::TooLarge)?;
-        if width > 16_384 || height > 16_384 {
-            return Err(TextRasterError::TooLarge);
-        }
-        let pixel_count = usize::try_from(width)
-            .ok()
-            .and_then(|width| {
-                usize::try_from(height)
-                    .ok()
-                    .and_then(|height| width.checked_mul(height))
-            })
-            .ok_or(TextRasterError::TooLarge)?;
+        let colors = placed
+            .iter()
+            .any(|(key, ..)| !matches!(drawings[key], Drawing::Outline(_)));
+        let pixel_count = raster_pixels(width, height, raster_bytes_per_pixel(request, colors))?;
         let mut coverage = vec![0_u8; pixel_count];
         // Allocated only once a color glyph is placed.
         let mut colors: Option<Vec<u8>> = None;
@@ -2110,6 +2156,9 @@ impl Outline {
         let mut sink = OutlineSink::default();
         face.outline_glyph(GlyphId(glyph), &mut sink);
         sink.close();
+        if sink.overflow {
+            return Self::default();
+        }
         sink.outline
     }
 
@@ -2219,14 +2268,25 @@ fn quadratic_roots(a: f32, b: f32, c: f32) -> [Option<f32>; 2] {
     ]
 }
 
+/// Most segments one glyph outline may hold; a glyph past it draws nothing.
+const MAX_GLYPH_SEGMENTS: usize = 65_536;
+
 #[derive(Default)]
 struct OutlineSink {
     outline: Outline,
     start: [f32; 2],
     pen: [f32; 2],
+    overflow: bool,
 }
 
 impl OutlineSink {
+    /// Whether another segment fits; the font parser cannot be stopped, so past the limit the
+    /// sink only stops recording.
+    fn room(&mut self) -> bool {
+        self.overflow |= self.outline.segments.len() >= MAX_GLYPH_SEGMENTS;
+        !self.overflow
+    }
+
     fn include(&mut self, points: &[[f32; 2]]) {
         for &[x, y] in points {
             let bounds = self.outline.bounds.get_or_insert([x, y, x, y]);
@@ -2248,6 +2308,9 @@ impl OutlineBuilder for OutlineSink {
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
+        if !self.room() {
+            return;
+        }
         let to = [x, y];
         self.include(&[self.pen, to]);
         self.outline.segments.push(Segment::Line(self.pen, to));
@@ -2255,6 +2318,9 @@ impl OutlineBuilder for OutlineSink {
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        if !self.room() {
+            return;
+        }
         let (control, to) = ([x1, y1], [x, y]);
         self.include(&[self.pen, control, to]);
         self.outline
@@ -2264,6 +2330,9 @@ impl OutlineBuilder for OutlineSink {
     }
 
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        if !self.room() {
+            return;
+        }
         let (first, second, to) = ([x1, y1], [x2, y2], [x, y]);
         self.include(&[self.pen, first, second, to]);
         self.outline
@@ -2286,7 +2355,7 @@ fn validate_request(request: &TextRasterRequest) -> Result<(), TextRasterError> 
         && request.font_size <= MAX_FONT_SIZE
         && request.text.len() <= MAX_TEXT_BYTES
         && request.max_width.is_finite()
-        && request.max_width <= 16_384.0
+        && request.max_width <= MAX_TEXT_BOX_PIXELS
         && request.line_height.is_finite()
         && request.line_height > 0.0
         && request.line_height <= MAX_LINE_HEIGHT
@@ -2322,7 +2391,7 @@ fn validate_request(request: &TextRasterRequest) -> Result<(), TextRasterError> 
 }
 
 fn checked_dimension(value: f32) -> Result<u32, TextRasterError> {
-    if value.is_finite() && value > 0.0 && value.ceil() <= 16_384.0 {
+    if value.is_finite() && value > 0.0 && value.ceil() <= MAX_TEXT_BOX_PIXELS {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         Ok(value.ceil() as u32)
     } else {

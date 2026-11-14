@@ -197,6 +197,7 @@ impl FailureContext {
     }
 
     pub fn enter(&self, phase: ExportPhase, frame: Option<u64>) {
+        crate::heartbeat::request_phase(phase);
         self.phase.set(phase);
         self.frame.set(frame);
     }
@@ -293,6 +294,7 @@ pub fn classify_failure(
         | "PLUGIN_ABI_UNSUPPORTED"
         | "PLUGIN_NO_ARTIFACT"
         | "PLUGIN_NATIVE_REFUSED"
+        | "PLUGIN_REFUSED"
         | "PLUGIN_DESCRIPTOR_MISMATCH"
         | "PLUGIN_UNSUPPORTED_FEATURE"
         | "PLUGIN_LOAD_FAILED"
@@ -301,6 +303,8 @@ pub fn classify_failure(
         | "OUTPUT_IN_USE" => return class("INVALID_INPUT", "unknown"),
         // A slow client, or a plugin's server, may answer in time on another attempt.
         "EXTRACTOR_TIMEOUT" | "PLUGIN_FETCH_FAILED" => return class("UNKNOWN", "unknown"),
+        // A caught panic: an engine fault, which a fresh host may not meet again.
+        "INTERNAL" => return class("DEFECT", "unknown"),
         _ => {}
     }
     let missing_canary = message.contains(alpha2_render::GPU_WORK_DROPPED_MESSAGE);
@@ -391,6 +395,22 @@ fn storage_exhausted(message: &str) -> bool {
         || lower.contains("disc quota exceeded")
 }
 
+thread_local! {
+    static CAUGHT_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`panic_message`] of a panic a request boundary caught; the request's thread then reports it
+/// ([`take_caught_panic`]) and the host retires, since shared state may be as the unwind left it.
+pub fn caught_panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    CAUGHT_PANIC.with(|caught| caught.set(true));
+    panic_message(payload)
+}
+
+/// Whether a boundary on this thread caught a panic since the last call.
+pub fn take_caught_panic() -> bool {
+    CAUGHT_PANIC.with(std::cell::Cell::take)
+}
+
 pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
     payload
         .downcast_ref::<&str>()
@@ -438,6 +458,16 @@ pub fn failure_json(
 
 /// For a start that failed before any device exists; only the build is known.
 pub fn startup_failure_json(host_code: &str, message: &str, native: Option<&str>) -> Value {
+    minimal_failure_json(host_code, message, native, ExportPhase::Prepare)
+}
+
+/// [`startup_failure_json`] at `phase`, for an export answered from outside its thread.
+pub fn minimal_failure_json(
+    host_code: &str,
+    message: &str,
+    native: Option<&str>,
+    phase: ExportPhase,
+) -> Value {
     let mut diagnostics = Map::new();
     diagnostics.insert(
         "environment".to_owned(),
@@ -457,7 +487,7 @@ pub fn startup_failure_json(host_code: &str, message: &str, native: Option<&str>
         host_code,
         message,
         native,
-        (ExportPhase::Prepare, None),
+        (phase, None),
         &GpuDiagnosticSnapshot::default(),
         diagnostics,
     )

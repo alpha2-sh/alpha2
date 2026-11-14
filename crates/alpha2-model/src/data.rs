@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Most data sets in one project.
+///
+/// The per-set limits below bound one set; together they admit far more than a document holds.
+/// The byte cap ([`crate::MAX_PROJECT_JSON_BYTES`]) binds first: about 6 million values of full
+/// precision fill it, and every writer refuses a project past it.
 pub const MAX_DATA_SETS: usize = 256;
 /// Most channels of one `points` or `scalars` data set.
 pub const MAX_DATA_CHANNELS: usize = 64;
@@ -33,6 +37,8 @@ pub const MAX_DATA_SCALAR: f32 = 1e9;
 pub const MAX_DATA_ROTATION_DEGREES: f32 = 36_000.0;
 /// Largest similarity scale; the smallest is just above zero.
 pub const MAX_DATA_SCALE: f32 = 1_000.0;
+/// Longest chain of canvas-space follows from one clip, counted in links.
+pub const MAX_FOLLOW_DEPTH: usize = 8;
 
 /// The clock a data set's times are on.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
@@ -300,6 +306,18 @@ pub struct DataSet {
 }
 
 impl DataSet {
+    /// Its latest time: the last sample, or the latest word or interval end.
+    #[must_use]
+    pub fn last_time(&self) -> Option<MediaTime> {
+        match &self.values {
+            DataValues::Points(samples)
+            | DataValues::Scalars(samples)
+            | DataValues::Similarity(samples) => samples.times.last().copied(),
+            DataValues::Words(words) => words.iter().map(|word| word.end).max(),
+            DataValues::Intervals(intervals) => intervals.iter().map(|interval| interval.end).max(),
+        }
+    }
+
     /// The kind of the values.
     #[must_use]
     pub const fn kind(&self) -> DataKind {
@@ -324,10 +342,13 @@ enum DataSetSchema {
         /// How the values read between samples.
         interpolation: DataInterpolation,
         /// Channel names, unique, 1 to 256 bytes each.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_CHANNELS)))]
         channels: Vec<String>,
         /// Sample times in ticks on the anchor's clock, strictly ascending.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         times: Vec<MediaTime>,
         /// `times.len() * channels.len() * 2` numbers, sample after sample, channel after channel.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         values: Vec<Option<f32>>,
         /// Which extractor made it.
         #[serde(default)]
@@ -345,10 +366,13 @@ enum DataSetSchema {
         /// How the values read between samples.
         interpolation: DataInterpolation,
         /// Channel names, unique, 1 to 256 bytes each.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_CHANNELS)))]
         channels: Vec<String>,
         /// Sample times in ticks on the anchor's clock, strictly ascending.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         times: Vec<MediaTime>,
         /// `times.len() * channels.len()` numbers, sample after sample, channel after channel.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         values: Vec<Option<f32>>,
         /// Which extractor made it.
         #[serde(default)]
@@ -367,8 +391,10 @@ enum DataSetSchema {
         /// How the values read between samples.
         interpolation: DataInterpolation,
         /// Sample times in ticks on the anchor's clock, strictly ascending.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         times: Vec<MediaTime>,
         /// `times.len() * 4` numbers: `tx`, `ty`, rotation, scale per sample.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         values: Vec<Option<f32>>,
         /// Which extractor made it.
         #[serde(default)]
@@ -384,6 +410,7 @@ enum DataSetSchema {
         /// The clock the times are on.
         anchor: DataAnchor,
         /// Words sorted by `(start, end)`.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_WORDS)))]
         words: Vec<DataWord>,
         /// Which extractor made it.
         #[serde(default)]
@@ -399,6 +426,7 @@ enum DataSetSchema {
         /// The clock the times are on.
         anchor: DataAnchor,
         /// Intervals sorted by `(start, end)`.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_INTERVALS)))]
         intervals: Vec<DataInterval>,
         /// Which extractor made it.
         #[serde(default)]
@@ -430,14 +458,21 @@ struct DataSetFlat {
     #[serde(default)]
     interpolation: Option<DataInterpolation>,
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_DATA_CHANNELS }>")]
     channels: Option<Vec<String>>,
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_DATA_VALUES }>")]
     times: Option<Vec<MediaTime>>,
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_DATA_VALUES }>")]
     values: Option<Vec<Option<f32>>>,
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_DATA_WORDS }>")]
     words: Option<Vec<DataWord>>,
     #[serde(default)]
+    #[serde(
+        deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_DATA_INTERVALS }>"
+    )]
     intervals: Option<Vec<DataInterval>>,
     #[serde(default)]
     made_by: Option<MadeBy>,
@@ -713,8 +748,6 @@ pub enum DataProblem {
     TimesNotAscending,
     /// A time is negative.
     NegativeTime,
-    /// A time is past the source fingerprint's duration.
-    PastSourceEnd,
     /// A value is not finite, outside its kind's bounds, or a lost marker covers only part of a
     /// channel or sample.
     InvalidValue {
@@ -762,7 +795,6 @@ impl fmt::Display for DataProblem {
                 formatter.write_str("has times that are not strictly ascending")
             }
             Self::NegativeTime => formatter.write_str("has a negative time"),
-            Self::PastSourceEnd => formatter.write_str("has a time past its source's duration"),
             Self::InvalidValue { index } => {
                 write!(formatter, "has an invalid value at values[{index}]")
             }
@@ -812,6 +844,8 @@ pub enum BindingProblem {
     InvalidRemap,
     /// Following clips in canvas space forms a cycle.
     Cycle,
+    /// The clip follows clips in canvas space through more than [`MAX_FOLLOW_DEPTH`] links.
+    TooDeep,
     /// A correction's data set is not anchored to the clip's own source.
     NotOwnSource,
     /// A caption track's `track` is missing for a source anchor, given for a timeline anchor,
@@ -851,6 +885,10 @@ impl fmt::Display for BindingProblem {
             Self::InvalidRemap => formatter
                 .write_str("has a non-finite offset or remap, or a remap with equal inputs"),
             Self::Cycle => formatter.write_str("follows clips in canvas space in a cycle"),
+            Self::TooDeep => write!(
+                formatter,
+                "follows clips in canvas space more than {MAX_FOLLOW_DEPTH} deep"
+            ),
             Self::NotOwnSource => {
                 formatter.write_str("corrects with data anchored to another source")
             }
@@ -913,11 +951,13 @@ pub fn valid_interval(interval: &DataInterval) -> bool {
 
 impl DataSet {
     /// Checks the set on its own against the model's rules (everything but its anchor's
-    /// existence). `source_duration` is the anchored source's duration in ticks, when known.
+    /// existence). A time past its source's recorded duration is stale data, which
+    /// [`crate::Project::lint`] reports, not an invalid set: the duration is evidence a host may
+    /// replace.
     ///
     /// # Errors
     /// The first [`DataProblem`] found.
-    pub fn validate(&self, source_duration: Option<i64>) -> Result<(), DataProblem> {
+    pub fn validate(&self) -> Result<(), DataProblem> {
         if self.id.as_str().len() > MAX_DATA_ID_BYTES {
             return Err(DataProblem::IdTooLong);
         }
@@ -940,9 +980,6 @@ impl DataSet {
         let time_ok = |time: MediaTime| -> Result<(), DataProblem> {
             if time.ticks() < 0 {
                 return Err(DataProblem::NegativeTime);
-            }
-            if source_duration.is_some_and(|end| time.ticks() > end) {
-                return Err(DataProblem::PastSourceEnd);
             }
             Ok(())
         };

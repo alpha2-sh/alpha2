@@ -480,3 +480,45 @@ const ok = software
 report({ ok, software, ...details });
 `;
 }
+
+// The CPU renderer refuses a frame whose own color is HDR (PQ or HLG), as the GPU renderer does,
+// since its 2D canvas read would show the browser's tone mapping.
+export function cpuHdrFrameRefused() {
+  return `
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = WebEffectRegistry.createCpu(new OffscreenCanvas(16, 16));
+engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "hdr", name: "HDR",
+  settings: { width: 16, height: 16, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [{ id: "s", locator: "fixture://s", kind: "video" }],
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{ id: "c", source_id: "s",
+    timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 } }] }] },
+}));
+const frame = (transfer) => new VideoFrame(new Uint8Array(16 * 16 * 4).fill(128), {
+  format: "RGBA", codedWidth: 16, codedHeight: 16, timestamp: 0,
+  colorSpace: { primaries: transfer === "pq" ? "bt2020" : "bt709", transfer, matrix: "rgb", fullRange: true },
+});
+const attempt = (work) => {
+  try {
+    work();
+    return { ok: true };
+  } catch (error) {
+    return { code: error?.code ?? null, message: String(error?.message ?? error) };
+  }
+};
+const pq = frame("pq");
+const declared = pq.colorSpace.transfer;
+const refused = attempt(() => engine.uploadVideoFrame("s", 0n, pq));
+const presented = attempt(() => engine.uploadPresentedVideoFrame("s", 0n, frame("hlg"), 16, 16, 0, false));
+const sdr = attempt(() => engine.uploadVideoFrame("s", 0n, frame("bt709")));
+const rendered = attempt(() => engine.renderAt(0n));
+engine.free();
+if (declared !== "pq") skip("video-frame-color", "this browser drops a VideoFrame's PQ transfer", { declared });
+report({
+  ok: refused.code === "INVALID_INPUT" && /HDR/.test(refused.message) && presented.code === "INVALID_INPUT"
+    && sdr.ok === true && rendered.ok === true,
+  declared, refused, presented, sdr, rendered,
+});
+`;
+}

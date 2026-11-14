@@ -35,7 +35,7 @@ workspace = true
 
 [dev-dependencies]
 alpha2-scaling-support.workspace = true
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+serde_json.workspace = true
 
 [[bench]]
 name = "caption_raster"

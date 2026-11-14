@@ -917,6 +917,7 @@ pub struct MediaCodecAudioEncoder {
     codec: Codec,
     kind: AudioCodec,
     rate: u32,
+    bitrate: u32,
     channels: usize,
     frame_size: usize,
     record: Option<Bytes>,
@@ -971,7 +972,8 @@ impl MediaCodecAudioEncoder {
         format.set_str("mime", mime);
         format.set_i32("sample-rate", i32::try_from(rate).unwrap_or(48_000));
         format.set_i32("channel-count", i32::try_from(channels).unwrap_or(2));
-        format.set_i32("bitrate", i32::try_from(config.bitrate).unwrap_or(128_000));
+        let bitrate = i32::try_from(config.bitrate).unwrap_or(128_000);
+        format.set_i32("bitrate", bitrate);
         format.set_i32("pcm-encoding", PCM_16);
         format.set_i32(
             "max-input-size",
@@ -995,6 +997,7 @@ impl MediaCodecAudioEncoder {
             codec,
             kind: config.codec,
             rate,
+            bitrate: bitrate.unsigned_abs(),
             channels,
             frame_size,
             record: None,
@@ -1051,6 +1054,10 @@ impl AudioEncodeBackend for MediaCodecAudioEncoder {
 
     fn frame_size(&self) -> usize {
         self.frame_size
+    }
+
+    fn bitrate(&self) -> u32 {
+        self.bitrate
     }
 
     fn submit(&mut self, pts: i64, planes: &[Vec<f32>]) -> Result<Submit, EncodeError> {

@@ -7,3 +7,5 @@ dist/
 *.so
 *.pyd
 alpha2/src/alpha2/_host_archives.json
+alpha2/THIRD_PARTY_NOTICES.md
+alpha2/rust-crate-licenses.md

@@ -4,11 +4,56 @@
 /// Approximate pixels per band: enough to amortize scheduling, small enough to stay in cache.
 const BAND_PIXELS: usize = 16_384;
 
+type Progress = std::sync::Arc<dyn Fn() + Send + Sync>;
+
+std::thread_local! {
+    static BAND_PROGRESS: std::cell::RefCell<Option<Progress>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Calls `progress` once per band of every pass the CPU renderer draws for the calling thread,
+/// from whichever thread draws the band, until the guard drops. A watcher of the caller then sees
+/// a long frame progress.
+#[must_use = "the report ends when the guard drops"]
+pub fn report_band_progress(progress: Progress) -> BandProgress {
+    let previous = BAND_PROGRESS.with(|current| current.replace(Some(progress)));
+    BandProgress {
+        previous,
+        thread: std::marker::PhantomData,
+    }
+}
+
+/// Ends a [`report_band_progress`] report, restoring the one before it.
+pub struct BandProgress {
+    previous: Option<Progress>,
+    thread: std::marker::PhantomData<*const ()>,
+}
+
+impl Drop for BandProgress {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        BAND_PROGRESS.with(|current| {
+            current.replace(previous);
+        });
+    }
+}
+
+fn band_progress() -> impl Fn() + Send + Sync {
+    let progress = BAND_PROGRESS.with(|current| current.borrow().clone());
+    move || {
+        if let Some(progress) = &progress {
+            progress();
+        }
+    }
+}
+
 /// The threads one CPU renderer draws with.
 pub(crate) struct Workers {
     #[cfg(not(target_arch = "wasm32"))]
     pool: Option<rayon::ThreadPool>,
     threads: usize,
+    /// Rows of every band in place of [`band_rows`], so tests can move band seams.
+    fixed_rows: Option<usize>,
 }
 
 impl std::fmt::Debug for Workers {
@@ -37,13 +82,34 @@ impl Workers {
                 })
                 .flatten();
             let threads = if pool.is_some() { threads } else { 1 };
-            Self { pool, threads }
+            Self {
+                pool,
+                threads,
+                fixed_rows: None,
+            }
         }
         #[cfg(target_arch = "wasm32")]
         {
             let _ = threads;
-            Self { threads: 1 }
+            Self {
+                threads: 1,
+                fixed_rows: None,
+            }
         }
+    }
+
+    /// As [`Self::new`], with every band `rows` rows high (`usize::MAX` for one band).
+    #[cfg(test)]
+    pub(crate) fn with_band_rows(threads: usize, rows: usize) -> Self {
+        Self {
+            fixed_rows: Some(rows.max(1)),
+            ..Self::new(threads)
+        }
+    }
+
+    /// Rows per band for an image `width` pixels wide.
+    pub(crate) fn band_rows(&self, width: usize) -> usize {
+        self.fixed_rows.unwrap_or_else(|| band_rows(width))
     }
 
     pub(crate) const fn threads(&self) -> usize {
@@ -63,20 +129,25 @@ impl Workers {
         if width == 0 || pixels.is_empty() {
             return;
         }
-        let rows = band_rows(width);
+        let rows = self.band_rows(width);
+        let progress = band_progress();
+        let draw = |row, chunk: &mut [T]| {
+            progress();
+            draw(row, chunk);
+        };
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(pool) = &self.pool {
             use rayon::prelude::*;
             pool.install(|| {
                 pixels
-                    .par_chunks_mut(rows * width)
+                    .par_chunks_mut(rows.saturating_mul(width))
                     .enumerate()
-                    .for_each(|(band, chunk)| wide(|| draw(band * rows, chunk)));
+                    .for_each(|(band, chunk)| draw(band * rows, chunk));
             });
             return;
         }
-        for (band, chunk) in pixels.chunks_mut(rows * width).enumerate() {
-            wide(|| draw(band * rows, chunk));
+        for (band, chunk) in pixels.chunks_mut(rows.saturating_mul(width)).enumerate() {
+            draw(band * rows, chunk);
         }
     }
 
@@ -85,7 +156,6 @@ impl Workers {
     ///
     /// Which bands share a scratch depends on scheduling, so `draw` must reset everything it
     /// reads from the scratch at the start of each band.
-    #[cfg_attr(target_arch = "wasm32", allow(clippy::unused_self))]
     pub(crate) fn bands_with<T: Send, S: Send>(
         &self,
         pixels: &mut [T],
@@ -96,7 +166,41 @@ impl Workers {
         if width == 0 || pixels.is_empty() {
             return;
         }
-        let rows = band_rows(width);
+        let rows = self.band_rows(width);
+        self.chunks_with(pixels, rows.saturating_mul(width), rows, init, draw);
+    }
+
+    /// As [`Self::bands_with`] over `items` that each cover `item_pixels` pixels (one row of
+    /// chroma, say): bands hold whole items, `draw` gets the index of its first item.
+    pub(crate) fn items_with<T: Send, S: Send>(
+        &self,
+        items: &mut [T],
+        item_pixels: usize,
+        init: impl Fn() -> S + Sync + Send,
+        draw: impl Fn(&mut S, usize, &mut [T]) + Sync + Send,
+    ) {
+        if item_pixels == 0 || items.is_empty() {
+            return;
+        }
+        let rows = self.band_rows(item_pixels);
+        self.chunks_with(items, rows, rows, init, draw);
+    }
+
+    /// Calls `draw(scratch, band * step, chunk)` for each `length`-long chunk of `items`.
+    #[cfg_attr(target_arch = "wasm32", allow(clippy::unused_self))]
+    fn chunks_with<T: Send, S: Send>(
+        &self,
+        items: &mut [T],
+        length: usize,
+        step: usize,
+        init: impl Fn() -> S + Sync + Send,
+        draw: impl Fn(&mut S, usize, &mut [T]) + Sync + Send,
+    ) {
+        let progress = band_progress();
+        let draw = |scratch: &mut S, row, chunk: &mut [T]| {
+            progress();
+            draw(scratch, row, chunk);
+        };
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(pool) = &self.pool {
             use rayon::prelude::*;
@@ -106,8 +210,8 @@ impl Workers {
                 .map(|_| Mutex::new(None::<S>))
                 .collect::<Vec<_>>();
             pool.install(|| {
-                pixels
-                    .par_chunks_mut(rows * width)
+                items
+                    .par_chunks_mut(length)
                     .enumerate()
                     .for_each(|(band, chunk)| {
                         let slot = rayon::current_thread_index()
@@ -115,11 +219,11 @@ impl Workers {
                         match slots[slot].try_lock() {
                             Ok(mut held) => {
                                 let scratch = held.get_or_insert_with(&init);
-                                wide(|| draw(scratch, band * rows, chunk));
+                                draw(scratch, band * step, chunk);
                             }
                             // A thread that re-entered the pool while drawing: a scratch of its own.
                             Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => {
-                                wide(|| draw(&mut init(), band * rows, chunk));
+                                draw(&mut init(), band * step, chunk);
                             }
                         }
                     });
@@ -127,9 +231,21 @@ impl Workers {
             return;
         }
         let mut scratch = init();
-        for (band, chunk) in pixels.chunks_mut(rows * width).enumerate() {
-            wide(|| draw(&mut scratch, band * rows, chunk));
+        for (band, chunk) in items.chunks_mut(length).enumerate() {
+            draw(&mut scratch, band * step, chunk);
         }
+    }
+
+    /// Calls `job(index)` for every index below `count`, in parallel and in any order.
+    #[cfg_attr(target_arch = "wasm32", allow(clippy::unused_self))]
+    pub(crate) fn for_each(&self, count: usize, job: &(dyn Fn(usize) + Sync)) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(pool) = &self.pool {
+            use rayon::prelude::*;
+            pool.install(|| (0..count).into_par_iter().for_each(job));
+            return;
+        }
+        (0..count).for_each(job);
     }
 
     /// Calls `work(index)` in parallel for every index below `count`, collecting in index order.
@@ -153,36 +269,40 @@ fn band_rows(width: usize) -> usize {
     (BAND_PIXELS / width).clamp(1, 64)
 }
 
-/// Runs `work` compiled for AVX2 on x86-64 where present. The IEEE operations and their order
-/// are unchanged (Rust never contracts mul-add, FMA is not enabled), so the bits are identical;
-/// only the lane count differs.
-#[inline]
-fn wide<R>(work: impl FnOnce() -> R) -> R {
-    #[cfg(target_arch = "x86_64")]
-    if avx2::available() {
-        // SAFETY: the processor reports AVX2 and F16C, the only features `run` enables.
-        #[allow(unsafe_code)]
-        return unsafe { avx2::run(work) };
+impl crate::layout_pack::Bands for Workers {
+    fn rows_per_band(&self, _chroma_rows: usize, row_pixels: usize) -> usize {
+        self.band_rows(row_pixels)
     }
-    work()
+
+    fn run(&self, count: usize, job: &(dyn Fn(usize) + Sync)) {
+        self.for_each(count, job);
+    }
 }
 
-#[cfg(target_arch = "x86_64")]
-mod avx2 {
-    use std::sync::OnceLock;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    pub(super) fn available() -> bool {
-        static AVAILABLE: OnceLock<bool> = OnceLock::new();
-        *AVAILABLE.get_or_init(|| {
-            std::arch::is_x86_feature_detected!("avx2")
-                && std::arch::is_x86_feature_detected!("f16c")
-        })
-    }
-
-    /// `work`, inlined into a function compiled with AVX2.
-    #[allow(unsafe_code)]
-    #[target_feature(enable = "avx2,f16c")]
-    pub(super) unsafe fn run<R>(work: impl FnOnce() -> R) -> R {
-        work()
+    #[test]
+    fn every_band_reports_progress_to_the_calling_threads_watcher_on_any_thread() {
+        let width = 512;
+        let rows = band_rows(width);
+        for threads in [1, 4] {
+            let workers = Workers::new(threads);
+            let reported = Arc::new(AtomicUsize::new(0));
+            let counter = Arc::clone(&reported);
+            let report = report_band_progress(Arc::new(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }));
+            let mut pixels = vec![0_u8; width * rows * 9];
+            workers.bands(&mut pixels, width, |_, chunk| chunk.fill(1));
+            workers.bands_with(&mut pixels, width, || (), |(), _, chunk| chunk.fill(2));
+            assert_eq!(reported.load(Ordering::Relaxed), 18, "{threads} threads");
+            drop(report);
+            workers.bands(&mut pixels, width, |_, chunk| chunk.fill(3));
+            assert_eq!(reported.load(Ordering::Relaxed), 18, "the report ended");
+        }
     }
 }

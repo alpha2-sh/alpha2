@@ -14,6 +14,7 @@ fn evaluated_frame_executes_the_clip_effect_chain() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
             data: alpha2_eval::SampleContext::NONE,
@@ -118,6 +119,7 @@ fn keyframed_effect_parameters_render_at_the_frame_time_and_clamp_only_overshoot
         let frame = FrameDesc {
             background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::LinearLight,
+            canvas: None,
             time: MediaTime(time),
             visual: vec![ActiveClip {
                 data: alpha2_eval::SampleContext::NONE,
@@ -220,6 +222,7 @@ fn evaluated_frame_executes_active_transition_nodes() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![
             active(from_clip.clone(), MediaTime::ZERO),
@@ -268,4 +271,25 @@ fn evaluated_frame_executes_active_transition_nodes() {
     let expected: Vec<u8> =
         serde_json::from_value(reference["transition_midpoint"].clone()).expect("RGBA reference");
     assert_rgba8_near(&read_rgba8(&renderer, &output), &expected, 1);
+}
+
+#[test]
+fn effects_get_the_render_scale_of_the_project_canvas() {
+    let project = one_clip_snapshot();
+    let frame = project.evaluate(MediaTime::ZERO).expect("frame");
+    let settings = &project.project().settings;
+    assert_eq!(frame.canvas, Some((settings.width, settings.height)));
+    let at = |width, height| {
+        crate::frame::frame_runtime(&frame, RenderSize::new(width, height).expect("size")).scale
+    };
+    assert_eq!(at(settings.width, settings.height), 1.0);
+    assert_eq!(at(settings.width / 2, settings.height / 2), 0.5);
+    let without_canvas = FrameDesc {
+        canvas: None,
+        ..frame.clone()
+    };
+    assert_eq!(
+        crate::frame::frame_runtime(&without_canvas, RenderSize::new(7, 5).expect("size")).scale,
+        1.0
+    );
 }

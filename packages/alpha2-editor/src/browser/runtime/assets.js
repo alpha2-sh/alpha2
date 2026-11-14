@@ -21,7 +21,11 @@ import { OffscreenTextRasterizer } from "alpha2/text";
 import { ALL_FORMATS, AudioSampleSink, BlobSource, Input } from "mediabunny";
 const uid = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 import { drawGenerator, generatorLabel } from "./generators.js";
-import { seekVideoFrame } from "./preview-utils.js";
+import {
+  loadedOrFailed,
+  seekVideoFrame,
+  unloadVideo,
+} from "./preview-utils.js";
 import { decodeStill } from "./still.js";
 import { readUserText } from "./text.js";
 import { EditorError } from "../../core/document.js";
@@ -329,17 +333,17 @@ export class AssetLibrary {
       preload: "auto",
       loop: false,
     });
-    const failed = await new Promise((resolve) => {
-      video.onloadeddata = () => resolve(null);
-      video.onerror = () =>
-        resolve(video.error ?? new Error("video decode failed"));
-    });
-    // The element is a fallback reader, not the gate: Chrome's media pipeline refuses some files
-    // WebCodecs decodes (a stream copy cut inside an open GOP).
-    if (failed) {
-      if (!probe?.video?.decodable) throw failed;
-      video.removeAttribute("src");
+    let failed = null;
+    try {
+      await loadedOrFailed(video, { signal });
+    } catch (error) {
+      unloadVideo(video);
+      if (signal?.aborted) throw signal.reason;
+      failed = error;
     }
+    // The element is a fallback reader, not the gate: Chrome's media pipeline refuses some files
+    // WebCodecs decodes (a stream copy cut inside an open GOP), and some never finish loading.
+    if (failed && !probe?.video?.decodable) throw failed;
     const element = failed ? null : video;
     if (!probe && !video.videoWidth)
       throw new Error("the browser found no picture in it");
@@ -660,7 +664,7 @@ async function containerDuration(file) {
  * Whether this browser decodes a file's primary audio, using the preview decoder's trial decode
  * (`probeAudioSource`), and the refusal facts when not.
  */
-async function audioDecoding(file) {
+export async function audioDecoding(file) {
   try {
     await probeAudioSource(file.name, file);
     return { decodable: true, facts: null };
@@ -804,11 +808,7 @@ async function videoThumbnail(video, width, height) {
   const clone = video.cloneNode(true);
   clone.muted = true;
   try {
-    await new Promise((resolve, reject) => {
-      clone.onloadeddata = resolve;
-      clone.onerror = () => reject(clone.error);
-      clone.load();
-    });
+    await loadedOrFailed(clone);
     await seekVideoFrame(clone, Math.min(0.25 * (clone.duration || 1), 1));
     return thumbnailFrom(clone, width, height);
   } catch {

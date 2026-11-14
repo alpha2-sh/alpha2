@@ -1,9 +1,10 @@
 //! Host logic shared by every native alpha2 host, with no `FFmpeg` and no platform media API.
 //!
 //! The desktop host uses its policies, audio windows, cursor rules, providers, partial outputs,
-//! plugin runtime and protocol frames, and decodes and encodes through `FFmpeg` itself. The iOS
-//! and Android hosts also run its decode, export and still pipeline over `VideoToolbox` and
-//! `MediaCodec`. Project audio rendering needs the `engine` feature, on by default.
+//! plugin runtime, protocol frames and request parsing (`requests`), and decodes and encodes
+//! through `FFmpeg` itself. The iOS and Android hosts also run its decode, export and still
+//! pipeline over `VideoToolbox` and `MediaCodec`. Project audio rendering needs the `engine`
+//! feature, on by default.
 
 // Its thread locals are `const`; clippy misreads the emulated-TLS expansion used on Android.
 #![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
@@ -38,6 +39,9 @@ pub mod probe_cache;
 pub mod providers;
 pub mod rate_control;
 pub mod recovery;
+pub mod request_watch;
+#[cfg(feature = "requests")]
+pub mod requests;
 pub mod reverse_window;
 pub mod stills;
 mod threads;
@@ -64,6 +68,7 @@ pub use recovery::{
     Recovery, VideoRecoveryGap, watch_decode_progress,
 };
 pub use stills::{DecodedStill, StillFormat, StillInfo, decode_still, probe_still, still_format};
+pub use threads::panic_text;
 pub use tools::{
     FrameScore, THUMBNAIL_LUMA_RANGE, choose_thumbnail, downscale_frame, resize_rgba, score_frame,
 };

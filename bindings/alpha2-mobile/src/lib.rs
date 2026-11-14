@@ -2,9 +2,9 @@
 //!
 //! Swift and Kotlin bindings are generated from this crate with uniffi. The shape follows the
 //! Node client: [`Alpha2::capabilities`], [`Alpha2::conform`], [`Alpha2::export`] and typed
-//! [`Alpha2Error`]s carrying the engine's error codes. Projects and results cross as JSON. A
-//! conform result is this library's own shape, whether each source's file opens, not the desktop
-//! host's conform report.
+//! [`Alpha2Error`]s with a code. Projects and results cross as JSON in this library's own shapes:
+//! a conform result says whether each source's file opens, not what the desktop host's conform
+//! report says.
 //!
 //! Long operations run on threads this library owns. uniffi futures cannot be cancelled, so an
 //! export returns an [`ExportHandle`] whose [`ExportHandle::cancel`] stops it and whose
@@ -22,6 +22,7 @@ uniffi::setup_scaffolding!();
 
 #[cfg(feature = "compose")]
 mod compose;
+mod diagnostics;
 mod edit;
 mod error;
 // The media pipeline is built everywhere so desktop tests compile it; only platforms with a media
@@ -32,6 +33,9 @@ mod error;
 )]
 mod export;
 mod extract;
+#[cfg(test)]
+mod extract_cases;
+mod job;
 mod platform;
 mod player;
 #[cfg(feature = "plugins")]
@@ -47,6 +51,7 @@ pub mod android;
 #[cfg(all(test, any(target_os = "android", target_os = "ios")))]
 mod device_tests;
 
+pub use diagnostics::{DiagnosticListener, ListenerFailure, set_diagnostic_listener};
 pub use edit::{EditedProject, apply_edit};
 pub use error::{Alpha2Error, EncoderRefusalRecord};
 pub use extract::{
@@ -58,8 +63,8 @@ pub use player::{Player, PlayerRequest};
 pub use plugin::Plugin;
 pub use session::{
     Alpha2, ConformRequest, EngineConfig, ExportHandle, ExportOutcome, ExportProgress,
-    ExportProgressEvent, ExportRequest, FontFile, RendererMode, StillEntry, StillsRequest,
-    VideoDecodeMode, VideoFrameMode,
+    ExportProgressEvent, ExportRequest, FontFile, ProgressFailure, RendererMode, StillEntry,
+    StillsRequest, VideoDecodeMode, VideoFrameMode,
 };
 
 /// The library's version.

@@ -65,6 +65,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
                 float("static_luminosity", 0.8, 0.0, 1.0),
             ],
         ),
+        // Noise is per output pixel: a half-scale preview shows it twice as coarse.
         transition(
             "tv-static",
             TV_STATIC,

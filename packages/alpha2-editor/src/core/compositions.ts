@@ -284,6 +284,72 @@ export function ownComposition<P extends Project>(
   };
 }
 
+/** What draws composition `id` directly: clips that show it, sources, and group nodes. */
+export interface CompositionUsers {
+  /** Ids of clips that show it. */
+  readonly clips: readonly string[];
+  /** Ids of composition sources (Library items) that show it. */
+  readonly sources: readonly string[];
+  /** Group nodes that draw it, by composition and node id. */
+  readonly groups: readonly {
+    readonly composition: string;
+    readonly node: string;
+  }[];
+}
+
+/**
+ * What draws composition `id` directly. Clips may share a composition (an engine edit gives every
+ * part of a cut clip the clip's own), and a graph command changes every clip that shows it; a view
+ * can use this to say so, and `clip.detachComposition` gives one clip its own copy.
+ */
+export function compositionUsers(
+  project: Project,
+  id: string,
+): CompositionUsers {
+  const clips: string[] = [];
+  for (const track of project.timeline.tracks)
+    for (const clip of track.clips ?? [])
+      if (clip.composition?.id === id) clips.push(clip.id);
+  const sources = project.sources
+    .filter((source) => source.composition === id)
+    .map((source) => source.id);
+  const groups: { composition: string; node: string }[] = [];
+  for (const composition of project.compositions ?? [])
+    for (const node of composition.nodes ?? [])
+      if (node.op.type === "group" && node.op.composition === id)
+        groups.push({ composition: composition.id, node: node.id });
+  return { clips, sources, groups };
+}
+
+/**
+ * `project` with clip `clipId` showing its own copy of its composition tree when anything else
+ * draws a member of it, which is copy on write for a clip-addressed edit. Returns the copies' ids
+ * by their originals' (empty when the clip already owns its tree).
+ */
+export function detachComposition<P extends Project>(
+  project: P,
+  clipId: string,
+): { readonly project: P; readonly copies: ReadonlyMap<string, string> } {
+  const unchanged = { project, copies: new Map<string, string>() };
+  let clip: ClipOf<P> | undefined;
+  for (const track of project.timeline.tracks)
+    clip ??= (track.clips ?? []).find((c) => c.id === clipId) as
+      ClipOf<P> | undefined;
+  if (clip?.composition == null) return unchanged;
+  // The clip not drawing its composition, so ownComposition sees only the other users.
+  const without = setClipComposition(project, clipId, undefined) as P;
+  const owned = ownComposition(without, clip);
+  if (!owned.copies.size) return unchanged;
+  return {
+    project: setClipComposition(
+      owned.project,
+      clipId,
+      owned.clip.composition ?? undefined,
+    ) as P,
+    copies: owned.copies,
+  };
+}
+
 /**
  * The compositions `copy` draws for those `original` draws, by id: the two roots and, recursively,
  * the definitions of same-id group nodes. Compositions copied for a split or paste correspond this

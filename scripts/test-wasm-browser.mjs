@@ -14,7 +14,7 @@ import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
 import { probeRun } from "./lib/browser-probe.mjs";
 import { recordSkip, virtualMachineEncoderStall } from "./lib/capabilities.mjs";
 import {
-  gpuProcessEnvironment,
+  runWithGpuProcessRerun,
   reportSkippedBrowser,
   skippedCasesSummary,
   fromThisMachine,
@@ -165,52 +165,42 @@ try {
   await probeRun("wasm-browser", browser, {
     engineModule: "/packages/alpha2/wasm/alpha2_wasm.js",
   });
-  const runPage = async (name) => {
-    let gpuProcess;
-    let encoded;
-    try {
-      encoded = await runBrowserPage(
-        browser,
-        `http://127.0.0.1:${address.port}/${name}${process.env.ALPHA2_CASE_QUERY ?? ""}`,
-        {
-          // A perf case exports for minutes on a slow GPU.
-          timeoutMs: Number(
-            process.env.ALPHA2_CASE_TIMEOUT_MS ??
-              (Object.hasOwn(perfCases, name)
-                ? 600_000
-                : (caseLaunch[name]?.timeoutMs ?? 60_000)),
-          ),
-          ...(Object.hasOwn(pageDrivers, name)
-            ? { onPage: pageDrivers[name] }
-            : {}),
-          ...(caseLaunch[name]?.domainBlocking3d
-            ? { domainBlocking3d: true }
-            : {}),
-          onGpuProcess: (record) => (gpuProcess = record),
-        },
-      );
-    } catch (error) {
-      const marked = gpuProcessEnvironment(gpuProcess, {
-        error: error.message,
-      });
-      if (marked === null) throw error;
-      return marked;
-    }
-    const result = JSON.parse(decodeURIComponent(encoded));
-    // Only GPU process exits the case did not cause count as the environment's (a Windows session
-    // 0 restarts it at launch).
-    const caused = caseLaunch[name]?.gpuProcessExits;
-    if (caused !== undefined && gpuProcess !== undefined) {
-      if (gpuProcess.exits <= caused) return { ...result, gpuProcess };
-      return (
-        gpuProcessEnvironment(
-          { ...gpuProcess, exits: gpuProcess.exits - caused },
-          result,
-        ) ?? result
-      );
-    }
-    return gpuProcessEnvironment(gpuProcess, result) ?? result;
-  };
+  const runPage = (name) =>
+    runWithGpuProcessRerun(
+      async () => {
+        let gpuProcess;
+        try {
+          const encoded = await runBrowserPage(
+            browser,
+            `http://127.0.0.1:${address.port}/${name}${process.env.ALPHA2_CASE_QUERY ?? ""}`,
+            {
+              // A perf case exports for minutes on a slow GPU.
+              timeoutMs: Number(
+                process.env.ALPHA2_CASE_TIMEOUT_MS ??
+                  (Object.hasOwn(perfCases, name)
+                    ? 600_000
+                    : (caseLaunch[name]?.timeoutMs ?? 60_000)),
+              ),
+              ...(Object.hasOwn(pageDrivers, name)
+                ? { onPage: pageDrivers[name] }
+                : {}),
+              ...(caseLaunch[name]?.domainBlocking3d
+                ? { domainBlocking3d: true }
+                : {}),
+              onGpuProcess: (record) => (gpuProcess = record),
+            },
+          );
+          return {
+            result: JSON.parse(decodeURIComponent(encoded)),
+            gpuProcess,
+          };
+        } catch (error) {
+          return { error, gpuProcess };
+        }
+      },
+      // Exits the case causes itself (a Windows session 0 restarts it at launch) are no restart.
+      caseLaunch[name]?.gpuProcessExits,
+    );
   const report = (name, outcome) => {
     const stalled =
       outcome.ok === true ? null : virtualMachineEncoderStall(outcome);

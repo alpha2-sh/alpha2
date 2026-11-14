@@ -220,12 +220,12 @@ test("each audio stream a clip names is supplied and uploaded apart", async () =
       ["s", 1],
     ],
   );
-  // A page-made buffer is one stream, so stream 1 is uploaded silent.
+  // A page-made buffer is one stream, so stream 1 is silence that covers any channel selection.
   assert.deepEqual(
     uploads.sort((a, b) => (a.stream ?? -1) - (b.stream ?? -1)),
     [
       { sourceId: "s", stream: undefined, layout: 1, ends: false },
-      { sourceId: "s", stream: 1, layout: 1, ends: false },
+      { sourceId: "s", stream: 1, layout: 24, ends: false },
     ],
   );
   await supplier.close();

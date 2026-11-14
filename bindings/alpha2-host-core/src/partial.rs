@@ -49,6 +49,9 @@ const PROBE_RETRY_BUDGET: Duration = Duration::from_secs(2);
 const CLAIM_IN_USE_WAIT: Duration = Duration::from_millis(250);
 const CLAIM_IN_USE_POLL: Duration = Duration::from_millis(10);
 const STAGING_COPY_CHUNK: usize = 4 << 20;
+/// Bytes written between two syncs of an output, so the final sync flushes at most this much and
+/// a destination that stops answering is found while writing, by the stall limit.
+pub const PERIODIC_SYNC_BYTES: u64 = 256 << 20;
 
 fn output_error(error: impl std::fmt::Display) -> EncodeError {
     EncodeError::Output(error.to_string())
@@ -379,6 +382,10 @@ pub struct PartialOutput {
     lock: Option<File>,
     staging: Option<PathBuf>,
     state: PartialState,
+    /// Bytes handed to the writer since the last periodic sync ([`Self::wrote`]).
+    unsynced: u64,
+    /// The write path's length at the last sync.
+    synced_len: u64,
 }
 
 impl PartialOutput {
@@ -431,6 +438,8 @@ impl PartialOutput {
                     lock: Some(file),
                     staging: None,
                     state: PartialState::Writing,
+                    unsynced: 0,
+                    synced_len: 0,
                 });
             }
             alpha2_os::diagnostic!(
@@ -538,13 +547,47 @@ impl PartialOutput {
         }
     }
 
+    /// Counts `bytes` handed to the writer of [`Self::write_path`], and syncs what was written once
+    /// [`PERIODIC_SYNC_BYTES`] went since the last sync.
+    ///
+    /// # Errors
+    /// When the sync fails.
+    pub fn wrote(&mut self, bytes: u64) -> Result<(), EncodeError> {
+        self.unsynced = self.unsynced.saturating_add(bytes);
+        if self.unsynced < hooks::periodic_sync_bytes(&self.target.path) {
+            return Ok(());
+        }
+        self.unsynced = 0;
+        crate::encode_watch::beat_encode_call();
+        self.sync_written().map_err(output_error)
+    }
+
+    fn sync_written(&mut self) -> std::io::Result<()> {
+        let written = match &self.staging {
+            // Opened for writing: Windows flushes only a handle that may write.
+            Some(staging) => OpenOptions::new().write(true).open(staging)?,
+            None => self
+                .lock
+                .as_ref()
+                .ok_or_else(|| std::io::Error::other("the partial file is no longer held"))?
+                .try_clone()?,
+        };
+        let len = written.metadata()?.len();
+        hooks::sync_delay(&self.target.path, len.saturating_sub(self.synced_len));
+        written.sync_data()?;
+        hooks::record("periodic sync");
+        self.synced_len = len;
+        Ok(())
+    }
+
     /// Publishes the finished output after its writer closed it: copies any staging file into the
     /// partial, syncs it, moves it into place (retrying up to 10 s on Windows sharing conflicts
     /// while beating the encode watch), and syncs the folder.
     ///
     /// # Errors
-    /// [`EncodeError::Cancelled`] when `cancel` stopped the retries (the partial is removed). Any
-    /// other failure keeps the finished file beside the target ([`EncodeError::Publish`]).
+    /// [`EncodeError::Cancelled`] when `cancel` stopped the staging copy or the retries (the
+    /// partial and any staging file are removed). Any other failure keeps the finished file
+    /// beside the target ([`EncodeError::Publish`]).
     pub fn finish(&mut self, cancel: &CancelToken) -> Result<PublishReport, EncodeError> {
         if self.state != PartialState::Writing {
             return Err(EncodeError::Adapter(
@@ -553,10 +596,16 @@ impl PartialOutput {
         }
         self.state = PartialState::Finished;
         let staged_locally = self.staging.is_some();
-        if let Some(staging) = self.staging.clone()
-            && let Err(error) = self.copy_staging(&staging)
-        {
-            return Err(self.keep_staging(staging, &error));
+        if let Some(staging) = self.staging.clone() {
+            match self.copy_staging(&staging, cancel) {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.state = PartialState::Writing;
+                    self.discard()?;
+                    return Err(EncodeError::Cancelled);
+                }
+                Err(error) => return Err(self.keep_staging(staging, &error)),
+            }
         }
         let beat_unless_cancelled = || {
             crate::encode_watch::beat_encode_call();
@@ -571,6 +620,7 @@ impl PartialOutput {
                 self.state = PartialState::Published;
                 drop(self.lock.take());
                 self.remove_staging();
+                crate::encode_watch::beat_encode_call();
                 #[cfg(unix)]
                 if let Err(error) = sync_directory(parent_dir(&self.target.path)) {
                     alpha2_os::diagnostic!(
@@ -594,8 +644,9 @@ impl PartialOutput {
     }
 
     /// Copies the staging file into the partial through the lock handle: an in-order FUSE server
-    /// may upload on every write-handle close, so a second handle would race.
-    fn copy_staging(&self, staging: &Path) -> Result<(), String> {
+    /// may upload on every write-handle close, so a second handle would race. Returns `false`
+    /// when `cancel` stopped it.
+    fn copy_staging(&self, staging: &Path, cancel: &CancelToken) -> Result<bool, String> {
         let mut source = File::open(staging).map_err(|error| error.to_string())?;
         let mut lock = self
             .lock
@@ -604,16 +655,28 @@ impl PartialOutput {
         lock.seek(SeekFrom::Start(0))
             .map_err(|error| error.to_string())?;
         let mut chunk = vec![0_u8; STAGING_COPY_CHUNK];
+        let mut unsynced = 0_u64;
         loop {
             crate::encode_watch::beat_encode_call();
+            if cancel.is_cancelled() {
+                return Ok(false);
+            }
             let read = source
                 .read(&mut chunk)
                 .map_err(|error| format!("reading {}: {error}", staging.display()))?;
             if read == 0 {
-                return Ok(());
+                return Ok(true);
             }
             lock.write_all(&chunk[..read])
                 .map_err(|error| format!("writing {}: {error}", self.path.display()))?;
+            unsynced = unsynced.saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+            if unsynced >= hooks::periodic_sync_bytes(&self.target.path) {
+                crate::encode_watch::beat_encode_call();
+                hooks::sync_delay(&self.target.path, unsynced);
+                lock.sync_data()
+                    .map_err(|error| format!("syncing {}: {error}", self.path.display()))?;
+                unsynced = 0;
+            }
         }
     }
 
@@ -624,9 +687,17 @@ impl PartialOutput {
             .lock
             .as_ref()
             .ok_or_else(|| "the partial file is no longer held".to_owned())?;
+        crate::encode_watch::beat_encode_call();
+        if self.staging.is_none() {
+            let len = lock
+                .metadata()
+                .map_or(self.synced_len, |metadata| metadata.len());
+            hooks::sync_delay(final_path, len.saturating_sub(self.synced_len));
+        }
         lock.sync_all()
             .map_err(|error| format!("syncing {}: {error}", self.path.display()))?;
         hooks::record("sync");
+        crate::encode_watch::beat_encode_call();
         let published = match self.target.existing {
             ExistingOutput::Refuse => {
                 publish_no_replace(&self.path, final_path, retry).map_err(|error| {
@@ -1008,6 +1079,12 @@ mod hooks {
     pub(super) fn record(_event: &'static str) {}
 
     pub(super) fn lock_closed(_name: &Path) {}
+
+    pub(super) const fn periodic_sync_bytes(_path: &Path) -> u64 {
+        super::PERIODIC_SYNC_BYTES
+    }
+
+    pub(super) const fn sync_delay(_path: &Path, _bytes: u64) {}
 }
 
 /// Test hooks for this thread's publishes. Test builds only.
@@ -1061,6 +1138,33 @@ pub mod hooks {
             }
         });
     }
+
+    /// A slow destination for one output, process-wide since syncs run on the writer's thread:
+    /// the final path, the bytes between periodic syncs, and nanoseconds each sync takes per KiB
+    /// it flushes.
+    pub static SLOW_SYNC: std::sync::Mutex<Option<(PathBuf, u64, u64)>> =
+        std::sync::Mutex::new(None);
+
+    fn slow_sync(path: &Path) -> Option<(u64, u64)> {
+        SLOW_SYNC
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .filter(|(slow, _, _)| slow == path)
+            .map(|&(_, interval, nanos)| (interval, nanos))
+    }
+
+    pub(super) fn periodic_sync_bytes(path: &Path) -> u64 {
+        slow_sync(path).map_or(super::PERIODIC_SYNC_BYTES, |(interval, _)| interval)
+    }
+
+    pub(super) fn sync_delay(path: &Path, bytes: u64) {
+        if let Some((_, nanos)) = slow_sync(path) {
+            std::thread::sleep(std::time::Duration::from_nanos(
+                nanos.saturating_mul(bytes / 1024),
+            ));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1069,6 +1173,66 @@ mod tests {
     use std::io::{Read, Write};
 
     use super::*;
+
+    #[test]
+    fn an_output_is_synced_while_it_is_written_and_the_final_sync_covers_the_rest() {
+        let path = final_path("periodic-sync");
+        *hooks::SLOW_SYNC.lock().expect("hook") = Some((path.clone(), 1 << 20, 0));
+        hooks::EVENTS.set(Some(Vec::new()));
+        let mut partial =
+            PartialOutput::claim(&OutputTarget::from(&path), SeekNeed::Required).expect("claim");
+        let mut file = partial.open_file().expect("open");
+        let chunk = vec![7_u8; 64 << 10];
+        for _ in 0..56 {
+            file.write_all(&chunk).expect("write");
+            partial.wrote(64 << 10).expect("periodic sync");
+        }
+        drop(file);
+        partial.finish(&CancelToken::default()).expect("publish");
+        let events = hooks::EVENTS.take().expect("events");
+        *hooks::SLOW_SYNC.lock().expect("hook") = None;
+        let mut expected = vec!["periodic sync"; 3];
+        expected.extend(["sync", "rename"]);
+        if cfg!(unix) {
+            expected.push("directory sync");
+        }
+        assert_eq!(events, expected);
+        assert_eq!(fs::metadata(&path).expect("published").len(), 56 << 16);
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_cancel_during_the_staging_copy_publishes_nothing_and_removes_both_files() {
+        let path = final_path("staged-cancel");
+        hooks::NOT_SEEKABLE.set(true);
+        let claimed = PartialOutput::claim(&OutputTarget::from(&path), SeekNeed::Required);
+        hooks::NOT_SEEKABLE.set(false);
+        let mut partial = claimed.expect("claim");
+        let staging = partial.write_path().to_owned();
+        assert_ne!(staging, partial.path, "the output was not staged");
+        let mut writer = partial.open_file().expect("the staging file opens");
+        writer
+            .write_all(&vec![7_u8; 3 * STAGING_COPY_CHUNK])
+            .expect("three chunks");
+        drop(writer);
+        let cancel = CancelToken::default();
+        let beats = std::cell::Cell::new(0);
+        let watched = cancel.clone();
+        // The copy beats once before each chunk: cancel after the first chunk is copied.
+        let _watch = crate::encode_watch::watch_encode_calls(move || {
+            beats.set(beats.get() + 1);
+            if beats.get() == 2 {
+                watched.cancel();
+            }
+        });
+        assert!(matches!(
+            partial.finish(&cancel),
+            Err(EncodeError::Cancelled)
+        ));
+        assert!(!path.exists(), "the cancelled copy was published");
+        assert!(!partial.path.exists(), "the partial was left");
+        assert!(!staging.exists(), "the staging file was left");
+    }
 
     /// A unique final path in the temporary directory, with neither it nor its partial present.
     fn final_path(label: &str) -> PathBuf {

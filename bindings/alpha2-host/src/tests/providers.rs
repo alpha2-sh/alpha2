@@ -771,6 +771,76 @@ fn an_svg_draws_the_image_files_its_resources_give_it() {
     std::fs::remove_dir_all(&directory).ok();
 }
 
+/// The provider budget sees the images an SVG source holds, not only its last raster.
+#[cfg(feature = "extensions")]
+#[test]
+fn svg_sources_holding_images_are_closed_for_the_budget_once_off_screen() {
+    let directory = scratch_directory("svg-image-budget");
+    // A 4x4 PNG header padded to 1 MiB with a text chunk.
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x04\0\0\0\x04\x08\x06\0\0\0".to_vec();
+    png.extend_from_slice(&[0xa9, 0xf1, 0x9e, 0x7e]);
+    png.extend_from_slice(&u32::to_be_bytes(1 << 20));
+    png.extend_from_slice(b"tEXt");
+    png.resize(png.len() + (1 << 20), b'x');
+    png.extend_from_slice(&[0; 4]);
+    png.extend_from_slice(b"\0\0\0\0IEND\xaeB`\x82");
+    let photo = directory.join("photo.png");
+    std::fs::write(&photo, &png).expect("photo");
+    let mut files = alpha2_host_core::providers::ProviderFiles::default();
+    for source in ["a", "b"] {
+        let path = directory.join(format!("{source}.svg"));
+        std::fs::write(
+            &path,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="96" height="64"><image width="96" height="64" href="photo.png"/></svg>"#,
+        )
+        .expect("svg");
+        files.originals.insert(source.to_owned(), path);
+        files.resources.insert(
+            source.to_owned(),
+            HashMap::from([("photo.png".to_owned(), photo.clone())]),
+        );
+    }
+    let clip = |id: &str, source: &str| {
+        json!({"id": id, "source_id": source,
+               "timeline_range": {"start": 0, "end": 360_000},
+               "source_range": {"start": 0, "end": 360_000}})
+    };
+    let project = Project::from_json(
+        &json!({
+            "schema_version": 1, "id": "images", "name": "Images",
+            "settings": {"width": 96, "height": 64, "frame_rate": {"num": 10, "den": 1}, "sample_rate": 48_000},
+            "sources": [
+                {"id": "a", "locator": "asset://a", "kind": "image", "provider": {"format": "svg"}},
+                {"id": "b", "locator": "asset://b", "kind": "image", "provider": {"format": "svg"}}
+            ],
+            "timeline": {"tracks": [
+                {"id": "v1", "name": "V1", "kind": "video", "clips": [clip("ca", "a")]},
+                {"id": "v2", "name": "V2", "kind": "video", "clips": [clip("cb", "b")]}
+            ]}
+        })
+        .to_string(),
+    )
+    .expect("project");
+    let media = alpha2_host_core::providers::ProviderMedia::new(&project, files, (96, 64), 3 << 19);
+    media
+        .frame(&provider_reader("a", "ca"), MediaTime::ZERO, 0)
+        .expect("a");
+    assert!(
+        media.resident_bytes() > 1 << 20,
+        "{}",
+        media.resident_bytes()
+    );
+    media
+        .frame(&provider_reader("b", "cb"), MediaTime::ZERO, 5)
+        .expect("b");
+    assert_eq!(media.open_sources(), 1, "a was last shown at frame 0");
+    assert!(
+        media.resident_bytes() < 3 << 19,
+        "{}",
+        media.resident_bytes()
+    );
+}
+
 #[cfg(feature = "extensions")]
 fn provider_reader(source: &str, clip: &str) -> crate::decode::DecodeCursorKey {
     (

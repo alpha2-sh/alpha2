@@ -118,6 +118,33 @@ const recoverAfter = async (recoveries) => {
   }
   return { last, recovered: false };
 };
+// Live page decoders through the resets: which errors they report, and whether a device-recovery
+// request decodes again. Recorded, not required.
+const { MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
+const liveDecoders = [];
+for (const file of ["h264-bt709-copy.mp4", "hevc-hvc1.mp4"]) {
+  try {
+    const blob = await (await fetch("/tests/corpus/" + file)).blob();
+    liveDecoders.push({ file, decoder: await MediabunnyVideoDecoder.open(file, blob), at: 0 });
+  } catch (error) {
+    liveDecoders.push({ file, opened: String(error?.name ?? error) });
+  }
+}
+const decodeLive = async (reason) => {
+  const outcomes = {};
+  for (const live of liveDecoders) {
+    if (live.decoder === undefined) { outcomes[live.file] = live.opened; continue; }
+    try {
+      const decoded = await live.decoder.refill({ sourceId: live.file, mediaTimeTicks: BigInt(live.at++) * 4000n, reason, generation: 0 });
+      decoded.frame.close();
+      outcomes[live.file] = "ok" + (live.decoder.softwareFallback === undefined ? "" : " software");
+    } catch (error) {
+      outcomes[live.file] = String(error?.name) + ": " + String(error?.code ?? error?.message ?? "");
+    }
+  }
+  return outcomes;
+};
+const liveBefore = await decodeLive("prefetch");
 const before = await presentOnce();
 const lumaBefore = await luma();
 // Headless SwiftShader loses its device presenting to a canvas before any crash.
@@ -126,10 +153,13 @@ if (lumaBefore !== 200 && backend.isDeviceLost())
 document.title = "crash-1";
 const first = await recoverAfter(1);
 const lumaFirst = first.recovered ? await luma() : null;
+const liveAfterFirst = { prefetch: await decodeLive("prefetch"), recovery: await decodeLive("device-recovery") };
 const afterFirst = { choice: backend.rendererChoice, losses: pageGpuLosses.count(), surfaces };
 document.title = "crash-2";
 const second = await recoverAfter(2);
 const lumaSecond = second.recovered ? await luma() : null;
+const liveAfterSecond = { prefetch: await decodeLive("prefetch"), recovery: await decodeLive("device-recovery") };
+for (const live of liveDecoders) live.decoder?.close();
 const afterSecond = { choice: backend.rendererChoice, losses: pageGpuLosses.count(), surfaces };
 for (let index = 0; index < 5; index += 1) await presentOnce();
 const finalChoice = backend.rendererChoice;
@@ -146,6 +176,7 @@ report({
   second: { ...second, luma: lumaSecond, ...afterSecond },
   rendererChanges: changes.map((choice) => choice.renderer + "/" + choice.backend),
   workerCapabilitiesAfter: workerCapabilitiesAfter.renderer, workerErrors,
+  liveDecoders: { before: liveBefore, afterFirst: liveAfterFirst, afterSecond: liveAfterSecond },
 });
 `;
 }

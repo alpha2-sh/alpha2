@@ -6,15 +6,17 @@
 //! `alpha2-host probe-d3d12va-encode`. A crash, an exit without an answer, or no answer within the
 //! GPU wait timeout is a refusal, and the export takes the readback path.
 //!
-//! Answers are cached per process by adapter LUID and codec. The host asks for every candidate
-//! codec in parallel as it starts, so startup waits for one child, not one per codec.
+//! Answers are kept per process by adapter LUID and codec as [`ChildProbeEnd::keep`] says: a busy,
+//! unstarted or lost child is asked again. The host asks for every candidate codec in parallel as
+//! it starts, so startup waits for one child, not one per codec.
 
 use std::io::Read;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use alpha2_gpu::GpuContext;
+use alpha2_host_core::probe_cache::{ChildProbeEnd, KeptAnswers};
 use alpha2_native::{D3D12EncodeProbe, NativeVideoCodec};
 use alpha2_native_gpu::{D3D12EncodeCodec, SharedD3D12Context};
 use serde_json::{Value, json};
@@ -28,9 +30,11 @@ const KILL_GRACE: Duration = Duration::from_secs(1);
 
 const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-type Answer = ((u64, NativeVideoCodec), Result<D3D12EncodeProbe, String>);
+type Key = (u64, NativeVideoCodec);
 
-static ANSWERS: Mutex<Vec<Answer>> = Mutex::new(Vec::new());
+type Answer = Result<D3D12EncodeProbe, String>;
+
+static ANSWERS: Mutex<KeptAnswers<Key, Answer>> = Mutex::new(KeptAnswers::new());
 
 pub const fn d3d12_codec(codec: NativeVideoCodec) -> Option<D3D12EncodeCodec> {
     match codec {
@@ -66,15 +70,15 @@ fn test_encode(
     let mut answers = ANSWERS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((_, answer)) = answers.iter().find(|(key, _)| *key == (luid, codec)) {
-        return answer.clone();
+    if let Some(answer) = answers.get(&(luid, codec)) {
+        return answer;
     }
-    let answer = run_child(luid, codec, alpha2_native_gpu::d3d12_wait_timeout(), None);
-    answers.push(((luid, codec), answer.clone()));
+    let (answer, end) = run_child(luid, codec, alpha2_native_gpu::d3d12_wait_timeout(), None);
+    answers.record((luid, codec), &answer, end.keep());
     answer
 }
 
-pub struct Prewarm(Vec<std::thread::JoinHandle<Answer>>);
+pub struct Prewarm(Vec<std::thread::JoinHandle<(Key, Answer, ChildProbeEnd)>>);
 
 /// A child spends most of its time opening the device (`wgpu` asks every DX12 adapter, which wakes
 /// a sleeping discrete GPU), so it runs while the host makes its renderer.
@@ -94,11 +98,14 @@ pub fn start_prewarm(
         codecs
             .iter()
             .copied()
-            .filter(|codec| !answers.iter().any(|(key, _)| *key == (luid, *codec)))
+            .filter(|codec| answers.get(&(luid, *codec)).is_none())
             .filter_map(|codec| {
                 std::thread::Builder::new()
                     .name(format!("alpha2 {} test encode", codec.as_str()))
-                    .spawn(move || ((luid, codec), run_child(luid, codec, timeout, None)))
+                    .spawn(move || {
+                        let (answer, end) = run_child(luid, codec, timeout, None);
+                        ((luid, codec), answer, end)
+                    })
                     .ok()
             })
             .collect(),
@@ -107,7 +114,7 @@ pub fn start_prewarm(
 
 impl Prewarm {
     pub fn finish(self) {
-        let answered: Vec<Answer> = self
+        let answered: Vec<(Key, Answer, ChildProbeEnd)> = self
             .0
             .into_iter()
             .filter_map(|child| child.join().ok())
@@ -115,22 +122,21 @@ impl Prewarm {
         let mut answers = ANSWERS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for (key, answer) in answered {
-            if !answers.iter().any(|(known, _)| *known == key) {
-                answers.push((key, answer));
-            }
+        for (key, answer, end) in answered {
+            answers.record(key, &answer, end.keep());
         }
     }
 }
 
-/// `fault`, in a test, makes the child fail as it says.
+/// The child's answer and how it ended; `fault`, in a test, makes the child fail as it says.
 fn run_child(
     luid: u64,
     codec: NativeVideoCodec,
     timeout: Duration,
     fault: Option<&str>,
-) -> Result<D3D12EncodeProbe, String> {
-    run_child_at(luid, codec, None, timeout, fault).0
+) -> (Answer, ChildProbeEnd) {
+    let (answer, _, end) = run_child_at(luid, codec, None, timeout, fault);
+    (answer, end)
 }
 
 /// Also returns the child's last stderr line, where `FFmpeg` logs the `HRESULT` behind a refusal.
@@ -140,7 +146,8 @@ pub fn probe_child(
     size: (u32, u32),
     timeout: Duration,
 ) -> (Result<D3D12EncodeProbe, String>, Option<String>) {
-    run_child_at(luid, codec, Some(size), timeout, None)
+    let (answer, last_line, _) = run_child_at(luid, codec, Some(size), timeout, None);
+    (answer, last_line)
 }
 
 fn run_child_at(
@@ -149,10 +156,10 @@ fn run_child_at(
     size: Option<(u32, u32)>,
     timeout: Duration,
     fault: Option<&str>,
-) -> (Result<D3D12EncodeProbe, String>, Option<String>) {
+) -> (Answer, Option<String>, ChildProbeEnd) {
     let mut command = match child_command(luid, codec, size, fault) {
         Ok(command) => command,
-        Err(error) => return (Err(error), None),
+        Err(error) => return (Err(error), None, ChildProbeEnd::NotStarted),
     };
     command
         .stdin(Stdio::null())
@@ -164,13 +171,14 @@ fn run_child_at(
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let started = Instant::now();
+    let started = alpha2_os::AwakeInstant::now();
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             return (
                 Err(format!("the D3D12VA test encode did not start: {error}")),
                 None,
+                ChildProbeEnd::NotStarted,
             );
         }
     };
@@ -190,13 +198,14 @@ fn run_child_at(
                 return (
                     Err(format!("the D3D12VA test encode was lost: {error}")),
                     None,
+                    ChildProbeEnd::Lost,
                 );
             }
         }
     };
     let Some(status) = status else {
         let _ = child.kill();
-        let killed = Instant::now();
+        let killed = alpha2_os::AwakeInstant::now();
         while killed.elapsed() < KILL_GRACE && matches!(child.try_wait(), Ok(None)) {
             std::thread::sleep(POLL_INTERVAL);
         }
@@ -205,6 +214,7 @@ fn run_child_at(
                 "the D3D12VA test encode did not finish within {timeout:?} and was killed"
             )),
             None,
+            ChildProbeEnd::TimedOut,
         );
     };
     let stdout = joined(stdout);
@@ -219,14 +229,18 @@ fn run_child_at(
             .ok()
             .filter(|value| value.get("ok").is_some())
     });
-    let answer = match (status.code(), answer) {
-        (Some(0), Some(answer)) => answer_from_json(&answer),
+    let (answer, end) = match (status.code(), answer) {
+        (Some(0), Some(answer)) => {
+            let answer = answer_from_json(&answer);
+            let busy = matches!(&answer, Err(reason) if alpha2_native::d3d12va_busy(reason));
+            (answer, ChildProbeEnd::Answered { busy })
+        }
         (code, _) => {
             let last_words = last_line
                 .as_ref()
                 .map(|line| format!("; it last wrote: {line}"))
                 .unwrap_or_default();
-            Err(match code {
+            let answer = Err(match code {
                 // An NTSTATUS: an access violation (0xC0000005), a fast fail (0xC0000409).
                 Some(code) if code.cast_unsigned() >= 0xC000_0000 => format!(
                     "the D3D12VA test encode crashed (exit {:#010X}){last_words}",
@@ -236,10 +250,11 @@ fn run_child_at(
                     format!("the D3D12VA test encode exited with {code} and no answer{last_words}")
                 }
                 None => format!("the D3D12VA test encode ended without an exit code{last_words}"),
-            })
+            });
+            (answer, ChildProbeEnd::NoAnswer)
         }
     };
-    (answer, last_line)
+    (answer, last_line, end)
 }
 
 /// A job that ends every child with the host; `None` when the system refused one.
@@ -302,9 +317,7 @@ pub fn answer(luid: u64, codec: NativeVideoCodec) -> Option<Result<D3D12EncodePr
     ANSWERS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .iter()
-        .find(|(key, _)| *key == (luid, codec))
-        .map(|(_, answer)| answer.clone())
+        .get(&(luid, codec))
 }
 
 #[cfg(test)]
@@ -313,7 +326,7 @@ pub const TEST_CHILD: &str = "tests::d3d12va_encode::d3d12va_test_encode_child";
 #[cfg(test)]
 pub const TEST_CHILD_ARGUMENTS: &str = "ALPHA2_TEST_D3D12VA_CHILD";
 
-/// `crash`, `hang`, or `refuse`.
+/// `crash`, `hang`, `refuse`, or `busy`.
 #[cfg(test)]
 pub const TEST_CHILD_FAULT: &str = "ALPHA2_TEST_D3D12VA_CHILD_FAULT";
 
@@ -364,6 +377,15 @@ pub fn child_test_main(arguments: &str) {
     match std::env::var(TEST_CHILD_FAULT).ok().as_deref() {
         Some("crash") => std::process::abort(),
         Some("hang") => std::thread::sleep(Duration::from_secs(600)),
+        Some("busy") => {
+            println!();
+            println!(
+                "{}",
+                answer_json(&Err(
+                    "Encoding failed: CreateVideoEncoder returned 0x8007000E, injected".to_owned()
+                ))
+            );
+        }
         Some("refuse") => {
             println!();
             println!(
@@ -592,7 +614,7 @@ pub fn injected_refusal(adapter: &str, luid: u64, codec: NativeVideoCodec) -> Op
         InjectedRefusal::Timeout => "hang",
         InjectedRefusal::Crash => "crash",
     };
-    let reason = match run_child(luid, codec, timeout, Some(fault)) {
+    let reason = match run_child(luid, codec, timeout, Some(fault)).0 {
         Ok(_) => return None,
         Err(error) => format!("{encoder} did not open and encode on {adapter}: {error}"),
     };
@@ -620,7 +642,7 @@ pub fn prewarm_injected(adapter: &str, luid: u64) {
             .iter()
             .map(|&codec| {
                 scope.spawn(move || {
-                    let reason = run_child(luid, codec, timeout, Some(fault)).err()?;
+                    let reason = run_child(luid, codec, timeout, Some(fault)).0.err()?;
                     Some((
                         codec,
                         format!(
@@ -683,6 +705,24 @@ mod tests {
             answer_from_json(&json!({"ok": true, "result": {}}))
                 .expect_err("malformed")
                 .contains("malformed")
+        );
+    }
+
+    #[test]
+    fn a_busy_child_is_asked_again_and_a_hung_one_is_kept() {
+        let mut answers = KeptAnswers::new();
+        let key = (0xAB12C, NativeVideoCodec::H264);
+        let (answer, end) = run_child(key.0, key.1, Duration::from_secs(60), Some("busy"));
+        assert_eq!(end, ChildProbeEnd::Answered { busy: true }, "{answer:?}");
+        answers.record(key, &answer, end.keep());
+        assert_eq!(answers.get(&key), None, "a busy device is asked again");
+        let (answer, end) = run_child(key.0, key.1, Duration::from_millis(200), Some("hang"));
+        assert_eq!(end, ChildProbeEnd::TimedOut, "{answer:?}");
+        answers.record(key, &answer, end.keep());
+        assert_eq!(
+            answers.get(&key),
+            Some(answer),
+            "a hung child turns the path off"
         );
     }
 

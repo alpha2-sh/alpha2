@@ -476,3 +476,44 @@ fn a_named_input_decides_what_its_effect_may_cache() {
         Ok(CacheEligibility::Bypassed)
     );
 }
+
+#[test]
+fn a_result_encoded_before_a_clear_is_not_kept_after_it() {
+    let _lock = gpu_test_lock();
+    let (renderer, tint) = renderer_with_tint();
+    renderer.set_result_cache_budget(1 << 20);
+    let texture = rgba_texture(&renderer, [200, 100, 50, 255]);
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let built = graph(&view, true, &tint, 0.5, 1.0);
+    let mut encoder = renderer.command_encoder("alpha2 test encoder");
+    let work = renderer
+        .encode_graph(&built.graph, &mut encoder)
+        .expect("encodes");
+    work.flush_uniforms(renderer.gpu.queue());
+    // What a resource registration or a quality change on another thread does meanwhile.
+    renderer.clear_result_cache_for(crate::CacheInvalidation::EffectResources);
+    renderer.submit([encoder.finish()]).expect("submits");
+    drop(renderer.complete_graph_work(work, true));
+    assert_eq!(renderer.result_cache_stats().entries, 0);
+    let (_, stats, drawn) = run(&renderer, &built.graph);
+    assert_eq!((stats.hits, drawn), (0, 2), "the next frame draws again");
+    assert_eq!(stats.entries, 2);
+}
+
+#[test]
+fn the_cpu_renderer_keeps_no_result_looked_up_before_a_clear() {
+    use crate::RenderControls;
+    let cpu = crate::CpuRenderer::new(1);
+    cpu.set_result_cache_budget(1 << 20);
+    let size = RenderSize::new(4, 4).expect("size");
+    let image = std::sync::Arc::new(
+        crate::CpuImage::from_premultiplied_rgba8(size, &[200; 4 * 4 * 4]).expect("image"),
+    );
+    let result = [(RenderCacheKey::source(7), image, false)];
+    let clears = cpu.content_epoch();
+    cpu.clear_result_cache();
+    cpu.keep_results(clears, &result);
+    assert_eq!(cpu.result_cache_stats().entries, 0);
+    cpu.keep_results(cpu.content_epoch(), &result);
+    assert_eq!(cpu.result_cache_stats().entries, 1);
+}

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use alpha2_engine::frame_store::DEFAULT_VIDEO_FRAME_BYTES;
 use alpha2_host_core::export::FrameBudget;
@@ -10,6 +10,7 @@ use alpha2_media::CancelToken;
 use serde_json::{Value, json};
 
 use crate::error::Alpha2Error;
+use crate::job::Job;
 use crate::platform::{self, ExportJob, Platform};
 
 /// Which renderer draws frames.
@@ -143,9 +144,9 @@ pub struct ExportRequest {
     pub audio_codec: Option<String>,
     /// Mix and encode the project's audio.
     pub include_audio: bool,
-    /// The first rendered timeline tick; the timeline's start when unset.
+    /// The first rendered timeline tick; 0 when unset.
     pub start_ticks: Option<i64>,
-    /// The tick the export stops before; the timeline's end when unset.
+    /// The tick the export stops before; the end of what the timeline shows when unset.
     pub end_ticks: Option<i64>,
 }
 
@@ -158,11 +159,72 @@ pub struct ExportProgressEvent {
     pub frames_total: u64,
 }
 
+/// Why an app's progress callback failed.
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum ProgressFailure {
+    /// The callback failed for `reason`.
+    #[error("{reason}")]
+    Failed {
+        /// Why.
+        reason: String,
+    },
+}
+
+impl From<uniffi::UnexpectedUniFFICallbackError> for ProgressFailure {
+    fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::Failed {
+            reason: error.reason,
+        }
+    }
+}
+
 /// Receives an export's progress on a library thread.
 #[uniffi::export(with_foreign)]
 pub trait ExportProgress: Send + Sync {
     /// Called after frames are encoded; keep it short.
-    fn on_progress(&self, event: ExportProgressEvent);
+    ///
+    /// # Errors
+    /// A failure, or anything the callback throws, stops the export with nothing published, and
+    /// [`ExportHandle::outcome`] fails with `PROGRESS_CALLBACK_FAILED`.
+    fn on_progress(&self, event: ExportProgressEvent) -> Result<(), ProgressFailure>;
+}
+
+/// An export's progress callback and its first failure.
+pub(crate) struct Progress {
+    callback: Arc<dyn ExportProgress>,
+    failure: Mutex<Option<String>>,
+}
+
+impl Progress {
+    pub(crate) fn new(callback: Arc<dyn ExportProgress>) -> Self {
+        Self {
+            callback,
+            failure: Mutex::new(None),
+        }
+    }
+
+    /// Hands `event` to the callback; a failure is kept and cancels `cancel`.
+    pub(crate) fn report(&self, event: ExportProgressEvent, cancel: &CancelToken) {
+        if let Err(failure) = self.callback.on_progress(event) {
+            self.failure
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get_or_insert_with(|| failure.to_string());
+            cancel.cancel();
+        }
+    }
+
+    /// The error the export fails with when the callback failed.
+    pub(crate) fn failure(&self) -> Option<Alpha2Error> {
+        self.failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|reason| Alpha2Error::Failed {
+                code: "PROGRESS_CALLBACK_FAILED".into(),
+                reason: format!("the progress callback failed: {reason}"),
+            })
+    }
 }
 
 /// What a finished export produced.
@@ -175,6 +237,18 @@ pub struct ExportOutcome {
 }
 
 impl Alpha2 {
+    /// A session on `platform` instead of this device's backend.
+    #[cfg(test)]
+    pub(crate) fn with_platform(config: EngineConfig, platform: Arc<dyn Platform>) -> Arc<Self> {
+        Arc::new(Self {
+            config,
+            platform,
+            fonts: Mutex::new(Vec::new()),
+            paused: Arc::new(PauseGate::default()),
+            budgets: Mutex::new(Vec::new()),
+        })
+    }
+
     /// The configuration the session was made with.
     pub(crate) const fn engine_config(&self) -> &EngineConfig {
         &self.config
@@ -250,6 +324,7 @@ impl Alpha2 {
     #[uniffi::constructor]
     #[must_use]
     pub fn new(config: EngineConfig) -> Arc<Self> {
+        crate::diagnostics::report_panics();
         Arc::new(Self {
             config,
             platform: platform::current(),
@@ -309,7 +384,8 @@ impl Alpha2 {
     }
 
     /// Renders frames to 8-bit sRGB RGBA PNG files, as an export draws them before encoding,
-    /// and returns the stills result JSON. Runs on the calling thread: call it off the main one.
+    /// and returns the stills result JSON. Runs on the calling thread, and blocks there while the
+    /// session is paused: call it off the main one.
     ///
     /// # Errors
     /// [`Alpha2Error::InvalidInput`] for an invalid project or request, else what rendering or
@@ -324,6 +400,7 @@ impl Alpha2 {
         }
         crate::stills::render(
             &request,
+            &self.paused,
             &self.config,
             &self.fonts(),
             self.video_backends(),
@@ -350,38 +427,33 @@ impl Alpha2 {
         if request.output_path.is_empty() {
             return Err(Alpha2Error::invalid("the output path is empty"));
         }
-        let handle = Arc::new(ExportHandle::default());
+        let handle = Arc::new(ExportHandle {
+            job: Job::new("export"),
+            held: Arc::new(AtomicBool::new(false)),
+            gate: Arc::clone(&self.paused),
+        });
+        let progress = Arc::new(Progress::new(progress));
         let job = ExportJob {
             request,
             config: self.config.clone(),
-            fonts: self
-                .fonts
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone(),
-            cancel: handle.cancel.clone(),
+            fonts: self.fonts(),
+            cancel: handle.job.cancel_token().clone(),
             paused: Arc::clone(&self.paused),
             held: Arc::clone(&handle.held),
             budget: self.frame_budget(DEFAULT_VIDEO_FRAME_BYTES),
-            progress,
+            progress: Arc::clone(&progress),
         };
         let platform = Arc::clone(&self.platform);
-        let finished = Arc::clone(&handle);
-        std::thread::Builder::new()
-            .name("alpha2-export".into())
-            .spawn(move || {
-                let outcome = platform.export(job);
-                finished.finish(outcome);
-            })
-            .map_err(|error| Alpha2Error::Failed {
-                code: "RESOURCE_LIMIT".into(),
-                reason: format!("cannot start the export thread: {error}"),
-            })?;
+        handle.job.spawn("alpha2-export", move || {
+            let outcome = platform.export(job);
+            progress.failure().map_or(outcome, Err)
+        })?;
         Ok(handle)
     }
 
-    /// Holds exports at their next frame boundary until [`Self::resume`]; call when the app leaves
-    /// the foreground, since iOS does not run GPU work in the background.
+    /// Holds exports, stills, extractions and previews before their next GPU work until
+    /// [`Self::resume`]; call when the app leaves the foreground, since iOS does not run GPU work
+    /// in the background.
     pub fn pause(&self) {
         self.paused.set(true);
     }
@@ -407,12 +479,11 @@ impl Alpha2 {
 }
 
 /// A running export.
-#[derive(uniffi::Object, Default)]
+#[derive(uniffi::Object)]
 pub struct ExportHandle {
-    cancel: CancelToken,
-    outcome: Mutex<Option<Result<ExportOutcome, Alpha2Error>>>,
+    job: Arc<Job<ExportOutcome>>,
     held: Arc<AtomicBool>,
-    taken: AtomicBool,
+    gate: Arc<PauseGate>,
 }
 
 #[uniffi::export]
@@ -420,7 +491,8 @@ impl ExportHandle {
     /// Stops the export; [`Self::outcome`] then fails with [`Alpha2Error::Aborted`] and no output is
     /// left behind.
     pub fn cancel(&self) {
-        self.cancel.cancel();
+        self.job.cancel_token().cancel();
+        self.gate.wake();
     }
 
     /// Whether the export is held at a frame boundary by [`Alpha2::pause`].
@@ -432,73 +504,17 @@ impl ExportHandle {
     /// Whether the export has finished, succeeded or not.
     #[must_use]
     pub fn is_finished(&self) -> bool {
-        self.outcome
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .is_some()
-            || self.taken.load(Ordering::Acquire)
+        self.job.is_finished()
     }
 
     /// The export's outcome once it finishes.
     ///
     /// # Errors
     /// The export's failure; [`Alpha2Error::Aborted`] after [`Self::cancel`];
-    /// [`Alpha2Error::InvalidInput`] when the outcome was already taken.
+    /// `PROGRESS_CALLBACK_FAILED` when the progress callback failed; `INTERNAL` when the export
+    /// thread panicked; [`Alpha2Error::InvalidInput`] when the outcome was already taken.
     pub async fn outcome(&self) -> Result<ExportOutcome, Alpha2Error> {
-        let outcome = WaitOutcome { handle: self }.await;
-        self.taken.store(true, Ordering::Release);
-        outcome
-    }
-}
-
-impl ExportHandle {
-    fn finish(&self, outcome: Result<ExportOutcome, Alpha2Error>) {
-        *self
-            .outcome
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
-        for waker in WAKERS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .drain(..)
-        {
-            waker.wake();
-        }
-    }
-}
-
-/// Wakers of pending [`ExportHandle::outcome`] futures, woken when any export finishes.
-static WAKERS: Mutex<Vec<std::task::Waker>> = Mutex::new(Vec::new());
-
-struct WaitOutcome<'a> {
-    handle: &'a ExportHandle,
-}
-
-impl std::future::Future for WaitOutcome<'_> {
-    type Output = Result<ExportOutcome, Alpha2Error>;
-
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        context: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let mut wakers = WAKERS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut outcome = self
-            .handle
-            .outcome
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(outcome) = outcome.take() {
-            return std::task::Poll::Ready(outcome);
-        }
-        if self.handle.taken.load(Ordering::Acquire) {
-            return std::task::Poll::Ready(Err(Alpha2Error::invalid(
-                "this export's outcome was already taken",
-            )));
-        }
-        wakers.push(context.waker().clone());
-        std::task::Poll::Pending
+        self.job.outcome().await
     }
 }
 
@@ -526,7 +542,19 @@ impl PauseGate {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Wakes the waits so they see a token cancelled before this call.
+    pub(crate) fn wake(&self) {
+        // Taking the lock orders the cancel before a waiter's check or its wait.
+        drop(
+            self.paused
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        self.changed.notify_all();
+    }
+
     /// Blocks while paused, returning early on cancellation; `held` is set while it blocks.
+    /// Whoever cancels `cancel` calls [`Self::wake`].
     pub(crate) fn wait_while_paused(&self, cancel: &CancelToken, held: &AtomicBool) {
         let mut paused = self
             .paused
@@ -536,11 +564,15 @@ impl PauseGate {
         while *paused && !cancel.is_cancelled() {
             paused = self
                 .changed
-                .wait_timeout(paused, std::time::Duration::from_millis(100))
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .0;
+                .wait(paused)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         held.store(false, Ordering::Release);
+    }
+
+    /// [`Self::wait_while_paused`] for work nobody watches the hold of.
+    pub(crate) fn wait(&self, cancel: &CancelToken) {
+        self.wait_while_paused(cancel, &AtomicBool::new(false));
     }
 }
 
@@ -616,12 +648,16 @@ fn capabilities_json(config: &EngineConfig, platform: &dyn Platform) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     struct Quiet;
 
     impl ExportProgress for Quiet {
-        fn on_progress(&self, _event: ExportProgressEvent) {}
+        fn on_progress(&self, _event: ExportProgressEvent) -> Result<(), ProgressFailure> {
+            Ok(())
+        }
     }
 
     /// A file of the repository's `tests/`, or of `ALPHA2_TESTS_DIR` where a device runs the
@@ -646,6 +682,41 @@ mod tests {
             video_decode: VideoDecodeMode::Auto,
             video_frames: VideoFrameMode::Auto,
         })
+    }
+
+    #[test]
+    fn a_cancel_ends_a_held_export_at_once() {
+        use std::time::{Duration, Instant};
+
+        let engine = cpu();
+        engine.pause();
+        let request = ExportRequest {
+            project_json: project(),
+            output_path: std::env::temp_dir()
+                .join("alpha2-held-cancel.mp4")
+                .to_string_lossy()
+                .into_owned(),
+            ..ExportRequest::default()
+        };
+        let handle = engine.export(request, Arc::new(Quiet)).expect("started");
+        let until = Instant::now() + Duration::from_secs(10);
+        while !handle.is_held() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(handle.is_held());
+        let cancelled = Instant::now();
+        handle.cancel();
+        let (done, outcome) = std::sync::mpsc::channel();
+        let waiting = Arc::clone(&handle);
+        std::thread::spawn(move || {
+            let _ = done.send(pollster::block_on(waiting.outcome()));
+        });
+        let outcome = outcome
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the held export ended");
+        let took = cancelled.elapsed();
+        assert!(matches!(outcome, Err(Alpha2Error::Aborted)), "{outcome:?}");
+        assert!(took < Duration::from_millis(50), "{took:?}");
     }
 
     #[test]
@@ -779,6 +850,260 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len();
         assert_eq!(held, 1, "ended work's budget is let go");
+    }
+
+    /// A backend whose export panics.
+    struct Panics;
+
+    impl Platform for Panics {
+        fn media_capabilities(&self) -> Value {
+            Value::Null
+        }
+
+        fn conform(&self, _request: &ConformRequest) -> Result<Value, Alpha2Error> {
+            Ok(Value::Null)
+        }
+
+        fn export(&self, _job: ExportJob) -> Result<ExportOutcome, Alpha2Error> {
+            panic!("the backend broke");
+        }
+    }
+
+    #[test]
+    fn a_panicking_export_settles_its_outcome_as_internal() {
+        let engine = Alpha2::with_platform(EngineConfig::default(), Arc::new(Panics));
+        let request = ExportRequest {
+            project_json: project(),
+            output_path: "unused.mp4".into(),
+            ..ExportRequest::default()
+        };
+        let handle = engine.export(request, Arc::new(Quiet)).expect("started");
+        let (done, wait) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(pollster::block_on(handle.outcome()));
+        });
+        let outcome = wait
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the outcome settles");
+        match outcome {
+            Err(Alpha2Error::Failed { code, reason }) => {
+                assert_eq!(code, "INTERNAL");
+                assert!(reason.contains("the backend broke"), "{reason}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Encodes each frame into a one-byte packet at once and decodes nothing.
+    mod fake_media {
+        use alpha2_container::TrackInfo;
+        use alpha2_host_core::encode::{
+            AudioEncodeBackend, AudioEncodeConfig, AudioEncoders, EncodePoll, EncodedPacket,
+            PlaneBuffer, VideoEncodeBackend, VideoEncodeConfig, VideoEncoders,
+        };
+        use alpha2_host_core::rate_control::AppliedRateControl;
+        use alpha2_host_core::video_stream::{
+            BackendError, BackendKind, Submit, VideoBackends, VideoDecodeBackend,
+        };
+        use alpha2_media::EncodeError;
+        use bytes::Bytes;
+
+        pub struct Media;
+
+        impl VideoBackends for Media {
+            fn open(
+                &self,
+                _track: &TrackInfo,
+                _kind: BackendKind,
+            ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
+                Err(BackendError::Unsupported("no decoders".into()))
+            }
+        }
+
+        impl alpha2_host_core::audio_stream::AudioBackends for Media {
+            fn open(
+                &self,
+                _track: &TrackInfo,
+            ) -> Result<Box<dyn alpha2_host_core::audio_stream::AudioDecodeBackend>, BackendError>
+            {
+                Err(BackendError::Unsupported("no decoders".into()))
+            }
+        }
+
+        impl AudioEncoders for Media {
+            fn open(
+                &self,
+                _config: &AudioEncodeConfig,
+            ) -> Result<Box<dyn AudioEncodeBackend>, EncodeError> {
+                Err(EncodeError::Adapter("no audio encoder".into()))
+            }
+        }
+
+        impl VideoEncoders for Media {
+            fn open(
+                &self,
+                _config: &VideoEncodeConfig,
+            ) -> Result<Box<dyn VideoEncodeBackend>, EncodeError> {
+                Ok(Box::new(Video::default()))
+            }
+        }
+
+        #[derive(Default)]
+        struct Video {
+            queued: std::collections::VecDeque<i64>,
+            ended: bool,
+            given: bool,
+        }
+
+        impl VideoEncodeBackend for Video {
+            fn name(&self) -> &'static str {
+                "fake"
+            }
+
+            fn hardware(&self) -> bool {
+                false
+            }
+
+            fn timescale(&self) -> u32 {
+                90_000
+            }
+
+            fn submit(
+                &mut self,
+                pts: i64,
+                _planes: &[PlaneBuffer],
+                _keyframe: bool,
+            ) -> Result<Submit, EncodeError> {
+                self.queued.push_back(pts);
+                Ok(Submit::Accepted)
+            }
+
+            fn receive(&mut self, _wait: bool) -> Result<EncodePoll, EncodeError> {
+                Ok(match self.queued.pop_front() {
+                    Some(pts) => {
+                        self.given = true;
+                        EncodePoll::Packet(EncodedPacket {
+                            pts,
+                            dts: pts,
+                            keyframe: true,
+                            data: Bytes::from_static(&[1]),
+                        })
+                    }
+                    None if self.ended => EncodePoll::Drained,
+                    None => EncodePoll::Pending,
+                })
+            }
+
+            fn finish_input(&mut self) -> Result<(), EncodeError> {
+                self.ended = true;
+                Ok(())
+            }
+
+            fn codec_private(&self) -> Option<Bytes> {
+                self.given.then(|| Bytes::from_static(&[1, 0, 0, 0]))
+            }
+
+            fn applied_rate_control(&self) -> AppliedRateControl {
+                AppliedRateControl::Bitrate
+            }
+        }
+    }
+
+    fn fake_media() -> Arc<Alpha2> {
+        let media = Arc::new(fake_media::Media);
+        let platform = crate::platform::MediaPlatform {
+            name: "test",
+            media: crate::export::MediaBackends {
+                video_decoders: media.clone(),
+                audio_decoders: media.clone(),
+                video_encoders: media.clone(),
+                audio_encoders: media,
+            },
+            video_codecs: Vec::new,
+            audio_codecs: Vec::new,
+        };
+        let engine = Alpha2::with_platform(
+            EngineConfig {
+                renderer: RendererMode::Cpu,
+                ..EngineConfig::default()
+            },
+            Arc::new(platform),
+        );
+        engine
+            .set_fonts(vec![FontFile {
+                bytes: std::fs::read(tests_file("fonts/Alpha2Fixture.ttf")).expect("font"),
+                face_index: 0,
+            }])
+            .expect("fonts");
+        engine
+    }
+
+    /// Fails the report of frame `at`, counting from 1.
+    struct FailsAt(u64);
+
+    impl ExportProgress for FailsAt {
+        fn on_progress(&self, event: ExportProgressEvent) -> Result<(), ProgressFailure> {
+            if event.frames_done == self.0.min(event.frames_total) {
+                return Err(ProgressFailure::Failed {
+                    reason: "the app broke".into(),
+                });
+            }
+            Ok(())
+        }
+    }
+
+    fn export_with(
+        progress: Arc<dyn ExportProgress>,
+        name: &str,
+    ) -> (PathBuf, Result<ExportOutcome, Alpha2Error>) {
+        let output =
+            std::env::temp_dir().join(format!("alpha2-mobile-{}-{name}.mkv", std::process::id()));
+        let _ = std::fs::remove_file(&output);
+        let request = ExportRequest {
+            project_json: project(),
+            assets: HashMap::from([(
+                "still".to_owned(),
+                tests_file("corpus/parity-image.png")
+                    .to_string_lossy()
+                    .into_owned(),
+            )]),
+            output_path: output.to_string_lossy().into_owned(),
+            video_codec: Some("vp9".into()),
+            ..ExportRequest::default()
+        };
+        let handle = fake_media().export(request, progress).expect("started");
+        let (done, wait) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(pollster::block_on(handle.outcome()));
+        });
+        let outcome = wait
+            .recv_timeout(std::time::Duration::from_secs(120))
+            .expect("the outcome settles");
+        (output, outcome)
+    }
+
+    #[test]
+    fn an_export_with_a_quiet_callback_publishes_its_file() {
+        let (output, outcome) = export_with(Arc::new(Quiet), "quiet");
+        outcome.expect("exported");
+        assert!(output.exists());
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn a_failing_progress_callback_fails_the_export_and_publishes_nothing() {
+        for (at, name) in [(1, "first"), (u64::MAX, "last")] {
+            let (output, outcome) = export_with(Arc::new(FailsAt(at)), name);
+            match outcome {
+                Err(Alpha2Error::Failed { code, reason }) => {
+                    assert_eq!(code, "PROGRESS_CALLBACK_FAILED", "{name}");
+                    assert!(reason.contains("progress callback"), "{reason}");
+                    assert!(reason.contains("the app broke"), "{reason}");
+                }
+                other => panic!("{name}: {other:?}"),
+            }
+            assert!(!output.exists(), "{name}: no file is published");
+        }
     }
 
     #[test]

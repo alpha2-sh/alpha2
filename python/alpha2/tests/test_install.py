@@ -244,6 +244,20 @@ def test_musl_and_old_glibc_are_refused_before_any_download_naming_the_floor(
     assert not cache.exists()
 
 
+def test_the_openh264_pins_are_the_ones_the_manifest_names() -> None:
+    manifest = tomllib.loads((ROOT / "release" / "openh264" / "manifest.toml").read_text("utf-8"))
+    assert manifest["version"] == install_module.OPENH264_VERSION
+    assert manifest["notice"] == install_module.OPENH264_NOTICE
+    assert manifest["download_url"] == install_module.OPENH264_DOWNLOAD_URL
+    assert manifest["license_url"] == install_module.OPENH264_LICENSE_URL
+    assert install_module._OPENH264_TARGETS == {
+        target: install_module._OpenH264Archive(
+            entry["archive"], entry["archive_sha256"], entry["library"], entry["library_sha256"]
+        )
+        for target, entry in manifest["targets"].items()
+    }
+
+
 def test_the_glibc_floor_is_the_minimum_os_the_ffmpeg_lock_file_names_for_linux() -> None:
     lock = tomllib.loads((ROOT / "release" / "ffmpeg-lgpl" / "manifest.toml").read_text("utf-8"))
     floors = {
@@ -282,7 +296,7 @@ def test_store_python_warns_that_the_cache_is_private(
     assert main(["install"]) == 0
     err = capsys.readouterr().err
     assert (
-        "alpha2 install: this is the Microsoft Store Python: Windows keeps what it writes under "
+        "python -m alpha2 install: this is the Microsoft Store Python: Windows keeps what it writes under "
         "%LOCALAPPDATA% private to it, so other alpha2 clients will not see this install; set "
         "ALPHA2_HOST_CACHE_DIR to a folder outside %LOCALAPPDATA% to share it"
     ) in err

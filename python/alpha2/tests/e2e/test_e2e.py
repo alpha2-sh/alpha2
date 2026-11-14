@@ -119,6 +119,57 @@ def assert_declared_performance(performance: dict[str, Any], path: str) -> None:
         assert set(submissions) == {"frames", "splitFrames", "maxPerFrame", "maxPredictedMs"}
 
 
+def test_an_openh264_installed_into_the_clients_cache_reaches_the_next_capabilities_and_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import http.server
+
+    import alpha2
+
+    archive_path = os.environ.get("ALPHA2_TEST_OPENH264_ARCHIVE", "").strip()
+    if not archive_path:
+        require_or_skip("openh264", "ALPHA2_TEST_OPENH264_ARCHIVE names no Cisco .bz2 file")
+    archive = Path(archive_path).read_bytes()
+    name = Path(archive_path).name
+
+    class Mirror(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            found = self.path == f"/{name}"
+            self.send_response(200 if found else 404)
+            self.send_header("Content-Length", str(len(archive) if found else 0))
+            self.end_headers()
+            if found:
+                self.wfile.write(archive)
+
+        def log_message(self, *_: Any) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Mirror)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    # Only the cache this client names may hold the library.
+    monkeypatch.delenv("ALPHA2_OPENH264_LIBRARY", raising=False)
+    cache = tmp_path / "cache"
+    local = HostClient(host_path=HOST, cache_directory=cache, renderer="cpu")
+    try:
+        before = local.capabilities()["capabilities"]["encode"]["openh264"]
+        assert before["status"] != "available"
+        installed = alpha2.install_openh264(
+            cache_directory=cache, download_url=f"http://127.0.0.1:{server.server_address[1]}"
+        )
+        assert installed.downloaded
+        openh264 = local.capabilities()["capabilities"]["encode"]["openh264"]
+        assert openh264["status"] == "available", openh264
+        output = tmp_path / "out.mp4"
+        result = local.export(
+            **image_export(output, video_codec="h264", video_encoder=openh264["encoder"])
+        )
+        assert result["videoEncoder"] == openh264["encoder"]
+        assert output.stat().st_size > 0
+    finally:
+        local.close()
+        server.shutdown()
+
+
 def test_the_client_reports_the_hosts_encode_capabilities(client: HostClient) -> None:
     capabilities = client.capabilities()
     assert capabilities["status"] == "ready"
@@ -1115,6 +1166,6 @@ def test_a_project_file_in_cp949_is_invalid_input(tmp_path: Path) -> None:
         assert run.returncode == 1, run.stderr
         assert "Traceback" not in run.stderr
         assert (
-            f"alpha2 {command}: INVALID_INPUT: project file {project} is not UTF-8 text "
+            f"python -m alpha2 {command}: INVALID_INPUT: project file {project} is not UTF-8 text "
             "(invalid byte at offset 10); save it as UTF-8"
         ) in run.stderr

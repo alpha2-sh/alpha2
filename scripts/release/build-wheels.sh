@@ -13,9 +13,17 @@ out=$(cd "$out" && pwd)
 
 uv run --no-project --python 3.12 "$workspace/python/alpha2-host/build_wheel.py" "$archive" "$out"
 
+# The alpha2 wheel's license files (pyproject.toml lists them); maturin skips a missing one.
+package="$workspace/python/alpha2"
+trap 'rm -f "$package/rust-crate-licenses.md" "$package/THIRD_PARTY_NOTICES.md"' EXIT
+rust_target=${CARGO_BUILD_TARGET:-$(rustc -vV | sed -n 's/^host: //p')}
+node "$workspace/scripts/crate-licenses.mjs" --target "$rust_target" \
+  --out "$package/rust-crate-licenses.md" alpha2-python
+cp "$workspace/THIRD_PARTY_NOTICES.md" "$package/THIRD_PARTY_NOTICES.md"
+
 # Run from the package directory; a bare --manifest-path would skip pyproject.toml.
 maturin_args=(build --release --out "$out")
-(cd "$workspace/python/alpha2" && uvx maturin@1.15.0 "${maturin_args[@]}")
+(cd "$package" && uvx maturin@1.15.0 "${maturin_args[@]}")
 ls -l "$out"
 
 uv venv --python 3.11 "$venv"
@@ -31,3 +39,10 @@ found = alpha2.resolve_host_binary()
 assert found == pathlib.Path(alpha2_host.host_path()), found
 print(found)')
 { "$host" 2>&1 || true; } | grep "usage: alpha2-host"
+"$python" - "$out"/alpha2-*.whl <<'PY'
+import sys, zipfile
+for wheel in sys.argv[1:]:
+    names = zipfile.ZipFile(wheel).namelist()
+    for notice in ("LICENSE.md", "THIRD_PARTY_NOTICES.md", "rust-crate-licenses.md"):
+        assert any(n.endswith(f".dist-info/licenses/{notice}") for n in names), (wheel, notice)
+PY

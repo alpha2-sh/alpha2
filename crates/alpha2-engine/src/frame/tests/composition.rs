@@ -584,9 +584,13 @@ fn an_unconnected_named_input_makes_the_composition_incomplete() {
         effect_node("fx", "test.multiply-map", "clip", r#"{ "map": null }"#)
     );
     let project = project(&nodes, "fx", "", "");
+    // An export over the whole timeline finds it before its first frame, with the frame's error.
+    let whole = alpha2_time::TimeRange::new(MediaTime::ZERO, MediaTime(i64::MAX)).expect("range");
+    let before = project.plan_errors(whole);
     let error = project
         .evaluate(MediaTime(90_000))
         .expect_err("the map is needed");
+    assert_eq!(before, std::slice::from_ref(&error));
     assert_eq!(
         crate::ErrorCode::of(&error),
         Some(crate::ErrorCode::IncompleteComposition)
@@ -601,6 +605,54 @@ fn an_unconnected_named_input_makes_the_composition_incomplete() {
         ),
         other => panic!("expected an incomplete composition, got {other:?}"),
     }
+}
+
+#[test]
+fn an_export_whose_late_composition_cannot_draw_fails_before_its_first_frame() {
+    use crate::{EngineError, ErrorCode, Exporter, QualityProfile};
+    use alpha2_time::{FrameRate, TimeRange};
+    let nodes = format!(
+        r#"{{ "id": "clip", "op": {{ "type": "clip" }} }}, {}"#,
+        effect_node("fx", "test.multiply-map", "clip", r#"{ "map": null }"#)
+    );
+    let project = project(&nodes, "fx", "", "");
+    let rate = FrameRate::new(30, 1).expect("rate");
+    let export = |project: &EngineProject, start, end| {
+        Exporter::new(
+            project,
+            TimeRange::new(MediaTime(start), MediaTime(end)).expect("range"),
+            rate,
+            QualityProfile::export(),
+            alpha2_media::VideoCodec::H264,
+        )
+    };
+    // Frame 0 draws nothing; the clip's first frame, at 60000, is the one that fails.
+    let error = export(&project, 0, 180_000).expect_err("refused before frame 0");
+    let frame: EngineError = project
+        .evaluate(MediaTime(60_000))
+        .expect_err("the clip's first frame fails")
+        .into();
+    assert_eq!(error.to_string(), frame.to_string());
+    assert_eq!(
+        ErrorCode::of(&error),
+        Some(ErrorCode::IncompleteComposition)
+    );
+    let exporter = export(&project, 0, 60_000).expect("the clip is after the range");
+    assert_eq!(exporter.progress().total, 15);
+    assert!(exporter.prefetch_needs(&project, 1).is_ok());
+    // A clip that lies between two frame times is never drawn, so it fails nothing.
+    let mut between = project.project().clone();
+    let clip = &mut between.timeline.tracks[0].clips[0];
+    clip.timeline_range = TimeRange::new(MediaTime(60_001), MediaTime(63_999)).expect("range");
+    clip.source_range = TimeRange::new(MediaTime::ZERO, MediaTime(3_998)).expect("range");
+    let between = EngineProject::new(between).expect("indexed");
+    assert_eq!(
+        between
+            .plan_errors(TimeRange::new(MediaTime::ZERO, MediaTime(180_000)).expect("range"))
+            .len(),
+        1
+    );
+    export(&between, 0, 180_000).expect("no frame shows the clip");
 }
 
 #[test]

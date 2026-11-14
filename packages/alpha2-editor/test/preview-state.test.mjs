@@ -122,7 +122,7 @@ async function session({
       async stage(file, signal, options) {
         if (options?.fingerprint === false) {
           counts.proxyStages += 1;
-          if (stageProxy) return stageProxy(file);
+          if (stageProxy) return stageProxy(file, signal);
         }
         return {
           runtime: {
@@ -423,7 +423,78 @@ test(
 );
 
 test(
-  "a kept proxy the runtime has no room for is reported, and preview draws the rest",
+  "Play whose audio start fails plays the picture silent and reports it once",
+  { skip },
+  async (t) => {
+    const { editor, bridge, reported } = await session();
+    addColor(editor);
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(await bridge.seek(0), true);
+    globalThis.stubEngine.audible = () => true;
+    t.after(() => delete globalThis.stubEngine.audible);
+    const mixer = globalThis.stubEngine.mixers.at(-1);
+    let stopped = 0;
+    const stop = mixer.stop.bind(mixer);
+    mixer.stop = () => {
+      stopped += 1;
+      stop();
+    };
+    mixer.resume = async () => {};
+    mixer.start = async () => {
+      throw new Error("the worklet could not start");
+    };
+    const before = stopped;
+    await bridge.play();
+    assert.equal(bridge.playing, true);
+    assert.ok(stopped > before, "the failed start is stopped");
+    assert.deepEqual(
+      reported.map((e) => [e.code, e.cause?.message]),
+      [["audio_unavailable", "the worklet could not start"]],
+    );
+    const at = bridge.tick;
+    await settle(60);
+    assert.ok(bridge.tick > at, "the picture plays on the wall clock");
+    bridge.pause();
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "a kept proxy whose staging never settles does not hold up disposal",
+  { skip },
+  async () => {
+    const { editor, bridge } = await session({
+      kept: { [hash("e")]: keptProxy(hash("e")) },
+      stageProxy: (file, signal) =>
+        new Promise((resolve, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          }),
+        ),
+    });
+    addColor(editor);
+    await importClip(bridge, "clip", "e");
+    ok(
+      editor.dispatch({
+        type: "asset.put",
+        asset: { ...editor.document.assets.clip, missing: true },
+      }),
+    );
+    const binding = bridge.bindPreview(new FakeCanvas(64, 36));
+    binding.catch(() => {});
+    await settle(20);
+    const disposed = await Promise.race([
+      bridge.dispose().then(() => "disposed"),
+      settle(2000).then(() => "pending"),
+    ]);
+    assert.equal(disposed, "disposed");
+    editor.dispose();
+  },
+);
+
+test(
+  "a kept proxy adopts when imported media fill the runtime limit",
   { skip },
   async () => {
     const { editor, bridge, reported } = await session({
@@ -454,17 +525,15 @@ test(
     await bridge.bindPreview(new FakeCanvas(64, 36));
     assert.equal(await bridge.seek(0), true);
     assert.ok(await bridge.conform("preview"));
-    assert.deepEqual(
-      reported.map((e) => [e.code, e.entityId, e.cause?.code]),
-      [["proxy_unavailable", "clip", "resource_budget"]],
-    );
+    assert.deepEqual(reported, []);
+    assert.equal(bridge.proxyStatus("clip").available, true);
     await bridge.dispose();
     editor.dispose();
   },
 );
 
 test(
-  "proxy preview of more sources than the runtime holds reads the originals of the rest",
+  "proxy preview of more sources than the runtime limit reads every proxy",
   { skip },
   async () => {
     const sha = (n) => n.toString(16).padStart(64, "0");
@@ -485,17 +554,12 @@ test(
     bridge.setPreviewMedia("proxies");
     assert.equal(await bridge.seek(0), true);
     assert.equal(bridge.proxyStatus("f1").reading, "proxy");
-    assert.equal(bridge.proxyStatus(`f${count}`).reading, "original");
-    const refused = reported.map((e) => e.entityId);
-    assert.ok(refused.length > 0);
-    assert.ok(reported.every((e) => e.code === "proxy_unavailable"));
-    assert.equal(new Set(refused).size, refused.length, "once per proxy");
-    assert.ok(refused.includes(`f${count}`));
-    const staged = counts.proxyStages;
+    assert.equal(bridge.proxyStatus(`f${count}`).reading, "proxy");
+    assert.equal(counts.proxyStages, count);
+    assert.deepEqual(reported, []);
     ok(editor.dispatch({ type: "project.update", patch: { name: "edited" } }));
     assert.equal(await bridge.seek(4000), true);
-    assert.equal(counts.proxyStages, staged);
-    assert.equal(reported.length, refused.length);
+    assert.equal(counts.proxyStages, count);
     await bridge.dispose();
     editor.dispose();
   },

@@ -108,7 +108,11 @@ fn chunks(input: &mut Input) -> Result<(Format, Data), DemuxError> {
         let body = pos + 8;
         let mut next = body + size;
         if &tag == b"fmt " && format.is_none() {
-            let bytes = input.peek(body, usize::try_from(size).unwrap_or(usize::MAX))?;
+            // A format is tens of bytes; more is never read.
+            let bytes = input.peek(
+                body,
+                usize::try_from(size).unwrap_or(usize::MAX).min(1 << 16),
+            )?;
             format = Some(parse_format(bytes)?);
         } else if &tag == b"data" {
             if size == 0 || size == 0xffff_ffff {

@@ -159,10 +159,19 @@ fn ids_must_be_unique_and_short() {
 fn too_many_sets_are_refused() {
     let sets = (0..=crate::MAX_DATA_SETS)
         .map(|index| scalars(&format!("s{index}"), &timeline()))
-        .collect();
+        .collect::<Vec<_>>();
     assert!(matches!(
-        model_error(&with_data(sets)),
-        ModelError::TooManyDataSets { .. }
+        Project::from_json(&with_data(sets.clone()).to_string()),
+        Err(crate::ProjectLoadError::Json(_))
+    ));
+    let mut project =
+        Project::from_json(&with_data(sets[1..].to_vec()).to_string()).expect("at the limit");
+    project
+        .data
+        .push(serde_json::from_value(sets[0].clone()).expect("set"));
+    assert!(matches!(
+        project.validate(),
+        Err(ModelError::TooManyDataSets { .. })
     ));
 }
 
@@ -199,16 +208,25 @@ fn channels_are_counted_and_named() {
         data_problem(&with_data(vec![set])),
         DataProblem::ChannelName
     );
-    let too_many = (0..=crate::MAX_DATA_CHANNELS)
+    let all = (0..crate::MAX_DATA_CHANNELS)
         .map(|index| format!("c{index}"))
         .collect::<Vec<_>>();
     let mut set = scalars("s", &timeline());
-    set["values"] = json!(vec![0.0; too_many.len() * 3]);
-    set["channels"] = json!(too_many);
-    assert_eq!(
-        data_problem(&with_data(vec![set])),
-        DataProblem::ChannelCount
-    );
+    set["values"] = json!(vec![0.0; all.len() * 3]);
+    set["channels"] = json!(all);
+    let mut project = Project::from_json(&with_data(vec![set]).to_string()).expect("at the limit");
+    let crate::DataValues::Scalars(samples) = &mut project.data[0].values else {
+        panic!("scalars");
+    };
+    samples.channels.push("one-more".to_owned());
+    samples.values.extend([Some(0.0); 3]);
+    assert!(matches!(
+        project.validate(),
+        Err(ModelError::InvalidDataSet {
+            problem: DataProblem::ChannelCount,
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -232,9 +250,32 @@ fn times_ascend_from_zero_within_the_source() {
         data_problem(&with_data(vec![set])),
         DataProblem::NegativeTime
     );
+}
+
+#[test]
+fn a_time_past_the_recorded_duration_is_stale_data_not_an_error() {
+    let stale = |project: &Project| {
+        project
+            .lint()
+            .into_iter()
+            .filter(|issue| matches!(issue, crate::LintIssue::StaleData { .. }))
+            .collect::<Vec<_>>()
+    };
     let mut project = with_data(vec![scalars("s", &source("music"))]);
+    project["sources"][1]["fingerprint"] = json!({ "duration_ticks": 8008 });
+    assert_eq!(
+        stale(&load(&project).expect("within the duration")),
+        Vec::new()
+    );
     project["sources"][1]["fingerprint"] = json!({ "duration_ticks": 5000 });
-    assert_eq!(data_problem(&project), DataProblem::PastSourceEnd);
+    let shorter = load(&project).expect("a shorter recorded duration still loads");
+    assert_eq!(
+        stale(&shorter),
+        vec![crate::LintIssue::StaleData {
+            data: crate::DataSetId::new("s".to_owned()).expect("id"),
+            source: alpha2_media::SourceId::new("music".to_owned()).expect("id"),
+        }]
+    );
 }
 
 #[test]
@@ -721,7 +762,7 @@ fn stale_data_is_reported_by_the_hosts_comparison() {
 
 #[cfg(feature = "schema")]
 mod schema {
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     /// Every place whose schema holds a data-accepting value, as `Def.property` (enum variants as
     /// `Def[tag].property`), with the clock it is on. "holder" means the clock depends on what
@@ -940,6 +981,105 @@ mod schema {
         assert_eq!(
             found, classified,
             "a data-accepting value is not classified by its clock"
+        );
+    }
+
+    /// A project holding every value keyed in timeline time: all mask outlines, a transition
+    /// parameter, buses and a matte. Built without validation; only its shape matters.
+    fn every_timeline_place() -> crate::Project {
+        let mut project = crate::tests::project();
+        let constant = |value: Value| json!({ "mode": "constant", "value": value });
+        let point = constant(json!({ "x": 0.5, "y": 0.5 }));
+        let number = constant(json!(1.0));
+        let masks = [
+            json!({ "type": "rectangle", "center": point, "size": point }),
+            json!({ "type": "ellipse", "center": point, "size": point }),
+            json!({ "type": "polystar", "kind": "star", "center": point, "points": number,
+                    "outer_radius": number }),
+            json!({ "type": "path", "path": constant(json!({ "subpaths": [] })) }),
+        ];
+        let mut clip = project.timeline.tracks[0].clips[0].clone();
+        clip.masks = masks
+            .into_iter()
+            .map(|shape| serde_json::from_value(json!({ "shape": shape })).expect("mask"))
+            .collect();
+        clip.matte = Some(crate::Matte {
+            source: clip.id.clone(),
+            mode: crate::MatteMode::Alpha,
+        });
+        let transition = serde_json::from_value(json!({
+            "from_clip": clip.id, "to_clip": clip.id,
+            "timeline_range": { "start": 0, "end": 1 }, "easing": { "type": "linear" },
+            "effect": { "id": "alpha2.transition.angular", "version": 1,
+                        "params": { "starting_angle": constant(json!({ "type": "float", "value": 0.0 })) } }
+        }))
+        .expect("transition");
+        project.timeline.tracks[0].clips = vec![clip];
+        project.timeline.tracks[0].transitions = vec![transition];
+        project
+    }
+
+    #[test]
+    fn the_timeline_walker_visits_every_timeline_clock_place() {
+        let mut project = every_timeline_place();
+        let mut visited = std::collections::BTreeSet::new();
+        project.for_each_timeline_value_mut(&mut |_, at, _| {
+            visited.insert(at);
+        });
+        // Paths carry keyframes in timeline time but take no data, so the table omits them.
+        assert!(visited.remove("ShapeGeometry[path].path"));
+        let timeline = CLASSIFIED
+            .iter()
+            .filter(|(_, clock)| clock.contains("timeline"))
+            .map(|(place, _)| *place)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            visited, timeline,
+            "the walker and the table disagree on timeline-clock places"
+        );
+    }
+
+    #[test]
+    fn the_reference_walker_visits_mattes_transition_clips_and_bindings() {
+        use crate::ClipReference::{Matte, TransitionFrom, TransitionTo, Via};
+        use crate::TimelineValue;
+        let mut project = every_timeline_place();
+        let through = || {
+            crate::Animated::<f32>::Data(Box::new(
+                serde_json::from_value(
+                    json!({ "data": "d", "channel": "c", "via": { "clip": "x" } }),
+                )
+                .expect("binding"),
+            ))
+        };
+        project.timeline.tracks[0].clips[0].visual.opacity = through();
+        project.timeline.tracks[0].audio.pan = through();
+        project.audio.gain = through();
+        let mut references = Vec::new();
+        project.for_each_clip_reference_mut(&mut |owner, kind, clip| {
+            let owner = match owner {
+                crate::TimelineOwner::Clip { .. } => "clip",
+                crate::TimelineOwner::Transition { .. } => "transition",
+                crate::TimelineOwner::Track { .. } => "track",
+                crate::TimelineOwner::Master => "master",
+            };
+            references.push((owner, kind));
+            *clip = crate::ClipId::new("renamed").expect("id");
+        });
+        assert_eq!(
+            references,
+            vec![
+                ("clip", Matte),
+                ("clip", Via),
+                ("transition", TransitionFrom),
+                ("transition", TransitionTo),
+                ("track", Via),
+                ("master", Via),
+            ]
+        );
+        assert_eq!(
+            project.audio.gain.via_clip().map(crate::ClipId::as_str),
+            Some("renamed")
         );
     }
 

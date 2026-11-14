@@ -39,6 +39,7 @@ pub(crate) fn convert_video_frame(
             u32::try_from(frame.crop_top.saturating_add(frame.crop_bottom)).unwrap_or(0),
         ),
     };
+    check_frame_size(width, height)?;
     // YCbCr layouts the renderer samples go as planes (shared when fully written, else copied); the
     // GPU applies subsampling, depth, crop, rotation and aspect ratio.
     if let Some(planes) = frame.yuv_planes().map_err(adapter_error)? {
@@ -71,14 +72,6 @@ pub(crate) fn convert_video_frame(
                 })
                 .collect(),
         });
-    }
-    // Converting allocates a whole frame, so refuse unsupported sizes first.
-    if !alpha2_media::frame_size_supported(width, height) {
-        return Err(DecodeError::Unsupported(format!(
-            "a {width}x{height} frame is larger than {} pixels or {} on a side",
-            alpha2_media::MAX_FRAME_PIXELS,
-            alpha2_media::MAX_FRAME_DIMENSION
-        )));
     }
     let (pixel_format, planes, color) = if converts_like_rgba8(color) {
         (
@@ -300,7 +293,8 @@ fn packed_len(width: u32, height: u32, sample_bytes: usize) -> Result<usize, Dec
 /// Where the chroma of a `codec` stream or frame sits, given what `FFmpeg` reports.
 ///
 /// H.264 infers location type 0 (left) when the SPS declares none (E.2.1), but `FFmpeg` reports
-/// unspecified, which the renderer would sample centred. HEVC already reports left.
+/// unspecified, which the renderer samples centred for 4:2:0. HEVC 4:2:0 already reports left;
+/// unspecified 4:2:2 and 4:1:1 the renderer reads as left by itself.
 pub(crate) fn decoded_chroma_location(
     codec: ffi::AVCodecID,
     location: ffi::AVChromaLocation,
@@ -716,13 +710,37 @@ pub(crate) fn map_color(
 /// `flags=+unaligned` lets `FFmpeg` crop software frames exactly; without it a small left crop
 /// (under 64 columns of 8-bit 4:2:0) is dropped to keep planes aligned. Hardware frames keep their
 /// crop as the visible rectangle either way.
+/// Refuses a `width` x `height` frame larger than alpha2 renders.
+pub(crate) fn check_frame_size(width: u32, height: u32) -> Result<(), DecodeError> {
+    if alpha2_media::frame_size_supported(width, height) {
+        return Ok(());
+    }
+    Err(DecodeError::Unsupported(format!(
+        "a {width}x{height} frame is larger than {} pixels or {} on a side",
+        alpha2_media::MAX_FRAME_PIXELS,
+        alpha2_media::MAX_FRAME_DIMENSION
+    )))
+}
+
+/// `max_pixels` makes the decoder refuse a picture larger than alpha2 renders before allocating
+/// it, for sizes only the bitstream states and for a size change mid-stream.
 pub(crate) fn video_decoder_options(threads: i64) -> AVDictionary {
-    AVDictionary::new_int(c"threads", threads, 0).set(c"flags", c"+unaligned", 0)
+    let max_pixels = i64::try_from(alpha2_media::MAX_FRAME_PIXELS).unwrap_or(i64::MAX);
+    AVDictionary::new_int(c"threads", threads, 0)
+        .set(c"flags", c"+unaligned", 0)
+        .set_int(c"max_pixels", max_pixels, 0)
 }
 
 /// The `FFmpeg` pixel format of `layout`.
-pub(crate) fn pixel_format(layout: alpha2_media::PixelLayout) -> ffi::AVPixelFormat {
-    match layout.ffmpeg_name() {
+pub(crate) fn pixel_format(
+    layout: alpha2_media::PixelLayout,
+) -> Result<ffi::AVPixelFormat, EncodeError> {
+    pixel_format_named(layout.ffmpeg_name())
+}
+
+pub(crate) fn pixel_format_named(name: &str) -> Result<ffi::AVPixelFormat, EncodeError> {
+    Ok(match name {
+        "yuv420p" => ffi::AV_PIX_FMT_YUV420P,
         "yuva420p" => ffi::AV_PIX_FMT_YUVA420P,
         "yuv420p10le" => ffi::AV_PIX_FMT_YUV420P10LE,
         "yuva420p10le" => ffi::AV_PIX_FMT_YUVA420P10LE,
@@ -735,22 +753,12 @@ pub(crate) fn pixel_format(layout: alpha2_media::PixelLayout) -> ffi::AVPixelFor
         "yuv444p10le" => ffi::AV_PIX_FMT_YUV444P10LE,
         "yuva444p10le" => ffi::AV_PIX_FMT_YUVA444P10LE,
         "p010le" => ffi::AV_PIX_FMT_P010LE,
-        _ => ffi::AV_PIX_FMT_YUV420P,
-    }
-}
-
-/// Visible bytes per row and rows of each plane of `layout`, in `FFmpeg`'s plane order.
-#[must_use]
-pub(crate) fn frame_planes(
-    layout: alpha2_media::PixelLayout,
-    width: u32,
-    height: u32,
-) -> Vec<(usize, usize)> {
-    layout
-        .planes(width, height)
-        .into_iter()
-        .map(|(plane_width, rows, bytes)| ((plane_width * bytes) as usize, rows as usize))
-        .collect()
+        _ => {
+            return Err(EncodeError::Adapter(format!(
+                "pixel layout {name} has no FFmpeg pixel format"
+            )));
+        }
+    })
 }
 
 /// A reusable encoder frame for `width` x `height` pictures of `layout`, its planes in
@@ -769,15 +777,10 @@ pub fn packed_frame(
         i32::try_from(height)
             .map_err(|_| alpha2_ffmpeg_bridge::BridgeError::InvalidInput("height"))?,
     );
-    if layout.is_yuv420p() {
-        return alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::new(coded_width, coded_height);
-    }
-    alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::with_format(
-        coded_width,
-        coded_height,
-        pixel_format(layout),
-        &frame_planes(layout, width, height),
-    )
+    let format = pixel_format(layout).map_err(|_| {
+        alpha2_ffmpeg_bridge::BridgeError::InvalidInput("pixel layout has no FFmpeg format")
+    })?;
+    alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::with_format(coded_width, coded_height, format)
 }
 
 pub(crate) fn prores_options(layout: alpha2_media::PixelLayout) -> Vec<(&'static CStr, String)> {

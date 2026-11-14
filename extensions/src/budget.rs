@@ -28,6 +28,10 @@ pub const DEFAULT_FRAME_BUDGET: usize = 256 * 1024 * 1024;
 /// image draw per render (an image reused through `<use>` counts twice); Lottie counts its assets
 /// once at open.
 pub const MAX_SOURCE_IMAGE_PIXELS: u64 = 4 * MAX_CANVAS_PIXELS;
+/// Most encoded raster bytes the images of one SVG source may hold, counting each copy usvg
+/// makes; shared bytes count once.
+#[cfg(feature = "svg")]
+pub(crate) const MAX_SOURCE_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Most canvases of blended fill one SVG render or Lottie frame may draw. A 1080p canvas of
 /// blended fill costs about 4 to 10 ms natively, so this is about 2 s. Opaque fills are not
@@ -35,10 +39,48 @@ pub const MAX_SOURCE_IMAGE_PIXELS: u64 = 4 * MAX_CANVAS_PIXELS;
 #[cfg(any(feature = "svg", feature = "lottie"))]
 pub(crate) const MAX_DRAWING: f64 = 256.0;
 
+/// Blended-fill pixels one pair of edges active in one device row costs tiny-skia's scan
+/// conversion, which inserts and sorts a row's edges: 0.26 ns natively against 2.07 ns a pixel.
+#[cfg(any(feature = "svg", feature = "lottie"))]
+const FILL_PAIR: f64 = 0.13;
+
+/// Blended-fill pixels one edge that is not horizontal costs to build and walk: 0.6 us natively
+/// in small shapes, 2 us in one long outline of tiny segments.
+#[cfg(any(feature = "svg", feature = "lottie"))]
+const FILL_SEGMENT: f64 = 400.0;
+
+/// Blended-fill pixels one dash costs: tiny-skia dashes the whole path before clipping (about
+/// 0.22 us a dash natively).
+#[cfg(any(feature = "svg", feature = "lottie"))]
+const DASH: f64 = 107.0;
+
+/// Most dashes tiny-skia makes of one path.
+#[cfg(any(feature = "svg", feature = "lottie"))]
+pub(crate) const MAX_DASHES: f64 = 1_000_000.0;
+
+/// What filling `segments` segments costs, in blended-fill pixels, where `row_pairs` is the sum
+/// over device rows of the square of the edges active in that row. A path whose rows are unknown
+/// counts all its edges in one row.
+#[cfg(any(feature = "svg", feature = "lottie"))]
+pub(crate) fn fill_geometry(row_pairs: f64, segments: f64) -> f64 {
+    row_pairs * FILL_PAIR + segments * FILL_SEGMENT
+}
+
+/// What making `dashes` dashes costs, in blended-fill pixels.
+#[cfg(any(feature = "svg", feature = "lottie"))]
+pub(crate) fn dash_geometry(dashes: f64) -> f64 {
+    dashes.min(MAX_DASHES) * DASH
+}
+
 /// Minimum canvas an SVG counts as for [`MAX_DRAWING`], since a small icon can still draw many
-/// blurs. Lottie uses its own canvas because all its layers are frame-sized.
-#[cfg(feature = "svg")]
+/// blurs. Lottie uses its own canvas for area because all its layers are frame-sized, and this
+/// one for geometry, whose cost does not shrink with the canvas.
+#[cfg(any(feature = "svg", feature = "lottie"))]
 pub(crate) const FLOOR_CANVAS: f64 = 1920.0 * 1080.0;
+
+/// Most intermediate pixels (layers, masks, tiles, filter results) held at once: 1 GiB of RGBA8.
+#[cfg(any(feature = "svg", feature = "lottie"))]
+pub(crate) const MAX_HELD_PIXELS: f64 = 268_435_456.0;
 
 /// Refuses a canvas larger than a provider opens.
 ///

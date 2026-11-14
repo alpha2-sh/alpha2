@@ -141,6 +141,7 @@ fn loaded(
         params.as_object().cloned().unwrap_or_default(),
         policy,
         &mut Local,
+        &CancelToken::default(),
     )
 }
 
@@ -365,11 +366,13 @@ fn a_file_that_is_not_the_pinned_one_is_refused() {
     );
     let mut short = manifest(0, true, false);
     short["artifacts"][0]["bytes"] = json!(3);
-    assert_eq!(
-        loaded(&short, &json!({}), &Policy::default())
-            .expect_err("refused")
-            .code,
-        codes::HASH_MISMATCH
+    let longer = loaded(&short, &json!({}), &Policy::default()).expect_err("refused");
+    assert_eq!(longer.code, codes::HASH_MISMATCH);
+    assert!(
+        longer
+            .message
+            .ends_with("is longer than the 3 bytes the manifest pins"),
+        "{longer}"
     );
     let mut resourced = manifest(1, true, false);
     let mut resource = entry(&built().wasm[0]);
@@ -528,7 +531,7 @@ fn manifests_of_other_abis_are_refused_by_code() {
         parse_manifest("{}").expect_err("invalid").code,
         codes::LOAD_FAILED
     );
-    assert_eq!(PLUGIN_CODES.len(), 10);
+    assert_eq!(PLUGIN_CODES.len(), 11);
     let digest: Descriptor = serde_json::from_value(descriptor_of(0)).expect("descriptor");
     assert_eq!(
         digest,
@@ -675,6 +678,7 @@ fn instantiated(module: &[u8], memory_bytes: u64) -> Result<wasm::WasmTransport,
         HashMap::new(),
         Vec::new(),
         &policy,
+        CancelToken::default(),
     )
 }
 
@@ -881,4 +885,310 @@ fn a_native_table_shorter_than_its_abi_or_with_a_null_entry_is_refused() {
     let refused = unsafe { native::checked(slots.as_ptr().cast()) }.expect_err("null entry");
     assert_eq!(refused.code, codes::LOAD_FAILED, "{refused}");
     assert!(refused.message.contains("null entry"), "{refused}");
+}
+
+/// Fetches from `built().dir` and counts the native libraries it is asked to prepare.
+#[derive(Default)]
+struct Counting {
+    prepared: usize,
+}
+
+impl Fetch for Counting {
+    fn fetch(&mut self, url: &str, sha256: &str, bytes: u64) -> Result<Fetched, PluginError> {
+        Local.fetch(url, sha256, bytes)
+    }
+
+    fn prepare_native(
+        &mut self,
+        verified: &Path,
+        _bytes: &[u8],
+        _sha256: &str,
+    ) -> Result<PathBuf, PluginError> {
+        self.prepared += 1;
+        Ok(verified.to_path_buf())
+    }
+}
+
+#[test]
+fn a_native_library_is_prepared_once_and_outlives_threads_it_left_running() {
+    let manifest = parse_manifest(&manifest(1, false, true).to_string()).expect("manifest");
+    let mut fetch = Counting::default();
+    let params = json!({ "park_thread": true }).as_object().cloned();
+    let mut first = load(
+        &manifest,
+        params.clone().unwrap_or_default(),
+        &native_allowed(),
+        &mut fetch,
+        &CancelToken::default(),
+    )
+    .expect("first load");
+    run(&mut first, &json!({ "park_thread": true })).expect("first run");
+    drop(first);
+    let after_first = fetch.prepared;
+    // Another test of this process may have loaded the library first.
+    assert!(after_first <= 1, "{after_first}");
+    let mut second = load(
+        &manifest,
+        params.unwrap_or_default(),
+        &native_allowed(),
+        &mut fetch,
+        &CancelToken::default(),
+    )
+    .expect("second load");
+    run(&mut second, &json!({})).expect("second run");
+    drop(second);
+    assert_eq!(fetch.prepared, after_first);
+    // The parked thread keeps running the library's code.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+}
+
+/// Fetches every file from one path.
+struct Bare(PathBuf);
+impl Fetch for Bare {
+    fn fetch(&mut self, _: &str, _: &str, _: u64) -> Result<Fetched, PluginError> {
+        Ok(Fetched {
+            path: self.0.clone(),
+            local: true,
+        })
+    }
+}
+
+/// Loads the native digest fixture named by its bare file name, from the working directory, as a
+/// child process started by the test below.
+#[test]
+#[ignore = "run as a child of a_native_library_named_without_a_directory_loads_the_checked_file"]
+fn load_a_native_library_by_bare_name() {
+    let Some(file) = std::env::var_os("ALPHA2_TEST_BARE_LIBRARY") else {
+        return;
+    };
+    let mut entry = json!({ "target": TARGET, "type": "cdylib", "url": "lib" });
+    let bytes = std::fs::read(&file).expect("library");
+    entry["sha256"] = json!(sha256_hex(&bytes));
+    entry["bytes"] = json!(bytes.len());
+    let descriptor = descriptor_of(0);
+    let manifest = json!({ "id": descriptor["id"], "version": "1.2.3", "abi": "alpha2-plugin/1",
+                           "kind": "extractor", "artifacts": [entry], "descriptor": descriptor });
+    let manifest = parse_manifest(&manifest.to_string()).expect("manifest");
+    let mut plugin = load(
+        &manifest,
+        serde_json::Map::new(),
+        &native_allowed(),
+        &mut Bare(PathBuf::from(file)),
+        &CancelToken::default(),
+    )
+    .expect("the checked library loads");
+    run(&mut plugin, &json!({})).expect("run");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_native_library_named_without_a_directory_loads_the_checked_file() {
+    let dir = scratch("bare-native");
+    let decoys = scratch("bare-native-decoy");
+    let name = built().native[0].file_name().expect("name").to_owned();
+    std::fs::copy(&built().native[0], dir.join(&name)).expect("library");
+    // A library of the same name on the search path, which a bare name would reach first.
+    std::fs::copy(&built().native[1], decoys.join(&name)).expect("decoy");
+    let search = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
+    let mut paths = vec![decoys.clone()];
+    paths.extend(std::env::split_paths(&search));
+    let output = Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "plugins::tests::load_a_native_library_by_bare_name",
+            "--ignored",
+            "--nocapture",
+        ])
+        .current_dir(&dir)
+        .env("ALPHA2_TEST_BARE_LIBRARY", &name)
+        .env(
+            "LD_LIBRARY_PATH",
+            std::env::join_paths(paths).expect("paths"),
+        )
+        .output()
+        .expect("child");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{}\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(&dir).expect("cleanup");
+    std::fs::remove_dir_all(&decoys).expect("cleanup");
+}
+
+#[test]
+fn a_cancel_stops_a_wasm_call_before_its_deadline_and_the_deadline_is_wall_clock() {
+    let manifest = manifest(1, true, false);
+    let cancel = CancelToken::default();
+    let params = json!({ "spin_at": 1 });
+    let policy = Policy {
+        call_deadline: std::time::Duration::from_secs(10),
+        ..Policy::default()
+    };
+    let mut plugin = load(
+        &parse_manifest(&manifest.to_string()).expect("manifest"),
+        params.as_object().cloned().unwrap_or_default(),
+        &policy,
+        &mut Local,
+        &cancel,
+    )
+    .expect("loads");
+    let started = std::time::Instant::now();
+    let failed = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            cancel.cancel();
+        });
+        run(&mut plugin, &params).expect_err("cancelled")
+    });
+    assert!(
+        matches!(&failed, alpha2_engine::extract::DriveError::Extractor(error)
+            if error.code == Some(CANCELLED)),
+        "{failed:?}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    let refused = load(
+        &parse_manifest(&manifest.to_string()).expect("manifest"),
+        serde_json::Map::new(),
+        &Policy::default(),
+        &mut Local,
+        &cancel,
+    )
+    .expect_err("cancelled before a file is read");
+    assert_eq!(refused.code, CANCELLED);
+}
+
+/// Runs the scripted fixture as wasm and as a native library with `params`.
+fn run_both(params: &Value) -> Vec<Result<Vec<DataSet>, alpha2_engine::extract::DriveError>> {
+    [Policy::default(), native_allowed()]
+        .iter()
+        .map(|policy| {
+            let manifest = manifest(1, true, true);
+            let mut plugin = loaded(&manifest, params, policy).expect("loads");
+            run(&mut plugin, params)
+        })
+        .collect()
+}
+
+/// Logs 100,000 lines through both transports, as a child of the tests below.
+#[test]
+#[ignore = "run as a child of the plugin log tests"]
+fn log_a_hundred_thousand_lines_through_both_transports() {
+    if std::env::var_os("ALPHA2_TEST_PLUGIN_LOG").is_none() {
+        return;
+    }
+    // The parent closes or drains standard error before this ends.
+    std::io::copy(&mut std::io::stdin(), &mut std::io::sink()).expect("read standard input");
+    let params = json!({ "log": { "text": "a plugin line", "lines": 100_000 } });
+    for outcome in run_both(&params) {
+        outcome.expect("the run ends");
+    }
+}
+
+/// Runs the logging child; `keep_stderr` reads its standard error, else it is closed first.
+#[cfg(unix)]
+fn logging_child(keep_stderr: bool) -> (std::process::ExitStatus, String, Vec<u8>) {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    let mut child = Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "plugins::tests::log_a_hundred_thousand_lines_through_both_transports",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("ALPHA2_TEST_PLUGIN_LOG", "1")
+        // The fixture build writes nothing to standard error then.
+        .env("CARGO_TERM_QUIET", "true")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("child");
+    let stderr = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if keep_stderr && let Some(mut stderr) = stderr {
+            stderr.read_to_end(&mut bytes).expect("stderr");
+        }
+        bytes
+    });
+    if !keep_stderr {
+        // The reader dropped its end; wait until it has.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("child");
+    let stderr = reader.join().expect("reader");
+    (
+        output.status,
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr,
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn a_plugin_logging_to_a_closed_standard_error_neither_panics_nor_aborts() {
+    let (status, stdout, _) = logging_child(false);
+    assert!(
+        status.success() && stdout.contains("1 passed"),
+        "{status}\n{stdout}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_run_writes_at_most_its_log_budget_and_one_notice() {
+    let (status, stdout, stderr) = logging_child(true);
+    assert!(status.success(), "{status}\n{stdout}");
+    let text = String::from_utf8_lossy(&stderr);
+    let notices = text.matches("further lines are dropped").count();
+    assert_eq!(notices, 2, "one notice per transport");
+    // Two runs, each at most the budget plus its line prefixes and one notice.
+    let lines = text.lines().count();
+    let budget = 2 * (LOG_BUDGET_BYTES + 100) + lines * "plugin: \n".len();
+    assert!(
+        stderr.len() <= budget,
+        "{} bytes, {lines} lines",
+        stderr.len()
+    );
+}
+
+#[test]
+fn a_long_fail_message_arrives_cut_to_its_bound() {
+    let message = format!(
+        "{}\u{e9}{}",
+        "x".repeat(MAX_FAIL_BYTES - 1),
+        "y".repeat(1 << 20)
+    );
+    let params = json!({ "fail_at": 1, "fail_message": message });
+    for outcome in run_both(&params) {
+        match outcome {
+            Err(alpha2_engine::extract::DriveError::Extractor(error)) => {
+                // The two-byte character the bound splits is dropped whole.
+                assert_eq!(error.message, "x".repeat(MAX_FAIL_BYTES - 1));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[test]
+fn bounded_text_cuts_at_a_character_boundary() {
+    assert_eq!(bounded_text("ab\u{e9}".as_bytes(), 3), "ab");
+    assert_eq!(bounded_text("ab\u{e9}".as_bytes(), 4), "ab\u{e9}");
+    assert_eq!(bounded_text(b"a\xffb", 8), "a\u{fffd}b");
+    let mut budget = LogBudget::default();
+    let line = vec![b'z'; MAX_LOG_BYTES * 2];
+    assert_eq!(
+        budget.line(&line).map(|line| line.len()),
+        Some(MAX_LOG_BYTES)
+    );
 }

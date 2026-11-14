@@ -343,3 +343,90 @@ fn the_android_api_level_comes_from_the_toolchain() {
         34
     );
 }
+
+/// The `include` directory of each SDK release under the SDK cache whose tag starts with
+/// `prefix`.
+fn cached_sdk_includes(prefix: &str) -> Vec<PathBuf> {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cache = std::env::var_os("ALPHA2_FFMPEG_CACHE")
+        .map_or_else(|| workspace.join("target/ffmpeg-sdk-cache"), PathBuf::from);
+    let Ok(releases) = std::fs::read_dir(&cache) else {
+        return Vec::new();
+    };
+    releases
+        .flatten()
+        .filter(|release| release.file_name().to_string_lossy().starts_with(prefix))
+        .filter_map(|release| std::fs::read_dir(release.path().join("sdk")).ok())
+        .flat_map(|targets| {
+            targets
+                .flatten()
+                .map(|target| target.path().join("include"))
+        })
+        .filter(|include| include.join("libavutil/version.h").is_file())
+        .collect()
+}
+
+/// Whether the shim version guard compiles against `include`, or `None` without a C compiler.
+fn guard_compiles(include: &std::path::Path) -> Option<bool> {
+    let source =
+        std::env::temp_dir().join(format!("alpha2-version-guard-{}.c", std::process::id()));
+    std::fs::write(&source, "#include \"alpha2_ffmpeg_version.h\"\n").expect("source");
+    let guard =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../alpha2-ffmpeg-bridge/include");
+    let compiler = std::env::var("CC").unwrap_or_else(|_| "cc".to_owned());
+    let status = std::process::Command::new(compiler)
+        .arg("-fsyntax-only")
+        .arg(format!(
+            "-DALPHA2_FFMPEG_AVUTIL_MAJOR={FFMPEG_AVUTIL_MAJOR}"
+        ))
+        .arg(format!(
+            "-DALPHA2_FFMPEG_AVCODEC_MAJOR={FFMPEG_AVCODEC_MAJOR}"
+        ))
+        .arg("-I")
+        .arg(guard)
+        .arg("-I")
+        .arg(include)
+        .arg(&source)
+        .stderr(std::process::Stdio::null())
+        .status();
+    std::fs::remove_file(&source).expect("cleanup");
+    status.ok().map(|status| status.success())
+}
+
+#[test]
+fn the_version_guard_refuses_ffmpeg_8_0_headers_and_takes_the_pinned_ones() {
+    let previous = cached_sdk_includes("ffmpeg-8.0.");
+    let Some(include) = previous.first() else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::PreviousFfmpegSdk,
+            "no FFmpeg 8.0 SDK in the SDK cache"
+        );
+        return;
+    };
+    let Some(compiled) = guard_compiles(include) else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::CCompiler,
+            "no C compiler for the version guard"
+        );
+        return;
+    };
+    assert!(!compiled, "{} passed the guard", include.display());
+    let manifest = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../release/ffmpeg-lgpl/manifest.toml"),
+    )
+    .expect("the pinned SDK manifest");
+    let pinned = manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("release_tag = \""))
+        .and_then(|tag| tag.strip_suffix('"'))
+        .expect("a release tag");
+    for include in cached_sdk_includes(pinned) {
+        assert_eq!(
+            guard_compiles(&include),
+            Some(true),
+            "{}",
+            include.display()
+        );
+    }
+}

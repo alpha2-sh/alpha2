@@ -959,3 +959,79 @@ fn cpu_planes_tagged_rgb_keep_their_code_scale_at_every_depth() {
         assert_rgb_close(&pixels, &RgbPlanes::SHOWN, &format!("CPU {depth} bits"));
     }
 }
+
+#[test]
+fn unspecified_siting_reads_horizontally_subsampled_chroma_as_left() {
+    type Case<'a> = (&'a str, alpha2_media::YuvFormat, [&'a [u8]; 3], [u32; 3]);
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(16, 2).expect("size");
+    let sited = |format: alpha2_media::YuvFormat, planes: [&[u8]; 3], strides: [u32; 3], siting| {
+        present_yuv(
+            &renderer,
+            crate::YuvFrame {
+                format,
+                planes: [0, 1, 2].map(|index| plane(planes[index], strides[index] as usize)),
+                alpha_plane: None,
+                size,
+                alpha: 1.0,
+                color: Some(full_range_bt709()),
+            },
+            siting,
+        )
+    };
+    // 10-bit 4:2:2 and 8-bit 4:1:1 with a blue-difference step halfway across.
+    let ten = |code: u16| code.to_le_bytes();
+    let luma = (0..32).flat_map(|_| ten(512)).collect::<Vec<_>>();
+    let cb = (0..16)
+        .flat_map(|index| ten(if index % 8 < 4 { 300 } else { 700 }))
+        .collect::<Vec<_>>();
+    let cr = (0..16).flat_map(|_| ten(512)).collect::<Vec<_>>();
+    let luma8 = [128_u8; 32];
+    let cb8 = [80_u8, 80, 180, 180, 80, 80, 180, 180];
+    let cr8 = [128_u8; 8];
+    let cases: [Case<'_>; 2] = [
+        (
+            "4:2:2",
+            alpha2_media::YuvFormat::planar(1, 0, 10),
+            [&luma, &cb, &cr],
+            [32, 16, 16],
+        ),
+        (
+            "4:1:1",
+            alpha2_media::YuvFormat::planar(2, 0, 8),
+            [&luma8, &cb8, &cr8],
+            [16, 4, 4],
+        ),
+    ];
+    for (name, format, planes, strides) in cases {
+        let unspecified = sited(format, planes, strides, ChromaLocation::Unspecified);
+        assert_eq!(
+            unspecified,
+            sited(format, planes, strides, ChromaLocation::Left),
+            "{name}"
+        );
+        assert_ne!(
+            unspecified,
+            sited(format, planes, strides, ChromaLocation::Center),
+            "{name}"
+        );
+    }
+    // 4:2:0 keeps reading an unspecified siting as centred.
+    let cb = [80_u8, 80, 80, 80, 180, 180, 180, 180];
+    let unspecified = sited(
+        alpha2_media::YuvFormat::I420,
+        [&luma8, &cb, &cr8],
+        [16, 8, 8],
+        ChromaLocation::Unspecified,
+    );
+    assert_eq!(
+        unspecified,
+        sited(
+            alpha2_media::YuvFormat::I420,
+            [&luma8, &cb, &cr8],
+            [16, 8, 8],
+            ChromaLocation::Center
+        )
+    );
+}

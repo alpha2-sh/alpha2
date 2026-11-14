@@ -55,6 +55,13 @@ impl EngineProject {
         evaluate(&self.project, &self.index, time)
     }
 
+    /// The errors [`Self::evaluate`] would return in `range` because a clip's composition cannot
+    /// draw ([`alpha2_eval::ActiveIndex::plan_errors`]). An export checks its range before frame 0.
+    #[must_use]
+    pub fn plan_errors(&self, range: alpha2_time::TimeRange) -> Vec<EvalError> {
+        self.index.plan_errors(range)
+    }
+
     /// Returns the host frames needed at a timeline timestamp.
     ///
     /// # Errors

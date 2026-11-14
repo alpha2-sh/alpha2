@@ -2,7 +2,7 @@
 
 The alpha2 media engine for Rust programs. It renders a timeline project (a JSON document of sources, tracks, clips, effects and transitions) on the GPU through wgpu, for preview frames and for export, and mixes its audio. The program decodes its media and encodes the output; the engine renders what the project shows from the frames the program lends it.
 
-This crate is the facade over the engine's crates. Its modules are those crates: `audio`, `engine` (playback and export), `gpu`, `media`, `model` (the project document), `render` and `time`; the types most programs use are also at the top level. The [alpha2 README](https://github.com/alpha2-sh/alpha2#readme) explains the project document and the other ways to use the engine.
+This crate is the facade over the engine's crates. Its modules are those crates: `audio`, `engine` (playback and export), `eval` (timeline evaluation), `geometry` (shape geometry), `gpu`, `media`, `model` (the project document), `render` and `time`, with `extract` (extractors over a source or the timeline) and `edit` (edit operations that apply data to a project) at the top; the types most programs use are also at the top level. The [alpha2 README](https://github.com/alpha2-sh/alpha2#readme) explains the project document and the other ways to use the engine.
 
 ## A first render
 

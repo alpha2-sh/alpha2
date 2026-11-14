@@ -7,6 +7,7 @@ use crate::builtins::{
     DIRECTIONAL_BLUR_ID, DROP_SHADOW_ID, GAUSSIAN_BLUR_ID, GLOW_ID, TILT_SHIFT_ID, UNSHARP_MASK_ID,
 };
 use crate::cpu::curves;
+pub(super) use crate::cpu::curves::{pow_tables, table_pow};
 use crate::cpu::image::{CpuImage, PixelBox};
 
 mod blur;
@@ -247,66 +248,10 @@ impl CpuKernel for Expanded {
     }
 }
 
-/// Entries per octave of the `pow` tables.
-const POW_STEPS: usize = 1024;
-const POW_SHIFT: u32 = 13;
-
-/// `log2` over one octave's mantissa and `exp2` over `[0, 1]`, built once with `libm` and
-/// linearly interpolated: a target-independent `pow` with no per-pixel library call, accurate
-/// to a few millionths relative.
-pub(super) struct PowTables {
-    log2: Vec<f32>,
-    exp2: Vec<f32>,
-}
-
-#[allow(clippy::cast_precision_loss)]
-pub(super) fn pow_tables() -> &'static PowTables {
-    static TABLES: std::sync::OnceLock<PowTables> = std::sync::OnceLock::new();
-    TABLES.get_or_init(|| PowTables {
-        log2: (0..=POW_STEPS)
-            .map(|step| libm::log2f(1.0 + step as f32 / POW_STEPS as f32))
-            .collect(),
-        exp2: (0..=POW_STEPS)
-            .map(|step| libm::exp2f(step as f32 / POW_STEPS as f32))
-            .collect(),
-    })
-}
-
-/// `pow(base, exponent)` for normal positive `base`, as `exp2(exponent * log2(base))`.
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap
-)]
-pub(super) fn table_pow(tables: &PowTables, base: f32, exponent: f32) -> f32 {
-    let bits = base.to_bits();
-    let octave = ((bits >> 23) & 0xff) as i32 - 127;
-    let mantissa = bits & 0x007f_ffff;
-    let index = (mantissa >> POW_SHIFT) as usize;
-    let fraction = (mantissa & ((1 << POW_SHIFT) - 1)) as f32 * (1.0 / (1 << POW_SHIFT) as f32);
-    let low = tables.log2[index];
-    let log2 = octave as f32 + (low + (tables.log2[index + 1] - low) * fraction);
-    let power = exponent * log2;
-    if power.is_nan() || power <= -126.0 {
-        return 0.0;
-    }
-    if power >= 128.0 {
-        return f32::INFINITY;
-    }
-    let whole = power.floor();
-    let position = (power - whole) * POW_STEPS as f32;
-    let index = (position as usize).min(POW_STEPS - 1);
-    let fraction = position - index as f32;
-    let low = tables.exp2[index];
-    let scale = f32::from_bits(((whole as i32 + 127) as u32) << 23);
-    (low + (tables.exp2[index + 1] - low) * fraction) * scale
-}
-
 #[cfg(test)]
 #[allow(clippy::disallowed_methods)] // The reference is the platform's `f64` math.
 mod tests {
-    use super::{pow_tables, table_pow, wrap};
+    use super::wrap;
     use crate::cpu::kernels::{builtin_hsv_to_rgb, builtin_rgb_to_hsv, builtin_value_noise};
 
     #[test]
@@ -359,23 +304,5 @@ mod tests {
             "{:?}",
             wrap([0.4, 0.6], 3)
         );
-    }
-
-    // Far under a half float's step (about 5e-4 relative); the bound is the f32 rounding of
-    // `exponent * log2(base)` at the smallest bases.
-    #[test]
-    fn the_table_pow_stays_far_below_a_half_float_step() {
-        let tables = pow_tables();
-        let mut worst = 0.0_f64;
-        for exponent in [0.0_f32, 0.05, 0.3, 0.77, 1.0, 1.5, 2.0] {
-            let mut base = 1.0e-10_f32;
-            while base < 64.0 {
-                let expected = f64::from(base).powf(f64::from(exponent));
-                let got = f64::from(table_pow(tables, base, exponent));
-                worst = worst.max((got - expected).abs() / expected);
-                base *= 1.000_37;
-            }
-        }
-        assert!(worst < 1.0e-5, "relative error {worst}");
     }
 }

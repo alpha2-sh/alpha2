@@ -347,6 +347,18 @@ interface Exports {
   alpha2_end(): number;
 }
 
+const MAX_LOG_BYTES = 2048;
+const LOG_BUDGET_BYTES = 64 * 1024;
+const MAX_FAIL_BYTES = 4096;
+
+/** How many of `bytes` to keep for at most `max`, not splitting a UTF-8 sequence. */
+function utf8Cut(bytes: Uint8Array, max: number): number {
+  let end = Math.min(bytes.length, max);
+  if (end < bytes.length)
+    while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
+  return end;
+}
+
 /**
  * One run of the module, with an instance, its host functions and what they collected. It is
  * instantiated asynchronously because browsers refuse large synchronous instantiation.
@@ -358,6 +370,8 @@ class Run {
   #records: PluginRecord[] = [];
   #undecodable: PluginError | undefined;
   #failure: string | undefined;
+  #logLeft = LOG_BUDGET_BYTES;
+  #logExhausted = false;
 
   private constructor(descriptor: ExtractorDescriptor, memoryBytes: number) {
     this.#descriptor = descriptor;
@@ -389,11 +403,18 @@ class Run {
       new Uint8Array(this.#exports.memory.buffer, ptr, len);
     const utf8 = (ptr: number, len: number): string =>
       new TextDecoder().decode(bytes(ptr, len));
+    // Mirrors host-core: at most `max` bytes are decoded, one more read to see a split sequence.
+    const bounded = (ptr: number, len: number, max: number): Uint8Array => {
+      const read = bytes(ptr, Math.max(0, Math.min(len, max + 1)));
+      return read.subarray(0, utf8Cut(read, max));
+    };
     return {
       alpha2: {
         emit: (ptr: number, len: number): number => {
           try {
-            this.#records.push(...decodeRecords(bytes(ptr, len).slice()));
+            // A loop: spreading a large batch into arguments passes the engine's argument limit.
+            for (const record of decodeRecords(bytes(ptr, len).slice()))
+              this.#records.push(record);
             return 0;
           } catch (error) {
             this.#undecodable =
@@ -419,10 +440,22 @@ class Run {
           return 0;
         },
         fail: (ptr: number, len: number): void => {
-          this.#failure = utf8(ptr, len);
+          this.#failure = new TextDecoder().decode(
+            bounded(ptr, len, MAX_FAIL_BYTES),
+          );
         },
         log: (_level: number, ptr: number, len: number): void => {
-          console.warn(`plugin: ${utf8(ptr, len).slice(0, 2048)}`);
+          if (this.#logExhausted) return;
+          const line = bounded(ptr, len, MAX_LOG_BYTES);
+          if (line.byteLength > this.#logLeft) {
+            this.#logExhausted = true;
+            console.warn(
+              `plugin: the plugin logged more than ${LOG_BUDGET_BYTES} bytes; its further lines are dropped`,
+            );
+            return;
+          }
+          this.#logLeft -= line.byteLength;
+          console.warn(`plugin: ${new TextDecoder().decode(line)}`);
         },
       },
     };
@@ -430,12 +463,33 @@ class Run {
 
   /** The descriptor JSON the module itself returns. */
   describe(): string {
-    const packed = BigInt.asUintN(64, this.#exports.alpha2_describe());
-    const ptr = Number(packed & 0xffffffffn);
-    const len = Number(packed >> 32n);
-    return new TextDecoder().decode(
-      new Uint8Array(this.#exports.memory.buffer, ptr, len),
-    );
+    try {
+      const packed = BigInt.asUintN(64, this.#exports.alpha2_describe());
+      const ptr = Number(packed & 0xffffffffn);
+      const len = Number(packed >> 32n);
+      return new TextDecoder().decode(
+        new Uint8Array(this.#exports.memory.buffer, ptr, len),
+      );
+    } catch (cause) {
+      throw new PluginError(
+        "PLUGIN_DESCRIPTOR_MISMATCH",
+        `describe failed: ${String(cause)}`,
+        { cause },
+      );
+    }
+  }
+
+  /** Runs a guest call outside a step, reporting a trap or an out-of-range pointer as one. */
+  #guest<T>(run: () => T): T {
+    try {
+      return run();
+    } catch (cause) {
+      throw new PluginError(
+        "PLUGIN_TRAPPED",
+        `the plugin trapped: ${String(cause)}`,
+        { cause },
+      );
+    }
   }
 
   /** Runs a call, turning its status, a trap or the memory cap into the run's outcome. */
@@ -479,15 +533,21 @@ class Run {
     align: number,
     run: (ptr: number) => number,
   ): PluginRecord[] {
-    const ptr = this.#exports.alpha2_alloc(data.byteLength, align);
+    const ptr = this.#guest(() =>
+      this.#exports.alpha2_alloc(data.byteLength, align),
+    );
     if (ptr === 0 && data.byteLength > 0)
       throw new PluginError(
         "PLUGIN_LIMIT",
         "the plugin could not allocate the call's input",
       );
-    new Uint8Array(this.#exports.memory.buffer, ptr, data.byteLength).set(data);
+    this.#guest(() =>
+      new Uint8Array(this.#exports.memory.buffer, ptr, data.byteLength).set(
+        data,
+      ),
+    );
     const records = this.call(() => run(ptr));
-    this.#exports.alpha2_free(ptr, data.byteLength, align);
+    this.#guest(() => this.#exports.alpha2_free(ptr, data.byteLength, align));
     return records;
   }
 

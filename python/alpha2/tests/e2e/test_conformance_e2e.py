@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from conftest import ROOT, require_or_skip
 
-from alpha2 import HostClient
+from alpha2 import Alpha2HostError, HostClient
 from alpha2.extract import Emitter, ExtractFrame
 
 HOST = Path(
@@ -130,6 +130,13 @@ def test_each_extract_case_hashes_as_pinned(
     project = TABLE["projects"][case["project"]]
     assets = {key: ROOT / path for key, path in case["assets"].items()}
     plugin = case["extractor"].get("plugin")
+    if "refused" in case:
+        with pytest.raises(Alpha2HostError) as refused:
+            client.extract(
+                project, case["request"], Digest(case["extractor"]["client"]), assets=assets
+            )
+        assert case["refused"] in refused.value.message
+        return
     if plugin is None:
         result = client.extract(
             project, case["request"], Digest(case["extractor"]["client"]), assets=assets

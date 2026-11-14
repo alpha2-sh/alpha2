@@ -14,6 +14,8 @@ const VORBIS_COMMENT: u8 = 4;
 const PICTURE: u8 = 6;
 /// The largest `codec_private` this reader builds from metadata blocks.
 const MAX_PRIVATE: usize = 1 << 24;
+/// The most metadata blocks kept; padding and pictures are skipped, not kept.
+const MAX_METADATA_BLOCKS: usize = 65_536;
 /// The largest frame this reader hands out; 65535 samples of 8 channels at 32 bits fit.
 const MAX_FRAME: u64 = 1 << 25;
 /// Bytes a frame header and the first subframe header take at most.
@@ -234,6 +236,11 @@ pub(super) fn vorbis_comments(block: &[u8]) -> Vec<String> {
 
 /// Builds `codec_private` from metadata blocks: `fLaC` and every block but padding and pictures,
 /// the last flagged as last.
+/// The length of `from..to` as a read size.
+fn span(from: u64, to: u64) -> usize {
+    usize::try_from(to - from).unwrap_or(usize::MAX)
+}
+
 pub(super) fn codec_private(blocks: &[(u8, Vec<u8>)]) -> Bytes {
     let kept = blocks
         .iter()
@@ -262,6 +269,11 @@ pub(super) fn open(mut input: Input, start: u64) -> Result<Box<dyn ContainerRead
         let kind = header[0] & 0x7f;
         let size =
             (usize::from(header[1]) << 16) | (usize::from(header[2]) << 8) | usize::from(header[3]);
+        if blocks.len() == MAX_METADATA_BLOCKS {
+            return Err(DemuxError::Invalid(
+                "FLAC has more metadata blocks than this layer reads".into(),
+            ));
+        }
         if blocks.is_empty() && kind != STREAMINFO {
             return Err(DemuxError::Invalid(
                 "FLAC STREAMINFO is not the first block".into(),
@@ -276,8 +288,6 @@ pub(super) fn open(mut input: Input, start: u64) -> Result<Box<dyn ContainerRead
                 return Err(DemuxError::Invalid("FLAC metadata is too large".into()));
             }
             blocks.push((kind, input.exact(pos + 4, size)?.to_vec()));
-        } else {
-            blocks.push((kind, Vec::new()));
         }
         pos += 4 + size as u64;
         if last {
@@ -402,12 +412,18 @@ impl FlacFramer {
     ) -> Result<Option<u64>, DemuxError> {
         let trusted = self.state.last.is_some_and(|last| header.follows(&last));
         let mut from = pos + 1;
+        // The CRC of `pos..summed`, extended to each candidate, so one frame is read once.
+        let (mut crc, mut summed) = (0, pos);
         while let Some((next, child)) = Self::next_header(input, from)? {
             if next - pos > MAX_FRAME {
                 break;
             }
-            let size = usize::try_from(next - pos).unwrap_or(usize::MAX);
-            if (trusted && header.continued_by(&child)) || crc16(input.exact(pos, size)?) == 0 {
+            if trusted && header.continued_by(&child) {
+                return Ok(Some(next));
+            }
+            crc = crc16(crc, input.exact(summed, span(summed, next))?);
+            summed = next;
+            if crc == 0 {
                 return Ok(Some(next));
             }
             from = next + 1;
@@ -428,6 +444,7 @@ impl FlacFramer {
                 break;
             }
             let mut probe = pos + 1;
+            let (mut crc, mut summed) = (0, pos);
             for _ in 0..PROBE_CANDIDATES {
                 let Some((next, _)) = Self::next_header(input, probe)? else {
                     break;
@@ -435,8 +452,9 @@ impl FlacFramer {
                 if next - pos > self.max_frame {
                     break;
                 }
-                let size = usize::try_from(next - pos).unwrap_or(usize::MAX);
-                if crc16(input.exact(pos, size)?) == 0 {
+                crc = crc16(crc, input.exact(summed, span(summed, next))?);
+                summed = next;
+                if crc == 0 {
                     return Ok(Some((pos, header)));
                 }
                 probe = next + 1;

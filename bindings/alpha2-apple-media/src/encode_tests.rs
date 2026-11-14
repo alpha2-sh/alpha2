@@ -1,13 +1,15 @@
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use alpha2_container::{Mp4Flavor, Mp4Writer, TrackKind};
 use alpha2_host_core::DecodePolicy;
 use alpha2_host_core::audio_stream::{AudioStream, WithPcm};
 use alpha2_host_core::encode::{
-    AudioEncodeConfig, AudioEncoders, EncodeSink, VideoEncodeConfig, VideoEncoders,
+    AudioEncodeConfig, AudioEncoders, EncodePoll, EncodeSink, VideoEncodeBackend,
+    VideoEncodeConfig, VideoEncoders,
 };
 use alpha2_host_core::export::{PlaneBuffer, VideoSink};
-use alpha2_host_core::video_stream::{StreamOptions, VideoStream};
+use alpha2_host_core::video_stream::{StreamOptions, Submit, VideoStream};
 use alpha2_media::{
     AudioBlock, AudioBlockSink, AudioCodec, BitDepth, BitrateMode, CancelToken, ColorMetadata,
     PixelLayout, SpeakerLayout, VideoCodec, VideoRateControl,
@@ -15,7 +17,7 @@ use alpha2_media::{
 use alpha2_time::{FrameRate, MediaTime};
 
 use crate::tests::tone_offset;
-use crate::video_encode::{codec_type, listed};
+use crate::video_encode::{MAX_IN_FLIGHT, VideoToolboxEncoder, codec_type, hooks, listed};
 use crate::{AppleAudio, AppleAudioEncoders, AppleVideo, AppleVideoEncoders};
 
 const WIDTH: u32 = 320;
@@ -126,7 +128,13 @@ fn encode(
         .open(path)
         .map_err(|error| error.to_string())?;
     let writer = Box::new(Mp4Writer::create(file, Mp4Flavor::Mp4));
-    let mut sink = EncodeSink::new(writer, video, config, Some((audio, audio_config)));
+    let mut sink = EncodeSink::new(
+        writer,
+        video,
+        config,
+        Some((audio, audio_config)),
+        alpha2_media::CancelToken::default(),
+    );
     let (name, hardware, _) = sink.video_encoder();
     let encoder = (name.to_owned(), hardware);
     let cancel = CancelToken::default();
@@ -143,9 +151,9 @@ fn encode(
     Ok(encoder)
 }
 
-/// Reads `path` back: packets in order with keyframes at the interval, every frame at its level,
-/// and the tone from sample 0 within `tolerance` samples of its phase.
-fn check(path: &std::path::Path, layout: PixelLayout, tolerance: f64) -> Vec<String> {
+/// Reads the video of `path` back: packets in order with keyframes at the interval, every frame
+/// at its level. Returns the failures and the keyframe indices.
+fn check_video(path: &std::path::Path, layout: PixelLayout) -> (Vec<String>, Vec<u64>) {
     let mut failures = Vec::new();
     let mut reader = alpha2_container::open(path).expect("readable output");
     let video = alpha2_container::default_track(reader.tracks(), TrackKind::Video).expect("video");
@@ -195,7 +203,14 @@ fn check(path: &std::path::Path, layout: PixelLayout, tolerance: f64) -> Vec<Str
     if index != FRAMES {
         failures.push(format!("{index} frames decoded, not {FRAMES}"));
     }
+    (failures, keyframes)
+}
 
+/// Reads `path` back: the video as [`check_video`] does, and the tone from sample 0 within
+/// `tolerance` samples of its phase.
+fn check(path: &std::path::Path, layout: PixelLayout, tolerance: f64) -> Vec<String> {
+    let (mut failures, _) = check_video(path, layout);
+    let cancel = CancelToken::default();
     let mut audio = AudioStream::open_file(
         path,
         &WithPcm(AppleAudio),
@@ -342,4 +357,255 @@ fn every_available_codec_opens_an_encoder() {
             panic!("{codec:?}: {error}");
         }
     }
+}
+
+/// Planes of noise, so every frame costs the encoder real work.
+fn noise(width: u32, height: u32, seed: u32) -> Vec<PlaneBuffer> {
+    let plane = |columns: u32, rows: u32, salt: u32| {
+        let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(salt) | 1;
+        let bytes = (0..columns as usize * rows as usize)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                state.to_le_bytes()[3]
+            })
+            .collect();
+        PlaneBuffer {
+            bytes,
+            stride: columns as usize,
+            width: columns,
+            height: rows,
+        }
+    };
+    vec![
+        plane(width, height, 1),
+        plane(width / 2, height / 2, 2),
+        plane(width / 2, height / 2, 3),
+    ]
+}
+
+fn h264_config(width: u32, height: u32, software: bool) -> VideoEncodeConfig {
+    VideoEncodeConfig {
+        codec: VideoCodec::H264,
+        width,
+        height,
+        frame_rate: FrameRate::new(30, 1).expect("rate"),
+        layout: PixelLayout::YUV420P,
+        rate: BITRATE,
+        color: ColorMetadata::EXPORT,
+        keyframe_interval: KEYFRAME_INTERVAL,
+        software,
+    }
+}
+
+/// Drops `rounds` encoders, hardware or software, each with up to 16 frames submitted and none
+/// received: every frame's callback has run when the drop returns.
+fn drop_with_frames_in_flight(software: bool, rounds: usize) {
+    let config = h264_config(WIDTH, HEIGHT, software);
+    let pictures = (0..4)
+        .map(|seed| noise(WIDTH, HEIGHT, seed))
+        .collect::<Vec<_>>();
+    for round in 0..rounds {
+        let mut encoder = VideoToolboxEncoder::open(&config).expect("an encoder opens");
+        let callbacks = encoder.callbacks();
+        let step = i64::from(encoder.timescale()) / 30;
+        let mut accepted = 0;
+        for index in 0..16_i64 {
+            let picture = &pictures[usize::try_from(index % 4).expect("small")];
+            match encoder.submit(index * step, picture, index == 0) {
+                Ok(Submit::Accepted) => accepted += 1,
+                Ok(Submit::Busy) => break,
+                Err(error) => panic!("round {round}, frame {index}: {error}"),
+            }
+        }
+        drop(encoder);
+        assert_eq!(
+            callbacks.load(Ordering::SeqCst),
+            accepted,
+            "software {software}, round {round}: every submitted frame completed before the drop returned"
+        );
+    }
+}
+
+#[test]
+fn a_hardware_encoder_dropped_with_frames_in_flight_completes_them_first() {
+    drop_with_frames_in_flight(false, 100);
+}
+
+#[test]
+fn a_software_encoder_dropped_with_frames_in_flight_completes_them_first() {
+    // A software drop takes about 0.2 s on a phone; 60 keep the test within iOS's 20 s launch limit.
+    drop_with_frames_in_flight(true, 60);
+}
+
+#[test]
+fn an_encoder_without_a_delay_bound_holds_at_most_the_frames_in_flight_cap() {
+    let (width, height) = (3840, 2160);
+    hooks::REFUSE_DELAY_BOUND.set(true);
+    let opened = VideoToolboxEncoder::open(&h264_config(width, height, true));
+    hooks::REFUSE_DELAY_BOUND.set(false);
+    let mut encoder = opened.expect("a software encoder opens");
+    let pictures = (0..4)
+        .map(|seed| noise(width, height, seed))
+        .collect::<Vec<_>>();
+    let step = i64::from(encoder.timescale()) / 30;
+    let mut most = 0;
+    let mut index = 0_i64;
+    while index < 40 {
+        let picture = &pictures[usize::try_from(index % 4).expect("small")];
+        match encoder.submit(index * step, picture, index == 0) {
+            Ok(Submit::Accepted) => index += 1,
+            Ok(Submit::Busy) => {
+                while let EncodePoll::Packet(_) = encoder.receive(true).expect("a packet") {}
+            }
+            Err(error) => panic!("frame {index}: {error}"),
+        }
+        most = most.max(encoder.in_flight());
+    }
+    assert!(
+        most <= MAX_IN_FLIGHT,
+        "{most} frames in flight, over {MAX_IN_FLIGHT}"
+    );
+}
+
+/// Encodes the flat clip without audio to `path`, losing the session at frame `lose_at` and
+/// settling before frame `settle_at`; returns the frame each replacing session started at.
+fn encode_through_a_loss(
+    path: &std::path::Path,
+    codec: VideoCodec,
+    lose_at: Option<(u64, bool)>,
+    settle_at: Option<u64>,
+) -> Result<Vec<Option<u64>>, alpha2_media::EncodeError> {
+    let config = VideoEncodeConfig {
+        codec,
+        ..h264_config(WIDTH, HEIGHT, false)
+    };
+    let mut encoder = VideoToolboxEncoder::open(&config)?;
+    if let Some((index, other_record)) = lose_at {
+        encoder.lose_session_at(index, other_record);
+    }
+    let resumed = encoder.resumed();
+    let timescale = i64::from(encoder.timescale());
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .expect("output");
+    let writer = Box::new(Mp4Writer::create(file, Mp4Flavor::Mp4));
+    let mut sink = EncodeSink::new(
+        writer,
+        Box::new(encoder),
+        config,
+        None,
+        CancelToken::default(),
+    );
+    for index in 0..FRAMES {
+        if settle_at == Some(index) {
+            sink.settle()?;
+        }
+        sink.write_frame(index, &frame(index, PixelLayout::YUV420P))?;
+    }
+    sink.finish()?;
+    let resumed = resumed.lock().expect("resumed").clone();
+    Ok(resumed
+        .into_iter()
+        .map(|pts| pts.and_then(|pts| u64::try_from(pts * 30 / timescale).ok()))
+        .collect())
+}
+
+fn scratch_mp4(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("alpha2-apple-{name}-{}.mp4", std::process::id()))
+}
+
+#[test]
+fn a_lost_session_is_replaced_and_the_stream_goes_on_from_a_keyframe() {
+    for codec in [VideoCodec::H264, VideoCodec::Hevc] {
+        let path = scratch_mp4(&format!("lost-{codec:?}"));
+        let resumed = encode_through_a_loss(&path, codec, Some((18, false)), None)
+            .unwrap_or_else(|error| panic!("{codec:?}: {error}"));
+        let (failures, keyframes) = check_video(&path, PixelLayout::YUV420P);
+        let _ = std::fs::remove_file(&path);
+        assert!(failures.is_empty(), "{codec:?}: {failures:#?}");
+        // One replacement; it re-encoded the frames in flight from the earliest unfinished one.
+        let [Some(frame)] = resumed[..] else {
+            panic!("{codec:?}: replacements {resumed:?}");
+        };
+        assert!(frame <= 18, "{codec:?}: resumed at frame {frame}");
+        assert!(
+            keyframes.contains(&frame),
+            "{codec:?}: keyframes {keyframes:?}, none at frame {frame} where the session was replaced"
+        );
+    }
+}
+
+#[test]
+fn a_replaced_session_with_another_configuration_rejects_the_encoder() {
+    let path = scratch_mp4("lost-other-record");
+    let result = encode_through_a_loss(&path, VideoCodec::H264, Some((18, true)), None);
+    let _ = std::fs::remove_file(&path);
+    match result {
+        Err(alpha2_media::EncodeError::EncoderRejected { message, .. }) => {
+            assert!(message.contains("configuration record"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn settling_mid_stream_keeps_every_frame() {
+    for codec in [VideoCodec::H264, VideoCodec::Hevc] {
+        let path = scratch_mp4(&format!("settled-{codec:?}"));
+        encode_through_a_loss(&path, codec, None, Some(7))
+            .unwrap_or_else(|error| panic!("{codec:?}: {error}"));
+        let (failures, _) = check_video(&path, PixelLayout::YUV420P);
+        let _ = std::fs::remove_file(&path);
+        assert!(failures.is_empty(), "{codec:?}: {failures:#?}");
+    }
+}
+
+#[test]
+fn aac_takes_the_highest_listed_bitrate_at_or_below_the_request() {
+    // The top of the encoder's list for stereo at each rate, as this system's encoder lists it.
+    let tops = [
+        (8_000, 48_000),
+        (11_025, 64_000),
+        (12_000, 64_000),
+        (16_000, 96_000),
+        (22_050, 128_000),
+        (24_000, 128_000),
+        (32_000, 192_000),
+        (44_100, 320_000),
+        (48_000, 320_000),
+    ];
+    let open = |project_rate: u32, channels: usize, bitrate: u32| {
+        let config = AudioEncodeConfig {
+            codec: AudioCodec::Aac,
+            project_rate,
+            speakers: SpeakerLayout::default_for(channels).expect("layout"),
+            bitrate,
+        };
+        AppleAudioEncoders
+            .open(&config)
+            .map(|encoder| encoder.bitrate())
+            .map_err(|error| format!("{project_rate} Hz, {channels} channels, {bitrate}: {error}"))
+    };
+    let mut failures = Vec::new();
+    for (rate, top) in tops {
+        for asked in [192_000, 256_000] {
+            let expected = Ok(asked.min(top));
+            let applied = open(rate, 2, asked);
+            if applied != expected {
+                failures.push(format!(
+                    "{rate} Hz at {asked}: {applied:?}, not {expected:?}"
+                ));
+            }
+        }
+    }
+    // Mono at 8 kHz lists 8 to 24 kbit/s.
+    let mono = open(8_000, 1, 192_000);
+    if mono != Ok(24_000) {
+        failures.push(format!("mono 8000 Hz: {mono:?}"));
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
 }

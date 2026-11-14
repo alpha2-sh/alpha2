@@ -544,7 +544,7 @@ test("a cancel after the last frame was submitted still cancels the export", asy
   assert.equal(calls.at(-1), "abort cancelled");
 });
 
-test("a cancel during finish rejects the export and aborts its sink", async () => {
+test("a cancel while finish is pending rejects the export at once and aborts its sink", async () => {
   const controller = new AbortController();
   const calls = [];
   const backend = {
@@ -564,9 +564,10 @@ test("a cancel during finish rejects the export and aborts its sink", async () =
   );
   const sink = {
     writeVideo: async () => {},
-    finish: async () => {
+    finish: () => {
       calls.push("finish");
       controller.abort();
+      return new Promise(() => {});
     },
     abort: async (reason) => calls.push(`abort ${reason.code}`),
   };

@@ -18,11 +18,11 @@ use alpha2_time::{MediaTime, TimeRange};
 use serde_json::{Value, json};
 
 use crate::decode::{DecodeScheduler, DecodeWorker};
-use crate::effect_request::EffectRequest;
 use crate::encode::PipelineFailure;
 use crate::export_decode::ExportDecodePlan;
 use crate::host::{Host, result_cache_budget, written_path};
 use crate::metrics::ExportMetrics;
+use crate::protocol::EffectRequest;
 use crate::protocol::StillEntry;
 use crate::renderer_backend::RendererBackend;
 use crate::{WORKER_RETRY_INTERVAL, error_message};
@@ -63,8 +63,7 @@ impl Host {
                 .map_err(error_message)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        self.renderer.clear_result_cache();
-        self.renderer.set_result_cache_budget(result_cache_budget(
+        self.reserve_result_cache(result_cache_budget(
             size,
             self.renderer.intermediate_format(),
         ));

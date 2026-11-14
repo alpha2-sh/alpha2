@@ -12,6 +12,7 @@ Option dicts passed in use snake_case keys; host reports keep the protocol's cam
 from __future__ import annotations
 
 import collections
+import contextlib
 import hashlib
 import itertools
 import json
@@ -25,10 +26,10 @@ import threading
 import time
 import unicodedata
 import weakref
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from . import _host_start, _native, _wire
 from ._quarantine import quarantine_refusal
@@ -42,8 +43,15 @@ from .errors import (
     ExportPhase,
 )
 from .extract import ExtractProgress, schema_problem, take_step
-from .install import cached_host_binary, host_cache_directory, host_executable_name, package_version
+from .install import (
+    cached_host_binary,
+    host_cache_directory,
+    host_executable_name,
+    openh264_install_generation,
+    package_version,
+)
 from .protocol import (
+    PROTOCOL_VERSION,
     UNREAD_REQUEST_ID,
     create_cancel,
     create_request,
@@ -98,8 +106,17 @@ _HOST_SHUTDOWN_TIMEOUT = 5.0
 
 _CANCEL_TIMEOUT = 5.0
 
-# A host draining at each try would otherwise take the request from host to host forever.
+# A host draining or dying at each try would otherwise take the request from host to host forever.
 _MAX_RESENDS = 3
+
+
+class _Unsent(Exception):
+    """The host exited before the request was written in full, so it never ran there."""
+
+    def __init__(self, error: Alpha2HostError) -> None:
+        super().__init__(error.message)
+        self.error = error
+
 
 _POLL_SECONDS = 0.05
 
@@ -135,13 +152,28 @@ class ExtractPlugin(TypedDict, total=False):
     """The wasm artifact even where a native one is allowed."""
 
 
+class PluginHostPolicy(TypedDict, total=False):
+    """What a :class:`HostClient`'s hosts allow plugins, passed to each as ``serve`` flags."""
+
+    mode: Literal["off", "wasm", "native"]
+    """``off`` runs no plugin, ``wasm`` (the default) only wasm artifacts, ``native`` also a native
+    artifact for a request that sets ``allow_native``."""
+    origins: Literal["none"] | Sequence[str]
+    """``"none"`` fetches nothing over the network; a list of ``https://host[:port]`` origins allows
+    manifests, files and redirects only there. Unset: a manifest from any ``https:`` origin, with
+    its files and redirects on that origin."""
+    root: str | os.PathLike[str]
+    """``"any"`` (the default), ``"none"`` for no local manifest, or the directory local manifests
+    must lie under, resolved against the working directory when relative."""
+
+
 class LoudnessTarget(TypedDict):
     """Normalizes an export's audio to an integrated loudness under a true-peak ceiling."""
 
     target_lufs: float
     """Integrated loudness, -60..=0 LUFS; streaming platforms use -14 to -16."""
-    true_peak_ceiling_dbtp: float
-    """True-peak ceiling, -20..=0 dBTP; EBU R128 uses -1."""
+    true_peak_ceiling_dbtp: NotRequired[float]
+    """True-peak ceiling, -20..=0 dBTP. Defaults to -1, EBU R128's."""
 
 
 class RenderCacheOptions(TypedDict, total=False):
@@ -186,12 +218,33 @@ class ExportProgress:
     """``frames`` while encoding, ``finalizing`` while the output is flushed. The export is complete
     only when the call returns."""
     completed: int
-    """Frames encoded so far; at most ``total``."""
+    """Frames encoded so far; at most ``total``. It goes back to 0 only in a report marked
+    ``restarted``."""
     total: int
     """Frames in the export."""
+    restarted: bool = False
+    """The export started over: the host moved it to the readback path after the GPU-resident
+    encoder refused a frame, or the client reran it with software decode after a hardware decoder
+    stalled. Set on the first report of the new run."""
 
 
 ProgressCallback = Callable[[ExportProgress], object]
+
+
+def _marking_restart(on_progress: ProgressCallback | None) -> ProgressCallback | None:
+    """``on_progress`` with its next report marked ``restarted``."""
+    if on_progress is None:
+        return None
+    pending = [True]
+
+    def forward(progress: ExportProgress) -> object:
+        if pending:
+            pending.clear()
+            progress = replace(progress, restarted=True)
+        return on_progress(progress)
+
+    return forward
+
 
 PathLike = str | os.PathLike[str]
 
@@ -208,6 +261,46 @@ def _check_video_decode(field: str, value: object) -> None:
 def _check_renderer(field: str, value: object) -> None:
     if value is not None and value not in _RENDERER_MODES:
         raise _invalid(f"{field} must be auto, gpu, or cpu")
+
+
+def _plugin_flags(policy: object) -> list[str]:
+    """The ``serve`` flags of a :class:`PluginHostPolicy`; ``INVALID_INPUT`` for a malformed one."""
+    if policy is None:
+        return []
+    if not isinstance(policy, Mapping):
+        raise _invalid("plugins must be a mapping")
+    unknown = set(policy) - {"mode", "origins", "root"}
+    if unknown:
+        raise _invalid(f"plugins has unknown keys: {', '.join(sorted(map(str, unknown)))}")
+    flags: list[str] = []
+    mode = policy.get("mode")
+    if mode is not None:
+        if mode not in ("off", "wasm", "native"):
+            raise _invalid("plugins.mode must be off, wasm or native")
+        flags += ["--plugins", mode]
+    origins = policy.get("origins")
+    if origins is not None:
+        if origins == "none":
+            flags += ["--plugin-origins", "none"]
+        elif (
+            isinstance(origins, Sequence)
+            and not isinstance(origins, (str, bytes))
+            and len(origins) > 0
+            and all(
+                isinstance(origin, str) and origin.startswith("https://") and "," not in origin
+                for origin in origins
+            )
+        ):
+            flags += ["--plugin-origins", ",".join(origins)]
+        else:
+            raise _invalid('plugins.origins must be "none" or a non-empty list of https:// origins')
+    root = policy.get("root")
+    if root is not None:
+        if not isinstance(root, (str, os.PathLike)) or os.fspath(root) == "":
+            raise _invalid('plugins.root must be "any", "none" or a directory')
+        text = os.fspath(root)
+        flags += ["--plugin-root", text if text in ("any", "none") else os.path.abspath(text)]
+    return flags
 
 
 def _is_file(path: Path) -> bool:
@@ -406,7 +499,11 @@ def _request_inputs(
     effect_assets: object,
     fonts: object,
     effects: object,
+    *,
+    effect_resources: bool = True,
 ) -> dict[str, Any]:
+    """The render inputs of a request; every effect resource needs a path unless
+    ``effect_resources`` is false."""
     effect_payload = _path_record("effect_assets", effect_assets, "effect asset path")
     resources_payload: dict[str, dict[str, str]] = {}
     if resources is not None:
@@ -429,7 +526,7 @@ def _request_inputs(
             if not isinstance(text, str) or not text:
                 raise _invalid("fonts must be a list of font file paths")
             font_paths.append(_absolute(text))
-    for resource in project.get("effect_resources") or []:
+    for resource in (project.get("effect_resources") or []) if effect_resources else []:
         if not effect_payload.get(resource["id"]):
             raise Alpha2HostError(
                 "MISSING_INPUT", f"missing effect asset path for resource {resource['id']}"
@@ -494,7 +591,7 @@ def _loudness(loudness: object, include_audio: bool) -> dict[str, float] | None:
     if loudness is None:
         return None
     if not isinstance(loudness, Mapping):
-        raise _invalid("loudness must be a dict {target_lufs, true_peak_ceiling_dbtp}")
+        raise _invalid("loudness must be a dict {target_lufs, true_peak_ceiling_dbtp?}")
     unknown = next(
         (key for key in loudness if key not in ("target_lufs", "true_peak_ceiling_dbtp")), None
     )
@@ -508,6 +605,8 @@ def _loudness(loudness: object, include_audio: bool) -> dict[str, float] | None:
         ("target_lufs", -60, "targetLufs"),
         ("true_peak_ceiling_dbtp", -20, "truePeakCeilingDbtp"),
     ):
+        if key == "true_peak_ceiling_dbtp" and key not in loudness:
+            continue
         value = loudness.get(key)
         if not isinstance(value, (int, float)) or isinstance(value, bool) or not low <= value <= 0:
             raise _invalid(f"loudness.{key} must be within {low}..=0, received {value}")
@@ -603,14 +702,17 @@ class HostClient:
     :func:`resolve_host_binary`). ``video_decode`` and ``renderer`` (see :data:`RendererMode`) apply
     to every request unless it names its own. A client is safe to share between threads.
 
+    ``plugins`` (a :class:`PluginHostPolicy`) is what the client's hosts allow plugins; unset, a
+    host runs wasm plugins only, from a local manifest or one on any ``https:`` origin.
+
     ``host_start_timeout`` is how many seconds a started host has to report that it is ready
     (``None`` waits forever). A host held before it runs (Gatekeeper, antivirus, App Control) is
     killed and the request fails with ``HOST_START_TIMEOUT``.
 
     Raises ``ValueError`` for a ``concurrency`` that is not a positive integer or a
     ``host_start_timeout`` that is not above zero, and :class:`~alpha2.Alpha2HostError` when
-    ``video_decode`` or ``renderer`` is not a mode (``INVALID_INPUT``) or the binary cannot be
-    found.
+    ``video_decode`` or ``renderer`` is not a mode or ``plugins`` is malformed (``INVALID_INPUT``),
+    or the binary cannot be found.
     """
 
     def __init__(
@@ -622,6 +724,7 @@ class HostClient:
         video_decode: VideoDecodeMode | None = None,
         renderer: RendererMode | None = None,
         host_start_timeout: float | None = _host_start.DEFAULT_HOST_START_TIMEOUT,
+        plugins: PluginHostPolicy | None = None,
     ) -> None:
         if not _safe_integer(concurrency) or concurrency < 1:
             raise ValueError("concurrency must be a positive integer")
@@ -633,12 +736,17 @@ class HostClient:
             raise ValueError("host_start_timeout must be a number of seconds above zero, or None")
         _check_video_decode("video_decode", video_decode)
         _check_renderer("renderer", renderer)
+        serve_flags = _plugin_flags(plugins)
         self.host_path: Path = resolve_host_binary(host_path, cache_directory=cache_directory)
+        # Hosts get it as ALPHA2_HOST_CACHE_DIR, so they find an OpenH264 installed there.
+        self.cache_directory: str | None = (
+            None if cache_directory is None else os.path.abspath(os.fspath(cache_directory))
+        )
         self.concurrency = concurrency
         self.video_decode: VideoDecodeMode | None = video_decode
         self.renderer: RendererMode | None = renderer
         self.host_start_timeout: float | None = host_start_timeout
-        self._pool = _Pool(self.host_path, concurrency)
+        self._pool = _Pool(self.host_path, concurrency, self.cache_directory, serve_flags)
         self._probes: dict[str, _Probe] = {}
         self._probes_lock = threading.Lock()
         _clients.add(self)
@@ -662,10 +770,14 @@ class HostClient:
             raise Alpha2AbortError()
         mode = video_decode if video_decode is not None else self.video_decode
         drawn_by = renderer if renderer is not None else self.renderer
-        key = _HostModes(mode, drawn_by).key()
+        key = _HostModes(mode, drawn_by).key(self.cache_directory)
         with self._probes_lock:
             probe = self._probes.get(key)
             if probe is None:
+                # Reports from before an OpenH264 install go once a newer one is asked for.
+                generation = ":" + key.rsplit(":", 1)[1]
+                for stale in [known for known in self._probes if not known.endswith(generation)]:
+                    del self._probes[stale]
                 probe = _Probe()
                 self._probes[key] = probe
                 threading.Thread(
@@ -743,7 +855,7 @@ class HostClient:
             "assets": _path_record("assets", assets, "asset path"),
             "proxies": _proxies_payload(proxies),
             "frames": _frames_payload(frames),
-            "purpose": purpose.replace("_", "-"),
+            "purpose": purpose,
         }
         return self._pool.request(  # type: ignore[no-any-return]
             "conform",
@@ -936,7 +1048,7 @@ class HostClient:
                     payload,
                     _HostModes("software", drawn_by, self.host_start_timeout),
                     cancel,
-                    on_progress,
+                    _marking_restart(on_progress),
                 )
             except Alpha2HostError as retry_error:
                 raise _record_decode_stall(retry_error, stall) from stall
@@ -1079,8 +1191,12 @@ class HostClient:
         plugin: ExtractPlugin | None = None,
         assets: Mapping[str, PathLike] | None = None,
         proxies: Mapping[str, Sequence[ProxyFile]] | None = None,
+        frames: Mapping[str, Sequence[PathLike | None]] | None = None,
+        resources: Mapping[str, Mapping[str, PathLike]] | None = None,
         media: Literal["original", "proxies"] = "original",
+        effect_assets: Mapping[str, PathLike] | None = None,
         fonts: Sequence[PathLike] | None = None,
+        effects: Sequence[Mapping[str, Any]] | None = None,
         on_progress: Callable[[ExtractProgress], object] | None = None,
         cancel: threading.Event | None = None,
     ) -> dict[str, Any]:
@@ -1093,6 +1209,10 @@ class HostClient:
         Returns ``{"dataSets", "timings"}`` with the data sets the session validated,
         ``made_from`` set to the conformed original and, for a plugin, ``made_by.plugin`` naming
         the artifact that ran.
+
+        The render inputs (``frames``, ``resources``, ``effect_assets``, ``fonts``, ``effects``)
+        are those of :meth:`stills`; a timeline input draws with them and needs a path for every
+        effect resource, a source input draws nothing.
 
         A client-side extractor's ``request["params"]`` is checked against its
         ``params_schema`` first. Raises with ``INVALID_EMIT`` for output the session refuses,
@@ -1126,7 +1246,20 @@ class HostClient:
                     "force_wasm": bool(plugin.get("force_wasm", False)),
                 }
             }
-        inputs = _request_inputs(project, assets, proxies, None, None, media, None, fonts, None)
+        read = request.get("input")
+        from_timeline = isinstance(read, Mapping) and read.get("from") == "timeline"
+        inputs = _request_inputs(
+            project,
+            assets,
+            proxies,
+            frames,
+            resources,
+            media,
+            effect_assets,
+            fonts,
+            effects,
+            effect_resources=from_timeline,
+        )
         payload = {**inputs, "request": dict(request), **runs}
         return self._pool.request(  # type: ignore[no-any-return]
             "extract",
@@ -1203,9 +1336,10 @@ class _HostModes:
     renderer: str | None
     start_timeout: float | None = _host_start.DEFAULT_HOST_START_TIMEOUT
 
-    def environment(self) -> dict[str, str]:
+    def environment(self, cache_directory: str | None = None) -> dict[str, str]:
         """The environment a host started now would get. The host reads its renderer and decode
-        path at startup, so the modes go in it."""
+        path at startup, so the modes go in it, and the client's cache directory, else the
+        environment's, made absolute, since a host resolves it against its own directory."""
         named = {
             variable: value
             for variable, value in (
@@ -1214,18 +1348,23 @@ class _HostModes:
             )
             if value is not None
         }
-        return {**os.environ, **named}
+        environment = {**os.environ, **named}
+        cache = cache_directory or environment.get("ALPHA2_HOST_CACHE_DIR", "")
+        if cache.strip():
+            environment["ALPHA2_HOST_CACHE_DIR"] = os.path.abspath(cache)
+        return environment
 
-    def key(self) -> str:
-        return _environment_key(self.environment())
+    def key(self, cache_directory: str | None = None) -> str:
+        return _environment_key(self.environment(cache_directory))
 
 
 def _environment_key(environment: Mapping[str, str]) -> str:
-    """A host reads its whole environment when it starts, so hosts are kept apart by it."""
+    """A host reads its whole environment when it starts, so hosts are kept apart by it, and by the
+    OpenH264 install generation, since a host looks for the library once."""
     digest = hashlib.sha256()
     for name, value in sorted(environment.items()):
         digest.update(f"{name}={value}".encode("utf-8", "surrogateescape") + b"\0")
-    return digest.hexdigest()
+    return f"{digest.hexdigest()}:{openh264_install_generation()}"
 
 
 class _Host:
@@ -1235,19 +1374,19 @@ class _Host:
     ``running`` belongs to the owner: whether a request it sent may still run there.
     """
 
-    def __init__(self, pool: _Pool, binary: Path, environment: dict[str, str], key: str) -> None:
+    def __init__(
+        self,
+        pool: _Pool,
+        binary: Path,
+        environment: dict[str, str],
+        key: str,
+        holder: list[_Host],
+    ) -> None:
+        """Starts the process last and puts this host in ``holder`` at once, so an interrupt after
+        the spawn still leaves its caller the process to end."""
         self.pool = pool
         self.key = key
         self.oom_kills_at_spawn = _host_start.oom_kill_count()
-        self.process = subprocess.Popen(
-            [str(binary), "serve"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=environment,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        self.started_at = time.monotonic()
         self.owner: queue.Queue[tuple[str, Any]] | None = None
         self.ready = False
         self.available = True
@@ -1266,12 +1405,43 @@ class _Host:
             threading.Thread(target=self._read_stdout, daemon=True),
             threading.Thread(target=self._read_stderr, daemon=True),
         ]
+        self._writer = threading.Thread(target=self._write, daemon=True)
+        self._waiter = threading.Thread(target=self._wait, daemon=True)
+        self.started_at = time.monotonic()
+        self.process = subprocess.Popen(
+            [str(binary), "serve", *pool.serve_flags],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        holder.append(self)
 
     def start(self) -> None:
-        for thread in self._readers:
+        for thread in (*self._readers, self._writer, self._waiter):
             thread.start()
-        threading.Thread(target=self._write, daemon=True).start()
-        threading.Thread(target=self._wait, daemon=True).start()
+
+    def threads_started(self) -> bool:
+        return all(
+            thread.ident is not None for thread in (*self._readers, self._writer, self._waiter)
+        )
+
+    def abandon(self) -> None:
+        """Ends a host whose threads did not all start, and closes what they would have closed."""
+        self.kill()
+        self.process.wait()
+        self.close_input()
+        for thread in self._readers:
+            if thread.ident is not None:
+                thread.join(_HOST_SHUTDOWN_TIMEOUT)
+        streams = (self.process.stdout, self.process.stderr, self.process.stdin)
+        for thread, stream in zip((*self._readers, self._writer), streams, strict=True):
+            if stream is not None and (thread.ident is None or not thread.is_alive()):
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
 
     def keep_stderr(self, data: bytes) -> None:
         with self._stderr_changed:
@@ -1443,9 +1613,17 @@ class _Pool:
     the pool's view of each host current; the request's own thread reads its events from a queue.
     """
 
-    def __init__(self, binary: Path, limit: int) -> None:
+    def __init__(
+        self,
+        binary: Path,
+        limit: int,
+        cache_directory: str | None = None,
+        serve_flags: Sequence[str] = (),
+    ) -> None:
         self.binary = binary
         self.limit = limit
+        self.cache_directory = cache_directory
+        self.serve_flags = tuple(serve_flags)
         self._condition = threading.Condition()
         self._hosts: list[_Host] = []
         self._starting = 0
@@ -1466,13 +1644,19 @@ class _Pool:
         with self._condition:
             if kind == "message":
                 if value.get("type") == "state":
-                    if value["state"] == "ready":
-                        host.ready = True
-                    else:
+                    if value["state"] != "ready":
                         host.available = False
+                    elif (client := package_version()) is not None and (
+                        reported := value["details"].get("hostVersion")
+                    ) != client:
+                        # A host of another release is never used, whatever it is asked.
+                        host.available = False
+                        kind, value = "other-release", reported
+                    else:
+                        host.ready = True
                 elif value.get("type") == "fatal" or value.get("hostState") == "draining":
                     host.available = False
-            elif kind in ("invalid", "write-failed"):
+            elif kind in ("invalid", "write-failed", "foreign"):
                 host.available = False
             if host.owner is not None:
                 host.owner.put((kind, value))
@@ -1484,6 +1668,10 @@ class _Pool:
         with self._condition:
             host.alive = False
             host.available = False
+            # The writer waits for this to end; nothing more will be written to a host that is gone.
+            if not host.input_closed:
+                host.input_closed = True
+                host.close_input()
             if host in self._hosts:
                 self._hosts.remove(host)
             if host.owner is not None:
@@ -1509,59 +1697,84 @@ class _Pool:
         for host in idle:
             host.exited.wait()
 
-    def _acquire(
+    @contextlib.contextmanager
+    def _lease(
         self,
         modes: _HostModes,
         events: queue.Queue[tuple[str, Any]],
         cancel: threading.Event | None,
-    ) -> tuple[_Host, bool]:
+    ) -> Iterator[tuple[_Host, bool]]:
         """An idle host started with the environment the request would start one with, else a new
         one, ending an idle host of another environment to make room. Requests wait first come,
-        first served. Returns the host and whether it is new (not yet ``ready``)."""
-        environment = modes.environment()
+        first served. Yields the host and whether it is new (not yet ``ready``). Leaving releases
+        the host, or ends it when its threads did not all start, whatever interrupted the lease."""
+        environment = modes.environment(self.cache_directory)
         key = _environment_key(environment)
         ticket = object()
-        with self._condition:
-            self._waiting.append(ticket)
-            try:
-                while True:
-                    if cancel is not None and cancel.is_set():
-                        raise Alpha2AbortError()
-                    if self._waiting[0] is ticket:
-                        idle = [
-                            host
-                            for host in self._hosts
-                            if host.available and host.ready and host.owner is None
-                        ]
-                        match = next((host for host in idle if host.key == key), None)
-                        if match is not None:
-                            match.owner = events
-                            return match, False
-                        alive = sum(1 for host in self._hosts if host.alive)
-                        if alive + self._starting < self.limit:
-                            self._starting += 1
-                            break
-                        if idle:
-                            self._retire(idle[0])
-                    self._condition.wait(_POLL_SECONDS)
-            finally:
-                self._waiting.remove(ticket)
-                self._condition.notify_all()
+        host: _Host | None = None
+        spawned: list[_Host] = []
+        fresh = False
+        starting = False
         try:
-            host = self._spawn(environment, key)
-        except BaseException:
             with self._condition:
-                self._starting -= 1
-                self._condition.notify_all()
-            raise
-        with self._condition:
-            self._starting -= 1
-            host.owner = events
-            self._hosts.append(host)
-        host.start()
-        return host, True
+                self._waiting.append(ticket)
+                try:
+                    while True:
+                        if cancel is not None and cancel.is_set():
+                            raise Alpha2AbortError()
+                        if self._waiting[0] is ticket:
+                            idle = [
+                                host
+                                for host in self._hosts
+                                if host.available and host.ready and host.owner is None
+                            ]
+                            match = next((host for host in idle if host.key == key), None)
+                            if match is not None:
+                                match.owner = events
+                                host = match
+                                break
+                            alive = sum(1 for host in self._hosts if host.alive)
+                            if alive + self._starting < self.limit:
+                                self._starting += 1
+                                starting = True
+                                break
+                            if idle:
+                                self._retire(idle[0])
+                        self._condition.wait(_POLL_SECONDS)
+                finally:
+                    self._waiting.remove(ticket)
+                    self._condition.notify_all()
+            if host is None:
+                fresh = True
+                host = self._spawn(environment, key, spawned)
+                with self._condition:
+                    self._starting -= 1
+                    starting = False
+                    host.owner = events
+                    self._hosts.append(host)
+                host.start()
+            yield host, fresh
+        finally:
+            if starting:
+                with self._condition:
+                    self._starting -= 1
+                    self._condition.notify_all()
+            if host is None and spawned:
+                host = spawned[0]
+            if host is not None:
+                if fresh and not host.threads_started():
+                    host.abandon()
+                    with self._condition:
+                        host.alive = False
+                        host.available = False
+                        host.owner = None
+                        if host in self._hosts:
+                            self._hosts.remove(host)
+                        self._condition.notify_all()
+                else:
+                    self._release(host)
 
-    def _spawn(self, environment: dict[str, str], key: str) -> _Host:
+    def _spawn(self, environment: dict[str, str], key: str, holder: list[_Host]) -> _Host:
         binary = self.binary
         # Windows starts a batch file only through a shell, which this never asks for.
         if sys.platform == "win32" and binary.suffix.lower() in (".bat", ".cmd"):
@@ -1577,7 +1790,7 @@ class _Pool:
             if refusal is not None:
                 raise Alpha2HostError("HOST_QUARANTINED", refusal)
         try:
-            return _Host(self, binary, environment, key)
+            return _Host(self, binary, environment, key, holder)
         except OSError as cause:
             refused = _host_start.spawn_refusal(binary, cause)
             if refused is not None:
@@ -1656,17 +1869,27 @@ class _Pool:
         resends = 0
         while True:
             events: queue.Queue[tuple[str, Any]] = queue.Queue()
-            host, fresh = self._acquire(modes, events, cancel)
             try:
-                return self._run(
-                    host, fresh, events, framed, request_id, modes, cancel, on_progress, extraction
-                )
+                with self._lease(modes, events, cancel) as (host, fresh):
+                    return self._run(
+                        host,
+                        fresh,
+                        events,
+                        framed,
+                        request_id,
+                        modes,
+                        cancel,
+                        on_progress,
+                        extraction,
+                    )
+            except _Unsent as unsent:
+                if resends >= _MAX_RESENDS:
+                    raise unsent.error from None
+                resends += 1
             except Alpha2HostError as error:
                 if error.code != "HOST_RETIRING" or resends >= _MAX_RESENDS:
                     raise
                 resends += 1
-            finally:
-                self._release(host)
 
     def _run(
         self,
@@ -1724,11 +1947,13 @@ class _Pool:
                     host.kill()
                     host.process.wait()
                     start_timed_out = True
+                    host.settle_stderr()
                     outcome = (
                         False,
                         Alpha2HostError(
                             "HOST_START_TIMEOUT",
                             _host_start.start_timeout_message(binary, modes.start_timeout),
+                            stderr=host.stderr_since(stderr_mark),
                         ),
                     )
                     break
@@ -1751,6 +1976,24 @@ class _Pool:
                     write_error = value
                     write_failed_at = time.monotonic()
                     continue
+                if kind in ("foreign", "other-release"):
+                    host.kill()
+                    host.process.wait()
+                    host.settle_stderr()
+                    text = (
+                        _host_start.protocol_mismatch_message(binary, value, PROTOCOL_VERSION)
+                        if kind == "foreign"
+                        else _host_start.version_mismatch_message(
+                            binary, value, package_version() or "unknown"
+                        )
+                    )
+                    outcome = (
+                        False,
+                        Alpha2HostError(
+                            "HOST_VERSION_MISMATCH", text, stderr=host.stderr_since(stderr_mark)
+                        ),
+                    )
+                    break
                 if kind == "invalid":
                     outcome = (
                         False,
@@ -1827,6 +2070,7 @@ class _Pool:
                                     message.get("phase", "frames"),
                                     message["completed"],
                                     message["total"],
+                                    message.get("restarted") is True,
                                 )
                             )
                         except Exception as cause:  # noqa: BLE001 - reported as the export's failure
@@ -1899,7 +2143,10 @@ class _Pool:
         assert exit_status is not None
         code = exit_status[0]
         tail = host.stderr_since(stderr_mark)
-        raise _exit_error(code, signal_name, tail, oom_kills_before, phase_now())
+        error = _exit_error(code, signal_name, tail, oom_kills_before, phase_now())
+        if sent and not host.wrote(sent):
+            raise _Unsent(error)
+        raise error
 
     def _cancel(
         self,
@@ -2053,7 +2300,7 @@ def _quarantine_check(binary: Path, *, again: bool = False) -> str | None:
     return refusal
 
 
-_shared_clients: dict[tuple[int, str], HostClient] = {}
+_shared_clients: dict[tuple[int, str, str | None], HostClient] = {}
 _shared_lock = threading.Lock()
 
 _clients: weakref.WeakSet[HostClient] = weakref.WeakSet()
@@ -2090,15 +2337,17 @@ if hasattr(os, "register_at_fork"):
 def _shared_client(
     host_path: PathLike | None, cache_directory: PathLike | None, concurrency: int
 ) -> HostClient:
-    """Keyed by binary and ``concurrency`` only, so calls with different modes share the bound."""
+    """Keyed by binary, cache directory and ``concurrency``, so calls with different modes share
+    the bound."""
     if not _safe_integer(concurrency) or concurrency < 1:
         raise ValueError("concurrency must be a positive integer")
     binary = resolve_host_binary(host_path, cache_directory=cache_directory)
-    key = (concurrency, str(binary))
+    cache = None if cache_directory is None else os.path.abspath(os.fspath(cache_directory))
+    key = (concurrency, str(binary), cache)
     with _shared_lock:
         client = _shared_clients.get(key)
         if client is None:
-            client = HostClient(host_path=binary, concurrency=concurrency)
+            client = HostClient(host_path=binary, concurrency=concurrency, cache_directory=cache)
             _shared_clients[key] = client
         return client
 

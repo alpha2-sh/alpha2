@@ -21,8 +21,9 @@ use alpha2_model::{
     VideoStreamShape,
 };
 use alpha2_time::MediaTime;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+pub use alpha2_host_core::requests::ProxyRequest;
 
 /// A stream only a hardware session decodes (AV1 without libdav1d) is reported `unsupported` by
 /// conform on a software-decode host, rather than failing the export at its first frame.
@@ -48,27 +49,6 @@ impl HardwareVideoDecode {
             Self::None => false,
             Self::Codecs(codecs) => codecs.contains(&codec),
             Self::PerStream => true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProxyRequest {
-    pub path: PathBuf,
-    #[serde(default)]
-    pub made_from: Option<MediaFingerprint>,
-    /// Set when the proxy was tone-mapped.
-    #[serde(default)]
-    pub color_pipeline: Option<String>,
-}
-
-impl ProxyRequest {
-    pub const fn at(path: PathBuf) -> Self {
-        Self {
-            path,
-            made_from: None,
-            color_pipeline: None,
         }
     }
 }
@@ -551,6 +531,7 @@ fn probe_media(
     ),
     String,
 > {
+    crate::heartbeat::request_step(crate::heartbeat::RequestSide::Input, "conform");
     let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
     let probe = alpha2_native::probe(path).map_err(|error| format!("{error}"))?;
     let stored_frames = probe.selected_video_stream().and_then(VideoFrameSize::of);
@@ -605,7 +586,11 @@ fn probe_media(
 /// `None` when it cannot be measured, as a browser then records none.
 fn measured_rate(path: &Path, index: usize) -> Option<alpha2_time::FrameRate> {
     let mut evidence = FrameRateEvidence::new();
-    alpha2_native::visit_packet_times(path, index, |seconds| evidence.push(seconds)).ok()?;
+    alpha2_native::visit_packet_times(path, index, |seconds| {
+        crate::heartbeat::beat_request();
+        evidence.push(seconds)
+    })
+    .ok()?;
     evidence.rate()
 }
 
@@ -614,6 +599,7 @@ fn sha256(path: &Path) -> Result<String, String> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0; 1 << 20];
     loop {
+        crate::heartbeat::beat_request();
         let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
         if read == 0 {
             break;

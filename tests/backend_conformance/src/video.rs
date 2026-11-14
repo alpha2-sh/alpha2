@@ -401,6 +401,83 @@ pub fn video_crop_shows_exactly_the_cropped_columns(backend: &dyn Backend) -> Ou
     failures.outcome()
 }
 
+/// VP9 in `WebM`, which carries no `vpcC` record, decodes every frame exactly: VP9 decoding is
+/// bit-exact, so the visible samples hash to what the reference decoder gives.
+///
+/// # Errors
+/// What differed.
+pub fn video_vp9_without_a_record_decodes_exactly(backend: &dyn Backend) -> Outcome {
+    let mut failures = Failures::default();
+    // FNV-1a over each frame's visible Y, then Cb, then Cr samples in raster order, each sample
+    // as two little-endian bytes, from `FFmpeg`'s `vp9` decoder.
+    for (name, frames, expected) in [
+        ("vp9-128.webm", 30, 0xe9bb_05a8_8ed7_fa22_u64),
+        ("vp9.webm", 15, 0x021e_0f29_6677_ac71),
+        ("vp9-color.webm", 15, 0xd453_725d_4da1_3f25),
+    ] {
+        let Some(mut decoder) = video_or_refusal(backend, name)? else {
+            continue;
+        };
+        let cancel = CancelToken::default();
+        let mut hash = FNV_OFFSET;
+        let mut count = 0;
+        loop {
+            match decoder
+                .decode_next(&cancel)
+                .map_err(|error| format!("{name}: {error}"))?
+            {
+                DecodeEvent::Video(frame) => {
+                    count += 1;
+                    let Some(next) = visible_samples_hash(&frame, hash) else {
+                        failures.check(false, || {
+                            format!("{name} frame {count}: unreadable {:?}", frame.pixel_format)
+                        });
+                        break;
+                    };
+                    hash = next;
+                }
+                DecodeEvent::EndOfStream => break,
+                _ => {}
+            }
+        }
+        failures.check(count == frames, || {
+            format!("{name}: {count} frames, not {frames}")
+        });
+        failures.check(hash == expected, || {
+            format!("{name}: samples hash to {hash:#018x}, not {expected:#018x}")
+        });
+    }
+    failures.outcome()
+}
+
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// Folds the visible samples of `frame` into the FNV-1a `hash`; `None` when a sample is missing.
+fn visible_samples_hash(frame: &DecodedVideoFrame, mut hash: u64) -> Option<u64> {
+    let PixelFormat::Yuv(format) = frame.pixel_format else {
+        return None;
+    };
+    let rect = frame.visible_rect;
+    for component in 0..3 {
+        let (shift_x, shift_y) = if component == 0 {
+            (0, 0)
+        } else {
+            (format.chroma_shift_x, format.chroma_shift_y)
+        };
+        let (x, y) = (rect.x >> shift_x, rect.y >> shift_y);
+        let width = (rect.x + rect.width).div_ceil(1 << shift_x) - x;
+        let height = (rect.y + rect.height).div_ceil(1 << shift_y) - y;
+        for row in y..y + height {
+            for column in x..x + width {
+                for byte in sample(frame, component, row, column)?.to_le_bytes() {
+                    hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+                }
+            }
+        }
+    }
+    Some(hash)
+}
+
 /// Sample `x` of row `row` of component `component` (Y, U, V) of a YCbCr frame, wherever its
 /// layout keeps it.
 fn sample(frame: &DecodedVideoFrame, component: usize, row: u32, x: u32) -> Option<u16> {

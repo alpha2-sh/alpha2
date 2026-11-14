@@ -1194,13 +1194,8 @@ fn the_render_cache_writer_never_holds_up_a_skipping_export() {
         report["writeErrors"].as_u64().expect("writeErrors"),
     );
     assert!(writes >= 1, "{report}");
-    if errors == 0 {
-        assert_eq!(writes + busy, 40, "{report}");
-    } else {
-        // A failed write stops the cache, so the frame counts no longer add up.
-        eprintln!("the render cache failed {errors} write(s) during the test: {report}");
-        assert!(writes + busy + errors <= 40, "{report}");
-    }
+    // A failed write drops only its own frame.
+    assert_eq!(writes + busy + errors, 40, "{report}");
     assert_eq!(report["backlog"], json!("skip"));
 
     let mut full = RenderCache::open(
@@ -1639,4 +1634,200 @@ fn the_cache_key_changes_with_the_shader_compiler() {
         key(r"DXC 1.9.2609.1 (C:\alpha2\dxcompiler.dll)")
     );
     assert_eq!(key("FXC"), key("FXC"));
+}
+
+/// Frames `0..count` of 64x64, written one at a time, with a directory in the way of each frame
+/// `blocked` names, so its rename fails. Returns the files on disk (`F` or `-`) and the report.
+fn bake_with_blocked_frames(label: &str, count: u8, blocked: &[u8]) -> (String, Value) {
+    use crate::render_cache::{Backlog, BakedFrame, RenderCache, RenderCacheRequest};
+    let directory = scratch_directory(label);
+    let rate = alpha2_time::FrameRate::new(30, 1).expect("rate");
+    let frame = |index: u8| BakedFrame {
+        y: vec![index; 64 * 64],
+        u: vec![index.wrapping_add(1); 32 * 32],
+        v: vec![index.wrapping_add(2); 32 * 32],
+    };
+    let request = RenderCacheRequest {
+        directory: directory.to_path_buf(),
+        quota_bytes: 1 << 30,
+        backlog: Backlog::Wait,
+    };
+    let mut cache = RenderCache::open(
+        &request,
+        [7; 32],
+        h264_frames(64, 64),
+        &CancelToken::default(),
+    )
+    .expect("cache");
+    let keys: Vec<String> = (0..i64::from(count))
+        .map(|index| cache.key(MediaTime::from_ticks(index * 4_000), rate))
+        .collect();
+    cache.write(keys[0].clone(), frame(0), false);
+    cache.settle();
+    let snapshot = std::fs::read_dir(directory.join("v2"))
+        .expect("snapshots")
+        .map(|entry| entry.expect("snapshot").path())
+        .next()
+        .expect("the snapshot directory");
+    let path_of = |key: &str| snapshot.join(&key[..2]).join(format!("{key}.frame"));
+    for &index in blocked {
+        std::fs::create_dir_all(path_of(&keys[usize::from(index)]).join("in-the-way"))
+            .expect("obstacle");
+    }
+    for index in 1..count {
+        if cache.accepts() {
+            cache.write(keys[usize::from(index)].clone(), frame(index), false);
+            cache.settle();
+        }
+    }
+    let report = cache.finish();
+    let stored = keys
+        .iter()
+        .map(|key| if path_of(key).is_file() { 'F' } else { '-' })
+        .collect();
+    std::fs::remove_dir_all(&directory).ok();
+    (stored, report)
+}
+
+#[test]
+fn one_failed_frame_write_drops_that_frame_and_baking_goes_on() {
+    let (stored, report) = bake_with_blocked_frames("cache-one-error", 10, &[3]);
+    assert_eq!(stored, "FFF-FFFFFF", "{report}");
+    assert_eq!(report["writes"], json!(9), "{report}");
+    assert_eq!(report["writeErrors"], json!(1), "{report}");
+}
+
+#[test]
+fn failed_frame_writes_in_a_row_stop_the_baking() {
+    let most = crate::render_cache::MAX_CONSECUTIVE_WRITE_FAILURES;
+    let blocked: Vec<u8> = (1..=u8::try_from(most).expect("small")).collect();
+    let count = u8::try_from(most).expect("small") + 3;
+    let (stored, report) = bake_with_blocked_frames("cache-errors-in-a-row", count, &blocked);
+    assert_eq!(
+        stored,
+        format!("F{}--", "-".repeat(blocked.len())),
+        "{report}"
+    );
+    assert_eq!(report["writeErrors"], json!(most), "{report}");
+}
+
+/// A raw deflate stream of `length` zero bytes: a fixed-Huffman block of one literal and then
+/// copies of 258 bytes at distance 1, about 13 bits per copy.
+fn deflated_zeros(length: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    let (mut bits, mut count) = (0_u64, 0_u32);
+    let mut put = |value: u64, width: u32| {
+        bits |= value << count;
+        count += width;
+        while count >= 8 {
+            out.push((bits & 0xff) as u8);
+            bits >>= 8;
+            count -= 8;
+        }
+    };
+    // Final block, fixed codes; Huffman codes go most significant bit first, so they are reversed.
+    put(1, 1);
+    put(1, 2);
+    put(0x0c, 8); // literal 0
+    let mut left = length.saturating_sub(1);
+    while left >= 258 {
+        put(0xa3, 8); // length code 285 (258 bytes)
+        put(0, 5); // distance code 0 (distance 1)
+        left -= 258;
+    }
+    for _ in 0..left {
+        put(0x0c, 8);
+    }
+    put(0, 7); // end of block
+    put(0, 7);
+    out
+}
+
+#[test]
+fn a_frame_file_that_inflates_past_its_planes_is_deleted_without_inflating_it() {
+    use crate::render_cache::{Backlog, RenderCache, RenderCacheRequest};
+    let directory = scratch_directory("cache-inflation");
+    let rate = alpha2_time::FrameRate::new(30, 1).expect("rate");
+    let request = RenderCacheRequest {
+        directory: directory.to_path_buf(),
+        quota_bytes: 1 << 30,
+        backlog: Backlog::Wait,
+    };
+    let planes = 64 * 64 * 3 / 2;
+    let header_bytes = 64;
+    let bodies = [
+        ("64 times the planes", deflated_zeros(64 * planes)),
+        ("1 GiB", deflated_zeros(1 << 30)),
+        (
+            "longer than any frame",
+            vec![0; 2 * usize::try_from(planes).expect("small")],
+        ),
+    ];
+    for (what, body) in bodies {
+        let mut cache = RenderCache::open(
+            &request,
+            [8; 32],
+            h264_frames(64, 64),
+            &CancelToken::default(),
+        )
+        .expect("cache");
+        let key = cache.key(MediaTime::from_ticks(0), rate);
+        cache.write(key.clone(), noise_frame(3, 64, 64), false);
+        cache.settle();
+        let path = walk(&directory).pop().expect("the frame");
+        let mut forged = std::fs::read(&path).expect("frame")[..header_bytes].to_vec();
+        forged.extend_from_slice(&body);
+        std::fs::write(&path, &forged).expect("forge");
+        let started = Instant::now();
+        assert!(
+            cache.read(&key).is_none(),
+            "{what}: the forged frame was taken"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "{what}: {:?}",
+            started.elapsed()
+        );
+        assert!(!path.exists(), "{what}: the forged frame was kept");
+        let report = cache.finish();
+        assert_eq!(report["corrupt"], json!(1), "{what}: {report}");
+    }
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn an_idle_host_holds_no_result_cache_entries_or_pooled_frames_after_an_export() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("result-cache-idle");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
+    let device = std::sync::Arc::clone(host.device());
+    let request = json!({
+        "protocolVersion": 2, "requestId": "idle", "operation": "export",
+        "project": conform_project(&json!({})),
+        "assets": {"video": corpus("parity-rgb.mov")},
+        "startTicks": 0, "endTicks": alpha2_time::TICKS_PER_SECOND,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "output": directory.join("idle.mp4"),
+    });
+    let result = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |_| Ok(()),
+        )
+        .expect("export");
+    assert!(
+        device.renderer.result_cache_stats().bytes > 0,
+        "the request still holds its entries: {}",
+        result["resultCache"]
+    );
+    drop(host);
+    assert_eq!(device.renderer.result_cache_stats().bytes, 0);
+    assert_eq!(
+        device.renderer.release_idle_memory(),
+        0,
+        "pools were released"
+    );
+    std::fs::remove_dir_all(&directory).ok();
 }

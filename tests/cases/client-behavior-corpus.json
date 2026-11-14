@@ -95,6 +95,40 @@
     }
   },
   {
+    "id": "extract-render-inputs-follow-the-caller",
+    "kind": "request-paths",
+    "given": {
+      "directories": ["first", "second"],
+      "requests": [
+        {
+          "operation": "extract",
+          "fields": {
+            "assets": { "a": "clip.mp4" },
+            "frames": { "seq": ["frames/1.png", null] },
+            "resources": { "seq": { "index.json": "resources/index.json" } },
+            "effectAssets": { "lut": "luts/look.cube" },
+            "plugin": { "manifest": "plugins/levels/manifest.json" }
+          }
+        }
+      ]
+    },
+    "expect": {
+      "hosts": 1,
+      "requests": [
+        {
+          "resolved": [
+            "/assets/a",
+            "/frames/seq/0",
+            "/resources/seq/index.json",
+            "/effectAssets/lut",
+            "/plugin/manifest"
+          ],
+          "unchanged": ["/frames/seq/1"]
+        }
+      ]
+    }
+  },
+  {
     "id": "compose-font-paths-follow-the-caller",
     "kind": "request-paths",
     "clients": ["node"],
@@ -162,6 +196,125 @@
       "code": "EXTRACTOR_FAILED",
       "messageContains": "must be",
       "nextRequest": "same host"
+    }
+  },
+  {
+    "id": "protocol-1-host-fails-at-once",
+    "kind": "foreign-host",
+    "given": {
+      "stdout": "{\"protocolVersion\":1,\"type\":\"ready\"}\n",
+      "then": "waits for input",
+      "startTimeoutMs": 30000
+    },
+    "expect": {
+      "code": "HOST_VERSION_MISMATCH",
+      "messageContains": ["protocol 1", "protocol 2"],
+      "namesBinary": true,
+      "withinMs": 5000,
+      "hostEnded": true
+    }
+  },
+  {
+    "id": "ready-with-another-version",
+    "kind": "host-version",
+    "given": { "hostVersions": ["0.0.1", null] },
+    "expect": {
+      "code": "HOST_VERSION_MISMATCH",
+      "namesHostVersion": true,
+      "namesClientVersion": true,
+      "namesBinary": true,
+      "hostEnded": true
+    }
+  },
+  {
+    "id": "start-timeout-carries-the-preamble",
+    "kind": "start-timeout",
+    "given": {
+      "stdout": "a library's diagnostic line\n",
+      "stderr": "held before ready\n",
+      "startTimeoutMs": 2000
+    },
+    "expect": {
+      "code": "HOST_START_TIMEOUT",
+      "stderrContains": ["a library's diagnostic line", "held before ready"]
+    }
+  },
+  {
+    "id": "idle-host-killed-then-request",
+    "kind": "dead-idle-host",
+    "given": {
+      "ends": ["exits after answering", "killed, then gone", "killed"],
+      "requestsAfterEach": 3
+    },
+    "expect": {
+      "afterGone": "ok on another host",
+      "afterKill": "ok, or HOST_EXITED",
+      "firstHostRequests": 1
+    }
+  },
+  {
+    "id": "host-dies-reading-every-frame",
+    "kind": "dies-reading",
+    "given": { "projectNameBytes": 1048576 },
+    "expect": { "code": "HOST_EXITED", "hosts": 4 }
+  },
+  {
+    "id": "grandchild-holds-the-pipes",
+    "kind": "grandchild-holds-the-pipes",
+    "platforms": ["posix"],
+    "given": {
+      "host": "answers, starts a sleeper that inherits its stdout and stderr, exits",
+      "concurrency": 1
+    },
+    "expect": {
+      "nextRequest": "ok on another host",
+      "withinMs": 9000,
+      "closeWithinMs": 9000
+    }
+  },
+  {
+    "id": "another-environment-is-not-starved",
+    "kind": "arrival-order",
+    "given": {
+      "concurrency": 1,
+      "first": "software",
+      "second": "auto",
+      "thenKeepPending": { "videoDecode": "software", "depth": 2, "total": 12 }
+    },
+    "expect": { "secondCompletes": 2 }
+  },
+  {
+    "id": "cache-directory-reaches-the-host",
+    "kind": "cache-directory",
+    "given": { "option": "option/cache", "environment": "environment/cache" },
+    "expect": { "hostVariable": "ALPHA2_HOST_CACHE_DIR", "absoluteUnder": "the calling directory" }
+  },
+  {
+    "id": "install-starts-a-new-generation",
+    "kind": "install-generation",
+    "given": {
+      "calls": ["capabilities", "install OpenH264", "capabilities", "export"]
+    },
+    "expect": {
+      "hosts": 2,
+      "afterInstall": "capabilities and the export run on the second host"
+    }
+  },
+  {
+    "id": "defect-answer-retires-the-host",
+    "kind": "defect",
+    "given": {
+      "operations": ["export", "conform"],
+      "firstHost": "says draining (reason defect), answers INTERNAL with hostState draining, then answers HOST_RETIRING until its input ends",
+      "failureReport": { "export": { "code": "DEFECT", "phase": "render", "resource": "unknown" } }
+    },
+    "expect": {
+      "code": "INTERNAL",
+      "failureCode": "DEFECT",
+      "exportRetry": { "retry": true, "delayMs": 0, "profile": "default" },
+      "nextRequest": "ok on a second host",
+      "firstHostRequests": 1,
+      "firstHostEnded": true
     }
   }
 ]

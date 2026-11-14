@@ -21,6 +21,7 @@ use alpha2_engine::extract::{
     ArtifactKind, AudioInput, Descriptor, Emitter, Extractor, ExtractorError, ManifestError,
     PassInfo, PluginArtifact, PluginManifest, RunContext, VideoFormat, VideoInput, WASM_TARGET,
 };
+use alpha2_media::CancelToken;
 use alpha2_model::{DataInterval, DataWord, MAX_DATA_CHANNELS, MAX_DATA_LABEL_BYTES, MadeByPlugin};
 use alpha2_plugin_abi::records::{Limits, Record, records};
 use alpha2_plugin_abi::{direction, status, video_format};
@@ -39,6 +40,8 @@ pub mod codes {
     pub const NO_ARTIFACT: &str = "PLUGIN_NO_ARTIFACT";
     /// Only a native artifact runs here, and the caller did not allow native code.
     pub const NATIVE_REFUSED: &str = "PLUGIN_NATIVE_REFUSED";
+    /// The host's plugin policy refuses the plugin or one of its files.
+    pub const REFUSED: &str = "PLUGIN_REFUSED";
     /// The artifact's descriptor differs from the manifest's.
     pub const DESCRIPTOR_MISMATCH: &str = "PLUGIN_DESCRIPTOR_MISMATCH";
     /// The wasm module uses relaxed SIMD, threads, shared memory, more than one memory or 64-bit
@@ -52,13 +55,18 @@ pub mod codes {
     pub const LIMIT: &str = "PLUGIN_LIMIT";
 }
 
+/// The code of a load or call that stopped because the caller's cancel token was set. It is not a
+/// plugin code: the request ends as cancelled.
+pub const CANCELLED: &str = "CANCELLED";
+
 /// Every plugin error code.
-pub const PLUGIN_CODES: [&str; 10] = [
+pub const PLUGIN_CODES: [&str; 11] = [
     codes::FETCH_FAILED,
     codes::HASH_MISMATCH,
     codes::ABI_UNSUPPORTED,
     codes::NO_ARTIFACT,
     codes::NATIVE_REFUSED,
+    codes::REFUSED,
     codes::DESCRIPTOR_MISMATCH,
     codes::UNSUPPORTED_FEATURE,
     codes::LOAD_FAILED,
@@ -111,7 +119,8 @@ pub fn parse_manifest(text: &str) -> Result<PluginManifest, PluginError> {
     PluginManifest::from_json(text).map_err(PluginError::from)
 }
 
-/// What the caller allows a plugin.
+/// What the caller allows a plugin. A program that calls [`load`] is its own operator: it decides
+/// here what the `alpha2-host` operator decides with its `serve` flags.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     /// Native code runs with the process's rights; refused unless allowed.
@@ -252,12 +261,20 @@ pub trait Fetch {
     /// `PLUGIN_FETCH_FAILED`, or `PLUGIN_HASH_MISMATCH` when the fetcher checks too.
     fn fetch(&mut self, url: &str, sha256: &str, bytes: u64) -> Result<Fetched, PluginError>;
 
-    /// The file to load for the native artifact at `verified`, whose bytes the loader has checked;
-    /// macOS hosts sign a copy here.
+    /// The file to load for the native artifact read from `verified`, whose checked `bytes` have
+    /// the pinned `sha256`. Called only when this process has not loaded that artifact yet; the
+    /// library then stays loaded until the process exits. A host loads its own copy of the bytes
+    /// here, so the file it checked cannot be replaced before the load.
     ///
     /// # Errors
     /// `PLUGIN_LOAD_FAILED` when it cannot be prepared.
-    fn prepare_native(&mut self, verified: &Path) -> Result<PathBuf, PluginError> {
+    fn prepare_native(
+        &mut self,
+        verified: &Path,
+        bytes: &[u8],
+        sha256: &str,
+    ) -> Result<PathBuf, PluginError> {
+        let _ = (bytes, sha256);
         Ok(verified.to_path_buf())
     }
 }
@@ -268,24 +285,89 @@ fn read_verified(
     sha256: &str,
     size: u64,
 ) -> Result<(PathBuf, Vec<u8>), PluginError> {
+    use std::io::Read;
     let Fetched { path, local } = fetch.fetch(url, sha256, size)?;
-    let bytes = std::fs::read(&path).map_err(|error| {
+    let failed = |error: std::io::Error| {
         PluginError::new(codes::FETCH_FAILED, format!("{}: {error}", path.display()))
-    })?;
+    };
+    let file = std::fs::File::open(&path).map_err(failed)?;
+    let length = file.metadata().map_err(failed)?.len();
+    let mut bytes = Vec::with_capacity(usize::try_from(length.min(size)).unwrap_or(0));
+    file.take(size.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(failed)?;
+    if bytes.len() as u64 > size {
+        let message = if local {
+            format!("{url} is longer than the {size} bytes the manifest pins")
+        } else {
+            format!("{url} does not match the length and SHA-256 the manifest pins")
+        };
+        return Err(PluginError::new(codes::HASH_MISMATCH, message));
+    }
     verify(&bytes, sha256, size, url, local)?;
     Ok((path, bytes))
 }
 
 /// The longest plugin log line written; the rest is cut.
 const MAX_LOG_BYTES: usize = 2048;
+/// Log text one run may write; later lines are dropped after one notice.
+const LOG_BUDGET_BYTES: usize = 64 * 1024;
+/// The longest `fail` message kept; the rest is cut.
+const MAX_FAIL_BYTES: usize = 4096;
 
-/// Writes a plugin's diagnostic to standard error, where host diagnostics go.
-fn log_line(message: &str) {
-    let mut end = message.len().min(MAX_LOG_BYTES);
-    while !message.is_char_boundary(end) {
-        end -= 1;
+/// UTF-8 text of at most `max` of `bytes`, a sequence the cut splits dropped.
+fn bounded_text(bytes: &[u8], max: usize) -> String {
+    let mut kept = &bytes[..bytes.len().min(max)];
+    if kept.len() < bytes.len()
+        && let Err(error) = std::str::from_utf8(kept)
+        && error.error_len().is_none()
+    {
+        kept = &kept[..error.valid_up_to()];
     }
-    eprintln!("plugin: {}", &message[..end]);
+    String::from_utf8_lossy(kept).into_owned()
+}
+
+/// What is left of a run's log budget.
+#[derive(Debug)]
+struct LogBudget {
+    remaining: usize,
+    exhausted: bool,
+}
+
+impl Default for LogBudget {
+    fn default() -> Self {
+        Self {
+            remaining: LOG_BUDGET_BYTES,
+            exhausted: false,
+        }
+    }
+}
+
+impl LogBudget {
+    /// The line to write for a plugin's `message`, cut to [`MAX_LOG_BYTES`]; once the budget is
+    /// spent, one notice and then nothing.
+    fn line(&mut self, message: &[u8]) -> Option<String> {
+        if self.exhausted {
+            return None;
+        }
+        let text = bounded_text(message, MAX_LOG_BYTES);
+        if text.len() > self.remaining {
+            self.exhausted = true;
+            return Some(format!(
+                "the plugin logged more than {LOG_BUDGET_BYTES} bytes; its further lines are dropped"
+            ));
+        }
+        self.remaining -= text.len();
+        Some(text)
+    }
+
+    /// Writes a plugin's diagnostic to standard error, where host diagnostics go; a closed stream
+    /// drops it.
+    fn log(&mut self, message: &[u8]) {
+        if let Some(line) = self.line(message) {
+            alpha2_os::diagnostic!("plugin: {line}");
+        }
+    }
 }
 
 /// What one plugin call emitted, or why it failed.
@@ -404,6 +486,7 @@ pub struct PluginExtractor {
     params: serde_json::Map<String, serde_json::Value>,
     plugin: MadeByPlugin,
     transport: Box<dyn Transport>,
+    native: bool,
 }
 
 impl fmt::Debug for PluginExtractor {
@@ -417,24 +500,37 @@ impl fmt::Debug for PluginExtractor {
 }
 
 /// Loads the artifact `policy` picks from `manifest`, fetching it and every resource through
-/// `fetch`, to run with `params`.
+/// `fetch`, to run with `params`. Once `cancel` is set, the load stops before the next file, and
+/// a wasm call of the plugin it returns stops within about 50 ms; a module compile and a native
+/// call run to their end.
 ///
 /// # Errors
-/// A [`PluginError`] for the first check that fails.
+/// A [`PluginError`] for the first check that fails, [`CANCELLED`] once `cancel` is set.
 pub fn load(
     manifest: &PluginManifest,
     params: serde_json::Map<String, serde_json::Value>,
     policy: &Policy,
     fetch: &mut dyn Fetch,
+    cancel: &CancelToken,
 ) -> Result<PluginExtractor, PluginError> {
     let artifact = select(manifest, policy, TARGET)?;
+    let stopped = || {
+        if cancel.is_cancelled() {
+            Err(PluginError::new(CANCELLED, "the plugin load was cancelled"))
+        } else {
+            Ok(())
+        }
+    };
     let mut resources = HashMap::new();
     for resource in &manifest.resources {
+        stopped()?;
         let (_, bytes) = read_verified(fetch, &resource.url, &resource.sha256, resource.bytes)?;
         resources.insert(resource.name.clone(), bytes);
     }
+    stopped()?;
     let (path, bytes) = read_verified(fetch, &artifact.url, &artifact.sha256, artifact.bytes)?;
     let caps = output_caps(&manifest.descriptor);
+    let native = artifact.kind == ArtifactKind::Cdylib;
     let mut transport: Box<dyn Transport> = match artifact.kind {
         ArtifactKind::Wasm => Box::new(wasm::WasmTransport::new(
             &manifest.id,
@@ -443,9 +539,11 @@ pub fn load(
             resources,
             caps,
             policy,
+            cancel.clone(),
         )?),
         ArtifactKind::Cdylib => Box::new(native::NativeTransport::new(
-            &fetch.prepare_native(&path)?,
+            &artifact.sha256,
+            || fetch.prepare_native(&path, &bytes, &artifact.sha256),
             resources,
             caps,
         )?),
@@ -479,10 +577,18 @@ pub fn load(
             artifact_sha256: artifact.sha256.clone(),
         },
         transport,
+        native,
     })
 }
 
 impl PluginExtractor {
+    /// A native library runs in the process with no deadline of its own; a wasm module's calls
+    /// end at the policy's call deadline.
+    #[must_use]
+    pub const fn is_native(&self) -> bool {
+        self.native
+    }
+
     /// What `made_by.plugin` records for data this plugin makes.
     #[must_use]
     pub fn made_by(&self) -> &MadeByPlugin {

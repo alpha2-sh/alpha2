@@ -8,7 +8,8 @@
 /**
  * Failure class. `RESOURCE_LIMIT` means the export was stopped before exceeding a budget.
  * `RESOURCE_BUSY` means a device is held by other work (for example all hardware encoder
- * sessions) and may free up later.
+ * sessions) and may free up later. `DEFECT` is an engine fault (a panic or a wasm trap), which a
+ * fresh worker or host may not repeat.
  */
 export type ExportFailureCode =
   | "OUT_OF_MEMORY"
@@ -25,6 +26,7 @@ export type ExportFailureCode =
   | "RESOURCE_LIMIT"
   | "RESOURCE_BUSY"
   | "CANCELLED"
+  | "DEFECT"
   | "UNKNOWN";
 
 /** Export step a failure belongs to. Steps overlap in a pipelined export. */
@@ -138,6 +140,7 @@ const CODES = new Set<string>([
   "RESOURCE_LIMIT",
   "RESOURCE_BUSY",
   "CANCELLED",
+  "DEFECT",
   "UNKNOWN",
 ]);
 
@@ -212,84 +215,184 @@ export interface FailureClass {
 
 const permanent: FailureClass = { code: "INVALID_INPUT", resource: "unknown" };
 const unknown: FailureClass = { code: "UNKNOWN", resource: "unknown" };
+const defect: FailureClass = { code: "DEFECT", resource: "unknown" };
+
+/** The native host protocol's codes, which `alpha2-wasm` shares. */
+type ProtocolErrorCode =
+  | "UNSUPPORTED_PROTOCOL"
+  | "INVALID_REQUEST"
+  | "INVALID_INPUT"
+  | "CONFORM_FAILED"
+  | "MISSING_INPUT"
+  | "INCOMPLETE_COMPOSITION"
+  | "EFFECT_ERROR"
+  | "HARDWARE_DECODE_UNAVAILABLE"
+  | "COPY_INELIGIBLE"
+  | "GPU_OUTPUT_UNAVAILABLE"
+  | "OUTPUT_IN_USE"
+  | "GPU_DEVICE_LOST"
+  | "GPU_DEVICE_HUNG"
+  | "GPU_TIMEOUT"
+  | "DECODE_STALLED"
+  | "ENCODE_STALLED"
+  | "IO_ERROR"
+  | "OUTPUT_PUBLISH_FAILED"
+  | "CANCELLED"
+  | "RESOURCE_LIMIT"
+  | "HOST_RETIRING"
+  | "INVALID_EMIT"
+  | "EXTRACTOR_FAILED"
+  | "EXTRACTOR_TIMEOUT"
+  | "PLUGIN_FETCH_FAILED"
+  | "PLUGIN_HASH_MISMATCH"
+  | "PLUGIN_ABI_UNSUPPORTED"
+  | "PLUGIN_NO_ARTIFACT"
+  | "PLUGIN_NATIVE_REFUSED"
+  | "PLUGIN_REFUSED"
+  | "PLUGIN_DESCRIPTOR_MISMATCH"
+  | "PLUGIN_UNSUPPORTED_FEATURE"
+  | "PLUGIN_LOAD_FAILED"
+  | "PLUGIN_TRAPPED"
+  | "PLUGIN_LIMIT"
+  | "GPU_INIT_FAILED"
+  | "ENCODE_ERROR"
+  | "ENCODER_BUSY"
+  | "INTERNAL"
+  | "ALPHA2_ERROR";
+
+/** Codes only the host clients make (`@alpha2-sh/node` and the Python package). */
+type ClientErrorCode =
+  | "HOST_NOT_FOUND"
+  | "HOST_VERSION_MISMATCH"
+  | "HOST_NOT_EXECUTABLE"
+  | "HOST_LOAD_FAILED"
+  | "HOST_START_FAILED"
+  | "HOST_START_TIMEOUT"
+  | "HOST_QUARANTINED"
+  | "HOST_BLOCKED"
+  | "HOST_WRITE_FAILED"
+  | "HOST_EXITED"
+  | "HOST_OOM_KILLED"
+  | "INVALID_RESPONSE"
+  | "PROGRESS_CALLBACK_FAILED"
+  | "ABORTED";
 
 /**
- * Failure class of each error code: native host protocol codes (shared by `alpha2-wasm`), codes
- * only `@alpha2-sh/node` produces, and browser decode refusals. Must match the host's
- * `classify_failure`; `tests/cases/failure-classes.json` checks both.
+ * Codes only the browser runtime makes: decode refusals, the frame supply, wasm traps, its
+ * workers, and the wasm binding's own `INVALID_STATE`.
  */
-const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
-  UNSUPPORTED_PROTOCOL: permanent,
-  INVALID_REQUEST: permanent,
-  INVALID_INPUT: permanent,
-  CONFORM_FAILED: permanent,
-  MISSING_INPUT: permanent,
-  INCOMPLETE_COMPOSITION: permanent,
-  EFFECT_ERROR: permanent,
-  HARDWARE_DECODE_UNAVAILABLE: permanent,
-  COPY_INELIGIBLE: permanent,
-  GPU_OUTPUT_UNAVAILABLE: permanent,
-  OUTPUT_IN_USE: permanent,
-  GPU_DEVICE_LOST: { code: "DEVICE_LOST", resource: "gpu" },
-  GPU_DEVICE_HUNG: { code: "DEVICE_HUNG", resource: "gpu" },
-  GPU_TIMEOUT: { code: "GPU_TIMEOUT", resource: "gpu" },
-  DECODE_STALLED: { code: "GPU_TIMEOUT", resource: "unknown" },
-  ENCODE_STALLED: { code: "GPU_TIMEOUT", resource: "unknown" },
-  IO_ERROR: { code: "OUTPUT_IO_FAILED", resource: "unknown" },
-  OUTPUT_PUBLISH_FAILED: { code: "OUTPUT_IO_FAILED", resource: "unknown" },
-  CANCELLED: { code: "CANCELLED", resource: "unknown" },
-  RESOURCE_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
-  // Never started: the host was retiring, and another host runs it.
-  HOST_RETIRING: { code: "HOST_EXITED", resource: "unknown" },
-  // An extractor's own output or failure repeats on a retry; a slow client may not.
-  INVALID_EMIT: permanent,
-  EXTRACTOR_FAILED: permanent,
-  EXTRACTOR_TIMEOUT: unknown,
-  // A plugin that is refused, does not load or traps does so again; a server may answer later.
-  PLUGIN_FETCH_FAILED: unknown,
-  PLUGIN_HASH_MISMATCH: permanent,
-  PLUGIN_ABI_UNSUPPORTED: permanent,
-  PLUGIN_NO_ARTIFACT: permanent,
-  PLUGIN_NATIVE_REFUSED: permanent,
-  PLUGIN_DESCRIPTOR_MISMATCH: permanent,
-  PLUGIN_UNSUPPORTED_FEATURE: permanent,
-  PLUGIN_LOAD_FAILED: permanent,
-  PLUGIN_TRAPPED: permanent,
-  PLUGIN_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
-  GPU_INIT_FAILED: unknown,
-  ENCODE_ERROR: unknown,
-  ENCODER_BUSY: { code: "RESOURCE_BUSY", resource: "gpu" },
-  INTERNAL: unknown,
-  ALPHA2_ERROR: unknown,
-  // `@alpha2-sh/node` setup errors that a retry does not fix.
-  HOST_NOT_FOUND: permanent,
-  HOST_NOT_EXECUTABLE: permanent,
-  HOST_LOAD_FAILED: permanent,
-  HOST_START_FAILED: unknown,
-  // A loaded machine may start the host late, so a retry may work.
-  HOST_START_TIMEOUT: unknown,
-  HOST_QUARANTINED: permanent,
-  HOST_BLOCKED: permanent,
-  HOST_WRITE_FAILED: unknown,
-  HOST_EXITED: { code: "HOST_EXITED", resource: "unknown" },
-  // The cgroup's `oom_kill` count rose; a retry with a smaller `memory.scale` may fit.
-  HOST_OOM_KILLED: { code: "OUT_OF_MEMORY", resource: "cpu" },
-  INVALID_RESPONSE: unknown,
-  PROGRESS_CALLBACK_FAILED: unknown,
-  ABORTED: { code: "CANCELLED", resource: "unknown" },
-  // Browser decode refusals repeat on every attempt.
-  DECODE_UNAVAILABLE: permanent,
-  PLANAR_DECODE_UNAVAILABLE: permanent,
-  NON_PLANAR_FRAME: permanent,
-  FRAME_SUPPLY_FAILED: unknown,
-  SOFTWARE_DECODE_REQUIRED: unknown,
-});
+export const BROWSER_ERROR_CODES = [
+  "DECODE_UNAVAILABLE",
+  "PLANAR_DECODE_UNAVAILABLE",
+  "NON_PLANAR_FRAME",
+  "FRAME_SUPPLY_FAILED",
+  "SOFTWARE_DECODE_REQUIRED",
+  "WASM_TRAP",
+  "WASM_TRAPPED",
+  "WASM_COMPILE_ERROR",
+  "WASM_LINK_ERROR",
+  "RENDER_WORKER_ERROR",
+  "RENDER_WORKER_FAILED",
+  "AUDIO_WORKER_ERROR",
+  "INVALID_STATE",
+] as const;
+
+/** A code the browser runtime makes; see {@link BROWSER_ERROR_CODES}. */
+export type BrowserErrorCode = (typeof BROWSER_ERROR_CODES)[number];
+
+type ClassifiedCode = ProtocolErrorCode | ClientErrorCode | BrowserErrorCode;
+
+/**
+ * Failure class of each error code. Must match the host's `classify_failure`;
+ * `tests/cases/failure-classes.json` checks both.
+ */
+const CODE_CLASSES: Readonly<Record<ClassifiedCode, FailureClass>> =
+  Object.freeze({
+    UNSUPPORTED_PROTOCOL: permanent,
+    INVALID_REQUEST: permanent,
+    INVALID_INPUT: permanent,
+    CONFORM_FAILED: permanent,
+    MISSING_INPUT: permanent,
+    INCOMPLETE_COMPOSITION: permanent,
+    EFFECT_ERROR: permanent,
+    HARDWARE_DECODE_UNAVAILABLE: permanent,
+    COPY_INELIGIBLE: permanent,
+    GPU_OUTPUT_UNAVAILABLE: permanent,
+    OUTPUT_IN_USE: permanent,
+    GPU_DEVICE_LOST: { code: "DEVICE_LOST", resource: "gpu" },
+    GPU_DEVICE_HUNG: { code: "DEVICE_HUNG", resource: "gpu" },
+    GPU_TIMEOUT: { code: "GPU_TIMEOUT", resource: "gpu" },
+    DECODE_STALLED: { code: "GPU_TIMEOUT", resource: "unknown" },
+    ENCODE_STALLED: { code: "GPU_TIMEOUT", resource: "unknown" },
+    IO_ERROR: { code: "OUTPUT_IO_FAILED", resource: "unknown" },
+    OUTPUT_PUBLISH_FAILED: { code: "OUTPUT_IO_FAILED", resource: "unknown" },
+    CANCELLED: { code: "CANCELLED", resource: "unknown" },
+    RESOURCE_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
+    // Never started: the host was retiring, and another host runs it.
+    HOST_RETIRING: { code: "HOST_EXITED", resource: "unknown" },
+    // An extractor's own output or failure repeats on a retry; a slow client may not.
+    INVALID_EMIT: permanent,
+    EXTRACTOR_FAILED: permanent,
+    EXTRACTOR_TIMEOUT: unknown,
+    // A plugin that is refused, does not load or traps does so again; a server may answer later.
+    PLUGIN_FETCH_FAILED: unknown,
+    PLUGIN_HASH_MISMATCH: permanent,
+    PLUGIN_ABI_UNSUPPORTED: permanent,
+    PLUGIN_NO_ARTIFACT: permanent,
+    PLUGIN_NATIVE_REFUSED: permanent,
+    PLUGIN_REFUSED: permanent,
+    PLUGIN_DESCRIPTOR_MISMATCH: permanent,
+    PLUGIN_UNSUPPORTED_FEATURE: permanent,
+    PLUGIN_LOAD_FAILED: permanent,
+    PLUGIN_TRAPPED: permanent,
+    PLUGIN_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
+    GPU_INIT_FAILED: unknown,
+    ENCODE_ERROR: unknown,
+    ENCODER_BUSY: { code: "RESOURCE_BUSY", resource: "gpu" },
+    // A caught panic of the host.
+    INTERNAL: defect,
+    ALPHA2_ERROR: unknown,
+    // `@alpha2-sh/node` setup errors that a retry does not fix.
+    HOST_NOT_FOUND: permanent,
+    HOST_VERSION_MISMATCH: permanent,
+    HOST_NOT_EXECUTABLE: permanent,
+    HOST_LOAD_FAILED: permanent,
+    HOST_START_FAILED: unknown,
+    // A loaded machine may start the host late, so a retry may work.
+    HOST_START_TIMEOUT: unknown,
+    HOST_QUARANTINED: permanent,
+    HOST_BLOCKED: permanent,
+    HOST_WRITE_FAILED: unknown,
+    HOST_EXITED: { code: "HOST_EXITED", resource: "unknown" },
+    // The cgroup's `oom_kill` count rose; a retry with a smaller `memory.scale` may fit.
+    HOST_OOM_KILLED: { code: "OUT_OF_MEMORY", resource: "cpu" },
+    INVALID_RESPONSE: unknown,
+    PROGRESS_CALLBACK_FAILED: unknown,
+    ABORTED: { code: "CANCELLED", resource: "unknown" },
+    // Browser decode refusals repeat on every attempt.
+    DECODE_UNAVAILABLE: permanent,
+    PLANAR_DECODE_UNAVAILABLE: permanent,
+    NON_PLANAR_FRAME: permanent,
+    FRAME_SUPPLY_FAILED: unknown,
+    SOFTWARE_DECODE_REQUIRED: unknown,
+    // A module that does not compile or link, and a call the binding's state refuses, repeat.
+    WASM_COMPILE_ERROR: permanent,
+    WASM_LINK_ERROR: permanent,
+    INVALID_STATE: permanent,
+    // A trap is an engine fault; a fresh worker may not meet it again.
+    WASM_TRAP: defect,
+    WASM_TRAPPED: defect,
+    // A worker's error without a code of its own says nothing about a retry.
+    RENDER_WORKER_ERROR: unknown,
+    RENDER_WORKER_FAILED: unknown,
+    AUDIO_WORKER_ERROR: unknown,
+  });
 
 /** Failure class of a protocol or `@alpha2-sh/node` error code; `UNKNOWN` for any other. */
 export function failureClassOfCode(code: unknown): FailureClass {
   return (
     (typeof code === "string" && Object.hasOwn(CODE_CLASSES, code)
-      ? CODE_CLASSES[code]
+      ? CODE_CLASSES[code as ClassifiedCode]
       : undefined) ?? unknown
   );
 }

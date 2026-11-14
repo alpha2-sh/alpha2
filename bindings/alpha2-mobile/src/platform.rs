@@ -7,8 +7,7 @@ use serde_json::{Value, json};
 
 use crate::error::Alpha2Error;
 use crate::session::{
-    ConformRequest, EngineConfig, ExportOutcome, ExportProgress, ExportRequest, LoadedFont,
-    PauseGate,
+    ConformRequest, EngineConfig, ExportOutcome, ExportRequest, LoadedFont, PauseGate, Progress,
 };
 
 /// Everything an export thread needs.
@@ -37,7 +36,7 @@ pub(crate) struct ExportJob {
         not(any(target_os = "android", target_vendor = "apple")),
         allow(dead_code)
     )]
-    pub progress: Arc<dyn ExportProgress>,
+    pub progress: Arc<Progress>,
 }
 
 /// One platform's media backend.

@@ -170,6 +170,7 @@ fn extract(
         params.as_object().cloned().unwrap_or_default(),
         policy,
         &mut Packed,
+        &CancelToken::default(),
     )
     .expect("plugin loads");
     let duration = ticks(i64::try_from(samples.len()).expect("small")).max(end);

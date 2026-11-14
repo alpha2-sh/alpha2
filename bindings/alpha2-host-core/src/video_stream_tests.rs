@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use alpha2_container::{
     ContainerReader, DemuxError, Packet, TrackId, TrackInfo, TrackKind, VideoTrack,
@@ -143,6 +144,13 @@ struct Behavior {
     fail_after: Option<(usize, BackendError)>,
     /// Packets with this presentation time are damaged.
     corrupt_pts: Option<i64>,
+    /// `fail_after` of each session in the order they open, in place of the first session alone
+    /// failing.
+    sessions: Vec<Option<(usize, BackendError)>>,
+    /// A session fails once, then takes packets again.
+    fail_once: bool,
+    /// The picture with this presentation time fails to decode, as hardware sessions report it.
+    picture_fails: Option<i64>,
 }
 
 struct FakeSession {
@@ -167,7 +175,11 @@ impl VideoDecodeBackend for FakeSession {
         if let Some((after, error)) = &self.behavior.fail_after
             && self.submitted >= *after
         {
-            return Err(error.clone());
+            let error = error.clone();
+            if self.behavior.fail_once {
+                self.behavior.fail_after = None;
+            }
+            return Err(error);
         }
         if self.out.len() > 4 {
             return Ok(Submit::Busy);
@@ -199,6 +211,10 @@ impl VideoDecodeBackend for FakeSession {
 
     fn receive(&mut self, _wait: bool) -> Result<Poll, BackendError> {
         if let Some(pts) = self.out.pop_front() {
+            crate::recovery::take_frame_delay();
+            if self.kind == BackendKind::Hardware && self.behavior.picture_fails == Some(pts) {
+                return Err(BackendError::HardwarePicture(format!("picture {pts}")));
+            }
             return Ok(Poll::Frame(picture(pts)));
         }
         if self.finished {
@@ -258,9 +274,13 @@ impl VideoBackends for FakeBackends {
         }
         let mut opened = self.opened.lock().expect("lock");
         let mut behavior = self.behavior.clone();
-        // Only the first session fails; its replacement works.
-        if !opened.is_empty() {
-            behavior.fail_after = None;
+        if behavior.sessions.is_empty() {
+            // Only the first session fails; its replacement works.
+            if !opened.is_empty() {
+                behavior.fail_after = None;
+            }
+        } else {
+            behavior.fail_after = behavior.sessions.get(opened.len()).cloned().flatten();
         }
         opened.push(kind);
         Ok(Box::new(FakeSession {
@@ -595,13 +615,13 @@ fn a_session_in_presentation_order_is_not_held_back() {
 
 #[test]
 fn the_presentation_slack_reads_no_more_than_16_mib_of_first_packets() {
-    // Eight exact 2 MiB frames, then millisecond-rounded 30 fps frames in a 1/16000 time base.
+    // Eight exact 2 MiB frames, then frames of the same period rounded to 16 units.
     let bytes = 2 << 20;
     let exact = usize::try_from(alpha2_time::ROUNDING_SCAN_BYTES).expect("bytes") / bytes;
     assert_eq!(exact, 8);
     let mut timestamps = (0..8).map(|index| index * 640).collect::<Vec<i64>>();
     let mut last = timestamps[exact - 1];
-    for step in [528, 544, 528, 544] {
+    for step in [624, 656, 624, 656] {
         last += step;
         timestamps.push(last);
     }
@@ -681,5 +701,137 @@ fn a_hardware_picture_failure_keeps_the_decoder_text() {
     assert_eq!(
         recovery.diagnostics.corrupt_packets[0].detail.as_deref(),
         Some("surface lost")
+    );
+}
+
+/// Intra frames presented at `0..count`.
+fn intra(count: i64) -> Vec<Script> {
+    (0..count).map(|index| packet(index, index, true)).collect()
+}
+
+#[test]
+fn a_session_lost_again_and_again_is_replaced_while_the_stream_moves_on() {
+    let lost = Some((5, BackendError::SessionLost("backgrounded".into())));
+    let (mut stream, backends) = open(
+        &intra(60),
+        false,
+        Behavior {
+            sessions: vec![lost; 40],
+            ..Behavior::default()
+        },
+    );
+    assert_eq!(frames(&mut stream), (0..60).collect::<Vec<_>>());
+    assert!(backends.opened.lock().expect("lock").len() > 4);
+}
+
+#[test]
+fn losses_without_progress_still_fail_the_stream() {
+    // After the first, each session takes one packet: the one at the resume point, which it drops.
+    let lost = |after| Some((after, BackendError::SessionLost("backgrounded".into())));
+    let (mut stream, _) = open_reader(
+        FakeReader::of(track_with_depth(0), &intra(10), false, 1),
+        Behavior {
+            sessions: [vec![lost(2)], vec![lost(1); 10]].concat(),
+            ..Behavior::default()
+        },
+    );
+    let cancel = CancelToken::default();
+    stream.next(&cancel).expect("frame 0");
+    stream.next(&cancel).expect("frame 1");
+    let mut result = Ok(Some(()));
+    for _ in 0..20 {
+        result = stream.next(&cancel).map(|frame| frame.map(|_| ()));
+        if result.is_err() {
+            break;
+        }
+    }
+    assert!(result.is_err(), "{result:?}");
+}
+
+#[test]
+fn a_long_catch_up_after_a_lost_session_gets_a_budget_per_frame() {
+    // One keyframe, then 200 frames: the replacement decodes all of them again to resume.
+    let mut packets = intra(1);
+    packets.extend((1..201).map(|index| packet(index, index, false)));
+    let lost = Some((200, BackendError::SessionLost("backgrounded".into())));
+    let (mut stream, _) = open(
+        &packets,
+        false,
+        Behavior {
+            sessions: vec![lost, None],
+            ..Behavior::default()
+        },
+    );
+    crate::recovery::VIRTUAL_CLOCK.with(|clock| clock.set(Some(Duration::ZERO)));
+    crate::recovery::FRAME_DELAY.with(|delay| delay.set(Duration::from_millis(100)));
+    let shown = frames(&mut stream);
+    crate::recovery::VIRTUAL_CLOCK.with(|clock| clock.set(None));
+    crate::recovery::FRAME_DELAY.with(|delay| delay.set(Duration::ZERO));
+    assert_eq!(shown, (0..201).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_seek_after_a_failed_resume_answers_the_frame_at_its_time() {
+    let mut stream = VideoStream::open(
+        FakeReader::boxed(&intra(20), false),
+        0,
+        Arc::new(FakeBackends {
+            behavior: Behavior {
+                sessions: vec![
+                    Some((11, BackendError::SessionLost("backgrounded".into()))),
+                    Some((1, BackendError::Failed("decoder fault".into()))),
+                ],
+                fail_once: true,
+                ..Behavior::default()
+            },
+            opened: Mutex::default(),
+        }),
+        StreamOptions {
+            preference: DecodePreference::Software,
+            ..StreamOptions::default()
+        },
+    )
+    .expect("open");
+    let cancel = CancelToken::default();
+    let mut result = Ok(Some(()));
+    while let Ok(Some(())) = result {
+        result = stream.next(&cancel).map(|frame| frame.map(|_| ()));
+    }
+    assert!(matches!(result, Err(DecodeError::Adapter(_))), "{result:?}");
+    let frame = stream.seek(ticks(0), &cancel).expect("seek");
+    assert_eq!(stream.track_units(frame.facts.pts), 0);
+}
+
+#[test]
+fn a_hardware_picture_failure_is_concealed_under_the_tolerant_policy_and_replaced_under_strict() {
+    let behavior = Behavior {
+        picture_fails: Some(3),
+        ..Behavior::default()
+    };
+    let backends = Arc::new(FakeBackends {
+        behavior: behavior.clone(),
+        opened: Mutex::default(),
+    });
+    let mut tolerant = VideoStream::open(
+        FakeReader::boxed(&intra(8), false),
+        0,
+        backends.clone(),
+        StreamOptions {
+            policy: DecodePolicy::Tolerant,
+            ..StreamOptions::default()
+        },
+    )
+    .expect("open");
+    assert_eq!(frames(&mut tolerant), [0, 1, 2, 4, 5, 6, 7]);
+    assert_eq!(tolerant.recovery().diagnostics.corrupt_packets.len(), 1);
+    assert_eq!(
+        *backends.opened.lock().expect("lock"),
+        [BackendKind::Hardware]
+    );
+    let (mut strict, backends) = open(&intra(8), false, behavior);
+    assert_eq!(frames(&mut strict), (0..8).collect::<Vec<_>>());
+    assert_eq!(
+        *backends.opened.lock().expect("lock"),
+        [BackendKind::Hardware, BackendKind::Software]
     );
 }

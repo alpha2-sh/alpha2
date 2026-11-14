@@ -27,6 +27,34 @@ export function hostStartTimeoutMessage(binary: string, ms: number): string {
   return `alpha2-host did not start within ${ms} ms: ${binary}${hint}`;
 }
 
+const MISMATCH_REMEDY =
+  "install the alpha2-host of this release (npx @alpha2-sh/node install) or correct the path";
+
+/** `HOST_VERSION_MISMATCH` for a host whose first line announces another protocol version. */
+export function hostProtocolMismatchMessage(
+  binary: string,
+  hostProtocol: number,
+  clientProtocol: number,
+): string {
+  return (
+    `alpha2-host speaks protocol ${hostProtocol} and this client protocol ${clientProtocol}, ` +
+    `so it is from another alpha2 release: ${binary}; ${MISMATCH_REMEDY}`
+  );
+}
+
+/** `HOST_VERSION_MISMATCH` for a host whose `ready` state names another release, or none. */
+export function hostVersionMismatchMessage(
+  binary: string,
+  hostVersion: unknown,
+  clientVersion: string,
+): string {
+  const host =
+    typeof hostVersion === "string"
+      ? `alpha2-host is release ${hostVersion}`
+      : "alpha2-host names no release";
+  return `${host} and this client is ${clientVersion}: ${binary}; ${MISMATCH_REMEDY}`;
+}
+
 export function hostBlockedMessage(what: string): string {
   return (
     `Windows blocked alpha2-host or a library it loads (${what}): Smart App Control, an App ` +

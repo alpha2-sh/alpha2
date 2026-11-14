@@ -17,6 +17,7 @@ import {
   fromThisMachine,
   gpuProcessEnvironment,
   gpuProcessRecord,
+  runWithGpuProcessRerun,
   reportSkippedBrowser,
   runChromePage,
   servedFile,
@@ -586,6 +587,99 @@ test("a changed GPU process id marks the page as environment", () => {
     assert.equal(gpuProcessEnvironment(record, { ok: true }), null);
   }
   assert.equal(gpuProcessEnvironment(undefined, { ok: true }), null);
+});
+
+test("a page's own result decides, and a failure during a GPU process restart reruns once", async () => {
+  const restart = gpuProcessRecord({ startPid: 40, endPid: 52, exits: 1 });
+  const lost = gpuProcessRecord({
+    startPid: null,
+    endPid: 52,
+    exits: 1,
+    exitsBeforePage: 1,
+  });
+  const clean = gpuProcessRecord({ startPid: 40, endPid: 40, exits: 0 });
+  const runs = (...attempts) => {
+    const queue = [...attempts];
+    const run = async () => {
+      run.count += 1;
+      return queue.shift();
+    };
+    run.count = 0;
+    return run;
+  };
+
+  const okDuring = runs({ result: { ok: true }, gpuProcess: restart });
+  assert.deepEqual(await runWithGpuProcessRerun(okDuring), {
+    ok: true,
+    gpuProcess: restart,
+  });
+  assert.equal(okDuring.count, 1);
+
+  const twice = runs(
+    { result: { error: "device lost" }, gpuProcess: restart },
+    { error: new Error("browser page timed out"), gpuProcess: restart },
+  );
+  const failed = await runWithGpuProcessRerun(twice);
+  assert.equal(twice.count, 2);
+  assert.equal(failed.skipped, undefined);
+  assert.match(
+    failed.error,
+    /failed in two browsers; .*browser page timed out/,
+  );
+  assert.deepEqual(failed.attempts, [
+    { page: { error: "device lost" }, gpuProcess: restart },
+    { page: "browser page timed out", gpuProcess: restart },
+  ]);
+
+  const recovered = await runWithGpuProcessRerun(
+    runs(
+      { error: new Error("browser page timed out"), gpuProcess: restart },
+      { result: { ok: true, frames: 3 }, gpuProcess: clean },
+    ),
+  );
+  assert.deepEqual(recovered, {
+    ok: true,
+    frames: 3,
+    gpuProcess: clean,
+    firstAttempt: { page: "browser page timed out", gpuProcess: restart },
+  });
+
+  const lostTwice = await runWithGpuProcessRerun(
+    runs(
+      { error: new Error("browser page timed out"), gpuProcess: lost },
+      { result: { error: "no adapter" }, gpuProcess: lost },
+    ),
+  );
+  assert.equal(lostTwice.capability, "browser-gpu-process");
+  assert.match(lostTwice.skipped, /^gpu-process-lost: /);
+
+  // Without a restart, the page's failure is the case's and a thrown error stays thrown.
+  const plain = runs({ result: { error: "wrong pixels" }, gpuProcess: clean });
+  assert.deepEqual(await runWithGpuProcessRerun(plain), {
+    error: "wrong pixels",
+  });
+  assert.equal(plain.count, 1);
+  await assert.rejects(
+    runWithGpuProcessRerun(runs({ error: new Error("crashed") })),
+    /crashed/,
+  );
+
+  // Exits a case declares as its own are no restart.
+  const caused = runs({
+    result: { error: "wrong pixels" },
+    gpuProcess: restart,
+  });
+  assert.deepEqual(await runWithGpuProcessRerun(caused, 1), {
+    error: "wrong pixels",
+    gpuProcess: restart,
+  });
+  assert.equal(caused.count, 1);
+  const beyond = runs(
+    { result: { error: "device lost" }, gpuProcess: { ...restart, exits: 2 } },
+    { result: { ok: true }, gpuProcess: { ...restart, exits: 1 } },
+  );
+  assert.equal((await runWithGpuProcessRerun(beyond, 1)).ok, true);
+  assert.equal(beyond.count, 2);
 });
 
 test("stopping Chrome waits for every process it reported", async () => {

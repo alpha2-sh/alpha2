@@ -397,6 +397,141 @@ fn a_canvas_cycle_fails_to_index() {
     ));
 }
 
+/// `links + 1` clips of `v1`, each on its own track; each follows the next in canvas space with
+/// its position and its scale.
+fn double_follow_chain(links: usize) -> Result<Project, alpha2_model::ProjectLoadError> {
+    let follow = |clip: usize| {
+        json!({ "mode": "data", "data": "face", "channel": "nose",
+        "via": { "clip": format!("c{clip}") }, "space": "canvas" })
+    };
+    let tracks: Vec<Value> = (0..=links)
+        .map(|index| {
+            let mut clip = json!({ "id": format!("c{index}"), "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 240_000 },
+                "source_range": { "start": 0, "end": 240_000 } });
+            if index < links {
+                clip["visual"] =
+                    json!({ "position": follow(index + 1), "scale": follow(index + 1) });
+            }
+            json!({ "id": format!("t{index}"), "name": "V", "kind": "video", "clips": [clip] })
+        })
+        .collect();
+    let document = json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": { "width": 1920, "height": 1080, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+        "sources": [{ "id": "v1", "kind": "video", "locator": "v1.mp4" }],
+        "timeline": { "tracks": tracks },
+        "data": points_on_v1()
+    });
+    Project::from_json(&document.to_string())
+}
+
+#[test]
+fn a_double_follow_chain_at_the_depth_limit_evaluates() {
+    let project = double_follow_chain(alpha2_model::MAX_FOLLOW_DEPTH).expect("eight links");
+    let index = ActiveIndex::build(&project).expect("index");
+    let frame = crate::evaluate(&project, &index, MediaTime(1_000)).expect("frame");
+    assert_eq!(frame.visual.len(), alpha2_model::MAX_FOLLOW_DEPTH + 1);
+    assert!(frame.visual.iter().all(|layer| {
+        layer
+            .visual
+            .is_some_and(|visual| visual.position.x.is_finite() && visual.scale.x.is_finite())
+    }));
+    assert!(double_follow_chain(alpha2_model::MAX_FOLLOW_DEPTH + 1).is_err());
+}
+
+/// An audio clip looping `source` ticks over `timeline` ticks, a one-word `words` set on its
+/// source, and a caption track that follows the words through the clip's track.
+fn tiny_loop(timeline: i64, source: i64) -> Value {
+    json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": { "width": 640, "height": 360, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+        "sources": [{ "id": "a", "kind": "audio", "locator": "a.m4a" }],
+        "timeline": { "tracks": [
+            { "id": "t-audio", "name": "A", "kind": "audio", "clips": [
+                { "id": "lp", "source_id": "a",
+                  "timeline_range": { "start": 0, "end": timeline },
+                  "source_range": { "start": 0, "end": source },
+                  "time_map": { "type": "loop", "mode": "repeat" } } ] },
+            { "id": "t-subs", "name": "C", "kind": "caption",
+              "captions": { "from_words": { "data": "speech", "track": "t-audio", "max_chars": 40 } } }
+        ] },
+        "data": [{ "id": "speech", "anchor": { "type": "source", "source_id": "a" }, "kind": "words",
+                   "words": [{ "start": 0, "end": source, "text": "Hi" }] }]
+    })
+}
+
+#[test]
+fn a_loop_of_the_most_passes_builds_its_index() {
+    let passes = i64::try_from(alpha2_model::MAX_LOOP_PASSES).expect("passes");
+    let project = Project::from_json(&tiny_loop(passes, 1).to_string()).expect("valid");
+    ActiveIndex::build(&project).expect("index");
+    let clip = &project.timeline.tracks[0].clips[0];
+    let whole = source_range_to_timeline(
+        clip.timeline_range,
+        clip.source_range,
+        clip.time_map,
+        project.settings.frame_rate,
+        MediaTime(0),
+        MediaTime(1),
+    );
+    assert_eq!(whole, Some(vec![clip.timeline_range]));
+}
+
+#[test]
+fn a_loop_of_more_passes_is_refused_before_it_is_walked() {
+    let document = tiny_loop(1 << 40, 1);
+    let error = Project::from_json(&document.to_string()).expect_err("too many passes");
+    assert_eq!(
+        error.to_string(),
+        "invalid project: clip lp loops 1099511627776 times; the maximum is 65536"
+    );
+    let passes = i64::try_from(alpha2_model::MAX_LOOP_PASSES).expect("passes");
+    assert!(Project::from_json(&tiny_loop(passes + 1, 1).to_string()).is_err());
+    let mut uncaptioned = document;
+    uncaptioned["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks")
+        .pop();
+    uncaptioned["data"] = json!([]);
+    let split = json!({ "op": "split_at",
+        "times": { "list": [0], "anchor": { "type": "source", "source_id": "a" } },
+        "target": { "track": "t-audio" } });
+    let refused = crate::edit::apply_json(&uncaptioned.to_string(), &split.to_string());
+    assert!(matches!(refused, Err(failure) if failure.refusal == "invalid_project"));
+}
+
+#[test]
+fn words_mapped_through_a_long_loop_stop_at_the_word_limit() {
+    let passes = i64::try_from(alpha2_model::MAX_LOOP_PASSES).expect("passes");
+    // A two-tick source: each one-tick word is shown once per pass, apart from the next pass's.
+    let with_words = |count: usize| {
+        let mut document = tiny_loop(2 * passes, 2);
+        document["data"][0]["words"] =
+            json!(vec![json!({ "start": 0, "end": 1, "text": "Hi" }); count]);
+        Project::from_json(&document.to_string()).expect("valid")
+    };
+    let project = with_words(1);
+    let index = ActiveIndex::build(&project).expect("one cue per pass");
+    let last_pass = crate::evaluate(&project, &index, MediaTime(2 * passes - 2)).expect("frame");
+    assert_eq!(last_pass.captions.len(), 1);
+    let bake = json!({ "op": "bake", "targets": [{ "track": "t-subs", "property": "captions" }] });
+    let baked = crate::edit::apply_json(
+        &serde_json::to_string(&with_words(4)).expect("json"),
+        &bake.to_string(),
+    );
+    assert!(matches!(baked, Err(failure) if failure.refusal == "too_many_cues"));
+    let refused = ActiveIndex::build(&with_words(4));
+    assert_eq!(
+        refused.err().map(|error| error.to_string()),
+        Some(
+            "cannot index invalid project: track t-subs derives more than 65536 caption cues or \
+             maps more than 200000 words"
+                .to_owned()
+        )
+    );
+}
+
 #[test]
 fn a_gain_bound_to_data_changes_only_at_sample_times() {
     let project = project((30, 1), &frame_numbers("hold"), |document| {
@@ -465,7 +600,8 @@ fn cue_texts(project: &Project) -> Vec<(i64, i64, String, Option<String>)> {
         .captions
         .as_ref()
         .expect("captions");
-    crate::caption_cues(project, captions)
+    crate::caption_cues(project, &project.timeline.tracks[3].id, captions)
+        .expect("within the limits")
         .into_iter()
         .map(|cue| {
             (

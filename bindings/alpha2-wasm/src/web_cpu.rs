@@ -326,14 +326,13 @@ impl WebCpuRenderer {
         output_size: RenderSize,
         orientation: Orientation,
     ) -> Result<CpuFrame, JsValue> {
-        if self
-            .declared_color(source_id)
-            .is_some_and(alpha2_render::is_hdr)
-        {
-            return Err(invalid_input(format!(
-                "source {source_id} is HDR (PQ or HLG): upload its frames' planes with \
-                 uploadYuvFrame, which converts them under the project's color pipeline"
-            )));
+        let declared = self.declared_color(source_id);
+        let (hdr, kind) = match image.dyn_ref::<web_sys::VideoFrame>() {
+            Some(frame) => (crate::web::frame_shows_hdr(declared, frame), "VideoFrame"),
+            None => (declared.is_some_and(alpha2_render::is_hdr), "ImageBitmap"),
+        };
+        if hdr {
+            return Err(crate::web::hdr_upload_refusal(source_id, kind));
         }
         let size = RenderSize::new(width, height).map_err(|error| typed_error(&error))?;
         let pixels = image_pixels(image, width, height).map_err(|error| {
@@ -403,11 +402,9 @@ impl WebCpuRenderer {
             &video_color_space(ColorMetadata::EXPORT)?,
         )?;
         set(&result, "layout", &layout)?;
-        set(
-            &result,
-            "pixels",
-            &web_sys::js_sys::Uint8Array::from(planes),
-        )?;
+        let pixels = crate::interop::copy_out_bytes(planes)
+            .map_err(|error| crate::interop::copy_out_failure(&error))?;
+        set(&result, "pixels", &pixels)?;
         Ok(result)
     }
 
@@ -1518,10 +1515,7 @@ impl WebCpuRenderer {
         let size = quality
             .export_size(&project.project().settings)
             .map_err(|error| typed_error(&error))?;
-        self.renderer
-            .set_texture_budget_bytes(quality.texture_budget_bytes);
-        self.renderer
-            .set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+        Self::use_export_quality(&self.renderer);
         self.texts
             .prepare(&self.renderer, &frame, size)
             .map_err(|error| typed_error(&error))?;
@@ -1670,15 +1664,17 @@ impl WebCpuRenderer {
         self.texts = TextTextures::new();
     }
 
-    /// Draws one project frame at preview quality onto the canvas's 2D context, scaled to fit,
-    /// and returns the JSON `WebEffectRegistry.renderAt` returns. A frame equal to the one
-    /// shown is skipped (`unchanged`).
-    ///
-    /// # Errors
-    /// Fails without a project, or when the frame cannot be drawn.
-    /// `WebEffectRegistry.readRgbaAt`: the project's frame at `time_ticks`, drawn at `width` x
-    /// `height` from the frames uploaded so far, as straight-alpha sRGB RGBA8; nothing is shown on
-    /// the canvas. An extraction reads timeline frames through it.
+    /// Sets the export profile's texture budget and filter and motion blur sample controls.
+    fn use_export_quality(renderer: &CpuRenderer) {
+        let quality = QualityProfile::export();
+        renderer.set_texture_budget_bytes(quality.texture_budget_bytes);
+        renderer.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+    }
+
+    /// The project's frame at `time_ticks`, drawn at export quality at `width` x `height` from the
+    /// frames uploaded so far, as straight-alpha sRGB RGBA8; nothing is shown on the canvas. Only
+    /// the CPU renderer has it; an extraction reads timeline frames through it, so what was
+    /// rendered before does not change them.
     ///
     /// # Errors
     /// `INVALID_STATE` without a project, `MISSING_INPUT` when a source frame it shows has not
@@ -1696,6 +1692,7 @@ impl WebCpuRenderer {
             .ok_or_else(|| invalid_state("no project is loaded"))?;
         let size = RenderSize::new(width, height).map_err(|error| typed_error(&error))?;
         let time = MediaTime(time_ticks);
+        Self::use_export_quality(&self.renderer);
         self.texts
             .prepare_at(&self.renderer, project, time, size)
             .map_err(|error| typed_error(&error))?;
@@ -1721,6 +1718,12 @@ impl WebCpuRenderer {
         Ok(pixels)
     }
 
+    /// Draws one project frame at preview quality onto the canvas's 2D context, scaled to fit,
+    /// and returns the JSON `WebEffectRegistry.renderAt` returns. A frame equal to the one
+    /// shown is skipped (`unchanged`).
+    ///
+    /// # Errors
+    /// Fails without a project, or when the frame cannot be drawn.
     #[wasm_bindgen(js_name = renderAt)]
     pub fn render_at(&mut self, time_ticks: i64) -> Result<String, JsValue> {
         let project = self

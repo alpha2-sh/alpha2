@@ -40,10 +40,9 @@ mod paint_wgsl;
 mod pipeline;
 mod pool;
 mod present;
-mod quad;
 mod readback;
 mod registry;
-pub use registry::{CompiledEffect, MAX_EFFECT_INPUTS, PendingEffect};
+pub use registry::{CheckedEffect, CompiledEffect, MAX_EFFECT_INPUTS, PendingEffect, check_effect};
 mod renderer;
 mod repack;
 mod result_cache;
@@ -83,8 +82,8 @@ pub use color::{
 };
 pub use composite::{CompositeLayer, LayerTransform};
 pub use cpu::{
-    CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, decoded,
-    pack_cpu_image,
+    BandProgress, CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, decoded,
+    report_band_progress,
 };
 pub use diagnostics::{
     AdapterDiagnostics, BenchmarkMetadata, GpuSubmissionStats, PassTiming, PipelineCreation,
@@ -120,7 +119,7 @@ pub use pipeline::{PipelineCacheStats, WarmupReport};
 pub use pool::{ReadbackBufferPoolStats, TexturePoolStats, UploadTexture, UploadTexturePoolStats};
 pub use readback::{
     EncodedNv12Pack, Nv12PlaneTargets, PlaneTarget, Rgba8Readback, StagingPlane, Yuv420pPlanes,
-    Yuv420pReadback, Yuv420pTargets, yuv420p_staging_bytes,
+    Yuv420pReadback, Yuv420pTargets, layout_staging_bytes, yuv420p_staging_bytes,
 };
 pub use renderer::{LossClassifier, RenderQualityControls, Renderer};
 pub use repack::RepackSource;

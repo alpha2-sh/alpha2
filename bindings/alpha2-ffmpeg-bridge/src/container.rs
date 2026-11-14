@@ -234,7 +234,8 @@ impl std::fmt::Display for OpenInputError {
 impl std::error::Error for OpenInputError {}
 
 /// Opens `path` and reads its stream information using only the demuxers in `formats`
-/// (comma-separated `FFmpeg` short names) and only the `file` protocol.
+/// (comma-separated `FFmpeg` short names) and only the `file` protocol. With `decoders`
+/// (comma-separated `FFmpeg` decoder names), probing opens only those decoders.
 ///
 /// Still images pick their demuxer by signature. Otherwise `image2` claims any file named like an
 /// image before the JPEG demuxer has seen a large JPEG whole, and `formats` leaves `image2` out.
@@ -242,7 +243,11 @@ impl std::error::Error for OpenInputError {}
 /// # Errors
 /// [`OpenInputError::Path`] for an unusable path, [`OpenInputError::Refused`] for a container
 /// `formats` leaves out, else the `FFmpeg` failure.
-pub fn open_input(path: &Path, formats: &CStr) -> Result<DemuxInput, OpenInputError> {
+pub fn open_input(
+    path: &Path,
+    formats: &CStr,
+    decoders: Option<&CStr>,
+) -> Result<DemuxInput, OpenInputError> {
     let url = file_url(path).map_err(OpenInputError::Path)?;
     let url = url.as_c_str();
     crate::install_log_capture();
@@ -253,7 +258,7 @@ pub fn open_input(path: &Path, formats: &CStr) -> Result<DemuxInput, OpenInputEr
         .map_or(ptr::null(), |name| unsafe {
             ffi::av_find_input_format(name.as_ptr())
         });
-    open_with(url, formats, still).map_err(|failure| match failure {
+    open_with(url, formats, decoders, still).map_err(|failure| match failure {
         OpenFailure::Open(opened) => refused_format(path, url, formats).map_or(
             OpenInputError::Ffmpeg(RsmpegError::OpenInputError(opened)),
             OpenInputError::Refused,
@@ -285,6 +290,7 @@ enum OpenFailure {
 fn open_with(
     url: &CStr,
     formats: &CStr,
+    decoders: Option<&CStr>,
     format: *const ffi::AVInputFormat,
 ) -> Result<DemuxInput, OpenFailure> {
     let interrupt = Arc::new(InputInterrupt::default());
@@ -303,8 +309,12 @@ fn open_with(
             opaque: Arc::as_ptr(&interrupt).cast_mut().cast(),
         };
     }
-    let options =
+    let mut options =
         AVDictionary::new(c"format_whitelist", formats, 0).set(c"protocol_whitelist", c"file", 0);
+    // The format context hands its list to every decoder `avformat_find_stream_info` opens.
+    if let Some(decoders) = decoders {
+        options = options.set(c"codec_whitelist", decoders, 0);
+    }
     let mut options = options.into_raw().as_ptr();
     // SAFETY: `context` is fresh, `url` NUL-terminated, `format` null or a static demuxer, and
     // `options` a dictionary the call may consume; it frees and nulls `context` on failure.
@@ -323,9 +333,28 @@ fn open_with(
     // SAFETY: `avformat_open_input` succeeded, so `context` is an open input context this now owns;
     // its `Drop` closes it with `avformat_close_input`.
     let mut input = unsafe { AVFormatContextInput::from_raw(context) };
-    // SAFETY: the context is open and exclusively owned; null options read no per-stream
-    // dictionaries.
-    let found = unsafe { ffi::avformat_find_stream_info(input.as_mut_ptr(), ptr::null_mut()) };
+    // Probing decodes a picture to learn its size, so the decoders it opens refuse one larger
+    // than alpha2 takes before allocating it.
+    let max_pixels = i64::try_from(alpha2_media::MAX_FRAME_PIXELS).unwrap_or(i64::MAX);
+    let mut options = (0..input.nb_streams)
+        .map(|_| {
+            AVDictionary::new_int(c"max_pixels", max_pixels, 0)
+                .into_raw()
+                .as_ptr()
+        })
+        .collect::<Vec<_>>();
+    let pointer = if options.is_empty() {
+        ptr::null_mut()
+    } else {
+        options.as_mut_ptr()
+    };
+    // SAFETY: the context is open and exclusively owned; `pointer` is null or holds one dictionary
+    // per stream the context had before the call, which is how many the call reads.
+    let found = unsafe { ffi::avformat_find_stream_info(input.as_mut_ptr(), pointer) };
+    for dictionary in &mut options {
+        // SAFETY: each entry is null or a dictionary this owns, which the call may have replaced.
+        unsafe { ffi::av_dict_free(dictionary) };
+    }
     if found < 0 {
         return Err(OpenFailure::Other(OpenInputError::Ffmpeg(
             RsmpegError::FindStreamInfoError(found),

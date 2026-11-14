@@ -124,13 +124,13 @@ fn a_curved_position_moves_at_constant_speed_and_overshoots_along_its_tangent() 
     let middle = at(500);
     assert!((middle.x - 0.5).abs() < 1e-4, "{middle:?}");
     assert!(middle.y < 0.4, "{middle:?}");
-    // Equal times, equal distances along the arch.
+    // Equal times, equal distances along the arch; steps this short make chord and arc agree.
     let step = |a: Vec2, b: Vec2| {
         let (dx, dy) = (f64::from(b.x - a.x), f64::from(b.y - a.y));
         (dx * dx + dy * dy).sqrt()
     };
-    let (d1, d2) = (step(at(100), at(200)), step(at(400), at(500)));
-    assert!((d1 - d2).abs() < 2e-3, "{d1} {d2}");
+    let (d1, d2) = (step(at(100), at(101)), step(at(400), at(401)));
+    assert!((d1 - d2).abs() < 1e-6, "{d1} {d2}");
     // An overshooting curve continues past the end along the end tangent: straight down.
     let curve = alpha2_model::CubicBezier::new(0.3, 0.0, 0.5, 1.6);
     let point = point_keys(

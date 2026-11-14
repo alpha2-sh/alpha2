@@ -102,12 +102,12 @@ test(
       });
       assert.ok(result.ok, `${fixture.name}: ${result.error?.message}`);
       assert.deepEqual(result.value.report, fixture.expected.report);
-      assert.deepEqual(editor.document.project, applied.project, fixture.name);
       // The engine's text of the committed project, through the host again.
       const again = await client.edit(editor.document.project, {
         op: "bake",
         targets: [],
       });
+      assert.equal(again.projectJson, applied.projectJson, fixture.name);
       assert.equal(
         createHash("sha256").update(again.projectJson).digest("hex"),
         fixture.expected.project_sha256,

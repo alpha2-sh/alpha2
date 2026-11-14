@@ -2976,6 +2976,234 @@
     }
    ]
   },
+  "frame-rounding-late.mkv": {
+   "remux": {
+    "tracks": [
+     {
+      "codec": "h264",
+      "codec_id": "V_MPEG4/ISO/AVC",
+      "color": {
+       "primaries": "unknown",
+       "range": "unknown",
+       "space": "unknown",
+       "transfer": "unknown"
+      },
+      "default": true,
+      "duration": null,
+      "first_packets": [
+       [
+        500,
+        500,
+        33,
+        1,
+        584,
+        "8a238f33477bb97f50de1b5bc35454f5965b0f364d593c390bf9b1211e14025d",
+        0,
+        0
+       ],
+       [
+        533,
+        533,
+        33,
+        0,
+        15,
+        "3f999238b0a4eb258a9c1ffb13d06970c4df4bc8337f1115ac186e96c0798d69",
+        0,
+        0
+       ],
+       [
+        567,
+        567,
+        33,
+        0,
+        22,
+        "dc8156ce71578278d609dec89146955d10833681eaaff3029ff5f8dfbdcba356",
+        0,
+        0
+       ],
+       [
+        600,
+        600,
+        33,
+        0,
+        23,
+        "dcaef92b7541014d331494e958b8613209e6006b09ac9e3da2ff5eb9ba9e4d56",
+        0,
+        0
+       ],
+       [
+        633,
+        633,
+        33,
+        0,
+        23,
+        "dfc81f996f5408071bdc0c0feb7f8448bf7eadaca939f395878c815d88c5c68e",
+        0,
+        0
+       ],
+       [
+        667,
+        667,
+        33,
+        0,
+        23,
+        "2912cf50c36724662e3c2b5cc4bd0203f602593ae125b9d1d0a551b879bde772",
+        0,
+        0
+       ],
+       [
+        700,
+        700,
+        33,
+        0,
+        23,
+        "bb4184473a0b9ff80f9becb0209056416c3baade2cc2c9340203a977a023a524",
+        0,
+        0
+       ],
+       [
+        734,
+        734,
+        33,
+        0,
+        23,
+        "c88dd0958d24fa9b7431b06c4bc6ca4d510eea049c7e292f51410a142f361e24",
+        0,
+        0
+       ]
+      ],
+      "height": 48,
+      "id": 1,
+      "index": 0,
+      "kind": "video",
+      "language": null,
+      "orientation": {
+       "mirror": false,
+       "rotation": 0
+      },
+      "packet_count": 60,
+      "packets_sha256": "f41141d8b74ad217d7ee663d63ebe825c7bd4d56960617dda05cfca052a4f3e4",
+      "sar": "1:1",
+      "time_base": "1/1000",
+      "timescale": 1000,
+      "title": null,
+      "width": 64
+     }
+    ]
+   },
+   "tracks": [
+    {
+     "codec": "h264",
+     "codec_id": "V_MPEG4/ISO/AVC",
+     "color": {
+      "primaries": "unknown",
+      "range": "unknown",
+      "space": "unknown",
+      "transfer": "unknown"
+     },
+     "default": true,
+     "duration": null,
+     "first_packets": [
+      [
+       500,
+       500,
+       33,
+       1,
+       584,
+       "8a238f33477bb97f50de1b5bc35454f5965b0f364d593c390bf9b1211e14025d",
+       0,
+       0
+      ],
+      [
+       533,
+       533,
+       33,
+       0,
+       15,
+       "3f999238b0a4eb258a9c1ffb13d06970c4df4bc8337f1115ac186e96c0798d69",
+       0,
+       0
+      ],
+      [
+       567,
+       567,
+       33,
+       0,
+       22,
+       "dc8156ce71578278d609dec89146955d10833681eaaff3029ff5f8dfbdcba356",
+       0,
+       0
+      ],
+      [
+       600,
+       600,
+       33,
+       0,
+       23,
+       "dcaef92b7541014d331494e958b8613209e6006b09ac9e3da2ff5eb9ba9e4d56",
+       0,
+       0
+      ],
+      [
+       633,
+       633,
+       33,
+       0,
+       23,
+       "dfc81f996f5408071bdc0c0feb7f8448bf7eadaca939f395878c815d88c5c68e",
+       0,
+       0
+      ],
+      [
+       667,
+       667,
+       33,
+       0,
+       23,
+       "2912cf50c36724662e3c2b5cc4bd0203f602593ae125b9d1d0a551b879bde772",
+       0,
+       0
+      ],
+      [
+       700,
+       700,
+       33,
+       0,
+       23,
+       "bb4184473a0b9ff80f9becb0209056416c3baade2cc2c9340203a977a023a524",
+       0,
+       0
+      ],
+      [
+       734,
+       734,
+       33,
+       0,
+       23,
+       "c88dd0958d24fa9b7431b06c4bc6ca4d510eea049c7e292f51410a142f361e24",
+       0,
+       0
+      ]
+     ],
+     "height": 48,
+     "id": 1,
+     "index": 0,
+     "kind": "video",
+     "language": null,
+     "orientation": {
+      "mirror": false,
+      "rotation": 0
+     },
+     "packet_count": 60,
+     "packets_sha256": "f41141d8b74ad217d7ee663d63ebe825c7bd4d56960617dda05cfca052a4f3e4",
+     "sar": "1:1",
+     "time_base": "1/1000",
+     "timescale": 1000,
+     "title": null,
+     "width": 64
+    }
+   ]
+  },
   "frame-rounding-vfr-ms.mkv": {
    "remux": {
     "tracks": [

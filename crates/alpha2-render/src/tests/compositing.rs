@@ -173,6 +173,7 @@ fn first_layer_specialization_preserves_out_of_range_effect_math() {
                 time: alpha2_time::MediaTime::ZERO,
                 progress: 0.0,
                 ratio: 1.0,
+                scale: 1.0,
             },
         )
         .expect("out-of-range effect renders");

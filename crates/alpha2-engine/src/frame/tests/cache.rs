@@ -35,6 +35,7 @@ fn frame(source: &SourceId, cache: CacheIntent, opacity: f32) -> FrameDesc<'stat
     FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
             data: alpha2_eval::SampleContext::NONE,

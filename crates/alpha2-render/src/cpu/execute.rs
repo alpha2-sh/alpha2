@@ -12,6 +12,7 @@ use super::composite::{CompositeSettings, LayerInput, composite};
 use super::half;
 use super::image::{CpuImage, PixelBox};
 use super::kernels::{CpuLut, KernelContext};
+use super::renderer::add_elapsed;
 use crate::graph::{RenderGraph, RenderNode, RenderNodeId};
 use crate::graph_cache::renderer_node_key;
 use crate::{
@@ -61,6 +62,7 @@ impl CpuRenderer {
                 release_inputs(graph, &plan.last_use, &mut outputs, node, position);
                 continue;
             }
+            let node_started = Instant::now();
             let image = match &graph.nodes[node.index] {
                 RenderNode::Source(view) => {
                     let source = view.cpu_source().ok_or(RenderError::InvalidSource)?;
@@ -157,7 +159,16 @@ impl CpuRenderer {
                     )?)
                 }
             };
-            if !matches!(graph.nodes[node.index], RenderNode::Source(_)) {
+            let stage = match &graph.nodes[node.index] {
+                RenderNode::Source(_) => None,
+                RenderNode::Effect { .. }
+                | RenderNode::Transition { .. }
+                | RenderNode::Generator { .. } => Some(&self.stats.kernel_micros),
+                RenderNode::Vector { .. } => Some(&self.stats.vector_micros),
+                RenderNode::Composite { .. } => Some(&self.stats.composite_micros),
+            };
+            if let Some(counter) = stage {
+                add_elapsed(counter, node_started);
                 drawn += 1;
             }
             if let Some((key, pinned)) = cached.store[node.index] {
@@ -176,18 +187,10 @@ impl CpuRenderer {
         let image = outputs[plan.output.index]
             .take()
             .ok_or(GraphError::SourceOutput)?;
-        if !inserts.is_empty() {
-            let mut cache = self.lock_cache();
-            for (key, image, pinned) in &inserts {
-                cache.insert(*key, image, *pinned);
-            }
-        }
+        self.keep_results(cached.clears, &inserts);
         self.stats.graphs.fetch_add(1, Ordering::Relaxed);
         self.stats.nodes.fetch_add(drawn, Ordering::Relaxed);
-        self.stats.render_micros.fetch_add(
-            u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
+        add_elapsed(&self.stats.render_micros, started);
         self.stats
             .image_high_water_bytes
             .fetch_max(high_water, Ordering::Relaxed);
@@ -211,10 +214,8 @@ impl CpuRenderer {
             .map_err(GraphError::into_render_error)?;
         let started = Instant::now();
         super::pack::pack_yuv420p(&self.workers, &image, encoding, targets)?;
-        self.stats.render_micros.fetch_add(
-            u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
+        add_elapsed(&self.stats.render_micros, started);
+        add_elapsed(&self.stats.pack_micros, started);
         Ok(())
     }
 
@@ -279,6 +280,7 @@ impl CpuRenderer {
             max_filter_samples: self.quality_controls().max_filter_samples,
             source_a,
             source_b,
+            texels: [source_a.texels(), source_b.texels()],
             inputs: &inputs,
             resources: &resources,
         };
@@ -325,6 +327,24 @@ impl CpuRenderer {
     }
 
     /// Result-cache lookups, as the GPU executor's `cached_results`.
+    /// Stores drawn results unless the cache was cleared since `clears` was read with the lookups;
+    /// mirrors `Renderer::complete_graph_work`.
+    pub(crate) fn keep_results(
+        &self,
+        clears: u64,
+        inserts: &[(RenderCacheKey, Arc<CpuImage>, bool)],
+    ) {
+        if inserts.is_empty() {
+            return;
+        }
+        let mut cache = self.lock_cache();
+        if cache.clears() == clears {
+            for (key, image, pinned) in inserts {
+                cache.insert(*key, image, *pinned);
+            }
+        }
+    }
+
     fn cached_results(
         &self,
         graph: &RenderGraph<'_>,
@@ -337,6 +357,7 @@ impl CpuRenderer {
             hits: vec![None; count],
             store: vec![None; count],
             needed: vec![true; count],
+            clears: 0,
         };
         if graph.intents.iter().all(Option::is_none) {
             return cached;
@@ -345,6 +366,7 @@ impl CpuRenderer {
         if !cache.enabled() {
             return cached;
         }
+        cached.clears = cache.clears();
         let eligibility = graph.eligibility();
         let (mut hits, mut misses, mut ineligible) = (0, 0, 0);
         cached.needed = vec![false; count];
@@ -389,6 +411,8 @@ struct CachedResults {
     hits: Vec<Option<Arc<CpuImage>>>,
     store: Vec<Option<(RenderCacheKey, bool)>>,
     needed: Vec<bool>,
+    /// The cache's clear count read with the lookups.
+    clears: u64,
 }
 
 fn output(outputs: &[Option<Arc<CpuImage>>], node: RenderNodeId) -> &CpuImage {

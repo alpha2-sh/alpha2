@@ -113,20 +113,16 @@ fn frame_display_rotation_reads_the_matrix_a_decoder_attached() {
 fn video_plane_copy_normalizes_positive_and_negative_stride() {
     let bytes = [1_u8, 2, 99, 4, 5, 99, 7, 8, 99];
     assert_eq!(
-        copy_video_plane(bytes.as_ptr(), 3, 2, 3, "plane").expect("positive stride"),
+        // SAFETY: `bytes` holds three rows of three bytes.
+        unsafe { copy_plane_rows(bytes.as_ptr(), 3, 2, 3, "plane") }.expect("positive stride"),
         vec![1, 2, 4, 5, 7, 8]
     );
     // A negative-stride frame points at its first logical row and walks backwards.
     assert_eq!(
-        copy_video_plane(
-            // SAFETY: index six is the first byte of the final stored row.
-            unsafe { bytes.as_ptr().add(6) },
-            -3,
-            2,
-            3,
-            "plane",
-        )
-        .expect("negative stride"),
+        // SAFETY: index six is the first byte of the final stored row, and the rows before it
+        // are in `bytes`.
+        unsafe { copy_plane_rows(bytes.as_ptr().add(6), -3, 2, 3, "plane") }
+            .expect("negative stride"),
         vec![7, 8, 4, 5, 1, 2]
     );
 }
@@ -918,4 +914,108 @@ fn a_scaler_refuses_a_frame_of_another_size_or_format() {
     assert_eq!((converted.width, converted.height), (64, 64));
     assert_eq!(converted.format, ffi::AV_PIX_FMT_RGBA);
     assert_eq!(converted.linesize[0] % 64, 0);
+}
+
+#[test]
+fn a_frame_buffer_takes_each_planes_rows_from_its_pixel_format() {
+    let (width, height) = (37, 21);
+    for (format, expected) in [
+        (ffi::AV_PIX_FMT_YUV420P, vec![(37, 21), (19, 11), (19, 11)]),
+        (ffi::AV_PIX_FMT_P010LE, vec![(74, 21), (76, 11)]),
+        (
+            ffi::AV_PIX_FMT_YUV422P10LE,
+            vec![(74, 21), (38, 21), (38, 21)],
+        ),
+        (
+            ffi::AV_PIX_FMT_YUVA444P10LE,
+            vec![(74, 21), (74, 21), (74, 21), (74, 21)],
+        ),
+    ] {
+        let mut buffer = Yuv420pFrameBuffer::with_format(width, height, format).expect("buffer");
+        assert_eq!(buffer.planes(), expected, "{format}");
+        let mut ranges = Vec::new();
+        for (index, ((plane, stride), (row_bytes, rows))) in buffer
+            .begin_write_planes()
+            .expect("planes")
+            .into_iter()
+            .zip(expected)
+            .enumerate()
+        {
+            assert_eq!(
+                plane.len(),
+                stride * (rows - 1) + row_bytes,
+                "{format} {index}"
+            );
+            plane.fill(0x5A);
+            ranges.push((plane.as_ptr() as usize, plane.len()));
+        }
+        for (index, (start, len)) in ranges.into_iter().enumerate() {
+            assert!(
+                in_frame_buffer(buffer.frame(), start, len),
+                "{format} plane {index} leaves its buffer"
+            );
+        }
+    }
+}
+
+#[test]
+fn yuv_planes_refuse_rows_past_the_frames_buffer() {
+    let mut frame = AVFrame::new();
+    frame.set_format(ffi::AV_PIX_FMT_YUV420P);
+    frame.set_width(16);
+    frame.set_height(16);
+    frame.get_buffer(1).expect("buffer");
+    assert!(yuv_planes(&frame).expect("planes").is_some());
+    frame.set_height(1000);
+    assert!(
+        yuv_planes(&frame).is_err(),
+        "1000 rows were read from a 16-row buffer"
+    );
+}
+
+#[test]
+fn a_flipped_frame_inside_its_buffer_still_copies() {
+    let y = vec![1_u8, 2, 3, 4, 5, 6];
+    let chroma = vec![9_u8, 9];
+    let mut frame = yuv420p_frame(&y, 2, &chroma, 1, &chroma, 1, 2, 3).expect("frame");
+    // SAFETY: only `data` and `linesize` change, to the same rows walked from the last one.
+    let raw = unsafe { &mut *frame.as_mut_ptr() };
+    for plane in 0..3 {
+        let rows = if plane == 0 { 3 } else { 2 };
+        let linesize = raw.linesize[plane];
+        let last_row = isize::try_from(linesize * (rows - 1)).expect("offset");
+        // SAFETY: the plane's last row is inside the frame's buffer.
+        raw.data[plane] = unsafe { raw.data[plane].offset(last_row) };
+        raw.linesize[plane] = -linesize;
+    }
+    let planes = yuv_planes(&frame).expect("planes").expect("I420").planes;
+    let luma: Vec<u8> = planes[0]
+        .bytes
+        .chunks(planes[0].stride as usize)
+        .flat_map(|row| &row[..2])
+        .copied()
+        .collect();
+    assert_eq!(luma, [5, 6, 3, 4, 1, 2]);
+}
+
+#[test]
+fn hardware_interop_needs_the_libavutil_minor_the_shims_were_compiled_for() {
+    let version = |major: u32, minor: u32, micro: u32| (major << 16) | (minor << 8) | micro;
+    assert_eq!(
+        interop_version_refusal(version(60, 26, 103), version(60, 26, 103)),
+        None
+    );
+    assert_eq!(
+        interop_version_refusal(version(60, 26, 103), version(60, 26, 100)),
+        None
+    );
+    let refusal = interop_version_refusal(version(60, 26, 103), version(60, 8, 103))
+        .expect("another minor is refused");
+    assert!(
+        refusal.contains("60.26.103") && refusal.contains("60.8.103"),
+        "{refusal}"
+    );
+    assert!(interop_version_refusal(version(60, 26, 103), version(61, 0, 100)).is_some());
+    assert_eq!(hardware_interop_refusal(), None, "the pinned SDK passes");
+    check_hardware_interop().expect("the pinned SDK passes");
 }

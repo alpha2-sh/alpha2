@@ -4,13 +4,16 @@ import {
   extractDigest,
   extractInvalidEmit,
   extractTimeline,
+  extractTimelineQuality,
   extractUnsendableEmit,
   pluginConformance,
   pluginDigest,
 } from "./extract.mjs";
 import {
   editorApplyEdit,
+  editorAudioLaneFailure,
   editorConformStaleData,
+  editorExportUndecodableAudio,
   pluginEditorExtract,
 } from "./editor.mjs";
 import {
@@ -22,6 +25,7 @@ import {
   audioStoreCapacity,
   audioStreamSelection,
   audioWindowPreroll,
+  silentChannelSelection,
   fixedAudioMix,
   loudnessUnderLimiter,
 } from "./audio.mjs";
@@ -32,6 +36,7 @@ import {
   audioWorkletQuanta,
 } from "./audio-worklet.mjs";
 import {
+  bindingBrowserExceptions,
   bitmapUploads,
   layers,
   layout,
@@ -42,10 +47,12 @@ import {
   transparentEdges,
   webgl2EffectBackendCompile,
   webgl2EffectTextureBudget,
+  webgl2ElseIfChain,
   webgl2ProbeWithoutOffscreenWebgl,
   webgl2UploadFallback,
   webgl2WithoutFloatColorBuffers,
   webglContextLoss,
+  webglWorkerLostCalls,
   webglWorkerRecovery,
   webgpuAdapterInfo,
   webgpuDroppedWork,
@@ -63,6 +70,7 @@ import {
 import { crashGpuOnSignal, gpuResetLadder } from "./recovery.mjs";
 import {
   cpuGrid,
+  cpuHdrFrameRefused,
   cpuRuntimeEffectRefusedWhenDrawn,
   cpuWorkerHost,
   rendererFallbackAdapter,
@@ -70,6 +78,7 @@ import {
 } from "./cpu.mjs";
 import {
   exportAacPriming,
+  exportCancelDuringFinish,
   exportEveryContainer,
   exportPixels,
   exportEveryProjectRate,
@@ -94,14 +103,20 @@ import {
   stillResidency,
   wasmMemoryBound,
 } from "./memory.mjs";
-import { previewFullResolution, previewUnchangedFrame } from "./preview.mjs";
+import {
+  previewEveryAnimationFrame,
+  previewFullResolution,
+  previewUnchangedFrame,
+} from "./preview.mjs";
 import {
   browserVideoConversion,
+  decoderCursorBudget,
   webcodecsDecodeOrder,
   decoderSoftwareFallback,
   hdrHevcSource,
   presentationCacheColor,
   presentationCacheResize,
+  reverseWindowPixels,
   sdrChromaSiting,
   videoColorContract,
   yuvAnamorphic,
@@ -117,15 +132,20 @@ export const cases = {
   "extract-invalid-emit": extractInvalidEmit,
   "extract-unsendable-emit": extractUnsendableEmit,
   "extract-timeline": extractTimeline,
+  "extract-timeline-quality": extractTimelineQuality,
   "plugin-digest": pluginDigest,
   "plugin-conformance": pluginConformance,
   "plugin-editor-extract": pluginEditorExtract,
   "editor-apply-edit": editorApplyEdit,
   "editor-conform-stale-data": editorConformStaleData,
+  "editor-audio-lane-failure": editorAudioLaneFailure,
+  "editor-export-undecodable-audio": editorExportUndecodableAudio,
   "webgpu-smoke": () => smoke(false),
   "webgl2-smoke": () => smoke(true),
   "webgl-context-loss": webglContextLoss,
   "webgl-worker-recovery": webglWorkerRecovery,
+  "webgl-worker-lost-calls": webglWorkerLostCalls,
+  "binding-browser-exceptions": bindingBrowserExceptions,
   "webgpu-dropped-work": webgpuDroppedWork,
   "webgpu-rejected-frame": webgpuRejectedFrame,
   "heavy-effect-split": heavyEffectSplit,
@@ -133,6 +153,8 @@ export const cases = {
   "video-color-contract": videoColorContract,
   "browser-video-conversion": browserVideoConversion,
   "decoder-software-fallback": decoderSoftwareFallback,
+  "reverse-window-pixels": reverseWindowPixels,
+  "decoder-cursor-budget": decoderCursorBudget,
   "hdr-hevc-source": hdrHevcSource,
   "hdr-hevc-source-degraded": () => hdrHevcSource({ degraded: true }),
   "export-survives-frozen-page": exportSurvivesFrozenPage,
@@ -158,12 +180,14 @@ export const cases = {
   "audio-matroska-codec-delay": audioMatroskaCodecDelay,
   "audio-speaker-layout": audioSpeakerLayout,
   "audio-stream-selection": audioStreamSelection,
+  "audio-silent-channel-selection": silentChannelSelection,
   "aac-layout-refusal": aacLayoutRefusal,
   "fixed-audio-mix": fixedAudioMix,
   "export-every-project-rate": exportEveryProjectRate,
   "export-every-container": exportEveryContainer,
   "export-pixels": exportPixels,
   "export-aac-priming": exportAacPriming,
+  "export-cancel-during-finish": exportCancelDuringFinish,
   "loudness-under-limiter": loudnessUnderLimiter,
   "text-raster-parity": textRasterParity,
   "webgl2-transparent-edges": () => transparentEdges(true),
@@ -171,6 +195,7 @@ export const cases = {
   "webgl2-layers": () => layers(true),
   "webgpu-layers": () => layers(false),
   "webgl2-effect-backend-compile": webgl2EffectBackendCompile,
+  "webgl2-else-if-chain": webgl2ElseIfChain,
   "webgpu-named-inputs": () => namedInputs(false),
   "webgl2-named-inputs": () => namedInputs(true),
   "webgpu-shapes": () => shapes(false),
@@ -204,6 +229,7 @@ export const cases = {
   "webgpu-adapter-info": webgpuAdapterInfo,
   "preview-unchanged-frame": previewUnchangedFrame,
   "preview-full-resolution": previewFullResolution,
+  "preview-every-animation-frame": previewEveryAnimationFrame,
   "cpu-worker-host": () => cpuWorkerHost("cpu", 640, 360),
   "cpu-worker-host-1080p": () => cpuWorkerHost("cpu", 1920, 1080),
   "renderer-auto": () => cpuWorkerHost("auto", 640, 360),
@@ -213,6 +239,7 @@ export const cases = {
   "cpu-worker": () => rendererWorker("cpu"),
   "cpu-grid-1080p": cpuGrid,
   "cpu-runtime-effect-refused-when-drawn": cpuRuntimeEffectRefusedWhenDrawn,
+  "cpu-hdr-frame-refused": cpuHdrFrameRefused,
   "cpu-fixed-audio-mix": () => fixedAudioMix(true),
   "webcodecs-decode-order": webcodecsDecodeOrder,
   "safari-sim-quality-silent": () =>

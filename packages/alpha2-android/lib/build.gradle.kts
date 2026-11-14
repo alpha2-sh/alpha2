@@ -10,6 +10,8 @@ android {
     defaultConfig {
         minSdk = 29
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // An app's R8 build keeps what JNA and the bindings reach by name.
+        consumerProguardFiles("consumer-rules.pro")
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
     sourceSets["main"].kotlin.srcDir("build/generated/uniffi")

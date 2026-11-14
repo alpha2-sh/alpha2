@@ -13,6 +13,7 @@ import type {
   WasmMissingFrame,
 } from "./effects.js";
 import type { ExportBackend, ExportTicket } from "./exporter.js";
+import type { BrowserErrorCode } from "./export-failure.js";
 import {
   lossReportFromJson,
   type GpuLossReport,
@@ -67,6 +68,7 @@ import {
   type PhysicalFrameIdentity,
 } from "./physical-frames.js";
 import { sendsBitmaps, uploadPresentedFrame } from "./presented-frames.js";
+import { withinActiveTime } from "./active-clock.js";
 
 /** A request to the render worker. The worker handles requests serially and echoes each `id`. */
 export type RenderWorkerRequest =
@@ -941,12 +943,30 @@ type RequestWithoutId = RenderWorkerRequest extends infer Request
     : never
   : never;
 
+/** Options of {@link WorkerRenderBackend}. */
+export interface WorkerRenderBackendOptions {
+  /**
+   * Milliseconds of active time (a hidden or frozen page does not count) any request waits for
+   * its reply. Default 60000 for `initialize` and `recover`, 30000 for every other request. An
+   * export frame's readback is bounded by the engine instead.
+   */
+  readonly requestTimeoutMs?: number;
+}
+
+/** Active milliseconds a request may wait for its reply, by type; others take the default. */
+const REQUEST_TIMEOUT_MS: Readonly<Partial<Record<string, number>>> = {
+  initialize: 60_000,
+  recover: 60_000,
+};
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
 /**
  * A `RenderBackend` that forwards every call to a worker running {@link installRenderWorker}.
  *
  * Calls reject with `Alpha2WasmError` for worker errors, and with a plain `Error` after
- * {@link WorkerRenderBackend.dispose}. After an uncaught worker error, every pending and later call
- * rejects with a fatal `RENDER_WORKER_FAILED` and the worker must be replaced.
+ * {@link WorkerRenderBackend.dispose}. After an uncaught worker error, a message that cannot be
+ * read, or a request unanswered past its deadline, every pending and later call rejects with a
+ * fatal `RENDER_WORKER_FAILED` and the worker must be replaced.
  */
 export class WorkerRenderBackend implements RenderBackend {
   readonly #worker: Worker;
@@ -958,11 +978,14 @@ export class WorkerRenderBackend implements RenderBackend {
   #lossReport: GpuLossReport | undefined;
   #disposed = false;
   #failure: Alpha2WasmError | undefined;
+  readonly #requestTimeoutMs: number | undefined;
 
-  constructor(worker: Worker) {
+  constructor(worker: Worker, options: WorkerRenderBackendOptions = {}) {
     this.#worker = worker;
+    this.#requestTimeoutMs = options.requestTimeoutMs;
     worker.addEventListener("message", this.#onMessage);
     worker.addEventListener("error", this.#onWorkerError);
+    worker.addEventListener("messageerror", this.#onMessageError);
   }
 
   /** Set by {@link WorkerRenderBackend.initialize} and each recovery; `undefined` before. */
@@ -1055,7 +1078,7 @@ export class WorkerRenderBackend implements RenderBackend {
         reject(failure);
       }
     });
-    return started.then(
+    return this.#withinDeadline(started, "begin-export-frame").then(
       (value) => {
         const result = value as ExportStart;
         if (result.kind === "waiting") {
@@ -1120,6 +1143,7 @@ export class WorkerRenderBackend implements RenderBackend {
     this.#postWithoutReply({ type: "dispose" });
     this.#worker.removeEventListener("message", this.#onMessage);
     this.#worker.removeEventListener("error", this.#onWorkerError);
+    this.#worker.removeEventListener("messageerror", this.#onMessageError);
     this.#worker.terminate();
     const error = new Error("alpha2 render worker disposed");
     for (const request of this.#pending.values()) request.reject(error);
@@ -1160,19 +1184,41 @@ export class WorkerRenderBackend implements RenderBackend {
   // An uncaught worker error (such as a trap in a wasm-driven future) can leave the serial queue
   // waiting forever, so the backend fails every pending and later call.
   readonly #onWorkerError = (event: ErrorEvent): void => {
-    const error = new Alpha2WasmError({
-      code: "RENDER_WORKER_FAILED",
-      message: `${event.message || "alpha2 render worker failed"}; the render worker must be replaced`,
+    this.#fail(event.message || "alpha2 render worker failed");
+  };
+
+  readonly #onMessageError = (): void => {
+    this.#fail("a render worker message could not be read");
+  };
+
+  /** Fails every pending and later call with one fatal `RENDER_WORKER_FAILED`. */
+  #fail(reason: string): Alpha2WasmError {
+    this.#failure ??= new Alpha2WasmError({
+      code: "RENDER_WORKER_FAILED" satisfies BrowserErrorCode,
+      message: `${reason}; the render worker must be replaced`,
       fatal: true,
     });
-    this.#failure ??= error;
+    const error = this.#failure;
     for (const request of this.#pending.values()) request.reject(error);
     this.#pending.clear();
     for (const readback of this.#pendingExportReadbacks.values()) {
       readback.reject(error);
     }
     this.#pendingExportReadbacks.clear();
-  };
+    return error;
+  }
+
+  #withinDeadline<T>(reply: Promise<T>, type: string): Promise<T> {
+    const limit =
+      this.#requestTimeoutMs ??
+      REQUEST_TIMEOUT_MS[type] ??
+      DEFAULT_REQUEST_TIMEOUT_MS;
+    return withinActiveTime(reply, limit, () =>
+      this.#fail(
+        `the render worker did not answer ${type} within ${limit / 1000} s of active time`,
+      ),
+    );
+  }
 
   #request(
     request: RequestWithoutId,
@@ -1188,7 +1234,7 @@ export class WorkerRenderBackend implements RenderBackend {
       return Promise.reject(this.#failure);
     }
     const id = this.#nextId++;
-    return new Promise((resolve, reject) => {
+    const reply = new Promise((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
       try {
         this.#worker.postMessage({ ...request, id }, transfer);
@@ -1198,6 +1244,7 @@ export class WorkerRenderBackend implements RenderBackend {
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
+    return this.#withinDeadline(reply, request.type);
   }
 
   #postWithoutReply(request: RequestWithoutId): void {

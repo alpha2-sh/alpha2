@@ -64,6 +64,7 @@ mod conformance;
 mod containers;
 mod copies;
 mod damaged_input;
+mod decoders;
 mod encoders;
 mod frame_metadata;
 mod hardware_decode;

@@ -48,6 +48,7 @@ pub(crate) fn read_moof(
     trex: &[Trex],
     tracks: &mut [FragmentTrack<'_>],
     file_len: u64,
+    entries_left: &mut usize,
 ) -> Result<(), DemuxError> {
     let mut implicit_offset = moof_offset;
     for traf in children(&moof.bytes.slice(moof.header..)) {
@@ -93,6 +94,7 @@ pub(crate) fn read_moof(
                         next_trun_dts,
                         tracks[defaults.track].index,
                         file_len,
+                        entries_left,
                     )?;
                     if let Some((end_dts, end_offset)) = end {
                         next_trun_dts = Some(end_dts);
@@ -167,6 +169,7 @@ fn trun(
     next_trun_dts: Option<i64>,
     index: &mut Index,
     file_len: u64,
+    entries_left: &mut usize,
 ) -> Result<Option<(i64, u64)>, DemuxError> {
     let mut reader = Reader::new(payload, "trun");
     let (_, flags) = reader.version_flags()?;
@@ -204,6 +207,10 @@ fn trun(
             "a trun box declares more samples than it holds".into(),
         ));
     }
+    if entries > *entries_left {
+        return Err(super::index::too_many_samples());
+    }
+    *entries_left -= entries;
     let mut offset = defaults.base_data_offset.wrapping_add_signed(data_offset);
     let previous = index.entries.last().map(|entry| entry.dts);
     index.has_stts = true;

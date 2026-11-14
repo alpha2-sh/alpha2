@@ -32,6 +32,17 @@ print(result["output"], result["videoPipeline"], result["frames"])
 
 - `alpha2.export`, `alpha2.conform` and `alpha2.capabilities` run on a shared `HostClient`; make
   your own (`alpha2.HostClient(concurrency=2)`) to bound or separate them.
+- `export` renders from time 0 to where the project ends (its last clip or caption cue) at the
+  project's frame rate unless `start_ticks`, `end_ticks` or `frame_rate` say otherwise, and returns
+  the host's export result (`alpha2.results.ExportResult`, with `output`). `on_progress` receives
+  `ExportProgress(phase, completed, total, restarted)`: `restarted` is true on the first report
+  after the export started over (the host moved a GPU-resident export to the readback path, or the
+  client reran it with software decode after a hardware decoder stalled), the only report in which
+  `completed` goes back to 0.
+- The package installs no command. Its command line is `python -m alpha2` with `install`,
+  `export`, `still`, `mcp` and `capabilities`. The `alpha2` program in a
+  [native archive](https://github.com/alpha2-sh/alpha2/blob/main/docs/native.md) is another
+  program, a media tool.
 - A client keeps up to `concurrency` `alpha2-host` processes and sends each one request at a
   time, so later requests skip the start. A host serves until it decides a new process would do
   better (memory, request count, idle time) and drains; the client then starts another. A host
@@ -52,7 +63,11 @@ print(result["output"], result["videoPipeline"], result["frames"])
   (seconds, a `HostClient` argument, 30 by default, `None` to wait forever) is killed and the
   request fails with `HOST_START_TIMEOUT`; a host macOS has quarantined is refused before it starts
   with `HOST_QUARANTINED`, one Windows refuses by policy is `HOST_BLOCKED`, and a Linux host whose
-  program interpreter is missing (musl) or whose glibc is too old is `HOST_LOAD_FAILED`.
+  program interpreter is missing (musl) or whose glibc is too old is `HOST_LOAD_FAILED`. A host of
+  another alpha2 release (an older `alpha2-host` on `PATH` or in `ALPHA2_HOST_PATH`) is ended at
+  once and the request fails with `HOST_VERSION_MISMATCH`.
+- An engine defect inside an in-process call (validation, compose, edit operations, measuring)
+  raises `alpha2.Alpha2InternalError`, a `RuntimeError` with `code` `INTERNAL`.
 - Options you write use snake_case (`loudness={"target_lufs": -14, ...}`); what the host reports
   keeps the protocol's camelCase keys (`result["effectiveRange"]`).
 
@@ -230,8 +245,13 @@ with alpha2.HostClient() as client:
 - A [plugin](../../docs/plugin-abi.md) runs inside the host instead: pass
   `plugin={"manifest": ..., "sha256": ...}` and no extractor. The host fetches the manifest (an
   `https:` URL or a path), checks every file against its pinned SHA-256 and runs the wasm artifact
-  sandboxed; `"allow_native": True` lets a native artifact run with the host's rights. A plugin
-  that is refused, does not load, traps or runs past its limits fails with a `PLUGIN_*` code.
+  sandboxed. A plugin that is refused, does not load, traps or runs past its limits fails with a
+  `PLUGIN_*` code.
+- `HostClient(plugins={...})` decides what the client's hosts allow: `"mode"` (`"off"`, `"wasm"`
+  by default, or `"native"`), `"origins"` (`"none"` or the `https:` origins manifests and files
+  may come from) and `"root"` (the directory local manifests must lie under, or `"none"`). Only
+  under `"mode": "native"` does a request's `"allow_native": True` let a native artifact run,
+  with the host's rights.
 
 ## Apply data with edit operations
 
@@ -253,8 +273,8 @@ edited = alpha2.edit.apply(
 )
 ```
 
-Kept moments render as before for clip picture and sound, clip keyframes, captions, hold data
-and linear automation; a matte or a binding read through another clip follows the part beside it
+Kept moments render as before for clip picture and sound, clip keyframes, captions,
+timeline-anchored data and track and master automation; a matte or a binding read through another clip follows the part beside it
 or the edit is refused (`matte_source`, `read_through`). The host protocol lists what is not exact
 in this release. `project_json` is the same bytes on every surface.
 A refusal raises `alpha2.Alpha2EditError`, whose `refusal` names why (`unknown_data`,
@@ -353,9 +373,18 @@ claude mcp add alpha2 -- python -m alpha2 mcp --font Inter.ttf --templates ./tem
 
 `--font` gives the fonts text is drawn with (text needs one), `--templates` a directory of template
 JSON files beside the built-in ones, and `--host` the `alpha2-host` binary. Relative paths in specs
-are read from the server's working directory. `render_frame` (given an `output`) and `render_video`
-write files, replacing one only with `overwrite`, and are marked destructive; the other tools only
-read. A call that fails, however malformed, is answered with an error and the server keeps serving.
+are read from the server's working directory. `render_frame` (given an `output`, which must be a
+`.png` file) and `render_video` write files, replacing one only with `overwrite`, and are marked
+destructive; the other tools only read. A call that fails, however malformed, is answered with an
+error and the server keeps serving.
+
+The tools read and write only under the server's roots: the working directory, or each `--root DIR`
+given instead. That covers spec, template and project files, the media and caption files a spec
+names, and outputs, with links resolved; a link as an output is refused. The `--templates`
+directories and `--font` files are read at start without a root. A file argument must be a regular
+file no larger than a project document may be. `--read-only` leaves out the two writing tools.
+`--max-seconds` (default 3600) bounds the range `render_video` renders and `--max-pixels` (default
+7680 x 4320) the canvas of either render tool.
 
 ## Finding `alpha2-host`
 
@@ -398,7 +427,10 @@ This downloads Cisco's OpenH264 2.7.0 binary for the platform from
 SHA-256s, and puts the library in the shared cache, in `openh264-2.7.0-<target>/`, where
 `alpha2-host` finds it. It installs only the library, not `alpha2-host`. `--force` downloads again,
 `alpha2.install_openh264()` does the same from code, and `ALPHA2_OPENH264_DOWNLOAD_URL` (or the
-`download_url` argument) names a mirror. Every run prints Cisco's notice:
+`download_url` argument) names a mirror. A `HostClient` made with `cache_directory` gives its hosts
+that directory, so they find a library installed there. After `install_openh264()` downloads, the
+clients of this process start new hosts and probe capabilities again; an install made by another
+process is not seen by a running client. Every run prints Cisco's notice:
 
 ```text
 OpenH264 Video Codec provided by Cisco Systems, Inc.

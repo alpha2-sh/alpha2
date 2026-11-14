@@ -24,7 +24,7 @@ fn facts() -> Value {
     for index in 1..=4 {
         media.insert(
             format!("grid{index}.mp4"),
-            json!({"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "duration_ticks": (30 + index) * SECOND}),
+            json!({"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "duration_ticks": (30 + index) * SECOND, "has_audio": false}),
         );
     }
     media.insert(
@@ -611,18 +611,24 @@ fn a_faster_video_keeps_its_pitch_unless_told_not_to() {
     );
 }
 
-/// Specs that use no motion field compile to pinned bytes. Set `ALPHA2_UPDATE_GOLDENS=1` to
-/// re-pin after an intended change.
+const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/old-specs.golden.json");
+
+/// The pinned specs, `{facts, cases: [{spec, compiled}]}`.
+fn golden() -> Value {
+    serde_json::from_str(&std::fs::read_to_string(GOLDEN).expect("golden")).expect("JSON")
+}
+
+/// Specs of every node kind compile to pinned bytes. Set `ALPHA2_UPDATE_GOLDENS=1` to re-pin
+/// after an intended change.
 #[test]
 fn old_specs_compile_to_the_same_bytes() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/old-specs.golden.json");
-    let mut cases: Vec<Value> =
-        serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
+    let mut golden = golden();
     let update =
         std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"));
-    let facts = facts().to_string();
-    for case in &mut cases {
-        let compiled = compile_json(&case["spec"].to_string(), &facts, &[]).expect("compiles");
+    let facts = golden["facts"].to_string();
+    for case in golden["cases"].as_array_mut().expect("cases") {
+        let compiled = compile_json(&case["spec"].to_string(), &facts, &[])
+            .unwrap_or_else(|error| panic!("{error}: {}", case["spec"]));
         if update {
             case["compiled"] = Value::String(compiled);
             continue;
@@ -635,9 +641,9 @@ fn old_specs_compile_to_the_same_bytes() {
         );
     }
     if update {
-        let mut text = serde_json::to_string_pretty(&cases).expect("serializes");
+        let mut text = serde_json::to_string_pretty(&golden).expect("serializes");
         text.push('\n');
-        std::fs::write(path, text).expect("writes the golden");
+        std::fs::write(GOLDEN, text).expect("writes the golden");
     }
 }
 
@@ -1546,5 +1552,594 @@ fn a_looping_video_refuses_a_speed_other_than_one() {
     assert_eq!(
         span(slower, "timeline_range"),
         2 * span(slower, "source_range")
+    );
+}
+
+#[test]
+fn times_past_what_a_project_holds_are_refused_with_a_path() {
+    let cases = [
+        (
+            json!({"body": {"type": "stack", "children": [
+                {"type": "color", "at": 1e300, "duration": 1e300},
+            ]}}),
+            "spec.body.children[0].duration: ",
+        ),
+        (
+            json!({"body": {"type": "stack", "children": [
+                {"type": "color", "at": 1e14, "duration": 1e14},
+            ]}}),
+            "spec.body.children[0].duration: ",
+        ),
+        (
+            json!({"duration": 1e11, "body": {"type": "color"}}),
+            "spec.duration: ",
+        ),
+        // Each value fits; their sum does not.
+        (
+            json!({"body": {"type": "stack", "children": [
+                {"type": "color", "at": 5e10, "duration": 5e10},
+            ]}}),
+            "spec.body.children[0]: it ends past the latest time a project holds",
+        ),
+        (
+            json!({"body": {"type": "sequence", "children": [
+                {"type": "color", "duration": 3e10},
+                {"type": "color", "duration": 3e10},
+                {"type": "color", "duration": 3e10},
+            ]}}),
+            "spec.body: it ends past the latest time a project holds",
+        ),
+        (
+            json!({"duration": 1, "body": {"type": "media", "path": "logo.png",
+                "zoom": {"from": 1, "to": 2, "at": 5e10, "duration": 3e10}}}),
+            "spec.body.zoom: it ends past the latest time a project holds",
+        ),
+        // The key fits from the node's start, which is late on the timeline.
+        (
+            json!({"body": {"type": "stack", "children": [
+                {"type": "media", "path": "logo.png", "at": 3e9, "duration": 1,
+                    "zoom": {"from": 1, "to": 2, "at": 7e10, "duration": 3e9}},
+            ]}}),
+            "spec.body.children[0].zoom: it ends past the latest time a project holds",
+        ),
+        (
+            json!({"theme": {"text_seconds": 1e11}, "body": {"type": "text", "text": "x"}}),
+            "spec.theme: text_seconds is 100000000000 s, past the latest time",
+        ),
+        (
+            json!({"body": {"type": "sequence", "transition": {"type": "wipe-left", "duration": 0.5},
+            "children": [
+                {"type": "media", "path": "logo.png", "duration": 4},
+                {"type": "text", "text": "Mid", "duration": 2.333_333_333_333_333_3e38},
+                {"type": "color", "duration": 2},
+            ]}}),
+            "spec.body.children[1].duration: ",
+        ),
+    ];
+    for (spec, expected) in cases {
+        let outcome =
+            std::panic::catch_unwind(|| compile_json(&spec.to_string(), &facts().to_string(), &[]))
+                .unwrap_or_else(|_| panic!("panicked: {spec}"));
+        let error = outcome.expect_err("refused").to_string();
+        assert!(error.starts_with(expected), "{error}");
+    }
+    // Entrance delays past the latest time are not added up: the spec is refused for its
+    // track count, not lost to an overflow.
+    let staggered = json!({"duration": 1, "body": {"type": "stack", "stagger": 7e10,
+        "enter": {"type": "fade", "duration": 0.5},
+        "children": vec![json!({"type": "color"}); 1100]}});
+    assert!(std::panic::catch_unwind(|| compile_error(&staggered)).is_ok());
+    let mut facts = facts();
+    facts["media"]["wide.mp4"]["duration_ticks"] = json!(i64::MAX);
+    let error = compile_json(
+        &json!({"body": {"type": "media", "path": "wide.mp4"}}).to_string(),
+        &facts.to_string(),
+        &[],
+    )
+    .expect_err("refused")
+    .to_string();
+    assert!(
+        error.starts_with("spec.body.path: the facts give \"wide.mp4\" a duration of"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_zero_canvas_is_refused_before_anything_is_lowered() {
+    for counter in [
+        json!({"type": "counter", "start": 0, "end": 5, "duration": 1}),
+        json!({"type": "counter", "start": 0, "end": 5, "duration": 1, "font_size": 40}),
+        json!({"type": "color", "duration": 1}),
+    ] {
+        let spec = json!({"canvas": {"width": 0, "height": 0}, "body": counter});
+        let outcome =
+            std::panic::catch_unwind(|| compile_json(&spec.to_string(), &facts().to_string(), &[]))
+                .unwrap_or_else(|_| panic!("panicked: {spec}"));
+        let error = outcome.expect_err("refused").to_string();
+        assert!(error.starts_with("spec.canvas: "), "{error}");
+    }
+}
+
+#[test]
+fn old_specs_compile_to_projects_that_load() {
+    let golden = golden();
+    let facts = golden["facts"].to_string();
+    for case in golden["cases"].as_array().expect("cases") {
+        let compiled: Value = serde_json::from_str(
+            &compile_json(&case["spec"].to_string(), &facts, &[]).expect("compiles"),
+        )
+        .expect("JSON");
+        alpha2_model::Project::from_json(&compiled["project"].to_string())
+            .unwrap_or_else(|error| panic!("{error}: {}", case["spec"]));
+    }
+}
+
+#[test]
+fn a_counter_counts_over_at_most_its_frame_budget() {
+    let counter = |duration: f64, rate: u32| {
+        json!({"canvas": {"preset": "youtube-1080p", "frame_rate": rate},
+            "body": {"type": "counter", "start": 0, "end": 1_000_000, "duration": duration}})
+    };
+    let started = std::time::Instant::now();
+    let error = compile_error(&counter(1e9, 30));
+    assert!(error.starts_with("spec.body: the count spans"), "{error}");
+    let error = compile_error(&counter(7200.0, 60));
+    assert!(error.contains("431999 frames"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    compile(&counter(60.0, 60));
+}
+
+fn incoming_ramps_in_over(compiled: &Value, overlap: i64) {
+    let lanes = tracks(compiled)
+        .iter()
+        .filter(|track| track["kind"] == "video")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lanes.len(),
+        2,
+        "the incoming picture takes a lane of its own"
+    );
+    assert!(
+        lanes
+            .iter()
+            .all(|lane| lane["transitions"].as_array().is_none_or(Vec::is_empty))
+    );
+    let clips = lanes[1]["clips"].as_array().expect("clips");
+    let start = clips[0]["timeline_range"]["start"].as_i64().expect("ticks");
+    // The ramp may run on across a played part into a held frame.
+    let keys = clips
+        .iter()
+        .flat_map(|clip| {
+            let opacity = &clip["visual"]["opacity"];
+            keyframe_times(opacity)
+                .into_iter()
+                .zip(keyframe_values(opacity))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(keys[0], (start, json!(0.0)));
+    assert!(keys.contains(&(start + overlap, json!(1.0))), "{keys:?}");
+}
+
+#[test]
+fn a_join_into_or_out_of_a_part_shorter_than_its_transition_crossfades_or_is_refused() {
+    // wide.mp4 lasts 10 s: in 10.5 s its held last frame lasts 0.5 s.
+    let held_out = |transition: &str| {
+        json!({"body": {"type": "sequence", "transition": {"type": transition, "duration": 1},
+        "children": [
+            {"type": "media", "path": "wide.mp4", "duration": 10.5},
+            {"type": "media", "path": "slides/01.jpg", "duration": 3},
+        ]}})
+    };
+    // Trimmed to 0.5 s, it plays 0.5 s and then holds its frame.
+    let short_in = |transition: &str| {
+        json!({"body": {"type": "sequence", "transition": {"type": transition, "duration": 1},
+        "children": [
+            {"type": "media", "path": "slides/01.jpg", "duration": 3},
+            {"type": "media", "path": "wide.mp4", "trim_end": 0.5, "duration": 3},
+        ]}})
+    };
+    incoming_ramps_in_over(&compile(&held_out("crossfade")), SECOND);
+    incoming_ramps_in_over(&compile(&short_in("crossfade")), SECOND);
+    let error = compile_error(&held_out("wipe-left"));
+    assert!(
+        error.starts_with("spec.body.children[0]: its last held part lasts 0.5 s"),
+        "{error}"
+    );
+    let error = compile_error(&short_in("wipe-left"));
+    assert!(
+        error.starts_with("spec.body.children[1]: its first part plays 0.5 s"),
+        "{error}"
+    );
+    // Parts as long as the transition keep the engine transition.
+    let covered = compile(&json!({"body": {"type": "sequence",
+    "transition": {"type": "wipe-left", "duration": 1}, "children": [
+        {"type": "media", "path": "wide.mp4", "duration": 11},
+        {"type": "media", "path": "slides/01.jpg", "duration": 3},
+    ]}}));
+    assert_eq!(
+        tracks(&covered)[0]["transitions"].as_array().map(Vec::len),
+        Some(1)
+    );
+}
+
+#[test]
+fn a_middle_child_shorter_than_its_two_transitions_is_refused() {
+    let error = compile_error(&json!({"body": {"type": "sequence",
+    "transition": {"type": "crossfade", "duration": 0.5}, "children": [
+        {"type": "media", "path": "slides/01.jpg", "duration": 0.8},
+        {"type": "media", "path": "slides/02.jpg", "duration": 0.8},
+        {"type": "media", "path": "slides/03.jpg", "duration": 0.8},
+    ]}}));
+    assert_eq!(
+        error,
+        "spec.body.children[1]: it lasts 0.8 s, shorter than the two 0.5 s transitions around it"
+    );
+    let error = compile_error(&json!({"body": {"type": "slideshow",
+        "items": ["slides/01.jpg", "slides/02.jpg", "slides/03.jpg"],
+        "seconds": 0.8, "transition": {"type": "crossfade", "duration": 0.5}}}));
+    assert!(
+        error.starts_with("spec.body.seconds: each slide lasts 0.8 s, shorter than the two 0.5 s"),
+        "{error}"
+    );
+    let error = compile_error(&json!({"body": {"type": "slideshow",
+        "items": ["slides/01.jpg", "slides/02.jpg", "slides/03.jpg"], "fit_to": "music.m4a",
+        "transition": {"type": "crossfade", "duration": 30}}}));
+    assert!(error.starts_with("spec.body.fit_to: "), "{error}");
+    // Two slides have no middle one.
+    compile(
+        &json!({"body": {"type": "slideshow", "items": ["slides/01.jpg", "slides/02.jpg"],
+        "seconds": 0.8, "transition": {"type": "crossfade", "duration": 0.5}}}),
+    );
+}
+
+#[test]
+fn a_zoom_runs_over_its_node_across_a_held_last_frame() {
+    // grid1.mp4 lasts 31 s, so a 40 s node plays it and holds its last frame.
+    for zoom in [
+        json!({"from": 1, "to": 1.2}),
+        json!({"from": 1, "to": 1.2, "ease": "ease-in-out"}),
+        json!({"keys": [{"t": 0, "v": 1}, {"t": 35, "v": 1.3, "ease": "ease-in"}, {"t": 40, "v": 1.1}]}),
+    ] {
+        for inset in [0, 100] {
+            let clips = video_clips(&json!({"duration": 40, "zoom": zoom, "inset": inset,
+                "fit": "cover"}))
+            .expect("compiles");
+            assert_eq!(clips.len(), 2, "{zoom}");
+            assert_eq!(clips[1]["time_map"]["type"], "freeze");
+            let played = &clips[0]["visual"]["scale"];
+            assert_eq!(played, &clips[1]["visual"]["scale"], "{zoom}");
+            let times = keyframe_times(played);
+            assert_eq!(times.first(), Some(&0), "{zoom}");
+            assert_eq!(times.last(), Some(&(40 * SECOND)), "{zoom}");
+            assert_eq!(clips[0]["masks"], clips[1]["masks"], "{zoom}");
+            if inset > 0 {
+                let times = keyframe_times(&clips[0]["masks"][0]["shape"]["size"]);
+                assert_eq!(times.first(), Some(&0), "{zoom}");
+                assert_eq!(times.last(), Some(&(40 * SECOND)), "{zoom}");
+            }
+        }
+    }
+    // A slideshow of videos longer than each video pans each node once.
+    let compiled = compile(
+        &json!({"body": {"type": "slideshow", "items": ["wide.mp4", "wide.mp4"],
+        "seconds": 12, "ken_burns": 1.2, "transition": "cut"}}),
+    );
+    let clips = visual_clips(&compiled);
+    assert_eq!(clips.len(), 4);
+    for (index, clip) in clips.iter().enumerate() {
+        let start = if index < 2 { 0 } else { 12 * SECOND };
+        let times = keyframe_times(&clip["visual"]["scale"]);
+        assert_eq!(times, [start, start + 12 * SECOND], "clip {index}");
+    }
+}
+
+/// Each sounding clip's `(fade_in, fade_out, fade_shape)`, track by track.
+fn sound_fades(compiled: &Value) -> Vec<(i64, i64, String)> {
+    tracks(compiled)
+        .iter()
+        .flat_map(|track| track["clips"].as_array().into_iter().flatten())
+        .filter(|clip| clip["audio"]["muted"] != true && clip["time_map"]["type"] != "freeze")
+        .map(|clip| {
+            let audio = &clip["audio"];
+            (
+                audio["fade_in"].as_i64().expect("ticks"),
+                audio["fade_out"].as_i64().expect("ticks"),
+                audio["fade_shape"].as_str().expect("shape").to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_sound_of_two_joined_clips_crosses_over_their_transition() {
+    let joined = |transition: Value, second: Value| {
+        compile(
+            &json!({"body": {"type": "sequence", "transition": transition, "children": [
+            {"type": "media", "path": "wide.mp4", "duration": 6}, second]}}),
+        )
+    };
+    let talk = json!({"type": "media", "path": "talk.mp4", "duration": 6});
+    let equal = "equal_power".to_owned();
+    for transition in [
+        json!({"type": "crossfade", "duration": 1}),
+        json!({"type": "wipe-left", "duration": 1}),
+    ] {
+        assert_eq!(
+            sound_fades(&joined(transition, talk.clone())),
+            [(0, SECOND, equal.clone()), (SECOND, 0, equal.clone())]
+        );
+    }
+    let cut = sound_fades(&joined(json!("cut"), talk));
+    assert_eq!(
+        cut,
+        [(0, 0, "linear".to_owned()), (0, 0, "linear".to_owned())]
+    );
+    let muted = joined(
+        json!({"type": "crossfade", "duration": 1}),
+        json!({"type": "media", "path": "talk.mp4", "duration": 6, "muted": true}),
+    );
+    let quiet = visual_clips(&muted)
+        .into_iter()
+        .find(|clip| clip["audio"]["muted"] == true)
+        .expect("the muted clip");
+    assert_eq!(quiet["audio"]["fade_in"], 0);
+    // An audio node keeps its own longer fade and its linear shape.
+    let sounds = compile(&json!({"body": {"type": "sequence",
+    "transition": {"type": "crossfade", "duration": 1}, "children": [
+        {"type": "audio", "path": "music.m4a", "duration": 5, "fade_out": 2},
+        {"type": "audio", "path": "music.m4a", "duration": 5},
+    ]}}));
+    assert_eq!(
+        sound_fades(&sounds),
+        [(0, 2 * SECOND, "linear".to_owned()), (SECOND, 0, equal)]
+    );
+}
+
+#[test]
+fn a_model_refusal_names_the_node_that_made_the_refused_object() {
+    let id = |text: &str| alpha2_model::ClipId::new(text.to_owned()).expect("an id");
+    let made_by = std::collections::HashMap::from([
+        ("c3".to_owned(), "spec.body.children[1]".to_owned()),
+        ("c7".to_owned(), "spec.overlays[0]".to_owned()),
+    ]);
+    let refusal = crate::compile::model_refusal(
+        &alpha2_model::ModelError::InvalidVisualProperties { clip: id("c3") },
+        &made_by,
+    );
+    assert_eq!(refusal.path, "spec.body.children[1]");
+    assert!(
+        refusal
+            .message
+            .starts_with("the compiled project is not valid: ")
+    );
+    let overlap = crate::compile::model_refusal(
+        &alpha2_model::ModelError::OverlappingClips {
+            track: alpha2_model::TrackId::new("t1".to_owned()).expect("an id"),
+            first: id("c3"),
+            second: id("c7"),
+        },
+        &made_by,
+    );
+    assert_eq!(overlap.path, "spec.overlays[0]");
+    assert!(
+        overlap
+            .message
+            .ends_with("the other clip is spec.body.children[1]'s"),
+        "{overlap}"
+    );
+    let unknown = crate::compile::model_refusal(
+        &alpha2_model::ModelError::InvalidVisualProperties { clip: id("c9") },
+        &made_by,
+    );
+    assert_eq!(unknown.path, "spec");
+
+    // A raw fragment's clip that names no source is reported at its overlay.
+    let error = compile_error(&json!({"duration": 1, "body": {"type": "color"},
+        "overlays": [{"type": "color", "duration": 1}, {"type": "raw", "tracks": [
+            {"id": "raw-track", "name": "raw", "kind": "video", "clips": [{"id": "raw-clip",
+                "source_id": "src-missing", "timeline_range": {"start": 0, "end": SECOND},
+                "source_range": {"start": 0, "end": SECOND}}]}]}]}));
+    assert!(
+        error.starts_with("spec.overlays[1]: the compiled project is not valid"),
+        "{error}"
+    );
+}
+
+#[test]
+fn limits_the_compiler_can_count_are_named_where_the_node_is() {
+    let overlays = (0..300)
+        .map(|index| json!({"type": "color", "at": index % 2, "duration": 1}))
+        .collect::<Vec<_>>();
+    let error =
+        compile_error(&json!({"duration": 2, "body": {"type": "color"}, "overlays": overlays}));
+    // The body takes the first track.
+    assert!(
+        error.starts_with(
+            "spec.overlays[255]: the video needs 301 tracks, and a project holds at most 256"
+        ),
+        "{error}"
+    );
+
+    let colors = vec![json!({"type": "color"}); 40];
+    let error =
+        compile_error(&json!({"duration": 1, "body": {"type": "group", "children": colors}}));
+    assert!(
+        error.starts_with(
+            "spec.body: it draws 40 pictures as layers, and a group merges at most 32"
+        ),
+        "{error}"
+    );
+
+    let stills = vec![json!("slides/01.jpg"); 5000];
+    let error = compile_error(&json!({"body": {"type": "slideshow", "items": stills,
+        "seconds": 1, "transition": "cut"}}));
+    assert!(
+        error.starts_with("spec.body: with child 4096 one of its tracks holds 4097 clips"),
+        "{error}"
+    );
+
+    // Cues one after another fill a caption track and go on in the next.
+    let cues = (0..5000)
+        .map(|index| json!({"text": "x", "start": index, "end": index + 1}))
+        .collect::<Vec<_>>();
+    let compiled = compile(&json!({"body": {"type": "captions", "cues": cues}}));
+    assert_eq!(tracks(&compiled).len(), 2);
+    let together = vec![json!({"text": "x", "start": 0, "end": 1}); 300];
+    let error = compile_error(&json!({"body": {"type": "captions", "cues": together}}));
+    assert!(error.starts_with("spec.body: "), "{error}");
+
+    let long = "x".repeat(5000);
+    let error = compile_error(&json!({"duration": 1, "body": {"type": "text", "text": long}}));
+    assert!(
+        error.starts_with("spec.body.text: the text is 5000 bytes"),
+        "{error}"
+    );
+    let error = compile_error(&json!({"body": {"type": "captions",
+        "cues": [{"text": long, "start": 0, "end": 1}]}}));
+    assert!(
+        error.starts_with("spec.body.cues[0].text: the text is 5000 bytes"),
+        "{error}"
+    );
+
+    let error = compile_error(
+        &json!({"body": {"type": "sequence", "transition": "wipe-lft",
+        "children": [{"type": "color", "duration": 2}, {"type": "color", "duration": 2}]}}),
+    );
+    assert!(
+        error.starts_with("spec.body.transition: the transition \"wipe-lft\" (alpha2.transition.wipe-lft) is not a built-in"),
+        "{error}"
+    );
+
+    let leaves = vec![json!({"text": {"mode": "constant", "value": "x"}}); 300];
+    let error = compile_error(&json!({"duration": 1, "body": {"type": "layout",
+        "root": {"children": leaves}}}));
+    assert!(
+        error.starts_with("spec.body.root.children: invalid length 257"),
+        "{error}"
+    );
+
+    let boxed = |count: usize| {
+        json!({"canvas": {"width": 1000, "height": 500}, "duration": 2,
+            "body": {"type": "box", "background": "#202020", "children": vec![
+                json!({"box": {"width": "20px", "height": "20px"},
+                    "node": {"type": "color", "color": "#ff0000"}}); count]}})
+    };
+    let error = compile_error(&boxed(300));
+    assert!(
+        error.starts_with("spec.body: a box field is invalid: invalid length 257"),
+        "{error}"
+    );
+}
+
+fn box_with_leaves_after_a_picture(leaves: usize) -> Value {
+    let mut children = vec![json!({"box": {"width": "200px"},
+        "node": {"type": "media", "path": "wide.mp4", "muted": true}})];
+    children.extend(std::iter::repeat_n(
+        json!({"box": {"width": "20px", "height": "20px"},
+                "node": {"type": "color", "color": "#ff0000"}}),
+        leaves,
+    ));
+    json!({"canvas": {"width": 1000, "height": 500}, "duration": 2,
+        "body": {"type": "box", "background": "#202020", "children": children}})
+}
+
+#[test]
+fn a_box_with_a_picture_names_how_many_leaves_it_can_hide() {
+    compile(&box_with_leaves_after_a_picture(15));
+    let error = compile_error(&box_with_leaves_after_a_picture(16));
+    assert_eq!(
+        error,
+        "spec.body: a box with a picture hides the leaves on the other side of it, and holds at \
+         most 15 of them"
+    );
+}
+
+fn latest_end(compiled: &Value) -> i64 {
+    tracks(compiled)
+        .iter()
+        .flat_map(|track| track["clips"].as_array().into_iter().flatten())
+        .map(|clip| clip["timeline_range"]["end"].as_i64().expect("ticks"))
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_spec_duration_is_the_project_length() {
+    for body in [
+        json!({"type": "sequence", "children": [{"type": "text", "text": "Hi", "duration": 3}]}),
+        json!({"type": "stack", "children": [{"type": "media", "path": "logo.png", "duration": 3}]}),
+    ] {
+        let compiled = compile(&json!({"duration": 10, "body": body}));
+        assert_eq!(latest_end(&compiled), 10 * SECOND, "{body}");
+        let filler = &tracks(&compiled)[0]["clips"][0];
+        assert_eq!(
+            filler["timeline_range"],
+            json!({"start": 3 * SECOND, "end": 10 * SECOND})
+        );
+    }
+    // Content that already lasts the duration gets no extra track.
+    let filled = compile(&json!({"duration": 10, "body": {"type": "color"}}));
+    assert_eq!(tracks(&filled).len(), 1);
+    // Without a duration the content's own length stands.
+    let own = compile(&json!({"body": {"type": "sequence", "children": [
+        {"type": "text", "text": "Hi", "duration": 3}]}}));
+    assert_eq!(latest_end(&own), 3 * SECOND);
+    assert_eq!(tracks(&own).len(), 1);
+}
+
+#[test]
+fn a_video_needs_facts_that_say_whether_it_has_sound() {
+    let mut facts = facts();
+    facts["media"]["wide.mp4"]
+        .as_object_mut()
+        .expect("facts")
+        .remove("has_audio");
+    let run = |media: Value| {
+        compile_json(&json!({"body": media}).to_string(), &facts.to_string(), &[])
+            .map_err(|error| error.to_string())
+    };
+    let error = run(json!({"type": "media", "path": "wide.mp4"})).expect_err("refused");
+    assert_eq!(
+        error,
+        "spec.body.path: no has_audio for \"wide.mp4\" in the facts; gather them for every file \
+         `requirements` lists"
+    );
+    run(json!({"type": "media", "path": "wide.mp4", "muted": true})).expect("a muted video");
+
+    let fingerprint = json!({"byte_length": 10, "duration_ticks": 5,
+        "streams": {"video": {"width": 640, "height": 360}, "audio": {"channels": 2, "sample_rate": 48000}}});
+    let made: Value = serde_json::from_str(
+        &crate::media_facts_json(&fingerprint.to_string()).expect("a fingerprint"),
+    )
+    .expect("JSON");
+    assert_eq!(
+        made,
+        json!({"width": 640, "height": 360, "duration_ticks": 5, "has_audio": true})
+    );
+}
+
+#[test]
+fn a_file_named_as_sound_and_then_as_a_picture_is_listed_once_as_the_picture() {
+    let text = requirements_json(
+        &json!({"body": {"type": "media", "path": "clip.mp4"},
+            "audio": [{"type": "audio", "path": "clip.mp4"}, {"type": "audio", "path": "song.mp4"}]})
+        .to_string(),
+    )
+    .expect("parses");
+    let found: Value = serde_json::from_str(&text).expect("JSON");
+    assert_eq!(
+        found["media"],
+        json!([{"path": "clip.mp4", "kind": "video"}, {"path": "song.mp4", "kind": "audio"}])
+    );
+    let text = requirements_json(
+        &json!({"body": {"type": "sequence", "children": [
+            {"type": "audio", "path": "clip.mp4"}, {"type": "media", "path": "clip.mp4"}]}})
+        .to_string(),
+    )
+    .expect("parses");
+    let found: Value = serde_json::from_str(&text).expect("JSON");
+    assert_eq!(
+        found["media"],
+        json!([{"path": "clip.mp4", "kind": "video"}])
     );
 }

@@ -2,17 +2,6 @@ use std::path::{Path, PathBuf};
 
 use unicode_normalization::UnicodeNormalization;
 
-/// The absolute path, NFC-composed and lower-cased. Windows and macOS file systems usually ignore
-/// case, and macOS also normalization; the clients compare by the same rule.
-pub fn output_key(path: &Path) -> String {
-    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    absolute
-        .to_string_lossy()
-        .nfc()
-        .collect::<String>()
-        .to_lowercase()
-}
-
 /// A file beside the missing `path` whose name is the same text in another Unicode normalization.
 pub fn normalization_sibling(path: &Path) -> Option<PathBuf> {
     let wanted = path.file_name()?.to_str()?.nfc().collect::<String>();

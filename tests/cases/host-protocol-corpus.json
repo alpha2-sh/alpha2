@@ -2544,5 +2544,154 @@
       "includeaudio": false
     },
     "messages": []
+  },
+  {
+    "name": "an answer with text in many scripts is framed as UTF-8",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 2,
+      "operation": "compose",
+      "requestId": "utf8-1",
+      "action": "templates"
+    },
+    "messages": [
+      {
+        "protocolVersion": 2,
+        "requestId": "utf8-1",
+        "ok": true,
+        "result": {
+          "templates": [
+            { "template": { "id": "acme/café", "title": "Café 한국어 日本語 العربية 🎬" } }
+          ]
+        },
+        "hostState": "ready"
+      }
+    ]
+  },
+  {
+    "name": "a compile answer carries the loudness export takes",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 2,
+      "operation": "compose",
+      "requestId": "compile-loud",
+      "action": "compile",
+      "spec": {
+        "duration": 1,
+        "body": {
+          "type": "color",
+          "color": "#336699"
+        },
+        "loudness": -14
+      }
+    },
+    "messages": [
+      {
+        "protocolVersion": 2,
+        "requestId": "compile-loud",
+        "ok": true,
+        "result": {
+          "project": {},
+          "assets": {},
+          "loudness": {
+            "targetLufs": -14,
+            "truePeakCeilingDbtp": -1
+          },
+          "warnings": []
+        },
+        "hostState": "ready"
+      }
+    ]
+  },
+  {
+    "name": "export takes a compile answer's loudness",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 2,
+      "operation": "export",
+      "requestId": "export-compiled-loudness",
+      "project": {},
+      "assets": {},
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": true,
+      "output": "/staging/output.mp4",
+      "loudness": {
+        "targetLufs": -14,
+        "truePeakCeilingDbtp": -1
+      }
+    },
+    "messages": []
+  },
+  {
+    "name": "loudness without a ceiling takes -1 dBTP",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 2,
+      "operation": "export",
+      "requestId": "export-loudness-default-ceiling",
+      "project": {},
+      "assets": {},
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": true,
+      "output": "/staging/output.mp4",
+      "loudness": {
+        "targetLufs": -14
+      }
+    },
+    "messages": []
+  },
+  {
+    "name": "conform takes the purpose a report names",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 2,
+      "operation": "conform",
+      "requestId": "conform-proxy",
+      "project": {},
+      "assets": {},
+      "purpose": "export_proxy"
+    },
+    "messages": [
+      {
+        "protocolVersion": 2,
+        "requestId": "conform-proxy",
+        "ok": true,
+        "result": {
+          "catalog": {
+            "assets": []
+          },
+          "report": {
+            "purpose": "export_proxy",
+            "ready": true,
+            "sources": []
+          }
+        },
+        "hostState": "ready"
+      }
+    ]
+  },
+  {
+    "name": "a purpose in another spelling is refused",
+    "requestValid": false,
+    "expectedErrorCode": "INVALID_REQUEST",
+    "request": {
+      "protocolVersion": 2,
+      "operation": "conform",
+      "requestId": "conform-kebab",
+      "project": {},
+      "assets": {},
+      "purpose": "export-original"
+    },
+    "messages": []
   }
 ]

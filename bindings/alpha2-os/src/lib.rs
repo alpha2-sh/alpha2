@@ -7,7 +7,7 @@
 
 use std::fs::File;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod lifetime;
@@ -26,7 +26,9 @@ pub use lifetime::{
     KillOnCloseJob, claim_stdout, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
 };
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub use memory::{CgroupMemory, cgroup_memory, cgroup_memory_at, memory_capacity_at};
+pub use memory::{
+    CgroupMemory, CgroupMemoryWatch, cgroup_memory, cgroup_memory_at, memory_capacity_at,
+};
 pub use memory::{MemoryCapacity, memory_capacity};
 pub use os_version::os_version;
 
@@ -583,14 +585,100 @@ pub fn process_cpu_time() -> Option<std::time::Duration> {
     }
 }
 
-/// Writes one line to standard error like `eprintln!`, but drops it instead of panicking when the
-/// stream is closed, so a client closing the pipe cannot abort an export. Use [`diagnostic!`].
-pub fn write_diagnostic(line: std::fmt::Arguments<'_>) {
-    use std::io::Write;
-    let _ = writeln!(io::stderr().lock(), "{line}");
+/// The host's cache directory, as the Node and Python clients name it: `ALPHA2_HOST_CACHE_DIR`
+/// (relative to the working directory), else `alpha2` under `$XDG_CACHE_HOME` (when absolute) or
+/// `~/.cache` on Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows. `None` without
+/// a home directory.
+#[must_use]
+pub fn host_cache_directory() -> Option<PathBuf> {
+    host_cache_directory_from(|name| std::env::var_os(name))
 }
 
-/// `eprintln!` that drops the line instead of panicking ([`write_diagnostic`]).
+/// [`host_cache_directory`] with the environment read through `variable`.
+#[must_use]
+pub fn host_cache_directory_from(
+    variable: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let variable = |name: &str| {
+        variable(name)
+            .filter(|value| !value.to_string_lossy().trim().is_empty())
+            .map(PathBuf::from)
+    };
+    if let Some(cache) = variable("ALPHA2_HOST_CACHE_DIR") {
+        return Some(if cache.is_absolute() {
+            cache
+        } else {
+            std::env::current_dir().ok()?.join(cache)
+        });
+    }
+    if cfg!(target_os = "windows") {
+        let base = variable("LOCALAPPDATA")
+            .or_else(|| variable("USERPROFILE").map(|home| home.join("AppData").join("Local")))?;
+        return Some(base.join("alpha2"));
+    }
+    let home = variable("HOME");
+    if cfg!(target_os = "macos") {
+        return Some(home?.join("Library").join("Caches").join("alpha2"));
+    }
+    let base = variable("XDG_CACHE_HOME")
+        .filter(|path| path.is_absolute())
+        .or_else(|| home.map(|home| home.join(".cache")))?;
+    Some(base.join("alpha2"))
+}
+
+/// Creates `path` and its missing parents for files only this user may change. On Unix new
+/// directories get mode 0700, and a directory that another user owns or that group or others can
+/// write is refused.
+///
+/// # Errors
+/// When a directory cannot be created, or the existing one is refused (`PermissionDenied`).
+pub fn create_private_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        platform::create_private_directory(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(path)
+    }
+}
+
+/// Receives each diagnostic line in place of the default output.
+pub type DiagnosticSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+static DIAGNOSTIC_SINK: std::sync::RwLock<Option<DiagnosticSink>> = std::sync::RwLock::new(None);
+
+/// Sends every later diagnostic line of the process to `sink`, or with `None` back to the default
+/// output: standard error, and on Android, which discards an app's standard error, the system log
+/// under the tag `alpha2`.
+pub fn set_diagnostic_sink(sink: Option<DiagnosticSink>) {
+    *DIAGNOSTIC_SINK
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = sink;
+}
+
+/// Writes one diagnostic line to the sink [`set_diagnostic_sink`] chose. The default output drops
+/// the line instead of panicking when standard error is closed, so a client closing the pipe
+/// cannot abort an export. Use [`diagnostic!`].
+pub fn write_diagnostic(line: std::fmt::Arguments<'_>) {
+    // Called outside the lock, so a sink may write diagnostics or replace itself.
+    let sink = DIAGNOSTIC_SINK
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    match sink {
+        Some(sink) => sink(&line.to_string()),
+        #[cfg(target_os = "android")]
+        None => platform::android_log(&line.to_string()),
+        #[cfg(not(target_os = "android"))]
+        None => {
+            use std::io::Write;
+            let _ = writeln!(io::stderr().lock(), "{line}");
+        }
+    }
+}
+
+/// `eprintln!` through the process's diagnostic sink ([`write_diagnostic`]).
 #[macro_export]
 macro_rules! diagnostic {
     ($($argument:tt)*) => {
@@ -602,6 +690,22 @@ macro_rules! diagnostic {
 mod tests {
     use super::*;
     use std::fs::{self, OpenOptions};
+
+    #[test]
+    fn a_diagnostic_sink_receives_each_line_until_it_is_removed() {
+        let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept = std::sync::Arc::clone(&lines);
+        // Other tests of this process may write while the sink is set; only marked lines count.
+        set_diagnostic_sink(Some(std::sync::Arc::new(move |line: &str| {
+            if line.contains("sink-test") {
+                kept.lock().expect("lines").push(line.to_owned());
+            }
+        })));
+        diagnostic!("sink-test {}", 1);
+        set_diagnostic_sink(None);
+        diagnostic!("sink-test 2");
+        assert_eq!(*lines.lock().expect("lines"), ["sink-test 1"]);
+    }
 
     #[test]
     fn the_awake_clock_advances_with_time_and_never_goes_back() {

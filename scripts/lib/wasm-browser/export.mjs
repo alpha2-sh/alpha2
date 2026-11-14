@@ -541,3 +541,72 @@ report({
 });
 `;
 }
+
+// A cancel that lands while `finish` is pending commits nothing to the OPFS file.
+export function exportCancelDuringFinish() {
+  return `
+const { Alpha2Exporter, exportToSink } = await import("/packages/alpha2/dist/exporter.js");
+const { WritableFileDestination } = await import("/packages/alpha2/dist/export-destination.js");
+const { canEncodeVideoTrack, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
+const rate = { bitrate: 1_000_000, bitrateMode: "variable" };
+const frameRate = { num: 30, den: 1 };
+const encoding = await canEncodeVideoTrack("avc", { width: 128, height: 96, frameRate, rate });
+if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder");
+const root = await navigator.storage.getDirectory();
+if (typeof FileSystemFileHandle.prototype.createWritable !== "function")
+  skip("opfs-writable", "this browser has no writable OPFS file stream on the page");
+const exportOnce = async (name, cancel) => {
+  await root.removeEntry(name).catch(() => {});
+  const handle = await root.getFileHandle(name, { create: true });
+  const sink = new MediabunnySink({
+    container: "mp4",
+    videoCodec: "avc",
+    videoRateControl: rate,
+    ...(encoding.codecString === undefined ? {} : { videoCodecString: encoding.codecString }),
+    frameRate,
+    destination: { kind: "stream", writable: new WritableFileDestination(await handle.createWritable()).writable },
+  });
+  let index = 0;
+  const backend = {
+    begin: async () => {
+      // Memory-backed frames: some GPU processes restart while encoding canvas-backed ones.
+      const pixels = new Uint8Array(128 * 96 * 4).fill((index * 20) & 255);
+      const frame = new VideoFrame(pixels, { format: "RGBA", codedWidth: 128, codedHeight: 96, timestamp: Math.round((index * 1e6) / 30) });
+      index += 1;
+      return { kind: "rendered", retainedBytes: 128 * 96 * 4, readback: Promise.resolve(frame) };
+    },
+    isDeviceLost: () => false,
+    abort() {},
+  };
+  const controller = new AbortController();
+  const wrapped = {
+    writeVideo: (frame) => sink.writeVideo(frame),
+    finish: () => {
+      const finishing = sink.finish();
+      if (cancel) controller.abort();
+      return finishing;
+    },
+    abort: (reason) => sink.abort(reason),
+  };
+  let outcome;
+  try {
+    await exportToSink(new Alpha2Exporter(backend, { num: 30n, den: 1n }, 0n, 40_000n), wrapped, async () => {}, { signal: controller.signal });
+    outcome = "finished";
+  } catch (error) {
+    outcome = error?.name + ":" + (error?.code ?? "");
+  }
+  // A late finalize must not commit the file after the export rejected.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const size = (await (await root.getFileHandle(name)).getFile()).size;
+  await root.removeEntry(name).catch(() => {});
+  return { outcome, size, output: sink.output };
+};
+const cancelled = await exportOnce("alpha2-cancel-during-finish.mp4", true);
+const finished = await exportOnce("alpha2-finished.mp4", false);
+report({
+  ok: cancelled.outcome === "ExportAbortedError:cancelled" && cancelled.size === 0 && cancelled.output === null
+    && finished.outcome === "finished" && finished.size > 0,
+  cancelled, finished,
+});
+`;
+}

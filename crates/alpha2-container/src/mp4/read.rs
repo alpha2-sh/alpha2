@@ -107,6 +107,9 @@ fn load(source: &mut dyn Source, top: &TopBox) -> Result<RawBox, DemuxError> {
     })
 }
 
+/// The most top-level `moof` boxes a file may have.
+const MAX_FRAGMENTS: usize = 1 << 21;
+
 /// The `ftyp` brands, `moov`, and where every `moof` is.
 type TopLevel = (Brands, RawBox, Vec<TopBox>);
 
@@ -124,6 +127,11 @@ fn scan(source: &mut dyn Source, file_len: u64) -> Result<TopLevel, DemuxError> 
         }
         at = top.at + top.size;
         if &top.kind.0 == b"moof" {
+            if moofs.len() == MAX_FRAGMENTS {
+                return Err(DemuxError::Invalid(
+                    "the file has more fragments than this layer reads".into(),
+                ));
+            }
             moofs.push(top);
         }
     }
@@ -158,6 +166,7 @@ impl Mp4Reader {
             movie_timescale: movie.timescale,
             advanced: true,
             file_len,
+            entries_left: index::MAX_FILE_ENTRIES,
         };
         let mut tracks = Vec::with_capacity(movie.tracks.len());
         let mut states = Vec::with_capacity(movie.tracks.len());
@@ -212,7 +221,14 @@ impl Mp4Reader {
                     index: &mut state.index,
                 })
                 .collect::<Vec<_>>();
-            fragment::read_moof(&fragment_box, top.at, &movie.trex, &mut views, file_len)?;
+            fragment::read_moof(
+                &fragment_box,
+                top.at,
+                &movie.trex,
+                &mut views,
+                file_len,
+                &mut context.entries_left,
+            )?;
         }
         for (track, state) in tracks.iter_mut().zip(&mut states) {
             if state.family == Family::Aac {

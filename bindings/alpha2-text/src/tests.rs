@@ -1,5 +1,15 @@
 use super::*;
 
+/// An f32 is read through an f64, as `Math.fround` reads a JSON number: at an exact f32 midpoint
+/// the f64 rounds to the midpoint and the f32 then to even.
+#[test]
+fn json_floats_parse_as_the_shipped_hosts_and_the_browser_parse_them() {
+    assert_eq!(
+        serde_json::from_str::<f32>("1.0000000596046448").expect("f32"),
+        1.0
+    );
+}
+
 #[test]
 fn a_font_check_refuses_what_adding_the_font_refuses() {
     let fixture = std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture");
@@ -15,6 +25,79 @@ fn a_font_check_refuses_what_adding_the_font_refuses() {
         })
         .expect_err("the rasterizer refuses it too");
     assert_eq!(refused.to_string(), added.to_string());
+}
+
+fn hostile(name: &str) -> Vec<u8> {
+    std::fs::read(format!("../../tests/fonts/{name}")).expect("hostile fixture font")
+}
+
+#[test]
+fn a_font_whose_glyphs_expand_past_a_budget_is_refused_at_registration() {
+    for (name, reason) in [
+        ("Alpha2HostileComposite.ttf", "composite glyph"),
+        ("Alpha2HostilePaint.ttf", "painting"),
+        ("Alpha2HostileCollection.ttc", "256 faces"),
+    ] {
+        let bytes = hostile(name);
+        let started = std::time::Instant::now();
+        let refused = check_font(&bytes, 0).expect_err(name);
+        assert!(refused.to_string().contains(reason), "{name}: {refused}");
+        let added = TextRasterizer::empty()
+            .add_font(TextFont {
+                family: "Hostile".into(),
+                bytes: bytes.into(),
+                face_index: 0,
+            })
+            .expect_err(name);
+        assert_eq!(added.to_string(), refused.to_string());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_strike_past_the_pixel_budget_is_not_decoded() {
+    let mut rasterizer = TextRasterizer::new(vec![TextFont {
+        family: "Strike".into(),
+        bytes: hostile("Alpha2HostileStrike.ttf").into(),
+        face_index: 0,
+    }])
+    .expect("the strike font registers");
+    let raster = rasterizer.rasterize(&request("A", 40.0)).expect("draws");
+    assert!(raster.pixels.rgba8.iter().all(|byte| *byte == 0));
+}
+
+#[test]
+fn an_outline_past_the_segment_budget_stops_recording() {
+    let mut sink = OutlineSink::default();
+    sink.move_to(0.0, 0.0);
+    #[allow(clippy::cast_precision_loss)]
+    for step in 0..MAX_GLYPH_SEGMENTS + 10 {
+        sink.line_to(step as f32, 1.0);
+    }
+    sink.close();
+    assert!(sink.overflow);
+    assert_eq!(sink.outline.segments.len(), MAX_GLYPH_SEGMENTS);
+}
+
+#[test]
+fn every_fixture_font_passes_the_registration_checks() {
+    for name in [
+        "Alpha2Fixture.ttf",
+        "Alpha2FixtureHangul.ttf",
+        "Alpha2FixtureEmojiColr.ttf",
+        "Alpha2FixtureEmojiBitmap.ttf",
+        "Alpha2FixtureColor.ttf",
+        "Alpha2FixtureVariable.ttf",
+        "Alpha2FixturePair.ttc",
+    ] {
+        let bytes = hostile(name);
+        for face in 0..face_count(&bytes) {
+            check_font(&bytes, face).unwrap_or_else(|error| panic!("{name} {face}: {error}"));
+        }
+    }
 }
 
 /// Must match the hash in `scripts/test-wasm-parity.mjs` and `test-wasm-browser.mjs`.
@@ -142,6 +225,9 @@ fn fixture_requests_match_the_pinned_rasters() {
         if update {
             case["expected"] = actual;
         } else {
+            // The product's parser may read a pinned f32 back one f64 step off, so both sides take it.
+            let actual: serde_json::Value =
+                serde_json::from_str(&actual.to_string()).expect("JSON");
             assert_eq!(case["expected"], actual, "{}", case["name"]);
         }
     }
@@ -2807,6 +2893,71 @@ fn identity_states_raster_the_static_bytes() {
 }
 
 #[test]
+fn a_tile_reused_from_the_cache_draws_what_a_fresh_tile_draws() {
+    let turned = |rasterizer: &TextRasterizer, request: &TextRasterRequest, dx: f32| {
+        let mut states = identity_states(rasterizer, request);
+        for state in &mut states {
+            state.rotation = 0.3;
+            state.scale = [1.7, 1.7];
+            state.offset = [dx, 0.0];
+        }
+        states
+    };
+    let first = request("Cache", 40.0);
+    let moved = TextRasterRequest {
+        content_version: 2,
+        ..first.clone()
+    };
+    let mut warm = fixture();
+    let states = turned(&warm, &first, 0.0);
+    warm.rasterize_animated(&first, &states).expect("draws");
+    let states = turned(&warm, &moved, 3.0);
+    let reused = warm.rasterize_animated(&moved, &states).expect("draws");
+    let mut cold = fixture();
+    let fresh = cold.rasterize_animated(&moved, &states).expect("draws");
+    assert_eq!(reused.pixels.rgba8, fresh.pixels.rgba8);
+    assert_eq!(reused.descriptor, fresh.descriptor);
+}
+
+#[test]
+fn an_animated_raster_past_its_tile_budget_is_too_large() {
+    let mut rasterizer = fixture();
+    let caption = TextRasterRequest {
+        strokes: vec![TextStroke {
+            color: [0, 0, 0, 255],
+            width: 2.0,
+        }],
+        ..request("Twenty char caption.", 300.0)
+    };
+    let mut states = identity_states(&rasterizer, &caption);
+    for state in &mut states {
+        state.scale = [10.0, 10.0];
+    }
+    assert_eq!(
+        rasterizer.rasterize_animated(&caption, &states).map(drop),
+        Err(TextRasterError::TooLarge)
+    );
+}
+
+#[test]
+fn a_cluster_scaled_past_the_limit_is_an_invalid_request() {
+    let mut rasterizer = fixture();
+    let caption = request("Scaled", 20.0);
+    for scale in [[11.0, 1.0], [1.0, 1.0e8], [-1.0, 1.0], [f32::NAN, 1.0]] {
+        let mut states = identity_states(&rasterizer, &caption);
+        states[0].scale = scale;
+        assert_eq!(
+            rasterizer.rasterize_animated(&caption, &states).map(drop),
+            Err(TextRasterError::InvalidRequest),
+            "{scale:?}"
+        );
+    }
+    let mut states = identity_states(&rasterizer, &caption);
+    states[0].scale = [MAX_CLUSTER_SCALE, MAX_CLUSTER_SCALE];
+    assert!(rasterizer.rasterize_animated(&caption, &states).is_ok());
+}
+
+#[test]
 fn tracking_shifts_later_clusters_without_rewrapping() {
     let mut rasterizer = fixture();
     let start = request("IIII", 40.0);
@@ -3034,4 +3185,52 @@ fn cluster_state(value: &serde_json::Value) -> ClusterState {
         stroke: mix("stroke"),
         tracking: number("tracking", 0.0),
     }
+}
+
+#[test]
+fn rasters_over_the_frame_area_are_refused_before_they_allocate() {
+    let mut rasterizer = fixture();
+    // About 13,000 by 15,000 pixels: within the side limit, three times the largest frame.
+    let huge = request(&"WWWWWWW\n".repeat(6), 2_048.0);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        rasterizer.rasterize(&huge).map(|_| ()),
+        Err(TextRasterError::TooLarge)
+    );
+    let states = identity_states(&rasterizer, &huge);
+    assert_eq!(
+        rasterizer.rasterize_animated(&huge, &states).map(|_| ()),
+        Err(TextRasterError::TooLarge)
+    );
+    println!("refused in {:?}", started.elapsed());
+    // A wide paragraph with two strokes and a background, about 3800 by 1700.
+    let paragraph = TextRasterRequest {
+        max_width: 3_800.0,
+        strokes: vec![
+            TextStroke {
+                color: [0, 0, 0, 255],
+                width: 3.0,
+            },
+            TextStroke {
+                color: [255, 255, 255, 255],
+                width: 2.0,
+            },
+        ],
+        background: Some(TextBackground {
+            color: [0, 0, 0, 128],
+            padding: 8.0,
+        }),
+        ..request(
+            &"The quick brown fox jumps over the lazy dog. ".repeat(60),
+            96.0,
+        )
+    };
+    let drawn = rasterizer.rasterize(&paragraph).expect("draws");
+    let texture = &drawn.descriptor.texture;
+    println!("paragraph {}x{}", texture.width, texture.height);
+    assert!(texture.width >= 3_700 && texture.height >= 1_200);
+    let states = identity_states(&rasterizer, &paragraph);
+    rasterizer
+        .rasterize_animated(&paragraph, &states)
+        .expect("draws");
 }

@@ -8,8 +8,8 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use alpha2_engine::extract::{
-    AudioInput, Delivery, Descriptor, Direction, Emit, ExtractRequest, ExtractSession, Need,
-    PassProgress, SessionError, Step, SuppliedAudio, SuppliedFrame, Supplier, VideoInput,
+    AudioInput, Delivery, Direction, Emit, ExtractRequest, ExtractSession, Need, PassProgress,
+    SessionError, Step, SuppliedAudio, SuppliedFrame, Supplier, VideoInput,
 };
 use alpha2_host_core::host_frames::Attachment;
 use alpha2_media::CancelToken;
@@ -20,10 +20,9 @@ use serde_json::{Value, json};
 
 use crate::HostError;
 use crate::PROTOCOL_VERSION;
-use crate::assets::ProxyRequest;
 use crate::host::Host;
-use crate::protocol::{ExportMedia, ProjectJson};
 use crate::serve_io::Responder;
+pub use alpha2_host_core::requests::{ExtractHostRequest, PluginRequest};
 
 /// How long a client may take to acknowledge a `pass`, `video` or `audio` step by default.
 pub const DEFAULT_STEP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -37,6 +36,8 @@ pub struct ExtractOptions {
     pub plugin_memory_bytes: u64,
     /// The longest one wasm plugin call may run.
     pub plugin_call_deadline: Duration,
+    /// What the operator allows plugins, read once at start.
+    pub plugins: &'static crate::plugin_policy::PluginPolicy,
 }
 
 impl ExtractOptions {
@@ -45,85 +46,13 @@ impl ExtractOptions {
         step_timeout: Some(DEFAULT_STEP_TIMEOUT),
         plugin_memory_bytes: alpha2_host_core::plugins::DEFAULT_MEMORY_BYTES,
         plugin_call_deadline: alpha2_host_core::plugins::DEFAULT_CALL_DEADLINE,
+        plugins: &crate::plugin_policy::DEFAULT_POLICY,
     };
 }
 
 impl Default for ExtractOptions {
     fn default() -> Self {
         Self::DEFAULT
-    }
-}
-
-/// The `plugin` of an `extract` request, a manifest the host fetches and runs.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PluginRequest {
-    /// An `https:` URL, a `file:` URL or a local path.
-    pub manifest: String,
-    /// SHA-256 of the manifest's bytes.
-    pub sha256: String,
-    /// Native artifacts run with the host's rights; refused unless allowed.
-    #[serde(default)]
-    pub allow_native: bool,
-    /// The wasm artifact even where a native one is allowed.
-    #[serde(default)]
-    pub force_wasm: bool,
-}
-
-/// An `extract` request.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ExtractHostRequest {
-    pub protocol_version: u32,
-    pub request_id: String,
-    pub operation: String,
-    /// The frame's attachment list, read with the frame.
-    #[serde(default, rename = "attachments")]
-    pub(crate) _attachments: serde::de::IgnoredAny,
-    pub project: ProjectJson,
-    pub assets: HashMap<String, PathBuf>,
-    #[serde(default)]
-    pub proxies: HashMap<String, Vec<ProxyRequest>>,
-    #[serde(default)]
-    pub frames: HashMap<String, Vec<Option<PathBuf>>>,
-    #[serde(default)]
-    pub resources: HashMap<String, HashMap<String, PathBuf>>,
-    #[serde(default)]
-    pub media: ExportMedia,
-    #[serde(default)]
-    pub effect_assets: HashMap<String, PathBuf>,
-    #[serde(rename = "fonts", default)]
-    pub font_files: Vec<PathBuf>,
-    #[serde(default)]
-    pub effects: Vec<crate::effect_request::EffectRequest>,
-    /// The run, as `alpha2_engine::extract::ExtractRequest` writes it.
-    pub request: ExtractRequest,
-    /// The client-side extractor's descriptor.
-    #[serde(default)]
-    pub descriptor: Option<Descriptor>,
-    /// A plugin the host runs itself.
-    #[serde(default)]
-    pub plugin: Option<PluginRequest>,
-}
-
-impl ExtractHostRequest {
-    /// # Errors
-    /// `INVALID_REQUEST` for another operation, or unless exactly one of `descriptor` and `plugin`
-    /// is given.
-    pub fn check(&self) -> Result<(), HostError> {
-        if self.operation != "extract" {
-            return Err(HostError::new(
-                "INVALID_REQUEST",
-                "invalid request: the operation is not `extract`",
-            ));
-        }
-        if self.descriptor.is_some() == self.plugin.is_some() {
-            return Err(HostError::new(
-                "INVALID_REQUEST",
-                "an extract request has exactly one of `descriptor` and `plugin`",
-            ));
-        }
-        Ok(())
     }
 }
 
@@ -219,6 +148,8 @@ impl Client<'_> {
             .then_some(self.timeout)
             .flatten()
             .map(|timeout| started + timeout);
+        // The client's step, with no deadline of its own for `begin` and `end`.
+        let _idle = crate::heartbeat::request_idle();
         loop {
             if self.cancel.is_cancelled() {
                 return Err(HostError::new(
@@ -368,6 +299,7 @@ fn run_client(
         match session.next() {
             Step::Need(need) => match &need {
                 Need::SourceFrame { .. } | Need::TimelineFrame { .. } => {
+                    extract_media_step();
                     match supplier.frame(&need).map_err(HostError::classify)? {
                         Some(frame) => session
                             .supply_video(frame)
@@ -378,6 +310,7 @@ fn run_client(
                     }
                 }
                 Need::SourceAudio { .. } | Need::TimelineAudio { .. } => {
+                    extract_media_step();
                     let block = supplier.audio(&need).map_err(HostError::classify)?;
                     session
                         .supply_audio(block)
@@ -438,7 +371,7 @@ struct TimelineFrames<'a> {
     project: String,
     assets: HashMap<String, PathBuf>,
     effect_assets: HashMap<String, PathBuf>,
-    effects: Vec<crate::effect_request::EffectRequest>,
+    effects: Vec<crate::protocol::EffectRequest>,
     canvas: (u32, u32),
 }
 
@@ -535,11 +468,13 @@ pub fn handle(
         plugin,
         ..
     } = request;
+    // Taken first, so a cancel also stops the plugin's fetch and calls.
+    let cancel = crate::termination::export_cancel();
     // A plugin is fetched, checked and loaded before any media is read.
     let (descriptor, mut plugin) = match (descriptor, plugin) {
         (Some(descriptor), _) => (descriptor, None),
         (None, Some(plugin)) => {
-            let loaded = load_plugin(&plugin, &request, options)?;
+            let loaded = load_plugin(&plugin, &request, options, &cancel)?;
             (
                 alpha2_engine::extract::Extractor::describe(&loaded).clone(),
                 Some(loaded),
@@ -566,7 +501,6 @@ pub fn handle(
         media,
         request.input.source_id.as_ref(),
     )?;
-    let cancel = crate::termination::export_cancel();
     let renderer = alpha2_render::CpuRenderer::new(1);
     let source = request.input.source_id.clone();
     let path = |id: &alpha2_media::SourceId| paths.get(id.as_str()).cloned();
@@ -617,7 +551,14 @@ pub fn handle(
     };
     let (mut sets, waited) = match plugin.as_mut() {
         Some(plugin) => (
-            run_plugin(session, &mut supplier, plugin, out, &request_id, &cancel)?,
+            run_plugin(
+                session,
+                &mut supplier,
+                (plugin.is_native(), plugin),
+                out,
+                &request_id,
+                &cancel,
+            )?,
             Duration::ZERO,
         ),
         None => run_client(
@@ -648,41 +589,92 @@ pub fn handle(
 }
 
 fn plugin_error(error: alpha2_host_core::plugins::PluginError) -> HostError {
+    if error.code == alpha2_host_core::plugins::CANCELLED {
+        return HostError::new(error.code, crate::protocol::cancelled(error.message));
+    }
     HostError::new(error.code, error.message)
 }
 
-/// Fetches and checks the manifest, then loads the artifact the request's policy picks.
+/// Fetches and checks the manifest, then loads the artifact the request picks within the
+/// operator's policy.
 fn load_plugin(
     plugin: &PluginRequest,
     request: &ExtractRequest,
     options: ExtractOptions,
+    cancel: &CancelToken,
 ) -> Result<alpha2_host_core::plugins::PluginExtractor, HostError> {
     use alpha2_host_core::plugins;
+    let operator = options.plugins;
+    operator.allows_plugins().map_err(plugin_error)?;
+    let download = crate::plugin_fetch::https();
     let (text, base) =
-        crate::plugin_fetch::manifest(&plugin.manifest, &plugin.sha256).map_err(plugin_error)?;
+        crate::plugin_fetch::manifest(&plugin.manifest, &plugin.sha256, &*download, operator)
+            .map_err(plugin_error)?;
     let manifest = plugins::parse_manifest(&text).map_err(plugin_error)?;
     let policy = plugins::Policy {
-        allow_native: plugin.allow_native,
+        allow_native: plugin.allow_native && operator.allows_native(),
         force_wasm: plugin.force_wasm,
         memory_bytes: options.plugin_memory_bytes,
         call_deadline: options.plugin_call_deadline,
     };
-    let mut fetcher =
-        crate::plugin_fetch::Fetcher::new(base, crate::plugin_fetch::cache_directory());
-    plugins::load(&manifest, request.params.clone(), &policy, &mut fetcher).map_err(plugin_error)
+    let mut fetcher = crate::plugin_fetch::Fetcher::new(
+        base,
+        crate::plugin_fetch::cache_directory(),
+        download,
+        operator,
+    )
+    .with_cancel(cancel.clone());
+    plugins::load(
+        &manifest,
+        request.params.clone(),
+        &policy,
+        &mut fetcher,
+        cancel,
+    )
+    .map_err(|error| {
+        if error.code == plugins::codes::NATIVE_REFUSED && plugin.allow_native {
+            plugins::PluginError::new(
+                error.code,
+                format!(
+                    "{} runs here only as native code, and this host was not started with \
+                         --plugins native",
+                    manifest.id
+                ),
+            )
+        } else {
+            error
+        }
+    })
+    .map_err(plugin_error)
+}
+
+fn extract_media_step() {
+    crate::heartbeat::request_step(crate::heartbeat::RequestSide::Input, "extract media");
 }
 
 /// Runs a plugin the host loaded through the session, with progress and cancel as for a client.
 fn run_plugin(
     mut session: ExtractSession,
     supplier: &mut dyn Supplier,
-    extractor: &mut dyn alpha2_engine::extract::Extractor,
+    (native, extractor): (bool, &mut dyn alpha2_engine::extract::Extractor),
     out: &Responder,
     request_id: &str,
     cancel: &CancelToken,
 ) -> Result<Vec<alpha2_model::DataSet>, HostError> {
     use alpha2_engine::extract::{Emitter, ExtractorError, PassInfo};
+    // A native call is watched as the request's work; a wasm call ends at its own deadline.
+    let call = || {
+        if native {
+            crate::heartbeat::request_step(crate::heartbeat::RequestSide::Plugin, "plugin call");
+            None
+        } else {
+            crate::heartbeat::request_idle()
+        }
+    };
     let failed = |error: ExtractorError| match error.code {
+        Some(code @ alpha2_host_core::plugins::CANCELLED) => {
+            HostError::new(code, crate::protocol::cancelled(error.message))
+        }
         Some(code) => HostError::new(code, error.message),
         None => HostError::new(
             "EXTRACTOR_FAILED",
@@ -690,7 +682,9 @@ fn run_plugin(
         ),
     };
     let internal = |error: SessionError| HostError::new("INTERNAL", error.to_string());
+    let called = call();
     extractor.begin(&session.context()).map_err(failed)?;
+    drop(called);
     let mut pass = 0;
     loop {
         if cancel.is_cancelled() {
@@ -702,12 +696,14 @@ fn run_plugin(
         match session.next() {
             Step::Need(need) => match &need {
                 Need::SourceFrame { .. } | Need::TimelineFrame { .. } => {
+                    extract_media_step();
                     match supplier.frame(&need).map_err(HostError::classify)? {
                         Some(frame) => session.supply_video(frame).map_err(internal)?,
                         None => session.supply_end().map_err(internal)?,
                     }
                 }
                 Need::SourceAudio { .. } | Need::TimelineAudio { .. } => {
+                    extract_media_step();
                     let block = supplier.audio(&need).map_err(HostError::classify)?;
                     session.supply_audio(block).map_err(internal)?;
                 }
@@ -717,20 +713,24 @@ fn run_plugin(
                 direction,
             } => {
                 pass = index;
+                let called = call();
                 extractor
                     .pass(&PassInfo {
                         pass: index,
                         direction,
                     })
                     .map_err(failed)?;
+                drop(called);
             }
             Step::Deliver(delivery) => {
                 let mut emitter = Emitter::default();
+                let called = call();
                 match &delivery {
                     Delivery::Video(frame) => extractor.video(frame, &mut emitter),
                     Delivery::Audio(block) => extractor.audio(block, &mut emitter),
                 }
                 .map_err(failed)?;
+                drop(called);
                 emit_into(&mut session, emitter.emits())?;
                 if let Some(progress) = session.progress().get(pass) {
                     out.send(&progress_message(request_id, pass, *progress))?;
@@ -740,7 +740,9 @@ fn run_plugin(
         }
     }
     let mut emitter = Emitter::default();
+    let called = call();
     extractor.end(&mut emitter).map_err(failed)?;
+    drop(called);
     emit_into(&mut session, emitter.emits())?;
     session
         .finish()

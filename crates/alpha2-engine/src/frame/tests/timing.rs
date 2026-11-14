@@ -30,6 +30,7 @@ fn effect_timing_instrumentation_never_changes_the_rendered_result() {
         FrameDesc {
             background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::LinearLight,
+            canvas: None,
             time: MediaTime::ZERO,
             visual: vec![ActiveClip {
                 data: alpha2_eval::SampleContext::NONE,
@@ -117,6 +118,7 @@ fn pass_timing_is_off_by_default_and_never_alters_the_result() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
             data: alpha2_eval::SampleContext::NONE,

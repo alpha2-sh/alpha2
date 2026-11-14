@@ -104,6 +104,14 @@ impl FramePool {
             )
             .map_err(|error| encode_error(format!("cannot allocate an encoder frame: {error}")))?
         };
+        debug_assert!(
+            frame.planes().iter().copied().eq(self
+                .pixels
+                .planes(self.width.unsigned_abs(), self.height.unsigned_abs())
+                .into_iter()
+                .map(|(width, rows, bytes)| ((width * bytes) as usize, rows as usize))),
+            "the encoder frame's planes are not the ones the packer writes"
+        );
         Ok(PooledFrame {
             frame: Some(frame),
             pool: Arc::clone(self),
@@ -449,9 +457,7 @@ pub enum EncodeWorkerEvent {
 }
 
 fn packed_frame_bytes(frame: &Yuv420pFrameBuffer) -> u64 {
-    let (width, height) = frame.size();
-    let luma = u64::try_from(width.saturating_mul(height)).unwrap_or(u64::MAX);
-    luma.saturating_add(luma / 2)
+    u64::try_from(frame.visible_bytes()).unwrap_or(u64::MAX)
 }
 
 pub fn encode_event_bytes(event: &EncodeEvent) -> u64 {
@@ -822,9 +828,20 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-/// [`INJECT_SLOW_ENCODE`] for the first export `serve` runs.
+/// [`INJECT_SLOW_ENCODE`] and [`INJECT_ENCODE_STALL`] for the exports `serve` runs, one entry per
+/// export in the order they start.
 #[cfg(test)]
-pub static SERVE_SLOW_ENCODE: std::sync::Mutex<Option<Duration>> = std::sync::Mutex::new(None);
+pub static SERVE_EXPORT_HOOKS: std::sync::Mutex<Vec<ServeExportHooks>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ServeExportHooks {
+    pub slow: Option<Duration>,
+    pub stall: Option<(InjectedStall, Duration)>,
+    /// Panics in the export's conform ([`crate::host::PANIC_IN_CONFORM`]).
+    pub panic: bool,
+}
 
 #[cfg(test)]
 pub const INJECTED_WRITE_FAILURE: &str =
@@ -891,9 +908,22 @@ impl EncodeWorker {
                 #[cfg(test)]
                 slow_video,
             };
-            run_encode_worker(&mut state);
-            // Dropping a hardware session waits on the GPU inside FFmpeg, so it is watched too.
-            let _work = worker_heartbeat.begin_work();
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_encode_worker(&mut state);
+            })) {
+                // Not an encoder refusal: a retry policy must not switch encoders for a defect.
+                let error = format!(
+                    "{}the encode worker panicked: {}",
+                    crate::protocol::internal_tag(),
+                    crate::failure::panic_message(&*payload)
+                );
+                state.failure.record(&error);
+                state.cancel.cancel();
+                let _ = state.results.send(EncodeWorkerEvent::Failed(error));
+                let _work = state.heartbeat.begin_work();
+                state.sink.abort();
+            }
+            let _work = worker_heartbeat.begin_teardown();
             drop(state);
         };
         let builder = thread::Builder::new().name("alpha2-encode".to_owned());
@@ -1025,6 +1055,7 @@ impl EncodeWorker {
 
     pub fn result(&self) -> Result<EncodeWorkerEvent, String> {
         loop {
+            crate::heartbeat::beat_request();
             match self.results.recv_timeout(STALL_POLL) {
                 Ok(EncodeWorkerEvent::Failed(error)) => return Err(self.failure.cause_or(error)),
                 Ok(event) => return Ok(event),
@@ -1049,7 +1080,10 @@ impl EncodeWorker {
             thread::sleep(ENCODE_JOIN_POLL);
         }
         if self.join.take().is_some_and(|join| join.join().is_err()) {
-            return Err(encode_error("encode worker panicked"));
+            return Err(format!(
+                "{}the encode worker panicked in its teardown",
+                crate::protocol::internal_tag()
+            ));
         }
         Ok(())
     }
@@ -1059,6 +1093,7 @@ impl EncodeWorker {
     /// [`crate::protocol::HARDWARE_ENCODE_STALL_MARKER`] and `HARDWARE_STALL` evidence; a software
     /// one is most likely blocked writing its output.
     pub fn check_stall(&self) -> Result<(), String> {
+        crate::heartbeat::beat_request();
         let Some(stalled_for) = self.heartbeat.stuck_past(self.stall_timeout) else {
             return Ok(());
         };
@@ -1168,6 +1203,10 @@ pub fn handle_encode_worker_event(
             state.pending_events = state.pending_events.saturating_sub(1);
             if let Some(index) = video_index {
                 metrics.video_encode = metrics.video_encode.saturating_add(duration);
+                metrics
+                    .phases
+                    .steady
+                    .record(index, total, started_at.saturating_add(duration));
                 let expected = state.completed_video.saturating_add(1);
                 if index.saturating_add(1) != expected {
                     return Err(encode_error(format!(

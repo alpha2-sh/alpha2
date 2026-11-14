@@ -273,9 +273,17 @@ pub struct EvaluatedText {
     pub line_clamp: Option<alpha2_model::LineClamp>,
 }
 
-fn non_negative(animation: Option<&Animated<f32>>, time: MediaTime, default: f32) -> f32 {
+/// Largest magnitude of a sampled fraction: the fraction a valid pixel length converts to on a
+/// one-pixel picture. Eased keyframes can overshoot their values; sampling clamps them here.
+const MOST_FRACTION: f32 = alpha2_model::MAX_LAYOUT_PX;
+
+fn fraction(value: f32) -> f32 {
+    value.clamp(-MOST_FRACTION, MOST_FRACTION)
+}
+
+fn flex_factor(animation: Option<&Animated<f32>>, time: MediaTime, default: f32) -> f32 {
     animation.map_or(default, |value| {
-        sample_scalar(value, time, &SampleContext::NONE).max(0.0)
+        sample_scalar(value, time, &SampleContext::NONE).clamp(0.0, alpha2_model::MAX_FLEX_FACTOR)
     })
 }
 
@@ -284,11 +292,20 @@ fn size_or(
     time: MediaTime,
     default: f32,
 ) -> f32 {
-    animation.map_or(default, |value| sample_size(value, time).max(0.0))
+    animation.map_or(default, |value| {
+        sample_size(value, time).clamp(0.0, MOST_FRACTION)
+    })
 }
 
 fn length(animation: Option<&Animated<LayoutLength>>, time: MediaTime) -> Option<LayoutLength> {
-    animation.map(|value| sample_length(value, time))
+    animation.map(|value| {
+        let length = sample_length(value, time);
+        let bound = match length {
+            LayoutLength::Percent(_) => alpha2_model::MAX_LAYOUT_PERCENT,
+            LayoutLength::Fraction(_) | LayoutLength::Px(_) => MOST_FRACTION,
+        };
+        length.with_value(length.value().clamp(-bound, bound))
+    })
 }
 
 fn size(animation: Option<&Animated<LayoutLength>>, time: MediaTime) -> Option<LayoutLength> {
@@ -298,7 +315,7 @@ fn size(animation: Option<&Animated<LayoutLength>>, time: MediaTime) -> Option<L
 fn node_layout(node: &LayoutNode, time: MediaTime, border_width: f32) -> NodeLayout {
     let insets = |value: Option<&Animated<alpha2_model::Insets>>| {
         value.map_or_else(Sides::default, |value| {
-            Sides::from_array(sample_insets(value, time))
+            Sides::from_array(sample_insets(value, time).map(fraction))
         })
     };
     let padding = Sides::from_array(
@@ -341,8 +358,8 @@ fn node_layout(node: &LayoutNode, time: MediaTime, border_width: f32) -> NodeLay
         max_height: size(node.max_height.as_ref(), time),
         aspect_ratio: node.aspect_ratio,
         margin: insets(node.margin.as_ref()),
-        flex_grow: non_negative(node.flex_grow.as_ref(), time, 0.0),
-        flex_shrink: non_negative(node.flex_shrink.as_ref(), time, 1.0),
+        flex_grow: flex_factor(node.flex_grow.as_ref(), time, 0.0),
+        flex_shrink: flex_factor(node.flex_shrink.as_ref(), time, 1.0),
         flex_basis: size(node.flex_basis.as_ref(), time),
         align_self: node.align_self,
         justify_self: node.justify_self,
@@ -387,7 +404,7 @@ fn evaluate_node<'a>(
 ) -> EvaluatedNode {
     let border = node.border.as_ref().map(|border| {
         (
-            sample_size(&border.width, time).max(0.0),
+            sample_size(&border.width, time).clamp(0.0, MOST_FRACTION),
             sample_paint(&border.paint, time),
         )
     });
@@ -404,10 +421,10 @@ fn evaluate_node<'a>(
         opacity: node.opacity.as_ref().map_or(1.0, |value| {
             sample_scalar(value, time, &SampleContext::NONE).clamp(0.0, 1.0)
         }),
-        translate: node
-            .translate
-            .as_ref()
-            .map_or_else(Vec2::default, |value| sample_offset(value, time)),
+        translate: node.translate.as_ref().map_or_else(Vec2::default, |value| {
+            let offset = sample_offset(value, time);
+            Vec2::new(fraction(offset.x), fraction(offset.y))
+        }),
         scale: node.scale.as_ref().map_or(Vec2::new(1.0, 1.0), |value| {
             sample_vec2(value, time, &SampleContext::NONE)
         }),

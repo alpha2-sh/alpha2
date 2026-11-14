@@ -3,10 +3,11 @@
  *
  * The operations are named for primitives: `remove_ranges` (drop silences, keep highlights),
  * `split_at` (cut on beats) and `bake` (data bindings to keyframes, words to cues). Kept moments
- * render as before for clip picture and sound, clip keyframes, captions, hold data and linear
- * automation; a matte or a `via` binding follows the part beside it or the edit is refused
- * (`matte_source`, `read_through`); track automation with hold or eased keys across a removed range
- * and a fade under a cut are not exact yet. The result is the same canonical document everywhere.
+ * render as before for clip picture and sound, clip keyframes, captions, timeline-anchored data and
+ * track and master automation; a matte or a `via` binding follows the part beside it or the edit is
+ * refused (`matte_source`, `read_through`). `split_at` leaves out cuts it cannot make exactly
+ * (`report.skipped`); `remove_ranges` refuses them. The result is the same canonical document
+ * everywhere.
  *
  * ```ts
  * const { project: tight } = applyEdit(wasm, project, {
@@ -42,7 +43,10 @@ export type EditRequest =
       readonly ripple?: "none" | "track" | "timeline";
       /** Keeps only the ranges, removing their complement within the target clips' extent. */
       readonly invert?: boolean;
-      /** Ticks kept at each edge of every removed range. */
+      /**
+       * Ticks kept at each edge of every removed range; a negative value widens each range, which
+       * never starts before time 0.
+       */
       readonly padding?: number;
       /** Removed ranges shorter than this, after padding, are kept. */
       readonly min_duration?: number;
@@ -80,6 +84,17 @@ export interface EditReport {
   }[];
   /** Clips the operation created, each with the clip it was cut from (which keeps its id). */
   readonly created: readonly { readonly id: string; readonly from: string }[];
+  /**
+   * Cuts `split_at` left out because they would change what a clip shows, in clip and time
+   * order; absent when it left none out.
+   */
+  readonly skipped?: readonly {
+    readonly clip: string;
+    /** The cut, in timeline ticks. */
+    readonly time: number;
+    readonly reason:
+      "in_transition" | "in_fade" | "matte_source" | "read_through";
+  }[];
 }
 
 /** An operation's result. */
@@ -102,8 +117,14 @@ export type EditRefusal =
   | "invalid_range"
   | "nothing_to_bake"
   | "correction_not_bakeable"
+  | "unbounded_parameter"
   | "matte_source"
   | "read_through"
+  | "in_transition"
+  | "in_fade"
+  | "too_many_clips"
+  | "too_many_cues"
+  | "result_too_large"
   | "invalid_result";
 
 /** The generated wasm function this wrapper calls. */

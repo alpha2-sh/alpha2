@@ -77,5 +77,18 @@ pub enum LoopMode {
     PingPong,
 }
 
+/// Most passes a looping clip makes over its timeline range. A longer loop is several clips.
+pub const MAX_LOOP_PASSES: u64 = 65_536;
+
+/// Passes a loop of `source` ticks makes over `timeline` ticks, rounded up; zero for an empty
+/// source.
+#[must_use]
+pub fn loop_passes(timeline: i64, source: i64) -> u64 {
+    if source <= 0 || timeline <= 0 {
+        return 0;
+    }
+    timeline.unsigned_abs().div_ceil(source.unsigned_abs())
+}
+
 /// How long sound fades out before, and in after, each wrap of a repeating loop.
 pub const LOOP_FADE_SECONDS: f64 = 0.005;

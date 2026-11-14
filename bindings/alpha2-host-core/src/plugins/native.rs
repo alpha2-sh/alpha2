@@ -1,6 +1,8 @@
 //! Runs native plugins, C-ABI libraries loaded by the platform loader, through their
 //! `alpha2_plugin_v1` table and the host table they call back through. A library runs with the
-//! process's rights, as allowed by the caller.
+//! process's rights, as allowed by the caller. Each library is loaded once per process, keyed by
+//! its artifact's SHA-256, and never unloaded: the host cannot tell whether threads it started still
+//! run its code.
 
 #![allow(unsafe_code)]
 
@@ -8,17 +10,27 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of};
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
 
 use alpha2_engine::extract::AudioInput;
 use alpha2_plugin_abi::{ABI_MAJOR, HostV1, NATIVE_ENTRY, PluginV1};
 
-use super::{Call, Collected, OutputCap, PluginError, Transport, codes};
+use super::{
+    Call, Collected, LogBudget, MAX_FAIL_BYTES, MAX_LOG_BYTES, OutputCap, PluginError, Transport,
+    bounded_text, codes,
+};
 
 struct State {
     collected: Collected,
     caps: Vec<OutputCap>,
     resources: HashMap<String, Vec<u8>>,
+    log: LogBudget,
+}
+
+/// Runs a callback's body, answering `failed` instead of letting a panic cross the C boundary.
+fn guarded<T>(failed: T, body: impl FnOnce() -> T) -> T {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).unwrap_or(failed)
 }
 
 pub(super) struct NativeTransport {
@@ -26,8 +38,34 @@ pub(super) struct NativeTransport {
     instance: *mut c_void,
     // Boxed so the context pointer in the host table stays put; dropped after the instance.
     host: Box<(HostV1, RefCell<State>)>,
-    // Dropped last: the table and instance point into it.
-    library: Option<libloading::Library>,
+}
+
+/// Libraries this process loaded, by artifact SHA-256.
+static LOADED: Mutex<Option<HashMap<String, &'static libloading::Library>>> = Mutex::new(None);
+
+/// The library of the artifact pinned by `sha256`, loaded from the absolute form of the path
+/// `prepare` gives on the first use in this process. The lock is held across the load, so two runs
+/// never load one artifact twice.
+fn library(
+    sha256: &str,
+    prepare: impl FnOnce() -> Result<PathBuf, PluginError>,
+) -> Result<&'static libloading::Library, PluginError> {
+    let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
+    let loaded = loaded.get_or_insert_with(HashMap::new);
+    if let Some(library) = loaded.get(sha256) {
+        return Ok(library);
+    }
+    let failed = |why: String| PluginError::new(codes::LOAD_FAILED, why);
+    // A bare name would go through the loader's search path instead of naming the checked file.
+    let path = std::path::absolute(prepare()?)
+        .map_err(|error| failed(format!("the library path: {error}")))?;
+    // SAFETY: loading runs the library's initializers with the process's rights, which the
+    // caller allowed for this plugin.
+    let library = unsafe { libloading::Library::new(&path) }
+        .map_err(|error| failed(format!("{}: {error}", path.display())))?;
+    let library: &'static libloading::Library = Box::leak(Box::new(library));
+    loaded.insert(sha256.to_owned(), library);
+    Ok(library)
 }
 
 /// Borrows `len` items at `ptr`; empty for a null or zero-length pointer.
@@ -53,10 +91,12 @@ unsafe fn state<'a>(context: *mut c_void) -> &'a RefCell<State> {
 unsafe extern "C" fn emit(context: *mut c_void, records: *const u8, len: usize) -> i32 {
     // SAFETY: the ABI's rules for the context and the records, borrowed for the call.
     let (state, batch) = unsafe { (state(context), borrowed(records, len)) };
-    let State {
-        collected, caps, ..
-    } = &mut *state.borrow_mut();
-    collected.emit(batch, caps)
+    guarded(alpha2_plugin_abi::status::FAILED, || {
+        let State {
+            collected, caps, ..
+        } = &mut *state.borrow_mut();
+        collected.emit(batch, caps)
+    })
 }
 
 unsafe extern "C" fn resource(
@@ -67,31 +107,47 @@ unsafe extern "C" fn resource(
 ) -> *const u8 {
     // SAFETY: the ABI's rules for the context and the name, borrowed for the call.
     let (state, name) = unsafe { (state(context), borrowed(name, name_len)) };
-    let state = state.borrow();
-    match std::str::from_utf8(name)
-        .ok()
-        .and_then(|name| state.resources.get(name))
-    {
-        Some(bytes) if !len.is_null() => {
-            // SAFETY: the plugin passes a writable length; the bytes live until the instance is
-            // destroyed, since resources are never replaced.
-            unsafe { len.write(bytes.len()) };
-            bytes.as_ptr()
+    guarded(std::ptr::null(), || {
+        let state = state.borrow();
+        match std::str::from_utf8(name)
+            .ok()
+            .and_then(|name| state.resources.get(name))
+        {
+            Some(bytes) if !len.is_null() => {
+                // SAFETY: the plugin passes a writable length; the bytes live until the instance
+                // is destroyed, since resources are never replaced.
+                unsafe { len.write(bytes.len()) };
+                bytes.as_ptr()
+            }
+            _ => std::ptr::null(),
         }
-        _ => std::ptr::null(),
-    }
+    })
 }
 
 unsafe extern "C" fn fail(context: *mut c_void, message: *const u8, len: usize) {
-    // SAFETY: the ABI's rules for the context and the message, borrowed for the call.
-    let (state, message) = unsafe { (state(context), borrowed(message, len)) };
-    state.borrow_mut().collected.failure = Some(String::from_utf8_lossy(message).into_owned());
+    // SAFETY: the ABI's rules for the context and the message, borrowed for the call; only the
+    // kept prefix is read.
+    let (state, message) = unsafe {
+        (
+            state(context),
+            borrowed(message, len.min(MAX_FAIL_BYTES + 1)),
+        )
+    };
+    guarded((), || {
+        state.borrow_mut().collected.failure = Some(bounded_text(message, MAX_FAIL_BYTES));
+    });
 }
 
-unsafe extern "C" fn log(_context: *mut c_void, _level: u32, message: *const u8, len: usize) {
-    // SAFETY: the message is borrowed for the call.
-    let message = unsafe { borrowed(message, len) };
-    super::log_line(&String::from_utf8_lossy(message));
+unsafe extern "C" fn log(context: *mut c_void, _level: u32, message: *const u8, len: usize) {
+    // SAFETY: the ABI's rules for the context and the message, borrowed for the call; only the
+    // kept prefix is read.
+    let (state, message) = unsafe {
+        (
+            state(context),
+            borrowed(message, len.min(MAX_LOG_BYTES + 1)),
+        )
+    };
+    guarded((), || state.borrow_mut().log.log(message));
 }
 
 // Both tables are a few pointers long.
@@ -147,16 +203,16 @@ pub(super) unsafe fn checked(table: *const PluginV1) -> Result<PluginV1, PluginE
 }
 
 impl NativeTransport {
+    /// An instance of the artifact pinned by `sha256`; `prepare` gives the file to load when this
+    /// process has not loaded it yet.
     pub(super) fn new(
-        path: &Path,
+        sha256: &str,
+        prepare: impl FnOnce() -> Result<PathBuf, PluginError>,
         resources: HashMap<String, Vec<u8>>,
         caps: Vec<OutputCap>,
     ) -> Result<Self, PluginError> {
         let failed = |why: String| PluginError::new(codes::LOAD_FAILED, why);
-        // SAFETY: loading runs the library's initializers with the process's rights, which the
-        // caller allowed for this plugin.
-        let library = unsafe { libloading::Library::new(path) }
-            .map_err(|error| failed(format!("{}: {error}", path.display())))?;
+        let library = library(sha256, prepare)?;
         // SAFETY: the ABI types the entry as `extern "C" fn() -> *const PluginV1`; a null symbol
         // reads as `None`.
         let entry = unsafe {
@@ -166,7 +222,7 @@ impl NativeTransport {
         let entry = (*entry).ok_or_else(|| failed("alpha2_plugin_v1 is null".to_owned()))?;
         // SAFETY: the entry takes nothing and returns a static table or null.
         let table = unsafe { entry() };
-        // SAFETY: a non-null table is static while the library is loaded.
+        // SAFETY: a non-null table is static, and the library is never unloaded.
         let table = unsafe { checked(table) }?;
         let mut host = Box::new((
             HostV1 {
@@ -182,6 +238,7 @@ impl NativeTransport {
                 collected: Collected::default(),
                 caps,
                 resources,
+                log: LogBudget::default(),
             }),
         ));
         host.0.context = (&raw const host.1).cast_mut().cast();
@@ -194,7 +251,6 @@ impl NativeTransport {
             table,
             instance,
             host,
-            library: Some(library),
         })
     }
 
@@ -267,8 +323,7 @@ impl Transport for NativeTransport {
 
 impl Drop for NativeTransport {
     fn drop(&mut self) {
-        // SAFETY: the instance is live and destroyed once, before the library unloads.
+        // SAFETY: the instance is live and destroyed once; the library stays loaded.
         unsafe { (self.table.destroy)(self.instance) };
-        drop(self.library.take());
     }
 }

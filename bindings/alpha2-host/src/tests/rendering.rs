@@ -586,6 +586,52 @@ fn uploaded_first_frame(
         .expect("readback")
 }
 
+/// `ProRes` 422 declares no chroma siting; its chroma reads co-sited with even luma columns, as
+/// `ProRes` exports pack it.
+#[allow(clippy::used_underscore_binding)]
+#[test]
+fn unsited_prores_422_reads_its_chroma_as_left() {
+    let _gpu = gpu_test_lock();
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
+    let renderer = alpha2_render::Renderer::new(gpu);
+    let mut decoder = alpha2_native::NativeDecoder::open(corpus("prores-422-unsited.mov"))
+        .expect("the clip opens");
+    let cancel = CancelToken::default();
+    let frame = loop {
+        match decoder.decode_next(&cancel).expect("decode") {
+            alpha2_media::DecodeEvent::Video(frame) => break frame,
+            alpha2_media::DecodeEvent::EndOfStream => panic!("no frame"),
+            _ => {}
+        }
+    };
+    assert_eq!(
+        frame.pixel_format,
+        alpha2_media::PixelFormat::Yuv(alpha2_media::YuvFormat::planar(1, 0, 10))
+    );
+    assert_eq!(
+        frame.chroma_location,
+        alpha2_media::ChromaLocation::Unspecified
+    );
+    let drawn = |siting| {
+        let mut sited = frame.clone();
+        sited.chroma_location = siting;
+        let upload = crate::frames::upload_frame(
+            &renderer,
+            RenderSize::new(64, 48).expect("size"),
+            alpha2_render::ColorPolicy::RejectHdr,
+            &sited,
+        )
+        .expect("the frame uploads");
+        assert!(renderer.submit_pending_source(upload.texture.pending.as_ref().expect("pending")));
+        renderer
+            .read_rgba8(&upload.texture._texture)
+            .expect("readback")
+    };
+    let unsited = drawn(alpha2_media::ChromaLocation::Unspecified);
+    assert_eq!(unsited, drawn(alpha2_media::ChromaLocation::Left));
+    assert_ne!(unsited, drawn(alpha2_media::ChromaLocation::Center));
+}
+
 /// PQ BT.2020 with alpha is a layout the renderer does not sample; it must still tone-map like the
 /// opaque picture and keep its alpha.
 #[allow(clippy::used_underscore_binding)]

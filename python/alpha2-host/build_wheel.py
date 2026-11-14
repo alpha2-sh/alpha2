@@ -22,6 +22,7 @@ import struct
 import sys
 import tarfile
 import time
+import tomllib
 import zipfile
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -181,7 +182,24 @@ def host_path() -> str:
 '''
 
 
-def metadata(version: str, licenses: list[str]) -> str:
+def license_expression(files: dict[str, Member]) -> str:
+    """alpha2's MIT and the license the archive's FFmpeg runtime lock records."""
+    lock = files.get("compliance/FFMPEG-RUNTIME.toml")
+    if lock is None:
+        raise SystemExit("the archive has no compliance/FFMPEG-RUNTIME.toml")
+    ffmpeg = tomllib.loads(lock.data.decode()).get("license")
+    if not isinstance(ffmpeg, str) or not ffmpeg:
+        raise SystemExit("compliance/FFMPEG-RUNTIME.toml records no license")
+    return f"MIT AND {ffmpeg}"
+
+
+def license_file(path: str) -> bool:
+    return path in ("LICENSE.md", "compliance/THIRD_PARTY_NOTICES.md") or path.startswith(
+        "licenses/"
+    )
+
+
+def metadata(version: str, expression: str, licenses: list[str]) -> str:
     lines = [
         "Metadata-Version: 2.4",
         "Name: alpha2-host",
@@ -192,6 +210,7 @@ def metadata(version: str, licenses: list[str]) -> str:
         "Requires-Python: >=3.11.4",
         "Classifier: Programming Language :: Rust",
         "Classifier: Topic :: Multimedia :: Video",
+        f"License-Expression: {expression}",
         *(f"License-File: {name}" for name in licenses),
         "Description-Content-Type: text/markdown",
         "",
@@ -245,10 +264,14 @@ def build(archive: str, out_dir: str) -> str:
     }
     entries[f"{PACKAGE}/__init__.py"] = (init_source(version, executable).encode(), False)
     entries[f"{PACKAGE}/py.typed"] = (b"", False)
-    licenses = sorted(path for path in files if path == "LICENSE.md")
+    expression = license_expression(files)
+    licenses = sorted(path for path in files if license_file(path))
     for path in licenses:
         entries[f"{dist_info}/licenses/{path}"] = (files[path].data, False)
-    entries[f"{dist_info}/METADATA"] = (metadata(wheel_version, licenses).encode(), False)
+    entries[f"{dist_info}/METADATA"] = (
+        metadata(wheel_version, expression, licenses).encode(),
+        False,
+    )
     entries[f"{dist_info}/WHEEL"] = (
         (
             "Wheel-Version: 1.0\n"

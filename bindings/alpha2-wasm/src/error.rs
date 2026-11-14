@@ -34,6 +34,42 @@ impl Code {
     /// A failure of the binding's own steps, not of the caller's input.
     pub(crate) const INTERNAL: Self = Self::Engine(ErrorCode::Alpha2Error);
 
+    /// Every code the binding makes.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) const ALL: [Self; 13] = [
+        Self::Engine(ErrorCode::ALL[0]),
+        Self::Engine(ErrorCode::ALL[1]),
+        Self::Engine(ErrorCode::ALL[2]),
+        Self::Engine(ErrorCode::ALL[3]),
+        Self::Engine(ErrorCode::ALL[4]),
+        Self::Engine(ErrorCode::ALL[5]),
+        Self::Engine(ErrorCode::ALL[6]),
+        Self::Engine(ErrorCode::ALL[7]),
+        Self::Engine(ErrorCode::ALL[8]),
+        Self::InvalidState,
+        Self::ResourceLimit,
+        Self::GpuInitFailed,
+        Self::PlanarDecodeUnavailable,
+    ];
+    /// Every code the binding makes.
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) const ALL: [Self; 14] = [
+        Self::Engine(ErrorCode::ALL[0]),
+        Self::Engine(ErrorCode::ALL[1]),
+        Self::Engine(ErrorCode::ALL[2]),
+        Self::Engine(ErrorCode::ALL[3]),
+        Self::Engine(ErrorCode::ALL[4]),
+        Self::Engine(ErrorCode::ALL[5]),
+        Self::Engine(ErrorCode::ALL[6]),
+        Self::Engine(ErrorCode::ALL[7]),
+        Self::Engine(ErrorCode::ALL[8]),
+        Self::InvalidState,
+        Self::ResourceLimit,
+        Self::GpuInitFailed,
+        Self::PlanarDecodeUnavailable,
+        Self::InvalidEmit,
+    ];
+
     /// The code as `Alpha2Error.code` spells it.
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
@@ -158,6 +194,34 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), codes.len() + 2);
+    }
+
+    #[test]
+    fn every_code_has_a_failure_class_in_the_shared_table() {
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/cases/failure-classes.json"))
+                .expect("the shared table is JSON");
+        for code in Code::ALL {
+            // Exhaustive, so a new variant is listed in `ALL` too.
+            match code {
+                Code::Engine(_)
+                | Code::InvalidState
+                | Code::ResourceLimit
+                | Code::GpuInitFailed
+                | Code::PlanarDecodeUnavailable => {}
+                #[cfg(target_arch = "wasm32")]
+                Code::InvalidEmit => {}
+            }
+            let name = code.as_str();
+            assert!(
+                table["protocol"].get(name).is_some() || table["browser"].get(name).is_some(),
+                "{name} has no class in tests/cases/failure-classes.json"
+            );
+        }
+        assert_eq!(
+            Code::ALL.len(),
+            ErrorCode::ALL.len() + if cfg!(target_arch = "wasm32") { 5 } else { 4 }
+        );
     }
 
     #[test]

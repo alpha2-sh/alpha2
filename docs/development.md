@@ -133,12 +133,12 @@ The crates an iOS or Android app links build for `aarch64-apple-ios`, `aarch64-a
   ```
 
 - Never enable `alpha2-native-gpu`'s `hwdevice` feature for a mobile target: it links FFmpeg, which mobile builds do not use.
-- Test binaries run on a device or emulator with `adb push` and `adb shell`, and in the iOS simulator with `xcrun simctl spawn <device> <binary>`. The media and session suites read the repository's `tests/` from the directory `ALPHA2_TESTS_DIR` names, so push `tests/corpus`, `tests/cases` and `tests/fonts` there first:
+- Test binaries run on a device or emulator with `adb push` and `adb shell`, and in the iOS simulator with `xcrun simctl spawn <device> <binary>`. The media and session suites read the repository's `tests/` from the directory `ALPHA2_TESTS_DIR` names, so push `tests/corpus`, `tests/cases`, `tests/fonts` and `tests/golden` there first:
 
   ```sh
   cargo test --no-run --target x86_64-linux-android -p alpha2-android-media -p alpha2-mobile --lib
   adb shell mkdir -p /data/local/tmp/alpha2-test/tests
-  adb push tests/corpus tests/cases tests/fonts /data/local/tmp/alpha2-test/tests/
+  adb push tests/corpus tests/cases tests/fonts tests/golden /data/local/tmp/alpha2-test/tests/
   adb push <test binary> /data/local/tmp/alpha2-test/
   adb shell "cd /data/local/tmp/alpha2-test && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test ./<test binary> --test-threads 1"
   ```
@@ -159,6 +159,15 @@ adb shell am instrument -w sh.alpha2.test/androidx.test.runner.AndroidJUnitRunne
 
 An app calls `Alpha2Android.init(context)` once, before anything else. An app that takes the AAR file itself also adds its dependencies: `net.java.dev.jna:jna:5.17.0@aar` and `org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2`.
 
+The AAR ships consumer shrinker rules (`lib/consumer-rules.pro`): JNA and the generated bindings reach native code by class, field and method names, so an app's R8 build keeps `com.sun.jna`, the classes that implement or extend JNA types, and `sh.alpha2`. The `consumer` module is an app built that way (release, R8 with only those rules); its instrumentation test runs capabilities and an export against it:
+
+```sh
+scripts/build-android.sh :consumer:assembleRelease :consumer:assembleReleaseAndroidTest
+adb install -r packages/alpha2-android/consumer/build/outputs/apk/release/consumer-release.apk
+adb install -r -t packages/alpha2-android/consumer/build/outputs/apk/androidTest/release/consumer-release-androidTest.apk
+adb shell am instrument -w sh.alpha2.consumer.test/androidx.test.runner.AndroidJUnitRunner
+```
+
 Both mobile build scripts ship the Rust crates' license notices when `ALPHA2_NOTICES` names them (`node scripts/crate-licenses.mjs --target <triple> --out <file> alpha2-mobile`): the AAR in `META-INF/alpha2/`, each XCFramework slice beside its privacy manifest. The release workflow builds both packages that way and checks their sizes and the AAR's 16 KB alignment.
 
 #### The Swift package
@@ -175,9 +184,7 @@ Test binaries for an iPhone link a Swift overlay through a dependency, so build 
 
 #### App lifecycle
 
-- `Alpha2.pause()` holds exports and previews at their next frame, and `resume()` lets them continue. iOS runs no GPU work in the background, so an iOS app pauses when it leaves the foreground and resumes when it returns.
-- `Alpha2.memoryWarning()` halves the decoded frames running work keeps. Call it from `didReceiveMemoryWarning` on iOS, and from `onTrimMemory` on Android at `TRIM_MEMORY_RUNNING_LOW` and above. Work sizes its budget from the memory free when it starts.
-- An Android export that should go on in the background runs in a foreground service of type `dataSync` (API 29 and later) or `mediaProcessing` (API 35 and later). An app targeting API 31 or later cannot start one from the background, so it starts the service and the export while visible. Without the service, the app pauses as on iOS.
+Pausing for the background, memory warnings and Android foreground services are described for app developers in the [Android library](../packages/alpha2-android/README.md#app-lifecycle) and [Swift package](../packages/alpha2-swift/README.md#app-lifecycle) READMEs.
 
 ## Lint and format
 
@@ -203,4 +210,4 @@ It extracts the SDK afresh from its checked download, sets the FFmpeg environmen
 
 ## Versions
 
-`npm run version:set -- <x.y.z>` sets one version in the Cargo workspace, each crate's dependency on its siblings, the npm packages and their pins on each other, and the Python package's `alpha2-host` pin (the Python package takes its own version from Cargo), then updates `Cargo.lock`, `fuzz/Cargo.lock` and `package-lock.json`. It does not touch the plugin workspace: set the version in `plugins/Cargo.toml` by hand and update `plugins/Cargo.lock`. The release workflow refuses a tag that does not match it.
+`npm run version:set -- <x.y.z>` sets one version in the Cargo workspace and the plugin workspace, each crate's exact requirement (`=x.y.z`) on its siblings, the npm packages and their pins on each other, and the Python package's `alpha2-host` pin (the Python package takes its own version from Cargo), then updates `Cargo.lock`, `fuzz/Cargo.lock`, `plugins/Cargo.lock` and `package-lock.json`. The release workflow refuses a tag that does not match it.

@@ -13,6 +13,9 @@ pub(crate) const DISCARD: u8 = 2;
 /// The most index entries one track may have.
 pub(crate) const MAX_ENTRIES: usize = 1 << 23;
 
+/// The most index entries all tracks of one file may have together, fragments included.
+pub(crate) const MAX_FILE_ENTRIES: usize = 1 << 23;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Entry {
     pub pos: u64,
@@ -48,10 +51,16 @@ pub(crate) struct Context {
     /// `FFmpeg`'s `advanced_editlist`, turned off for good by the first track without `stts`.
     pub advanced: bool,
     pub file_len: u64,
+    /// Index entries the file may still add, from [`MAX_FILE_ENTRIES`].
+    pub entries_left: usize,
 }
 
 fn invalid(reason: &str) -> DemuxError {
     DemuxError::Invalid(reason.into())
+}
+
+pub(crate) fn too_many_samples() -> DemuxError {
+    invalid("the tracks of the file have more samples than this layer reads")
 }
 
 /// `a * b / c` rounded to nearest, halves away from zero (`av_rescale`).
@@ -125,6 +134,7 @@ pub(crate) fn build(
         context.advanced = false;
     }
     let mut current_dts = edit_prepass(trak, layout, context, &mut index);
+    let most = MAX_ENTRIES.min(context.entries_left);
     let chunked_pcm = layout.kind == TrackKind::Audio && deltas.len() == 1 && deltas[0].1 == 1;
     let complete = if chunked_pcm {
         chunked_entries(
@@ -135,6 +145,7 @@ pub(crate) fn build(
             &mut current_dts,
             &mut index,
             context.file_len,
+            most,
         )?
     } else {
         current_dts = current_dts.saturating_sub(i64::from(index.dts_shift));
@@ -146,11 +157,13 @@ pub(crate) fn build(
             current_dts,
             &mut index,
             layout.kind,
+            most,
         )?
     };
     if complete && context.advanced && !trak.edits.is_empty() && !index.entries.is_empty() {
-        fix_index(trak, layout, context.movie_timescale, &mut index);
+        fix_index(trak, layout, context.movie_timescale, &mut index, most)?;
     }
+    context.entries_left -= index.entries.len();
     Ok(index)
 }
 
@@ -272,7 +285,7 @@ fn time_to_sample(
 
 /// The index of an ordinary track, one entry per sample. Returns whether every sample was
 /// indexed (`FFmpeg` stops at the first broken one and then skips the edit list).
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn sample_entries(
     trak: &Trak,
     stsc: &[super::movie::Stsc],
@@ -281,14 +294,15 @@ fn sample_entries(
     mut current_dts: i64,
     index: &mut Index,
     kind: TrackKind,
+    most: usize,
 ) -> Result<bool, DemuxError> {
     let tables = &trak.tables;
     let sample_count = tables.sample_count as usize;
     if sample_count == 0 {
         return Ok(true);
     }
-    if sample_count > MAX_ENTRIES {
-        return Err(invalid("a track has too many samples"));
+    if sample_count > most {
+        return Err(too_many_samples());
     }
     index.has_stts = !deltas.is_empty();
     index.has_ctts = !tables.ctts.is_empty();
@@ -405,6 +419,7 @@ fn sample_entries(
 
 /// The index of PCM audio whose `stts` counts single samples: each chunk is cut into packets of
 /// up to 1024 samples, as `FFmpeg` does.
+#[allow(clippy::too_many_arguments)]
 fn chunked_entries(
     trak: &Trak,
     stsc: &[super::movie::Stsc],
@@ -413,6 +428,7 @@ fn chunked_entries(
     current_dts: &mut i64,
     index: &mut Index,
     file_len: u64,
+    most: usize,
 ) -> Result<bool, DemuxError> {
     let tables = &trak.tables;
     if tables.chunks.is_empty() {
@@ -444,10 +460,13 @@ fn chunked_entries(
     }
     let Some(total) = usize::try_from(total)
         .ok()
-        .filter(|total| *total <= MAX_ENTRIES && *total as u64 <= file_len)
+        .filter(|total| *total as u64 <= file_len)
     else {
         return Err(invalid("a PCM track has too many packets"));
     };
+    if total > most {
+        return Err(too_many_samples());
+    }
     let tts = time_to_sample(&[], &tables.ctts, total, false);
     let mut entries = Vec::with_capacity(total.min(1 << 16));
     let mut stsc_index = 0;
@@ -497,7 +516,7 @@ fn chunked_entries(
 
 /// `av_index_search_timestamp` with `AVSEEK_FLAG_BACKWARD`: the last entry at or before
 /// `wanted`, skipping back to a keyframe unless `any`.
-fn search_backward(entries: &[Entry], wanted: i64, any: bool) -> Option<usize> {
+fn search_backward(entries: &[Entry], wanted: i64, any: bool, steps: &mut u64) -> Option<usize> {
     let count = entries.len();
     // `low` is `FFmpeg`'s `a`, with `None` for -1.
     let mut low: Option<usize> = None;
@@ -525,6 +544,7 @@ fn search_backward(entries: &[Entry], wanted: i64, any: bool) -> Option<usize> {
     let mut found = low;
     if !any {
         while let Some(at) = found.filter(|at| entries[*at].flags & KEY == 0) {
+            *steps += 1;
             found = at.checked_sub(1);
         }
     }
@@ -538,15 +558,17 @@ fn previous_closest(
     dts_shift: i32,
     timestamp: i64,
     any: bool,
+    steps: &mut u64,
 ) -> Option<usize> {
     let timestamp = if dts_shift > 0 {
         timestamp.saturating_sub(i64::from(dts_shift))
     } else {
         timestamp
     };
-    let mut index = search_backward(entries, timestamp, any)?;
+    let mut index = search_backward(entries, timestamp, any, steps)?;
     let mut at = index;
     while at > 0 && entries[at].dts == entries[at - 1].dts {
+        *steps += 1;
         if any || entries[at - 1].flags & KEY != 0 {
             index = at - 1;
         }
@@ -556,6 +578,7 @@ fn previous_closest(
         return Some(index);
     }
     loop {
+        *steps += 1;
         let entry = entries[index];
         let Some((_, offset)) = entry.tts else {
             return Some(index);
@@ -570,15 +593,23 @@ fn previous_closest(
 /// `mov_fix_index`: keeps the samples each edit shows (and those needed to decode them) and
 /// moves their timestamps onto the presentation timeline.
 #[allow(clippy::too_many_lines)]
-fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut Index) {
+fn fix_index(
+    trak: &Trak,
+    layout: &Layout<'_>,
+    movie_timescale: u32,
+    index: &mut Index,
+    budget: usize,
+) -> Result<(), DemuxError> {
     let old = std::mem::take(&mut index.entries);
     let audio = layout.kind == TrackKind::Audio;
     let vorbis = layout.family == Family::Vorbis;
     let timescale = i64::from(trak.timescale);
     let dts_shift = i64::from(index.dts_shift);
-    let mut entries: Vec<Entry> = Vec::with_capacity(old.len());
+    // The kept samples by position in `old`, so the result does not hold a second index while it
+    // is built.
+    let mut entries: Vec<Kept> = Vec::new();
     // Edits may show samples more than once, but not without bound.
-    let most = old.len().saturating_mul(8).min(MAX_ENTRIES);
+    let most = old.len().saturating_mul(8).min(budget);
     let mut entry_end = -dts_shift;
     let start_dts = entry_end;
     let mut min_corrected_pts: i64 = -1;
@@ -586,8 +617,14 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
     let mut found_non_empty = false;
     let mut first_audio_edit: i32 = -1;
     let mut skip_samples = index.skip_samples;
+    // Each walk back over the old index is paid for by the samples kept after it, so a list
+    // whose walks exceed this is not one a muxer writes.
+    let step_budget = (old.len() as u64)
+        .saturating_mul(32)
+        .saturating_add((trak.edits.len() as u64).saturating_mul(64));
+    let mut steps = 0_u64;
     for edit in &trak.edits {
-        if movie_timescale == 0 {
+        if movie_timescale == 0 || entries.len() >= most {
             break;
         }
         let media_time = edit.media_time;
@@ -622,13 +659,33 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
         if audio {
             search = search.saturating_sub(timescale).max(old[0].dts);
         }
-        let start = previous_closest(&old, index.has_ctts, index.dts_shift, search, false)
-            .or_else(|| previous_closest(&old, index.has_ctts, index.dts_shift, search, true))
-            .unwrap_or(0);
+        let start = previous_closest(
+            &old,
+            index.has_ctts,
+            index.dts_shift,
+            search,
+            false,
+            &mut steps,
+        )
+        .or_else(|| {
+            previous_closest(
+                &old,
+                index.has_ctts,
+                index.dts_shift,
+                search,
+                true,
+                &mut steps,
+            )
+        })
+        .unwrap_or(0);
         let mut started = false;
         let mut keyframe_after_edit = false;
         let mut position = start;
         while position < old.len() {
+            steps += 1;
+            if steps > step_budget {
+                return Err(invalid("an edit list is too expensive to apply"));
+            }
             let current = old[position];
             let frame_duration = old
                 .get(position + 1)
@@ -683,10 +740,10 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
             if entries.len() >= most {
                 break;
             }
-            entries.push(Entry {
+            entries.push(Kept {
+                position: u32::try_from(position).unwrap_or(u32::MAX),
                 dts: counter,
                 flags,
-                ..current
             });
             if started {
                 counter = counter.saturating_add(frame_duration);
@@ -710,12 +767,45 @@ fn fix_index(trak: &Trak, layout: &Layout<'_>, movie_timescale: u32, index: &mut
     index.duration = index.duration.min(entry_end.saturating_sub(start_dts));
     index.skip_samples = skip_samples;
     index.start_pad = skip_samples;
-    index.entries = entries;
+    index.entries = apply_kept(old, &entries);
+    Ok(())
+}
+
+/// A sample `fix_index` keeps: its position in the old index, new decode time and flags.
+#[derive(Clone, Copy)]
+struct Kept {
+    position: u32,
+    dts: i64,
+    flags: u8,
+}
+
+/// The index `kept` describes over `old`. When every sample is kept at most once and in order,
+/// `old` is rewritten in place (each position is at or after its slot), so the peak stays one
+/// index.
+fn apply_kept(mut old: Vec<Entry>, kept: &[Kept]) -> Vec<Entry> {
+    let entry = |old: &[Entry], kept: &Kept| Entry {
+        dts: kept.dts,
+        flags: kept.flags,
+        ..old[kept.position as usize]
+    };
+    if kept
+        .windows(2)
+        .all(|pair| pair[0].position < pair[1].position)
+    {
+        for (slot, sample) in kept.iter().enumerate() {
+            old[slot] = entry(&old, sample);
+        }
+        old.truncate(kept.len());
+        old.shrink_to_fit();
+        old
+    } else {
+        kept.iter().map(|sample| entry(&old, sample)).collect()
+    }
 }
 
 /// `fix_index_entry_timestamps`: discarded samples before an edit's first shown one end where it
 /// starts, each its own duration earlier.
-fn rewrite_discarded(entries: &mut [Entry], end: i64, durations: &[i64]) {
+fn rewrite_discarded(entries: &mut [Kept], end: i64, durations: &[i64]) {
     let mut timestamp = end;
     let count = entries.len();
     for (back, duration) in durations.iter().rev().enumerate() {

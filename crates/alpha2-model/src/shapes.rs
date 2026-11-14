@@ -44,6 +44,8 @@ pub enum ShapeItem {
     /// enclosing group's for paints and trims after the group.
     Group {
         /// The group's items, front first.
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_SHAPE_ITEMS }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_SHAPE_ITEMS)))]
         items: Vec<ShapeItem>,
         /// Where the group lies, and how opaque it is.
         #[serde(default)]
@@ -191,6 +193,8 @@ pub struct PathGeometry {
 pub struct Path {
     /// The subpaths, at most [`MAX_PATH_SUBPATHS`], with at most [`MAX_PATH_VERTICES`] vertices
     /// in total.
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_PATH_SUBPATHS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_PATH_SUBPATHS)))]
     pub subpaths: Vec<Subpath>,
 }
 
@@ -203,6 +207,8 @@ pub struct Subpath {
     #[serde(default)]
     pub closed: bool,
     /// The vertices, in order.
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_PATH_VERTICES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_PATH_VERTICES)))]
     pub vertices: Vec<PathVertex>,
 }
 
@@ -332,6 +338,8 @@ pub struct Dash {
     /// Alternating dash and gap lengths, as fractions of the shorter side: one to
     /// [`MAX_DASH_ENTRIES`] non-negative entries, not all zero. An odd count repeats once more to
     /// pair up.
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_DASH_ENTRIES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DASH_ENTRIES)))]
     pub pattern: Vec<Animated<f32>>,
     /// How far into the pattern the stroke starts.
     #[serde(default = "zero")]
@@ -548,7 +556,7 @@ fn validate_ellipse(geometry: &EllipseGeometry, at: &str) -> Checked {
 fn validate_polystar(geometry: &PolystarGeometry, at: &str) -> Checked {
     point(&geometry.center, &format!("{at}.center"))?;
     scalar(&geometry.points, &format!("{at}.points"), |points| {
-        (MIN_POLYSTAR_POINTS..=MAX_POLYSTAR_POINTS).contains(&points)
+        crate::Domain::POLYSTAR_POINTS.contains(points)
     })?;
     scalar(
         &geometry.outer_radius,

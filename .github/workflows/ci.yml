@@ -359,7 +359,7 @@ jobs:
           - target: linux-arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       ALPHA2_REQUIRE: openh264,c-compiler
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
@@ -442,6 +442,18 @@ jobs:
           assert not any(f["encoder"].endswith(("_vulkan", "_nvenc")) for f in result["videoEncoderFallbacks"])
           EOF
           cmp "$RUNNER_TEMP/first.mp4" "$RUNNER_TEMP/second.mp4"
+      - name: Each client uses an OpenH264 it installs into its cache, in the same process
+        run: |
+          archive="$(ls "$RUNNER_TEMP"/openh264/*.bz2)"
+          ALPHA2_HOST_BINARY="$PWD/target/release/alpha2-host" ALPHA2_TEST_OPENH264_ARCHIVE="$archive" \
+            node --test --test-name-pattern 'OpenH264 installed' packages/alpha2-node/test/e2e/host-export.test.mjs
+          pipx install uv==0.13.3
+          cd python/alpha2
+          uv venv -q -p 3.11 .venv
+          uv pip install -q --group dev
+          uv pip install -q --no-deps -e .
+          ALPHA2_HOST_BINARY="$GITHUB_WORKSPACE/target/release/alpha2-host" ALPHA2_TEST_OPENH264_ARCHIVE="$archive" \
+            .venv/bin/pytest tests/e2e/test_e2e.py -k openh264
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
@@ -457,6 +469,9 @@ jobs:
     name: CPU renderer
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      ALPHA2_REQUIRE: ""
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
@@ -517,6 +532,16 @@ jobs:
           assert result["frames"] == 36, result["frames"]
           EOF
           done
+      - name: Skips this run recorded
+        if: always()
+        shell: bash
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: skip-log-cpu-renderer
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
 
   wasm-audio:
     if: >-
@@ -584,6 +609,9 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',valgrind,') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      ALPHA2_REQUIRE: ""
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
@@ -619,6 +647,16 @@ jobs:
         run: cargo test -p alpha2-ffmpeg-bridge -p alpha2-native --features alpha2-ffmpeg-bridge/hwdevice --lib --bins --tests --no-fail-fast
       - name: GPU timeout configuration under ThreadSanitizer
         run: bash scripts/test-gpu-timeout-race.sh
+      - name: Skips this run recorded
+        if: always()
+        shell: bash
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: skip-log-valgrind
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
 
   wasm-lint:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',wasm-lint,') }}
@@ -875,6 +913,8 @@ jobs:
     needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     strategy:
       fail-fast: false
       matrix:
@@ -934,8 +974,10 @@ jobs:
         if: matrix.instrumentation
         run: |
           export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:?}" JAVA_HOME="${JAVA_HOME_17_X64:?}"
-          ALPHA2_ANDROID_ABIS=x86_64 scripts/build-android.sh :lib:assembleDebugAndroidTest
+          ALPHA2_ANDROID_ABIS=x86_64 scripts/build-android.sh :lib:assembleDebugAndroidTest \
+            :consumer:assembleRelease :consumer:assembleReleaseAndroidTest
           echo "ALPHA2_TEST_APK=$PWD/packages/alpha2-android/lib/build/outputs/apk/androidTest/debug/lib-debug-androidTest.apk" >> "$GITHUB_ENV"
+          echo "ALPHA2_CONSUMER_APKS=$PWD/packages/alpha2-android/consumer/build/outputs/apk" >> "$GITHUB_ENV"
       - name: Let the emulator use KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
@@ -951,10 +993,11 @@ jobs:
           disable-animations: true
           script: |
             adb shell mkdir -p /data/local/tmp/alpha2-test/tests
-            adb push tests/corpus tests/cases tests/fonts /data/local/tmp/alpha2-test/tests/ > /dev/null
+            adb push tests/corpus tests/cases tests/fonts tests/golden /data/local/tmp/alpha2-test/tests/ > /dev/null
             adb push target/mobile-tests/. /data/local/tmp/alpha2-test/ > /dev/null
-            for binary in target/mobile-tests/*; do name=$(basename "$binary"); adb shell "cd /data/local/tmp/alpha2-test && chmod 755 $name && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test ${{ matrix.test-env }} ./$name --test-threads 1" || exit 1; done
+            for binary in target/mobile-tests/*; do name=$(basename "$binary"); adb shell "cd /data/local/tmp/alpha2-test && chmod 755 $name && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test ALPHA2_SKIP_LOG=/data/local/tmp/alpha2-test/skip-log.jsonl ${{ matrix.test-env }} ./$name --test-threads 1" || status=1; done; adb pull /data/local/tmp/alpha2-test/skip-log.jsonl "$ALPHA2_SKIP_LOG" > /dev/null 2>&1; node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"; [ -z "${status:-}" ]
             if [ -n "${ALPHA2_TEST_APK:-}" ]; then adb install -r -t "$ALPHA2_TEST_APK" && adb shell am instrument -w sh.alpha2.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/instrumentation.txt" && grep -q '^OK (' "$RUNNER_TEMP/instrumentation.txt"; fi
+            if [ -n "${ALPHA2_CONSUMER_APKS:-}" ]; then adb install -r "$ALPHA2_CONSUMER_APKS/release/consumer-release.apk" && adb install -r -t "$ALPHA2_CONSUMER_APKS/androidTest/release/consumer-release-androidTest.apk" && adb shell am instrument -w sh.alpha2.consumer.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/shrunk.txt" && grep -q '^OK (' "$RUNNER_TEMP/shrunk.txt"; fi
 
   mobile-test-ios:
     if: >-
@@ -964,6 +1007,8 @@ jobs:
     needs: changes
     runs-on: macos-26
     timeout-minutes: 60
+    env:
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     defaults:
       run:
         shell: bash
@@ -996,8 +1041,12 @@ jobs:
             -p alpha2-apple-media -p alpha2-mobile --lib --message-format=json |
             jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
             while read -r binary; do
-              SIMCTL_CHILD_ALPHA2_TESTS_DIR="$PWD/tests" xcrun simctl spawn "$SIMULATOR" "$binary" --test-threads 1
+              SIMCTL_CHILD_ALPHA2_TESTS_DIR="$PWD/tests" SIMCTL_CHILD_ALPHA2_SKIP_LOG="$ALPHA2_SKIP_LOG" \
+                xcrun simctl spawn "$SIMULATOR" "$binary" --test-threads 1
             done
+      - name: Skips this run recorded
+        if: always()
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
       - name: The Swift package in the simulator
         run: |
           scripts/build-ios.sh
@@ -1282,7 +1331,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           ALPHA2_HOST_BINARY: ${{ github.workspace }}/target/debug/alpha2-host${{ runner.os == 'Windows' && '.exe' || '' }}
-        run: '"$PY/pytest" python/alpha2/tests/test_e2e.py python/alpha2/tests/test_scenes.py'
+        run: '"$PY/pytest" python/alpha2/tests/e2e'
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
@@ -1308,7 +1357,7 @@ jobs:
         shell: bash
         working-directory: python/alpha2
     env:
-      ALPHA2_REQUIRE: ""
+      ALPHA2_REQUIRE: native-test-hooks
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1367,6 +1416,9 @@ jobs:
             runner: macos-26
           - target: win-x64
             runner: windows-2025
+    env:
+      ALPHA2_REQUIRE: ""
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
@@ -1385,6 +1437,16 @@ jobs:
         run: cargo test -p alpha2-render --lib cpu_determinism --no-fail-fast
       - name: CPU renderer pins and extension rasters
         run: cargo test -p alpha2-render-determinism -p alpha2-extension-raster-pins --no-fail-fast
+      - name: Skips this run recorded
+        if: always()
+        shell: bash
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: skip-log-determinism-${{ matrix.target }}
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
 
   security:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',security,') }}
@@ -1491,6 +1553,8 @@ jobs:
       MTL_DEBUG_LAYER: "1"
       ALPHA2_GPU_STRICT: ${{ matrix.strict || '0' }}
       ALPHA2_VALIDATION_REPORT: ${{ github.workspace }}/target/validation-report.jsonl
+      ALPHA2_REQUIRE: ""
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
@@ -1545,6 +1609,16 @@ jobs:
           name: validation-report-${{ matrix.backend }}
           path: target/validation-report.jsonl
           if-no-files-found: ignore
+      - name: Skips this run recorded
+        if: always()
+        shell: bash
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: skip-log-render-goldens-${{ matrix.backend }}
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
 
   browser:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser,') }}
@@ -1552,7 +1626,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      ALPHA2_REQUIRE: browser,wasm,webgpu,webgl2,webcodecs-audio,webcodecs-video
+      ALPHA2_REQUIRE: browser,wasm,webgpu,webgl2,webcodecs-audio,webcodecs-video,browser-gpu-process
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
       ALPHA2_CHROME_GPU: swiftshader
     steps:

@@ -23,5 +23,8 @@ include = [
 bindgen = "0.71"
 cc = "1.4.7"
 
+[dev-dependencies]
+alpha2-test-support.workspace = true
+
 [lints]
 workspace = true

@@ -1,7 +1,8 @@
 //! Cutting a clip into parts that each continue its source and time map.
 
-use super::TimelineValue;
-use alpha2_model::{Clip, ClipId, DataSet, DataValues, LoopMode, Project, ShapeGeometry, TimeMap};
+use alpha2_model::{
+    Clip, ClipId, DataInterpolation, DataSet, DataValues, LoopMode, Project, TimeMap,
+};
 use alpha2_time::{MediaTime, TimeRange};
 use std::collections::HashSet;
 
@@ -57,7 +58,7 @@ fn piece(clip: &Clip, window: (i64, i64), source: (i64, i64), time_map: TimeMap)
 
 /// The pieces showing `window` of `clip`. That is one clip, or for a loop a head for a partial
 /// pass, whole passes as a loop and, for a ping-pong starting backward, a reversed pass.
-fn pieces(clip: &Clip, window: (i64, i64)) -> Vec<Clip> {
+pub(super) fn pieces(clip: &Clip, window: (i64, i64)) -> Vec<Clip> {
     let (t0, t1) = (
         clip.timeline_range.start().ticks(),
         clip.timeline_range.end().ticks(),
@@ -157,9 +158,11 @@ pub(super) fn parts(
             }
             fades(&mut part, whole, window);
             let new_id = part.id.clone();
-            super::clip_timeline_values(&mut part, |value| {
-                value.shift_and_prune(0, window);
-                value.rename_via(&clip.id, &new_id);
+            part.for_each_timeline_value_mut(&mut |_, value| {
+                value.keep_window(window);
+                if let Some(via) = value.via_clip_mut().filter(|via| **via == clip.id) {
+                    via.clone_from(&new_id);
+                }
             });
             out.push(part);
         }
@@ -177,7 +180,7 @@ fn fades(part: &mut Clip, whole: (i64, i64), window: (i64, i64)) {
     }
 }
 
-/// `part` moved left by `delta` ticks with its keyframes.
+/// `part` moved left by `delta` ticks with every keyframe.
 pub(super) fn moved(mut part: Clip, delta: i64) -> Clip {
     if delta == 0 {
         return part;
@@ -188,44 +191,13 @@ pub(super) fn moved(mut part: Clip, delta: i64) -> Clip {
     );
     part.timeline_range = TimeRange::new(MediaTime(start - delta), MediaTime(end - delta))
         .unwrap_or(part.timeline_range);
-    super::clip_timeline_values(&mut part, |value| {
-        value.shift_and_prune(-delta, (start, end));
-    });
+    part.for_each_timeline_value_mut(&mut |_, value| value.shift(-delta));
     part
 }
 
-/// Visits each animated value of a mask outline.
-pub(super) fn visit_geometry(
-    geometry: &mut ShapeGeometry,
-    visit: &mut impl FnMut(&mut dyn TimelineValue),
-) {
-    match geometry {
-        ShapeGeometry::Rectangle(rectangle) => {
-            visit(&mut rectangle.center);
-            visit(&mut rectangle.size);
-            visit(&mut rectangle.corner_radius);
-            visit(&mut rectangle.rotation_degrees);
-        }
-        ShapeGeometry::Ellipse(ellipse) => {
-            visit(&mut ellipse.center);
-            visit(&mut ellipse.size);
-            visit(&mut ellipse.rotation_degrees);
-        }
-        ShapeGeometry::Polystar(polystar) => {
-            visit(&mut polystar.center);
-            visit(&mut polystar.points);
-            visit(&mut polystar.outer_radius);
-            visit(&mut polystar.inner_radius);
-            visit(&mut polystar.outer_roundness);
-            visit(&mut polystar.inner_roundness);
-            visit(&mut polystar.rotation_degrees);
-        }
-        ShapeGeometry::Path(path) => visit(&mut path.path),
-    }
-}
-
 /// A timeline-anchored set with the removed ranges cut out and later times moved left. A sample
-/// set keeps, at each cut, the value read just after it, so the kept side reads as before.
+/// set keeps, at each cut, the value read just after it (and a linear set the value just before
+/// it), so both kept sides read as before.
 pub(super) fn cut_data(set: &mut DataSet, removal: &[(i64, i64)]) {
     let new_time = |tick: i64| super::new_time(tick, removal);
     match &mut set.values {
@@ -248,20 +220,28 @@ pub(super) fn cut_data(set: &mut DataSet, removal: &[(i64, i64)]) {
                     ));
                 }
             }
-            for (_, to) in removal {
-                let Some(at) = new_time(*to) else { continue };
-                if entries.iter().any(|(tick, _)| *tick == at) {
-                    continue;
+            // A linear set also keys the tick before each cut, so the line before it keeps its
+            // slope; the pair one tick apart is the step.
+            let linear = samples.interpolation == DataInterpolation::Linear;
+            let first = samples.times[0].ticks();
+            for (from, to) in removal {
+                let before = (linear && *from > first).then_some(from - 1);
+                for read in before.into_iter().chain([*to]) {
+                    let Some(at) = new_time(read) else { continue };
+                    if entries.iter().any(|(tick, _)| *tick == at) {
+                        continue;
+                    }
+                    let held = (0..channels)
+                        .flat_map(|channel| {
+                            crate::sample_channel(samples, channel, arity, MediaTime(read))
+                                .map_or_else(
+                                    || vec![None; arity],
+                                    |values| values.into_iter().map(Some).collect(),
+                                )
+                        })
+                        .collect::<Vec<_>>();
+                    entries.push((at, held));
                 }
-                let held = (0..channels)
-                    .flat_map(|channel| {
-                        crate::sample_channel(samples, channel, arity, MediaTime(*to)).map_or_else(
-                            || vec![None; arity],
-                            |values| values.into_iter().map(Some).collect(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                entries.push((at, held));
             }
             entries.sort_by_key(|(tick, _)| *tick);
             samples.times = entries.iter().map(|(tick, _)| MediaTime(*tick)).collect();

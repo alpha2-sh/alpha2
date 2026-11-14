@@ -1269,6 +1269,153 @@
     },
     {
       "expected": {
+        "project_sha256": "f86bbd4a25dc2629eec2727c816969f05a1611bd045547c8beba21eedf74734e",
+        "report": {
+          "created": [
+            {
+              "from": "ta",
+              "id": "ta.1"
+            }
+          ],
+          "moved": [],
+          "removed": [],
+          "skipped": [
+            {
+              "clip": "ta",
+              "reason": "in_transition",
+              "time": 140000
+            },
+            {
+              "clip": "tb",
+              "reason": "in_transition",
+              "time": 140000
+            }
+          ]
+        }
+      },
+      "name": "split-skips-a-cut-in-a-transition",
+      "project": "kept",
+      "request": {
+        "op": "split_at",
+        "target": {
+          "track": "t-mix"
+        },
+        "times": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            80000,
+            140000
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "b519463db2bf42b41f59e61a9e525dfdb0678757f738eb467d5987b522e0dc7f",
+        "report": {
+          "created": [],
+          "moved": [],
+          "removed": [],
+          "skipped": [
+            {
+              "clip": "ms",
+              "reason": "matte_source",
+              "time": 60000
+            }
+          ]
+        }
+      },
+      "name": "split-skips-a-matte-source-cut",
+      "project": "bound",
+      "request": {
+        "op": "split_at",
+        "target": {
+          "clips": [
+            "ms"
+          ]
+        },
+        "times": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            60000
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "6ddddab33e2e9bc4379a7becad8a000dd7c49b886a03ec46558f0ecb0372ffac",
+        "report": {
+          "created": [
+            {
+              "from": "lp",
+              "id": "lp.1"
+            },
+            {
+              "from": "lp",
+              "id": "lp.2"
+            },
+            {
+              "from": "lp",
+              "id": "lp.3"
+            },
+            {
+              "from": "lp",
+              "id": "lp.4"
+            },
+            {
+              "from": "s",
+              "id": "s.1"
+            },
+            {
+              "from": "s",
+              "id": "s.2"
+            }
+          ],
+          "moved": [],
+          "removed": [],
+          "skipped": [
+            {
+              "clip": "lp",
+              "reason": "in_transition",
+              "time": 180000
+            },
+            {
+              "clip": "s",
+              "reason": "in_fade",
+              "time": 20000
+            }
+          ]
+        }
+      },
+      "name": "split-skips-cuts-in-fades-and-loop-transitions",
+      "project": "edges",
+      "request": {
+        "op": "split_at",
+        "target": {
+          "clips": [
+            "s",
+            "lp"
+          ]
+        },
+        "times": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            20000,
+            120000,
+            180000
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
         "project_sha256": "f5e395926d5c09609011b17baec78fae932ec1fd719e4a5ac799e5e4ebcff856",
         "report": {
           "created": [],
@@ -1487,18 +1634,22 @@
       "name": "refuse-matte-source",
       "project": "bound",
       "request": {
-        "op": "split_at",
-        "target": {
-          "clips": [
-            "ms"
-          ]
-        },
-        "times": {
+        "op": "remove_ranges",
+        "ranges": {
           "anchor": {
             "type": "timeline"
           },
           "list": [
-            60000
+            {
+              "end": 80000,
+              "start": 40000
+            }
+          ]
+        },
+        "ripple": "none",
+        "target": {
+          "clips": [
+            "ms"
           ]
         }
       }
@@ -1511,18 +1662,77 @@
       "name": "refuse-read-through",
       "project": "bound",
       "request": {
-        "op": "split_at",
-        "target": {
-          "clips": [
-            "a"
-          ]
-        },
-        "times": {
+        "op": "remove_ranges",
+        "ranges": {
           "anchor": {
             "type": "timeline"
           },
           "list": [
-            60000
+            {
+              "end": 80000,
+              "start": 40000
+            }
+          ]
+        },
+        "ripple": "none",
+        "target": {
+          "clips": [
+            "a"
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "in_transition"
+      },
+      "name": "refuse-in-transition",
+      "project": "edges",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 184000,
+              "start": 176000
+            }
+          ]
+        },
+        "ripple": "none",
+        "target": {
+          "clips": [
+            "lp"
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "in_fade"
+      },
+      "name": "refuse-in-fade",
+      "project": "edges",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 80000,
+              "start": 20000
+            }
+          ]
+        },
+        "target": {
+          "clips": [
+            "s"
           ]
         }
       }
@@ -1941,6 +2151,59 @@
         "version": 1
       },
       "sha256": "bea8d2d6c069635167433a3fe8457a6b15e23fe4c62738523c60ff134485d5e2"
+    },
+    {
+      "assets": {
+        "v": "tests/corpus/h264-bt709-copy.mp4"
+      },
+      "extractor": {
+        "client": {
+          "id": "alpha2.test.digest",
+          "input": {
+            "format": "rgba8",
+            "from": [
+              "source",
+              "timeline"
+            ],
+            "max_size": 960,
+            "media": "video"
+          },
+          "outputs": [
+            {
+              "channels": [
+                "hi",
+                "lo"
+              ],
+              "interpolation": "hold",
+              "kind": "scalars",
+              "name": "digest"
+            }
+          ],
+          "params_schema": {
+            "type": "object"
+          },
+          "version": 1
+        }
+      },
+      "name": "range-past-source",
+      "project": "fingerprinted",
+      "refused": "ends past the source's duration",
+      "request": {
+        "extractor": "alpha2.test.digest",
+        "input": {
+          "from": "source",
+          "range": {
+            "end": 40001,
+            "start": 0
+          },
+          "size": 96,
+          "source_id": "v"
+        },
+        "outputs": {
+          "digest": "frames"
+        },
+        "version": 1
+      }
     }
   ],
   "projects": {
@@ -2138,6 +2401,144 @@
             "name": "B"
           }
         ]
+      }
+    },
+    "edges": {
+      "id": "edges",
+      "name": "Edges",
+      "schema_version": 1,
+      "settings": {
+        "frame_rate": {
+          "den": 1,
+          "num": 30
+        },
+        "height": 36,
+        "sample_rate": 48000,
+        "width": 64
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "w",
+          "kind": "video",
+          "locator": "w.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "clips": [
+              {
+                "id": "lp",
+                "source_id": "v",
+                "source_range": {
+                  "end": 80000,
+                  "start": 0
+                },
+                "time_map": {
+                  "mode": "repeat",
+                  "type": "loop"
+                },
+                "timeline_range": {
+                  "end": 280000,
+                  "start": 0
+                }
+              },
+              {
+                "id": "y",
+                "source_id": "w",
+                "source_range": {
+                  "end": 200000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 400000,
+                  "start": 200000
+                }
+              }
+            ],
+            "id": "t-loop",
+            "kind": "video",
+            "name": "L",
+            "transitions": [
+              {
+                "easing": {
+                  "type": "linear"
+                },
+                "effect": {
+                  "id": "alpha2.transition.fade",
+                  "version": 1
+                },
+                "from_clip": "lp",
+                "timeline_range": {
+                  "end": 280000,
+                  "start": 200000
+                },
+                "to_clip": "y"
+              }
+            ]
+          },
+          {
+            "clips": [
+              {
+                "audio": {
+                  "fade_in": 40000,
+                  "fade_out": 40000
+                },
+                "id": "s",
+                "source_id": "v",
+                "source_range": {
+                  "end": 240000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 240000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-fade",
+            "kind": "video",
+            "name": "F"
+          }
+        ]
+      }
+    },
+    "fingerprinted": {
+      "id": "p",
+      "name": "P",
+      "schema_version": 1,
+      "settings": {
+        "frame_rate": {
+          "den": 1,
+          "num": 30
+        },
+        "height": 180,
+        "sample_rate": 48000,
+        "width": 320
+      },
+      "sources": [
+        {
+          "fingerprint": {
+            "duration_ticks": 40000
+          },
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": []
       }
     },
     "generated": {

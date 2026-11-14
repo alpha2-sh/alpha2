@@ -30,6 +30,25 @@ test("resource leases are bounded, idempotent and independent by revision", () =
   r.dispose();
   assert.equal(closed, 2);
 });
+test("uncounted resource entries are held beyond the limit and leave the counted room alone", () => {
+  const r = new ResourceRegistry(1);
+  const extra = r.put("proxy", 0, {}, () => {}, { counted: false });
+  r.put("title", 0, {}, () => {}, { counted: false });
+  const media = r.put("a", 0, {}, () => {});
+  assert.equal(r.size, 3);
+  assert.equal(r.counted, 1);
+  assert.throws(
+    () => r.put("b", 0, {}, () => {}),
+    (error) => error.code === "resource_budget",
+  );
+  extra.release();
+  assert.equal(r.counted, 1);
+  media.release();
+  assert.equal(r.counted, 0);
+  r.put("b", 0, {}, () => {});
+  assert.equal(r.counted, 1);
+  r.dispose();
+});
 test("export pins its document, waits for cancellation cleanup, and releases once", async () => {
   const e = createEditor(),
     snapshot = e.document,

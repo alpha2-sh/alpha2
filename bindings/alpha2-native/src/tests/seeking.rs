@@ -425,7 +425,7 @@ fn write_raw_grey_video(path: &Path, width: i32, height: i32, time_base: i32, ti
 }
 
 /// The presentation slack scan stops at 64 packets or 16 MiB. Eight exact 2 MiB frames come first,
-/// then millisecond-rounded 30 fps frames, so the slack reflects only the time base.
+/// then frames of the same period rounded to 16 units, so the slack reflects only the time base.
 #[test]
 fn the_presentation_slack_reads_no_more_than_16_mib_of_first_packets() {
     let path = output_path("rounding-scan-bytes").with_extension("mov");
@@ -437,7 +437,7 @@ fn the_presentation_slack_reads_no_more_than_16_mib_of_first_packets() {
         .map(|index| i64::try_from(index).expect("index") * 640)
         .collect::<Vec<_>>();
     let mut last = timestamps[exact - 1];
-    for step in [528, 544, 528, 544] {
+    for step in [624, 656, 624, 656] {
         last += step;
         timestamps.push(last);
     }
@@ -480,5 +480,33 @@ fn the_probe_reports_decoded_frame_bytes() {
             .streams
             .iter()
             .all(|stream| stream.frame_bytes.is_none())
+    );
+}
+
+#[test]
+fn a_packet_read_slower_than_the_work_limit_still_gives_its_frame() {
+    crate::require_pinned_ffmpeg_for_tests();
+    crate::recovery::VIRTUAL_CLOCK.with(|clock| clock.set(Some(std::time::Duration::ZERO)));
+    let limit = crate::recovery::WORK_LIMIT.with(std::cell::Cell::get);
+    let mut decoder = NativeDecoder::open_with_threads(corpus("long-gop.mp4"), 1).expect("open");
+    let cancel = CancelToken::default();
+    // Past the packets read ahead at open, so the delayed read is a real one.
+    for frame in 0..20 {
+        assert!(
+            matches!(decoder.decode_next(&cancel), Ok(DecodeEvent::Video(_))),
+            "frame {frame}"
+        );
+    }
+    crate::decode::READ_DELAY.with(|delay| delay.set(limit + std::time::Duration::from_secs(1)));
+    let next = decoder.decode_next(&cancel);
+    let consumed = crate::decode::READ_DELAY
+        .with(std::cell::Cell::get)
+        .is_zero();
+    crate::recovery::VIRTUAL_CLOCK.with(|clock| clock.set(None));
+    assert!(consumed, "the delayed read happened");
+    assert!(
+        matches!(next, Ok(DecodeEvent::Video(_))),
+        "{:?}",
+        next.err()
     );
 }

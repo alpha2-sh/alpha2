@@ -23,6 +23,8 @@ const MAX_PAGE: u64 = 65_307;
 const MAX_PACKET: usize = 1 << 25;
 /// The largest `codec_private` this reader assembles from header packets.
 const MAX_HEADERS: usize = 1 << 24;
+/// The most header packets read before the first data packet.
+const MAX_HEADER_PACKETS: usize = 65_536;
 
 /// One Ogg page whose CRC holds.
 #[derive(Clone)]
@@ -410,13 +412,20 @@ impl OggFramer {
                 && let Some(final_pts) = self.state.final_pts
             {
                 let state = &mut self.state;
-                let skip = final_pts + state.final_duration + duration - state.granule;
+                let skip = final_pts
+                    .saturating_add(state.final_duration)
+                    .saturating_add(duration)
+                    .saturating_sub(state.granule);
                 if skip > 0 {
                     trimming = u32::try_from(skip).unwrap_or(u32::MAX);
                 }
-                duration = (state.granule - final_pts - state.final_duration).max(0);
+                duration = state
+                    .granule
+                    .saturating_sub(final_pts)
+                    .saturating_sub(state.final_duration)
+                    .max(0);
             }
-            self.state.final_duration += duration;
+            self.state.final_duration = self.state.final_duration.saturating_add(duration);
         }
         Ok((duration, trimming))
     }
@@ -446,22 +455,26 @@ impl OggFramer {
                     duration += samples;
                 }
             }
-            self.state.last_pts = Some(self.state.granule - duration);
+            self.state.last_pts = Some(self.state.granule.saturating_sub(duration));
             self.state.last_dts = self.state.last_pts;
         }
         let mut duration = opus_duration(data)
             .ok_or_else(|| DemuxError::Invalid("a truncated Opus packet".into()))?;
         let state = &mut self.state;
         if let Some(pts) = state.last_pts {
-            let shifted = pts - pre_skip;
+            let shifted = pts.saturating_sub(pre_skip);
             state.last_pts = Some(shifted);
             state.last_dts = Some(shifted);
             state.opus_dts = shifted;
         }
-        state.opus_dts += duration;
+        state.opus_dts = state.opus_dts.saturating_add(duration);
         let mut trimming = 0;
         if state.flags & FLAG_EOS != 0 {
-            let skip = (state.opus_dts - state.granule + pre_skip).min(duration);
+            let skip = state
+                .opus_dts
+                .saturating_sub(state.granule)
+                .saturating_add(pre_skip)
+                .min(duration);
             if skip > 0 {
                 duration = if skip < duration { duration - skip } else { 1 };
                 trimming = u32::try_from(skip).unwrap_or(u32::MAX);
@@ -475,7 +488,7 @@ impl OggFramer {
     /// The time `granule` ends at: the timestamp of the packet after the one it closes.
     fn granule_time(&self, granule: i64) -> i64 {
         match self.codec {
-            Codec::Opus { pre_skip } => granule - pre_skip,
+            Codec::Opus { pre_skip } => granule.saturating_sub(pre_skip),
             _ => granule,
         }
     }
@@ -634,7 +647,7 @@ impl Framer for OggFramer {
         let state = &mut self.state;
         pts = pts.or(dts);
         let pts = pts.unwrap_or(state.next_pts);
-        state.next_pts = pts + duration;
+        state.next_pts = pts.saturating_add(duration);
         let discard = (std::mem::take(&mut state.start_trimming), end_trimming);
         Ok(Some(Frame {
             pts,
@@ -766,7 +779,7 @@ pub(super) fn open(mut input: Input) -> Result<Box<dyn ContainerReader>, DemuxEr
     };
     framer.loaded = None;
     let duration = last_granule(&mut input, framer.serial)?.map(|granule| match headers.codec {
-        Codec::Vorbis(_) => granule - start,
+        Codec::Vorbis(_) => granule.saturating_sub(start),
         _ => granule,
     });
     let facts = Facts {
@@ -827,7 +840,7 @@ fn header_packets(framer: &mut OggFramer, input: &mut Input) -> Result<Vec<Vec<u
             return Ok(packets);
         }
         total += raw.data.len();
-        if total > MAX_HEADERS {
+        if total > MAX_HEADERS || packets.len() == MAX_HEADER_PACKETS {
             return Err(DemuxError::Invalid(
                 "Ogg header packets are too large".into(),
             ));

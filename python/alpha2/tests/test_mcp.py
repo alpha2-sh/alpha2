@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -221,11 +222,28 @@ MALFORMED: dict[str, tuple[str, Any, str]] = {
         1,
         "INTERNAL",
     ),
+    "a failure of no known class": (
+        raw_call("describe_project", {"project": project_document()}),
+        1,
+        "UNKNOWN",
+    ),
 }
 
 
-class _Panic(BaseException):
-    """Stands in for the native module's panic, which is not an ``Exception``."""
+class _Unknown(BaseException):
+    pass
+
+
+def _native_panic(_text: str) -> list[str]:
+    panic = getattr(mcp._native, "_panic", None)
+    if panic is None:
+        raise mcp._native.InternalError("alpha2 internal error: attempt to negate with overflow")
+    panic("attempt to negate with overflow")
+    return []
+
+
+def _unknown(_text: str) -> list[str]:
+    raise _Unknown("attempt to negate with overflow")
 
 
 @pytest.mark.parametrize("case", list(MALFORMED))
@@ -233,12 +251,9 @@ def test_every_malformed_request_is_answered_and_the_server_keeps_serving(
     case: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     line, request_id, outcome = MALFORMED[case]
-    if outcome == "INTERNAL":
-
-        def panic(_text: str) -> list[str]:
-            raise _Panic("attempt to negate with overflow")
-
-        monkeypatch.setattr(mcp._native, "validate_project_json", panic)
+    if outcome in ("INTERNAL", "UNKNOWN"):
+        failing = _native_panic if outcome == "INTERNAL" else _unknown
+        monkeypatch.setattr(mcp._native, "validate_project_json", failing)
     monkeypatch.chdir(tmp_path)
     reader = io.BytesIO(f"{line}\n".encode() + b'{"jsonrpc":"2.0","id":99,"method":"ping"}\n')
     writer = io.BytesIO()
@@ -253,9 +268,11 @@ def test_every_malformed_request_is_answered_and_the_server_keeps_serving(
         assert first["error"]["code"] in {int(code) for code in outcome.split("|")}
     else:
         assert first["result"]["isError"] is True
-        if outcome == "INTERNAL":
+        if outcome in ("INTERNAL", "UNKNOWN"):
+            text = first["result"]["content"][0]["text"]
             assert first["result"]["structuredContent"] == {"code": "INTERNAL"}
-            assert first["result"]["content"][0]["text"].startswith("_Panic: ")
+            assert text.startswith("INTERNAL: " if outcome == "INTERNAL" else "_Unknown: ")
+            assert "attempt to negate with overflow" in text
     assert not (tmp_path / "never.mp4").exists()
 
 
@@ -328,3 +345,177 @@ def test_text_without_fonts_says_how_to_give_them(tmp_path: Path, fake_host: Fak
     )
     assert refused["isError"] is True
     assert "--font PATH" in refused["content"][0]["text"]
+
+
+def rooted(tmp_path: Path) -> tuple[Path, Path]:
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    return root, outside
+
+
+def refusal(reply: dict[str, Any]) -> str:
+    assert reply["isError"] is True
+    return str(reply["content"][0]["text"])
+
+
+def test_a_write_outside_the_roots_is_refused_and_nothing_is_written(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    root, outside = rooted(tmp_path)
+    server = Server(roots=[str(root)], host_path=still_host(tmp_path, fake_host))
+    for name, output in (("render_frame", "a.png"), ("render_video", "a.mp4")):
+        refused = answer(server, name, {"spec": SPEC, "output": str(outside / output)})
+        assert "is outside the directories this server may use" in refusal(refused)
+        assert refused["structuredContent"] == {"path": str(outside / output)}
+    assert list(outside.iterdir()) == []
+    assert not (tmp_path / "host" / "starts").exists()
+    written = answer(server, "render_frame", {"spec": SPEC, "output": str(root / "a.png")})
+    assert written["isError"] is False
+    assert (root / "a.png").read_bytes() == b"PNG"
+
+
+def test_files_a_spec_names_outside_the_roots_are_refused_before_any_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, outside = rooted(tmp_path)
+    (outside / "notes.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n", encoding="utf-8")
+
+    def no_read(*_arguments: Any, **_options: Any) -> Any:
+        raise AssertionError("a file was read")
+
+    monkeypatch.setattr(mcp._compose, "gather_facts", no_read)
+    server = Server(roots=[str(root)], host_path=sys.executable)
+    for body in (
+        {"type": "captions", "file": "/etc/hostname"},
+        {"type": "captions", "file": str(outside / "notes.srt")},
+        {"type": "media", "path": str(outside / "clip.mp4")},
+    ):
+        refused = answer(server, "check", {"spec": {"duration": 1, "body": body}})
+        assert "is outside the directories" in refusal(refused), body
+    project = answer(server, "describe_project", {"project": "/etc/hostname"})
+    assert "is outside the directories" in refusal(project)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="making a link needs a privilege on Windows")
+def test_a_link_inside_a_root_that_points_outside_is_refused_for_reads_and_writes(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    root, outside = rooted(tmp_path)
+    (outside / "spec.json").write_text(json.dumps(SPEC), encoding="utf-8")
+    (outside / "old.png").write_bytes(b"old")
+    (root / "spec.json").symlink_to(outside / "spec.json")
+    (root / "frame.png").symlink_to(outside / "old.png")
+    (root / "inner.png").symlink_to(root / "real.png")
+    (root / "elsewhere").symlink_to(outside, target_is_directory=True)
+    server = Server(roots=[str(root)], host_path=still_host(tmp_path, fake_host))
+    read = answer(server, "check", {"spec": str(root / "spec.json")})
+    assert "is outside the directories" in refusal(read)
+    for output in ("frame.png", "inner.png"):
+        replaced = answer(
+            server, "render_frame", {"spec": SPEC, "output": str(root / output), "overwrite": True}
+        )
+        assert "is a link" in refusal(replaced)
+    through = answer(
+        server, "render_frame", {"spec": SPEC, "output": str(root / "elsewhere/new.png")}
+    )
+    assert "is outside the directories" in refusal(through)
+    assert (outside / "old.png").read_bytes() == b"old"
+    assert not (outside / "new.png").exists() and not (root / "real.png").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX devices and FIFOs")
+@pytest.mark.timeout(20)
+def test_a_device_or_a_fifo_as_a_file_argument_is_refused_at_once(tmp_path: Path) -> None:
+    fifo = tmp_path / "spec.json"
+    os.mkfifo(fifo)
+    server = Server(roots=["/"], host_path=sys.executable)
+    for name, arguments in (
+        ("describe_project", {"project": "/dev/zero"}),
+        ("check", {"spec": str(fifo)}),
+        ("template_data_schema", {"template": str(fifo)}),
+        ("check", {"spec": {"duration": 1, "body": {"type": "captions", "file": "/dev/zero"}}}),
+    ):
+        assert "not a regular file" in refusal(answer(server, name, arguments)), arguments
+
+
+def test_a_file_argument_larger_than_a_project_may_be_is_refused(tmp_path: Path) -> None:
+    large = tmp_path / "project.json"
+    with large.open("wb") as file:
+        file.truncate(mcp._native.MAX_PROJECT_JSON_BYTES + 1)
+    server = Server(roots=[str(tmp_path)], host_path=sys.executable)
+    refused = answer(server, "describe_project", {"project": str(large)})
+    assert f"larger than {mcp._native.MAX_PROJECT_JSON_BYTES} bytes" in refusal(refused)
+
+
+def test_a_read_only_server_neither_lists_nor_runs_a_write_tool(tmp_path: Path) -> None:
+    server = Server(roots=[str(tmp_path)], read_only=True, host_path=sys.executable)
+    [listed, refused] = exchange(
+        server,
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        call("render_video", {"spec": SPEC, "output": str(tmp_path / "a.mp4")}, 2),
+    )
+    names = {tool["name"] for tool in listed["result"]["tools"]}
+    assert "check" in names and not names & {"render_frame", "render_video"}
+    assert refused["error"]["code"] == -32602
+    assert not (tmp_path / "a.mp4").exists()
+
+
+def test_a_still_is_written_only_to_a_png_file(tmp_path: Path, fake_host: FakeHost) -> None:
+    server = Server(roots=[str(tmp_path)], host_path=still_host(tmp_path, fake_host))
+    refused = answer(server, "render_frame", {"spec": SPEC, "output": str(tmp_path / "a.txt")})
+    assert ".png" in refusal(refused)
+    assert not (tmp_path / "a.txt").exists()
+    upper = answer(server, "render_frame", {"spec": SPEC, "output": str(tmp_path / "A.PNG")})
+    assert upper["isError"] is False
+
+
+def test_a_render_over_the_limits_is_refused_naming_the_flag(tmp_path: Path) -> None:
+    server = Server(
+        roots=[str(tmp_path)], max_seconds=2, max_pixels=64 * 36, host_path=sys.executable
+    )
+    small = {"canvas": {"width": 64, "height": 36}, "duration": 3, "body": SPEC["body"]}
+    long = answer(server, "render_video", {"spec": small, "output": str(tmp_path / "a.mp4")})
+    assert "more than --max-seconds 2" in refusal(long)
+    assert long["structuredContent"] == {"limit": "max-seconds"}
+    ranged = answer(
+        server, "render_video", {"spec": small, "output": str(tmp_path / "a.mp4"), "end": 3}
+    )
+    assert "--max-seconds" in refusal(ranged)
+    large = {**small, "canvas": {"width": 65, "height": 36}}
+    for name in ("render_frame", "render_video"):
+        refused = answer(server, name, {"spec": large, "output": str(tmp_path / "a.png")})
+        assert "more than --max-pixels 2304" in refusal(refused)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_command_line_gives_the_server_its_roots_and_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from alpha2 import __main__ as command
+
+    served: list[Server] = []
+    monkeypatch.setattr(mcp, "serve", served.append)
+    monkeypatch.chdir(tmp_path)
+    command.main(["mcp"])
+    command.main(["mcp", "--root", "a", "--root", "/b", "--read-only", "--max-seconds", "5"])
+    default, given = served
+    assert default.roots == [os.getcwd()] and not default.read_only
+    assert default.max_seconds == mcp.DEFAULT_MAX_SECONDS
+    assert default.max_pixels == mcp.DEFAULT_MAX_PIXELS
+    assert given.roots == ["a", "/b"] and given.read_only and given.max_seconds == 5
+
+
+def test_a_file_a_raw_fragment_reads_outside_the_roots_is_refused_before_rendering(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    root, outside = rooted(tmp_path)
+    server = Server(roots=[str(root)], host_path=still_host(tmp_path, fake_host))
+    source = {"id": "src-a", "locator": str(outside / "a.png"), "kind": "image"}
+    for assets in ({}, {"src-a": str(outside / "b.png")}):
+        raw = {"type": "raw", "sources": [source], "assets": assets, "tracks": []}
+        spec = {**SPEC, "overlays": [raw]}
+        assert "is outside the directories" in refusal(
+            answer(server, "render_frame", {"spec": spec})
+        )
+    assert not (tmp_path / "host" / "starts").exists()

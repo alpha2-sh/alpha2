@@ -111,6 +111,21 @@ impl EffectParamSpec {
         }
     }
 
+    /// The range of each scalar component, as [`Self::accepts`] checks it.
+    #[must_use]
+    pub const fn domain(&self) -> crate::Domain {
+        crate::Domain::new(
+            match self.min {
+                Some(min) => min,
+                None => f32::NEG_INFINITY,
+            },
+            match self.max {
+                Some(max) => max,
+                None => f32::INFINITY,
+            },
+        )
+    }
+
     /// Whether the parameter can follow a data set, which only Float and Vec2 ones can.
     #[must_use]
     pub const fn takes_data(&self) -> bool {
@@ -227,6 +242,16 @@ pub enum EffectProblem {
     Inputs,
     /// Resources other than exactly the declared ones.
     Resources,
+}
+
+/// Checks `effect` against its built-in definition, used as `kind`, as project validation does
+/// for a timeline transition or a node without named inputs. Ids outside
+/// [`BUILTIN_EFFECT_PREFIX`] belong to the host and pass.
+///
+/// # Errors
+/// What is wrong with the effect.
+pub fn check_builtin_effect(effect: &ClipEffect, kind: EffectKind) -> Result<(), EffectProblem> {
+    check_builtin(effect, kind, None)
 }
 
 /// Checks `effect` against its built-in definition, used as `kind`; `inputs` are an effect

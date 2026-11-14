@@ -1,14 +1,11 @@
 //! `ALPHA2_UPDATE_GOLDENS=1` rewrites the pinned hashes.
 
-use std::fmt::Write as _;
-use std::process::Command;
 use std::time::Duration;
-
-use sha2::{Digest, Sha256};
 
 use super::requests::{SERVE_CHILD, ServeChild};
 use super::*;
 use alpha2_engine::extract::fixtures::{digest_values, fnv1a};
+use alpha2_test_support::extract::{data_hash, pack_plugin};
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -16,109 +13,6 @@ fn root() -> PathBuf {
 
 fn table_path() -> PathBuf {
     root().join("tests/cases/surface-conformance.json")
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().fold(String::new(), |mut text, byte| {
-        let _ = write!(text, "{byte:02x}");
-        text
-    })
-}
-
-/// The table's `data_hash` of data sets given as JSON.
-fn data_hash(sets: &Value) -> String {
-    #[allow(clippy::cast_possible_truncation)]
-    let bits = |value: &Value| {
-        value.as_f64().map_or_else(
-            || "-".to_owned(),
-            |value| format!("{:08x}", (value as f32).to_bits()),
-        )
-    };
-    let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
-    let lines = sets
-        .as_array()
-        .expect("data sets")
-        .iter()
-        .map(|set| {
-            let kind = set["kind"].as_str().expect("kind");
-            let items = match kind {
-                "intervals" => set["intervals"]
-                    .as_array()
-                    .expect("intervals")
-                    .iter()
-                    .map(|item| {
-                        let score = if item["score"].is_null() {
-                            String::new()
-                        } else {
-                            bits(&item["score"])
-                        };
-                        format!(
-                            "{}:{}:{}:{score}",
-                            item["start"],
-                            item["end"],
-                            text(&item["label"])
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-                "words" => set["words"]
-                    .as_array()
-                    .expect("words")
-                    .iter()
-                    .map(|item| {
-                        format!(
-                            "{}:{}:{}:{}",
-                            item["start"],
-                            item["end"],
-                            text(&item["text"]),
-                            text(&item["speaker"])
-                        )
-                    })
-                    .collect(),
-                _ => {
-                    let times = set["times"].as_array().expect("times");
-                    let values = set["values"].as_array().expect("values");
-                    let width = values.len() / times.len().max(1);
-                    times
-                        .iter()
-                        .enumerate()
-                        .map(|(index, time)| {
-                            let row = values[index * width..(index + 1) * width]
-                                .iter()
-                                .map(bits)
-                                .collect::<Vec<_>>()
-                                .join(",");
-                            format!("{time}:{row}")
-                        })
-                        .collect()
-                }
-            };
-            format!("{} {kind}|{}", text(&set["id"]), items.join(";"))
-        })
-        .collect::<Vec<_>>();
-    hex(&Sha256::digest(lines.join("\n").as_bytes()))
-}
-
-/// Packs the plugin crate at `path` (from the repository root) into `dir` and returns its
-/// manifest's path and SHA-256.
-fn packed(dir: &Path, path: &str) -> (PathBuf, String) {
-    let plugins = root().join("plugins");
-    let out = dir.join(path);
-    let status = Command::new(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-        .args(["run", "--release", "--manifest-path"])
-        .arg(plugins.join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(plugins.join("target"))
-        .args(["-p", "alpha2-plugin-pack", "--"])
-        .arg(root().join(path))
-        .arg("--out")
-        .arg(&out)
-        .env_remove("CARGO_TARGET_DIR")
-        .status()
-        .expect("cargo runs");
-    assert!(status.success(), "{path} packs");
-    let manifest = out.join("manifest.json");
-    let sha256 = hex(&Sha256::digest(std::fs::read(&manifest).expect("manifest")));
-    (manifest, sha256)
 }
 
 fn assets(case: &Value) -> Value {
@@ -196,7 +90,7 @@ fn every_extract_case_hashes_as_pinned_on_every_path() {
         if let Some(plugin) = case["extractor"]["plugin"].as_str() {
             plugins
                 .entry(plugin.to_owned())
-                .or_insert_with(|| packed(&dir, plugin));
+                .or_insert_with(|| pack_plugin(&root(), &dir, plugin));
         }
     }
     let mut serving = ServeChild::start(
@@ -225,6 +119,15 @@ fn every_extract_case_hashes_as_pinned_on_every_path() {
             serving.write(&line.to_string());
         }
         let answer = digest_client(&mut serving, &name);
+        if let Some(refused) = case["refused"].as_str() {
+            assert_eq!(
+                answer["error"]["code"], "INVALID_REQUEST",
+                "{name}: {answer}"
+            );
+            let message = answer["error"]["message"].as_str().unwrap_or_default();
+            assert!(message.contains(refused), "{name}: {answer}");
+            continue;
+        }
         assert_eq!(answer["ok"], true, "{name}: {answer}");
         let found = data_hash(&answer["result"]["dataSets"]);
         if case["request"]["input"]["from"] == "source" && case["extractor"]["client"].is_object() {

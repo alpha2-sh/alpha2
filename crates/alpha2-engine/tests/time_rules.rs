@@ -363,7 +363,14 @@ fn presentation_slacks() -> Value {
             .map(|frame| (2 * frame * den * base + num) / (2 * num) * scale)
             .collect::<Vec<_>>()
     };
-    let streams: [((i64, i64), Vec<i64>); 14] = [
+    // Stills held 3, 3, 3, 4, 4 and 4 s, in `units` per second.
+    let stills = |units: i64| {
+        [0, 3, 6, 9, 13, 17, 21]
+            .iter()
+            .map(|second| second * units)
+            .collect::<Vec<_>>()
+    };
+    let streams: [((i64, i64), Vec<i64>); 18] = [
         ((1, 1_000), rounded(30_000, 1_001, 1_000, 1)),
         ((1, 16_000), rounded(30_000, 1_001, 1_000, 16)),
         ((1, 600), rounded(30_000, 1_001, 600, 1)),
@@ -378,6 +385,12 @@ fn presentation_slacks() -> Value {
         ((1, 15_360), vec![67, 0, 33, 33, 100, 133]),
         ((1, 1_000), vec![0, 33]),
         ((0, 0), vec![0, 33, 67, 100]),
+        // Unequal holds and two exact rates mixed are not a rounding; stills at 0, 3, 7, 10 and
+        // 14 s are also a 3.5 s period rounded to seconds.
+        ((1, 90_000), stills(90_000)),
+        ((1, 1_000), stills(1_000)),
+        ((1, 90_000), vec![0, 3_003, 6_757, 9_760, 13_514, 16_517]),
+        ((1, 90_000), vec![0, 270_000, 630_000, 900_000, 1_260_000]),
     ];
     streams
         .into_iter()

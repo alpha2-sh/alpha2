@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::sync::{Arc, PoisonError, RwLockReadGuard, RwLockWriteGuard};
 
-use alpha2_gpu::{CapabilityTier, GpuContext};
+use alpha2_gpu::CapabilityTier;
 
 use crate::effect::EffectKey;
+use crate::gpu_errors::{Answer, CreationErrorScopes, ScopeErrors, create_checked};
 use crate::loop_bound::{BUDGET, MAX_LOOP_ITERATIONS, blank_comments, bound_for_loops};
 use crate::uniform::{PARAM_SLOT_BYTES, RUNTIME_UNIFORM_WORDS, param_uniform_bytes};
 
@@ -18,11 +19,17 @@ use crate::{
 const MAX_REGISTERED_EFFECTS: usize = 256;
 const MAX_WGSL_BODY_BYTES: usize = 32 * 1024;
 const MAX_WGSL_NESTING: usize = 64;
+/// Most `vec4f`-sized elements one array may hold, counts multiplied through nested arrays.
+/// Software adapters compile a dynamically indexed array in time that grows faster than its size,
+/// and this one compiles and draws in under a second there.
+const MAX_ARRAY_SLOTS: u64 = 128;
+/// Most array types a body may write.
+const MAX_ARRAY_TYPES: usize = 32;
 /// Operator characters one statement may hold.
 ///
 /// naga recurses once per operand of a flat chain like `x+x+...+x`; about 2,500 operands
 /// overflow a 1 MiB stack (Windows main thread, wasm32) and abort the process. Engine bodies
-/// stay under 32. DXC needs more at this limit, hence `D3D12_COMPILE_STACK`.
+/// stay under 32. DXC needs more at this limit, hence `COMPILE_STACK`.
 const MAX_WGSL_STATEMENT_OPERATORS: usize = 256;
 /// Identifier prefix of everything the generated wrapper declares.
 const RESERVED_PREFIX: &str = "alpha2_";
@@ -37,53 +44,20 @@ const INPUT_BINDING_BASE: u32 = 5 + 2 * MAX_EFFECT_RESOURCES as u32;
 /// `ResourceMetadata_<name>`: `domain_min` and `domain_max`, two `vec4f`.
 const RESOURCE_METADATA_BYTES: usize = 32;
 
-/// Scopes for every error class shader-module or pipeline creation can raise.
-///
-/// `wgpu` routes an error only to a scope of its class. A backend compiler rejecting code
-/// generated from valid WGSL reports an internal error, and OOM its own class; uncaught, either
-/// leaves an invalid pipeline that invalidates every submission drawing it.
-struct CreationErrorScopes([wgpu::ErrorScopeGuard; 3]);
-
-impl CreationErrorScopes {
-    fn push(device: &wgpu::Device) -> Self {
-        Self([
-            device.push_error_scope(wgpu::ErrorFilter::Internal),
-            device.push_error_scope(wgpu::ErrorFilter::OutOfMemory),
-            device.push_error_scope(wgpu::ErrorFilter::Validation),
-        ])
-    }
-
-    /// Pops the scopes in reverse push order and returns what they caught.
-    fn pop(self) -> ScopeErrors {
-        let [internal, out_of_memory, validation] = self.0;
-        let validation = validation.pop();
-        let out_of_memory = out_of_memory.pop();
-        let internal = internal.pop();
-        Box::pin(async move {
-            [validation.await, out_of_memory.await, internal.await]
-                .into_iter()
-                .flatten()
-                .collect()
-        })
-    }
-}
-
-/// Stack size for D3D12 effect pipeline compiles. DXC recurses per operand and needs about
-/// 1.5 MiB at [`MAX_WGSL_STATEMENT_OPERATORS`], more than a Windows main thread has.
+/// Stack size for effect shader and pipeline compiles. naga recurses per nested statement and
+/// DXC per operand, which needs about 1.5 MiB at [`MAX_WGSL_STATEMENT_OPERATORS`]; a caller's
+/// thread may have 1 MiB or less.
 #[cfg(not(target_arch = "wasm32"))]
-const D3D12_COMPILE_STACK: usize = 8 << 20;
+const COMPILE_STACK: usize = 8 << 20;
 
-/// Runs `make` on a `D3D12_COMPILE_STACK` thread on D3D12, or the calling thread elsewhere.
-/// Error scopes are per thread, so `make` pushes and pops its own.
+/// Runs `make` on a thread of [`COMPILE_STACK`] bytes. Error scopes are per thread, so `make`
+/// pushes and pops its own.
 #[cfg(not(target_arch = "wasm32"))]
-fn on_compile_stack<T: Send>(gpu: &GpuContext, make: impl FnOnce() -> T + Send) -> T {
-    if gpu.capabilities().backend != "Dx12" {
-        return make();
-    }
+fn on_compile_stack<T: Send>(make: impl FnOnce() -> T + Send) -> T {
     std::thread::scope(|scope| {
         let compile = std::thread::Builder::new()
             .name("alpha2 shader compile".to_owned())
-            .stack_size(D3D12_COMPILE_STACK)
+            .stack_size(COMPILE_STACK)
             .spawn_scoped(scope, make)
             .expect("the shader compile thread starts");
         compile
@@ -93,17 +67,9 @@ fn on_compile_stack<T: Send>(gpu: &GpuContext, make: impl FnOnce() -> T + Send) 
 }
 
 #[cfg(target_arch = "wasm32")]
-fn on_compile_stack<T>(_gpu: &GpuContext, make: impl FnOnce() -> T) -> T {
+fn on_compile_stack<T>(make: impl FnOnce() -> T) -> T {
     make()
 }
-
-/// Not `Send` in a browser, where the device answers on its own event loop.
-#[cfg(not(target_arch = "wasm32"))]
-type Answer<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
-#[cfg(target_arch = "wasm32")]
-type Answer<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T>>>;
-
-type ScopeErrors = Answer<Vec<wgpu::Error>>;
 
 /// A runtime effect created on the device, awaiting the device's verdict.
 ///
@@ -268,15 +234,16 @@ impl Renderer {
     ) -> Result<PendingEffect, ShaderDiagnostics> {
         let id = self.check_registration(&definition)?;
         let device = self.gpu.device();
-        let shader_scope = CreationErrorScopes::push(device);
-        let shader = effect_shader(device, &definition);
-        let compilation: Answer<wgpu::CompilationInfo> = Box::pin(shader.get_compilation_info());
-        let shader_errors = shader_scope.pop();
         let format = self.intermediate_format();
-        let (pipeline, pipeline_errors) = on_compile_stack(&self.gpu, || {
+        let (compilation, shader_errors, pipeline, pipeline_errors) = on_compile_stack(|| {
+            let shader_scope = CreationErrorScopes::push(device);
+            let shader = effect_shader(device, &definition);
+            let compilation: Answer<wgpu::CompilationInfo> =
+                Box::pin(shader.get_compilation_info());
+            let shader_errors = shader_scope.pop();
             let pipeline_scope = CreationErrorScopes::push(device);
             let pipeline = effect_pipeline(device, &definition, shader, format);
-            (pipeline, pipeline_scope.pop())
+            (compilation, shader_errors, pipeline, pipeline_scope.pop())
         });
         Ok(PendingEffect {
             compiled: CompiledEffect {
@@ -339,22 +306,50 @@ impl Renderer {
         Ok(id)
     }
 
-    /// The effect's pipeline, created now if needed.
-    pub(crate) fn effect_pipeline<'a>(&self, effect: &'a RegisteredEffect) -> &'a EffectPipeline {
-        effect.pipeline.get_or_init(|| {
-            crate::diagnostics::timed_pipeline_creation(
-                &self.diagnostics,
-                || effect.definition.id.as_str().to_owned(),
-                || {
-                    let device = self.gpu.device();
-                    let shader = effect_shader(device, &effect.definition);
-                    let format = self.intermediate_format();
-                    on_compile_stack(&self.gpu, || {
+    /// The effect's pipeline, created now if needed; a failed creation is not kept.
+    ///
+    /// # Errors
+    /// [`crate::RenderError::Gpu`] with the class of the creation's error.
+    pub(crate) fn effect_pipeline<'a>(
+        &self,
+        effect: &'a RegisteredEffect,
+    ) -> Result<&'a EffectPipeline, crate::RenderError> {
+        if let Some(pipeline) = effect.pipeline.get() {
+            return Ok(pipeline);
+        }
+        let created = crate::diagnostics::timed_pipeline_creation(
+            &self.diagnostics,
+            || effect.definition.id.as_str().to_owned(),
+            || {
+                let device = self.gpu.device();
+                let format = self.intermediate_format();
+                // Scopes are per thread, so the compile thread pushes its own.
+                on_compile_stack(|| {
+                    let shader = create_checked(device, || self.lazy_effect_shader(effect))?;
+                    create_checked(device, || {
                         effect_pipeline(device, &effect.definition, shader, format)
                     })
-                },
-            )
-        })
+                })
+            },
+        )
+        .map_err(|kind| crate::RenderError::Gpu { kind })?;
+        Ok(effect.pipeline.get_or_init(|| created))
+    }
+
+    fn lazy_effect_shader(&self, effect: &RegisteredEffect) -> wgpu::ShaderModule {
+        let device = self.gpu.device();
+        #[cfg(test)]
+        if self
+            .fail_next_pipeline
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            // A module without the entry points the pipeline names.
+            return device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("alpha2 test module without entry points"),
+                source: wgpu::ShaderSource::Wgsl("fn unused() {}".into()),
+            });
+        }
+        effect_shader(device, &effect.definition)
     }
 
     /// Adds an effect this renderer compiled.
@@ -519,8 +514,19 @@ impl Renderer {
     /// passes) so the first frame does not wait on the compiler.
     ///
     /// # Errors
-    /// Names the first unregistered effect.
+    /// Names the first unregistered effect, or the first pipeline whose creation failed.
     pub fn warmup(&self, effects: &[EffectId]) -> Result<(), ShaderDiagnostics> {
+        let create = |effect: &EffectId, registered: &RegisteredEffect| {
+            self.effect_pipeline(registered)
+                .map(|_| ())
+                .map_err(|error| {
+                    ShaderDiagnostics::error(format!(
+                        "effect {} version {}: {error}",
+                        effect.as_str(),
+                        effect.version()
+                    ))
+                })
+        };
         for effect in effects {
             let Some(registered) = self.effects().get(effect) else {
                 return Err(ShaderDiagnostics::error(format!(
@@ -529,10 +535,11 @@ impl Renderer {
                     effect.version()
                 )));
             };
-            self.effect_pipeline(&registered);
+            create(effect, &registered)?;
             for pass in crate::gaussian_blur::expanded_passes(effect.as_str()).unwrap_or_default() {
-                if let Some(registered) = self.effects().get(&EffectId::from_static(pass, 1)) {
-                    self.effect_pipeline(&registered);
+                let pass = EffectId::from_static(pass, 1);
+                if let Some(registered) = self.effects().get(&pass) {
+                    create(&pass, &registered)?;
                 }
             }
         }
@@ -817,6 +824,8 @@ fn time() -> f32 {{ return runtime.resolution_time.z; }}
 fn time_ticks() -> vec2u {{ return runtime.ticks.xy; }}
 fn progress() -> f32 {{ return runtime.transition.x; }}
 fn ratio() -> f32 {{ return runtime.transition.y; }}
+fn render_scale() -> f32 {{ return runtime.resolution_time.w; }}
+fn render_scale_fixed() -> u32 {{ return runtime.ticks.z; }}
 fn max_filter_samples() -> f32 {{ return runtime.transition.z; }}
 fn load_params() -> EffectParams {{ return EffectParams({param_values}); }}
 
@@ -917,6 +926,37 @@ fn wgsl_type(param_type: ParamType) -> &'static str {
         ParamType::Vec4 | ParamType::Color => "vec4f",
         ParamType::Enum | ParamType::Bool => "u32",
     }
+}
+
+/// What registration learns about a runtime effect before any device sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedEffect {
+    /// The WGSL module the device would compile: the body, its loops bounded, in the wrapper.
+    pub module: String,
+    /// Functions the body declares.
+    pub functions: usize,
+    /// The most function bodies one invocation of any of them runs once calls are inlined.
+    pub calls: u64,
+    /// The invocation's cost in units of the registration cap.
+    pub cost_units: u64,
+}
+
+/// Checks `definition` as registration does before the device compiles it: the schema, the
+/// lexical rules of the body, its calls and its cost. Device limits (uniform size, texture
+/// bindings) and the compile itself are not checked.
+///
+/// # Errors
+/// The diagnostics registration would return.
+pub fn check_effect(definition: &EffectDef) -> Result<CheckedEffect, ShaderDiagnostics> {
+    validate_definition(definition)?;
+    let code = blank_comments(&definition.wgsl_body);
+    let (calls, _) = crate::call_budget::invocation_calls(&code)?;
+    Ok(CheckedEffect {
+        module: build_shader(definition),
+        functions: crate::call_budget::declarations(&code).len(),
+        calls,
+        cost_units: crate::effect_cost::invocation_cost(&code).units(),
+    })
 }
 
 fn validate_definition(definition: &EffectDef) -> Result<(), ShaderDiagnostics> {
@@ -1047,36 +1087,8 @@ fn validate_wgsl_body(body: &str) -> Result<(), ShaderDiagnostics> {
             "a WGSL statement has more than {MAX_WGSL_STATEMENT_OPERATORS} operators; split it with `let`"
         )));
     }
-    let mut delimiters = Vec::new();
-    for character in code.chars() {
-        match character {
-            '{' | '(' | '[' => {
-                delimiters.push(character);
-                if delimiters.len() > MAX_WGSL_NESTING {
-                    return Err(ShaderDiagnostics::error(format!(
-                        "WGSL nesting exceeds {MAX_WGSL_NESTING} levels"
-                    )));
-                }
-            }
-            '}' | ')' | ']' => {
-                let matches = matches!(
-                    (delimiters.pop(), character),
-                    (Some('{'), '}') | (Some('('), ')') | (Some('['), ']')
-                );
-                if !matches {
-                    return Err(ShaderDiagnostics::error(
-                        "WGSL body has unbalanced delimiters",
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
-    if !delimiters.is_empty() {
-        return Err(ShaderDiagnostics::error(
-            "WGSL body has unbalanced delimiters",
-        ));
-    }
+    check_nesting(&code)?;
+    check_arrays(&code)?;
 
     let forbidden = [
         "@binding",
@@ -1103,6 +1115,128 @@ fn validate_wgsl_body(body: &str) -> Result<(), ShaderDiagnostics> {
     bound_for_loops(body)?;
     crate::call_budget::check_invocation_calls(&code)?;
     crate::effect_cost::check_invocation_cost(&code).map(drop)
+}
+
+/// Refuses an array without a literal count, of elements other than scalars, vectors, matrices
+/// and arrays, past [`MAX_ARRAY_SLOTS`] elements, or one array type too many.
+fn check_arrays(code: &str) -> Result<(), ShaderDiagnostics> {
+    let arrays = crate::effect_cost::array_types(code);
+    if arrays.len() > MAX_ARRAY_TYPES {
+        return Err(ShaderDiagnostics::error(format!(
+            "a runtime effect writes at most {MAX_ARRAY_TYPES} array types"
+        )));
+    }
+    for array in arrays {
+        let text = &code[array.span.clone()];
+        if !array.templated {
+            return Err(ShaderDiagnostics::error(
+                "write a runtime effect's arrays with their element type and count, as \
+                 `array<T, N>(...)`",
+            ));
+        }
+        let Some(slots) = array.slots else {
+            return Err(ShaderDiagnostics::error(format!(
+                "`{text}` needs an integer literal count and elements that are scalars, \
+                 vectors, matrices or arrays"
+            )));
+        };
+        if slots > MAX_ARRAY_SLOTS {
+            return Err(ShaderDiagnostics::error(format!(
+                "`{text}` holds more than {MAX_ARRAY_SLOTS} vectors; put a large table in a \
+                 resource texture"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses unbalanced delimiters and nesting past [`MAX_WGSL_NESTING`], where each arm of an
+/// `else if` chain nests one level deeper than the one before, as naga lowers it.
+fn check_nesting(code: &str) -> Result<(), ShaderDiagnostics> {
+    let unbalanced = || ShaderDiagnostics::error("WGSL body has unbalanced delimiters");
+    let too_deep = |chained: bool| {
+        ShaderDiagnostics::error(if chained {
+            format!(
+                "an `else if` chain nests past {MAX_WGSL_NESTING} levels; use `switch` or \
+                 early returns"
+            )
+        } else {
+            format!("WGSL nesting exceeds {MAX_WGSL_NESTING} levels")
+        })
+    };
+    // Open delimiters with their depth, and the chain length of an `if` body.
+    let mut open: Vec<(u8, usize, Option<usize>)> = Vec::new();
+    // An `if` whose body opens at this delimiter count, and its chain length.
+    let mut pending_if: Option<(usize, usize)> = None;
+    // The chain length of the `if` body that closed last, while only `else` may follow it.
+    let mut closed_chain: Option<usize> = None;
+    let mut after_else = false;
+    let bytes = code.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte.is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
+        if crate::loop_bound::is_identifier_byte(byte) {
+            let end = index
+                + bytes[index..]
+                    .iter()
+                    .take_while(|byte| crate::loop_bound::is_identifier_byte(**byte))
+                    .count();
+            let word = &code[index..end];
+            index = end;
+            if word == "else" && closed_chain.is_some() && !after_else {
+                after_else = true;
+                continue;
+            }
+            if word == "if" {
+                let chain = if after_else {
+                    closed_chain.map_or(1, |chain| chain + 1)
+                } else {
+                    1
+                };
+                pending_if = Some((open.len(), chain));
+            }
+            closed_chain = None;
+            after_else = false;
+            continue;
+        }
+        closed_chain = None;
+        after_else = false;
+        index += 1;
+        match byte {
+            b'{' | b'(' | b'[' => {
+                let chain = pending_if
+                    .filter(|(at, _)| byte == b'{' && *at == open.len())
+                    .map(|(_, chain)| chain);
+                if chain.is_some() {
+                    pending_if = None;
+                }
+                let depth = open.last().map_or(0, |(_, depth, _)| *depth) + chain.unwrap_or(1);
+                if depth > MAX_WGSL_NESTING {
+                    return Err(too_deep(chain.is_some_and(|chain| chain > 1)));
+                }
+                open.push((byte, depth, chain));
+            }
+            b'}' | b')' | b']' => {
+                let Some((opened, _, chain)) = open.pop() else {
+                    return Err(unbalanced());
+                };
+                if !matches!((opened, byte), (b'{', b'}') | (b'(', b')') | (b'[', b']')) {
+                    return Err(unbalanced());
+                }
+                closed_chain = chain;
+            }
+            _ => {}
+        }
+    }
+    if open.is_empty() {
+        Ok(())
+    } else {
+        Err(unbalanced())
+    }
 }
 
 /// Identifiers in `code`; words starting with a letter or `_`, so number suffixes are excluded.
@@ -1261,6 +1395,8 @@ fn valid_wgsl_identifier(value: &str) -> bool {
                 | "time_ticks"
                 | "progress"
                 | "ratio"
+                | "render_scale"
+                | "render_scale_fixed"
                 | "sample_src"
                 | "from_color"
                 | "to_color"

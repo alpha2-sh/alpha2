@@ -121,6 +121,58 @@ def wire_to_python(fields: dict[str, Any]) -> dict[str, Any]:
     return arguments
 
 
+def test_the_plugins_option_becomes_the_serve_flags_and_a_malformed_one_starts_no_host(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    starts = tmp_path / "starts"
+    host_path = fake_host(
+        tmp_path,
+        f"""
+    record({str(starts)!r}, json.dumps(sys.argv[1:]))
+    request, _ = read_request()
+    send(request, ok=True, result={{"status": "ready", "capabilities": {{}}, "effectCatalog": {{}}}})
+    """,
+    )
+
+    def flags(plugins: Any) -> list[list[str]]:
+        starts.unlink(missing_ok=True)
+        with HostClient(host_path=host_path, plugins=plugins) as client:
+            client.capabilities()
+        return [json.loads(line) for line in lines_in(starts)]
+
+    assert flags(None) == [[]]
+    assert flags(
+        {"mode": "native", "origins": ["https://a.example", "https://b.example:8443"], "root": "p"}
+    ) == [
+        [
+            "--plugins",
+            "native",
+            "--plugin-origins",
+            "https://a.example,https://b.example:8443",
+            "--plugin-root",
+            str(tmp_path / "p"),
+        ]
+    ]
+    assert flags({"origins": "none", "root": "none"}) == [
+        ["--plugin-origins", "none", "--plugin-root", "none"]
+    ]
+    starts.unlink(missing_ok=True)
+    for refused in [
+        {"mode": "all"},
+        {"origins": []},
+        {"origins": ["http://a.example"]},
+        {"origins": "https://a.example"},
+        {"root": ""},
+        {"allow": True},
+        "native",
+    ]:
+        with pytest.raises(Alpha2HostError) as caught:
+            HostClient(host_path=host_path, plugins=refused)  # type: ignore[arg-type]
+        assert caught.value.code == "INVALID_INPUT"
+        assert caught.value.message.startswith("plugins"), caught.value.message
+    assert lines_in(starts) == []
+
+
 def test_the_client_refuses_every_invalid_export_request_of_the_corpus_before_a_host_starts(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:
@@ -268,6 +320,11 @@ def test_options_written_in_python_reach_the_host_in_the_protocols_names(
         assert absent not in request
     alpha2.export(**export_args(tmp_path / "without.mp4"), host_path=host_path)
     assert json.loads(recorded.read_text())["resources"] == {}
+    # The host takes -1 dBTP for a loudness without a ceiling.
+    alpha2.export(
+        **export_args(tmp_path / "loud.mp4", loudness={"target_lufs": -16}), host_path=host_path
+    )
+    assert json.loads(recorded.read_text())["loudness"] == {"targetLufs": -16}
 
 
 def test_an_export_defaults_to_the_whole_project_at_its_own_rate(
@@ -946,6 +1003,36 @@ def test_an_auto_export_whose_hardware_decoder_stalls_runs_again_in_software(
     assert lines_in(runs) == ["unset", "software"]
 
 
+def test_progress_marks_where_an_export_started_over(tmp_path: Path, fake_host: FakeHost) -> None:
+    host_path = fake_host(
+        tmp_path,
+        """
+        request, _ = read_request()
+        if os.environ.get("ALPHA2_VIDEO_DECODE") == "software":
+            send(request, type="progress", phase="frames", completed=0, total=9)
+            send(request, type="progress", phase="frames", completed=9, total=9)
+            send(request, ok=True, result={"frames": 9})
+        else:
+            send(request, type="progress", phase="frames", completed=4, total=9)
+            # The host's own restart on the readback path.
+            send(request, type="progress", phase="frames", completed=0, total=9, restarted=True)
+            send(request, type="progress", phase="frames", completed=2, total=9)
+            send(request, ok=False, error={"code": "DECODE_STALLED",
+                "message": "decode shard 0 has been inside one decoder operation for 40001 ms",
+                "failure": {"code": "GPU_TIMEOUT", "origin": "native-host", "operation": "export",
+                            "backend": "native", "phase": "decode", "resource": "gpu"}})
+        """,
+    )
+    reports: list[tuple[int, bool]] = []
+    HostClient(host_path=host_path, video_decode="auto").export(
+        **export_args(
+            tmp_path / "out.mp4", on_progress=lambda p: reports.append((p.completed, p.restarted))
+        )
+    )
+    # The software rerun's first report is marked by the client.
+    assert reports == [(4, False), (0, True), (2, False), (0, True), (9, False)]
+
+
 def test_a_stall_is_not_retried_with_only_software_sessions_or_hardware_required(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:
@@ -1486,7 +1573,7 @@ def test_conform_sends_the_purpose_as_the_host_spells_it(
     import json
 
     request = json.loads(recorded.read_text())
-    assert request["purpose"] == "preview-proxy"
+    assert request["purpose"] == "preview_proxy"
     assert request["assets"] == {"a": os.path.abspath("/a.mov")}
     with pytest.raises(Alpha2ProjectValidationError):
         HostClient(host_path=host_path).conform({**project_document(), "schema_version": 9})
@@ -1893,6 +1980,109 @@ def test_concurrent_requests_share_at_most_concurrency_hosts(
     for _, starts in marks:
         depth += 1 if starts else -1
         assert depth <= 2
+
+
+EXITING_HOST = """
+request, _ = read_request()
+sys.exit(3)
+"""
+
+
+def open_descriptors() -> int | None:
+    try:
+        return len(os.listdir("/proc/self/fd"))
+    except OSError:
+        return None
+
+
+def test_hosts_that_exit_mid_request_leave_no_thread_or_pipe_behind(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    client = HostClient(host_path=fake_host(tmp_path, EXITING_HOST))
+    with pytest.raises(Alpha2HostError):
+        client.export(**export_args("out.mp4"))
+    threads, descriptors = threading.active_count(), open_descriptors()
+    for _ in range(40):
+        with pytest.raises(Alpha2HostError) as caught:
+            client.export(**export_args("out.mp4"))
+        assert caught.value.code == "HOST_EXITED"
+    wait_until(lambda: threading.active_count() <= threads)
+    wait_until(lambda: open_descriptors() == descriptors)
+
+
+EXHAUSTION = r"""
+import os, resource, sys, textwrap
+sys.path.insert(0, sys.argv[1])
+from conftest import HOST_PRELUDE, export_args
+from alpha2 import Alpha2HostError, HostClient
+with open("serve", "w") as file:
+    file.write(HOST_PRELUDE + "begin()\nstate()\n" + textwrap.dedent(sys.argv[2]))
+resource.setrlimit(resource.RLIMIT_NOFILE, (64, resource.getrlimit(resource.RLIMIT_NOFILE)[1]))
+client = HostClient(host_path=sys.executable)
+codes = set()
+for _ in range(80):
+    try:
+        client.export(**export_args("out.mp4"))
+    except Alpha2HostError as error:
+        codes.add(error.code)
+print(" ".join(sorted(codes)))
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_NOFILE is POSIX")
+def test_eighty_host_deaths_fit_in_sixty_four_descriptors(tmp_path: Path) -> None:
+    script = tmp_path / "exhaust.py"
+    script.write_text(EXHAUSTION, encoding="utf-8")
+    finished = subprocess.run(
+        [sys.executable, str(script), str(Path(__file__).parent), EXITING_HOST],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert finished.returncode == 0, finished.stderr
+    assert finished.stdout.split() == ["HOST_EXITED"], finished.stdout
+
+
+def test_an_interrupt_while_a_new_host_starts_ends_it_and_frees_its_slot(
+    tmp_path: Path, fake_host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from alpha2 import client as client_module
+
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log)))
+    start, spawn = client_module._Host.start, client_module._Pool._spawn
+    armed = {"start": False, "spawn": False}
+
+    def interrupted_start(self: Any) -> None:
+        if armed["start"]:
+            armed["start"] = False
+            raise KeyboardInterrupt
+        start(self)
+
+    def interrupted_spawn(self: Any, *args: Any) -> Any:
+        host = spawn(self, *args)
+        if armed["spawn"]:
+            armed["spawn"] = False
+            raise KeyboardInterrupt
+        return host
+
+    monkeypatch.setattr(client_module._Host, "start", interrupted_start)
+    monkeypatch.setattr(client_module._Pool, "_spawn", interrupted_spawn)
+    for where in ("start", "spawn"):
+        # No idle host, so the request starts one.
+        client.close()
+        armed[where] = True
+        with pytest.raises(KeyboardInterrupt):
+            client.export(**export_args("out.mp4"))
+        assert client._pool._starting == 0
+        client.export(**export_args("out.mp4"))
+    # The hosts the interrupts hit were ended; one host serves both later requests.
+    assert len(client._pool._hosts) == 1
+    started = client._pool._hosts[0].process.pid
+    for host_pid in starts_in(log):
+        if host_pid != started:
+            wait_until(lambda host_pid=host_pid: pid_exited(host_pid))
 
 
 def test_close_ends_the_hosts_and_a_later_request_starts_a_new_one(
@@ -2411,6 +2601,383 @@ def run_unsendable_emit(scenario: dict[str, Any], tmp_path: Path, fake_host: Fak
     assert len(served_by) == 1 and expect["nextRequest"] == "same host"
 
 
+def preamble_host(pids: Path, stdout: str = "", stderr: str = "") -> str:
+    """Records its pid, writes ``stdout`` and ``stderr`` before any frame, then waits for its
+    input to end."""
+    return f"""
+    record({str(pids)!r}, str(os.getpid()))
+    sys.stderr.write({stderr!r})
+    sys.stderr.flush()
+    sys.stdout.buffer.write({stdout.encode()!r})
+    sys.stdout.buffer.flush()
+    sys.stdin.buffer.read()
+    """
+
+
+def versioned_host(pids: Path, host_version: str | None) -> str:
+    """Records its pid, then reports ready naming ``host_version`` (none when ``None``) and serves."""
+    details = {} if host_version is None else {"hostVersion": host_version}
+    return f"""
+    record({str(pids)!r}, str(os.getpid()))
+    begin()
+    write_message({{"type": "state", "state": "ready", "reason": "started", "details": {details!r}}})
+    serve(lambda request: send(request, ok=True, result={{"output": request["output"]}}))
+    """
+
+
+def refused(client: HostClient) -> Alpha2HostError:
+    with pytest.raises(Alpha2HostError) as caught:
+        client.export(**export_args("out.mp4"))
+    return caught.value
+
+
+def assert_hosts_ended(pids: Path) -> None:
+    started = [int(line) for line in lines_in(pids)]
+    assert started, "no host started"
+    for pid in started:
+        wait_until(lambda pid=pid: pid_exited(pid))
+
+
+def ended_unseen(pid: int) -> None:
+    """Waits until ``pid`` has ended; on Linux only until it is a zombie whose threads are gone, so
+    the client's reaper may not have seen the exit when the next request is made."""
+    if sys.platform != "linux":
+        wait_until(lambda: pid_exited(pid))
+        return
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            ended = stat.split(") ")[1][0] == "Z" and len(os.listdir(f"/proc/{pid}/task")) == 1
+        except (OSError, IndexError):
+            return
+        if ended:
+            return
+        assert time.monotonic() < deadline, f"host {pid} did not end"
+        time.sleep(0.002)
+
+
+def run_dead_idle_host(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    for index, end in enumerate(scenario["given"]["ends"]):
+        log = tmp_path / f"log-{index}"
+        exits = end == "exits after answering"
+        answer = 'send(request, ok=True, result={"pid": os.getpid()})'
+        if exits:
+            answer += "\n        time.sleep(0.05)\n        os._exit(0)"
+        client = HostClient(host_path=fake_host(tmp_path / str(index), pooled_host(log, answer)))
+        first = client.export(**export_args("out.mp4"))["pid"]
+        for _ in range(scenario["given"]["requestsAfterEach"]):
+            if not exits:
+                os.kill(first, signal.SIGKILL if sys.platform != "win32" else signal.SIGTERM)
+            if end != "killed":
+                ended_unseen(first)
+            try:
+                following = client.export(**export_args("out.mp4"))["pid"]
+            except Alpha2HostError as error:
+                assert end == "killed" and error.code == "HOST_EXITED", error.message
+                first = client.export(**export_args("out.mp4"))["pid"]
+                continue
+            assert following != first
+            served = [line for line in lines_in(log) if line == f"request {first}"]
+            assert len(served) == scenario["expect"]["firstHostRequests"]
+            first = following
+
+
+def defect_host(log: Path, marker: Path, report: dict[str, Any]) -> str:
+    """The first host to start retires as a host does after a caught panic: it says it is draining
+    with reason ``defect``, answers ``INTERNAL`` (with ``report`` as an export's failure), and
+    refuses later requests until its input ends. Every other host answers with its pid."""
+    return f"""
+    record({str(log)!r}, "start " + str(os.getpid()))
+    if not os.path.exists({str(marker)!r}):
+        open({str(marker)!r}, "w").write(str(os.getpid()))
+    first = open({str(marker)!r}).read() == str(os.getpid())
+    answered = []
+    def answer(request):
+        record({str(log)!r}, "request " + str(os.getpid()))
+        if not first:
+            send(request, ok=True, result={{"pid": os.getpid()}})
+        elif answered:
+            send(request, ok=False, error={{"code": "HOST_RETIRING", "message": "draining"}}, hostState="draining")
+        else:
+            answered.append(True)
+            state("draining", "defect")
+            error = {{"code": "INTERNAL", "message": "injected panic"}}
+            if request["operation"] == "export":
+                error["failure"] = {report!r}
+            send(request, ok=False, error=error, hostState="draining")
+    serve(answer)
+    """
+
+
+def run_defect(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    for operation in scenario["given"]["operations"]:
+        run_defect_operation(scenario, operation, tmp_path / operation, fake_host)
+
+
+def run_defect_operation(
+    scenario: dict[str, Any], operation: str, root: Path, fake_host: FakeHost
+) -> None:
+    expect = scenario["expect"]
+    log = root / "log"
+    report = scenario["given"]["failureReport"]["export"]
+    client = HostClient(host_path=fake_host(root, defect_host(log, root / "first", report)))
+
+    def run() -> Any:
+        if operation == "export":
+            return client.export(**export_args("out.mp4"))
+        return client.conform(project_document())
+
+    with pytest.raises(Alpha2HostError) as caught:
+        run()
+    assert caught.value.code == expect["code"], caught.value.message
+    assert caught.value.failure["code"] == expect["failureCode"]
+    run()
+    first, second = starts_in(log)
+    assert first != second
+    served = [line for line in lines_in(log) if line == f"request {first}"]
+    assert len(served) == expect["firstHostRequests"]
+    if expect["firstHostEnded"]:
+        wait_until(lambda: pid_exited(first))
+    client.close()
+
+
+def reading_host(log: Path) -> str:
+    """Reports ready, then exits once the first bytes of a request arrive."""
+    return f"""
+    record({str(log)!r}, "start " + str(os.getpid()))
+    begin()
+    state()
+    sys.stdin.buffer.read(8)
+    os._exit(1)
+    """
+
+
+def run_dies_reading(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, reading_host(log), ready=False))
+    project = {**project_document(), "name": "x" * scenario["given"]["projectNameBytes"]}
+    with pytest.raises(Alpha2HostError) as caught:
+        client.export(**export_args("out.mp4", project=project))
+    assert caught.value.code == scenario["expect"]["code"], caught.value.message
+    assert len(starts_in(log)) == scenario["expect"]["hosts"]
+
+
+def abandoning_host(log: Path) -> str:
+    """Answers, starts a sleeper that inherits its stdout and stderr, and exits."""
+    return f"""
+    record({str(log)!r}, "start " + str(os.getpid()))
+    import subprocess
+    request, _ = read_request()
+    send(request, ok=True, result={{"pid": os.getpid()}})
+    sleeper = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"], stdin=subprocess.DEVNULL
+    )
+    record({str(log)!r}, "sleeper " + str(sleeper.pid))
+    os._exit(0)
+    """
+
+
+def run_grandchild_holds_the_pipes(
+    scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost
+) -> None:
+    if sys.platform == "win32":
+        pytest.skip("a POSIX scenario")
+    log = tmp_path / "log"
+    client = HostClient(
+        host_path=fake_host(tmp_path, abandoning_host(log)),
+        concurrency=scenario["given"]["concurrency"],
+    )
+    try:
+        first = client.export(**export_args("out.mp4"))["pid"]
+        wait_until(lambda: pid_exited(first))
+        started = time.monotonic()
+        following = client.export(**export_args("out.mp4"))["pid"]
+        assert following != first
+        assert (time.monotonic() - started) * 1000 < scenario["expect"]["withinMs"]
+        started = time.monotonic()
+        client.close()
+        assert (time.monotonic() - started) * 1000 < scenario["expect"]["closeWithinMs"]
+    finally:
+        for line in lines_in(log):
+            if line.startswith("sleeper "):
+                try:
+                    os.kill(int(line.split(" ")[1]), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
+def run_arrival_order(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    given = scenario["given"]
+    keep = given["thenKeepPending"]
+    answer = "time.sleep(0.02)\n        send(request, ok=True, result={})"
+    client = HostClient(
+        host_path=fake_host(tmp_path, pooled_host(tmp_path / "log", answer)),
+        concurrency=given["concurrency"],
+    )
+    completed: list[str] = []
+    lock = threading.Lock()
+    submitted = 0
+
+    def run(label: str, decode: str) -> None:
+        nonlocal submitted
+        client.export(**export_args("out.mp4", video_decode=decode))
+        with lock:
+            completed.append(label)
+            more = label == "stream" and submitted < keep["total"]
+            if more:
+                submitted += 1
+        if more:
+            pool.submit(run, "stream", keep["videoDecode"])
+
+    with ThreadPoolExecutor(8) as pool:
+        # Each request is queued before the next is made, so the order is the order of the calls.
+        pool.submit(run, "first", given["first"])
+        time.sleep(0.2)
+        pool.submit(run, "second", given["second"])
+        time.sleep(0.05)
+        for _ in range(keep["depth"]):
+            with lock:
+                submitted += 1
+            pool.submit(run, "stream", keep["videoDecode"])
+        wait_until(lambda: len(completed) == 2 + keep["total"], 30)
+    assert completed.index("second") + 1 == scenario["expect"]["secondCompletes"], completed
+
+
+CACHE_HOST = """
+served = 0
+def answer(request):
+    global served
+    served += 1
+    report = {"pid": os.getpid(), "served": served, "cache": os.environ.get("ALPHA2_HOST_CACHE_DIR")}
+    if request["operation"] == "capabilities":
+        report = {"status": "ready", **report}
+    send(request, ok=True, result=report)
+serve(answer)
+"""
+
+
+def run_cache_directory(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    given = scenario["given"]
+    # The fake host starts from the calling directory, so that is where relative paths point.
+    host_path = fake_host(tmp_path, CACHE_HOST)
+    named = HostClient(host_path=host_path, cache_directory=given["option"])
+    assert named.export(**export_args("out.mp4"))["cache"] == str(tmp_path / given["option"])
+    saved = os.environ.get("ALPHA2_HOST_CACHE_DIR")
+    os.environ["ALPHA2_HOST_CACHE_DIR"] = given["environment"]
+    try:
+        inherited = HostClient(host_path=host_path)
+        cache = inherited.export(**export_args("out.mp4"))["cache"]
+        assert cache == str(tmp_path / given["environment"])
+    finally:
+        if saved is None:
+            del os.environ["ALPHA2_HOST_CACHE_DIR"]
+        else:
+            os.environ["ALPHA2_HOST_CACHE_DIR"] = saved
+
+
+def run_install_generation(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    import bz2
+    import dataclasses
+    import hashlib
+    import http.server
+
+    from alpha2 import install as install_module
+
+    client = HostClient(host_path=fake_host(tmp_path, CACHE_HOST))
+    before = client.capabilities()
+    target = alpha2.host_target()
+    assert target is not None
+    library = b"abracadabra"
+    archive = bz2.compress(library)
+    original = install_module._OPENH264_TARGETS[target]
+    entry = dataclasses.replace(
+        original,
+        archive_sha256=hashlib.sha256(archive).hexdigest(),
+        library_sha256=hashlib.sha256(library).hexdigest(),
+    )
+
+    class Mirror(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            found = self.path == f"/{entry.archive}"
+            self.send_response(200 if found else 404)
+            self.send_header("Content-Length", str(len(archive) if found else 0))
+            self.end_headers()
+            if found:
+                self.wfile.write(archive)
+
+        def log_message(self, *_: Any) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Mirror)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    install_module._OPENH264_TARGETS[target] = entry
+    try:
+        installed = alpha2.install_openh264(
+            cache_directory=tmp_path / "cache",
+            download_url=f"http://127.0.0.1:{server.server_address[1]}",
+        )
+        assert installed.downloaded
+    finally:
+        install_module._OPENH264_TARGETS[target] = original
+        server.shutdown()
+    after = client.capabilities()
+    exported = client.export(**export_args("out.mp4"))
+    assert after["pid"] != before["pid"]
+    assert exported["pid"] == after["pid"]
+    assert len({before["pid"], after["pid"]}) == scenario["expect"]["hosts"]
+
+
+def run_foreign_host(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    given, expect = scenario["given"], scenario["expect"]
+    pids = tmp_path / "pids"
+    host_path = fake_host(tmp_path, preamble_host(pids, given["stdout"]), ready=False)
+    client = HostClient(host_path=host_path, host_start_timeout=given["startTimeoutMs"] / 1000)
+    started = time.monotonic()
+    error = refused(client)
+    assert (time.monotonic() - started) * 1000 < expect["withinMs"]
+    assert error.code == expect["code"], error.message
+    for text in expect["messageContains"]:
+        assert text in error.message
+    if expect["namesBinary"]:
+        assert host_path in error.message
+    assert failure_class_of_code(error.code)[0] == "INVALID_INPUT"
+    if expect["hostEnded"]:
+        assert_hosts_ended(pids)
+
+
+def run_host_version(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    expect = scenario["expect"]
+    for index, host_version in enumerate(scenario["given"]["hostVersions"]):
+        pids = tmp_path / f"pids-{index}"
+        host_path = fake_host(
+            tmp_path / str(index), versioned_host(pids, host_version), ready=False
+        )
+        error = refused(HostClient(host_path=host_path))
+        assert error.code == expect["code"], error.message
+        if expect["namesHostVersion"] and host_version is not None:
+            assert host_version in error.message
+        if expect["namesClientVersion"]:
+            assert alpha2.__version__ in error.message
+        if expect["namesBinary"]:
+            assert host_path in error.message
+        if expect["hostEnded"]:
+            assert_hosts_ended(pids)
+
+
+def run_start_timeout(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    given = scenario["given"]
+    host = preamble_host(tmp_path / "pids", given["stdout"], given["stderr"])
+    client = HostClient(
+        host_path=fake_host(tmp_path, host, ready=False),
+        host_start_timeout=given["startTimeoutMs"] / 1000,
+    )
+    error = refused(client)
+    assert error.code == scenario["expect"]["code"], error.message
+    for text in scenario["expect"]["stderrContains"]:
+        assert text in (error.stderr or "")
+
+
 class FloatLike:
     def __float__(self) -> float:
         return 0.25
@@ -2467,6 +3034,16 @@ SCENARIO_DRIVERS: dict[str, Callable[[dict[str, Any], Path, FakeHost], None]] = 
     "fork": run_fork,
     "abandon": run_abandon,
     "unsendable-emit": run_unsendable_emit,
+    "foreign-host": run_foreign_host,
+    "dead-idle-host": run_dead_idle_host,
+    "dies-reading": run_dies_reading,
+    "defect": run_defect,
+    "grandchild-holds-the-pipes": run_grandchild_holds_the_pipes,
+    "arrival-order": run_arrival_order,
+    "cache-directory": run_cache_directory,
+    "install-generation": run_install_generation,
+    "host-version": run_host_version,
+    "start-timeout": run_start_timeout,
 }
 
 
@@ -2480,3 +3057,46 @@ def test_client_behavior_scenario(
     driver = SCENARIO_DRIVERS.get(scenario["kind"])
     assert driver is not None, f"no driver for scenario kind {scenario['kind']}"
     driver(scenario, tmp_path, fake_host)
+
+
+def test_extract_sends_the_render_inputs_and_only_a_timeline_input_needs_every_effect_asset(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path / "host", paths_host(log)))
+    project = corpus("host-parity-effects-project.json")
+    descriptor = {
+        "id": "example.levels",
+        "version": 1,
+        "input": {"media": "video", "from": ["source", "timeline"], "format": "rgba8"},
+        "params_schema": {"type": "object"},
+        "outputs": [],
+    }
+
+    class Extractor:
+        def describe(self) -> dict[str, Any]:
+            return descriptor
+
+    def run(source: str, **fields: Any) -> None:
+        read: dict[str, Any] = {"from": source, "range": {"start": 0, "end": 4000}}
+        if source == "source":
+            read["source_id"] = "video"
+        request = {"extractor": "example.levels", "version": 1, "input": read, "outputs": {}}
+        assets = {"video": "/media/v.mov", "still": "/media/s.png"}
+        client.extract(project, request, Extractor(), assets=assets, **fields)
+
+    run("source")
+    run("timeline", effect_assets={"grade": "/media/grade.cube"}, effects=[])
+    with pytest.raises(Alpha2HostError) as missing:
+        run("timeline")
+    assert missing.value.code == "MISSING_INPUT"
+    assert "resource grade" in missing.value.message
+    requests = [
+        line["request"]
+        for line in map(json.loads, lines_in(log))
+        if line.get("request", {}).get("operation") == "extract"
+    ]
+    assert len(requests) == 2
+    assert requests[0]["effectAssets"] == {}
+    assert requests[1]["effectAssets"] == {"grade": "/media/grade.cube"}
+    assert {"frames", "resources", "effects", "fonts"} <= requests[1].keys()

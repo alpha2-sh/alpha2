@@ -2,30 +2,135 @@
 
 use super::*;
 
-#[test]
-fn a_frame_larger_than_alpha2_renders_is_refused_before_it_is_converted() {
-    // A grey 1-bit PNG converts to RGBA (two frame-sized buffers); 8193x8193 is past
-    // MAX_FRAME_PIXELS from a file of a few kilobytes.
-    let path = output_path("large-png").with_extension("png");
-    {
-        let file = fs::File::create(&path).expect("create");
-        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 8_193, 8_193);
-        encoder.set_color(png::ColorType::Grayscale);
-        encoder.set_depth(png::BitDepth::One);
-        encoder.set_compression(png::Compression::Fast);
-        let mut writer = encoder.write_header().expect("header");
-        writer
-            .write_image_data(&vec![0; 8_193_usize.div_ceil(8) * 8_193])
-            .expect("rows");
+/// Writes a one-colour PNG of `width` x `height` RGBA pixels, a file of about 2 KB per
+/// megapixel.
+fn write_blank_png(path: &Path, width: u32, height: u32) {
+    let file = fs::File::create(path).expect("create");
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    let mut writer = encoder.write_header().expect("header");
+    let row = vec![0; usize::try_from(width).expect("width") * 4];
+    let mut stream = writer.stream_writer().expect("stream");
+    for _ in 0..height {
+        std::io::Write::write_all(&mut stream, &row).expect("row");
     }
-    let mut decoder = NativeDecoder::open(&path).expect("open");
-    let first = decoder.decode_next(&CancelToken::default());
-    // Windows cannot remove a file the decoder still has open.
-    drop(decoder);
+    stream.finish().expect("finish");
+}
+
+#[test]
+fn a_picture_larger_than_alpha2_renders_is_refused_before_it_is_decoded() {
+    let path = output_path("large-png").with_extension("png");
+    write_blank_png(&path, 8_193, 8_193);
+    let probed = probe(&path);
+    let opened = NativeDecoder::open(&path).map(|_| ());
     fs::remove_file(&path).expect("remove");
     assert!(
-        matches!(first, Err(DecodeError::Unsupported(_))),
-        "{first:?}"
+        matches!(probed, Err(DecodeError::Unsupported(_))),
+        "{probed:?}"
+    );
+    assert!(
+        matches!(opened, Err(DecodeError::Unsupported(_))),
+        "{opened:?}"
+    );
+}
+
+/// A 9000x9000 PNG would decode to 324 MB; refusing it holds the process under 64 MiB more.
+#[cfg(target_os = "linux")]
+#[test]
+fn refusing_a_large_picture_allocates_nothing_of_its_size() {
+    let spawning = child_process_lock();
+    let child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "tests::frame_metadata::large_picture_peak_memory",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .output()
+        .expect("child");
+    drop(spawning);
+    let stdout = String::from_utf8_lossy(&child.stdout);
+    assert!(
+        child.status.success() && stdout.contains("1 passed"),
+        "{}\n{stdout}\n{}",
+        child.status,
+        String::from_utf8_lossy(&child.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "run alone in a child process by refusing_a_large_picture_allocates_nothing_of_its_size"]
+fn large_picture_peak_memory() {
+    fn peak_kib() -> u64 {
+        fs::read_to_string("/proc/self/status")
+            .expect("status")
+            .lines()
+            .find_map(|line| line.strip_prefix("VmHWM:"))
+            .and_then(|value| value.trim().trim_end_matches("kB").trim().parse().ok())
+            .expect("VmHWM")
+    }
+    let path = output_path("huge-png").with_extension("png");
+    write_blank_png(&path, 9_000, 9_000);
+    let before = peak_kib();
+    let probed = probe(&path);
+    let opened = NativeDecoder::open(&path).map(|_| ());
+    let grown = peak_kib() - before;
+    fs::remove_file(&path).expect("remove");
+    assert!(
+        matches!(probed, Err(DecodeError::Unsupported(_))),
+        "{probed:?}"
+    );
+    assert!(
+        matches!(opened, Err(DecodeError::Unsupported(_))),
+        "{opened:?}"
+    );
+    assert!(grown < 64 << 10, "the peak grew by {grown} KiB");
+}
+
+#[test]
+fn a_planar_frame_wider_than_alpha2_renders_is_refused() {
+    let (width, height) = (16_386_u32, 16_u32);
+    let luma = vec![16_u8; usize::try_from(width * height).expect("size")];
+    let chroma = vec![128_u8; luma.len() / 4];
+    let frame = alpha2_ffmpeg_bridge::planar_frame(
+        ffi::AV_PIX_FMT_YUV420P,
+        &[(&luma, width), (&chroma, width / 2), (&chroma, width / 2)],
+        width,
+        height,
+    )
+    .expect("frame");
+    let configure = |context: &mut AVCodecContext| {
+        context.set_width(i32::try_from(width).expect("width"));
+        context.set_height(i32::try_from(height).expect("height"));
+        context.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
+        context.set_time_base(ra(1, 30));
+    };
+    let mut encoder =
+        AVCodecContext::new(&AVCodec::find_encoder(ffi::AV_CODEC_ID_RAWVIDEO).expect("encoder"));
+    configure(&mut encoder);
+    encoder.open(None).expect("open encoder");
+    encoder.send_frame(Some(&frame)).expect("send frame");
+    let packet = encoder.receive_packet().expect("packet");
+    let mut decoder =
+        AVCodecContext::new(&AVCodec::find_decoder(ffi::AV_CODEC_ID_RAWVIDEO).expect("decoder"));
+    configure(&mut decoder);
+    decoder.open(None).expect("open decoder");
+    decoder.send_packet(Some(&packet)).expect("send packet");
+    let picture = alpha2_ffmpeg_bridge::DecodedFrame::receive(&mut decoder).expect("frame");
+    let converted = crate::convert::convert_video_frame(
+        &picture,
+        ffi::AV_CODEC_ID_RAWVIDEO,
+        ra(1, 30),
+        alpha2_media::ColorMetadata::EXPORT,
+        &mut crate::convert::FrameScaler::default(),
+    );
+    assert!(
+        matches!(converted, Err(DecodeError::Unsupported(_))),
+        "{converted:?}"
     );
 }
 

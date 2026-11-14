@@ -115,7 +115,7 @@ fn a_shard_that_panics_fails_the_export_at_once_as_a_defect() {
     );
     let (code, class) = stall_report(error.clone());
     assert_eq!(code, "INTERNAL", "{error}");
-    assert_eq!((class.code, class.resource), ("UNKNOWN", "unknown"));
+    assert_eq!((class.code, class.resource), ("DEFECT", "unknown"));
     assert!(
         worker
             .heartbeats
@@ -566,20 +566,21 @@ fn dropping_a_worker_with_a_stuck_shard_returns_when_no_stall_was_reported() {
     assert!(crate::heartbeat::worker_threads_abandoned());
 }
 
+fn encode_stall_request_json(output: &Path) -> String {
+    json!({
+        "protocolVersion": 2, "requestId": "encode-stall", "operation": "export",
+        "project": conform_project(&json!({})),
+        "assets": {"video": corpus("parity-rgb.mov")},
+        "startTicks": 0, "endTicks": 120_000,
+        "frameRate": {"num": 12, "den": 1},
+        "videoCodec": "mpeg4-part2",
+        "output": output
+    })
+    .to_string()
+}
+
 fn encode_stall_request(output: &Path) -> Request {
-    parse_request(
-        &json!({
-            "protocolVersion": 2, "requestId": "encode-stall", "operation": "export",
-            "project": conform_project(&json!({})),
-            "assets": {"video": corpus("parity-rgb.mov")},
-            "startTicks": 0, "endTicks": 120_000,
-            "frameRate": {"num": 12, "den": 1},
-            "videoCodec": "mpeg4-part2",
-            "output": output
-        })
-        .to_string(),
-    )
-    .expect("export request")
+    parse_request(&encode_stall_request_json(output)).expect("export request")
 }
 
 fn export_with_a_stuck_encoder(
@@ -729,7 +730,11 @@ fn the_synchronous_comparison_switch_is_not_ignored_on_the_gpu() {
         child.status
     );
     if !stdout.contains("checked: the GPU-resident path refused") {
-        eprintln!("skipped: {}", stderr.lines().last().unwrap_or_default());
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::GpuResident,
+            "{}",
+            stderr.lines().last().unwrap_or_default()
+        );
     }
 }
 
@@ -993,6 +998,182 @@ fn a_copy_plan_whose_source_stops_answering_fails_as_a_decode_stall() {
         );
         let failure = error.failure.expect("an export failure report");
         assert_eq!(failure["phase"], "decode", "{failure}");
+    }
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// A disconnect read as an encoder failure would send a retry policy to the software encoder.
+#[test]
+fn an_encode_worker_that_panics_fails_the_export_as_internal_with_its_message() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("encode-panic");
+    let output = directory.join("out.mp4");
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    crate::encode::INJECT_ENCODE_STALL.set(Some((
+        crate::heartbeat::InjectedStall::PanicAfterOperations(3),
+        Duration::from_secs(30),
+    )));
+    let error = within(
+        Duration::from_secs(120),
+        "an export whose encoder panics",
+        || {
+            host.handle(encode_stall_request(&output), &mut |_| Ok(()))
+                .expect_err("an export whose encoder panics fails")
+        },
+    );
+    assert_eq!(error.code, "INTERNAL", "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains("the encode worker panicked: injected decoder panic"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        error.failure.expect("a failure report")["hostCode"],
+        "INTERNAL"
+    );
+    assert!(!output.exists());
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn a_watched_body_that_panics_is_reported_with_its_message() {
+    let cancel = CancelToken::default();
+    let watched = crate::heartbeat::Watched {
+        what: "packet copy",
+        heartbeat: Arc::new(crate::heartbeat::WorkerHeartbeat::default()),
+        limit: Duration::from_secs(30),
+        cancel: &cancel,
+    };
+    let error = crate::heartbeat::run_watched(
+        &watched,
+        |_| -> () { panic!("injected copy panic") },
+        &mut |_| Ok(()),
+        &|_| "stalled".to_owned(),
+    )
+    .expect_err("the body panicked");
+    assert!(
+        error.contains("the packet copy panicked: injected copy panic"),
+        "{error}"
+    );
+    assert_eq!(HostError::classify(error).code, "INTERNAL");
+}
+
+/// Each sync takes time in proportion to what it flushes, as on a slow destination: the whole
+/// output's sync would outlast the stall limit, the syncs made while writing do not.
+#[test]
+fn an_output_synced_while_written_publishes_although_one_whole_sync_would_stall() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("periodic-sync");
+    let output = directory.join("out.mov");
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut project = image_and_tone_project(2 * alpha2_time::TICKS_PER_SECOND, 48_000);
+    project["settings"]["width"] = json!(1280);
+    project["settings"]["height"] = json!(720);
+    project["sources"] = json!([{"id": "image", "locator": "fixture://image", "kind": "image"}]);
+    project["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks")
+        .truncate(1);
+    let request = json!({
+        "protocolVersion": 2, "operation": "export", "requestId": "periodic-sync",
+        "project": project,
+        "assets": {"image": Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/corpus/cross_topology_parity.png")},
+        "startTicks": 0, "endTicks": 2 * alpha2_time::TICKS_PER_SECOND,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "prores",
+        "inputPolicy": "cpu-readback",
+        "output": output,
+    });
+    // 1 MiB between syncs, 100 ms per MiB flushed, under a 400 ms encoder stall limit.
+    *alpha2_host_core::partial::hooks::SLOW_SYNC
+        .lock()
+        .expect("hook") = Some((output.clone(), 1 << 20, 100_000_000 / 1024));
+    crate::encode::INJECT_ENCODE_STALL.set(Some((
+        crate::heartbeat::InjectedStall::SlowProgress(Duration::ZERO),
+        Duration::from_millis(400),
+    )));
+    let result = within(
+        Duration::from_secs(120),
+        "an export with slow syncs",
+        || {
+            host.handle(
+                parse_request(&request.to_string()).expect("request"),
+                &mut |_| Ok(()),
+            )
+        },
+    );
+    *alpha2_host_core::partial::hooks::SLOW_SYNC
+        .lock()
+        .expect("hook") = None;
+    let result = result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    let bytes = std::fs::metadata(&output).expect("published").len();
+    assert!(
+        bytes > 8 << 20,
+        "{bytes} bytes: too small for one whole sync to outlast the limit"
+    );
+    assert_eq!(result["frames"], 60);
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// Once the encoder is told to finish it publishes the file, so a progress message that fails
+/// then (a client that stopped reading) must not answer a failure beside a published output.
+#[test]
+fn a_progress_message_that_fails_while_the_encoder_finishes_does_not_fail_the_export() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("progress-after-finish");
+    let export = |host: &mut Host, request: Value, output: &Path| {
+        let mut finalizing = 0;
+        crate::encode::INJECT_SLOW_ENCODE.with(|slow| slow.set(Some(Duration::from_millis(15))));
+        let result = host.handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |progress| {
+                if progress.phase == crate::protocol::ProgressPhase::Finalizing {
+                    finalizing += 1;
+                    // The first is sent before the encoder is told to finish.
+                    if finalizing > 1 {
+                        return Err(HostError::io(std::io::Error::from(
+                            std::io::ErrorKind::BrokenPipe,
+                        )));
+                    }
+                }
+                Ok(())
+            },
+        );
+        let result = result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+        assert!(output.is_file(), "{result}");
+        assert!(
+            finalizing > 1,
+            "no progress came while the encoder finished"
+        );
+        result
+    };
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let output = directory.join("readback.mp4");
+    let mut request =
+        serde_json::from_str::<Value>(&encode_stall_request_json(&output)).expect("request");
+    request["inputPolicy"] = json!("cpu-readback");
+    let result = export(&mut host, request, &output);
+    assert_eq!(result["videoPipeline"], json!("readback"), "{result}");
+
+    #[cfg(all(
+        any(target_os = "linux", target_os = "macos", target_os = "windows"),
+        feature = "hwencode"
+    ))]
+    if let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) {
+        let output = directory.join("gpu.mp4");
+        let mut request =
+            serde_json::from_str::<Value>(&encode_stall_request_json(&output)).expect("request");
+        request["videoCodec"] = json!("h264");
+        request["inputPolicy"] = json!("gpu-required");
+        // Above the smallest picture hardware H.264 encoders take.
+        request["project"]["settings"]["width"] = json!(320);
+        request["project"]["settings"]["height"] = json!(192);
+        let result = export(&mut host, request, &output);
+        assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
     }
     std::fs::remove_dir_all(&directory).ok();
 }

@@ -516,3 +516,92 @@ fn flac_frame_numbers_of_three_utf8_bytes_decode() {
     header[7] ^= 1;
     assert!(flac::frame_header(&header).is_none());
 }
+
+/// The start and length of each Ogg page of `data`.
+fn ogg_pages(data: &[u8]) -> Vec<(usize, usize)> {
+    let mut pages = Vec::new();
+    let mut at = 0;
+    while data.get(at..at + 4) == Some(b"OggS") {
+        let count = usize::from(data[at + 26]);
+        let body = data[at + 27..at + 27 + count]
+            .iter()
+            .map(|size| usize::from(*size))
+            .sum::<usize>();
+        pages.push((at, 27 + count + body));
+        at += 27 + count + body;
+    }
+    pages
+}
+
+/// Sets the granule position of `page` and redoes its CRC.
+fn set_granule(data: &mut [u8], page: (usize, usize), granule: i64) {
+    let (at, len) = page;
+    data[at + 6..at + 14].copy_from_slice(&granule.to_le_bytes());
+    data[at + 22..at + 26].fill(0);
+    let crc = crc::crc32(0, &data[at..at + len]);
+    data[at + 22..at + 26].copy_from_slice(&crc.to_le_bytes());
+}
+
+#[test]
+fn ogg_granule_positions_at_the_ends_of_the_range_read_and_seek() {
+    let vorbis = std::fs::read(corpus().join("audio-vorbis-5.1-pages.ogg")).expect("read");
+    let pages = ogg_pages(&vorbis);
+    let last = pages.len() - 1;
+    let edits: [&[(usize, i64)]; 4] = [
+        &[(2, i64::MAX)],
+        &[(last, i64::MIN)],
+        &[(last - 1, -5), (last, i64::MAX)],
+        &[(2, 1_000_000), (last, i64::MIN)],
+    ];
+    for edit in edits {
+        let mut data = vorbis.clone();
+        for &(page, granule) in edit {
+            set_granule(&mut data, pages[page], granule);
+        }
+        let mut reader = open_bytes(data).expect("open");
+        assert_ne!(read_all(reader.as_mut()), []);
+        reader.seek(TRACK, 48_000).expect("seek");
+    }
+    let mut opus = std::fs::read(corpus().join("audio-opus-pages.ogg")).expect("read");
+    let pages = ogg_pages(&opus);
+    for page in &pages[3..pages.len() - 1] {
+        set_granule(&mut opus, *page, i64::MIN);
+    }
+    let mut reader = open_bytes(opus).expect("open");
+    let _ = reader.seek(TRACK, 48_000);
+}
+
+#[test]
+fn hostile_audio_inputs_read_and_seek_without_a_panic() {
+    for (name, input) in crate::mp4::tests::hostile_inputs("container_audio") {
+        // A selector byte (0: the file as it is), the seek target, then the file.
+        assert_eq!(input[0], 0, "{name}");
+        let target = i64::from_le_bytes(input[1..9].try_into().expect("8 bytes"));
+        let Ok(mut reader) = open_bytes(input[9..].to_vec()) else {
+            continue;
+        };
+        exercise_to(reader.as_mut(), target);
+    }
+}
+
+fn exercise_to(reader: &mut dyn ContainerReader, target: i64) {
+    while let Ok(Some(_)) = reader.next_packet(TRACK) {}
+    if reader.seek(TRACK, target).is_ok() {
+        let _ = reader.next_packet(TRACK);
+    }
+}
+
+#[test]
+fn the_read_window_returns_to_its_size_after_a_large_read() {
+    let large = 16 << 20;
+    let mut input =
+        Input::new(Box::new(std::io::Cursor::new(vec![0_u8; 2 * large]))).expect("input");
+    assert_eq!(input.peek(0, large).expect("read").len(), large);
+    assert!(input.window.capacity() >= large);
+    input.peek(3 << 23, 16).expect("read");
+    assert!(
+        input.window.capacity() <= WINDOW,
+        "{}",
+        input.window.capacity()
+    );
+}

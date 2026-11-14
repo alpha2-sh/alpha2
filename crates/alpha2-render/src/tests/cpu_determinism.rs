@@ -27,7 +27,7 @@ fn frame(threads: usize) -> Vec<u8> {
 
 /// One frame of every kind of work (blur, transition, transformed layers in several modes over a
 /// background), packed into I420.
-fn draw(renderer: &CpuRenderer, size: RenderSize, background: Color) -> Vec<u8> {
+pub(super) fn draw(renderer: &CpuRenderer, size: RenderSize, background: Color) -> Vec<u8> {
     let card = CpuSource::image(Arc::new(
         CpuImage::from_premultiplied_rgba8(size, &test_card(size, false)).expect("card"),
     ));

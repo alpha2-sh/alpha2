@@ -408,3 +408,56 @@ fn every_transition_has_a_kernel() {
         );
     }
 }
+
+#[test]
+fn transitions_that_divide_by_a_tiny_progress_draw_on_the_cpu() {
+    let size = size();
+    let renderer = crate::CpuRenderer::new(1);
+    let picture = |rgba8: &[u8]| {
+        crate::CpuSource::image(std::sync::Arc::new(
+            crate::CpuImage::from_premultiplied_rgba8(size, rgba8).expect("picture"),
+        ))
+    };
+    let (cards, bands) = (picture(&test_card(size, false)), picture(&band_card(size)));
+    let slide_in: &[(&'static str, ParamValue)] = &[("slide_in", ParamValue::Bool(true))];
+    for (name, values) in [("fold", &[][..]), ("cube", &[]), ("slides", slide_in)] {
+        for progress in [1e-18, 1e-30, f32::MIN_POSITIVE] {
+            let mut graph = crate::RenderGraph::new(size);
+            let from = graph.add_source(crate::SourceView::cpu(&cards));
+            let to = graph.add_source(crate::SourceView::cpu(&bands));
+            let mut params = EffectParams::new();
+            for (param, value) in values {
+                params.insert(*param, value.clone());
+            }
+            let id = EffectId::new(format!("alpha2.transition.{name}"), 1);
+            let runtime = EffectRuntime {
+                progress,
+                ratio: 1.5,
+                ..Default::default()
+            };
+            let output = graph
+                .add_transition(id, from, to, params, runtime)
+                .expect("transition");
+            graph.set_output(output).expect("output");
+            let image = renderer.execute_graph(&graph).expect("drawn");
+            assert_eq!(
+                image.read_rgba8().len(),
+                96 * 64 * 4,
+                "{name} at {progress:e}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_sample_far_outside_the_picture_reads_the_edge_texel() {
+    // Two texels side by side, red on the left and blue on the right.
+    let size = RenderSize::new(2, 1).expect("size");
+    let image = crate::CpuImage::from_premultiplied_rgba8(size, &[255, 0, 0, 255, 0, 0, 255, 255])
+        .expect("picture");
+    let (left, right) = (image.texel(0, 0), image.texel(1, 0));
+    for (u, edge) in [(1e30, right), (f32::INFINITY, right), (-1e30, left)] {
+        assert_eq!(image.sample(u, 0.5), edge, "u = {u:e}");
+        assert_eq!(image.sample(0.25, u), image.sample(0.25, 0.5), "v = {u:e}");
+    }
+}

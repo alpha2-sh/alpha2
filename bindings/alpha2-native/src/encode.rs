@@ -496,8 +496,10 @@ impl NativeAvEncodeSink {
                 .output
                 .as_mut()
                 .ok_or_else(|| EncodeError::Adapter("muxer is already closed".into()))?;
+            let bytes = u64::try_from(queued.packet.size).unwrap_or(0);
             timed(total, || output.interleaved_write_frame(&mut queued.packet))
                 .map_err(|error| encode_adapter_error_at("packet write failed", error))?;
+            self.partial.wrote(bytes)?;
         }
         Ok(())
     }
@@ -542,6 +544,13 @@ impl NativeAvEncodeSink {
         {
             return Err(EncodeError::Adapter(
                 "encoder input dimensions do not match its configuration".into(),
+            ));
+        }
+        if crate::convert::pixel_format(self.video_selection.pixels).ok()
+            != Some(frame.frame().format)
+        {
+            return Err(EncodeError::Adapter(
+                "encoder input pixel format does not match its configuration".into(),
             ));
         }
         let pts = av_rescale_q(pts.ticks(), tick_base(), self.video_encoder_time_base);
@@ -993,6 +1002,8 @@ impl NativeWavEncodeSink {
                     .extend_from_slice(&block.channels[*plane][frame].to_le_bytes());
             }
         }
+        self.partial
+            .wrote(u64::try_from(self.interleaved.len()).unwrap_or(u64::MAX))?;
         file.write_all(&self.interleaved)
             .map_err(encode_adapter_error)?;
         self.frames_written = self

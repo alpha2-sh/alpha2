@@ -51,7 +51,6 @@ mod d3d12va_probe;
 mod decode;
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 mod dx12_adapters;
-mod effect_request;
 mod encode;
 mod encoder_refusal;
 mod export_decode;
@@ -72,6 +71,7 @@ mod metrics;
 mod packet_copy;
 mod paths;
 mod plugin_fetch;
+mod plugin_policy;
 mod protocol;
 mod providers;
 mod recovery;
@@ -112,7 +112,7 @@ use alpha2_native::ffmpeg_runtime_identity;
 use alpha2_render::Renderer;
 use serde_json::{Value, json};
 
-const PROTOCOL_VERSION: u32 = 2;
+use alpha2_host_core::requests::PROTOCOL_VERSION;
 const GPU_INIT_EXIT_CODE: u8 = 70;
 const DEFAULT_EXPORT_IN_FLIGHT_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_IN_FLIGHT_VIDEO_FRAMES: usize = 2;
@@ -284,7 +284,7 @@ fn exit_unflushed(code: u8) -> ! {
 fn run(host: &mut Option<Host>) -> Result<(), HostError> {
     #[cfg(windows)]
     configure_dx12_compiler();
-    let mut args = utf8_arguments(env::args_os().skip(1))?.into_iter();
+    let mut args = decoder_policy(utf8_arguments(env::args_os().skip(1))?).into_iter();
     match args.next().as_deref() {
         Some("serve") => {
             let options = ServeOptions::from_args(args)
@@ -307,6 +307,22 @@ fn run(host: &mut Option<Host>) -> Result<(), HostError> {
         }
         _ => Err(HostError::invalid_input(usage())),
     }
+}
+
+/// Takes `--allow-every-decoder` out of a `serve`, `export` or `conform` command line and applies
+/// it to the process. It is a process setting only; no request can set it.
+fn decoder_policy(mut arguments: Vec<String>) -> Vec<String> {
+    if matches!(
+        arguments.first().map(String::as_str),
+        Some("serve" | "export" | "conform")
+    ) && let Some(at) = arguments
+        .iter()
+        .position(|argument| argument == "--allow-every-decoder")
+    {
+        arguments.remove(at);
+        alpha2_native::allow_every_decoder();
+    }
+    arguments
 }
 
 /// `INVALID_INPUT` names the first argument that is not UTF-8.
@@ -929,6 +945,11 @@ fn log_runtime_codecs() {
             ffmpeg.pinned_sdk_release
         ),
     }
+    if let Some(reason) = ffmpeg.interop_refusal {
+        alpha2_os::diagnostic!(
+            "alpha2-host FFmpeg: {reason}; decode and encode use the software and CPU-frame paths"
+        );
+    }
     alpha2_os::diagnostic!(
         "alpha2-host MP4 encoders: video=[{}] audio=[{}]{}",
         video_encoders
@@ -1341,6 +1362,7 @@ fn serve(host: &mut Option<Host>, options: ServeOptions) -> Result<(), HostError
     let out = Arc::new(Responder::claimed_stdout());
     let lifecycle = Arc::new(Lifecycle::new(options.limits));
     lifecycle::install(&lifecycle, &out);
+    heartbeat::supervise_requests(request_stalled);
     install_termination();
     if let Err(error) = alpha2_os::watch_parent() {
         alpha2_os::diagnostic!(
@@ -1395,6 +1417,8 @@ struct Serving {
     max_running: usize,
     /// As [`crate::lifecycle::ServeOptions::extract`].
     extract: crate::extract_request::ExtractOptions,
+    #[cfg(test)]
+    pause_between_reads: bool,
 }
 
 impl Serving {
@@ -1410,6 +1434,8 @@ impl Serving {
             lifecycle,
             max_running,
             extract: crate::extract_request::ExtractOptions::DEFAULT,
+            #[cfg(test)]
+            pause_between_reads: false,
         }
     }
 
@@ -1463,9 +1489,6 @@ type Unusable<'a> = dyn Fn(Option<&HostDevice>) -> Option<DrainReason> + Sync + 
 /// How often the dispatcher looks at the host's state while requests run.
 const DISPATCH_POLL: Duration = Duration::from_millis(100);
 
-/// How long a host that cannot take another request waits for those it runs to answer.
-const RETIRE_WAIT: Duration = Duration::from_secs(60);
-
 /// When the GPU device cannot be made, the `fatal` notification is written and its error returned,
 /// and that request and later ones go unanswered. A request cancelled before it started is
 /// answered `CANCELLED` without running. Requests run on worker threads, up to
@@ -1481,7 +1504,19 @@ fn serve_requests(
     let slots = Slots::new(serving.max_running);
     let failed = Mutex::new(None);
     let served = std::thread::scope(|scope| {
-        dispatch(scope, serving, requests, out, unusable, &slots, &failed)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            dispatch(scope, serving, requests, out, unusable, &slots, &failed)
+        }))
+        .unwrap_or_else(|payload| {
+            let error = HostError::new(
+                "INTERNAL",
+                format!(
+                    "the request dispatcher panicked: {}",
+                    crate::failure::panic_message(&*payload)
+                ),
+            );
+            Err(write_fatal(error, out).unwrap_or_else(|unwritten| unwritten))
+        })
     });
     match failed.into_inner().unwrap_or_else(PoisonError::into_inner) {
         Some(error) => Err(error),
@@ -1501,13 +1536,21 @@ fn dispatch<'scope>(
 ) -> Result<Served, HostError> {
     let lifecycle = Arc::clone(&serving.lifecycle);
     loop {
+        // Read first: a request drains or fails before it frees its slot, so a host found idle
+        // here shows that drain or failure below.
+        let idle = slots.idle_for();
+        #[cfg(test)]
+        if idle.is_none() && std::mem::take(&mut serving.pause_between_reads) {
+            BETWEEN_DISPATCH_READS.wait();
+            slots.wait_idle(None);
+        }
         if let Some(error) = failed.lock().unwrap_or_else(PoisonError::into_inner).take() {
             return Err(error);
         }
         if let Some((reason, _)) = lifecycle.draining_since() {
             return retire(requests, out, &lifecycle, reason, slots);
         }
-        let wait = match (slots.idle_for(), lifecycle.idle_timeout()) {
+        let wait = match (idle, lifecycle.idle_timeout()) {
             (Some(idle), Some(limit)) => Some(limit.saturating_sub(idle)),
             (Some(_), None) => None,
             (None, _) => Some(DISPATCH_POLL),
@@ -1534,6 +1577,11 @@ fn dispatch<'scope>(
                 }
                 lifecycle.drain(DrainReason::InputClosed, out)?;
                 return Ok(Served::InputEnded);
+            }
+            // The running requests answer; those written after the failure are lost.
+            InputFrame::Failed(error) => {
+                slots.wait_idle(None);
+                return Err(write_fatal(error, out)?);
             }
             input => envelope_of(input),
         };
@@ -1566,7 +1614,14 @@ fn dispatch<'scope>(
             Err(_) => refused_export,
         };
         // Taken first, so a request that runs alone answers before the next one makes the device.
-        slots.acquire();
+        // A request thread the supervisor left never frees its slot.
+        if !slots.acquire_unless(&heartbeat::request_thread_left) {
+            let reason = lifecycle
+                .draining_since()
+                .map_or(DrainReason::InputClosed, |(reason, _)| reason);
+            refuse_retiring(out, &request_id, is_export, reason, &lifecycle)?;
+            continue;
+        }
         let device = if needs_host {
             match serving.device() {
                 Ok(device) => Some(device),
@@ -1597,6 +1652,7 @@ fn dispatch<'scope>(
             lifecycle: Arc::clone(&lifecycle),
             extract: serving.extract,
         };
+        let request_lifecycle = Arc::clone(&lifecycle);
         let spawned = std::thread::Builder::new()
             .name("alpha2-request".to_owned())
             .stack_size(COMMAND_STACK_BYTES)
@@ -1606,6 +1662,7 @@ fn dispatch<'scope>(
                     work.run(out, unusable)
                 }))
                 .unwrap_or_else(|payload| {
+                    request_lifecycle.record_defect();
                     Err(HostError::new(
                         "INTERNAL",
                         format!(
@@ -1628,6 +1685,15 @@ fn dispatch<'scope>(
         }
     }
 }
+
+/// Holds the request [`BETWEEN_READS_REQUEST`] until a dispatcher with
+/// [`Serving::pause_between_reads`] has read the slots, which then waits until it has ended.
+#[cfg(test)]
+static BETWEEN_DISPATCH_READS: std::sync::LazyLock<std::sync::Barrier> =
+    std::sync::LazyLock::new(|| std::sync::Barrier::new(2));
+
+#[cfg(test)]
+const BETWEEN_READS_REQUEST: &str = "ends-between-dispatch-reads";
 
 /// A request handed to a worker thread.
 struct RequestWork {
@@ -1655,17 +1721,19 @@ impl RequestWork {
             extract,
         } = self;
         #[cfg(test)]
-        if matches!(envelope, Ok(crate::protocol::Request::Export(_)))
-            && let Some(slow) = crate::encode::SERVE_SLOW_ENCODE
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take()
-        {
-            crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(Some(slow)));
+        if matches!(envelope, Ok(crate::protocol::Request::Export(_))) {
+            arm_serve_encode_hooks();
+        }
+        #[cfg(test)]
+        if request_id == BETWEEN_READS_REQUEST {
+            BETWEEN_DISPATCH_READS.wait();
         }
         // Until the answer is written, a termination waits for this request instead of ending the
         // process.
         let guard = termination::terminations().begin_request(&request_id);
+        let (side, step) = request_start(envelope.as_ref().ok());
+        let watch =
+            heartbeat::watch_request(&request_id, Some(guard.sequence()), is_export, side, step);
         let mut ended = RequestEnd {
             lifecycle: &lifecycle,
             ended: false,
@@ -1681,25 +1749,16 @@ impl RequestWork {
             Ok(crate::protocol::Request::Compose(request)) => {
                 crate::compose_request::answer(&request)
             }
-            Ok(crate::protocol::Request::Edit(request)) => request.answer(),
+            Ok(crate::protocol::Request::Edit(request)) => {
+                crate::compose_request::answer_edit(&request)
+            }
             Ok(crate::protocol::Request::Extract(request)) => match host.as_mut() {
                 Some(host) => crate::extract_request::handle(host, *request, out, extract),
                 None => Err(missing()),
             },
             Ok(request) => match host.as_mut() {
                 Some(host) => host.handle(request, &mut |progress| {
-                    let mut event = json!({
-                        "protocolVersion": PROTOCOL_VERSION,
-                        "type": "progress",
-                        "requestId": request_id,
-                        "phase": progress.phase.as_str(),
-                        "completed": progress.completed,
-                        "total": progress.total,
-                    });
-                    if progress.restarted {
-                        event["restarted"] = json!(true);
-                    }
-                    out.send(&event)
+                    out.send(&progress_event(&request_id, &progress))
                 }),
                 None => Err(missing()),
             },
@@ -1714,11 +1773,18 @@ impl RequestWork {
                 "INTERNAL",
                 format!(
                     "the host panicked handling the request: {}",
-                    crate::failure::panic_message(&*payload)
+                    crate::failure::caught_panic_message(&*payload)
                 ),
             );
             Err(if is_export { fatal_error(error) } else { error })
         });
+        if crate::failure::take_caught_panic() {
+            lifecycle.record_defect();
+        }
+        let response = match (response, guard.retired()) {
+            (Err(error), Some(reason)) => Err(stopped_by_retiring(error, reason, is_export)),
+            (response, _) => response,
+        };
         if is_extract && let Some(host) = host.as_mut() {
             host.end_extract();
         }
@@ -1729,6 +1795,11 @@ impl RequestWork {
             .unwrap_or_default();
         // Its effects and resources go back before the answer, for the next request.
         drop(host);
+        if !watch.claim_answer() {
+            // The supervisor answered it as stuck; the host retires.
+            return Ok(());
+        }
+        heartbeat::request_step(heartbeat::RequestSide::Output, "answer");
         ended.ended = true;
         answer(
             &lifecycle,
@@ -1739,10 +1810,112 @@ impl RequestWork {
             &attachments,
             unusable,
         )?;
+        drop(watch);
         // A termination ends the process here, once the last answer is out.
         drop(guard);
         Ok(())
     }
+}
+
+fn progress_event(request_id: &str, progress: &crate::protocol::Progress) -> Value {
+    let mut event = json!({
+        "protocolVersion": PROTOCOL_VERSION,
+        "type": "progress",
+        "requestId": request_id,
+        "phase": progress.phase.as_str(),
+        "completed": progress.completed,
+        "total": progress.total,
+    });
+    if progress.restarted {
+        event["restarted"] = json!(true);
+    }
+    event
+}
+
+/// The side and name of a request's first step, before it reports one.
+fn request_start(
+    request: Option<&crate::protocol::Request>,
+) -> (heartbeat::RequestSide, &'static str) {
+    use crate::protocol::Request;
+    match request {
+        Some(Request::Compose(_) | Request::Edit(_)) => {
+            (heartbeat::RequestSide::Compute, "compute")
+        }
+        Some(Request::Capabilities { .. }) => (heartbeat::RequestSide::Output, "capabilities"),
+        _ => (heartbeat::RequestSide::Input, "prepare"),
+    }
+}
+
+/// Answers a request the supervisor found stuck in one step, stops what it runs, and retires
+/// the host: the stuck thread never returns, so [`retire`] ends the process. On the command line
+/// it reports the error and exits.
+fn request_stalled(watch: &heartbeat::RequestWatch, stalled_for: Duration) {
+    heartbeat::leave_request_thread();
+    if let Some(sequence) = watch.sequence {
+        termination::terminations().stop_for_recorded_cause(Some(sequence));
+    }
+    let message = format!(
+        "the request was stuck in its {} step for {} ms, past the {} ms limit; the host retires",
+        watch.step(),
+        stalled_for.as_millis(),
+        heartbeat::request_stall_limit().as_millis()
+    );
+    let code = termination::requested().map_or(1, alpha2_os::Termination::exit_code);
+    let Some((lifecycle, out)) = lifecycle::served() else {
+        alpha2_os::diagnostic!("alpha2-host: {message}");
+        alpha2_os::exit_without_handlers(code);
+    };
+    // Also bounds a write that blocks: the answer, or the dispatcher's.
+    let deadline = termination::retire_grace().saturating_add(heartbeat::STALL_POLL);
+    let _ = std::thread::Builder::new()
+        .name("alpha2-watch-deadline".to_owned())
+        .spawn(move || {
+            std::thread::sleep(deadline);
+            alpha2_os::exit_without_handlers(code);
+        });
+    let side = watch.side();
+    let mut error = HostError::new(side.code(), message);
+    if watch.export {
+        let failure =
+            crate::failure::minimal_failure_json(error.code, &error.message, None, watch.phase());
+        error = error.with_failure(failure);
+    }
+    let _ = lifecycle.drain(DrainReason::ThreadsAbandoned, out);
+    let _ = write_answer(out, &watch.id, Err(error), &[], lifecycle);
+}
+
+/// A request the host stopped because it retires is answered `CANCELLED` with
+/// `details.hostRetiring`; an export that failed for a reason of its own keeps that reason.
+fn stopped_by_retiring(error: HostError, reason: &str, is_export: bool) -> HostError {
+    let mut error = if error.code == "CANCELLED" {
+        error
+    } else if is_export {
+        return error;
+    } else {
+        HostError::new("CANCELLED", termination::retiring_message(reason))
+    };
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        _ => serde_json::Map::new(),
+    };
+    details.insert("hostRetiring".to_owned(), json!(reason));
+    error.with_details(Value::Object(details))
+}
+
+/// Hands each export `serve` runs the encode hooks a test set for it.
+#[cfg(test)]
+fn arm_serve_encode_hooks() {
+    let mut hooks = crate::encode::SERVE_EXPORT_HOOKS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if hooks.is_empty() {
+        return;
+    }
+    let next = hooks.remove(0);
+    drop(hooks);
+    crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(next.slow));
+    crate::encode::INJECT_ENCODE_STALL.with(|injected| injected.set(next.stall));
+    crate::host::PANIC_IN_CONFORM.with(|injected| injected.set(next.panic));
 }
 
 /// Counts a request as ended when its thread unwinds before [`answer`] does.
@@ -1754,7 +1927,7 @@ struct RequestEnd<'a> {
 impl Drop for RequestEnd<'_> {
     fn drop(&mut self) {
         if !self.ended {
-            self.lifecycle.end_request();
+            let _ = self.lifecycle.end_request();
         }
     }
 }
@@ -1779,15 +1952,21 @@ impl Slots {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn acquire(&self) {
+    /// Waits for a free slot and takes it, or returns false once `stop` says so.
+    fn acquire_unless(&self, stop: &dyn Fn() -> bool) -> bool {
         let mut state = self.lock();
         while state.0 >= self.limit {
+            if stop() {
+                return false;
+            }
             state = self
                 .freed
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
+                .wait_timeout(state, DISPATCH_POLL)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
         }
         state.0 += 1;
+        true
     }
 
     fn release(&self) {
@@ -1859,7 +2038,7 @@ fn envelope_of(input: InputFrame) -> Envelope {
             });
             let envelope = envelope
                 .map_err(|reason| HostError::new("INVALID_REQUEST", reason))
-                .and_then(|()| parse_request(&header));
+                .and_then(|()| parse_request(&header).map_err(HostError::from));
             let request_id = match &envelope {
                 Ok(request) => request.request_id().to_owned(),
                 Err(_) => request_id_from_header(&header),
@@ -1890,7 +2069,9 @@ fn envelope_of(input: InputFrame) -> Envelope {
             )),
             true,
         ),
-        InputFrame::End => unreachable!("the end of input is no request"),
+        InputFrame::End | InputFrame::Failed(_) => {
+            unreachable!("the end of input is no request")
+        }
     }
 }
 
@@ -1913,10 +2094,11 @@ fn answer(
     attachments: &[Attachment],
     unusable: &Unusable<'_>,
 ) -> Result<(), HostError> {
-    lifecycle.end_request();
+    let over_limit = lifecycle.end_request();
     let reason = unusable(device)
         .or_else(|| termination::requested().map(|_| DrainReason::Terminating))
-        .or_else(|| lifecycle.over_soft_limit());
+        .or_else(|| lifecycle.defect().then_some(DrainReason::Defect))
+        .or(over_limit);
     if let Some(reason) = reason {
         lifecycle.drain(reason, out)?;
     }
@@ -1924,8 +2106,11 @@ fn answer(
 }
 
 /// Answers `HOST_RETIRING` to every request read but not started, and to those that arrive until
-/// the input ends or [`lifecycle::DRAIN_GRACE`] after draining, once nothing runs. A host that
-/// cannot take another request waits up to [`RETIRE_WAIT`] for those it runs, then exits.
+/// the input ends or [`lifecycle::DRAIN_GRACE`] after draining, once nothing runs.
+///
+/// A host that cannot take another request answers what it has read first, then stops what runs
+/// ([`termination::Terminations::retire`]), waits for those answers as long as a termination
+/// waits ([`termination::retire_grace`]), and exits.
 fn retire(
     requests: &Requests,
     out: &Responder,
@@ -1934,12 +2119,16 @@ fn retire(
     slots: &Slots,
 ) -> Result<Served, HostError> {
     if reason.exits_at_once() {
-        slots.wait_idle(Some(RETIRE_WAIT));
-        while let Some(input) = requests.queued() {
-            if matches!(input, InputFrame::End) {
+        refuse_queued(requests, out, reason, lifecycle)?;
+        termination::terminations().retire(reason.as_str());
+        let deadline = std::time::Instant::now() + termination::retire_grace();
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let idle = slots.wait_idle(Some(left.min(DISPATCH_POLL)));
+            refuse_queued(requests, out, reason, lifecycle)?;
+            if idle || left.is_zero() {
                 break;
             }
-            refuse_frame(out, &input, reason, lifecycle)?;
         }
         let served = Ok(Served::Drained(reason));
         // A request stuck past the wait would hold the worker threads' scope open.
@@ -1950,23 +2139,37 @@ fn retire(
         .draining_since()
         .map_or_else(std::time::Instant::now, |(_, since)| since);
     let deadline = since + lifecycle::DRAIN_GRACE;
-    let mut ended = false;
     loop {
         let now = std::time::Instant::now();
-        if (ended || now >= deadline) && slots.idle_for().is_some() {
-            return Ok(Served::Drained(reason));
+        if now >= deadline {
+            break;
         }
-        if ended {
-            slots.wait_idle(None);
-            continue;
-        }
-        let wait = deadline.saturating_duration_since(now).min(DISPATCH_POLL);
-        match requests.next_within(wait.max(Duration::from_millis(1))) {
+        match requests.next_within(deadline.saturating_duration_since(now).min(DISPATCH_POLL)) {
             None => {}
-            Some(InputFrame::End) => ended = true,
+            Some(InputFrame::End | InputFrame::Failed(_)) => break,
             Some(input) => refuse_frame(out, &input, reason, lifecycle)?,
         }
     }
+    while !slots.wait_idle(Some(DISPATCH_POLL)) {
+        refuse_queued(requests, out, reason, lifecycle)?;
+    }
+    Ok(Served::Drained(reason))
+}
+
+/// Answers `HOST_RETIRING` to every request read and not taken yet.
+fn refuse_queued(
+    requests: &Requests,
+    out: &Responder,
+    reason: DrainReason,
+    lifecycle: &Lifecycle,
+) -> Result<(), HostError> {
+    while let Some(input) = requests.queued() {
+        if matches!(input, InputFrame::End | InputFrame::Failed(_)) {
+            break;
+        }
+        refuse_frame(out, &input, reason, lifecycle)?;
+    }
+    Ok(())
 }
 
 fn refuse_frame(
@@ -1980,7 +2183,7 @@ fn refuse_frame(
             request_id_from_header(header),
             operation_from_header(header).as_deref() == Some("export"),
         ),
-        InputFrame::TooLarge(_) | InputFrame::NotUtf8 | InputFrame::End => {
+        InputFrame::TooLarge(_) | InputFrame::NotUtf8 | InputFrame::End | InputFrame::Failed(_) => {
             ("unknown".to_owned(), false)
         }
     };
@@ -2034,7 +2237,17 @@ fn write_answer(
             "hostState": host_state,
         }),
     };
-    out.send_with(&header, attachments)
+    match out.send_with(&header, attachments) {
+        // Only the header check answers this, and it wrote nothing.
+        Err(error) if error.code == "RESOURCE_LIMIT" => out.send(&json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "requestId": request_id,
+            "ok": false,
+            "error": error,
+            "hostState": host_state,
+        })),
+        sent => sent,
+    }
 }
 
 /// An export's answer carries the failure report every failed export has.

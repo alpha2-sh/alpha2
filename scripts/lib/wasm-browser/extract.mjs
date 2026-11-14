@@ -277,9 +277,17 @@ for (const fixture of table.extract) {
       request: fixture.request,
     }, extractor);
   } catch (error) {
+    if (fixture.refused !== undefined) {
+      if (!String(error?.message).includes(fixture.refused)) failed.push(fixture.name);
+      continue;
+    }
     if (error?.code !== "DECODE_UNAVAILABLE") throw error;
     undecodable[fixture.name] = error.message;
     h264Unavailable ??= fixture.name.includes("h264") ? error : undefined;
+    continue;
+  }
+  if (fixture.refused !== undefined) {
+    failed.push(fixture.name);
     continue;
   }
   found[fixture.name] = await dataHash(result.dataSets);
@@ -288,5 +296,53 @@ for (const fixture of table.extract) {
 // Without H.264 the case skips, unless something it could run failed.
 if (h264Unavailable !== undefined && failed.length === 0) throw h264Unavailable;
 report({ ok: failed.length === 0, failed, found, undecodable });
+`;
+}
+
+// A timeline frame read for extraction is drawn at export quality whatever drew before it: after
+// a preview render or an export, a minified layer reads the bytes a fresh renderer reads.
+export function extractTimelineQuality() {
+  return `${prelude}
+// A layer drawn at a twentieth of its size, so its filter wants more samples than preview allows.
+const shrunk = {
+  ...project,
+  sources: [{ id: "image", locator: "fixture://image", kind: "image" }],
+  timeline: { tracks: [{ id: "t", name: "T", kind: "video", clips: [{ id: "c", source_id: "image",
+    timeline_range: { start: 0, end: 40000 }, source_range: { start: 0, end: 40000 },
+    visual: { scale: { mode: "constant", value: { x: 0.05, y: 0.05 } } } }] }] },
+};
+const checker = new Uint8Array(320 * 180 * 4);
+for (let y = 0; y < 180; y++)
+  for (let x = 0; x < 320; x++) {
+    const value = (x + y) % 2 ? 255 : 0;
+    checker.set([value, value, value, 255], (y * 320 + x) * 4);
+  }
+const make = () => {
+  const engine = wasm.WebEffectRegistry.createCpu(new OffscreenCanvas(320, 180));
+  engine.loadProject(JSON.stringify(shrunk));
+  engine.uploadRgbaImage("image", 320, 180, checker);
+  return engine;
+};
+const readAfter = async (before) => {
+  const engine = make();
+  await before(engine);
+  const rgba = engine.readRgbaAt(4000n, 320, 180);
+  engine.free();
+  return rgba;
+};
+const differing = (a, b) => {
+  let count = 0;
+  for (let index = 0; index < a.length; index++) if (a[index] !== b[index]) count += 1;
+  return count;
+};
+const fresh = await readAfter(() => {});
+const afterPreview = await readAfter((engine) => engine.renderAt(4000n));
+const afterExport = await readAfter(async (engine) => {
+  const ticket = engine.beginExportAt(4000n, "h264");
+  if (ticket.kind === "rendered") await ticket.readback;
+});
+const previewDiffers = differing(fresh, afterPreview);
+const exportDiffers = differing(fresh, afterExport);
+report({ ok: fresh.length === 320 * 180 * 4 && previewDiffers === 0 && exportDiffers === 0, previewDiffers, exportDiffers });
 `;
 }

@@ -78,8 +78,11 @@ pub struct LoudnessTarget {
     pub true_peak_ceiling_dbtp: f64,
 }
 
+/// The true-peak ceiling a loudness target without one takes, in dBTP: EBU R128's.
+pub const DEFAULT_TRUE_PEAK_CEILING_DBTP: f64 = -1.0;
+
 const fn default_ceiling() -> f64 {
-    -1.0
+    DEFAULT_TRUE_PEAK_CEILING_DBTP
 }
 
 /// A compiled spec: the project, and what an export of it needs besides.
@@ -99,6 +102,8 @@ pub struct Compiled {
 ///
 /// `fonts` are the font files an export registers, in fallback order; with them, text that
 /// must fit is measured and shrunk to fit.
+///
+/// A spec either compiles to a project that [`Project::from_json`] loads, or fails here.
 ///
 /// # Errors
 /// Returns where in the spec, and why, it cannot be compiled.
@@ -150,15 +155,46 @@ fn parse<T: serde::de::DeserializeOwned>(json: &str, root: &str) -> Result<T, Co
 /// [`compile`] across a JSON boundary. The result is `{project, assets, loudness, warnings}`.
 ///
 /// # Errors
-/// Returns where in the spec or facts, and why, they do not parse or compile.
+/// Returns where in the spec or facts, and why, they do not parse or compile, and refuses a
+/// project longer than a project document may be at `spec`.
 ///
 /// # Panics
-/// Never; a compiled project always serializes.
+/// Never; the parts besides the project always serialize.
 pub fn compile_json(spec: &str, facts: &str, fonts: &[Arc<[u8]>]) -> Result<String, ComposeError> {
     let spec = parse_spec(&expand_builtins(spec)?)?;
     let facts = parse_facts(facts)?;
     let compiled = compile(&spec, &facts, fonts)?;
-    Ok(serde_json::to_string(&compiled).expect("a compiled project serializes"))
+    let project = compiled
+        .project
+        .to_json()
+        .map_err(|error| ComposeError::new("spec", error.to_string()))?;
+    // The same bytes as serializing `Compiled` whole, with the project written through its cap.
+    Ok(format!(
+        "{{\"project\":{project},\"assets\":{},\"loudness\":{},\"warnings\":{}}}",
+        part(&compiled.assets),
+        part(&compiled.loudness),
+        part(&compiled.warnings),
+    ))
+}
+
+fn part<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value).expect("assets, loudness and warnings serialize")
+}
+
+/// [`MediaFacts::from_fingerprint`] across a JSON boundary: a host's fingerprint of a file in,
+/// its facts out.
+///
+/// # Errors
+/// Returns where the fingerprint does not parse.
+///
+/// # Panics
+/// Never; facts always serialize.
+pub fn media_facts_json(fingerprint: &str) -> Result<String, ComposeError> {
+    let fingerprint: alpha2_model::MediaFingerprint = parse(fingerprint, "fingerprint")?;
+    Ok(
+        serde_json::to_string(&MediaFacts::from_fingerprint(&fingerprint))
+            .expect("facts serialize"),
+    )
 }
 
 /// [`requirements`] across a JSON boundary.

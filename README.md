@@ -15,7 +15,7 @@ Every target runs the same rendering code, so a project renders the same in a br
 | MP4, MOV, MKV or WebM export from any other language | `alpha2-host serve` and its [stdio protocol](docs/host-protocol.md) |
 | Building, validating and exporting projects from Python | [`alpha2`](python/alpha2/README.md) (PyPI) and `alpha2-host` |
 | A Rust program | [`alpha2`](crates/alpha2/README.md) (crate) |
-| An iOS or Android app (preview) | the mobile library, built from source: [mobile targets](docs/development.md#mobile-targets); no package is published |
+| An iOS or Android app (preview) | the mobile library, built from source: [Android](packages/alpha2-android/README.md), [Swift](packages/alpha2-swift/README.md); no package is published |
 
 ## Quick start
 
@@ -137,6 +137,10 @@ Native exports encode on the GPU wherever the device and codec allow it. Hardwar
 - **Python**: 3.11.4 or later.
 - **React**: `@alpha2-sh/react` needs React 18 or later, `@alpha2-sh/editor/react` React 19.3 or a later 19.
 - **Rust**: 1.99 or later.
+
+## Security
+
+[`docs/security.md`](docs/security.md) describes what alpha2 treats as hostile input, what it bounds, and how to run it for untrusted work. [SECURITY.md](SECURITY.md) says how to report a vulnerability.
 
 ## License
 

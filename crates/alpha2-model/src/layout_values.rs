@@ -29,6 +29,15 @@ pub(crate) fn parse_number(text: &str) -> Option<f32> {
     value.is_finite().then_some(value)
 }
 
+/// Largest magnitude of a layout length written as a fraction of the picture's shorter side.
+pub const MAX_LAYOUT_FRACTION: f32 = 1_024.0;
+/// Largest magnitude of a layout length written in canvas pixels: 1,024 times the largest
+/// canvas side.
+#[allow(clippy::cast_precision_loss)]
+pub const MAX_LAYOUT_PX: f32 = 1_024.0 * crate::MAX_CANVAS_DIMENSION as f32;
+/// Largest magnitude of a layout length written as a percent.
+pub const MAX_LAYOUT_PERCENT: f32 = 100_000.0;
+
 fn tokens(text: &str) -> impl Iterator<Item = &str> {
     text.split(' ').filter(|token| !token.is_empty())
 }
@@ -62,6 +71,18 @@ impl LayoutLength {
         match self {
             Self::Fraction(value) | Self::Px(value) | Self::Percent(value) => value,
         }
+    }
+
+    /// Whether the number is finite and within its unit's bound: [`MAX_LAYOUT_FRACTION`],
+    /// [`MAX_LAYOUT_PX`] or [`MAX_LAYOUT_PERCENT`].
+    #[must_use]
+    pub fn in_bounds(self) -> bool {
+        let bound = match self {
+            Self::Fraction(_) => MAX_LAYOUT_FRACTION,
+            Self::Px(_) => MAX_LAYOUT_PX,
+            Self::Percent(_) => MAX_LAYOUT_PERCENT,
+        };
+        self.value().abs() <= bound
     }
 
     /// Whether it is a percent.
@@ -145,6 +166,17 @@ impl LayoutSize {
         match self {
             Self::Fraction(value) | Self::Px(value) => value,
         }
+    }
+
+    /// Whether the number is finite and within its unit's bound: [`MAX_LAYOUT_FRACTION`] or
+    /// [`MAX_LAYOUT_PX`].
+    #[must_use]
+    pub fn in_bounds(self) -> bool {
+        let bound = match self {
+            Self::Fraction(_) => MAX_LAYOUT_FRACTION,
+            Self::Px(_) => MAX_LAYOUT_PX,
+        };
+        self.value().abs() <= bound
     }
 
     /// The same size with pixels converted to a fraction of a picture `shorter_side` pixels on

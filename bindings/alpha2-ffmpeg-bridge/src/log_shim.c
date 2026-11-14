@@ -26,3 +26,6 @@ static void alpha2_log_callback(void *ptr, int level, const char *fmt, va_list v
 }
 
 void alpha2_log_install(void) { av_log_set_callback(alpha2_log_callback); }
+
+/* The libavutil version of the headers every shim of this build was compiled against. */
+unsigned alpha2_ffmpeg_shim_avutil_version(void) { return LIBAVUTIL_VERSION_INT; }

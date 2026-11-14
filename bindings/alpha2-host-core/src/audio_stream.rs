@@ -19,7 +19,7 @@ use alpha2_media::{
 use alpha2_time::{AudioFrameGrid, MediaTime, TICKS_PER_SECOND, audio_frame_grid};
 
 use crate::audio_timeline::SourceTimeline;
-use crate::recovery::{DecodePolicy, Recovery, WorkBudget};
+use crate::recovery::{DecodePolicy, Recovery, WorkBudget, audio_timestamp_in_range};
 use crate::video_stream::{BackendError, Submit};
 
 /// Decoded samples from one packet.
@@ -680,38 +680,43 @@ impl AudioStream {
                 self.timeline.finish();
                 continue;
             }
-            self.step()?;
+            if self.step()? {
+                budget.advanced();
+            }
         }
     }
 
-    fn step(&mut self) -> Result<(), DecodeError> {
+    /// One receive, or one packet in; `true` when a packet was read or accepted.
+    fn step(&mut self) -> Result<bool, DecodeError> {
         match self.backend.receive(self.input != Input::Open)? {
             AudioPoll::Chunk(chunk) => {
                 if self.input == Input::Full {
                     self.input = Input::Open;
                 }
-                return self.place(chunk);
+                return self.place(chunk).map(|()| false);
             }
             AudioPoll::Drained => {
                 self.input = Input::Drained;
-                return Ok(());
+                return Ok(false);
             }
             AudioPoll::Pending => {}
         }
         if matches!(self.input, Input::Ended | Input::Drained) {
-            return Ok(());
+            return Ok(false);
         }
+        let mut advanced = false;
         if self.pending_packet.is_none() {
             if let Some(packet) = self.reader.next_packet(self.track.id)? {
                 self.pending_packet = Some(packet);
+                advanced = true;
             } else {
                 self.backend.finish_input()?;
                 self.input = Input::Ended;
-                return Ok(());
+                return Ok(false);
             }
         }
         let Some(packet) = self.pending_packet.as_ref() else {
-            return Ok(());
+            return Ok(advanced);
         };
         match self.backend.submit(packet)? {
             Submit::Accepted => {
@@ -720,10 +725,11 @@ impl AudioStream {
                 }
                 self.pending_packet = None;
                 self.input = Input::Open;
+                advanced = true;
             }
             Submit::Busy => self.input = Input::Full,
         }
-        Ok(())
+        Ok(advanced)
     }
 
     /// Drops a chunk's skip-samples and places it by its timestamp.
@@ -745,9 +751,14 @@ impl AudioStream {
         let (front, back) = self.discards.remove(&chunk.pts).unwrap_or((0, 0));
         let length = chunk.planes[0].len();
         let rate = chunk.sample_rate;
-        let scaled =
-            i128::from(chunk.pts) * i128::from(rate) / i128::from(self.track.timescale.max(1));
-        let scaled = i64::try_from(scaled).unwrap_or(0);
+        let timescale = i64::from(self.track.timescale.max(1));
+        let scaled = i128::from(chunk.pts) * i128::from(rate) / i128::from(timescale);
+        let Some(scaled) = i64::try_from(scaled)
+            .ok()
+            .filter(|_| audio_timestamp_in_range(chunk.pts, 1, timescale))
+        else {
+            return self.recovery.corrupt("audio timestamp", Some(chunk.pts));
+        };
         let before_zero = if front == 0 {
             let start = self.source_start(scaled, length, rate);
             usize::try_from(start.saturating_neg().max(0)).unwrap_or(usize::MAX)
@@ -771,7 +782,7 @@ impl AudioStream {
         if chunk.planes[0].is_empty() {
             return Ok(());
         }
-        let mut at = scaled + i64::try_from(front).unwrap_or(0);
+        let mut at = scaled.saturating_add(i64::try_from(front).unwrap_or(i64::MAX));
         let frames = i64::try_from(chunk.planes[0].len()).unwrap_or(i64::MAX);
         match self.timeline.expected(rate) {
             None => {
@@ -784,14 +795,14 @@ impl AudioStream {
         }
         if let Some(expected) = self.timeline.expected(rate) {
             if at < expected {
-                let overlap = usize::try_from(expected - at).unwrap_or(usize::MAX);
+                let overlap = usize::try_from(expected.saturating_sub(at)).unwrap_or(usize::MAX);
                 let dropped = overlap.min(chunk.planes[0].len());
-                self.recovery
-                    .timestamp_overlap(at, at + i64::try_from(dropped).unwrap_or(0), rate);
+                let end = at.saturating_add(i64::try_from(dropped).unwrap_or(i64::MAX));
+                self.recovery.timestamp_overlap(at, end, rate);
                 for plane in &mut chunk.planes {
                     plane.drain(..dropped);
                 }
-                at += i64::try_from(dropped).unwrap_or(0);
+                at = end;
                 if chunk.planes[0].is_empty() {
                     return Ok(());
                 }
@@ -816,8 +827,7 @@ impl AudioStream {
     /// adds under one sample to their difference. One unit rounded up to samples bounds it.
     fn snaps(&self, at: i64, expected: i64, rate: u32) -> bool {
         let unit = u64::from(rate).div_ceil(u64::from(self.track.timescale.max(1)));
-        let unit = i64::try_from(unit).unwrap_or(i64::MAX);
-        unit > 1 && (at - expected).abs() <= unit
+        unit > 1 && at.abs_diff(expected) <= unit
     }
 
     /// Where a `length`-sample chunk whose timestamp says `scaled` starts before any skip, as

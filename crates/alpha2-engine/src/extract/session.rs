@@ -209,6 +209,8 @@ pub enum RequestError {
     InvalidInput(String),
     /// The range is empty or negative, or a pass starts outside it.
     InvalidRange,
+    /// The range ends past the source's fingerprinted duration, in ticks.
+    RangePastSource(i64),
     /// `size` is zero or above the descriptor's `max_size`.
     InvalidSize,
     /// The audio rate or channels conflict with the descriptor's fixed ones, or are invalid.
@@ -228,6 +230,10 @@ impl fmt::Display for RequestError {
             Self::InvalidRange => {
                 formatter.write_str("the range is empty or negative, or a pass starts outside it")
             }
+            Self::RangePastSource(duration) => write!(
+                formatter,
+                "the range ends past the source's duration of {duration} ticks"
+            ),
             Self::InvalidSize => {
                 formatter.write_str("size is zero or above the descriptor's max_size")
             }
@@ -500,6 +506,15 @@ impl ExtractSession {
                     return Err(RequestError::InvalidInput(format!(
                         "source {id} cannot feed this input"
                     )));
+                }
+                let duration = source
+                    .fingerprint
+                    .as_ref()
+                    .and_then(|fingerprint| fingerprint.duration_ticks);
+                if let Some(duration) = duration
+                    && range.end().ticks() > duration
+                {
+                    return Err(RequestError::RangePastSource(duration));
                 }
                 Some(id.clone())
             }
@@ -1292,7 +1307,7 @@ impl ExtractSession {
                 made_by: Some(made_by.clone()),
                 made_from: None,
             };
-            set.validate(None).map_err(|problem| {
+            set.validate().map_err(|problem| {
                 SessionError::InvalidResult(format!("data set {id} {problem}"))
             })?;
             sets.push(set);

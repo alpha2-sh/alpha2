@@ -42,6 +42,10 @@ impl Backend for Ffmpeg {
     fn refuses(&self, _name: &str) -> Option<&'static str> {
         None
     }
+
+    fn pins_inexact_codecs(&self) -> bool {
+        true
+    }
 }
 
 conformance_tests!(ffmpeg());

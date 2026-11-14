@@ -32,6 +32,7 @@ mod colour_spaces;
 mod composite_batch;
 mod compositing;
 mod coverage;
+mod cpu_bands;
 mod cpu_composite;
 mod cpu_determinism;
 mod cpu_effects;
@@ -48,7 +49,9 @@ mod gpu_error;
 mod half_store;
 mod layer_bounds;
 mod masks;
+mod pipeline_creation;
 mod presentation;
+mod quad;
 mod readbacks;
 mod release;
 mod render_graph;
@@ -299,6 +302,62 @@ fn nv12_test_planes(
         width,
     );
     (y, uv)
+}
+
+/// The intermediate texels exactly as stored, without row padding.
+fn read_stored(renderer: &Renderer, target: &RenderedTexture) -> Vec<u8> {
+    let texel = match target.format {
+        wgpu::TextureFormat::Rgba16Float => 8,
+        wgpu::TextureFormat::Rgba8Unorm => 4,
+        other => panic!("unexpected intermediate {other:?}"),
+    };
+    let device = renderer.gpu.device();
+    let row = target.size.width * texel;
+    let padded =
+        row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("alpha2 test stored readback"),
+        size: u64::from(padded * target.size.height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &target.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(target.size.height),
+            },
+        },
+        wgpu::Extent3d {
+            width: target.size.width,
+            height: target.size.height,
+            depth_or_array_layers: 1,
+        },
+    );
+    renderer.gpu.submit([encoder.finish()]);
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |result| result.expect("map"));
+    device
+        .poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })
+        .expect("poll");
+    let mapped = buffer.slice(..).get_mapped_range().expect("mapped");
+    mapped
+        .chunks(padded as usize)
+        .flat_map(|line| line[..row as usize].iter().copied())
+        .collect()
 }
 
 fn read_rgba16f(renderer: &Renderer, target: &RenderedTexture) -> Vec<f32> {

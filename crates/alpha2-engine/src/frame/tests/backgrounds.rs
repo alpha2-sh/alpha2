@@ -53,6 +53,7 @@ fn export_keeps_layer_opacity_over_the_background() {
         let frame = FrameDesc {
             background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::LinearLight,
+            canvas: None,
             time: MediaTime::ZERO,
             visual: vec![white_clip(opacity, Vec2::new(1.0, 1.0))],
             audio: Vec::new(),
@@ -94,6 +95,7 @@ fn a_non_black_background_is_the_same_frame_in_preview_and_export() {
     let frame = FrameDesc {
         background: Some(background),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![white_clip(0.5, Vec2::new(0.5, 1.0))],
         audio: Vec::new(),
@@ -186,6 +188,7 @@ fn an_odd_canvas_previews_even_though_it_cannot_be_exported() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
             data: alpha2_eval::SampleContext::NONE,

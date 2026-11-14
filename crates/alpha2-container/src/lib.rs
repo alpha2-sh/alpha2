@@ -7,12 +7,19 @@
 //!
 //! Inputs are untrusted: sizes, counts and dimensions are bounded before anything is allocated
 //! (frames at most 16384 pixels per side and 2^26 pixels in all, as the engine refuses larger).
+//! Arithmetic with an operand from the file uses the `checked_`, `saturating_` or `wrapping_`
+//! method that says what an out-of-range result means, since release builds panic on overflow.
+//! Memory is bounded per file, not only per allocation: at most 256 tracks and 2^23
+//! MP4 index entries over all tracks.
 
 use std::path::Path;
 
 use alpha2_media::{ColorMetadata, Orientation, Rect, SampleAspectRatio, SpeakerLayout};
 use alpha2_time::FrameRate;
 use bytes::Bytes;
+
+/// The most tracks a file may have.
+pub(crate) const MAX_TRACKS: usize = 256;
 
 mod audio;
 mod error;
@@ -267,8 +274,10 @@ pub trait ContainerWriter: Send {
     /// A codec the container cannot carry, or a track added after the first packet.
     fn add_track(&mut self, track: &TrackInfo) -> Result<TrackId, MuxError>;
 
-    /// Writes `packet`. Packets of each track arrive in decode order; tracks may interleave in
-    /// any order, and the writer interleaves them itself.
+    /// Writes `packet`. Packets of each track arrive in decode order, and the writer interleaves
+    /// the tracks. A track may run ahead of the others by up to 10 s (Matroska) or 64 MiB of
+    /// packets (MP4) before the file's layout degrades: the leading track is then written in one
+    /// run, and a reader seeking in it finds the other tracks far away.
     ///
     /// # Errors
     /// Timestamps that go backward, or a write failure.
@@ -390,3 +399,5 @@ pub fn open_source(mut source: Box<dyn Source>) -> Result<Box<dyn ContainerReade
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod work_tests;

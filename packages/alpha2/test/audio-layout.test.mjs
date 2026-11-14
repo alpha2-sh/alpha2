@@ -1,6 +1,8 @@
 // The rules follow FFmpeg's demuxers and decoders.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   aacChannelConfiguration,
@@ -14,6 +16,8 @@ import {
   speakersOfMask,
   wavSpeakers,
 } from "../dist/audio-layout.js";
+
+const corpus = join(import.meta.dirname, "../../../tests/corpus");
 
 class BitWriter {
   bits = [];
@@ -677,4 +681,94 @@ test("a codec whose decoder sets the layout is not laid out by its container", a
     packet,
   );
   assert.equal(asked, 1, "a PCM track reads no packet");
+});
+
+function box(type, ...parts) {
+  const length = 8 + parts.reduce((sum, part) => sum + part.length, 0);
+  const bytes = new Uint8Array(length);
+  new DataView(bytes.buffer).setUint32(0, length);
+  bytes.set(new TextEncoder().encode(type), 4);
+  let at = 8;
+  for (const part of parts) {
+    bytes.set(part, at);
+    at += part.length;
+  }
+  return bytes;
+}
+
+// A Blob hands out exact-size buffers, so a read past a box's end throws instead of reading on.
+const blobReader = (bytes) => {
+  const blob = new Blob([bytes]);
+  return async (offset, length) =>
+    new Uint8Array(await blob.slice(offset, offset + length).arrayBuffer());
+};
+
+test("a moov ending in a truncated sample description or track header resolves without throwing", async () => {
+  const pcm = { id: 1, codec: "pcm-s16", numberOfChannels: 3 };
+  const tkhd = box("tkhd", new Uint8Array(84));
+  new DataView(tkhd.buffer).setUint32(8 + 12, 1);
+  // Full-box header and one entry, then an 8-byte entry with no sound description.
+  const stsdHeader = Uint8Array.from([0, 0, 0, 0, 0, 0, 0, 1]);
+  const shortEntry = box("lpcm");
+  const truncatedEntry = box(
+    "moov",
+    box(
+      "trak",
+      tkhd,
+      box(
+        "mdia",
+        box("minf", box("stbl", box("stsd", stsdHeader, shortEntry))),
+      ),
+    ),
+  );
+  assert.equal(
+    await readAudioSpeakers(
+      blobReader(truncatedEntry),
+      truncatedEntry.length,
+      pcm,
+      null,
+    ),
+    null,
+  );
+  const shortHeader = box(
+    "moov",
+    box(
+      "trak",
+      box("tkhd", new Uint8Array(4)),
+      box("chan", new Uint8Array(4), chan((114 << 16) | 3)),
+    ),
+  );
+  assert.deepEqual(
+    await readAudioSpeakers(
+      blobReader(shortHeader),
+      shortHeader.length,
+      pcm,
+      null,
+    ),
+    movChanSpeakers(chan((114 << 16) | 3), 3),
+  );
+});
+
+test("every truncation of a file that declares its layout in a moov resolves without throwing", async () => {
+  for (const [name, channels] of [
+    ["audio-lcr.mov", 3],
+    ["audio-ambisonic.mov", 4],
+  ]) {
+    const bytes = readFileSync(join(corpus, name));
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let moovAt = 0;
+    while (
+      String.fromCharCode(...bytes.subarray(moovAt + 4, moovAt + 8)) !== "moov"
+    )
+      moovAt += view.getUint32(moovAt);
+    const track = { id: 1, codec: "pcm-s16", numberOfChannels: channels };
+    for (
+      let length = 0;
+      length <= bytes.length;
+      length += length < moovAt ? 997 : 1
+    ) {
+      const prefix = bytes.slice(0, length);
+      await readAudioSpeakers(blobReader(prefix), prefix.length, track, null);
+    }
+  }
 });

@@ -1,20 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  BrowserRobustnessCoordinator,
-  detectBrowserCapabilities,
-} from "../dist/robustness.js";
-
-function coordinator(budget = { textureBytes: 1024, decoderSessions: 2 }) {
-  const diagnostics = [];
-  return [
-    new BrowserRobustnessCoordinator(budget, (diagnostic) =>
-      diagnostics.push(diagnostic),
-    ),
-    diagnostics,
-  ];
-}
+import { detectBrowserCapabilities } from "../dist/robustness.js";
 
 test("capability detection answers without a browser and reports the gaps", async () => {
   const capabilities = await detectBrowserCapabilities();
@@ -22,6 +9,8 @@ test("capability detection answers without a browser and reports the gaps", asyn
   assert.equal(capabilities.webgl2, false);
   assert.equal(capabilities.webcodecs, false);
   assert.equal(capabilities.offscreenCanvas, false);
+  assert.equal(capabilities.audioDecoder, false);
+  assert.equal(capabilities.audioEncoder, false);
   assert.equal(capabilities.renderer, "cpu");
   assert.deepEqual(capabilities.diagnostics, [
     "webgpu-unavailable",
@@ -237,73 +226,13 @@ test("WebGL2 is probed on a canvas of its own, never one the caller passes", asy
   }
 });
 
-test("a non-positive resource budget is rejected", () => {
-  for (const budget of [
-    { textureBytes: 0, decoderSessions: 1 },
-    { textureBytes: 1024, decoderSessions: 0 },
-    { textureBytes: 1.5, decoderSessions: 1 },
-  ]) {
-    assert.throws(
-      () => new BrowserRobustnessCoordinator(budget, () => {}),
-      RangeError,
-    );
+test("WebCodecs audio is reported per direction", async () => {
+  globalThis.AudioDecoder = class {};
+  try {
+    const capabilities = await detectBrowserCapabilities();
+    assert.equal(capabilities.audioDecoder, true);
+    assert.equal(capabilities.audioEncoder, false);
+  } finally {
+    delete globalThis.AudioDecoder;
   }
-});
-
-test("decoder sessions are bounded by the budget", () => {
-  const [robustness, diagnostics] = coordinator();
-  assert.equal(robustness.acquireDecoder(), true);
-  assert.equal(robustness.acquireDecoder(), true);
-  assert.equal(robustness.acquireDecoder(), false);
-  assert.deepEqual(diagnostics, ["decoder-session-limit"]);
-
-  robustness.releaseDecoder();
-  assert.equal(robustness.acquireDecoder(), true);
-  assert.deepEqual(diagnostics, ["decoder-session-limit"]);
-});
-
-test("releasing more decoders than were acquired stays at zero", () => {
-  const [robustness] = coordinator();
-  robustness.releaseDecoder();
-  robustness.releaseDecoder();
-  assert.equal(robustness.acquireDecoder(), true);
-  assert.equal(robustness.acquireDecoder(), true);
-  assert.equal(robustness.acquireDecoder(), false);
-});
-
-test("memory pressure halves the texture budget and reports itself", () => {
-  const [robustness, diagnostics] = coordinator();
-  assert.equal(robustness.memoryPressure(), 512);
-  assert.deepEqual(diagnostics, ["memory-pressure"]);
-});
-
-test("only the visible-to-hidden edge is reported", () => {
-  const [robustness, diagnostics] = coordinator();
-  robustness.setVisible(true);
-  assert.deepEqual(diagnostics, []);
-  robustness.setVisible(false);
-  robustness.setVisible(false);
-  assert.deepEqual(diagnostics, ["visibility-suspended"]);
-  robustness.setVisible(true);
-  robustness.setVisible(false);
-  assert.deepEqual(diagnostics, [
-    "visibility-suspended",
-    "visibility-suspended",
-  ]);
-});
-
-test("context loss is forwarded to the host", () => {
-  const [robustness, diagnostics] = coordinator();
-  robustness.contextLost();
-  assert.deepEqual(diagnostics, ["context-lost"]);
-});
-
-test("resize scales CSS pixels and never produces a zero-sized surface", () => {
-  const [robustness] = coordinator();
-  const canvas = { width: 0, height: 0 };
-  robustness.resize(canvas, 640, 360, 2);
-  assert.deepEqual(canvas, { width: 1280, height: 720 });
-  robustness.resize(canvas, 0.2, 0.2);
-  assert.deepEqual(canvas, { width: 1, height: 1 });
-  assert.throws(() => robustness.resize(canvas, Number.NaN, 1), RangeError);
 });

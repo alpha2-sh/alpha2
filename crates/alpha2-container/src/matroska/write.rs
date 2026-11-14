@@ -119,6 +119,12 @@ struct Cue {
     relative: u64,
 }
 
+/// The milliseconds of `packet` after its track's codec delay, before the file's shift; `None`
+/// when they do not fit.
+fn unshifted_ms(track: &Track, packet: &Packet) -> Option<i64> {
+    rescale(packet.pts, 1000, i64::from(track.info.timescale)).checked_add(track.ts_offset)
+}
+
 /// CRC-32 (IEEE 802.3, reflected), as Matroska's `CRC-32` element holds it.
 fn crc32(bytes: &[u8]) -> u32 {
     const TABLE: [u32; 256] = {
@@ -287,41 +293,52 @@ impl MatroskaWriter {
     }
 
     /// Milliseconds every timestamp moves by: enough that the earliest of `first` and the queued
-    /// packets is not negative after its codec delay (`FFmpeg`'s `avoid_negative_ts`).
-    fn shift_for(&self, track: usize, first: &Packet) -> i64 {
-        let ms = |track: &Track, packet: &Packet| {
-            rescale(packet.pts, 1000, i64::from(track.info.timescale)) + track.ts_offset
-        };
+    /// packets is not negative after its codec delay (`FFmpeg`'s `avoid_negative_ts`). `None`
+    /// when a time does not fit.
+    fn shift_for(&self, track: usize, first: &Packet) -> Option<i64> {
         let lowest = self
             .tracks
             .iter()
-            .flat_map(|track| track.queue.iter().map(move |packet| ms(track, packet)))
-            .chain(std::iter::once(ms(&self.tracks[track], first)))
-            .min()
-            .unwrap_or(0);
-        (-lowest).max(0)
+            .flat_map(|track| {
+                track
+                    .queue
+                    .iter()
+                    .map(move |packet| unshifted_ms(track, packet))
+            })
+            .chain(std::iter::once(unshifted_ms(&self.tracks[track], first)))
+            .try_fold(0, |lowest: i64, ms| Some(lowest.min(ms?)))?;
+        lowest.checked_neg()
     }
 
     /// Hands one packet, in interleaved order, to the cluster logic.
     fn mux(&mut self, index: usize, packet: Packet) -> Result<(), MuxError> {
+        let unfit = || {
+            MuxError::Invalid(format!(
+                "track {} has a packet at {} that does not fit a Matroska timestamp",
+                packet.track.0, packet.pts
+            ))
+        };
         let shift = if let Some(shift) = self.shift {
             shift
         } else {
-            let shift = self.shift_for(index, &packet);
+            let shift = self.shift_for(index, &packet).ok_or_else(unfit)?;
             self.shift = Some(shift);
             shift
         };
         let track = &self.tracks[index];
         let timescale = i64::from(track.info.timescale);
-        let ts = rescale(packet.pts, 1000, timescale) + shift + track.ts_offset;
         let duration = rescale(packet.duration, 1000, timescale).max(0);
+        let ts = unshifted_ms(track, &packet)
+            .and_then(|ms| ms.checked_add(shift))
+            .filter(|ts| ts.checked_add(duration).is_some())
+            .ok_or_else(unfit)?;
         let video = track.info.kind == TrackKind::Video;
         let audio = track.info.kind == TrackKind::Audio;
         let keyframe = packet.keyframe;
         if let Some(cluster) = &self.cluster {
             let size = cluster.payload.len();
             if size > CLUSTER_SIZE
-                || ts - cluster.timestamp > CLUSTER_TIME
+                || ts.saturating_sub(cluster.timestamp) > CLUSTER_TIME
                 || (video && keyframe && size > KEYFRAME_CLUSTER_SIZE)
             {
                 self.end_cluster()?;
@@ -374,7 +391,7 @@ impl MatroskaWriter {
             packet,
         } = ready;
         if let Some(cluster) = &self.cluster
-            && i16::try_from(ts - cluster.timestamp).is_err()
+            && i16::try_from(ts.saturating_sub(cluster.timestamp)).is_err()
         {
             self.end_cluster()?;
         }
@@ -405,7 +422,7 @@ impl MatroskaWriter {
         let relative = cluster.payload.len() as u64;
         let mut block = BytesMut::with_capacity(packet.data.len() + 12);
         put_size(&mut block, track.number, size_len(track.number));
-        let offset = i16::try_from(ts - cluster.timestamp).unwrap_or(0);
+        let offset = i16::try_from(ts.saturating_sub(cluster.timestamp)).unwrap_or(0);
         block.put_i16(offset);
         let mut extra = BytesMut::new();
         if duration > 0
@@ -434,7 +451,11 @@ impl MatroskaWriter {
             put_master(&mut group, id::BLOCK, &block);
             group.put_slice(&extra);
             if !keyframe {
-                put_sint(&mut group, id::REFERENCE_BLOCK, track.last_ts - ts);
+                put_sint(
+                    &mut group,
+                    id::REFERENCE_BLOCK,
+                    track.last_ts.saturating_sub(ts),
+                );
             }
             put_master(&mut cluster.payload, id::BLOCK_GROUP, &group);
         }
@@ -451,7 +472,7 @@ impl MatroskaWriter {
             track.has_cue = true;
         }
         track.last_ts = ts;
-        self.duration = self.duration.max(ts + duration);
+        self.duration = self.duration.max(ts.saturating_add(duration));
         Ok(())
     }
 

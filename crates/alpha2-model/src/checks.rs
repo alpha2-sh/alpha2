@@ -33,11 +33,11 @@ impl ValueIssue {
 pub(crate) type Checked = Result<(), ValueIssue>;
 
 pub(crate) fn unit(value: f32) -> bool {
-    (0.0..=1.0).contains(&value)
+    crate::Domain::UNIT.contains(value)
 }
 
 pub(crate) fn non_negative(value: f32) -> bool {
-    value >= 0.0
+    crate::Domain::NON_NEGATIVE.contains(value)
 }
 
 pub(crate) fn any(_: f32) -> bool {

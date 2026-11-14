@@ -13,14 +13,13 @@ use crate::decode::{
     backward_run, unique_decoded_frame_bytes,
 };
 use crate::decode::{DecodeBudget, DecodeJob, DecodedSourceFrame};
-use crate::effect_request::EffectRequest;
 use crate::encode::EncodeWorker;
 use crate::encode::{EncodeChannelDepth, EncodeCommand, PipelineFailure};
 use crate::memory::InFlightBudget;
 use crate::metrics::{ExportMetrics, add_stage_split_metrics, export_pipeline_limits};
+use crate::protocol::EffectRequest;
 use crate::protocol::{
     AudioQualityRequest, HostError, LoudnessRequest, RateRequest, Request, VideoQualityRequest,
-    parse_request,
 };
 use crate::trace::{AudioBlockTrace, ExportTrace, VideoFrameTrace};
 use alpha2_engine::{ExportFrameNeeds, ExportStepTimings};
@@ -36,6 +35,11 @@ use alpha2_native::{NativeAudioCodec, NativeVideoCodec};
 use alpha2_render::{FrameSubmitTimings, InputSpec, RenderSize};
 use alpha2_time::{MediaTime, TimeRange};
 use serde_json::{Value, json};
+
+/// A refusal as the host answers it.
+fn parse_request(line: &str) -> Result<Request, HostError> {
+    crate::protocol::parse_request(line).map_err(HostError::from)
+}
 
 mod alpha_sources;
 mod audio;
@@ -64,6 +68,7 @@ mod providers;
 mod render_cache;
 mod rendering;
 mod request_isolation;
+mod request_watch;
 mod requests;
 mod stalls;
 mod stills;
@@ -360,86 +365,6 @@ fn decoded_planes(path: &Path) -> Vec<Vec<Vec<u8>>> {
     }
 }
 
-/// Every hardware encoder stays above this on the transcode test's frames; a chroma plane swapped,
-/// shifted by a row or offset by a column falls far below it.
-pub(crate) const PLANE_PSNR_FLOOR_DB: f64 = 38.0;
-
-pub(crate) fn plane_psnr(exported: &[u8], original: &[u8]) -> f64 {
-    let squared = exported
-        .iter()
-        .zip(original)
-        .map(|(a, b)| {
-            let difference = f64::from(*a) - f64::from(*b);
-            difference * difference
-        })
-        .sum::<f64>();
-    if squared == 0.0 {
-        return f64::INFINITY;
-    }
-    #[allow(clippy::cast_precision_loss)]
-    let samples = exported.len() as f64;
-    10.0 * (255.0 * 255.0 * samples / squared).log10()
-}
-
-fn plane_sad(exported: &[u8], original: &[u8], width: usize, row_offset: usize) -> u64 {
-    exported
-        .chunks(width)
-        .zip(original.chunks(width).skip(row_offset))
-        .flat_map(|(a, b)| a.iter().zip(b))
-        .map(|(a, b)| u64::from(a.abs_diff(*b)))
-        .sum()
-}
-
-/// Each chroma plane must also be closer to its own source plane than to the other one or to
-/// itself one row down, which catches swaps and shifts that pass the PSNR floor.
-pub(crate) fn plane_check(
-    exported: &[Vec<Vec<u8>>],
-    original: &[Vec<Vec<u8>>],
-    width: u32,
-    height: u32,
-) -> Result<(), String> {
-    if exported.len() != original.len() {
-        return Err(format!(
-            "{} frames exported for {} source frames",
-            exported.len(),
-            original.len()
-        ));
-    }
-    let chroma_width = width.div_ceil(2) as usize;
-    for (index, (frame, source)) in exported.iter().zip(original).enumerate() {
-        if frame.len() != 3 || source.len() != 3 {
-            return Err(format!("frame {index}: not three planes"));
-        }
-        for plane in 0..3 {
-            if frame[plane].len() != source[plane].len() {
-                return Err(format!("frame {index} plane {plane}: another size"));
-            }
-            let psnr = plane_psnr(&frame[plane], &source[plane]);
-            if psnr < PLANE_PSNR_FLOOR_DB {
-                return Err(format!(
-                    "frame {index} plane {plane}: {psnr:.2} dB, below the {PLANE_PSNR_FLOOR_DB} dB floor"
-                ));
-            }
-        }
-        for (plane, other) in [(1, 2), (2, 1)] {
-            let own = plane_sad(&frame[plane], &source[plane], chroma_width, 0);
-            let swapped = plane_sad(&frame[plane], &source[other], chroma_width, 0);
-            let shifted = plane_sad(&frame[plane], &source[plane], chroma_width, 1);
-            // A swap or shift that leaves the source unchanged cannot be detected.
-            let swap_visible = plane_sad(&source[plane], &source[other], chroma_width, 0) > 0;
-            let shift_visible = plane_sad(&source[plane], &source[plane], chroma_width, 1) > 0;
-            if (swap_visible && own >= swapped) || (shift_visible && own >= shifted) {
-                return Err(format!(
-                    "frame {index} plane {plane}: {own} from its source plane, {swapped} from the \
-                     other chroma plane, {shifted} from its own one row down"
-                ));
-            }
-        }
-    }
-    let _ = height;
-    Ok(())
-}
-
 fn conform_project(recorded: &Value) -> Value {
     json!({
         "schema_version": 1, "id": "conform", "name": "Conform",
@@ -664,75 +589,4 @@ fn within<T>(limit: Duration, what: &str, body: impl FnOnce() -> T) -> T {
     drop(done);
     watchdog.join().expect("watchdog");
     value
-}
-
-#[test]
-fn the_plane_check_refuses_a_swapped_or_shifted_chroma_plane() {
-    let (width, height) = (256_usize, 144_usize);
-    let (chroma_width, chroma_height) = (width / 2, height / 2);
-    // U varies along rows and V along columns, so a swap, row shift or column offset each show.
-    let plane = |w: usize, h: usize, sample: &dyn Fn(usize, usize) -> u8| -> Vec<u8> {
-        (0..h)
-            .flat_map(|y| (0..w).map(move |x| sample(x, y)))
-            .collect()
-    };
-    let frame = |noise: u8| -> Vec<Vec<u8>> {
-        vec![
-            plane(width, height, &|x, y| {
-                u8::try_from((x * 3 + y * 5) % 200 + 16).expect("luma")
-                    ^ (noise & u8::try_from(x % 2).expect("bit"))
-            }),
-            plane(chroma_width, chroma_height, &|_, y| {
-                u8::try_from(16 + y * 3 % 200).expect("u")
-            }),
-            plane(chroma_width, chroma_height, &|x, _| {
-                u8::try_from(16 + x * 2 % 200).expect("v")
-            }),
-        ]
-    };
-    let (w32, h32) = (
-        u32::try_from(width).expect("w"),
-        u32::try_from(height).expect("h"),
-    );
-    let source = vec![frame(0); 3];
-    assert_eq!(plane_check(&source, &source, w32, h32), Ok(()));
-    assert_eq!(
-        plane_check(&vec![frame(1); 3], &source, w32, h32),
-        Ok(()),
-        "one code of noise"
-    );
-    let swapped: Vec<Vec<Vec<u8>>> = source
-        .iter()
-        .map(|planes| vec![planes[0].clone(), planes[2].clone(), planes[1].clone()])
-        .collect();
-    assert!(
-        plane_check(&swapped, &source, w32, h32).is_err(),
-        "U and V swapped"
-    );
-    let shift = |plane: &[u8], rows: usize, columns: usize| -> Vec<u8> {
-        (0..chroma_height)
-            .flat_map(|y| {
-                (0..chroma_width).map(move |x| {
-                    plane[(y + rows).min(chroma_height - 1) * chroma_width
-                        + (x + columns).min(chroma_width - 1)]
-                })
-            })
-            .collect()
-    };
-    for (rows, columns, what) in [(1, 0, "one row"), (0, 1, "one column")] {
-        let moved: Vec<Vec<Vec<u8>>> = source
-            .iter()
-            .map(|planes| {
-                vec![
-                    planes[0].clone(),
-                    shift(&planes[1], rows, columns),
-                    shift(&planes[2], rows, columns),
-                ]
-            })
-            .collect();
-        assert!(
-            plane_check(&moved, &source, w32, h32).is_err(),
-            "chroma moved {what}"
-        );
-    }
 }

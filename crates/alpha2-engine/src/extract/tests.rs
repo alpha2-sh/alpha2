@@ -845,3 +845,59 @@ fn a_manifest_finds_its_artifacts_by_target_and_kind() {
         )))
     );
 }
+
+/// The project with source `v` fingerprinted at `duration` ticks.
+fn project_with_duration(duration: i64) -> Project {
+    let mut project = project();
+    project.sources[0].fingerprint = Some(
+        serde_json::from_value(serde_json::json!({ "duration_ticks": duration }))
+            .expect("fingerprint"),
+    );
+    project
+}
+
+#[test]
+fn a_range_ends_at_most_at_the_source_duration() {
+    let digest = Digest::new(video_input(VideoFormat::Luma8, 64));
+    let descriptor = digest.describe().clone();
+    let at = |project: &Project, end: i64| {
+        ExtractSession::new(
+            project,
+            &descriptor,
+            request(&descriptor, InputFrom::Source, range(0, end), vec![]),
+        )
+    };
+    let fingerprinted = project_with_duration(120_000);
+    assert!(at(&fingerprinted, 120_000).is_ok());
+    assert_eq!(
+        at(&fingerprinted, 120_001).err(),
+        Some(RequestError::RangePastSource(120_000))
+    );
+    assert!(at(&project(), 120_000).is_ok());
+    assert!(at(&project(), 120_001).is_ok());
+    // The timeline has no fingerprint to stay within.
+    let timeline = request(&descriptor, InputFrom::Timeline, range(0, 120_001), vec![]);
+    assert!(ExtractSession::new(&fingerprinted, &descriptor, timeline).is_ok());
+}
+
+#[test]
+fn an_audio_range_up_to_the_last_tick_stays_on_the_sample_grid() {
+    // Rates stop below the tick rate, so a sample index is at most 0.8 of its tick.
+    let digest = Digest::new(audio_input(65_536));
+    let descriptor = digest.describe().clone();
+    let mut fastest = request(&descriptor, InputFrom::Timeline, range(0, i64::MAX), vec![]);
+    fastest.input.passes = vec![Pass {
+        start: MediaTime(i64::MAX - 1),
+        direction: Direction::Forward,
+    }];
+    fastest.input.sample_rate = Some(*alpha2_model::SAMPLE_RATE_RANGE.end());
+    let mut session = ExtractSession::new(&project(), &descriptor, fastest).expect("session");
+    assert!(matches!(session.next(), Step::PassBoundary { .. }));
+    assert!(matches!(session.next(), Step::Need(_)));
+    let mut past = request(&descriptor, InputFrom::Timeline, range(0, i64::MAX), vec![]);
+    past.input.sample_rate = Some(384_000);
+    assert_eq!(
+        ExtractSession::new(&project(), &descriptor, past).err(),
+        Some(RequestError::InvalidAudio)
+    );
+}

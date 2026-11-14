@@ -1,4 +1,10 @@
 // Protocol I/O for the fake alpha2-host processes the tests run; the fake hosts import it.
+import { readFileSync } from "node:fs";
+
+/** The release the client under test refuses any other of. */
+export const HOST_VERSION = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;
 
 export const MAGIC = Buffer.from([
   0x89, 0x41, 0x32, 0x48, 0x4f, 0x53, 0x54, 0x0a,
@@ -54,7 +60,12 @@ export function sendRaw(header, callback) {
 
 export function ready(callback) {
   send(
-    { type: "state", state: "ready", reason: "started", details: {} },
+    {
+      type: "state",
+      state: "ready",
+      reason: "started",
+      details: { hostVersion: HOST_VERSION },
+    },
     callback,
   );
 }

@@ -193,6 +193,9 @@ class Alpha2Processor extends AudioWorkletProcessor {
   #sourceFrames = 0;
   #sourceViews?: { buffer: ArrayBuffer; planes: Float32Array[] };
 
+  /** Why the module stopped; once set, nothing reaches the module again. */
+  #failure: string | undefined;
+
   constructor() {
     super();
     this.port.onmessage = (
@@ -227,12 +230,13 @@ class Alpha2Processor extends AudioWorkletProcessor {
         message.type === "alpha2-config" ||
         message.type === "alpha2-reset"
       ) {
-        let error: string | undefined;
-        try {
-          error = this.#apply(message);
-        } catch (thrown) {
-          error = thrown instanceof Error ? thrown.message : String(thrown);
-        }
+        let error: string | undefined = this.#failure;
+        if (error === undefined)
+          try {
+            error = this.#apply(message);
+          } catch (thrown) {
+            error = thrown instanceof Error ? thrown.message : String(thrown);
+          }
         // Posted after any `alpha2-latency` the request caused. Without an id, a refusal is an
         // error.
         if (message.id !== undefined)
@@ -539,21 +543,16 @@ class Alpha2Processor extends AudioWorkletProcessor {
             this.#channels,
           );
       } catch (error) {
-        this.port.postMessage({
-          type: "alpha2-error",
-          message: `AudioWorklet DSP module trapped (${
+        return this.#fail(
+          `AudioWorklet DSP module trapped (${
             this.#panicMessage(exports) ?? String(error)
           }); the node has stopped`,
-        });
-        return false;
+        );
       }
-      if (status !== 0) {
-        this.port.postMessage({
-          type: "alpha2-error",
-          message: `AudioWorklet processing failed (${status}); the node has stopped`,
-        });
-        return false;
-      }
+      if (status !== 0)
+        return this.#fail(
+          `AudioWorklet processing failed (${status}); the node has stopped`,
+        );
       const views = this.#viewsFor(exports, length);
       const produced = this.#transparent ? views.input : views.output;
       for (let channel = 0; channel < this.#channels; channel += 1) {
@@ -564,8 +563,18 @@ class Alpha2Processor extends AudioWorkletProcessor {
     return true;
   }
 
+  /**
+   * Records a module failure and reports it once. A node with a connected input keeps being
+   * called after it returns false, so later calls stop before the module.
+   */
+  #fail(message: string): false {
+    this.#failure = message;
+    this.port.postMessage({ type: "alpha2-error", message });
+    return false;
+  }
+
   process(inputs: Float32Array[][], outputs: Float32Array[][]): boolean {
-    if (this.#disposed) return false;
+    if (this.#disposed || this.#failure !== undefined) return false;
     const exports = this.#exports;
     const output = outputs[0];
     if (exports === undefined || output === undefined || this.#handle === 0)
@@ -609,22 +618,17 @@ class Alpha2Processor extends AudioWorkletProcessor {
         );
       } catch (error) {
         // A Rust panic traps, and the trap carries no message of its own.
-        this.port.postMessage({
-          type: "alpha2-error",
-          message: `AudioWorklet DSP module trapped (${
+        return this.#fail(
+          `AudioWorklet DSP module trapped (${
             this.#panicMessage(exports) ?? String(error)
           }); the node has stopped`,
-        });
-        return false;
+        );
       }
-      if (status !== 0) {
-        // Returning false retires the node; this message is the host's only signal.
-        this.port.postMessage({
-          type: "alpha2-error",
-          message: `AudioWorklet processing failed (${status}); the node has stopped`,
-        });
-        return false;
-      }
+      // Returning false retires the node; this message is the host's only signal.
+      if (status !== 0)
+        return this.#fail(
+          `AudioWorklet processing failed (${status}); the node has stopped`,
+        );
       // Recheck: processing may have grown memory and detached the views.
       const produced = this.#viewsFor(exports, length).output;
       for (let channel = 0; channel < this.#channels; channel += 1) {

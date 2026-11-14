@@ -127,7 +127,7 @@ impl Renderer {
         if format.interleaved_chroma != (planes.len() == 2) {
             return Err(RenderError::InvalidImageData);
         }
-        let cached = self.yuv_repack_pipeline();
+        let cached = self.yuv_repack_pipeline()?;
         let origin = [visible.x, visible.y, visible.x / 2, visible.y / 2]
             .iter()
             .flat_map(|value| value.to_le_bytes())
@@ -275,8 +275,8 @@ impl Renderer {
             .collect()
     }
 
-    fn yuv_repack_pipeline(&self) -> &CachedYuvRepackPipeline {
-        self.pipelines.yuv_repack.get_or_init(|| {
+    fn yuv_repack_pipeline(&self) -> Result<&CachedYuvRepackPipeline, RenderError> {
+        crate::gpu_errors::checked_cell(&self.pipelines.yuv_repack, self.gpu.device(), || {
             let texture = |binding| wgpu::BindGroupLayoutEntry {
                 binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,

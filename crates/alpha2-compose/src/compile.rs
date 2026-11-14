@@ -1,18 +1,22 @@
 //! Placing primitives on the timeline: lengths, areas, lanes, and the
 //! project they become.
+//!
+//! A project limit the compiler can count is checked where the node is in hand, with its path;
+//! anything else the model refuses is reported at the node that made the refused object.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use alpha2_media::SourceId;
 use alpha2_model::{
     Animated, AnimatedPoint, CaptionCue, Captions, Clip, ClipComposition, ClipEffect, ClipId,
     ClipTransition, Composition, CompositionId, CompositionNode, Ducking, Easing, EffectValue,
-    FontSizeFit, Generator, Interpolation, Keyframe, LayoutNode, LineClamp, LoopMode,
-    MediaKind as ModelKind, MediaSource, MergeLayer, NodeId, NodeOp, Paint, Project, ProjectId,
-    ProjectSettings, RangeShape, RangeUnits, RectangleGeometry, Rgb, Rgba, ShapeGeometry,
-    ShapeMask, TextAlign, TextAnimator, TextAnimatorProperties, TextBackground, TextSelector,
-    TextStyle, TimeMap, TimeScale, Timeline, Track, TrackId, TrackKind, Vec2, VisualProperties,
+    ErrorSubject, FontSizeFit, Generator, Interpolation, Keyframe, LayoutNode, LineClamp, LoopMode,
+    MediaKind as ModelKind, MediaSource, MergeLayer, ModelError, NodeId, NodeOp, Paint, Project,
+    ProjectId, ProjectSettings, RangeShape, RangeUnits, RectangleGeometry, Rgb, Rgba,
+    ShapeGeometry, ShapeMask, TextAlign, TextAnimator, TextAnimatorProperties, TextBackground,
+    TextSelector, TextStyle, TimeMap, TimeScale, Timeline, Track, TrackId, TrackKind, Vec2,
+    VisualProperties,
 };
 use alpha2_model::{
     Dash, EllipseGeometry, FillRule, GradientStop, PathGeometry, PolystarGeometry, ShapeItem,
@@ -26,7 +30,7 @@ use crate::lower::{
     AnimPrim, AudioPrim, BoxContent, BoxPrim, BoxTree, CaptionsPrim, Content, CounterContent,
     Coverage, CoveragePrim, EffectPrim, GeometryPrim, GridLayout, GroupPrim, Head, KeyPrim,
     KeyTime, MaskShapePrim, NodeMotion, PaintPrim, Preset, Prim, RevealPrim, SequencePrim,
-    ShapeContent, StackPrim, Visual, align_point, ticks_scaled,
+    ShapeContent, StackPrim, VideoContent, Visual, add_ticks, align_point, ticks_scaled,
 };
 use crate::spec::{
     Canvas, CustomCanvas, Fit, FrameRateChoice, GridLength, Loudness, Transition, VideoSpec,
@@ -138,10 +142,12 @@ struct Lane {
     duck: Option<(String, f32, String)>,
     /// A raw fragment's track, kept as written.
     raw: Option<Track>,
+    /// The spec path of the node that made it.
+    path: String,
 }
 
 impl Lane {
-    fn new(kind: TrackKind, owners: &BTreeSet<String>) -> Self {
+    fn new(kind: TrackKind, owners: &BTreeSet<String>, path: &str) -> Self {
         Self {
             kind,
             clips: Vec::new(),
@@ -150,6 +156,7 @@ impl Lane {
             owners: owners.clone(),
             duck: None,
             raw: None,
+            path: path.to_owned(),
         }
     }
 
@@ -251,6 +258,7 @@ pub(crate) struct Context<'a> {
     width: u32,
     height: u32,
     pub(crate) rate: FrameRate,
+    settings: ProjectSettings,
     measurer: Option<TextRasterizer>,
     sources: Vec<MediaSource>,
     media_sources: BTreeMap<(String, &'static str), SourceId>,
@@ -262,7 +270,14 @@ pub(crate) struct Context<'a> {
     next_clip: u32,
     next_composition: u32,
     warnings: Vec<String>,
+    /// The paths of the nodes being emitted, innermost last.
+    here: Vec<String>,
+    /// The path of the node that made each generated or raw id.
+    made_by: HashMap<String, String>,
 }
+
+/// Frames a counter may count over, each a keyframe at most.
+const MAX_COUNTER_FRAMES: i64 = 100_000;
 
 /// A canvas preset: width, height.
 fn preset(name: &str) -> Option<(u32, u32)> {
@@ -301,11 +316,7 @@ fn frame_rate(choice: FrameRateChoice) -> Result<FrameRate, String> {
 }
 
 impl<'a> Context<'a> {
-    fn new(
-        spec: &VideoSpec,
-        facts: &'a Facts,
-        fonts: &[Arc<[u8]>],
-    ) -> Result<(Self, Rgb), ComposeError> {
+    fn new(spec: &VideoSpec, facts: &'a Facts, fonts: &[Arc<[u8]>]) -> Result<Self, ComposeError> {
         let theme = crate::theme::resolve(&spec.theme)
             .map_err(|error| ComposeError::new("spec.theme", error))?;
         let custom = match &spec.canvas {
@@ -334,6 +345,15 @@ impl<'a> Context<'a> {
             )
             .map_err(|error| ComposeError::new("spec.canvas.frame_rate", error))?;
         let background = custom.background.unwrap_or(theme.background);
+        let settings = ProjectSettings::new(width, height, rate, 48_000)
+            .and_then(|settings| {
+                settings.with_background(Rgb::new(
+                    background.red,
+                    background.green,
+                    background.blue,
+                ))
+            })
+            .map_err(|error| ComposeError::new("spec.canvas", error.to_string()))?;
         let measurer = if fonts.is_empty() {
             None
         } else {
@@ -375,32 +395,36 @@ impl<'a> Context<'a> {
                     .collect::<Vec<_>>()
             })
             .collect();
-        Ok((
-            Self {
-                facts,
-                theme,
-                width,
-                height,
-                rate,
-                measurer,
-                sources: Vec::new(),
-                media_sources: BTreeMap::new(),
-                assets: BTreeMap::new(),
-                compositions: Vec::new(),
-                blur_compositions: BTreeMap::new(),
-                reserved,
-                next_source: 0,
-                next_clip: 0,
-                next_composition: 0,
-                warnings: Vec::new(),
-            },
-            Rgb::new(background.red, background.green, background.blue),
-        ))
+        Ok(Self {
+            facts,
+            theme,
+            width,
+            height,
+            rate,
+            settings,
+            measurer,
+            sources: Vec::new(),
+            media_sources: BTreeMap::new(),
+            assets: BTreeMap::new(),
+            compositions: Vec::new(),
+            blur_compositions: BTreeMap::new(),
+            reserved,
+            next_source: 0,
+            next_clip: 0,
+            next_composition: 0,
+            warnings: Vec::new(),
+            here: Vec::new(),
+            made_by: HashMap::new(),
+        })
     }
 
     #[allow(clippy::cast_precision_loss)]
     pub(crate) const fn canvas_px(&self) -> (f32, f32) {
         (self.width as f32, self.height as f32)
+    }
+
+    pub(crate) const fn canvas(&self) -> (u32, u32) {
+        (self.width, self.height)
     }
 
     pub(crate) fn short_side(&self) -> f32 {
@@ -437,14 +461,33 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// The path of the node being emitted.
+    fn here(&self) -> &str {
+        self.here.last().map_or("spec", String::as_str)
+    }
+
+    /// Records the node being emitted as the maker of `id`.
+    fn made(&mut self, id: String) -> String {
+        if !self.made_by.contains_key(&id) {
+            self.made_by.insert(id.clone(), self.here().to_owned());
+        }
+        id
+    }
+
     fn clip_id(&mut self) -> ClipId {
-        ClipId::new(Self::fresh(&self.reserved, &mut self.next_clip, "c"))
-            .expect("a generated id is not empty")
+        let id = Self::fresh(&self.reserved, &mut self.next_clip, "c");
+        ClipId::new(self.made(id)).expect("a generated id is not empty")
     }
 
     fn source_id(&mut self) -> SourceId {
-        SourceId::new(Self::fresh(&self.reserved, &mut self.next_source, "s"))
-            .expect("a generated id is not empty")
+        let id = Self::fresh(&self.reserved, &mut self.next_source, "s");
+        SourceId::new(self.made(id)).expect("a generated id is not empty")
+    }
+
+    /// A fresh composition id `{prefix}{n}`.
+    fn composition_id(&mut self, prefix: &str) -> CompositionId {
+        let id = Self::fresh(&self.reserved, &mut self.next_composition, prefix);
+        CompositionId::new(self.made(id)).expect("a generated id is not empty")
     }
 
     /// The source of the file at `path`, read as `kind`.
@@ -479,12 +522,7 @@ impl<'a> Context<'a> {
         if let Some(id) = self.blur_compositions.get(&radius.to_bits()) {
             return id.clone();
         }
-        let id = CompositionId::new(Self::fresh(
-            &self.reserved,
-            &mut self.next_composition,
-            "blur",
-        ))
-        .expect("a generated id is not empty");
+        let id = self.composition_id("blur");
         let clip = NodeId::new("clip").expect("a literal id");
         let blur = NodeId::new("blur").expect("a literal id");
         let mut composition = Composition::new(id.clone());
@@ -513,33 +551,43 @@ impl<'a> Context<'a> {
         id
     }
 
-    /// `prim`'s own length, or the one it takes by default.
-    fn length(&self, prim: &Prim) -> Length {
-        if let Some(duration) = prim.head().duration {
-            return Length::Fixed(duration);
+    /// `prim`'s own length, or the one it takes by default, refused at its path past the latest
+    /// time a project holds.
+    fn length(&self, prim: &Prim) -> Result<Length, ComposeError> {
+        let length = self.own_length(prim)?;
+        if length.resolve() > alpha2_time::MAX_SERIALIZED_TICKS {
+            return Err(ComposeError::new(
+                &prim.head().path,
+                format!("it lasts past {}", crate::lower::latest_time()),
+            ));
         }
-        match prim {
+        Ok(length)
+    }
+
+    fn own_length(&self, prim: &Prim) -> Result<Length, ComposeError> {
+        if let Some(duration) = prim.head().duration {
+            return Ok(Length::Fixed(duration));
+        }
+        Ok(match prim {
             Prim::Sequence(sequence) => {
                 let overlap = sequence.transition.as_ref().map_or(0, transition_ticks);
-                let total = sequence
-                    .children
-                    .iter()
-                    .enumerate()
-                    .map(|(index, child)| {
-                        self.length(child).resolve() - if index > 0 { overlap } else { 0 }
-                    })
-                    .sum::<i64>();
+                let mut total = 0_i64;
+                for (index, child) in sequence.children.iter().enumerate() {
+                    let length =
+                        self.length(child)?.resolve() - if index > 0 { overlap } else { 0 };
+                    total = add_ticks(total, length, &sequence.head.path)?;
+                }
                 Length::Fixed(total.max(0))
             }
-            Prim::Stack(stack) => self.stack_length(stack),
-            Prim::Group(group) => self.stack_length(&group.stack),
-            Prim::Coverage(coverage) => self.length(&coverage.content),
+            Prim::Stack(stack) => self.stack_length(stack)?,
+            Prim::Group(group) => self.stack_length(&group.stack)?,
+            Prim::Coverage(coverage) => self.length(&coverage.content)?,
             Prim::Box(node) => self.stack_length(&StackPrim {
                 head: Head::default(),
                 children: box_prims(&node.tree),
                 inset: [0.0; 4],
                 grid: None,
-            }),
+            })?,
             Prim::Visual(visual) => match &visual.content {
                 Content::Video(video) if video.looped => Length::Flexible(video.natural()),
                 Content::Video(video) => Length::Fixed(video.natural()),
@@ -567,19 +615,22 @@ impl<'a> Context<'a> {
             }
             Prim::Audio(audio) => Length::Fixed(audio.trim_end - audio.trim_start),
             Prim::Raw(..) => Length::Flexible(0),
-        }
+        })
     }
 
     /// A stack's own length, or the one it takes by default.
-    fn stack_length(&self, stack: &StackPrim) -> Length {
-        let lengths = stack
-            .children
+    fn stack_length(&self, stack: &StackPrim) -> Result<Length, ComposeError> {
+        let mut lengths = Vec::with_capacity(stack.children.len());
+        for child in &stack.children {
+            let length = self.length(child)?;
+            let at = child.head().at.unwrap_or(0);
+            let end = add_ticks(at, length.resolve(), &child.head().path)?;
+            lengths.push((end, matches!(length, Length::Fixed(_))));
+        }
+        let fixed = lengths
             .iter()
-            .map(|child| (child.head().at.unwrap_or(0), self.length(child)));
-        let fixed = lengths.clone().filter_map(|(at, length)| match length {
-            Length::Fixed(ticks) => Some(at + ticks),
-            Length::Flexible(_) => None,
-        });
+            .filter(|(_, fixed)| *fixed)
+            .map(|(end, _)| *end);
         let shortest = matches!(
             stack.grid,
             Some(GridLayout {
@@ -588,17 +639,10 @@ impl<'a> Context<'a> {
             })
         );
         let fixed = if shortest { fixed.min() } else { fixed.max() };
-        fixed.map_or_else(
-            || {
-                Length::Flexible(
-                    lengths
-                        .map(|(at, length)| at + length.resolve())
-                        .max()
-                        .unwrap_or(0),
-                )
-            },
+        Ok(fixed.map_or_else(
+            || Length::Flexible(lengths.iter().map(|(end, _)| *end).max().unwrap_or(0)),
             Length::Fixed,
-        )
+        ))
     }
 
     /// Places `prim` in `slot`, adding its lanes to `out`.
@@ -606,22 +650,27 @@ impl<'a> Context<'a> {
         if slot.len <= 0 {
             return Ok(());
         }
+        add_ticks(slot.start, slot.len, &prim.head().path)?;
         let mut slot = slot.clone();
         slot.owners.extend(prim.head().id.clone());
         self.resolve_motion(prim.head(), &mut slot);
+        self.here.push(prim.head().path.clone());
+        let emitted = self.emit_prim(prim, &slot, out);
+        self.here.pop();
+        emitted
+    }
+
+    fn emit_prim(&mut self, prim: &Prim, slot: &Slot, out: &mut Lanes) -> Result<(), ComposeError> {
         match prim {
-            Prim::Sequence(sequence) => self.emit_sequence(sequence, &slot, out),
-            Prim::Stack(stack) => self.emit_stack(stack, &slot, out),
-            Prim::Group(group) => self.emit_group(group, &slot, out),
-            Prim::Coverage(coverage) => self.emit_coverage(coverage, &slot, out),
-            Prim::Box(node) => self.emit_box(node, &slot, out),
-            Prim::Visual(visual) => self.emit_visual(visual, &slot, out),
-            Prim::Captions(captions) => {
-                self.emit_captions(captions, &slot, out);
-                Ok(())
-            }
+            Prim::Sequence(sequence) => self.emit_sequence(sequence, slot, out),
+            Prim::Stack(stack) => self.emit_stack(stack, slot, out),
+            Prim::Group(group) => self.emit_group(group, slot, out),
+            Prim::Coverage(coverage) => self.emit_coverage(coverage, slot, out),
+            Prim::Box(node) => self.emit_box(node, slot, out),
+            Prim::Visual(visual) => self.emit_visual(visual, slot, out),
+            Prim::Captions(captions) => self.emit_captions(captions, slot, out),
             Prim::Audio(audio) => {
-                self.emit_audio(audio, &slot, out);
+                self.emit_audio(audio, slot, out);
                 Ok(())
             }
             Prim::Raw(head, _) => Err(ComposeError::new(
@@ -643,7 +692,7 @@ impl<'a> Context<'a> {
         for motion in motions {
             let mut entered = start;
             if let Some(preset) = motion.enter {
-                let from = (start + slot.delay).min(end);
+                let from = start.saturating_add(slot.delay).min(end);
                 entered = (from + preset.duration).min(end);
                 trimmed |= from + preset.duration > end;
                 if entered > from {
@@ -665,6 +714,7 @@ impl<'a> Context<'a> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn emit_sequence(
         &mut self,
         sequence: &SequencePrim,
@@ -675,13 +725,15 @@ impl<'a> Context<'a> {
         let end = slot.start + slot.len;
         let overlap = sequence.transition.as_ref().map_or(0, transition_ticks);
         let mut cursor = slot.start;
-        // The lane and clip of the previous child, when it was one picture.
-        let mut previous: Option<(usize, ClipId, i64)> = None;
+        // The previous child's last clip, when the child was one picture.
+        let mut outgoing: Option<Outgoing> = None;
+        // The previous child's start, length and path, and whether a transition led into it.
+        let mut prior: Option<(i64, i64, &str, bool)> = None;
         for (index, child) in sequence.children.iter().enumerate() {
-            let length = self.length(child).resolve();
+            let length = self.length(child)?.resolve();
             let joined = index > 0 && overlap > 0;
             if joined {
-                let previous_length = previous.as_ref().map_or(i64::MAX, |(_, _, length)| *length);
+                let previous_length = outgoing.as_ref().map_or(i64::MAX, |out| out.length);
                 if length < overlap || previous_length < overlap {
                     return Err(ComposeError::new(
                         &child.head().path,
@@ -696,9 +748,54 @@ impl<'a> Context<'a> {
             if start >= end {
                 break;
             }
+            if joined
+                && let Some((prior_start, prior_length, prior_path, true)) = prior
+                && start < prior_start + overlap
+            {
+                return Err(ComposeError::new(
+                    prior_path,
+                    format!(
+                        "it lasts {} s, shorter than the two {} s transitions around it",
+                        seconds(prior_length),
+                        seconds(overlap)
+                    ),
+                ));
+            }
+            let len = length.min(end - start);
             let single = matches!(child, Prim::Visual(_));
-            let engine_transition = joined && single && previous.is_some();
             let transition = sequence.transition.as_ref().filter(|_| joined);
+            let mut engine_transition = joined && single && outgoing.is_some();
+            if engine_transition && let (Some(transition), Some(out)) = (transition, &outgoing) {
+                let first = edge_clips(child, len).map_or(len, |(first, _)| first);
+                let short_out = out.last < overlap.min(out.len);
+                let short_in = first < overlap.min(len);
+                if (short_out || short_in) && is_crossfade(transition) {
+                    engine_transition = false;
+                } else if short_out {
+                    return Err(ComposeError::new(
+                        &out.path,
+                        format!(
+                            "its last {} part lasts {} s, shorter than the {} s {} transition out \
+                             of it; a crossfade fits, or a longer node",
+                            if out.held { "held" } else { "played" },
+                            seconds(out.last),
+                            seconds(overlap),
+                            transition.kind
+                        ),
+                    ));
+                } else if short_in {
+                    return Err(ComposeError::new(
+                        &child.head().path,
+                        format!(
+                            "its first part plays {} s, shorter than the {} s {} transition into \
+                             it; a crossfade fits, or a longer video",
+                            seconds(first),
+                            seconds(overlap),
+                            transition.kind
+                        ),
+                    ));
+                }
+            }
             if let Some(transition) = transition
                 && !engine_transition
                 && !is_crossfade(transition)
@@ -714,21 +811,31 @@ impl<'a> Context<'a> {
             let mut fresh = Lanes::default();
             let child_slot = Slot {
                 start,
-                len: length.min(end - start),
+                len,
                 ramp: (joined && !engine_transition).then_some((start, overlap)),
                 hold: Hold::None,
                 ..slot.clone()
             };
             self.emit(child, &child_slot, &mut fresh)?;
+            // Compose owns the sound at a join: the two sides cross over the transition.
+            let followed = overlap > 0
+                && index + 1 < sequence.children.len()
+                && start + length - overlap < end;
+            self.fade_join(
+                &mut fresh,
+                (start, start + len),
+                if joined { overlap } else { 0 },
+                if followed { overlap } else { 0 },
+            );
             let placed = if engine_transition {
-                let (lane, from, _) = previous.take().expect("a transition follows a picture");
+                let from = outgoing.take().expect("a transition follows a picture");
                 let mut visual = std::mem::take(&mut fresh.visual).into_iter();
                 let incoming = visual.next().expect("a picture makes one lane");
                 let to = incoming.clips[0].id.clone();
-                lanes.visual[lane].absorb(incoming);
+                lanes.visual[from.lane].absorb(incoming);
                 let transition = transition.expect("joined");
-                lanes.visual[lane].transitions.push(ClipTransition {
-                    from_clip: from,
+                lanes.visual[from.lane].transitions.push(ClipTransition {
+                    from_clip: from.clip,
                     to_clip: to,
                     timeline_range: range(start, (start + overlap).min(end)),
                     easing: transition.easing.unwrap_or(alpha2_model::Easing::Linear),
@@ -740,10 +847,10 @@ impl<'a> Context<'a> {
                     },
                 });
                 lanes.share(fresh);
-                vec![lane]
+                vec![from.lane]
             } else if joined {
-                // A crossfade over what is not one picture: the incoming node fades in over the
-                // outgoing one, in lanes above it.
+                // A crossfade over what is not one picture, or into or out of a part shorter than
+                // it: the incoming node fades in over the outgoing one, in lanes above it.
                 let first = lanes.visual.len();
                 let count = fresh.visual.len();
                 lanes.stack(fresh);
@@ -751,17 +858,71 @@ impl<'a> Context<'a> {
             } else {
                 lanes.share(fresh)
             };
-            previous = match (single, placed.first()) {
-                (true, Some(&lane)) => lanes.visual[lane]
-                    .clips
-                    .last()
-                    .map(|clip| (lane, clip.id.clone(), length)),
+            check_lanes(&lanes, &sequence.head.path, index)?;
+            outgoing = match (single, placed.first()) {
+                (true, Some(&lane)) => lanes.visual[lane].clips.last().map(|clip| Outgoing {
+                    lane,
+                    clip: clip.id.clone(),
+                    length,
+                    len,
+                    last: clip.timeline_range.end().ticks() - clip.timeline_range.start().ticks(),
+                    held: matches!(clip.time_map, TimeMap::Freeze { .. }),
+                    path: child.head().path.clone(),
+                }),
                 _ => None,
             };
+            prior = Some((start, length, &child.head().path, joined));
             cursor = start + length;
         }
         out.stack(lanes);
         Ok(())
+    }
+
+    /// Fades in the sound of every clip of `lanes` that starts at `start` over `fade_in`, and
+    /// fades out every one that ends at `end` over `fade_out`, each at most the clip's length.
+    /// A clip without fades of its own fades at equal power.
+    fn fade_join(&self, lanes: &mut Lanes, (start, end): (i64, i64), fade_in: i64, fade_out: i64) {
+        if fade_in == 0 && fade_out == 0 {
+            return;
+        }
+        for clip in lanes
+            .visual
+            .iter_mut()
+            .chain(&mut lanes.audio)
+            .filter(|lane| lane.raw.is_none())
+            .flat_map(|lane| &mut lane.clips)
+        {
+            let sounds = !clip.audio.muted
+                && !matches!(clip.time_map, TimeMap::Freeze { .. })
+                && self
+                    .sources
+                    .iter()
+                    .any(|source| source.id == clip.source_id && source.is_audible());
+            if !sounds {
+                continue;
+            }
+            let (from, to) = (
+                clip.timeline_range.start().ticks(),
+                clip.timeline_range.end().ticks(),
+            );
+            let length = to - from;
+            let audio = &mut clip.audio;
+            let own = audio.fade_in.ticks() > 0 || audio.fade_out.ticks() > 0;
+            let mut faded = false;
+            if fade_in > 0 && from == start {
+                let ticks = audio.fade_in.ticks().max(fade_in.min(length));
+                audio.fade_in = MediaTime::from_ticks(ticks);
+                faded = true;
+            }
+            if fade_out > 0 && to == end {
+                let ticks = audio.fade_out.ticks().max(fade_out.min(length));
+                audio.fade_out = MediaTime::from_ticks(ticks);
+                faded = true;
+            }
+            if faded && !own {
+                audio.fade_shape = alpha2_model::FadeShape::EqualPower;
+            }
+        }
     }
 
     fn emit_stack(
@@ -792,7 +953,7 @@ impl<'a> Context<'a> {
                 continue;
             }
             let remaining = slot.len - at;
-            let len = match self.length(child) {
+            let len = match self.length(child)? {
                 Length::Fixed(_) if hold != Hold::None => remaining,
                 Length::Fixed(ticks) => ticks.min(remaining),
                 Length::Flexible(_) => remaining,
@@ -859,12 +1020,18 @@ impl<'a> Context<'a> {
             input: Some(node),
             transform: self.group_transform(group, rect, len),
         });
-        let id = CompositionId::new(Self::fresh(
-            &self.reserved,
-            &mut self.next_composition,
-            "group",
-        ))
-        .expect("a generated id is not empty");
+        if graph.nodes.len() > alpha2_model::MAX_COMPOSITION_NODES {
+            return Err(ComposeError::new(
+                &path,
+                format!(
+                    "it draws its children, effects and masks with {} composition nodes, and a \
+                     composition holds at most {}",
+                    graph.nodes.len(),
+                    alpha2_model::MAX_COMPOSITION_NODES
+                ),
+            ));
+        }
+        let id = self.composition_id("group");
         let mut composition = Composition::new(id.clone());
         composition.nodes = graph.nodes;
         composition.output = Some(node);
@@ -896,7 +1063,7 @@ impl<'a> Context<'a> {
             let range = clip.timeline_range;
             self.apply_motion(&mut clip.visual, &opacity, &slot.motions, range);
         }
-        let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+        let mut lane = Lane::new(TrackKind::Video, &slot.owners, self.here());
         lane.clips.push(clip);
         out.visual.push(lane);
         Ok(())
@@ -967,6 +1134,9 @@ impl<'a> Context<'a> {
                     range(0, still.len),
                 );
                 let place = Placement::new(rect, self.canvas_px());
+                for shape in shapes {
+                    keys_fit(shape.last_keys(still.len), clip.timeline_range, path)?;
+                }
                 clip.masks = shapes
                     .iter()
                     .map(|shape| ShapeMask {
@@ -993,7 +1163,7 @@ impl<'a> Context<'a> {
                     self.apply_motion(&mut clip.visual, &opacity, &still.motions, whole);
                 }
                 let id = clip.id.clone();
-                let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+                let mut lane = Lane::new(TrackKind::Video, &slot.owners, self.here());
                 lane.clips.push(clip);
                 out.visual.push(lane);
                 (id, alpha2_model::MatteMode::Alpha)
@@ -1039,6 +1209,7 @@ impl<'a> Context<'a> {
         let root: LayoutNode = serde_json::from_value(root).map_err(|error| {
             ComposeError::new(&path, format!("a box field is invalid: {error}"))
         })?;
+        self.layout_fits(&root, &path, false)?;
         if build.places.is_empty() {
             self.box_clip(root, rect, slot, out);
             return Ok(());
@@ -1070,6 +1241,7 @@ impl<'a> Context<'a> {
             if painted[low.min(high)..high].iter().any(|paints| *paints) {
                 let mut layer = root.clone();
                 hide_outside(&mut layer, &mut 0, low..high);
+                self.layout_fits(&layer, &path, true)?;
                 self.box_clip(layer, rect, slot, out);
             }
             if let Some(place) = build.places.get(segment) {
@@ -1077,6 +1249,73 @@ impl<'a> Context<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Makes the project last `total`: when its content ends earlier, a transparent picture on a
+    /// lane under everything lasts from that end to `total`.
+    fn fill_to(&mut self, lanes: &mut Lanes, total: i64) {
+        let latest = lanes
+            .visual
+            .iter()
+            .chain(&lanes.audio)
+            .flat_map(|lane| {
+                let raw = lane.raw.iter().flat_map(|track| &track.clips);
+                let ends = raw.map(|clip| clip.timeline_range.end().ticks());
+                lane.extent().map(|(_, end)| end).into_iter().chain(ends)
+            })
+            .max()
+            .unwrap_or(0);
+        if latest >= total {
+            return;
+        }
+        self.here.push("spec.duration".to_owned());
+        let source = self.generated_source(Generator::Fill {
+            paint: Paint::Solid {
+                color: Rgba::new(0.0, 0.0, 0.0, 0.0),
+            },
+        });
+        let clip = Clip::new(
+            self.clip_id(),
+            source,
+            range(latest, total),
+            range(0, total - latest),
+        );
+        let mut lane = Lane::new(TrackKind::Video, &BTreeSet::new(), self.here());
+        lane.clips.push(clip);
+        self.here.pop();
+        lanes.visual.insert(0, lane);
+    }
+
+    /// Refuses a box's layout tree the model would refuse, at the box's `path`; `segment` is a
+    /// tree drawn between pictures, whose hidden leaves are isolated.
+    fn layout_fits(
+        &self,
+        root: &LayoutNode,
+        path: &str,
+        segment: bool,
+    ) -> Result<(), ComposeError> {
+        let tree = Generator::Layout {
+            root: Box::new(root.clone()),
+        };
+        tree.validate_on(self.width, self.height)
+            .map_err(|issue| match issue {
+                alpha2_model::GeneratorIssue::Layout(issue)
+                    if segment && issue.problem == alpha2_model::LayoutProblem::TooManyIsolated =>
+                {
+                    ComposeError::new(
+                        path,
+                        format!(
+                            "a box with a picture hides the leaves on the other side of it, and \
+                         holds at most {} of them",
+                            alpha2_model::MAX_LAYOUT_ISOLATED - 1
+                        ),
+                    )
+                }
+                issue => ComposeError::new(
+                    path,
+                    format!("its layout is invalid: {}", issue_text(&issue)),
+                ),
+            })
     }
 
     /// One layout generator over the whole canvas, with the box's opacity and motion.
@@ -1111,7 +1350,7 @@ impl<'a> Context<'a> {
             let whole = clip.timeline_range;
             self.apply_motion(&mut clip.visual, &opacity, &slot.motions, whole);
         }
-        let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+        let mut lane = Lane::new(TrackKind::Video, &slot.owners, self.here());
         lane.clips.push(clip);
         out.visual.push(lane);
     }
@@ -1655,6 +1894,16 @@ impl<'a> Context<'a> {
                 opacity: constant(1.0),
             });
         }
+        if layers.len() > alpha2_model::MAX_MERGE_LAYERS {
+            return Err(ComposeError::new(
+                path,
+                format!(
+                    "it draws {} pictures as layers, and a group merges at most {}",
+                    layers.len(),
+                    alpha2_model::MAX_MERGE_LAYERS
+                ),
+            ));
+        }
         Ok(graph.add(NodeOp::Merge { layers }))
     }
 
@@ -1768,7 +2017,7 @@ impl<'a> Context<'a> {
             sound.audio = clip.audio.clone();
             sound.time_map = clip.time_map;
             shift(&mut sound);
-            let mut lane = Lane::new(TrackKind::Audio, &BTreeSet::new());
+            let mut lane = Lane::new(TrackKind::Audio, &BTreeSet::new(), self.here());
             lane.clips.push(sound);
             out.audio.push(lane);
         }
@@ -1876,96 +2125,68 @@ impl<'a> Context<'a> {
             fade_out: visual.fade_out,
             ramp: slot.ramp,
         };
-        let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+        let mut lane = Lane::new(TrackKind::Video, &slot.owners, self.here());
         match &visual.content {
             Content::Video(video) => {
+                let plan = video_plan(video, &visual.head.path, slot.hold, slot.len)?;
                 let source = self.media_source(&video.file, ModelKind::Video, video.has_audio);
-                let natural = video.natural();
-                let short = match video.when_short {
-                    Some(policy) => policy,
-                    None => match slot.hold {
-                        Hold::Loop => WhenShort::Loop,
-                        Hold::Freeze | Hold::None => WhenShort::Freeze,
-                    },
-                };
-                let refuse = |what: &str| {
-                    ComposeError::new(
-                        &visual.head.path,
-                        format!("the video is {what} than its node, and it says to refuse that"),
-                    )
-                };
-                if slot.len > natural && !video.looped && short == WhenShort::Error {
-                    return Err(refuse("shorter"));
-                }
-                if slot.len < natural && video.when_long == WhenLong::Error {
-                    return Err(refuse("longer"));
-                }
-                let stretches = !video.looped
-                    && ((slot.len > natural && short == WhenShort::Stretch)
-                        || (slot.len < natural && video.when_long == WhenLong::Stretch));
-                let looped = video.looped || (short == WhenShort::Loop && slot.len > natural);
                 let mut clips = Vec::new();
-                if stretches {
-                    clips.push(Clip::new(
+                match plan {
+                    VideoPlan::Stretch => clips.push(Clip::new(
                         self.clip_id(),
                         source.clone(),
                         range(start, end),
                         range(video.trim_start, video.trim_end),
-                    ));
-                } else if looped {
-                    #[allow(clippy::float_cmp)]
-                    let sped = video.speed != 1.0;
-                    if sped {
-                        return Err(ComposeError::new(
-                            &format!("{}.speed", visual.head.path),
-                            "a video that loops (loop, when_short loop or a longest_loop grid) \
-                             plays at speed 1",
-                        ));
-                    }
-                    let mut clip = Clip::new(
-                        self.clip_id(),
-                        source,
-                        range(start, end),
-                        range(video.trim_start, video.trim_end),
-                    );
-                    clip.time_map = TimeMap::Loop {
-                        mode: LoopMode::Repeat,
-                    };
-                    clips.push(clip);
-                } else {
-                    let play = slot.len.min(natural);
-                    let source_end =
-                        (video.trim_start + ticks_scaled(play, video.speed)).min(video.trim_end);
-                    clips.push(Clip::new(
-                        self.clip_id(),
-                        source.clone(),
-                        range(start, start + play),
-                        range(video.trim_start, source_end.max(video.trim_start + 1)),
-                    ));
-                    if short == WhenShort::Freeze && slot.len > play {
-                        let last = (video.trim_end - video.frame_ticks).max(video.trim_start);
-                        let mut freeze = Clip::new(
+                    )),
+                    VideoPlan::Loop => {
+                        let mut clip = Clip::new(
                             self.clip_id(),
                             source,
-                            range(start + play, end),
-                            range(last, video.trim_end),
+                            range(start, end),
+                            range(video.trim_start, video.trim_end),
                         );
-                        freeze.time_map = TimeMap::Freeze {
-                            source_time: MediaTime::from_ticks(last),
+                        clip.time_map = TimeMap::Loop {
+                            mode: LoopMode::Repeat,
                         };
-                        clips.push(freeze);
+                        clips.push(clip);
+                    }
+                    VideoPlan::Play { play, freeze } => {
+                        let source_end = (video.trim_start + ticks_scaled(play, video.speed))
+                            .min(video.trim_end);
+                        clips.push(Clip::new(
+                            self.clip_id(),
+                            source.clone(),
+                            range(start, start + play),
+                            range(video.trim_start, source_end.max(video.trim_start + 1)),
+                        ));
+                        if freeze {
+                            let last = (video.trim_end - video.frame_ticks).max(video.trim_start);
+                            let mut held = Clip::new(
+                                self.clip_id(),
+                                source,
+                                range(start + play, end),
+                                range(last, video.trim_end),
+                            );
+                            held.time_map = TimeMap::Freeze {
+                                source_time: MediaTime::from_ticks(last),
+                            };
+                            clips.push(held);
+                        }
                     }
                 }
                 let composition = video.blur.map(|radius| self.blur_composition(radius));
+                // Every clip of the node carries its zoom keys over the node's own span.
+                let span = range(start, end);
+                Self::zoom_fits(visual, span)?;
                 for clip in &mut clips {
                     clip.visual = self.picture_visual(
                         video.size,
                         rect,
                         visual,
                         &opacity,
-                        clip.timeline_range,
+                        (clip.timeline_range, span),
                     );
-                    clip.masks = self.picture_masks(video.size, rect, visual, clip.timeline_range);
+                    clip.masks = self.picture_masks(video.size, rect, visual, span);
                     clip.composition = composition.clone().map(ClipComposition::new);
                     clip.audio.gain = constant(video.volume);
                     clip.audio.muted = video.muted;
@@ -1983,9 +2204,10 @@ impl<'a> Context<'a> {
                     range(start, end),
                     range(0, slot.len),
                 );
-                clip.visual =
-                    self.picture_visual(*size, rect, visual, &opacity, clip.timeline_range);
-                clip.masks = self.picture_masks(*size, rect, visual, clip.timeline_range);
+                let span = clip.timeline_range;
+                Self::zoom_fits(visual, span)?;
+                clip.visual = self.picture_visual(*size, rect, visual, &opacity, (span, span));
+                clip.masks = self.picture_masks(*size, rect, visual, span);
                 clip.composition =
                     blur.map(|radius| ClipComposition::new(self.blur_composition(radius)));
                 lane.clips.push(clip);
@@ -2127,7 +2349,7 @@ impl<'a> Context<'a> {
                 lane.clips.push(clip);
             }
             Content::Counter(counter) => {
-                let root = self.counter_root(counter, rect, visual, start, slot.len);
+                let root = self.counter_root(counter, rect, visual, start, slot.len)?;
                 let source = self.generated_source(Generator::Layout {
                     root: Box::new(root),
                 });
@@ -2158,6 +2380,13 @@ impl<'a> Context<'a> {
         }
         out.visual.push(lane);
         Ok(())
+    }
+
+    /// Refuses zoom keys placed on the node's `span` past the latest time a project holds.
+    fn zoom_fits(visual: &Visual, span: TimeRange) -> Result<(), ComposeError> {
+        let length = span.end().ticks() - span.start().ticks();
+        let last = visual.zoom.as_ref().and_then(|zoom| last_key(zoom, length));
+        keys_fit([last], span, &format!("{}.zoom", visual.head.path))
     }
 
     /// A shape's items placed in `rect`, animated over `0..len` of the picture's time.
@@ -2263,6 +2492,30 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// The frame a count from `start` over `count` ticks begins in, refused at `path` when it
+    /// spans more than [`MAX_COUNTER_FRAMES`].
+    fn counter_frames(&self, start: i64, count: i64, path: &str) -> Result<i64, ComposeError> {
+        let first = self
+            .rate
+            .frame_at_or_before(MediaTime::from_ticks(start))
+            .unwrap_or(0);
+        let frames = self
+            .rate
+            .frame_at_or_before(MediaTime::from_ticks(start + count))
+            .unwrap_or(i64::MAX)
+            .saturating_sub(first);
+        if frames > MAX_COUNTER_FRAMES {
+            return Err(ComposeError::new(
+                path,
+                format!(
+                    "the count spans {frames} frames, and a counter counts over at most \
+                     {MAX_COUNTER_FRAMES}"
+                ),
+            ));
+        }
+        Ok(first)
+    }
+
     /// A counter's layout tree: its text, keyed on the frame grid, placed in `rect` by padding the
     /// canvas-sized root.
     fn counter_root(
@@ -2272,7 +2525,7 @@ impl<'a> Context<'a> {
         visual: &Visual,
         start: i64,
         len: i64,
-    ) -> LayoutNode {
+    ) -> Result<LayoutNode, ComposeError> {
         let (width, height) = self.canvas_px();
         let frame = self.rate.frame_start(1).map_or(1, MediaTime::ticks).max(1);
         let count = counter.count.unwrap_or(len - frame).clamp(1, len.max(1));
@@ -2288,6 +2541,7 @@ impl<'a> Context<'a> {
                 counter,
             )
         };
+        let first = self.counter_frames(start, count, &visual.head.path)?;
         // Frame starts on the timeline grid, as picture times from the clip's start.
         let mut keyframes: Vec<Keyframe<String>> = Vec::new();
         let mut push = |picture: i64, value: String| {
@@ -2300,10 +2554,6 @@ impl<'a> Context<'a> {
             }
         };
         push(0, value_at(0));
-        let first = self
-            .rate
-            .frame_at_or_before(MediaTime::from_ticks(start))
-            .unwrap_or(0);
         for index in first.. {
             let Some(time) = self.rate.frame_start(index) else {
                 break;
@@ -2359,18 +2609,23 @@ impl<'a> Context<'a> {
             "align_items": place(y),
             "children": [leaf],
         });
-        serde_json::from_value(root).expect("a counter's layout tree is well formed")
+        serde_json::from_value(root).map_err(|error| {
+            ComposeError::new(
+                &visual.head.path,
+                format!("a counter field is invalid: {error}"),
+            )
+        })
     }
 
-    /// Where a picture `size` pixels at scale 1 lies to fill `rect` as `visual` asks, and its
-    /// opacity over `clip`.
+    /// Where a picture `size` pixels at scale 1 lies to fill `rect` as `visual` asks, with its
+    /// zoom keyed over the node's `span` and its opacity over `clip`.
     fn picture_visual(
         &self,
         size: (u32, u32),
         rect: Rect,
         visual: &Visual,
         opacity: &Opacity,
-        clip: TimeRange,
+        (clip, span): (TimeRange, TimeRange),
     ) -> VisualProperties {
         let (width, height) = self.canvas_px();
         let fitted = Fitted::new(size, (width, height), rect, visual.fit);
@@ -2380,7 +2635,7 @@ impl<'a> Context<'a> {
             None => constant(fitted.scale),
             Some(AnimPrim::Value(zoom)) => constant(scaled(*zoom)),
             Some(AnimPrim::Keys(keys)) => Animated::Keyframes {
-                keyframes: resolve_keys(keys, clip)
+                keyframes: resolve_keys(keys, span)
                     .into_iter()
                     .map(|(time, zoom, easing)| Keyframe {
                         time,
@@ -2406,22 +2661,22 @@ impl<'a> Context<'a> {
     }
 
     /// The mask that crops a picture to `rect` where it overflows inside the canvas (the
-    /// canvas crops the rest).
+    /// canvas crops the rest), keyed over the node's `span`.
     fn picture_masks(
         &self,
         size: (u32, u32),
         rect: Rect,
         visual: &Visual,
-        clip: TimeRange,
+        span: TimeRange,
     ) -> Vec<ShapeMask> {
         let (width, height) = self.canvas_px();
         let fitted = Fitted::new(size, (width, height), rect, visual.fit);
         let (x, y) = align_point(visual.align);
         let full = rect == self.canvas_rect();
         let keys = match &visual.zoom {
-            None => vec![(clip.start(), 1.0, Easing::Linear)],
-            Some(AnimPrim::Value(zoom)) => vec![(clip.start(), *zoom, Easing::Linear)],
-            Some(AnimPrim::Keys(keys)) => resolve_keys(keys, clip),
+            None => vec![(span.start(), 1.0, Easing::Linear)],
+            Some(AnimPrim::Value(zoom)) => vec![(span.start(), *zoom, Easing::Linear)],
+            Some(AnimPrim::Keys(keys)) => resolve_keys(keys, span),
         };
         let overflows = |zoom: f32| {
             fitted.displayed.0 * zoom > rect.width * 1.0001
@@ -2493,7 +2748,12 @@ impl<'a> Context<'a> {
         }]
     }
 
-    fn emit_captions(&mut self, captions: &CaptionsPrim, slot: &Slot, out: &mut Lanes) {
+    fn emit_captions(
+        &mut self,
+        captions: &CaptionsPrim,
+        slot: &Slot,
+        out: &mut Lanes,
+    ) -> Result<(), ComposeError> {
         let end = slot.start + slot.len;
         let cues = captions
             .cues
@@ -2534,14 +2794,16 @@ impl<'a> Context<'a> {
                 opacity: constant(color.alpha),
             };
             let _ = width;
-            let mut lane = Lane::new(TrackKind::Video, &slot.owners);
+            let mut lane = Lane::new(TrackKind::Video, &slot.owners, self.here());
             lane.clips.push(clip);
             out.visual.push(lane);
         }
         // Overlapping cues take a track each, as a caption track shows one at a time.
-        let rows = alpha2_model::caption_rows(&cues).unwrap_or_else(|_| vec![cues]);
+        // A row holds as many cues as a track does; past that the cues take another row.
+        let rows = alpha2_model::caption_rows(&cues)
+            .map_err(|error| ComposeError::new(&captions.head.path, error.to_string()))?;
         for row in rows {
-            let mut lane = Lane::new(TrackKind::Caption, &slot.owners);
+            let mut lane = Lane::new(TrackKind::Caption, &slot.owners, self.here());
             lane.captions = Some(Captions {
                 from_words: None,
                 style: captions.style.clone(),
@@ -2550,6 +2812,7 @@ impl<'a> Context<'a> {
             });
             out.visual.push(lane);
         }
+        Ok(())
     }
 
     fn emit_audio(&mut self, audio: &AudioPrim, slot: &Slot, out: &mut Lanes) {
@@ -2581,7 +2844,7 @@ impl<'a> Context<'a> {
         clip.audio.fade_in = MediaTime::from_ticks(audio.fade_in.min(play));
         clip.audio.fade_out =
             MediaTime::from_ticks(audio.fade_out.min(play - clip.audio.fade_in.ticks()));
-        let mut lane = Lane::new(TrackKind::Audio, &slot.owners);
+        let mut lane = Lane::new(TrackKind::Audio, &slot.owners, self.here());
         lane.clips.push(clip);
         lane.duck = audio
             .duck_under
@@ -2589,6 +2852,130 @@ impl<'a> Context<'a> {
             .map(|target| (target, audio.duck_depth_db, audio.head.path.clone()));
         out.audio.push(lane);
     }
+}
+
+/// Refuses a lane of `lanes` that holds more clips, transitions or cues than a track does, at the
+/// sequence's `path`, once child `index` is placed.
+fn check_lanes(lanes: &Lanes, path: &str, index: usize) -> Result<(), ComposeError> {
+    for lane in lanes.visual.iter().chain(&lanes.audio) {
+        let cues = lane
+            .captions
+            .as_ref()
+            .map_or(0, |captions| captions.cues.len());
+        for (count, what, most) in [
+            (lane.clips.len(), "clips", alpha2_model::MAX_CLIPS_PER_TRACK),
+            (
+                lane.transitions.len(),
+                "transitions",
+                alpha2_model::MAX_TRANSITIONS_PER_TRACK,
+            ),
+            (cues, "caption cues", alpha2_model::MAX_CLIPS_PER_TRACK),
+        ] {
+            if count > most {
+                return Err(ComposeError::new(
+                    path,
+                    format!(
+                        "with child {index} one of its tracks holds {count} {what}, and a track \
+                         holds at most {most}"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The last clip of a sequence child that is one picture, which a transition out of it starts on.
+struct Outgoing {
+    lane: usize,
+    clip: ClipId,
+    /// The child's own length and its slot's.
+    length: i64,
+    len: i64,
+    /// The clip's timeline length, and whether it holds a frame.
+    last: i64,
+    held: bool,
+    path: String,
+}
+
+/// The timeline lengths of the first and last clip `prim` emits in a slot `len` long, when it
+/// is one picture.
+fn edge_clips(prim: &Prim, len: i64) -> Option<(i64, i64)> {
+    let Prim::Visual(visual) = prim else {
+        return None;
+    };
+    Some(match &visual.content {
+        Content::Video(video) => {
+            match video_plan(video, &visual.head.path, Hold::None, len).ok()? {
+                VideoPlan::Play { play, freeze: true } => (play, len - play),
+                VideoPlan::Play { play, .. } => (play, play),
+                VideoPlan::Stretch | VideoPlan::Loop => (len, len),
+            }
+        }
+        _ => (len, len),
+    })
+}
+
+/// The clips a video becomes in a slot `len` long.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VideoPlan {
+    /// One clip whose source range fills the slot at another speed.
+    Stretch,
+    /// One clip that repeats its source range.
+    Loop,
+    /// One clip that plays `play` ticks, then a held last frame to the slot's end if `freeze`.
+    Play { play: i64, freeze: bool },
+}
+
+/// How `video` fills a slot `len` long under `hold`, or why it refuses to.
+fn video_plan(
+    video: &VideoContent,
+    path: &str,
+    hold: Hold,
+    len: i64,
+) -> Result<VideoPlan, ComposeError> {
+    let natural = video.natural();
+    let short = match video.when_short {
+        Some(policy) => policy,
+        None => match hold {
+            Hold::Loop => WhenShort::Loop,
+            Hold::Freeze | Hold::None => WhenShort::Freeze,
+        },
+    };
+    let refuse = |what: &str| {
+        ComposeError::new(
+            path,
+            format!("the video is {what} than its node, and it says to refuse that"),
+        )
+    };
+    if len > natural && !video.looped && short == WhenShort::Error {
+        return Err(refuse("shorter"));
+    }
+    if len < natural && video.when_long == WhenLong::Error {
+        return Err(refuse("longer"));
+    }
+    let stretches = !video.looped
+        && ((len > natural && short == WhenShort::Stretch)
+            || (len < natural && video.when_long == WhenLong::Stretch));
+    if stretches {
+        return Ok(VideoPlan::Stretch);
+    }
+    if video.looped || (short == WhenShort::Loop && len > natural) {
+        #[allow(clippy::float_cmp)]
+        let sped = video.speed != 1.0;
+        if sped {
+            return Err(ComposeError::new(
+                &format!("{path}.speed"),
+                "a video that loops (loop, when_short loop or a longest_loop grid) plays at speed 1",
+            ));
+        }
+        return Ok(VideoPlan::Loop);
+    }
+    let play = len.min(natural);
+    Ok(VideoPlan::Play {
+        play,
+        freeze: short == WhenShort::Freeze && len > play,
+    })
 }
 
 fn transition_ticks(transition: &Transition) -> i64 {
@@ -2608,7 +2995,7 @@ fn coverage_commutes(effect: &ClipEffect) -> bool {
     alpha2_model::builtin_effect(&effect.id).is_some_and(|spec| spec.coverage_commutes)
 }
 
-fn transition_effect_id(kind: &str) -> String {
+pub(crate) fn transition_effect_id(kind: &str) -> String {
     match kind {
         "crossfade" | "fade" => "alpha2.transition.fade".to_owned(),
         kind if kind.contains('.') => kind.to_owned(),
@@ -2692,19 +3079,9 @@ impl Fitted {
 /// node's end that would not follow the key before it falls one tick after it.
 fn resolve_keys<T: Clone>(keys: &[KeyPrim<T>], clip: TimeRange) -> Vec<(MediaTime, T, Easing)> {
     let length = clip.end().ticks() - clip.start().ticks();
-    let mut previous = None;
-    keys.iter()
-        .map(|key| {
-            let mut ticks = match key.at {
-                KeyTime::Ticks(ticks) => ticks,
-                KeyTime::End => length,
-            };
-            if let Some(previous) = previous
-                && ticks <= previous
-            {
-                ticks = previous + 1;
-            }
-            previous = Some(ticks);
+    key_ticks(keys, length)
+        .zip(keys)
+        .map(|(ticks, key)| {
             (
                 MediaTime::from_ticks(clip.start().ticks() + ticks),
                 key.value.clone(),
@@ -2712,6 +3089,45 @@ fn resolve_keys<T: Clone>(keys: &[KeyPrim<T>], clip: TimeRange) -> Vec<(MediaTim
             )
         })
         .collect()
+}
+
+/// Each key's ticks from the start of a span `length` long, as [`resolve_keys`] places them.
+fn key_ticks<T>(keys: &[KeyPrim<T>], length: i64) -> impl Iterator<Item = i64> + '_ {
+    let mut previous: Option<i64> = None;
+    keys.iter().map(move |key| {
+        let mut ticks = match key.at {
+            KeyTime::Ticks(ticks) => ticks,
+            KeyTime::End => length,
+        };
+        if let Some(previous) = previous
+            && ticks <= previous
+        {
+            ticks = previous + 1;
+        }
+        previous = Some(ticks);
+        ticks
+    })
+}
+
+/// The ticks of `anim`'s last key from the start of a span `length` long.
+pub(crate) fn last_key<T>(anim: &AnimPrim<T>, length: i64) -> Option<i64> {
+    match anim {
+        AnimPrim::Value(_) => None,
+        AnimPrim::Keys(keys) => key_ticks(keys, length).last(),
+    }
+}
+
+/// Refuses animations whose last keys, `last` ticks after `clip`'s start, fall past the latest
+/// time a project holds.
+fn keys_fit(
+    last: impl IntoIterator<Item = Option<i64>>,
+    clip: TimeRange,
+    path: &str,
+) -> Result<(), ComposeError> {
+    for ticks in last.into_iter().flatten() {
+        add_ticks(clip.start().ticks(), ticks, path)?;
+    }
+    Ok(())
 }
 
 /// `anim` as a property animation over `clip`.
@@ -3630,6 +4046,37 @@ impl Opacity {
     }
 }
 
+/// A generator's problem as text: where in its tree, and what.
+pub(crate) fn issue_text(issue: &alpha2_model::GeneratorIssue) -> String {
+    match issue {
+        alpha2_model::GeneratorIssue::Layout(issue) => format!("{} {}", issue.at, issue.problem),
+        alpha2_model::GeneratorIssue::Shape(issue) => format!("{} {}", issue.at, issue.problem),
+        alpha2_model::GeneratorIssue::Invalid => "a field is out of range".to_owned(),
+    }
+}
+
+/// A model refusal of the compiled project, reported at the node that made the refused object.
+pub(crate) fn model_refusal(error: &ModelError, made_by: &HashMap<String, String>) -> ComposeError {
+    let path_of = |id: &str| made_by.get(id).map_or("spec", String::as_str);
+    let path = error.subject().map_or("spec", |subject| match subject {
+        ErrorSubject::Clip(id) => path_of(id.as_str()),
+        ErrorSubject::Source(id) => path_of(id.as_str()),
+        ErrorSubject::Track(id) => path_of(id.as_str()),
+        ErrorSubject::Composition(id) => path_of(id.as_str()),
+        ErrorSubject::DataSet(id) => path_of(id.as_str()),
+        ErrorSubject::EffectResource(id) => path_of(id.as_str()),
+        _ => "spec",
+    });
+    let message = match error {
+        ModelError::OverlappingClips { first, .. } => format!(
+            "the compiled project is not valid: {error}; the other clip is {}'s",
+            path_of(first.as_str())
+        ),
+        _ => format!("the compiled project is not valid: {error}"),
+    };
+    ComposeError::new(path, message)
+}
+
 /// A project id from `name`: letters and digits, lowercased, words joined by `-`.
 fn project_id(name: &str) -> ProjectId {
     let slug = name
@@ -3662,7 +4109,7 @@ pub(crate) fn compile(
             ),
         ));
     }
-    let (mut context, background) = Context::new(spec, facts, fonts)?;
+    let mut context = Context::new(spec, facts, fonts)?;
     let body = context.lower(&spec.body, "spec.body")?;
     let overlays = spec
         .overlays
@@ -3689,7 +4136,7 @@ pub(crate) fn compile(
         .collect::<Result<Vec<_>, _>>()?;
     let total = match spec.duration {
         Some(seconds) => Context::time("spec", "duration", seconds)?,
-        None => context.length(&body).resolve(),
+        None => context.length(&body)?.resolve(),
     };
     if total <= 0 {
         return Err(ComposeError::new(
@@ -3716,9 +4163,25 @@ pub(crate) fn compile(
     let mut raw_sources = Vec::new();
     let mut raw_compositions = Vec::new();
     for prim in overlays.iter().chain(&audio) {
-        if let Prim::Raw(_, raw) = prim {
+        if let Prim::Raw(head, raw) = prim {
+            let ids = raw
+                .sources
+                .iter()
+                .map(|source| source.id.to_string())
+                .chain(raw.tracks.iter().flat_map(|track| {
+                    std::iter::once(track.id.to_string())
+                        .chain(track.clips.iter().map(|clip| clip.id.to_string()))
+                }))
+                .chain(
+                    raw.compositions
+                        .iter()
+                        .map(|composition| composition.id.to_string()),
+                );
+            for id in ids {
+                context.made_by.insert(id, head.path.clone());
+            }
             for track in &raw.tracks {
-                let mut lane = Lane::new(track.kind, &BTreeSet::new());
+                let mut lane = Lane::new(track.kind, &BTreeSet::new(), &prim.head().path);
                 lane.raw = Some(track.clone());
                 if track.kind == TrackKind::Audio {
                     lanes.audio.push(lane);
@@ -3740,7 +4203,7 @@ pub(crate) fn compile(
             continue;
         }
         let remaining = total - at;
-        let len = match context.length(prim) {
+        let len = match context.length(prim)? {
             Length::Fixed(ticks) => ticks.min(remaining),
             Length::Flexible(_) => remaining,
         };
@@ -3754,11 +4217,13 @@ pub(crate) fn compile(
         context.emit(prim, &slot, &mut placed)?;
         lanes.stack(placed);
     }
+    if spec.duration.is_some() {
+        context.fill_to(&mut lanes, total);
+    }
     assemble(
         spec,
         context,
         lanes,
-        background,
         raw_sources,
         raw_compositions,
         raw_assets,
@@ -3774,7 +4239,6 @@ fn assemble(
     spec: &VideoSpec,
     mut context: Context<'_>,
     lanes: Lanes,
-    background: Rgb,
     raw_sources: Vec<MediaSource>,
     raw_compositions: Vec<Composition>,
     raw_assets: BTreeMap<String, String>,
@@ -3786,6 +4250,17 @@ fn assemble(
         .into_iter()
         .chain(lanes.audio)
         .collect::<Vec<_>>();
+    if let Some(lane) = ordered.get(alpha2_model::MAX_TRACKS) {
+        return Err(ComposeError::new(
+            &lane.path,
+            format!(
+                "the video needs {} tracks, and a project holds at most {}; each stacked child, \
+                 grid cell and overlay takes its own",
+                ordered.len(),
+                alpha2_model::MAX_TRACKS
+            ),
+        ));
+    }
     let ids = ordered
         .iter()
         .map(|lane| match &lane.raw {
@@ -3794,6 +4269,12 @@ fn assemble(
                 .expect("not empty"),
         })
         .collect::<Vec<_>>();
+    for (lane, id) in ordered.iter().zip(&ids) {
+        context
+            .made_by
+            .entry(id.to_string())
+            .or_insert_with(|| lane.path.clone());
+    }
     let mut tracks = Vec::with_capacity(ordered.len());
     for (index, lane) in ordered.iter().enumerate() {
         if let Some(track) = &lane.raw {
@@ -3860,9 +4341,7 @@ fn assemble(
         tracks.push(track);
     }
     let name = spec.name.clone().unwrap_or_else(|| "video".to_owned());
-    let settings = ProjectSettings::new(context.width, context.height, context.rate, 48_000)
-        .and_then(|settings| settings.with_background(background))
-        .map_err(|error| ComposeError::new("spec.canvas", error.to_string()))?;
+    let settings = context.settings.clone();
     let mut sources = std::mem::take(&mut context.sources);
     sources.extend(raw_sources);
     let mut compositions = std::mem::take(&mut context.compositions);
@@ -3879,12 +4358,9 @@ fn assemble(
         timeline: Timeline { tracks },
         audio: alpha2_model::MasterAudio::default(),
     };
-    project.validate().map_err(|error| {
-        ComposeError::new(
-            "spec",
-            format!("the compiled project is not valid: {error}"),
-        )
-    })?;
+    project
+        .validate()
+        .map_err(|error| model_refusal(&error, &context.made_by))?;
     let mut assets = std::mem::take(&mut context.assets);
     assets.extend(raw_assets);
     let loudness = spec.loudness.map(|loudness| match loudness {

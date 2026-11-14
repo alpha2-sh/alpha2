@@ -1,23 +1,30 @@
 //! Runs wasm plugins as core modules in wasmtime with only the `alpha2` imports. A module has one
-//! capped 32-bit memory and one element bound for all its tables. Each call is bounded by an epoch
-//! deadline, and NaNs are canonicalized so results do not depend on the CPU.
+//! capped 32-bit memory and one element bound for all its tables. Each call ends at its wall-clock
+//! deadline or a cancel, checked at every epoch deadline, and NaNs are canonicalized so results do
+//! not depend on the CPU.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use alpha2_engine::extract::{AudioInput, ExtractorError};
+use alpha2_media::CancelToken;
 use alpha2_plugin_abi::wasm as names;
 use wasmtime::wasmparser::{Parser, Payload, TypeRef, Validator, WasmFeatures};
 use wasmtime::{
     Caller, Config, Engine, Instance, Linker, Memory, Module, ResourceLimiter, Store, Trap,
-    TypedFunc,
+    TypedFunc, UpdateDeadline,
 };
 
-use super::{Call, Collected, MAX_MEMORY_BYTES, OutputCap, PluginError, Policy, Transport, codes};
+use super::{
+    Call, Collected, LogBudget, MAX_FAIL_BYTES, MAX_LOG_BYTES, MAX_MEMORY_BYTES, OutputCap,
+    PluginError, Policy, Transport, bounded_text, codes,
+};
 
-/// How often the engine's epoch advances; deadlines are counted in these.
+/// How often the engine's epoch advances.
 const EPOCH_TICK: Duration = Duration::from_millis(10);
+/// Epoch ticks between two checks of a running call's deadline and cancel, 50 ms.
+const CHECK_TICKS: u64 = 5;
 /// Compiled modules kept by artifact hash, most recent last.
 const KEPT_MODULES: usize = 8;
 
@@ -194,6 +201,24 @@ struct State {
     collected: Collected,
     caps: Vec<OutputCap>,
     resources: HashMap<String, Vec<u8>>,
+    log: LogBudget,
+    cancel: CancelToken,
+    /// When the running call must have returned.
+    ends: Instant,
+    /// Set when the running call was interrupted by the cancel.
+    cancelled: bool,
+}
+
+/// Interrupts a call once the cancel is set or its deadline passed, else checks again later.
+fn check_call(state: &mut State) -> UpdateDeadline {
+    if state.cancel.is_cancelled() {
+        state.cancelled = true;
+        UpdateDeadline::Interrupt
+    } else if Instant::now() >= state.ends {
+        UpdateDeadline::Interrupt
+    } else {
+        UpdateDeadline::Continue(CHECK_TICKS)
+    }
 }
 
 fn memory(caller: &mut Caller<'_, State>) -> Option<Memory> {
@@ -288,9 +313,11 @@ fn linker() -> Result<Linker<State>, PluginError> {
             "alpha2",
             "fail",
             |mut caller: Caller<'_, State>, ptr: i32, len: i32| {
-                if let Some(message) = read(&mut caller, ptr, len) {
+                // One byte past the bound tells a cut message from one of exactly that length.
+                let kept = len.min(i32::try_from(MAX_FAIL_BYTES + 1).unwrap_or(i32::MAX));
+                if let Some(message) = read(&mut caller, ptr, kept) {
                     caller.data_mut().collected.failure =
-                        Some(String::from_utf8_lossy(&message).into_owned());
+                        Some(bounded_text(&message, MAX_FAIL_BYTES));
                 }
             },
         )
@@ -300,8 +327,9 @@ fn linker() -> Result<Linker<State>, PluginError> {
             "alpha2",
             "log",
             |mut caller: Caller<'_, State>, _level: i32, ptr: i32, len: i32| {
-                if let Some(message) = read(&mut caller, ptr, len) {
-                    super::log_line(&String::from_utf8_lossy(&message));
+                let kept = len.min(i32::try_from(MAX_LOG_BYTES + 1).unwrap_or(i32::MAX));
+                if let Some(message) = read(&mut caller, ptr, kept) {
+                    caller.data_mut().log.log(&message);
                 }
             },
         )
@@ -348,6 +376,7 @@ impl WasmTransport {
         resources: HashMap<String, Vec<u8>>,
         caps: Vec<OutputCap>,
         policy: &Policy,
+        cancel: CancelToken,
     ) -> Result<Self, PluginError> {
         check_module(bytes)?;
         let module = compiled(sha256, bytes)?;
@@ -369,11 +398,15 @@ impl WasmTransport {
                 collected: Collected::default(),
                 caps,
                 resources,
+                log: LogBudget::default(),
+                cancel,
+                ends: deadline_from_now(policy.call_deadline),
+                cancelled: false,
             },
         );
         store.limiter(|state| &mut state.limiter);
-        store.epoch_deadline_trap();
-        store.set_epoch_deadline(ticks(policy.call_deadline));
+        store.epoch_deadline_callback(|mut state| Ok(check_call(state.data_mut())));
+        store.set_epoch_deadline(CHECK_TICKS);
         let instance: Instance = match linker()?.instantiate(&mut store, &module) {
             Ok(instance) => instance,
             Err(error) => {
@@ -421,14 +454,17 @@ impl WasmTransport {
         })
     }
 
-    /// Why a call failed: a refused emit, past its memory cap or deadline, or trapped.
+    /// Why a call failed: cancelled, a refused emit, past its memory cap or deadline, or trapped.
     fn failure(&mut self, error: &wasmtime::Error) -> ExtractorError {
         let state = self.store.data_mut();
-        if let Some(reason) = std::mem::take(&mut state.collected).refusal {
+        let interrupted = matches!(error.downcast_ref::<Trap>(), Some(Trap::Interrupt));
+        if interrupted && std::mem::take(&mut state.cancelled) {
+            ExtractorError::with_code(super::CANCELLED, "the extraction was cancelled")
+        } else if let Some(reason) = std::mem::take(&mut state.collected).refusal {
             ExtractorError::with_code("INVALID_EMIT", reason)
         } else if let Some(hit) = state.limiter.hit.take() {
             ExtractorError::with_code(codes::LIMIT, limit_message(hit, self.memory_cap))
-        } else if matches!(error.downcast_ref::<Trap>(), Some(Trap::Interrupt)) {
+        } else if interrupted {
             ExtractorError::with_code(
                 codes::LIMIT,
                 format!(
@@ -443,8 +479,11 @@ impl WasmTransport {
 
     /// Starts a call: a fresh deadline, and no refusal left from an earlier call.
     fn start_call(&mut self) {
-        self.store.set_epoch_deadline(ticks(self.deadline));
-        self.store.data_mut().limiter.hit = None;
+        self.store.set_epoch_deadline(CHECK_TICKS);
+        let state = self.store.data_mut();
+        state.ends = deadline_from_now(self.deadline);
+        state.cancelled = false;
+        state.limiter.hit = None;
     }
 
     /// Runs `call` and turns its status into the call's outcome.
@@ -498,15 +537,18 @@ fn limit_message(hit: Hit, memory_cap: u64) -> String {
     }
 }
 
-fn ticks(deadline: Duration) -> u64 {
-    u64::try_from(deadline.as_millis() / EPOCH_TICK.as_millis())
-        .unwrap_or(u64::MAX)
-        .max(1)
+/// `deadline` from now; a deadline past what `Instant` holds is taken as about a century.
+fn deadline_from_now(deadline: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(deadline)
+        .or_else(|| now.checked_add(Duration::from_hours(100 * 365 * 24)))
+        .unwrap_or(now)
 }
 
 impl Transport for WasmTransport {
     fn describe(&mut self) -> Result<String, PluginError> {
         let failed = |why: String| PluginError::new(codes::DESCRIPTOR_MISMATCH, why);
+        self.start_call();
         let describe = self.exports.describe.clone();
         let packed = describe
             .call(&mut self.store, ())

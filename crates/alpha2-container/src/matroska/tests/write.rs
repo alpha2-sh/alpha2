@@ -321,3 +321,17 @@ fn a_silent_track_holds_back_others_only_for_ten_seconds() {
     assert_eq!(packets(&mut reader, TrackId(1)).len(), 360);
     assert_eq!(packets(&mut reader, TrackId(2)).len(), 0);
 }
+
+#[test]
+fn a_packet_time_beyond_the_millisecond_range_is_refused() {
+    let mut info = video_info(VideoCodec::Vp9);
+    info.timescale = 1000;
+    for pts in [i64::MAX, i64::MIN] {
+        let mut writer = MatroskaWriter::new(Shared::default(), MatroskaFlavor::Matroska);
+        let id = writer.add_track(&info).expect("track");
+        assert!(matches!(
+            writer.write(frame(id, pts, 0, true)),
+            Err(MuxError::Invalid(_))
+        ));
+    }
+}

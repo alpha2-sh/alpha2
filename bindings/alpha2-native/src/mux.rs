@@ -246,11 +246,13 @@ impl Muxer {
         };
         packet.set_stream_index(stream_index);
         packet.rescale_ts(source_time_base, stream_time_base);
+        let bytes = u64::try_from(packet.size).unwrap_or(0);
         self.format
             .as_mut()
             .ok_or_else(|| EncodeError::Adapter("muxer is already closed".into()))?
             .interleaved_write_frame(packet)
-            .map_err(|error| encode_adapter_error_at("packet write failed", error))
+            .map_err(|error| encode_adapter_error_at("packet write failed", error))?;
+        self.partial.wrote(bytes)
     }
 
     /// Writes one encoder video packet, in `encoder_time_base`.
@@ -296,11 +298,13 @@ impl Muxer {
         fill_frame_duration(packet, 1);
         packet.rescale_ts(encoder_time_base, self.stream_time_base);
         crate::encode::beat_encode_call();
+        let bytes = u64::try_from(packet.size).unwrap_or(0);
         self.format
             .as_mut()
             .ok_or_else(|| EncodeError::Adapter("muxer is already closed".into()))?
             .interleaved_write_frame(packet)
-            .map_err(|error| encode_adapter_error_at("packet write failed", error))
+            .map_err(|error| encode_adapter_error_at("packet write failed", error))?;
+        self.partial.wrote(bytes)
     }
 
     /// Buffers one audio block and hands every whole encoder frame to the thread.
@@ -397,10 +401,12 @@ impl Muxer {
                 .format
                 .as_mut()
                 .ok_or_else(|| EncodeError::Adapter("muxer is already closed".into()))?;
+            let bytes = u64::try_from(queued.packet.size).unwrap_or(0);
             timed(&mut stages.audio_mux_write, || {
                 format.interleaved_write_frame(&mut queued.packet)
             })
             .map_err(|error| encode_adapter_error_at("packet write failed", error))?;
+            self.partial.wrote(bytes)?;
         }
         Ok(())
     }

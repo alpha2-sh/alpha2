@@ -23,14 +23,16 @@ pub enum EditRequest {
         /// Keeps only the ranges, removing their complement within the target clips' extent.
         #[serde(default)]
         invert: bool,
-        /// Ticks kept at each edge of every removed range.
+        /// Ticks kept at each edge of every removed range; a negative value widens each range,
+        /// which never starts before time 0.
         #[serde(default)]
         padding: MediaTime,
         /// Removed ranges shorter than this, after padding, are kept.
         #[serde(default)]
         min_duration: MediaTime,
     },
-    /// Splits every target clip spanning a mapped time.
+    /// Splits every target clip spanning a mapped time, except where a cut would change what
+    /// the clip shows; those cuts are listed in [`EditReport::skipped`].
     SplitAt {
         /// An `intervals` data set's starts or an anchored list of ticks.
         times: Times,
@@ -174,6 +176,32 @@ pub struct Created {
     pub from: ClipId,
 }
 
+/// Why `split_at` left a cut out.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkipReason {
+    /// The cut, or a part boundary it makes in a loop, falls inside one of the clip's
+    /// transitions.
+    InTransition,
+    /// The cut falls inside one of the clip's fades.
+    InFade,
+    /// The clip is another clip's matte, and that clip is not cut alike.
+    MatteSource,
+    /// A binding reads through the clip (`via`), and its owner is not cut alike.
+    ReadThrough,
+}
+
+/// A cut `split_at` left out.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Skipped {
+    /// The clip.
+    pub clip: ClipId,
+    /// The cut, in timeline time.
+    pub time: MediaTime,
+    /// Why.
+    pub reason: SkipReason,
+}
+
 /// What an operation changed, so a caller can show and select it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct EditReport {
@@ -183,6 +211,9 @@ pub struct EditReport {
     pub moved: Vec<Moved>,
     /// Clips the operation created, with the clip each was cut from.
     pub created: Vec<Created>,
+    /// Cuts `split_at` left out, in clip and time order; omitted when there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<Skipped>,
 }
 
 /// Why an operation refused.
@@ -210,6 +241,9 @@ pub enum EditError {
     NothingToBake(String),
     /// A correction has no keyframe equivalent.
     CorrectionNotBakeable(String),
+    /// A bake target is a parameter of an effect the model has no range for (a host effect), so
+    /// the live value the renderer clamps cannot be written.
+    UnboundedParameter(String),
     /// The edit cuts a matte source where a clip it mattes is not cut, or removes it from under
     /// one, so no single part of it can stay that clip's matte.
     MatteSource(ClipId),
@@ -220,6 +254,41 @@ pub enum EditError {
         clip: ClipId,
         /// The binding's owner, such as `clip b`, `track t` or `the master bus`.
         by: String,
+    },
+    /// A removed range's edge, or a part boundary the removal makes in a loop, falls strictly
+    /// inside a transition of the clip it cuts.
+    InTransition {
+        /// The clip cut.
+        clip: ClipId,
+        /// Where, in timeline time.
+        time: MediaTime,
+    },
+    /// A removed range's edge falls strictly inside a fade of the clip it cuts.
+    InFade {
+        /// The clip cut.
+        clip: ClipId,
+        /// Where, in timeline time.
+        time: MediaTime,
+    },
+    /// The result would hold more clips on a track than a track holds.
+    TooManyClips {
+        /// The track.
+        track: TrackId,
+        /// The clips it would hold.
+        found: usize,
+        /// The most it holds.
+        maximum: usize,
+    },
+    /// A caption bake's cues do not fit a track: more than it holds, or words past the limits of
+    /// cues from words ([`alpha2_model::MAX_DERIVED_CUES`] cues or
+    /// [`alpha2_model::MAX_DATA_WORDS`] mapped words), which derive no cues to count.
+    TooManyCues {
+        /// The track.
+        track: TrackId,
+        /// The cues it would hold; `None` when the words pass the limits of cues from words.
+        found: Option<usize>,
+        /// The most it holds.
+        maximum: usize,
     },
     /// The edited project failed validation, which is a bug.
     InvalidResult(ModelError),
@@ -241,6 +310,10 @@ impl fmt::Display for EditError {
             Self::CorrectionNotBakeable(at) => {
                 write!(formatter, "{at} is a correction, which has no keyframes")
             }
+            Self::UnboundedParameter(at) => write!(
+                formatter,
+                "{at} is a parameter of an effect whose range only the renderer knows"
+            ),
             Self::MatteSource(clip) => write!(
                 formatter,
                 "clip {clip} is another clip's matte, and the edit cuts the two apart"
@@ -248,6 +321,40 @@ impl fmt::Display for EditError {
             Self::ReadThrough { clip, by } => write!(
                 formatter,
                 "{by} reads data through clip {clip}, and the edit cuts the two apart"
+            ),
+            Self::InTransition { clip, time } => write!(
+                formatter,
+                "the edit cuts clip {clip} at {} inside one of its transitions",
+                time.ticks()
+            ),
+            Self::InFade { clip, time } => write!(
+                formatter,
+                "the edit cuts clip {clip} at {} inside one of its fades",
+                time.ticks()
+            ),
+            Self::TooManyClips {
+                track,
+                found,
+                maximum,
+            } => write!(
+                formatter,
+                "the edit leaves {found} clips on track {track}; a track holds {maximum}"
+            ),
+            Self::TooManyCues {
+                track,
+                found: Some(found),
+                maximum,
+            } => write!(
+                formatter,
+                "the bake writes {found} cues on track {track}; a track holds {maximum}"
+            ),
+            Self::TooManyCues {
+                track, found: None, ..
+            } => write!(
+                formatter,
+                "the words of track {track} derive more than {} cues or map more than {} words",
+                alpha2_model::MAX_DERIVED_CUES,
+                alpha2_model::MAX_DATA_WORDS
             ),
             Self::InvalidResult(error) => {
                 write!(formatter, "the edited project is invalid: {error}")
@@ -261,7 +368,8 @@ impl std::error::Error for EditError {}
 impl EditError {
     /// The refusal in snake case, as every binding reports it: `unknown_data`, `wrong_kind`,
     /// `unknown_target`, `empty_target`, `missing_anchor`, `invalid_range`, `nothing_to_bake`,
-    /// `correction_not_bakeable`, `matte_source`, `read_through` or `invalid_result`.
+    /// `correction_not_bakeable`, `unbounded_parameter`, `matte_source`, `read_through`,
+    /// `in_transition`, `in_fade`, `too_many_clips`, `too_many_cues` or `invalid_result`.
     #[must_use]
     pub const fn kind(&self) -> &'static str {
         match self {
@@ -273,8 +381,13 @@ impl EditError {
             Self::InvalidRange(_) => "invalid_range",
             Self::NothingToBake(_) => "nothing_to_bake",
             Self::CorrectionNotBakeable(_) => "correction_not_bakeable",
+            Self::UnboundedParameter(_) => "unbounded_parameter",
             Self::MatteSource(_) => "matte_source",
             Self::ReadThrough { .. } => "read_through",
+            Self::InTransition { .. } => "in_transition",
+            Self::InFade { .. } => "in_fade",
+            Self::TooManyClips { .. } => "too_many_clips",
+            Self::TooManyCues { .. } => "too_many_cues",
             Self::InvalidResult(_) => "invalid_result",
         }
     }

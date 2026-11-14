@@ -3,7 +3,8 @@
 # pages, its uniffi Kotlin bindings, then the Gradle library in packages/alpha2-android. Needs the
 # NDK (ANDROID_NDK_HOME), cargo-ndk, Gradle 8.11 or later on PATH, and the Android SDK
 # (ANDROID_HOME). PROFILE=debug builds unoptimized libraries. ALPHA2_NOTICES names the Rust crate
-# license notices (scripts/crate-licenses.mjs) the library ships in META-INF/alpha2/.
+# license notices (scripts/crate-licenses.mjs) the library ships in META-INF/alpha2/ beside
+# LICENSE.md and THIRD_PARTY_NOTICES.md.
 # ALPHA2_ANDROID_ABIS limits the ABIs built (default "arm64-v8a x86_64"), as an emulator test needs
 # only its own.
 #
@@ -46,6 +47,7 @@ done
 notices=$library/build/notices
 rm -rf "$notices"
 mkdir -p "$notices/META-INF/alpha2"
+cp LICENSE.md THIRD_PARTY_NOTICES.md "$notices/META-INF/alpha2/"
 if [ -n "${ALPHA2_NOTICES:-}" ]; then
   cp "$ALPHA2_NOTICES" "$notices/META-INF/alpha2/rust-crate-licenses.md"
 fi

@@ -167,6 +167,24 @@ fn a_fingerprint_records_the_streams_a_reader_plays() {
     }
 }
 
+#[test]
+fn a_video_of_a_codec_off_the_decoder_list_conforms_as_unsupported_naming_its_decoder() {
+    use crate::assets::{HardwareVideoDecode, fingerprint};
+    // The FFV1 stream relabelled as Cinepak, which the runtime has and the list leaves out.
+    let mut avi = std::fs::read(corpus("odd-dimensions.avi")).expect("corpus AVI");
+    for at in 0..avi.len() - 4 {
+        if &avi[at..at + 4] == b"FFV1" {
+            avi[at..at + 4].copy_from_slice(b"cvid");
+        }
+    }
+    let directory = scratch_directory("cinepak");
+    let path = directory.join("cinepak.avi");
+    std::fs::write(&path, &avi).expect("fixture");
+    let reason = fingerprint(&path, false, false, &HardwareVideoDecode::None)
+        .expect_err("an unlisted decoder is refused");
+    assert!(reason.contains("cinepak"), "{reason}");
+}
+
 /// A 4:3 picture of 4:3 pixels shows 16:9, so it is no proxy of a 4:3 picture of square pixels.
 #[test]
 fn a_proxy_shows_the_shape_its_original_shows() {
@@ -295,7 +313,7 @@ fn a_panic_handling_a_request_fails_that_request_and_the_host_answers_the_next()
         .expect_err("the export's conform panics");
     assert_eq!(error.code, "INTERNAL");
     let failure = error.failure.expect("an export failure report");
-    assert_eq!(failure["code"], "UNKNOWN");
+    assert_eq!(failure["code"], "DEFECT");
     assert_eq!(failure["hostCode"], "INTERNAL");
     assert_eq!(failure["phase"], "prepare");
     assert!(!refused.exists());

@@ -4,7 +4,7 @@
 use bytes::Bytes;
 
 use super::boxes::{RawBox, Reader, children, find};
-use crate::{DemuxError, FourCc};
+use crate::{DemuxError, FourCc, MAX_TRACKS};
 
 /// A 3x3 display matrix in 16.16 fixed point, its last column in 2.30.
 pub(crate) type Matrix = [[i32; 3]; 3];
@@ -155,6 +155,11 @@ pub(crate) fn parse_moov(data: &Bytes, brands: Brands) -> Result<Movie, DemuxErr
         match &child.kind.0 {
             b"mvhd" => parse_mvhd(&child, &mut movie)?,
             b"trak" => {
+                if movie.tracks.len() == MAX_TRACKS {
+                    return Err(DemuxError::Invalid(
+                        "the file has more tracks than this layer reads".into(),
+                    ));
+                }
                 let trak = parse_trak(&child, brands, movie.matrix)?;
                 movie.tracks.push(trak);
             }

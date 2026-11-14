@@ -21,14 +21,15 @@ use alpha2_gpu::GpuErrorKind;
 use crate::Shared;
 use crate::retire::Retirement;
 
-/// Validation and out-of-memory scopes of one renderer encoder, from creation to submission.
+/// Internal, out-of-memory and validation scopes of one renderer encoder, from creation to
+/// submission.
 ///
 /// Scopes are per thread and close in reverse order, so this is neither `Send` nor `Sync`, and
 /// a nested encoder must be submitted or dropped first.
 #[derive(Debug)]
 pub(crate) struct FrameErrorScope {
     #[cfg(not(target_arch = "wasm32"))]
-    scopes: Option<[wgpu::ErrorScopeGuard; 2]>,
+    scopes: Option<[wgpu::ErrorScopeGuard; 3]>,
     /// Told when an encoder is dropped unsubmitted with an error, since it may have pooled an
     /// invalid resource.
     retirement: Shared<Retirement>,
@@ -45,6 +46,7 @@ impl FrameErrorScope {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             scopes: Some([
+                device.push_error_scope(wgpu::ErrorFilter::Internal),
                 device.push_error_scope(wgpu::ErrorFilter::OutOfMemory),
                 device.push_error_scope(wgpu::ErrorFilter::Validation),
             ]),
@@ -54,18 +56,20 @@ impl FrameErrorScope {
         }
     }
 
-    /// Closes the scopes and returns the error, out-of-memory first because a failed allocation
-    /// also causes validation errors downstream.
+    /// Closes the scopes and returns the error: out-of-memory first because a failed allocation
+    /// also causes validation errors downstream, then internal, then validation.
     pub(crate) fn close(mut self) -> Option<GpuErrorKind> {
         self.pop()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn pop(&mut self) -> Option<GpuErrorKind> {
-        let [out_of_memory, validation] = self.scopes.take()?;
+        let [internal, out_of_memory, validation] = self.scopes.take()?;
         let validation = resolved(validation.pop());
         let out_of_memory = resolved(out_of_memory.pop());
+        let internal = resolved(internal.pop());
         out_of_memory
+            .or(internal)
             .or(validation)
             .map(|error| GpuErrorKind::of(&error))
     }
@@ -112,6 +116,89 @@ pub(crate) fn capture_creation<T>(
     {
         (create(), None)
     }
+}
+
+/// Scopes for every error class shader-module or pipeline creation can raise.
+///
+/// `wgpu` routes an error only to a scope of its class. A backend compiler rejecting code
+/// generated from valid WGSL reports an internal error, and OOM its own class; uncaught, either
+/// leaves an invalid pipeline that invalidates every submission drawing it.
+pub(crate) struct CreationErrorScopes([wgpu::ErrorScopeGuard; 3]);
+
+impl CreationErrorScopes {
+    pub(crate) fn push(device: &wgpu::Device) -> Self {
+        Self([
+            device.push_error_scope(wgpu::ErrorFilter::Internal),
+            device.push_error_scope(wgpu::ErrorFilter::OutOfMemory),
+            device.push_error_scope(wgpu::ErrorFilter::Validation),
+        ])
+    }
+
+    /// Pops the scopes in reverse push order and returns what they caught.
+    pub(crate) fn pop(self) -> ScopeErrors {
+        let [internal, out_of_memory, validation] = self.0;
+        let validation = validation.pop();
+        let out_of_memory = out_of_memory.pop();
+        let internal = internal.pop();
+        Box::pin(async move {
+            [validation.await, out_of_memory.await, internal.await]
+                .into_iter()
+                .flatten()
+                .collect()
+        })
+    }
+}
+
+/// Not `Send` in a browser, where the device answers on its own event loop.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) type Answer<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
+#[cfg(target_arch = "wasm32")]
+pub(crate) type Answer<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T>>>;
+
+pub(crate) type ScopeErrors = Answer<Vec<wgpu::Error>>;
+
+/// Runs `create` under scopes of every creation error class and returns the first error caught:
+/// out-of-memory, then internal, then validation.
+///
+/// Lazily created pipelines keep only a success, so a failed creation fails its frame and the
+/// next frame tries again. In a browser scopes answer only on the event loop, so this is `Ok`.
+#[cfg_attr(target_arch = "wasm32", allow(clippy::unnecessary_wraps))]
+pub(crate) fn create_checked<T>(
+    #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] device: &wgpu::Device,
+    create: impl FnOnce() -> T,
+) -> Result<T, GpuErrorKind> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let CreationErrorScopes([internal, out_of_memory, validation]) =
+            CreationErrorScopes::push(device);
+        let created = create();
+        let validation = resolved(validation.pop());
+        let out_of_memory = resolved(out_of_memory.pop());
+        let internal = resolved(internal.pop());
+        match out_of_memory.or(internal).or(validation) {
+            Some(error) => Err(GpuErrorKind::of(&error)),
+            None => Ok(created),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        Ok(create())
+    }
+}
+
+/// `cell`'s value, created by `create` under [`create_checked`] when empty. A failed creation
+/// stores nothing.
+pub(crate) fn checked_cell<'a, T>(
+    cell: &'a std::sync::OnceLock<T>,
+    device: &wgpu::Device,
+    create: impl FnOnce() -> T,
+) -> Result<&'a T, crate::RenderError> {
+    if let Some(value) = cell.get() {
+        return Ok(value);
+    }
+    let created =
+        create_checked(device, create).map_err(|kind| crate::RenderError::Gpu { kind })?;
+    Ok(cell.get_or_init(|| created))
 }
 
 /// A native scope's result, ready when popped on `wgpu-core`.

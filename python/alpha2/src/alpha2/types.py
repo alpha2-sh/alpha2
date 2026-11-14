@@ -16,8 +16,14 @@ AUDIO_EFFECT_STATE_MARGIN_MS = 1100
 CURRENT_SCHEMA_VERSION = 1
 """Mirrors `alpha2_model::CURRENT_SCHEMA_VERSION`."""
 
+MAX_ANIMATOR_OFFSET = 1024
+"""Mirrors `alpha2_model::MAX_ANIMATOR_OFFSET`."""
+
 MAX_ANIMATOR_SCALE = 10
 """Mirrors `alpha2_model::MAX_ANIMATOR_SCALE`."""
+
+MAX_ASPECT_RATIO = 10000
+"""Mirrors `alpha2_model::MAX_ASPECT_RATIO`."""
 
 MAX_AUDIO_CHANNELS = 24
 """Mirrors `alpha2_model::MAX_AUDIO_CHANNELS`."""
@@ -115,8 +121,14 @@ MAX_DATA_VALUES = 4000000
 MAX_DATA_WORDS = 200000
 """Mirrors `alpha2_model::MAX_DATA_WORDS`."""
 
+MAX_DERIVED_CUES = 65536
+"""Mirrors `alpha2_model::MAX_DERIVED_CUES`."""
+
 MAX_EFFECT_INPUTS = 8
 """Mirrors `alpha2_model::MAX_EFFECT_INPUTS`."""
+
+MAX_EFFECT_RESOURCES = 10000
+"""Mirrors `alpha2_model::MAX_EFFECT_RESOURCES`."""
 
 MAX_ENVELOPE_MS = 10000
 """Mirrors `alpha2_model::MAX_ENVELOPE_MS`."""
@@ -132,6 +144,12 @@ MAX_EQ_GAIN_DB = 36
 
 MAX_EQ_Q = 50
 """Mirrors `alpha2_model::MAX_EQ_Q`."""
+
+MAX_FLEX_FACTOR = 1000000
+"""Mirrors `alpha2_model::MAX_FLEX_FACTOR`."""
+
+MAX_FOLLOW_DEPTH = 8
+"""Mirrors `alpha2_model::MAX_FOLLOW_DEPTH`."""
 
 MAX_FONT_FAMILY_BYTES = 256
 """Mirrors `alpha2_model::MAX_FONT_FAMILY_BYTES`."""
@@ -160,6 +178,9 @@ MAX_HDR_PEAK_NITS = 10000
 MAX_INLINED_NODES = 65536
 """Mirrors `alpha2_model::MAX_INLINED_NODES`."""
 
+MAX_KEYFRAMES = 100000
+"""Mirrors `alpha2_model::MAX_KEYFRAMES`."""
+
 MAX_LATEX_BYTES = 4096
 """Mirrors `alpha2_model::MAX_LATEX_BYTES`."""
 
@@ -172,11 +193,20 @@ MAX_LAYOUT_DEPTH = 16
 MAX_LAYOUT_FONT_SIZE = 1
 """Mirrors `alpha2_model::MAX_LAYOUT_FONT_SIZE`."""
 
+MAX_LAYOUT_FRACTION = 1024
+"""Mirrors `alpha2_model::MAX_LAYOUT_FRACTION`."""
+
 MAX_LAYOUT_ISOLATED = 16
 """Mirrors `alpha2_model::MAX_LAYOUT_ISOLATED`."""
 
 MAX_LAYOUT_NODES = 256
 """Mirrors `alpha2_model::MAX_LAYOUT_NODES`."""
+
+MAX_LAYOUT_PERCENT = 100000
+"""Mirrors `alpha2_model::MAX_LAYOUT_PERCENT`."""
+
+MAX_LAYOUT_PX = 16777216
+"""Mirrors `alpha2_model::MAX_LAYOUT_PX`."""
 
 MAX_LAYOUT_TEXTS = 64
 """Mirrors `alpha2_model::MAX_LAYOUT_TEXTS`."""
@@ -189,6 +219,9 @@ MAX_LINE_HEIGHT = 3
 
 MAX_LOOKAHEAD_MS = 100
 """Mirrors `alpha2_model::MAX_LOOKAHEAD_MS`."""
+
+MAX_LOOP_PASSES = 65536
+"""Mirrors `alpha2_model::MAX_LOOP_PASSES`."""
 
 MAX_LOTTIE_DOCUMENT_BYTES = 16777216
 """Mirrors `alpha2_model::MAX_LOTTIE_DOCUMENT_BYTES`."""
@@ -256,6 +289,9 @@ MAX_TEXT_GENERATOR_FONT_SIZE = 1
 MAX_TEXT_PADDING = 2
 """Mirrors `alpha2_model::MAX_TEXT_PADDING`."""
 
+MAX_TEXT_POSITION = 1024
+"""Mirrors `alpha2_model::MAX_TEXT_POSITION`."""
+
 MAX_TEXT_RUNS = 512
 """Mirrors `alpha2_model::MAX_TEXT_RUNS`."""
 
@@ -279,6 +315,9 @@ MAX_TRACKS = 256
 
 MAX_TRANSITIONS_PER_TRACK = 4096
 """Mirrors `alpha2_model::MAX_TRANSITIONS_PER_TRACK`."""
+
+MIN_ASPECT_RATIO = 0.0001
+"""Mirrors `alpha2_model::MIN_ASPECT_RATIO`."""
 
 MIN_EQ_FREQUENCY_HZ = 10
 """Mirrors `alpha2_model::MIN_EQ_FREQUENCY_HZ`."""
@@ -2881,7 +2920,9 @@ class TextAnimatorProperties(TypedDict):
     rotation_degrees: NotRequired[Animated[float] | None]
     """Turns the character about its centre, clockwise degrees."""
     scale: NotRequired[Animated[Vec2] | None]
-    """Scales the character about its centre; 1 is none. Each axis in `[0, 10]`."""
+    """Scales the character about its centre; 1 is none. Each axis in `[0, 10]`. The scales of
+    several animators multiply, and the product is at most 10 on each axis.
+    """
     stroke: NotRequired[Keyframed[Rgba] | None]
     """The color every stroke of a fully selected character takes."""
     tracking: NotRequired[Animated[float] | None]
@@ -3044,7 +3085,7 @@ class TextStyle(TypedDict):
     """
     anchor: NotRequired[Vec2]
     """The point of the text, background included, placed at `position`; `(0.5, 1)` is its
-    bottom centre.
+    bottom centre. Each coordinate within `MAX_TEXT_POSITION`.
 
     Default: `{"x":0.5,"y":1}`.
     """
@@ -3115,7 +3156,8 @@ class TextStyle(TypedDict):
     Default: `0.9`.
     """
     position: NotRequired[Vec2]
-    """Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right.
+    """Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right;
+    each coordinate within `MAX_TEXT_POSITION`.
 
     Default: `{"x":0.5,"y":0.92}`.
     """

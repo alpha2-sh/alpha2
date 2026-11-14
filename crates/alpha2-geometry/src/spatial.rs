@@ -19,7 +19,9 @@ pub fn point_along(
 ) -> Point {
     let curve = CubicBez::new(from, from + out_tangent, to + in_tangent, to);
     let segment = PathSeg::Cubic(curve);
-    let total = arclen::length(&segment);
+    // Relative to the curve, since positions are normalized while `ACCURACY` is in pixels.
+    let tolerance = 1e-7 * arclen::gauss(&segment, 0.0, 1.0);
+    let total = arclen::length_within(&segment, 0.0, 1.0, tolerance);
     if total <= 0.0 {
         return from;
     }
@@ -31,7 +33,7 @@ pub fn point_along(
         let direction = unit(to - (to + in_tangent), to - from);
         return to + direction * ((amount - 1.0) * total);
     }
-    let t = arclen::parameter_at(&segment, amount * total, total);
+    let t = arclen::parameter_within(&segment, amount * total, total, tolerance);
     arclen::point_at(&segment, t)
 }
 

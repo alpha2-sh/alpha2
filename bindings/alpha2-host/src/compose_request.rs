@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use crate::protocol::{ComposeRequest, HostError};
+use crate::protocol::{ComposeRequest, EditRequest, HostError};
 
 /// A compose error as `INVALID_INPUT`, with `path` and `problem` in its details.
 fn refused(error: &alpha2_compose::ComposeError) -> HostError {
@@ -46,6 +46,23 @@ pub(crate) fn injected_panic(operation: &str) {
         !INJECT_REQUEST_PANIC.swap(false, std::sync::atomic::Ordering::Relaxed),
         "injected panic in {operation}"
     );
+}
+
+/// The edited project as the engine's canonical text, and the report.
+///
+/// # Errors
+/// `INVALID_INPUT` for an invalid project or operation and for every refusal, `INTERNAL` for an
+/// edited project that fails validation; `details.refusal` names why.
+pub fn answer_edit(request: &EditRequest) -> Result<Value, HostError> {
+    #[cfg(test)]
+    injected_panic("edit");
+    let edited = alpha2_eval::edit::apply_json(request.project.text(), request.edit.get())
+        .map_err(|failure| {
+            HostError::new(failure.code, failure.message)
+                .with_details(json!({ "refusal": failure.refusal }))
+        })?;
+    let report: Value = serde_json::from_str(&edited.report).map_err(HostError::json)?;
+    Ok(json!({ "projectJson": edited.project, "report": report }))
 }
 
 /// Answers a compose request.
@@ -91,7 +108,15 @@ pub fn answer(request: &ComposeRequest) -> Result<Value, HostError> {
                 &fonts,
             )
             .map_err(|error| refused(&error))?;
-            parsed(&compiled)
+            let mut answer = parsed(&compiled)?;
+            // An answer's loudness is the one `export` takes.
+            if let Some(loudness) = answer.get_mut("loudness").filter(|value| !value.is_null()) {
+                *loudness = json!({
+                    "targetLufs": loudness["target_lufs"],
+                    "truePeakCeilingDbtp": loudness["true_peak_ceiling_dbtp"],
+                });
+            }
+            Ok(answer)
         }
         "bind" => parsed(
             &alpha2_compose::bind_json(

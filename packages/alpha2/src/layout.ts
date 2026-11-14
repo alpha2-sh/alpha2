@@ -72,7 +72,8 @@ export interface NodeBounds {
   readonly content: LayoutRect;
   /**
    * Text (at its fitted size, once clamped) is taller than the content box or splits a word, or
-   * an in-flow child reaches past the padding box. Rendering draws it anyway.
+   * an in-flow child reaches past the padding box. Rendering draws it anyway, except a text box
+   * over 16,384 pixels a side, which the text host refuses and frames fail on.
    */
   readonly overflow: boolean;
   /** `null` for non-text nodes. */

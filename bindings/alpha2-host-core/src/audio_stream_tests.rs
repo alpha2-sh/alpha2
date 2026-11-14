@@ -77,9 +77,11 @@ impl ContainerReader for Pcm {
         self.next += 1;
         let mut data = Vec::with_capacity(samples * 4);
         for index in 0..samples {
-            let value =
-                i16::try_from((pts + i64::try_from(index).expect("small")).rem_euclid(1000))
-                    .expect("small");
+            let value = i16::try_from(
+                pts.wrapping_add(i64::try_from(index).expect("small"))
+                    .rem_euclid(1000),
+            )
+            .expect("small");
             data.extend_from_slice(&value.to_le_bytes());
             data.extend_from_slice(&value.to_le_bytes());
         }
@@ -331,4 +333,83 @@ fn the_seek_pre_roll_follows_the_codec() {
     );
     assert_eq!(ticks(seek_preroll(&pcm, 48_000, 48_000)), 12_000 + 3);
     assert_eq!(ticks(seek_preroll(&pcm, 48_000, 44_100)), 12_000 + 3 + 45);
+}
+
+#[test]
+fn a_timestamp_beyond_the_audio_range_is_corruption() {
+    let beyond = ((1_i64 << 31) + 1) * 48_000;
+    for (pts, discard) in [
+        (i64::MIN + 10, (0, 0)),
+        (i64::MAX - 1, (512, 0)),
+        (beyond, (0, 0)),
+        (-beyond, (0, 0)),
+    ] {
+        let mut stream = open(&[(0, 1_024, (0, 0)), (pts, 1_024, discard)], 48_000);
+        let cancel = CancelToken::default();
+        let failed = loop {
+            match stream.next_block(&cancel) {
+                Ok(Some(_)) => {}
+                Ok(None) => break false,
+                Err(_) => break true,
+            }
+        };
+        assert!(failed, "{pts}");
+        let corrupt = &stream.recovery().diagnostics.corrupt_packets;
+        assert_eq!(corrupt.len(), 1, "{pts}");
+        assert_eq!(corrupt[0].pts, Some(pts));
+
+        let mut tolerant = AudioStream::open(
+            pcm(&[
+                (0, 1_024, (0, 0)),
+                (pts, 1_024, discard),
+                (1_024, 1_024, (0, 0)),
+            ]),
+            0,
+            &WithPcm(PcmOnly),
+            48_000,
+            DecodePolicy::Tolerant,
+        )
+        .expect("open");
+        let (start, samples) = linear(&mut tolerant);
+        assert_eq!((start, samples.len()), (0, 2_048), "{pts}");
+    }
+}
+
+#[test]
+fn matroska_audio_timestamps_no_sample_index_holds_are_corruption() {
+    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
+    let cancel = CancelToken::default();
+    for name in ["audio-pts-ahead.mkv", "audio-pts-behind.mkv"] {
+        let mut strict = AudioStream::open_file(
+            &corpus.join(name),
+            &WithPcm(PcmOnly),
+            44_100,
+            None,
+            DecodePolicy::Strict,
+        )
+        .expect("open");
+        let error = loop {
+            match strict.next_block(&cancel) {
+                Ok(Some(_)) => {}
+                Ok(None) => panic!("{name}: strict decoding took every timestamp"),
+                Err(error) => break error,
+            }
+        };
+        assert!(
+            error.to_string().contains("audio timestamp"),
+            "{name}: {error}"
+        );
+    }
+    // Tolerant decoding drops the ten blocks 3e17 ms before zero and plays the twenty from zero.
+    let mut tolerant = AudioStream::open_file(
+        &corpus.join("audio-pts-behind.mkv"),
+        &WithPcm(PcmOnly),
+        44_100,
+        None,
+        DecodePolicy::Tolerant,
+    )
+    .expect("open");
+    let (start, samples) = linear(&mut tolerant);
+    assert_eq!((start, samples.len()), (0, 20 * 1_024));
+    assert_eq!(tolerant.recovery().diagnostics.corrupt_packets.len(), 10);
 }

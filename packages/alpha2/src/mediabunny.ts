@@ -24,6 +24,7 @@ export type {
   VideoLatencyProbe,
 } from "./export-metrics.js";
 import { decodeFailureOf, withSoftwareFallback } from "./decoder-fallback.js";
+import { isUnreadableFrame, withReadbackRetries } from "./frame-intake.js";
 import {
   ALL_FORMATS,
   AudioSample,
@@ -94,6 +95,7 @@ import type { VideoRateControl } from "./rate-control.js";
 import { type ExportContainer, resolveExportFormat } from "./containers.js";
 import type { PositionedWrite } from "./export-destination.js";
 import { ExportFailureError } from "./export-failure.js";
+import { nextSampleOrStall } from "./decoder-stall.js";
 
 // Up to 2 s ahead decodes forward instead of seeking; also the longest step of a backward run.
 const MAX_SEQUENTIAL_DECODE_GAP_TICKS = 240_000n;
@@ -129,6 +131,7 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
   readonly #input: Input;
   readonly #track: InputVideoTrack;
   #sink: VideoSampleSink;
+  readonly #openedAcceleration: HardwareAcceleration;
   #hardwareAcceleration: HardwareAcceleration;
   #softwareFallback?: string;
   #decodedAny = false;
@@ -172,6 +175,7 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     this.#sourceId = sourceId;
     this.#input = input;
     this.#track = track;
+    this.#openedAcceleration = hardwareAcceleration;
     this.#hardwareAcceleration = hardwareAcceleration;
     this.#sink = new VideoSampleSink(track, { hardwareAcceleration });
     this.#packets = packets;
@@ -295,12 +299,20 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
   /**
    * The frame presented at the request's time. A decoder failure (Chromium's VA-API decoders report
    * `EncodingError`) retries once with a software decoder; if that fails, rejects with
-   * {@link DecodeUnavailableError} when no frame was ever decoded, else with the failure.
+   * {@link DecodeUnavailableError} when no frame was ever decoded, else with the failure, and the
+   * next request decodes with the acceleration the decoder was opened with. A `device-recovery`
+   * request also returns a decoder that fell back to that acceleration.
    */
   async refill(
     request: DecoderRefillRequest,
     signal?: AbortSignal,
   ): Promise<BrowserDecodedFrame> {
+    if (
+      request.reason === "device-recovery" &&
+      !this.#closed &&
+      this.#hardwareAcceleration !== this.#openedAcceleration
+    )
+      await this.#useAcceleration(this.#openedAcceleration);
     try {
       const frame = await withSoftwareFallback(
         () => this.#refill(request, signal),
@@ -309,16 +321,10 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
           signal?.aborted === true
           ? undefined
           : async (cause) => {
-              await this.#resetIterator();
-              this.#cache.clear();
-              this.#reverse.clear();
-              this.#backwardSteps = 0;
-              this.#hardwareAcceleration = "prefer-software";
+              await this.#useAcceleration("prefer-software");
               this.#softwareFallback = `${cause.name}: ${cause.message}`;
-              this.#sink = new VideoSampleSink(this.#track, {
-                hardwareAcceleration: "prefer-software",
-              });
             },
+        () => this.#useAcceleration(this.#openedAcceleration),
       );
       this.#decodedAny = true;
       return frame;
@@ -332,6 +338,19 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
         false,
       );
     }
+  }
+
+  async #useAcceleration(acceleration: HardwareAcceleration): Promise<void> {
+    await this.#resetIterator();
+    this.#cache.clear();
+    this.#reverse.clear();
+    this.#backwardSteps = 0;
+    this.#hardwareAcceleration = acceleration;
+    if (acceleration === this.#openedAcceleration)
+      this.#softwareFallback = undefined;
+    this.#sink = new VideoSampleSink(this.#track, {
+      hardwareAcceleration: acceleration,
+    });
   }
 
   async #refill(
@@ -513,56 +532,29 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
           sample.close();
         }
       }
+    } catch (error) {
+      if (!(error instanceof UnreadableFrameError)) throw error;
+      // The forward path answers this request; it decodes and reads frames again.
+      this.#reverse.clear();
+      this.#backwardSteps = 0;
+      return;
     } finally {
       await iterator.return?.();
     }
     this.#reverseWindowsBuilt += 1;
   }
 
-  /**
-   * Rejects when the decoder produces nothing within the stall timeout, since a hardware decoder
-   * with all surfaces held waits silently. The iterator is then ended and a late frame closed.
-   */
-  async #nextSample(
+  /** A hardware decoder with all surfaces held waits silently, so every read has a stall limit. */
+  #nextSample(
     iterator: AsyncIterator<VideoSample>,
     signal?: AbortSignal,
   ): Promise<IteratorResult<VideoSample>> {
-    const pending = iterator.next();
-    const settled = new AbortController();
-    let abort: (() => void) | undefined;
-    const interrupted = new Promise<never>((_, reject) => {
-      // Active time, so a frozen page does not count as a stalled decoder.
-      void activeTimeout(this.#stallTimeoutMs, settled.signal).then(() =>
-        reject(
-          new Error(
-            `video decoder ${this.#sourceId} stalled: no frame for ${this.#stallTimeoutMs} ms`,
-          ),
-        ),
-      );
-      if (signal === undefined) return;
-      abort = () =>
-        reject(
-          signal.reason instanceof Error
-            ? signal.reason
-            : new DOMException("Aborted", "AbortError"),
-        );
-      signal.addEventListener("abort", abort, { once: true });
+    return nextSampleOrStall(iterator, {
+      stallMs: this.#stallTimeoutMs,
+      signal,
+      sourceId: this.#sourceId,
+      kind: "video",
     });
-    try {
-      return await Promise.race([pending, interrupted]);
-    } catch (error) {
-      void pending.then(
-        (late) => {
-          if (!late.done) late.value.close();
-        },
-        () => {},
-      );
-      void iterator.return?.()?.catch(() => {});
-      throw error;
-    } finally {
-      settled.abort();
-      if (abort !== undefined) signal?.removeEventListener("abort", abort);
-    }
   }
 
   async #keyframeSeconds(target: bigint): Promise<number> {
@@ -827,7 +819,14 @@ export async function streamChromaSiting(
   );
 }
 
-/** A copy that holds no decoder resources; opaque (GPU) frames are drawn into a bitmap. */
+/** A planar frame whose planes the browser would not copy out, even after retries. */
+class UnreadableFrameError extends Error {}
+
+/**
+ * A copy that holds no decoder resources. Opaque (GPU) frames and layouts the copy cannot express
+ * are drawn into a bitmap; a planar frame the browser refuses to copy is retried, then rejected
+ * with {@link UnreadableFrameError}, since the drawn conversion would differ from a decoded frame.
+ */
 async function detachVideoFrame(frame: VideoFrame): Promise<VideoFrame> {
   const format = frame.format;
   if (format !== null) {
@@ -839,7 +838,7 @@ async function detachVideoFrame(frame: VideoFrame): Promise<VideoFrame> {
         height: frame.codedHeight,
       };
       const buffer = new ArrayBuffer(frame.allocationSize());
-      const layout = await frame.copyTo(buffer);
+      const layout = await withReadbackRetries(() => frame.copyTo(buffer));
       // `transfer` is missing from the DOM typings.
       const init: VideoFrameBufferInit & { transfer: ArrayBuffer[] } = {
         format,
@@ -854,7 +853,11 @@ async function detachVideoFrame(frame: VideoFrame): Promise<VideoFrame> {
         transfer: [buffer],
       };
       return new VideoFrame(buffer, init);
-    } catch {
+    } catch (error) {
+      if (isUnreadableFrame(error))
+        throw new UnreadableFrameError("the browser could not read a frame", {
+          cause: error,
+        });
       // A layout the copy cannot express falls through to a drawn copy.
     }
   }
@@ -1372,6 +1375,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
   readonly #delay: number;
   readonly #binding: AudioResamplerBinding;
   readonly #facts: TrackDecodeFacts;
+  readonly #stallTimeoutMs: number;
   #resampler?: { targetRate: number; resampler: AudioResampler };
   #closed = false;
 
@@ -1388,7 +1392,9 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
     delay: number,
     binding: AudioResamplerBinding,
     facts: TrackDecodeFacts,
+    stallTimeoutMs: number,
   ) {
+    this.#stallTimeoutMs = stallTimeoutMs;
     this.#sourceId = sourceId;
     this.#input = input;
     this.#sink = sink;
@@ -1405,17 +1411,24 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
 
   /**
    * Opens `resource`'s primary audio track, or with `options.stream` the audio track at that
-   * position among the file's audio tracks in container order (a clip's `audio.stream`). Rejects
-   * when there is no such track, with `RangeError` for more than {@link MAX_AUDIO_CHANNELS}
-   * channels or a rate outside 1 kHz to 768 kHz, and with {@link DecodeUnavailableError} when this
-   * browser cannot decode it.
+   * position among the file's audio tracks in container order (a clip's `audio.stream`).
+   * `options.stallTimeoutMs` (default 5000) is the active time a refill waits for the next decoded
+   * samples. Rejects with code `AUDIO_STREAM_MISSING` when there is no such track, with
+   * `RangeError` for more than {@link MAX_AUDIO_CHANNELS} channels, a rate outside 1 kHz to
+   * 768 kHz or an invalid stall limit, and with {@link DecodeUnavailableError} when this browser
+   * cannot decode it.
    */
   static async open(
     sourceId: string,
     resource: MediabunnyInput,
     binding: AudioResamplerBinding,
-    options: { readonly stream?: number } = {},
+    options: {
+      readonly stream?: number;
+      readonly stallTimeoutMs?: number;
+    } = {},
   ): Promise<MediabunnyAudioDecoder> {
+    const stallTimeoutMs = options.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
+    validateStallTimeout(stallTimeoutMs);
     const source: Source =
       resource instanceof Blob
         ? new BlobSource(resource)
@@ -1427,10 +1440,13 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
         : ((await input.getAudioTracks())[options.stream] ?? null);
     if (track === null) {
       input.dispose();
-      throw new Error(
-        options.stream === undefined
-          ? "mediabunny input has no audio track"
-          : `mediabunny input has no audio stream ${options.stream}`,
+      throw Object.assign(
+        new Error(
+          options.stream === undefined
+            ? "mediabunny input has no audio track"
+            : `mediabunny input has no audio stream ${options.stream}`,
+        ),
+        { code: "AUDIO_STREAM_MISSING" },
       );
     }
     if (
@@ -1549,6 +1565,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
         channels: track.numberOfChannels,
         ...(speakers === null ? {} : { layout: speakers }),
       },
+      stallTimeoutMs,
     );
   }
 
@@ -1568,9 +1585,9 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
 
   /**
    * Decodes the interval at `projectSampleRate`, plus two samples each side; silence outside the
-   * stream. Rejects when closed, for another source or empty interval, on abort, or when the track
-   * changes format mid-stream; with {@link DecodeUnavailableError} when the browser's decoder
-   * fails.
+   * stream. Rejects when closed, for another source or empty interval, at once on abort, or when
+   * the track changes format mid-stream; with {@link DecodeUnavailableError} when the browser's
+   * decoder fails, and with `DECODE_STALLED` when it delivers nothing for the stall limit.
    */
   async refill(
     request: AudioDecoderRefillRequest,
@@ -1606,11 +1623,24 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
     let streamStart: number | undefined;
     let expected: number | undefined;
     const delay = this.#delay;
+    const iterator = this.#sink
+      .samples(decodeFrom + delay, sourceEnd / rate + delay)
+      [Symbol.asyncIterator]();
+    let ended = false;
     try {
-      for await (const sample of this.#sink.samples(
-        decodeFrom + delay,
-        sourceEnd / rate + delay,
-      )) {
+      for (;;) {
+        // A decoder that stops delivering would otherwise hold the refill, and a cancel, forever.
+        const next = await nextSampleOrStall(iterator, {
+          stallMs: this.#stallTimeoutMs,
+          signal,
+          sourceId: this.#sourceId,
+          kind: "audio",
+        });
+        if (next.done) {
+          ended = true;
+          break;
+        }
+        const sample = next.value;
         try {
           throwIfAborted(signal);
           if (sample.numberOfChannels !== channelCount)
@@ -1658,6 +1688,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
         }
       }
     } catch (error) {
+      if (!ended) void iterator.return?.()?.catch(() => {});
       if (
         typeof DOMException !== "undefined" &&
         error instanceof DOMException &&
@@ -2712,6 +2743,9 @@ export class MediabunnySink
   #framesOut = 0;
   /** Active time, so a frozen page does not count as a stall. */
   #progress?: ActiveStopwatch;
+  /** Active time since the last packet or write while `finish` runs. */
+  #finishing?: ActiveStopwatch;
+  #aborted: Error | undefined;
   readonly #audio?: AudioSampleSource;
   readonly #audioCodec?: "aac" | "opus";
   readonly #audioBitrate?: number;
@@ -2753,6 +2787,7 @@ export class MediabunnySink
       this.#target = new BufferTarget();
       // Stopping at the reserved size keeps the output within its budget.
       this.#target.onwrite = (_start, end) => {
+        this.#finishing?.reset();
         this.#written = Math.max(this.#written, end);
         if (end > destination.maxBytes)
           this.#overflow ??= new ExportFailureError({
@@ -2774,11 +2809,15 @@ export class MediabunnySink
       const muxed = new WritableStream<PositionedWrite>({
         write: async (chunk) => {
           await file.ready;
-          void file.write(chunk).catch(() => {});
+          void file.write(chunk).then(
+            () => this.#finishing?.reset(),
+            () => {},
+          );
         },
       });
       this.#target = new StreamTarget(muxed, { chunked: false });
       this.#target.onwrite = (_start, end) => {
+        this.#finishing?.reset();
         this.#written = Math.max(this.#written, end);
       };
     }
@@ -2885,6 +2924,7 @@ export class MediabunnySink
 
   #madeProgress(): void {
     (this.#progress ??= new ActiveStopwatch()).reset();
+    this.#finishing?.reset();
   }
 
   #watched<T>(work: Promise<T>): Promise<T> {
@@ -3157,35 +3197,96 @@ export class MediabunnySink
 
   /**
    * Finalizes the file and commits a stream destination; idempotent once resolved. Rejects with
-   * `RESOURCE_LIMIT`, `ENCODE_STALLED`, or the muxer's or destination's error, discarding a stream.
+   * `RESOURCE_LIMIT`, `ENCODE_STALLED` (no packet or write for the stall time), the muxer's or
+   * destination's error, or the reason of an `abort` that arrived meanwhile, discarding a stream.
    */
   async finish(): Promise<void> {
     if (this.#finished) return;
     await this.#ready;
+    const finishing = (this.#finishing = new ActiveStopwatch());
     try {
-      await this.#flushAudio();
-      await this.#watched(this.#output.finalize());
-      if (this.#overflow) throw this.#overflow;
-      await this.#file?.close();
+      await this.#finishWatched(
+        (async () => {
+          await this.#flushAudio();
+          await this.#output.finalize();
+          if (this.#overflow) throw this.#overflow;
+          if (this.#aborted !== undefined) throw this.#aborted;
+          await this.#file?.close();
+        })(),
+        finishing,
+      );
     } catch (error) {
-      await this.#discard(error).catch(() => {});
+      const discarded = this.#discard(error).catch(() => {});
+      // A stalled destination may never take the abort either.
+      if ((error as { code?: unknown }).code !== "ENCODE_STALLED")
+        await discarded;
       throw error;
     } finally {
+      finishing.dispose();
       this.#progress?.dispose();
     }
+    if (this.#aborted !== undefined) throw this.#aborted;
     this.#finished = true;
   }
 
-  /** Discards the output unless already finished; rejects if the destination refuses. */
+  // Fails when neither a packet nor a write arrived for the stall time.
+  #finishWatched(
+    work: Promise<void>,
+    finishing: ActiveStopwatch,
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const stop = finishing.onTick(() => {
+        const waited = finishing.elapsed();
+        if (waited < this.#stallTimeoutMs) return;
+        stop();
+        const held = this.#framesIn - this.#framesOut;
+        reject(
+          Object.assign(
+            new Error(
+              held > 0
+                ? `video encoder stalled: no output for ${Math.round(waited)} ms with ${held} frames queued`
+                : `export finalize stalled: no packet or write for ${Math.round(waited)} ms`,
+            ),
+            {
+              code: "ENCODE_STALLED",
+              failure:
+                held > 0
+                  ? {
+                      code: "GPU_TIMEOUT",
+                      phase: "encode",
+                      stage: "encoder-stalled",
+                      resource: "unknown",
+                    }
+                  : {
+                      code: "GPU_TIMEOUT",
+                      phase: "mux",
+                      stage: "finalize-stalled",
+                      resource: "unknown",
+                    },
+            },
+          ),
+        );
+      });
+      void work.finally(stop).then(resolve, reject);
+    });
+  }
+
+  /**
+   * Discards the output unless already finished, also while `finish` is pending; rejects if the
+   * destination refuses.
+   */
   async abort(reason: Error): Promise<void> {
     if (this.#finished) return;
+    this.#aborted ??= reason;
     this.#progress?.dispose();
     if (this.#audioConverter !== undefined && !this.#audioFlushed) {
       this.#audioFlushed = true;
       this.#audioConverter.free();
     }
     try {
-      if (this.#output.state !== "canceled") await this.#output.cancel();
+      // mediabunny ignores a cancel while finalizing; `finish` then refuses to commit.
+      if (this.#output.state === "started" || this.#output.state === "pending")
+        await this.#output.cancel();
     } finally {
       await this.#discard(reason);
     }

@@ -350,6 +350,7 @@ const SHAPE_KEYWORDS = new Set([
   "prefixItems",
   "minItems",
   "maxItems",
+  "maxProperties",
   "minimum",
   "maximum",
   "minLength",

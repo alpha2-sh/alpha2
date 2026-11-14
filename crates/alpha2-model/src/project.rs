@@ -1,6 +1,6 @@
 use crate::{
     Composition, EffectResource, EffectResourceId, Generator, MasterAudio, MediaKind, MediaSource,
-    ModelError, ProjectId, ProjectLoadError, Timeline, TrackKind,
+    ModelError, ProjectId, ProjectLoadError, ProjectWriteError, Timeline, TrackKind,
 };
 use alpha2_time::{FrameRate, MediaTime};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
@@ -28,6 +28,8 @@ pub const MAX_CLIPS: usize = 100_000;
 pub const MAX_CLIPS_PER_TRACK: usize = 4_096;
 /// Maximum number of transitions on one track.
 pub const MAX_TRANSITIONS_PER_TRACK: usize = 4_096;
+/// Maximum number of effect resources in one project.
+pub const MAX_EFFECT_RESOURCES: usize = 10_000;
 
 /// A complete serializable project document.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -83,12 +85,18 @@ pub(crate) struct ProjectWire {
     /// Output-wide timeline settings.
     pub(crate) settings: ProjectSettings,
     /// Media resources referenced by clips.
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_CLIPS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_CLIPS)))]
     pub(crate) sources: Vec<MediaSource>,
     /// Non-media resources referenced by effect invocations.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_EFFECT_RESOURCES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_EFFECT_RESOURCES)))]
     pub(crate) effect_resources: Vec<EffectResource>,
     /// Composition graphs that clips show.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_COMPOSITIONS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_COMPOSITIONS)))]
     pub(crate) compositions: Vec<Composition>,
     /// Ordered visual and audio tracks.
     pub(crate) timeline: Timeline,
@@ -97,6 +105,8 @@ pub(crate) struct ProjectWire {
     pub(crate) audio: MasterAudio,
     /// Values derived from media, which properties and caption tracks can follow. At most 256.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_DATA_SETS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_SETS)))]
     pub(crate) data: Vec<crate::DataSet>,
 }
 
@@ -164,6 +174,43 @@ impl Project {
         }
         let wire = serde_json::from_str::<ProjectWire>(json).map_err(ProjectLoadError::Json)?;
         Self::try_from(wire).map_err(ProjectLoadError::InvalidProject)
+    }
+
+    /// The document as compact JSON, refused once it passes [`MAX_PROJECT_JSON_BYTES`], so a
+    /// writer never hands out text [`Project::from_json`] would refuse. Writing stops at the cap.
+    ///
+    /// # Errors
+    /// [`ProjectWriteError::TooLarge`] past the cap.
+    ///
+    /// # Panics
+    /// Never; `serde_json` writes UTF-8.
+    pub fn to_json(&self) -> Result<String, ProjectWriteError> {
+        struct Capped(Vec<u8>);
+
+        impl std::io::Write for Capped {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.0.len() + bytes.len() > MAX_PROJECT_JSON_BYTES {
+                    return Err(std::io::Error::from(std::io::ErrorKind::FileTooLarge));
+                }
+                self.0.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut out = Capped(Vec::with_capacity(4096));
+        match serde_json::to_writer(&mut out, self) {
+            Ok(()) => Ok(String::from_utf8(out.0).expect("serde_json writes UTF-8")),
+            Err(error) if error.io_error_kind() == Some(std::io::ErrorKind::FileTooLarge) => {
+                Err(ProjectWriteError::TooLarge {
+                    maximum: MAX_PROJECT_JSON_BYTES,
+                })
+            }
+            Err(error) => Err(ProjectWriteError::Json(error)),
+        }
     }
 
     /// The sources a render of this project can read, in source order: each clip's own, and
@@ -291,7 +338,7 @@ impl Project {
     }
 
     /// The smallest interval holding every clip, caption cue and timeline-anchored word a caption
-    /// track shows, which a whole-project render covers. `None` for a project that shows nothing.
+    /// track shows. `None` for a project that shows nothing.
     #[must_use]
     pub fn extent(&self) -> Option<alpha2_time::TimeRange> {
         let words = self
@@ -317,6 +364,16 @@ impl Project {
                 Some(bounds.map_or((start, end), |(low, high)| (low.min(start), high.max(end))));
         }
         bounds.and_then(|(start, end)| alpha2_time::TimeRange::new(start, end).ok())
+    }
+
+    /// The range a whole-project export covers when none is asked for: from time 0, the origin
+    /// keyframes, markers and caption times count from, to the end of the [`Self::extent`].
+    /// `None` for a project that shows nothing or nothing after time 0.
+    #[must_use]
+    pub fn default_export_range(&self) -> Option<alpha2_time::TimeRange> {
+        let end = self.extent()?.end();
+        let range = alpha2_time::TimeRange::new(alpha2_time::MediaTime::ZERO, end).ok()?;
+        (end > alpha2_time::MediaTime::ZERO).then_some(range)
     }
 
     /// Creates an empty project using the current schema version.
@@ -442,7 +499,7 @@ impl Project {
         ensure_ducking_is_acyclic(&self.timeline)?;
         ensure_mattes_are_usable(&self.timeline)?;
         ensure_frames_fit(&self.timeline, &index.sources, &inlined)?;
-        Ok(())
+        crate::time_bound::ensure_times_are_writable(self)
     }
 
     /// Checks each source, and returns them by ID.
@@ -482,6 +539,12 @@ impl Project {
     }
 
     fn validate_effect_resources(&self) -> Result<HashSet<&EffectResourceId>, ModelError> {
+        if self.effect_resources.len() > MAX_EFFECT_RESOURCES {
+            return Err(ModelError::TooManyEffectResources {
+                found: self.effect_resources.len(),
+                maximum: MAX_EFFECT_RESOURCES,
+            });
+        }
         let mut ids = HashSet::new();
         for resource in &self.effect_resources {
             ensure_id(&resource.id)?;
@@ -601,6 +664,17 @@ fn validate_clip<'a>(
         return Err(ModelError::InvalidTimeMap {
             clip: clip.id.clone(),
         });
+    }
+    if let crate::TimeMap::Loop { .. } = clip.time_map {
+        let length = |range: alpha2_time::TimeRange| range.duration().map_or(0, MediaTime::ticks);
+        let found = crate::loop_passes(length(clip.timeline_range), length(clip.source_range));
+        if found > crate::MAX_LOOP_PASSES {
+            return Err(ModelError::TooManyLoopPasses {
+                clip: clip.id.clone(),
+                found,
+                maximum: crate::MAX_LOOP_PASSES,
+            });
+        }
     }
     Ok(())
 }

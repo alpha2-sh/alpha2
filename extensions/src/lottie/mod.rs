@@ -32,7 +32,7 @@ use crate::api::{
     Diagnostic, ExtensionError, Format, FramePixels, ProbeReport, ResourceResolver, Timing,
     VisualFrame, VisualProvider, VisualSource,
 };
-use crate::budget::{check_canvas, check_document_size, check_image_pixels};
+use crate::budget::{MAX_HELD_PIXELS, check_canvas, check_document_size, check_image_pixels};
 
 /// Most frames an animation may span.
 const MAX_LOTTIE_FRAMES: f64 = 100_000.0;
@@ -70,7 +70,7 @@ impl VisualProvider for LottieProvider {
             return Some(Err(error));
         }
         let json = parse_lottie(bytes)?;
-        Some(inspect(json, Format::Lottie).map(|(report, _)| report))
+        Some(inspect(json, Format::Lottie).map(|(report, _, _)| report))
     }
 
     fn open(
@@ -107,7 +107,7 @@ impl LottieSource {
                 .ok_or_else(|| ExtensionError::Mismatch("not a Lottie animation".into()))?;
             (json, None, Format::Lottie)
         };
-        let (mut report, sanitized) = inspect(json, format)?;
+        let (mut report, depth, sanitized) = inspect(json, format)?;
         if let Some(package) = &package {
             report.items.clone_from(&package.ids);
             report.item = Some(item.unwrap_or(&package.ids[0]).to_owned());
@@ -118,24 +118,34 @@ impl LottieSource {
         drop(sanitized);
         let composition = Composition::from_slice(&text)
             .map_err(|error| ExtensionError::Malformed(format!("{error:?}")))?;
+        let composition_bytes = text.len();
         drop(text);
-        // Check decoded asset size from headers first; oversized assets are reported missing.
-        let assets = composition
-            .images
-            .iter()
-            .map(|(id, asset)| Ok((id, asset, image_bytes(asset, package.as_ref(), resolver)?)))
-            .collect::<Result<Vec<_>, ExtensionError>>()?;
-        check_image_pixels(
-            assets
-                .iter()
-                .filter_map(|(_, _, bytes)| crate::raster::png_size(bytes.as_deref()?))
-                .filter(|(width, height)| check_canvas(*width, *height).is_ok())
-                .map(|(width, height)| u64::from(width) * u64::from(height))
-                .fold(0, u64::saturating_add),
-        )?;
+        // Assets are read one at a time, sized from their headers before they are decoded, and
+        // decoded at once; assets naming one file share its decode and count once.
         let mut images = HashMap::new();
-        for (id, asset, bytes) in assets {
-            match bytes.and_then(|bytes| decode_image(&bytes)) {
+        let mut decoded = HashMap::<String, Option<Arc<Pixmap>>>::new();
+        let mut pixels = 0_u64;
+        for (id, asset) in &composition.images {
+            let key = asset_key(asset);
+            let pixmap = if let Some(known) = decoded.get(&key) {
+                known.clone()
+            } else {
+                let pixmap = match image_bytes(asset, package.as_ref(), resolver)? {
+                    Some(bytes) => {
+                        if let Some((width, height)) = crate::raster::png_size(&bytes)
+                            && check_canvas(width, height).is_ok()
+                        {
+                            pixels = pixels.saturating_add(u64::from(width) * u64::from(height));
+                            check_image_pixels(pixels)?;
+                        }
+                        decode_image(&bytes).map(Arc::new)
+                    }
+                    None => None,
+                };
+                decoded.insert(key, pixmap.clone());
+                pixmap
+            };
+            match pixmap {
                 Some(pixmap) => {
                     images.insert(id.clone(), pixmap);
                 }
@@ -150,6 +160,8 @@ impl LottieSource {
         }
         Ok(Self {
             composition,
+            composition_bytes,
+            depth,
             renderer: Renderer::new(),
             images,
             report,
@@ -426,7 +438,7 @@ impl<'a> Package<'a> {
                 .animation(Some(id))
                 .and_then(|json| inspect(json, Format::DotLottie))
             {
-                Ok((report, _)) => {
+                Ok((report, _, _)) => {
                     unreadable.extend(report.diagnostics);
                     return Ok(ProbeReport {
                         items: self.ids.clone(),
@@ -477,8 +489,8 @@ impl<'a> Package<'a> {
     }
 }
 
-/// The animation's report and its normalized JSON.
-fn inspect(json: Value, format: Format) -> Result<(ProbeReport, Value), ExtensionError> {
+/// The animation's report, the most offscreen layers a frame holds, and its normalized JSON.
+fn inspect(json: Value, format: Format) -> Result<(ProbeReport, u64, Value), ExtensionError> {
     let root = json
         .as_object()
         .ok_or_else(|| ExtensionError::Malformed("the animation is not an object".into()))?;
@@ -499,7 +511,9 @@ fn inspect(json: Value, format: Format) -> Result<(ProbeReport, Value), Extensio
         (last - first).ceil() as usize,
     );
     check_canvas(width, height)?;
-    let (diagnostics, sanitized) = normalize::normalize(json)?;
+    let (normalized, sanitized) = normalize::normalize(json)?;
+    let normalize::Normalized { diagnostics, depth } = normalized;
+    check_held(depth, width, height)?;
     Ok((
         ProbeReport {
             format,
@@ -517,8 +531,23 @@ fn inspect(json: Value, format: Format) -> Result<(ProbeReport, Value), Extensio
             color: None,
             diagnostics,
         },
+        depth,
         sanitized,
     ))
+}
+
+/// Refuses drawing at `width` x `height` when the offscreen layers a frame holds, each that size,
+/// and the frame itself pass [`MAX_HELD_PIXELS`].
+fn check_held(depth: u64, width: u32, height: u32) -> Result<(), ExtensionError> {
+    #[allow(clippy::cast_precision_loss)]
+    let held = (depth.saturating_add(1)) as f64 * f64::from(width) * f64::from(height);
+    if held > MAX_HELD_PIXELS {
+        return Err(ExtensionError::Budget(format!(
+            "drawing the Lottie animation at {width}x{height} holds more than {MAX_HELD_PIXELS} \
+             pixels in its {depth} nested offscreen layers"
+        )));
+    }
+    Ok(())
 }
 
 /// A Lottie rate as a rational: NTSC and whole rates exactly, others to a thousandth.
@@ -533,18 +562,28 @@ fn rational_rate(rate: f64) -> Option<FrameRate> {
     FrameRate::new(num, den).ok()
 }
 
+/// What tells an asset's image apart: its data URL, or its directory and file name.
+fn asset_key(asset: &ImageAsset) -> String {
+    format!(
+        "{}\0{}",
+        asset.directory.clone().unwrap_or_default(),
+        asset.file_name
+    )
+}
+
 /// An image asset's bytes from a data URL, package file, or resource. A package file that fails
-/// to unpack fails the package.
+/// to unpack fails the package. A resource is shared with the resolver, not copied.
 fn image_bytes(
     asset: &ImageAsset,
     package: Option<&Package>,
     resolver: &dyn ResourceResolver,
-) -> Result<Option<Vec<u8>>, ExtensionError> {
+) -> Result<Option<Arc<[u8]>>, ExtensionError> {
     if let Some(data) = asset.file_name.strip_prefix("data:") {
         return Ok(data.split_once(";base64,").and_then(|(_, encoded)| {
             base64::engine::general_purpose::STANDARD
                 .decode(encoded)
                 .ok()
+                .map(Arc::from)
         }));
     }
     let name = format!(
@@ -555,11 +594,11 @@ fn image_bytes(
     if let Some(package) = package {
         for candidate in [&name, &asset.file_name] {
             if let Some(bytes) = package.image(candidate)? {
-                return Ok(Some(bytes));
+                return Ok(Some(Arc::from(bytes)));
             }
         }
     }
-    Ok(resolver.bytes(&name).ok().map(|bytes| bytes.to_vec()))
+    Ok(resolver.bytes(&name).ok())
 }
 
 /// A PNG image asset as a premultiplied pixmap; other formats are reported missing.
@@ -580,8 +619,13 @@ fn short(name: &str) -> String {
 /// An open Lottie animation; PNG assets are decoded once at open.
 struct LottieSource {
     composition: Composition,
+    /// The normalized text velato parsed, standing for the size of the composition.
+    composition_bytes: usize,
+    /// Most offscreen layers a frame holds, each the size drawn.
+    depth: u64,
     renderer: Renderer,
-    images: HashMap<String, Pixmap>,
+    /// Decoded assets by id; assets naming one file share one.
+    images: HashMap<String, Arc<Pixmap>>,
     report: ProbeReport,
     last: Option<VisualFrame>,
 }
@@ -594,6 +638,7 @@ impl VisualSource for LottieSource {
     fn render(&mut self, time: MediaTime, fit: (u32, u32)) -> Result<VisualFrame, ExtensionError> {
         let (index, start, end) = self.report.timing.frame_at(time);
         let (width, height) = fitted(self.report.width, self.report.height, fit);
+        check_held(self.depth, width, height)?;
         if let Some(last) = self
             .last
             .as_ref()
@@ -624,10 +669,13 @@ impl VisualSource for LottieSource {
     }
 
     fn resident_bytes(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
         self.images
             .values()
+            .filter(|image| seen.insert(Arc::as_ptr(image)))
             .map(|image| image.data().len())
             .sum::<usize>()
+            + self.composition_bytes
             + self.last.as_ref().map_or(0, |last| last.pixels.byte_len())
     }
 }
@@ -658,7 +706,7 @@ struct SkiaSink<'a> {
     width: u32,
     height: u32,
     layers: Vec<Layer>,
-    images: &'a HashMap<String, Pixmap>,
+    images: &'a HashMap<String, Arc<Pixmap>>,
     /// An all-255 mask for a clip covering the canvas, built once a frame.
     covering: Option<Rc<Mask>>,
     /// Cleared pixmaps of popped layers, for reuse.
@@ -687,7 +735,7 @@ impl<'a> SkiaSink<'a> {
     fn new(
         width: u32,
         height: u32,
-        images: &'a HashMap<String, Pixmap>,
+        images: &'a HashMap<String, Arc<Pixmap>>,
     ) -> Result<Self, ExtensionError> {
         let pixmap = Pixmap::new(width, height).ok_or_else(|| {
             ExtensionError::Budget(format!("cannot rasterize at {width}x{height}"))
@@ -1053,7 +1101,7 @@ impl RenderSink for SkiaSink<'_> {
     }
 
     fn draw_image(&mut self, image: &ImageAsset, transform: Affine, alpha: f64) {
-        let Some(pixmap) = self.images.get(&image.id) else {
+        let Some(pixmap) = self.images.get(&image.id).map(Arc::as_ref) else {
             return;
         };
         // Fit and center the picture in the asset's authored size; velato clips to that size.

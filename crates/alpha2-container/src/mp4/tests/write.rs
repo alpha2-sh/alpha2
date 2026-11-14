@@ -117,3 +117,24 @@ fn an_empty_movie_is_still_a_readable_file() {
     let reader = Mp4Reader::new(Cursor::new(buffer.contents())).expect("open");
     assert_eq!(reader.tracks(), []);
 }
+
+#[test]
+fn an_avc_sequence_with_the_largest_dimensions_opens() {
+    // Both dimensions code 2^32 - 1 macroblocks, in field pictures.
+    const AVCC: [u8; 39] = [
+        0x01, 0x42, 0x00, 0x1e, 0xff, 0xe1, 0x00, 0x18, 0x67, 0x42, 0x00, 0x1e, 0xdc, 0x00, 0x00,
+        0x03, 0x00, 0x03, 0xff, 0xff, 0xff, 0xfc, 0x00, 0x00, 0x03, 0x00, 0x07, 0xff, 0xff, 0xff,
+        0xf8, 0x20, 0x01, 0x00, 0x04, 0x68, 0xce, 0x3c, 0x80,
+    ];
+    let mut info = video_info(VideoCodec::H264);
+    if let Some(video) = info.video.as_mut() {
+        video.codec_private = Bytes::from_static(&AVCC);
+    }
+    let buffer = Shared::default();
+    let mut writer = Box::new(Mp4Writer::new(buffer.clone(), Mp4Flavor::Mp4));
+    let id = writer.add_track(&info).expect("track");
+    writer.write(frame(id, 0)).expect("write");
+    writer.finish().expect("finish");
+    let reader = Mp4Reader::new(Cursor::new(buffer.contents())).expect("open");
+    assert_eq!(reader.tracks().len(), 1);
+}

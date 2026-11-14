@@ -97,7 +97,7 @@ fn frame_needs_are_deduplicated() {
     project.timeline.tracks.push(copied_track);
     let index = ActiveIndex::build(&project).expect("valid project");
     let needs = frame_needs(&project, &index, MediaTime(175)).expect("matching index");
-    assert_eq!(needs.len(), 2);
+    assert_eq!(needs.len(), 1);
     assert_eq!(needs[0].clip_id.as_str(), "clip-v");
 }
 
@@ -579,12 +579,12 @@ fn extreme_keyframe_times_and_values_remain_finite() {
     clip.visual.rotation_degrees = Animated::Keyframes {
         keyframes: vec![
             Keyframe {
-                time: MediaTime(i64::MIN),
+                time: MediaTime(-alpha2_time::MAX_SERIALIZED_TICKS),
                 value: -3.0e38,
                 interpolation: Interpolation::Linear,
             },
             Keyframe {
-                time: MediaTime(i64::MAX),
+                time: MediaTime(alpha2_time::MAX_SERIALIZED_TICKS),
                 value: 3.0e38,
                 interpolation: Interpolation::Hold,
             },
@@ -1295,4 +1295,76 @@ fn animator_time_restarts_at_each_cue() {
     assert_eq!(local(120), MediaTime(20));
     assert_eq!(local(150), MediaTime(0));
     assert_eq!(local(179), MediaTime(29));
+}
+
+/// Clips a, b and c overlapping at frames 80..100 on one track with their transitions listed in
+/// `order`, plus `unrelated` other transitions on an earlier track.
+fn three_way(order: [usize; 3], unrelated: usize) -> Project {
+    use serde_json::json;
+    const FRAME: i64 = 4_000;
+    let clip = |id: &str, source: &str, from: i64, to: i64| {
+        json!({ "id": id, "source_id": source,
+                "timeline_range": { "start": from * FRAME, "end": to * FRAME },
+                "source_range": { "start": 0, "end": (to - from) * FRAME } })
+    };
+    let fade = |from: &str, to: &str, start: i64, end: i64| {
+        json!({ "from_clip": from, "to_clip": to,
+                "timeline_range": { "start": start * FRAME, "end": end * FRAME },
+                "easing": { "type": "linear" }, "effect": { "id": "alpha2.transition.fade", "version": 1 } })
+    };
+    let three = [
+        fade("a", "b", 50, 100),
+        fade("a", "c", 80, 100),
+        fade("b", "c", 80, 150),
+    ];
+    let mut others = (Vec::new(), Vec::new());
+    for pair in 0..i64::try_from(unrelated).expect("count") {
+        let base = 300 + pair * 40;
+        let (x, y) = (format!("x{pair}"), format!("y{pair}"));
+        others.0.push(clip(&x, "v", base, base + 20));
+        others.0.push(clip(&y, "w", base + 10, base + 30));
+        others.1.push(fade(&x, &y, base + 10, base + 20));
+    }
+    let document = json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": { "width": 640, "height": 360, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+        "sources": [
+            { "id": "v", "kind": "video", "locator": "v.mp4" },
+            { "id": "w", "kind": "video", "locator": "w.mp4" }
+        ],
+        "timeline": { "tracks": [
+            { "id": "u", "name": "U", "kind": "video", "clips": others.0, "transitions": others.1 },
+            { "id": "t", "name": "T", "kind": "video",
+              "clips": [clip("a", "v", 0, 100), clip("b", "w", 50, 150), clip("c", "v", 80, 200)],
+              "transitions": order.iter().map(|index| three[*index].clone()).collect::<Vec<_>>() }
+        ] }
+    });
+    Project::from_json(&document.to_string()).expect("valid project")
+}
+
+#[test]
+fn transitions_that_start_together_follow_their_track_list() {
+    for (order, expected) in [([0, 1, 2], "a>b a>c b>c"), ([0, 2, 1], "a>b b>c a>c")] {
+        for unrelated in [0, 18, 2_000] {
+            let project = three_way(order, unrelated);
+            let index = ActiveIndex::build(&project).expect("index");
+            let frame = evaluate(&project, &index, MediaTime(90 * 4_000)).expect("frame");
+            let listed = frame
+                .transitions
+                .iter()
+                .map(|transition| format!("{}>{}", transition.from_clip, transition.to_clip))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(listed, expected, "{order:?} with {unrelated} others");
+        }
+    }
+}
+
+#[test]
+fn audio_clips_need_no_frames() {
+    let project = project();
+    let index = ActiveIndex::build(&project).expect("valid project");
+    let needs = frame_needs(&project, &index, MediaTime(175)).expect("matching index");
+    assert!(needs.iter().all(|need| need.clip_id.as_str() != "clip-a"));
+    assert_eq!(needs.len(), 1);
 }

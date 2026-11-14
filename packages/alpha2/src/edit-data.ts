@@ -170,7 +170,8 @@ function byEdges<T extends { readonly start: number; readonly end: number }>(
 
 /**
  * A timeline-anchored set with `removal` cut out and later times moved left; a sample set keeps
- * the value read just after each cut (mirrors `split::cut_data`).
+ * the value read just after each cut, and a linear one also the value just before it (mirrors
+ * `split::cut_data`).
  */
 export function cutData(set: DataSet, removal: Removal): DataSet {
   if (set.kind === "words" || set.kind === "intervals") {
@@ -191,11 +192,15 @@ export function cutData(set: DataSet, removal: Removal): DataSet {
   if (!set.times.length) return set;
   const entries = samplesOf(set, (tick) => newTime(tick, removal));
   const ticks = new Set(entries.map(([tick]) => tick));
-  for (const [, to] of removal) {
-    const at = newTime(to, removal);
-    if (at === undefined || ticks.has(at)) continue;
-    ticks.add(at);
-    entries.push([at, heldAt(set, to)]);
+  const linear = set.interpolation === "linear";
+  for (const [from, to] of removal) {
+    const reads = linear && from - 1 >= set.times[0] ? [from - 1, to] : [to];
+    for (const read of reads) {
+      const at = newTime(read, removal);
+      if (at === undefined || ticks.has(at)) continue;
+      ticks.add(at);
+      entries.push([at, heldAt(set, read)]);
+    }
   }
   return withSamples(set, entries);
 }

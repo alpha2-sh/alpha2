@@ -10,7 +10,7 @@ use std::sync::Arc;
 use super::blend::composite as blend;
 use super::frames::FramePool;
 use super::half;
-use super::image::{CpuImage, PixelBox};
+use super::image::{CpuImage, PixelBox, Texels};
 use super::workers::Workers;
 use crate::{BlendMode, BlendSpace, Color, LayerTransform, RenderError, RenderSize};
 
@@ -266,6 +266,7 @@ struct General {
 
 struct PreparedLayer<'a> {
     image: &'a CpuImage,
+    texels: Texels<'a>,
     /// Every half float's value, for reading the backdrop.
     halves: &'static [f32; 65_536],
     blend_mode: BlendMode,
@@ -359,6 +360,7 @@ impl<'a> PreparedLayer<'a> {
         };
         Self {
             image: layer.image,
+            texels: layer.image.texels(),
             halves: half::table(),
             blend_mode: layer.blend_mode,
             opacity: visual.opacity,
@@ -414,7 +416,7 @@ impl<'a> PreparedLayer<'a> {
             }
             Sampler::General(general) => {
                 for x in first..self.bounds.right() {
-                    let Some(color) = general.sample(self.image, x, y) else {
+                    let Some(color) = general.sample(&self.texels, x, y) else {
                         continue;
                     };
                     let out = &mut line[(x - bounds.x) as usize];
@@ -424,7 +426,8 @@ impl<'a> PreparedLayer<'a> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
     fn composite_pixel(&self, backdrop: [u16; 4], color: [f32; 4], linear_light: bool) -> [u16; 4] {
         let source = color.map(|value| value * self.opacity);
         // A transparent source leaves the backdrop (the curve round trip is identity up to `pow`).
@@ -521,7 +524,7 @@ fn axis_taps(
 impl General {
     /// The layer's filtered sample at `(x, y)`, or `None` where coverage is zero.
     #[allow(clippy::cast_precision_loss)]
-    fn sample(&self, image: &CpuImage, x: u32, y: u32) -> Option<[f32; 4]> {
+    fn sample(&self, image: &Texels<'_>, x: u32, y: u32) -> Option<[f32; 4]> {
         let uv = [
             (x as f32 + 0.5) / self.output[0],
             (y as f32 + 0.5) / self.output[1],

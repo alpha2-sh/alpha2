@@ -116,9 +116,11 @@ fn limits_are_enforced_with_where_they_are_broken() {
         problem(&format!("[{nested}]")).map(|found| found.1),
         Some(ShapeProblem::TooDeep)
     );
+    let half = path(crate::MAX_PATH_VERTICES / 2 + 1, false);
+    let subpath = &half[r#"{"subpaths":["#.len()..half.len() - 2];
     let too_many_vertices = format!(
         r#"[{{"type":"path","path":{}}}]"#,
-        constant(&path(crate::MAX_PATH_VERTICES + 1, false))
+        constant(&format!(r#"{{"subpaths":[{subpath},{subpath}]}}"#))
     );
     assert_eq!(
         problem(&too_many_vertices),
@@ -151,10 +153,16 @@ fn limits_are_enforced_with_where_they_are_broken() {
         problem(&dash(&constant("0"))),
         Some(("items[1].dash.pattern".into(), ShapeProblem::InvalidDash))
     );
+    let mut too_long = items(&dash(&constant("0.01")));
+    let ShapeItem::Stroke(stroke) = &mut too_long[1] else {
+        panic!("a stroke");
+    };
+    let pattern = &mut stroke.dash.as_mut().expect("dash").pattern;
+    *pattern = vec![pattern[0].clone(); crate::MAX_DASH_ENTRIES + 1];
     assert_eq!(
-        problem(&dash(
-            &vec![constant("0.01"); crate::MAX_DASH_ENTRIES + 1].join(",")
-        )),
+        validate_shape_items(&too_long)
+            .err()
+            .map(|issue| (issue.at, issue.problem)),
         Some(("items[1].dash.pattern".into(), ShapeProblem::InvalidDash))
     );
 }

@@ -13,7 +13,7 @@ use alpha2_container::{ContainerReader, Packet, TrackInfo, TrackKind, VideoCodec
 use alpha2_media::{
     CancelToken, ChromaLocation, ColorMetadata, DecodeError, DecodeEvent, DecodeRequest,
     DecodeResult, DecodedVideoFrame, Decoder, Orientation, PixelFormat, Plane, Rect,
-    SampleAspectRatio, StreamInfo, StreamKind, YuvFormat,
+    SampleAspectRatio, SourceAlpha, StreamInfo, StreamKind, YuvFormat,
 };
 use alpha2_time::{MediaTime, TICKS_PER_SECOND};
 
@@ -246,6 +246,17 @@ pub struct StreamFrame {
 }
 
 impl StreamFrame {
+    /// Bytes the frame holds: its planes, or what its surface retains.
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        match &self.image {
+            BackendImage::Cpu { planes, .. } => {
+                planes.iter().map(|plane| plane.bytes.len() as u64).sum()
+            }
+            BackendImage::Surface(lease) => lease.retained_bytes(),
+        }
+    }
+
     /// The frame as a CPU frame; `None` for a surface.
     #[must_use]
     pub fn to_cpu(&self) -> Option<DecodedVideoFrame> {
@@ -342,7 +353,8 @@ impl ReorderBuffer {
     }
 }
 
-/// Sessions the system may take from one stream before its decode fails.
+/// Sessions the system may take from one stream in a row, with no frame decoded between them,
+/// before its decode fails.
 const MAX_SESSION_REOPENS: u32 = 3;
 
 /// Where a session's input stands.
@@ -376,6 +388,41 @@ impl From<alpha2_container::DemuxError> for Interrupt {
     }
 }
 
+/// Something a stream's pictures go without (they still decode), for reports.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DroppedLayer {
+    /// `alpha-dropped`, the code the desktop host reports too.
+    pub code: &'static str,
+    /// Why, for people.
+    pub reason: String,
+}
+
+/// The alpha a track declares, which the platform sessions decode opaque.
+fn dropped_alpha(video: &alpha2_container::VideoTrack) -> Option<(SourceAlpha, DroppedLayer)> {
+    if !video.alpha {
+        return None;
+    }
+    let (alpha, reason) = match video.codec {
+        VideoCodec::Vp9 => (
+            SourceAlpha::Vp9SideData,
+            "VP9 alpha in block additions is not decoded on this platform",
+        ),
+        VideoCodec::Hevc => (
+            SourceAlpha::HevcAuxiliaryLayer,
+            "alpha in an HEVC auxiliary layer is not decoded",
+        ),
+        _ => (
+            SourceAlpha::Planar,
+            "the alpha plane is not decoded on this platform",
+        ),
+    };
+    let dropped = DroppedLayer {
+        code: "alpha-dropped",
+        reason: reason.into(),
+    };
+    Some((alpha, dropped))
+}
+
 /// A video track decoded frame-exactly.
 pub struct VideoStream {
     reader: Box<dyn ContainerReader>,
@@ -400,6 +447,7 @@ pub struct VideoStream {
     crop: Option<CropWindow>,
     bitstream: Bitstream,
     info: Vec<StreamInfo>,
+    dropped: Option<DroppedLayer>,
 }
 
 impl std::fmt::Debug for VideoStream {
@@ -468,12 +516,14 @@ impl VideoStream {
         let slack = scan_slack(reader.as_mut(), &track)?;
         let mut recovery = Recovery::new((1, i32::try_from(timescale).unwrap_or(i32::MAX)));
         recovery.policy = options.policy;
+        recovery.set_hardware(backend.kind() == BackendKind::Hardware);
         let dimensions = crop
             .and_then(|crop| crop.visible())
             .map_or((video.width, video.height), |rect| {
                 (rect.width, rect.height)
             });
         let reorder = ReorderBuffer::new(reorder_depth(backend.as_ref(), &track));
+        let (alpha, dropped) = dropped_alpha(&video).unzip();
         let info = vec![StreamInfo {
             index,
             kind: StreamKind::Video,
@@ -495,7 +545,7 @@ impl VideoStream {
                 .or(video.color)
                 .or(bitstream.vui.color),
             frame_bytes: None,
-            alpha: None,
+            alpha,
             language: track.language.clone(),
             title: track.title.clone(),
         }];
@@ -518,6 +568,7 @@ impl VideoStream {
             crop,
             bitstream,
             info,
+            dropped,
             track,
         })
     }
@@ -542,6 +593,20 @@ impl VideoStream {
     #[must_use]
     pub const fn track(&self) -> &TrackInfo {
         &self.track
+    }
+
+    /// What the track declares that its pictures go without: the alpha of a track that has one.
+    #[must_use]
+    pub const fn dropped_layer(&self) -> Option<&DroppedLayer> {
+        self.dropped.as_ref()
+    }
+
+    /// Bytes of the frame decoded ahead and kept for the next [`Self::next`].
+    #[must_use]
+    pub fn lookahead_bytes(&self) -> u64 {
+        self.lookahead
+            .as_ref()
+            .map_or(0, StreamFrame::retained_bytes)
     }
 
     /// How far after a time a frame may be stored and still be the one shown at it.
@@ -617,6 +682,7 @@ impl VideoStream {
         time: MediaTime,
         cancel: &CancelToken,
     ) -> Result<StreamFrame, Interrupt> {
+        self.resume_after = None;
         let deadline = time.presentation_deadline(self.slack);
         let mut target = self.track_units_floor(deadline);
         let mut keyframe = self.reader.seek(self.track.id, target)?;
@@ -676,11 +742,13 @@ impl VideoStream {
             if let Some(picture) = self.reorder.take() {
                 let frame = self.facts(picture);
                 let pts = self.track_units(frame.facts.pts);
+                // A frame dropped on the way back to the resume point is progress too.
+                budget.progressed();
                 if self.resume_after.is_some_and(|after| pts <= after) {
                     continue;
                 }
                 self.resume_after = None;
-                budget.progressed();
+                self.reopens = 0;
                 self.recovery.progress(Some(pts))?;
                 return Ok(Some(frame));
             }
@@ -692,24 +760,26 @@ impl VideoStream {
                 return Ok(None);
             }
             budget.step(cancel)?;
-            self.step()?;
+            if self.step()? {
+                budget.advanced();
+            }
         }
     }
 
-    /// One receive, or one packet in.
-    fn step(&mut self) -> Result<(), Interrupt> {
+    /// One receive, or one packet in; `true` when a packet was read or accepted.
+    fn step(&mut self) -> Result<bool, Interrupt> {
         match self.backend.receive(self.input != Input::Open) {
             Ok(Poll::Frame(picture)) => {
                 if self.input == Input::Full {
                     self.input = Input::Open;
                 }
                 self.reorder.arrive(picture);
-                return Ok(());
+                return Ok(false);
             }
             Ok(Poll::Drained) => {
                 self.reorder.drain();
                 self.input = Input::Drained;
-                return Ok(());
+                return Ok(false);
             }
             Ok(Poll::Pending) => {}
             Err(BackendError::HardwarePicture(reason))
@@ -719,29 +789,32 @@ impl VideoStream {
             {
                 self.recovery
                     .corrupt_with_detail("video receive", None, Some(reason))?;
-                return Ok(());
+                return Ok(false);
             }
             Err(error) => return Err(Interrupt::Backend(error)),
         }
         if matches!(self.input, Input::Ended | Input::Drained) {
-            return Ok(());
+            return Ok(false);
         }
+        let mut advanced = false;
         if self.pending.is_none() {
             if let Some(packet) = self.reader.next_packet(self.track.id)? {
                 self.pending = Some(packet);
+                advanced = true;
             } else {
                 self.backend.finish_input().map_err(Interrupt::Backend)?;
                 self.input = Input::Ended;
-                return Ok(());
+                return Ok(false);
             }
         }
         let Some(packet) = self.pending.as_ref() else {
-            return Ok(());
+            return Ok(advanced);
         };
         match self.backend.submit(packet) {
             Ok(Submit::Accepted) => {
                 self.pending = None;
                 self.input = Input::Open;
+                advanced = true;
             }
             Ok(Submit::Busy) => self.input = Input::Full,
             Err(BackendError::Corrupt(reason))
@@ -754,7 +827,7 @@ impl VideoStream {
             }
             Err(error) => return Err(Interrupt::Backend(error)),
         }
-        Ok(())
+        Ok(advanced)
     }
 
     /// Empties the session and the queues, keeping `lookahead`.
@@ -791,6 +864,8 @@ impl VideoStream {
             DecodeError::Adapter(format!("{error}; no session replaces it: {reopen}"))
         })?;
         self.reorder = ReorderBuffer::new(reorder_depth(self.backend.as_ref(), &self.track));
+        self.recovery
+            .set_hardware(self.backend.kind() == BackendKind::Hardware);
         Ok(())
     }
 

@@ -78,6 +78,7 @@ version = "0.6.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-build-support",
+ "alpha2-container",
  "alpha2-engine",
  "alpha2-eval",
  "alpha2-extensions",
@@ -86,6 +87,7 @@ dependencies = [
  "alpha2-model",
  "alpha2-native",
  "alpha2-render",
+ "alpha2-text",
  "alpha2-time",
  "flate2",
  "libm",
@@ -101,6 +103,7 @@ dependencies = [
  "alpha2-container",
  "alpha2-host-core",
  "alpha2-media",
+ "alpha2-reader-conformance",
  "alpha2-test-support",
  "alpha2-time",
  "bytes",
@@ -116,6 +119,7 @@ dependencies = [
  "alpha2-container",
  "alpha2-host-core",
  "alpha2-media",
+ "alpha2-reader-conformance",
  "alpha2-time",
  "bytes",
  "lewton",
@@ -185,6 +189,7 @@ dependencies = [
 name = "alpha2-build-support"
 version = "0.6.0"
 dependencies = [
+ "alpha2-test-support",
  "bindgen",
  "cc",
 ]
@@ -197,6 +202,7 @@ dependencies = [
  "alpha2-media",
  "alpha2-model",
  "alpha2-render",
+ "alpha2-scaling-support",
  "alpha2-text",
  "alpha2-time",
  "libm",
@@ -220,6 +226,7 @@ name = "alpha2-container"
 version = "0.6.0"
 dependencies = [
  "alpha2-media",
+ "alpha2-scaling-support",
  "alpha2-test-support",
  "alpha2-time",
  "bytes",
@@ -292,7 +299,12 @@ dependencies = [
  "flate2",
  "gif",
  "half",
+ "hayro-ccitt",
+ "hayro-interpret",
+ "hayro-jbig2",
+ "hayro-jpeg2000",
  "hayro-svg",
+ "hayro-syntax",
  "image-webp",
  "imagesize",
  "kurbo",
@@ -300,10 +312,14 @@ dependencies = [
  "peniko",
  "png",
  "resvg",
+ "roxmltree",
  "serde",
  "serde_json",
  "simplecss",
  "svgtypes",
+ "tiny-skia",
+ "tiny-skia-path",
+ "usvg",
  "velato",
  "zip",
 ]
@@ -422,16 +438,20 @@ dependencies = [
 name = "alpha2-host-core"
 version = "0.6.0"
 dependencies = [
+ "alpha2-assets",
  "alpha2-audio",
+ "alpha2-compose",
  "alpha2-container",
  "alpha2-engine",
  "alpha2-eval",
  "alpha2-extensions",
+ "alpha2-gpu",
  "alpha2-media",
  "alpha2-model",
  "alpha2-os",
  "alpha2-plugin-abi",
  "alpha2-render",
+ "alpha2-test-support",
  "alpha2-time",
  "bytemuck",
  "bytes",
@@ -439,8 +459,10 @@ dependencies = [
  "image-webp",
  "libloading",
  "png",
+ "serde",
  "serde_json",
  "sha2 0.11.0",
+ "unicode-normalization",
  "wasmtime",
  "wgpu",
  "zune-core",
@@ -494,6 +516,7 @@ dependencies = [
  "alpha2-test-support",
  "alpha2-text",
  "alpha2-time",
+ "bytes",
  "jni 0.21.1",
  "ndk-context",
  "ndk-sys",
@@ -679,6 +702,7 @@ name = "alpha2-test-support"
 version = "0.6.0"
 dependencies = [
  "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]

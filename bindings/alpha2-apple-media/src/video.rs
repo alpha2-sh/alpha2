@@ -13,7 +13,7 @@ use std::ptr::{self, NonNull};
 use std::sync::{Mutex, Once, PoisonError};
 
 use alpha2_container::{Packet, TrackInfo, VideoCodec, VideoTrack};
-use alpha2_host_core::parameter_sets::{ParameterSetCodec, sequence_facts};
+use alpha2_host_core::parameter_sets::{ParameterSetCodec, sequence_facts, vp9_format};
 use alpha2_host_core::video_stream::{
     BackendError, BackendFrame, BackendImage, BackendKind, Poll, Submit, VideoBackends,
     VideoDecodeBackend,
@@ -42,7 +42,7 @@ use objc2_video_toolbox::{
     kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder,
 };
 
-use crate::config::{avc_parameter_sets, avc_sps_format, es_descriptor, hevc_parameter_sets};
+use crate::config::{avc_parameter_sets, es_descriptor, hevc_parameter_sets};
 use crate::sys::{self, code, dictionary, fourcc};
 
 /// The sample format a stream decodes to.
@@ -121,16 +121,15 @@ fn picture(video: &VideoTrack) -> Result<Picture, BackendError> {
     };
     Ok(match video.codec {
         VideoCodec::H264 => {
-            let (sets, _) = avc_parameter_sets(record).ok_or_else(unreadable)?;
-            let sps = sets
-                .iter()
-                .find(|set| set.first().is_some_and(|byte| byte & 0x1f == 7))
-                .ok_or_else(unreadable)?;
-            let (depth, chroma) = avc_sps_format(sps).ok_or_else(unreadable)?;
+            let facts = sequence_facts(ParameterSetCodec::H264, record).ok_or_else(unreadable)?;
+            // A crafted SPS saturates the depth, which no `u8` holds.
             Picture {
-                depth,
-                chroma,
-                full_range: vui_full_range(ParameterSetCodec::H264, record),
+                depth: u8::try_from(facts.bit_depth_luma).map_err(|_| unreadable())?,
+                chroma: u8::try_from(facts.chroma_format).map_err(|_| unreadable())?,
+                full_range: facts
+                    .vui
+                    .color
+                    .is_some_and(|color| color.range == ColorRange::Full),
             }
         }
         VideoCodec::Hevc => Picture {
@@ -433,8 +432,8 @@ fn region(size: (usize, usize), extended: Extended, window: Option<Window>) -> R
     }
 }
 
-/// Copies a picture out of `buffer`, rows of each plane `stride` bytes apart, the last row without
-/// its padding.
+/// Copies a picture out of `buffer`, rows of each plane `stride` bytes apart. The last row's padding
+/// is not read, since the buffer may end before it, and is zero in the copy.
 fn copy_picture(buffer: &CVPixelBuffer, outputs: &Outputs) -> Result<Copied, String> {
     let actual = CVPixelBufferGetPixelFormatType(buffer);
     if actual != outputs.pixel_format {
@@ -500,8 +499,11 @@ fn copy_picture(buffer: &CVPixelBuffer, outputs: &Outputs) -> Result<Copied, Str
             let bytes = unsafe {
                 std::slice::from_raw_parts(base.cast::<u8>().sub(offset).cast_const(), length)
             };
+            let mut copy = Vec::with_capacity(stride * rows);
+            copy.extend_from_slice(bytes);
+            copy.resize(stride * rows, 0);
             Ok(Plane {
-                bytes: Bytes::copy_from_slice(bytes),
+                bytes: Bytes::from(copy),
                 stride: u32::try_from(stride).unwrap_or(u32::MAX),
                 width: u32::try_from(columns).unwrap_or(u32::MAX),
                 height: u32::try_from(rows).unwrap_or(u32::MAX),
@@ -582,12 +584,22 @@ struct Description(CFRetained<CMFormatDescription>);
 // SAFETY: format descriptions are immutable after creation.
 unsafe impl Send for Description {}
 
-/// A `VideoToolbox` video decoder session.
-pub struct VideoToolboxVideo {
+/// An open decompression session and the state its callback writes.
+struct Open {
     // Declared before `outputs`: the session must be invalidated before its callback state goes.
     session: Session,
     description: Description,
     outputs: Box<Mutex<Outputs>>,
+}
+
+/// A `VideoToolbox` video decoder session.
+///
+/// A VP9 track without a `vpcC` record (every Matroska and `WebM` one) opens its session at the
+/// first packet, from the format the key frame declares.
+pub struct VideoToolboxVideo {
+    open: Option<Open>,
+    /// The track, for a session opened at the first packet.
+    video: VideoTrack,
     kind: BackendKind,
     codec: VideoCodec,
     timescale: i32,
@@ -604,6 +616,129 @@ impl std::fmt::Debug for VideoToolboxVideo {
     }
 }
 
+/// Opens a session of `kind` for `video`, and the kind `VideoToolbox` reports it chose.
+fn start(
+    video: &VideoTrack,
+    timescale: i32,
+    kind: BackendKind,
+) -> Result<(Open, BackendKind), BackendError> {
+    let picture = picture(video)?;
+    let (pixel_format, format) = picture.output()?;
+    if matches!(video.codec, VideoCodec::Vp9 | VideoCodec::Av1) {
+        register_supplemental_decoders();
+    }
+    let description = description(video)?;
+    let outputs = Box::new(Mutex::new(Outputs {
+        pixel_format,
+        format,
+        window: sps_window(video),
+        timescale,
+        frames: VecDeque::new(),
+        error: None,
+        copy_error: None,
+    }));
+    // SAFETY: framework constants.
+    let specification = unsafe {
+        match kind {
+            BackendKind::Hardware => dictionary(&[(
+                kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder,
+                sys::boolean(true),
+            )]),
+            BackendKind::Software => dictionary(&[(
+                kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder,
+                sys::boolean(false),
+            )]),
+        }
+    };
+    // SAFETY: a framework constant.
+    let attributes = dictionary(&[(
+        unsafe { kCVPixelBufferPixelFormatTypeKey },
+        &sys::int(i64::from(pixel_format)),
+    )]);
+    let callback = VTDecompressionOutputCallbackRecord {
+        decompressionOutputCallback: Some(decoded),
+        decompressionOutputRefCon: ptr::from_ref::<Mutex<Outputs>>(&outputs).cast_mut().cast(),
+    };
+    let mut session: *mut VTDecompressionSession = ptr::null_mut();
+    // SAFETY: the dictionaries hold the documented value types, the callback's refcon stays
+    // valid while the session lives, and `session` is a valid out pointer.
+    let status = unsafe {
+        VTDecompressionSession::create(
+            None,
+            &description,
+            Some(specification.as_opaque()),
+            Some(attributes.as_opaque()),
+            &raw const callback,
+            NonNull::from(&mut session),
+        )
+    };
+    let kind_name = match kind {
+        BackendKind::Hardware => "hardware",
+        BackendKind::Software => "software",
+    };
+    let session = NonNull::new(session)
+        .filter(|_| status == 0)
+        .ok_or_else(|| {
+            let profile = if mpeg4_advanced_simple(video) {
+                ", Advanced Simple Profile"
+            } else {
+                ""
+            };
+            BackendError::Unsupported(format!(
+                "VideoToolbox here has no {kind_name} {} decoder for this stream ({}{profile})",
+                codec_name(video.codec),
+                sys::status(status)
+            ))
+        })?;
+    // SAFETY: a successful create returns a +1 reference.
+    let session = Session(unsafe { CFRetained::from_raw(session) });
+    let kind = if on_hardware(&session.0) {
+        BackendKind::Hardware
+    } else {
+        BackendKind::Software
+    };
+    // The software H.264 decoder opens sessions for streams beyond 8-bit 4:2:0 (High 10,
+    // High 4:2:2, High 4:4:4 Predictive) and then fails every picture with -8969; hardware
+    // decoders refuse what they cannot read here, when the session is created.
+    if video.codec == VideoCodec::H264
+        && kind == BackendKind::Software
+        && (picture.depth > 8 || picture.chroma != 1)
+    {
+        return Err(BackendError::Unsupported(format!(
+            "VideoToolbox's software H.264 decoder reads 8-bit 4:2:0, not {}-bit with chroma \
+             format {}",
+            picture.depth, picture.chroma
+        )));
+    }
+    let open = Open {
+        session,
+        description: Description(description),
+        outputs,
+    };
+    Ok((open, kind))
+}
+
+/// The track `video` with the `vpcC` record its first packet's key frame declares.
+fn with_vp9_record(video: &VideoTrack, packet: &Packet) -> Result<VideoTrack, BackendError> {
+    let format = vp9_format(&packet.data).ok_or_else(|| {
+        BackendError::Corrupt("the VP9 stream does not start with a readable key frame".into())
+    })?;
+    if format.subsampling == (false, true) {
+        return Err(BackendError::Unsupported(
+            "VP9 with 4:4:0 chroma: VideoToolbox outputs 4:2:0, 4:2:2 and 4:4:4".into(),
+        ));
+    }
+    let mut video = video.clone();
+    video.codec_private = Bytes::copy_from_slice(&format.vpcc_record(video.color));
+    Ok(video)
+}
+
+impl Open {
+    fn outputs(&self) -> std::sync::MutexGuard<'_, Outputs> {
+        self.outputs.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 impl VideoToolboxVideo {
     /// A session of `kind` for `track`; its kind is the one `VideoToolbox` reports it chose.
     ///
@@ -612,110 +747,34 @@ impl VideoToolboxVideo {
     pub fn open(track: &TrackInfo, kind: BackendKind) -> Result<Self, BackendError> {
         let video = track
             .video
-            .as_ref()
+            .clone()
             .ok_or_else(|| BackendError::Unsupported("not a video track".into()))?;
-        let picture = picture(video)?;
-        let (pixel_format, format) = picture.output()?;
-        if matches!(video.codec, VideoCodec::Vp9 | VideoCodec::Av1) {
-            register_supplemental_decoders();
-        }
-        let description = description(video)?;
         let timescale = i32::try_from(track.timescale.max(1)).unwrap_or(i32::MAX);
-        let outputs = Box::new(Mutex::new(Outputs {
-            pixel_format,
-            format,
-            window: sps_window(video),
-            timescale,
-            frames: VecDeque::new(),
-            error: None,
-            copy_error: None,
-        }));
-        // SAFETY: framework constants.
-        let specification = unsafe {
-            match kind {
-                BackendKind::Hardware => dictionary(&[(
-                    kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder,
-                    sys::boolean(true),
-                )]),
-                BackendKind::Software => dictionary(&[(
-                    kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder,
-                    sys::boolean(false),
-                )]),
-            }
-        };
-        // SAFETY: a framework constant.
-        let attributes = dictionary(&[(
-            unsafe { kCVPixelBufferPixelFormatTypeKey },
-            &sys::int(i64::from(pixel_format)),
-        )]);
-        let callback = VTDecompressionOutputCallbackRecord {
-            decompressionOutputCallback: Some(decoded),
-            decompressionOutputRefCon: ptr::from_ref::<Mutex<Outputs>>(&outputs).cast_mut().cast(),
-        };
-        let mut session: *mut VTDecompressionSession = ptr::null_mut();
-        // SAFETY: the dictionaries hold the documented value types, the callback's refcon stays
-        // valid while the session lives, and `session` is a valid out pointer.
-        let status = unsafe {
-            VTDecompressionSession::create(
-                None,
-                &description,
-                Some(specification.as_opaque()),
-                Some(attributes.as_opaque()),
-                &raw const callback,
-                NonNull::from(&mut session),
-            )
-        };
-        let kind_name = match kind {
-            BackendKind::Hardware => "hardware",
-            BackendKind::Software => "software",
-        };
-        let session = NonNull::new(session)
-            .filter(|_| status == 0)
-            .ok_or_else(|| {
-                let profile = if mpeg4_advanced_simple(video) {
-                    ", Advanced Simple Profile"
-                } else {
-                    ""
-                };
-                BackendError::Unsupported(format!(
-                    "VideoToolbox here has no {kind_name} {} decoder for this stream ({}{profile})",
-                    codec_name(video.codec),
-                    sys::status(status)
-                ))
-            })?;
-        // SAFETY: a successful create returns a +1 reference.
-        let session = Session(unsafe { CFRetained::from_raw(session) });
-        let kind = if on_hardware(&session.0) {
-            BackendKind::Hardware
+        let (open, kind) = if video.codec == VideoCodec::Vp9 && video.codec_private.is_empty() {
+            (None, kind)
         } else {
-            BackendKind::Software
+            let (open, kind) = start(&video, timescale, kind)?;
+            (Some(open), kind)
         };
-        // The software H.264 decoder opens sessions for streams beyond 8-bit 4:2:0 (High 10,
-        // High 4:2:2, High 4:4:4 Predictive) and then fails every picture with -8969; hardware
-        // decoders refuse what they cannot read here, when the session is created.
-        if video.codec == VideoCodec::H264
-            && kind == BackendKind::Software
-            && (picture.depth > 8 || picture.chroma != 1)
-        {
-            return Err(BackendError::Unsupported(format!(
-                "VideoToolbox's software H.264 decoder reads 8-bit 4:2:0, not {}-bit with chroma \
-                 format {}",
-                picture.depth, picture.chroma
-            )));
-        }
         Ok(Self {
-            session,
-            description: Description(description),
-            outputs,
-            kind,
+            open,
             codec: video.codec,
+            video,
+            kind,
             timescale,
             ended: false,
         })
     }
 
-    fn outputs(&self) -> std::sync::MutexGuard<'_, Outputs> {
-        self.outputs.lock().unwrap_or_else(PoisonError::into_inner)
+    /// Opens the session from `packet` when the track's record was empty.
+    fn open_at(&mut self, packet: &Packet) -> Result<(), BackendError> {
+        if self.open.is_none() {
+            let video = with_vp9_record(&self.video, packet)?;
+            let (open, kind) = start(&video, self.timescale, self.kind)?;
+            self.kind = kind;
+            self.open = Some(open);
+        }
+        Ok(())
     }
 
     fn error(&self, status: i32, during: &str) -> BackendError {
@@ -737,8 +796,11 @@ impl VideoToolboxVideo {
 
     /// The failure the callback recorded since the last call, if any.
     fn take_callback_error(&self, during: &str) -> Result<(), BackendError> {
+        let Some(open) = &self.open else {
+            return Ok(());
+        };
         let (status, copy) = {
-            let mut outputs = self.outputs();
+            let mut outputs = open.outputs();
             (outputs.error.take(), outputs.copy_error.take())
         };
         if let Some(status) = status {
@@ -747,7 +809,11 @@ impl VideoToolboxVideo {
         copy.map_or(Ok(()), |reason| Err(BackendError::Failed(reason)))
     }
 
-    fn sample(&self, packet: &Packet) -> Result<CFRetained<CMSampleBuffer>, BackendError> {
+    fn sample(
+        &self,
+        open: &Open,
+        packet: &Packet,
+    ) -> Result<CFRetained<CMSampleBuffer>, BackendError> {
         let failed = |what: &str, status: i32| {
             BackendError::Failed(format!("{what} failed ({})", sys::status(status)))
         };
@@ -805,7 +871,7 @@ impl VideoToolboxVideo {
             CMSampleBuffer::create_ready(
                 None,
                 Some(&block),
-                Some(&self.description.0),
+                Some(&open.description.0),
                 1,
                 1,
                 &raw const timing,
@@ -823,13 +889,16 @@ impl VideoToolboxVideo {
 
     /// Emits the pictures the decoder holds back and waits for every callback.
     fn complete(&self, during: &str) -> Result<(), BackendError> {
+        let Some(open) = &self.open else {
+            return Ok(());
+        };
         // SAFETY: the session is live.
-        let status = unsafe { self.session.0.finish_delayed_frames() };
+        let status = unsafe { open.session.0.finish_delayed_frames() };
         if status != 0 {
             return Err(self.error(status, during));
         }
         // SAFETY: the session is live.
-        let status = unsafe { self.session.0.wait_for_asynchronous_frames() };
+        let status = unsafe { open.session.0.wait_for_asynchronous_frames() };
         if status != 0 {
             return Err(self.error(status, during));
         }
@@ -866,11 +935,15 @@ impl VideoDecodeBackend for VideoToolboxVideo {
         if packet.data.is_empty() {
             return Ok(Submit::Accepted);
         }
-        let sample = self.sample(packet)?;
+        self.open_at(packet)?;
+        let Some(open) = &self.open else {
+            return Err(BackendError::Failed("no session".into()));
+        };
+        let sample = self.sample(open, packet)?;
         let mut info = VTDecodeInfoFlags::empty();
         // SAFETY: the sample buffer is live; synchronous decoding calls back before returning.
         let status = unsafe {
-            self.session.0.decode_frame(
+            open.session.0.decode_frame(
                 &sample,
                 VTDecodeFrameFlags::empty(),
                 ptr::null_mut(),
@@ -878,7 +951,7 @@ impl VideoDecodeBackend for VideoToolboxVideo {
             )
         };
         if status != 0 {
-            self.outputs().error = None;
+            open.outputs().error = None;
             return Err(self.error(status, "decode"));
         }
         self.take_callback_error("decode")?;
@@ -887,7 +960,11 @@ impl VideoDecodeBackend for VideoToolboxVideo {
 
     fn receive(&mut self, _wait: bool) -> Result<Poll, BackendError> {
         self.take_callback_error("decode")?;
-        Ok(match self.outputs().frames.pop_front() {
+        let frame = self
+            .open
+            .as_ref()
+            .and_then(|open| open.outputs().frames.pop_front());
+        Ok(match frame {
             Some(frame) => Poll::Frame(frame),
             None if self.ended => Poll::Drained,
             None => Poll::Pending,
@@ -902,11 +979,12 @@ impl VideoDecodeBackend for VideoToolboxVideo {
 
     fn flush(&mut self) -> Result<(), BackendError> {
         let completed = self.complete("flush");
-        let mut outputs = self.outputs();
-        outputs.frames.clear();
-        outputs.error = None;
-        outputs.copy_error = None;
-        drop(outputs);
+        if let Some(open) = &self.open {
+            let mut outputs = open.outputs();
+            outputs.frames.clear();
+            outputs.error = None;
+            outputs.copy_error = None;
+        }
         self.ended = false;
         completed
     }
@@ -928,7 +1006,62 @@ impl VideoBackends for AppleVideo {
 
 #[cfg(test)]
 mod tests {
-    use super::{Extended, Rect, Region, Window, region};
+    use std::sync::Arc;
+
+    use alpha2_backend_conformance::corpus;
+    use alpha2_container::{TrackKind, VideoTrack};
+    use alpha2_host_core::video_stream::{BackendError, StreamOptions, VideoStream};
+    use alpha2_media::DecodeError;
+    use bytes::Bytes;
+
+    use super::{AppleVideo, Extended, Rect, Region, Window, picture, region};
+
+    fn corpus_video(name: &str) -> VideoTrack {
+        let reader = alpha2_container::open(&corpus(name)).expect(name);
+        let index = alpha2_container::default_track(reader.tracks(), TrackKind::Video).expect(name);
+        reader.tracks()[index].video.clone().expect(name)
+    }
+
+    #[test]
+    fn h264_depth_and_chroma_come_from_the_sps() {
+        for (name, depth, chroma) in [
+            ("h264-bt709-copy.mp4", 8, 1),
+            ("h264-high10.mp4", 10, 1),
+            ("hdr-pq.mp4", 10, 1),
+        ] {
+            let picture = picture(&corpus_video(name)).expect(name);
+            assert_eq!((picture.depth, picture.chroma), (depth, chroma), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_sps_whose_depth_overflows_is_refused_as_unreadable() {
+        // `bit_depth_luma_minus8` is the largest Exp-Golomb value 32 bits hold.
+        let sps = [
+            0x67, 0x64, 0x00, 0x0a, 0xa0, 0x00, 0x00, 0x00, 0x1f, 0xff, 0xff, 0xff, 0xe0,
+        ];
+        let mut record = vec![1, 0x64, 0x00, 0x0a, 0xff, 0xe1, 0, 13];
+        record.extend_from_slice(&sps);
+        record.extend_from_slice(&[1, 0, 4, 0x68, 0xce, 0x3c, 0x80]);
+        let mut video = corpus_video("h264-bt709-copy.mp4");
+        video.codec_private = Bytes::from(record);
+        assert_eq!(
+            picture(&video),
+            Err(BackendError::Unsupported(
+                "an unreadable H.264 configuration".into()
+            ))
+        );
+        // The corpus stream with that SPS field, through a whole stream open.
+        let opened = VideoStream::open_file(
+            &corpus("hostile/container_mp4/avc-sps-depth-overflow"),
+            Arc::new(AppleVideo),
+            StreamOptions::default(),
+        );
+        assert!(
+            matches!(opened, Err(DecodeError::Unsupported(_))),
+            "{opened:?}"
+        );
+    }
 
     const fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
         Rect {

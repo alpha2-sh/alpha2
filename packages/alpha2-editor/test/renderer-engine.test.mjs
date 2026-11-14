@@ -35,6 +35,24 @@ test("the preview's result cache is sized again when the canvas is", async () =>
   assert.equal(registry.budgets.length, count);
 });
 
+test("a renderer that lost its device takes a new canvas size and leaves recovery to the next render", async () => {
+  const { engine, registry } = await started(640, 360);
+  registry.resizeSurface = () => {
+    throw Object.assign(new Error("the GPU device was lost"), {
+      code: "GPU_DEVICE_LOST",
+      fatal: true,
+    });
+  };
+  engine.resize(1280, 720);
+  assert.deepEqual([engine.canvas.width, engine.canvas.height], [1280, 720]);
+  registry.resizeSurface = () => {
+    throw Object.assign(new Error("texture too large"), {
+      code: "INVALID_INPUT",
+    });
+  };
+  assert.throws(() => engine.resize(99_999, 720), { code: "INVALID_INPUT" });
+});
+
 const withLuts = (resources, drawn) => ({
   settings: { width: 64, height: 36 },
   sources: [],

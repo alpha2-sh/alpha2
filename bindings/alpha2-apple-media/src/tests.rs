@@ -11,6 +11,8 @@ use std::sync::Arc;
 use alpha2_backend_conformance::{ContainerBackend, conformance_tests, corpus};
 use alpha2_container::{AudioCodec, TrackKind, VideoCodec};
 use alpha2_host_core::audio_stream::WithPcm;
+use alpha2_host_core::parameter_sets::vp9_format;
+use alpha2_media::ColorMetadata;
 use objc2_audio_toolbox::{
     kAudioFormatProperty_AvailableDecodeNumberChannels, kAudioFormatProperty_DecodeFormatIDs,
 };
@@ -91,13 +93,31 @@ fn system_decodes_audio(path: &Path) -> bool {
     channels.is_empty() || channels.contains(&audio.channels)
 }
 
+/// The `vpcC` record the first key frame of the default video track of `path` declares.
+fn first_frame_vp9_record(path: &Path, color: Option<ColorMetadata>) -> Option<Vec<u8>> {
+    let mut reader = alpha2_container::open(path).ok()?;
+    let index = alpha2_container::default_track(reader.tracks(), TrackKind::Video)?;
+    let id = reader.tracks()[index].id;
+    let packet = reader.next_packet(id).ok()??;
+    Some(vp9_format(&packet.data)?.vpcc_record(color).to_vec())
+}
+
 /// Whether a `VideoToolbox` session, a hardware one when `hardware` asks, opens for the default
-/// video track of `path`, from the track's sample description alone.
+/// video track of `path`, from the track's sample description, or for VP9 without one, from the
+/// first key frame.
 fn system_decodes_video(path: &Path, hardware: bool) -> bool {
     let Some(video) = track(path, TrackKind::Video).and_then(|track| track.video) else {
         return false;
     };
-    let private = &video.codec_private[..];
+    let record = if video.codec == VideoCodec::Vp9 && video.codec_private.is_empty() {
+        let Some(record) = first_frame_vp9_record(path, video.color) else {
+            return false;
+        };
+        record
+    } else {
+        video.codec_private.to_vec()
+    };
+    let private = &record[..];
     let (codec_type, atom, body) = match video.codec {
         VideoCodec::H264 => (*b"avc1", "avcC", private.to_vec()),
         VideoCodec::Hevc => (*b"hvc1", "hvcC", private.to_vec()),
@@ -175,7 +195,14 @@ enum Probe {
 
 fn probe(name: &str) -> Option<Probe> {
     Some(match name {
-        "av1.mp4" | "av1-colocated.mp4" | "cfr-bt709-limited.mp4" | "long-gop.mp4" => Probe::Video,
+        "av1.mp4"
+        | "av1-colocated.mp4"
+        | "cfr-bt709-limited.mp4"
+        | "long-gop.mp4"
+        | "vp9-128.webm"
+        | "vp9.webm"
+        | "vp9-color.webm"
+        | "vp9-alpha.webm" => Probe::Video,
         "hdr-pq.mp4" | "hdr-pq-topleft.mp4" => Probe::HardwareVideo,
         "audio-ac3-5.1.mp4"
         | "audio-eac3-5.0.mp4"
@@ -221,16 +248,35 @@ fn apple() -> ContainerBackend {
 }
 
 conformance_tests!(apple());
+alpha2_reader_conformance::reader_conformance_tests!(apple());
+
+/// Decodes the first picture of the default video track of `path`.
+fn first_picture(path: &Path) -> Result<(), String> {
+    use alpha2_backend_conformance::Backend as _;
+    use alpha2_media::{CancelToken, DecodeEvent};
+    let mut decoder = apple().open_video(path).map_err(|e| e.to_string())?;
+    loop {
+        match decoder.decode_next(&CancelToken::default()) {
+            Ok(DecodeEvent::Video(_)) => return Ok(()),
+            Ok(DecodeEvent::Retry) => {}
+            Ok(event) => return Err(format!("{event:?}")),
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+}
 
 #[test]
 fn every_probed_fixture_the_system_decodes_opens() {
     use alpha2_host_core::audio_stream::AudioBackends;
-    use alpha2_host_core::video_stream::{BackendKind, VideoBackends};
     let names = [
         "av1.mp4",
         "av1-colocated.mp4",
         "cfr-bt709-limited.mp4",
         "long-gop.mp4",
+        "vp9-128.webm",
+        "vp9.webm",
+        "vp9-color.webm",
+        "vp9-alpha.webm",
         "hdr-pq.mp4",
         "hdr-pq-topleft.mp4",
         "audio-ac3-5.1.mp4",
@@ -251,13 +297,9 @@ fn every_probed_fixture_the_system_decodes_opens() {
         let opened = match probe {
             Probe::Audio => track(&path, TrackKind::Audio)
                 .map(|track| AppleAudio.open(&track).map(drop).map_err(|e| e.to_string())),
-            Probe::Video | Probe::HardwareVideo => track(&path, TrackKind::Video).map(|track| {
-                AppleVideo
-                    .open(&track, BackendKind::Hardware)
-                    .or_else(|_| AppleVideo.open(&track, BackendKind::Software))
-                    .map(drop)
-                    .map_err(|e| e.to_string())
-            }),
+            // Some sessions open at the first packet, so a video fixture opens when its first
+            // picture decodes.
+            Probe::Video | Probe::HardwareVideo => Some(first_picture(&path)),
         }
         .unwrap_or_else(|| Err("no track".into()));
         match (system_decodes(&path, &probe), opened) {

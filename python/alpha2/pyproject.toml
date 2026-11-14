@@ -7,7 +7,8 @@ name = "alpha2"
 description = "Python client for the alpha2 video engine: build, validate, and render project documents."
 readme = "README.md"
 license = "MIT"
-license-files = ["LICENSE.md"]
+# build-wheels.sh writes the two notice files; git ignores them.
+license-files = ["LICENSE.md", "THIRD_PARTY_NOTICES.md", "rust-crate-licenses.md"]
 # 3.11 for NotRequired and generic TypedDicts; 3.11.4 for tarfile extraction filters.
 requires-python = ">=3.11.4"
 dependencies = [
@@ -28,9 +29,6 @@ classifiers = [
 Homepage = "https://github.com/alpha2-sh/alpha2"
 Repository = "https://github.com/alpha2-sh/alpha2"
 Issues = "https://github.com/alpha2-sh/alpha2/issues"
-
-[project.scripts]
-alpha2 = "alpha2.__main__:main"
 
 [dependency-groups]
 # CI installs the package with --no-deps, so its trust dependencies are listed here, both on every

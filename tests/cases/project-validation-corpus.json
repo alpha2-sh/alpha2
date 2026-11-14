@@ -2298,9 +2298,8 @@
   {
     "name": "too-many-composition-nodes",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["composition c1-look has too many nodes"],
-    "error": "composition c1-look has 257 nodes; the maximum is 256",
+    "rejected_by": "schema",
+    "problems": ["project.compositions[0].nodes must have at most 256 items"],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -3980,9 +3979,8 @@
   {
     "name": "too-many-tracks",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["project must not contain more than 256 tracks"],
-    "error": "project has 257 tracks; the maximum is 256",
+    "rejected_by": "schema",
+    "problems": ["project.timeline.tracks must have at most 256 items"],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -6564,9 +6562,10 @@
   {
     "name": "mask-too-many",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["clip c1 has an invalid mask"],
-    "error": "clip c1 has an invalid mask",
+    "rejected_by": "schema",
+    "problems": [
+      "project.timeline.tracks[0].clips[0].masks must have at most 8 items"
+    ],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -8047,9 +8046,10 @@
   {
     "name": "generated-too-many-stops",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["source g1 has an invalid generator"],
-    "error": "source g1 has an invalid generator",
+    "rejected_by": "schema",
+    "problems": [
+      "project.sources[4].generator.paint.stops must have at most 8 items"
+    ],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -15937,11 +15937,10 @@
   {
     "name": "audio-channels-three",
     "valid": false,
-    "rejected_by": "model",
+    "rejected_by": "schema",
     "problems": [
-      "clip clip has invalid audio properties"
+      "project.timeline.tracks[0].clips[0].audio.channels must have at most 2 items"
     ],
-    "error": "clip clip has invalid audio properties",
     "project": {
       "schema_version": 1,
       "id": "audio-channels-three",
@@ -20645,9 +20644,10 @@
   {
     "name": "track-audio-effects-too-many",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["track t2 has invalid audio bus settings"],
-    "error": "track t2 has invalid audio bus settings",
+    "rejected_by": "schema",
+    "problems": [
+      "project.timeline.tracks[1].audio.effects must have at most 16 items"
+    ],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -23845,9 +23845,10 @@
   {
     "name": "effect-too-many-named-inputs",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["node fx of composition g has an invalid setting"],
-    "error": "node fx of composition g has an invalid setting",
+    "rejected_by": "schema",
+    "problems": [
+      "project.compositions[0].nodes[1].op.inputs must have at most 8 properties"
+    ],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -24389,11 +24390,10 @@
   {
     "name": "generated-shapes-too-many-items",
     "valid": false,
-    "rejected_by": "model",
+    "rejected_by": "schema",
     "problems": [
-      "source g1 has an invalid shape: items[1024] has more items than a shapes generator may hold"
+      "project.sources[4].generator.items must have at most 1024 items"
     ],
-    "error": "source g1 has an invalid shape: items[1024] has more items than a shapes generator may hold",
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -30399,9 +30399,9 @@
       }
     }
   },
-  {"name": "text-strokes-too-many", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "Big", "style": {"strokes": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "text-strokes-too-many", "valid": false, "rejected_by": "schema", "problems": ["project.sources[4].generator.style.strokes must have at most 4 items"], "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "Big", "style": {"strokes": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-stroke-extent-too-wide", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "Big", "style": {"strokes": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.3}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.25}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
-  {"name": "text-shadows-too-many", "valid": false, "rejected_by": "model", "problems": ["track subs has invalid captions"], "error": "track subs has invalid captions", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "v2", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "subs", "name": "Subtitles", "kind": "caption", "captions": {"style": {"shadows": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}]}, "cues": [{"timeline_range": {"start": 0, "end": 1000}, "text": "Hi"}]}}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "text-shadows-too-many", "valid": false, "rejected_by": "schema", "problems": ["project.timeline.tracks[1].captions.style.shadows must have at most 4 items"], "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "v2", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "subs", "name": "Subtitles", "kind": "caption", "captions": {"style": {"shadows": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}]}, "cues": [{"timeline_range": {"start": 0, "end": 1000}, "text": "Hi"}]}}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-shadow-blur-out-of-range", "valid": false, "rejected_by": "model", "problems": ["track subs has invalid captions"], "error": "track subs has invalid captions", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "v2", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "subs", "name": "Subtitles", "kind": "caption", "captions": {"style": {"shadows": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "blur": 1.5}]}, "cues": [{"timeline_range": {"start": 0, "end": 1000}, "text": "Hi"}]}}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-fill-gradient-one-stop", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "Big", "style": {"fill": {"type": "linear_gradient", "start": {"x": 0, "y": 0}, "end": {"x": 1, "y": 0}, "stops": [{"offset": 0, "color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}}]}}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "layout-text-inherits-shadows", "valid": true, "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "g1", "kind": "generated", "generator": {"type": "layout", "root": {"shadows": [{"color": "#000000c0", "offset": {"x": 0, "y": 0.08}, "blur": 0.2}], "strokes": [{"color": "#000000", "width": 0.06}], "fill": {"type": "radial_gradient", "center": {"x": 0.5, "y": 0.5}, "radius": 0.5, "stops": [{"offset": 0, "color": "#ffffff"}, {"offset": 1, "color": "#ffb020"}]}, "children": [{"text": {"mode": "constant", "value": "Shadowed"}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
@@ -30410,7 +30410,7 @@
   {"name": "text-run-empty", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": [{"text": ""}, {"text": "a"}], "style": {}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-run-class-name-invalid", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": [{"text": "a", "class": ["no spaces"]}], "style": {}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-run-time-reversed", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": [{"text": "a", "time": {"start": 5, "end": 5}}], "style": {}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
-  {"name": "text-animators-too-many", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "a", "style": {"animators": [{"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "text-animators-too-many", "valid": false, "rejected_by": "schema", "problems": ["project.sources[4].generator.style.animators must have at most 8 items"], "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "a", "style": {"animators": [{"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-animator-scale-out-of-range", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "a", "style": {"animators": [{"selector": {"type": "range"}, "properties": {"scale": {"mode": "constant", "value": {"x": 11, "y": 1}}}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-animator-range-percent-out-of-range", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "a", "style": {"animators": [{"selector": {"type": "range", "start": {"mode": "constant", "value": -150}}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-animator-class-name-invalid", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "a", "style": {"animators": [{"selector": {"type": "class", "class": ""}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
@@ -31906,9 +31906,8 @@
   {
     "name": "data-too-many-sets",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["project has 257 data sets; the maximum is 256"],
-    "error": "project has 257 data sets; the maximum is 256",
+    "rejected_by": "schema",
+    "problems": ["project.data must have at most 256 items"],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -32345,11 +32344,83 @@
     }
   },
   {
-    "name": "data-past-source-end",
-    "valid": false,
-    "rejected_by": "model",
-    "problems": ["data set s has a time past its source's duration"],
-    "error": "data set s has a time past its source's duration",
+    "name": "data-within-the-recorded-source-duration",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        {
+          "id": "a1",
+          "kind": "audio",
+          "locator": "c.m4a",
+          "fingerprint": { "duration_ticks": 4000 }
+        },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-past-the-recorded-source-duration-loads",
+    "valid": true,
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -34634,6 +34705,1156 @@
           "values": [0.4, 0.3, null, null]
         }
       ]
+    }
+  },
+  {
+    "name": "data-canvas-follow-at-depth-limit",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "v1", "kind": "video", "locator": "a.mp4" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c0",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c2" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v1",
+                "timeline_range": { "start": 240000, "end": 360000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c3" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c3",
+                "source_id": "v1",
+                "timeline_range": { "start": 360000, "end": 480000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c4" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c4",
+                "source_id": "v1",
+                "timeline_range": { "start": 480000, "end": 600000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c5" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c5",
+                "source_id": "v1",
+                "timeline_range": { "start": 600000, "end": 720000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c6" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c6",
+                "source_id": "v1",
+                "timeline_range": { "start": 720000, "end": 840000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c7" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c7",
+                "source_id": "v1",
+                "timeline_range": { "start": 840000, "end": 960000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c8" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c8",
+                "source_id": "v1",
+                "timeline_range": { "start": 960000, "end": 1080000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "a",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-canvas-follow-over-depth-limit",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c0 visual.position follows clips in canvas space more than 8 deep"
+    ],
+    "error": "clip c0 visual.position follows clips in canvas space more than 8 deep",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "v1", "kind": "video", "locator": "a.mp4" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c0",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c2" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v1",
+                "timeline_range": { "start": 240000, "end": 360000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c3" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c3",
+                "source_id": "v1",
+                "timeline_range": { "start": 360000, "end": 480000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c4" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c4",
+                "source_id": "v1",
+                "timeline_range": { "start": 480000, "end": 600000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c5" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c5",
+                "source_id": "v1",
+                "timeline_range": { "start": 600000, "end": 720000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c6" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c6",
+                "source_id": "v1",
+                "timeline_range": { "start": 720000, "end": 840000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c7" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c7",
+                "source_id": "v1",
+                "timeline_range": { "start": 840000, "end": 960000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c8" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c8",
+                "source_id": "v1",
+                "timeline_range": { "start": 960000, "end": 1080000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c9" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c9",
+                "source_id": "v1",
+                "timeline_range": { "start": 1080000, "end": 1200000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "a",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-canvas-follow-joins-two-cycles",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c1 visual.scale follows clips in canvas space in a cycle"
+    ],
+    "error": "clip c1 visual.scale follows clips in canvas space in a cycle",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "v1", "kind": "video", "locator": "a.mp4" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c3" },
+                    "space": "canvas"
+                  },
+                  "scale": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c2" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v1",
+                "timeline_range": { "start": 240000, "end": 360000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c3",
+                "source_id": "v1",
+                "timeline_range": { "start": 360000, "end": 480000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c4" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c4",
+                "source_id": "v1",
+                "timeline_range": { "start": 480000, "end": 600000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c3" },
+                    "space": "canvas"
+                  }
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "a",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "loop-at-pass-limit",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "a1", "kind": "audio", "locator": "a.m4a" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 131072 },
+                "source_range": { "start": 100, "end": 102 },
+                "time_map": { "type": "loop", "mode": "ping_pong" }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "loop-over-pass-limit",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["clip c1 loops 65537 times; the maximum is 65536"],
+    "error": "clip c1 loops 65537 times; the maximum is 65536",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "a1", "kind": "audio", "locator": "a.m4a" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 131073 },
+                "source_range": { "start": 100, "end": 102 },
+                "time_map": { "type": "loop", "mode": "ping_pong" }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-values-at-their-bounds",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "width": { "mode": "constant", "value": "16777216px" },
+                  "height": { "mode": "constant", "value": 1024 },
+                  "min_width": { "mode": "constant", "value": "100000%" },
+                  "margin": {
+                    "mode": "constant",
+                    "value": {
+                      "top": -1024,
+                      "right": 1024,
+                      "bottom": "-16777216px",
+                      "left": 0
+                    }
+                  },
+                  "padding": {
+                    "mode": "constant",
+                    "value": { "top": 1024, "right": 0, "bottom": 0, "left": 0 }
+                  },
+                  "flex_grow": { "mode": "constant", "value": 1000000 },
+                  "flex_shrink": { "mode": "constant", "value": 1000000 },
+                  "aspect_ratio": 10000,
+                  "translate": {
+                    "mode": "constant",
+                    "value": { "x": -1024, "y": "16777216px" }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-width-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].width has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].width has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [{ "width": { "mode": "constant", "value": 3e+38 } }]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-margin-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].margin has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].margin has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "margin": {
+                    "mode": "constant",
+                    "value": {
+                      "top": 3e+38,
+                      "right": 0,
+                      "bottom": 0,
+                      "left": 0
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-padding-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].padding has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].padding has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "padding": {
+                    "mode": "constant",
+                    "value": {
+                      "top": 3e+38,
+                      "right": 0,
+                      "bottom": 0,
+                      "left": 0
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-pixels-past-their-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].width has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].width has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                { "width": { "mode": "constant", "value": "16777218px" } }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-percent-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].min_width has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].min_width has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                { "min_width": { "mode": "constant", "value": "100001%" } }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-flex-grow-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].flex_grow has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].flex_grow has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                { "flex_grow": { "mode": "constant", "value": 1000001 } }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-aspect-ratio-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].aspect_ratio has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].aspect_ratio has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": { "children": [{ "aspect_ratio": 10001 }] }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-position-at-its-bound",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "text",
+            "text": "Hi",
+            "style": {
+              "position": { "x": 1024, "y": -1024 },
+              "anchor": { "x": 0.5, "y": 1 }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-position-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["source g1 has an invalid generator"],
+    "error": "source g1 has an invalid generator",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "text",
+            "text": "Hi",
+            "style": {
+              "position": { "x": 3e+38, "y": 0.5 },
+              "anchor": { "x": 0.5, "y": 1 }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
     }
   },
   {

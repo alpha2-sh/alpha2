@@ -123,6 +123,32 @@ pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
     })
 }
 
+/// Creates `path` and its missing parents with mode 0700, then refuses a directory that another
+/// user owns or that group or others can write.
+pub(crate) fn create_private_directory(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+    let metadata = fs::metadata(path)?;
+    // SAFETY: `geteuid` takes no arguments and cannot fail.
+    let user = unsafe { libc::geteuid() };
+    if metadata.uid() != user {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the directory belongs to another user",
+        ));
+    }
+    if metadata.permissions().mode() & 0o022 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "group or others can write the directory",
+        ));
+    }
+    Ok(())
+}
+
 /// From `<linux/fs.h>`; the same on every architecture.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const RENAME_NOREPLACE: libc::c_uint = 1;
@@ -682,4 +708,21 @@ pub(crate) fn thread_cpu_work() -> Option<u64> {
             .saturating_mul(1_000_000_000)
             .saturating_add(nanoseconds)
     })
+}
+
+/// Writes `line` to the Android system log at warning priority under the tag `alpha2`.
+#[cfg(target_os = "android")]
+pub(crate) fn android_log(line: &str) {
+    #[link(name = "log")]
+    unsafe extern "C" {
+        fn __android_log_write(
+            priority: libc::c_int,
+            tag: *const libc::c_char,
+            text: *const libc::c_char,
+        ) -> libc::c_int;
+    }
+    const ANDROID_LOG_WARN: libc::c_int = 5;
+    let text = std::ffi::CString::new(line.replace('\0', " ")).unwrap_or_default();
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    unsafe { __android_log_write(ANDROID_LOG_WARN, c"alpha2".as_ptr(), text.as_ptr()) };
 }

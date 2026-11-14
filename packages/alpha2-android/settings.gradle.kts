@@ -13,3 +13,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "alpha2-android"
 include(":lib")
+include(":consumer")

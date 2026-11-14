@@ -101,10 +101,11 @@ pub fn sample_text_animators(animators: &[TextAnimator], time: MediaTime) -> Vec
                         class: class.clone(),
                     },
                 },
-                offset: properties
-                    .offset
-                    .as_ref()
-                    .map(|value| pair(sample_vec2(value, time, &SampleContext::NONE))),
+                offset: properties.offset.as_ref().map(|value| {
+                    let bound = alpha2_model::MAX_ANIMATOR_OFFSET;
+                    pair(sample_vec2(value, time, &SampleContext::NONE))
+                        .map(|axis| axis.clamp(-bound, bound))
+                }),
                 scale: properties.scale.as_ref().map(|value| {
                     pair(sample_vec2(value, time, &SampleContext::NONE)).map(|axis| axis.max(0.0))
                 }),

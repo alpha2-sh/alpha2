@@ -661,8 +661,8 @@ pub fn product_backends() -> Vec<wgpu::Backends> {
 
 /// An adapter a product request will try.
 #[cfg(not(target_arch = "wasm32"))]
-struct Candidate {
-    adapter: wgpu::Adapter,
+struct Candidate<A = wgpu::Adapter> {
+    adapter: A,
     name: String,
     cpu: bool,
     pinned: bool,
@@ -685,37 +685,63 @@ impl ProductAttempt {
 
     fn into_error(self, request: &ProductRequest) -> GpuError {
         match (request.software, self.first) {
-            (SoftwareAdapters::Allow, Some(first)) => first,
+            (SoftwareAdapters::Allow, Some(first)) => first.tried(self.refusals),
             _ => GpuError::no_hardware(Vec::new(), self.refusals),
         }
     }
 }
 
-/// The adapters of the first product backend group with an acceptable adapter, in request order.
+/// The adapters a product request tries, in order ([`order_product_candidates`]).
 #[cfg(not(target_arch = "wasm32"))]
 async fn product_candidates(request: &ProductRequest) -> Result<Vec<Candidate>, GpuError> {
-    let pin = crate::AdapterPolicy::from_env();
-    let mut listed = Vec::new();
-    let mut software = Vec::new();
-    let mut refusals = Vec::new();
+    let mut groups = Vec::new();
     for group in product_backends() {
         let instance = crate::new_instance(group);
         let adapters = instance.enumerate_adapters(group).await;
         if group == wgpu::Backends::DX12 && adapters.is_empty() {
             return Err(GpuError::no_dx12_adapter());
         }
-        let kinds: Vec<(usize, wgpu::DeviceType)> = adapters
+        groups.push(
+            adapters
+                .into_iter()
+                .map(|adapter| {
+                    let info = adapter.get_info();
+                    (adapter, info)
+                })
+                .collect(),
+        );
+    }
+    order_product_candidates(groups, request, &crate::AdapterPolicy::from_env())
+}
+
+/// Orders the adapters of each backend group (in group order, each group in enumeration order):
+/// the hardware adapters of every group, then the software adapters of every group.
+///
+/// Under a pin the first group with a pinned adapter is the only one tried, since an index pin
+/// names a position in one group's enumeration.
+#[cfg(not(target_arch = "wasm32"))]
+fn order_product_candidates<A>(
+    groups: Vec<Vec<(A, wgpu::AdapterInfo)>>,
+    request: &ProductRequest,
+    pin: &crate::AdapterPolicy,
+) -> Result<Vec<Candidate<A>>, GpuError> {
+    let mut listed = Vec::new();
+    let mut software = Vec::new();
+    let mut refusals = Vec::new();
+    let (mut hardware_candidates, mut software_candidates) = (Vec::new(), Vec::new());
+    for group in groups {
+        let kinds: Vec<(usize, wgpu::DeviceType)> = group
             .iter()
             .enumerate()
-            .map(|(index, adapter)| (index, adapter.get_info().device_type))
+            .map(|(index, (_, info))| (index, info.device_type))
             .collect();
-        let mut adapters: Vec<Option<wgpu::Adapter>> = adapters.into_iter().map(Some).collect();
+        let mut adapters: Vec<Option<(A, wgpu::AdapterInfo)>> =
+            group.into_iter().map(Some).collect();
         let mut candidates = Vec::new();
         for index in crate::adapter_pin::product_order(&kinds) {
-            let Some(adapter) = adapters[index].take() else {
+            let Some((adapter, info)) = adapters[index].take() else {
                 continue;
             };
-            let info = adapter.get_info();
             listed.push(format!("[{index}] {} ({:?})", info.name, info.backend));
             let pinned = pin.names(index, &info.name);
             if pin.is_pin() && !pinned {
@@ -739,9 +765,16 @@ async fn product_candidates(request: &ProductRequest) -> Result<Vec<Candidate>, 
                 pinned,
             });
         }
-        if !candidates.is_empty() {
+        if pin.is_pin() && !candidates.is_empty() {
             return Ok(candidates);
         }
+        let (cpu, gpu): (Vec<_>, Vec<_>) = candidates.into_iter().partition(|each| each.cpu);
+        hardware_candidates.extend(gpu);
+        software_candidates.extend(cpu);
+    }
+    hardware_candidates.extend(software_candidates);
+    if !hardware_candidates.is_empty() {
+        return Ok(hardware_candidates);
     }
     if pin.is_pin() {
         return Err(GpuError::pin(format!(
@@ -818,6 +851,122 @@ mod tests {
         assert_eq!(
             ordered(PowerPreference::None),
             [Cpu, Other, VirtualGpu, IntegratedGpu, DiscreteGpu]
+        );
+    }
+
+    fn info(
+        name: &str,
+        device_type: wgpu::DeviceType,
+        backend: wgpu::Backend,
+    ) -> wgpu::AdapterInfo {
+        wgpu::AdapterInfo {
+            name: name.to_owned(),
+            vendor: 0,
+            device: 0,
+            device_type,
+            device_pci_bus_id: String::new(),
+            driver: String::new(),
+            driver_info: if backend == wgpu::Backend::Gl {
+                "4.6 (Core Profile) Mesa 24.0".to_owned()
+            } else {
+                String::new()
+            },
+            backend,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: None,
+            limit_bucket: None,
+        }
+    }
+
+    fn order(
+        groups: &[&[(&'static str, wgpu::DeviceType)]],
+        software: super::SoftwareAdapters,
+        pin: &crate::AdapterPolicy,
+    ) -> Result<Vec<&'static str>, String> {
+        let backends = [wgpu::Backend::Vulkan, wgpu::Backend::Gl];
+        let groups = groups
+            .iter()
+            .zip(backends)
+            .map(|(group, backend)| {
+                group
+                    .iter()
+                    .map(|(name, kind)| (*name, info(name, *kind, backend)))
+                    .collect()
+            })
+            .collect();
+        let request = super::ProductRequest {
+            software,
+            ..super::ProductRequest::default()
+        };
+        super::order_product_candidates(groups, &request, pin)
+            .map(|candidates| candidates.into_iter().map(|each| each.adapter).collect())
+            .map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn hardware_adapters_of_every_backend_group_come_before_any_software_one() {
+        use super::SoftwareAdapters::{Allow, Refuse};
+        let auto = crate::AdapterPolicy::Auto;
+        let lavapipe = ("llvmpipe (LLVM 15.0.7, 256 bits)", Cpu);
+        assert_eq!(
+            order(
+                &[&[lavapipe], &[("AMD Radeon", IntegratedGpu)]],
+                Allow,
+                &auto
+            ),
+            Ok(vec!["AMD Radeon", lavapipe.0])
+        );
+        assert_eq!(
+            order(
+                &[&[("GPU", DiscreteGpu)], &[("AMD Radeon", IntegratedGpu)]],
+                Allow,
+                &auto
+            ),
+            Ok(vec!["GPU", "AMD Radeon"]),
+            "a Vulkan adapter that fails to open is followed by the GL one"
+        );
+        assert_eq!(
+            order(
+                &[&[lavapipe], &[("AMD Radeon", IntegratedGpu), lavapipe]],
+                Refuse,
+                &auto
+            ),
+            Ok(vec!["AMD Radeon"])
+        );
+        let refused =
+            order(&[&[lavapipe], &[lavapipe]], Refuse, &auto).expect_err("only software adapters");
+        assert!(refused.contains("no hardware GPU"), "{refused}");
+        assert_eq!(
+            order(
+                &[&[("GPU", DiscreteGpu)], &[("AMD Radeon", IntegratedGpu)]],
+                Allow,
+                &crate::AdapterPolicy::Index(0)
+            ),
+            Ok(vec!["GPU"]),
+            "a pin stays in the first group that has the pinned adapter"
+        );
+    }
+
+    #[test]
+    fn a_request_that_fails_on_every_adapter_names_each_attempt() {
+        let mut attempt = super::ProductAttempt::default();
+        attempt.refused(
+            "GPU".to_owned(),
+            crate::GpuError::pin("device lost".to_owned()),
+        );
+        attempt.refused(
+            "AMD Radeon".to_owned(),
+            crate::GpuError::pin("out of memory".to_owned()),
+        );
+        let error = attempt
+            .into_error(&super::ProductRequest::default())
+            .to_string();
+        assert!(
+            error.starts_with("device lost")
+                && error.contains("tried GPU: device lost")
+                && error.contains("tried AMD Radeon: out of memory"),
+            "{error}"
         );
     }
 }

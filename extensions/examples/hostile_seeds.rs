@@ -2,7 +2,7 @@
 //!
 //! Usage: `cargo run -p alpha2-extensions --example hostile_seeds -- <target> <dir>`
 
-#[cfg(any(feature = "svg", feature = "exr"))]
+#[cfg(any(feature = "svg", feature = "exr", feature = "lottie"))]
 #[path = "../src/tests/hostile.rs"]
 mod hostile;
 
@@ -17,6 +17,8 @@ fn main() -> std::io::Result<()> {
     let seeds = match target.as_str() {
         "extension_svg" => svg_seeds(),
         "extension_exr" => exr_seeds(),
+        "extension_pdf" => pdf_seeds(),
+        "extension_lottie" => lottie_seeds(),
         _ => Vec::new(),
     };
     if seeds.is_empty() {
@@ -31,8 +33,36 @@ fn main() -> std::io::Result<()> {
 
 #[cfg(feature = "svg")]
 fn svg_seeds() -> Seeds {
-    use hostile::{svg_entity_elements, svg_nested_entity_elements, svg_nested_images};
-    vec![
+    use hostile::{
+        SvgLink, svg_dashed_copies, svg_dense_zigzag, svg_doubling_masks, svg_entity_attribute,
+        svg_entity_elements, svg_nested_entity_elements, svg_nested_images, svg_outline,
+        svg_reference_chain,
+    };
+    let rings = SvgLink::ALL.map(|link| {
+        let name = match link {
+            SvgLink::Fill => "ring-fill.svg",
+            SvgLink::Stroke => "ring-stroke.svg",
+            SvgLink::StyleSheet => "ring-style-sheet.svg",
+            SvgLink::StyleAttribute => "ring-style-attribute.svg",
+            SvgLink::Mask => "ring-mask.svg",
+            SvgLink::ClipPath => "ring-clip-path.svg",
+            SvgLink::FeImage => "ring-feimage.svg",
+        };
+        (name, svg_reference_chain(link, 3, true).into_bytes())
+    });
+    let mut seeds = vec![
+        (
+            "mask-chain.svg",
+            svg_reference_chain(SvgLink::Mask, 400, false).into(),
+        ),
+        ("doubling-masks.svg", svg_doubling_masks(22).into()),
+        ("dashed-copies.svg", svg_dashed_copies(100, 100).into()),
+        ("dense-zigzag.svg", svg_dense_zigzag(300_000).into()),
+        ("outline.svg", svg_outline(50_000).into()),
+        (
+            "entity-attribute.svg",
+            svg_entity_attribute(100_000, 255, 100).into(),
+        ),
         (
             "entity-elements.svg",
             svg_entity_elements(1000, 10_000).into(),
@@ -45,7 +75,9 @@ fn svg_seeds() -> Seeds {
             "nested-images.svg",
             svg_nested_images(&svg_entity_elements(1000, 10_000), 2).into(),
         ),
-    ]
+    ];
+    seeds.extend(rings);
+    seeds
 }
 
 #[cfg(not(feature = "svg"))]
@@ -53,9 +85,74 @@ fn svg_seeds() -> Seeds {
     Vec::new()
 }
 
+#[cfg(feature = "lottie")]
+fn lottie_seeds() -> Seeds {
+    use hostile::{lottie_dense_path, lottie_image_layers, lottie_nested_precompositions};
+    vec![
+        ("dense-path.json", lottie_dense_path(500_000, &[])),
+        (
+            "dense-repeated.json",
+            lottie_dense_path(10_000, &[1000, 49]),
+        ),
+        ("image-layers.json", lottie_image_layers(190, 500)),
+        ("nested.json", lottie_nested_precompositions(32)),
+    ]
+}
+
+#[cfg(not(feature = "lottie"))]
+fn lottie_seeds() -> Seeds {
+    Vec::new()
+}
+
+#[cfg(feature = "pdf")]
+fn pdf_seeds() -> Seeds {
+    use hostile::{
+        j2k_codestream, jbig2_page, pdf_coded_image, pdf_content_bomb, pdf_far_path, pdf_forms,
+        pdf_image_draws, pdf_self_invoking_form, pdf_type3_glyphs,
+    };
+    vec![
+        ("forms-1000.pdf", pdf_forms(1000, 3)),
+        ("forms-46.pdf", pdf_forms(46, 3)),
+        ("self-invoking-form.pdf", pdf_self_invoking_form()),
+        ("image-draws.pdf", pdf_image_draws(1000, false, true, 1000)),
+        ("type3-glyphs.pdf", pdf_type3_glyphs(1000, 10_000)),
+        ("content-bomb.pdf", pdf_content_bomb(250 << 20)),
+        ("far-path.pdf", pdf_far_path()),
+        (
+            "jpx-60000.pdf",
+            pdf_coded_image(
+                "/Height 1 /BitsPerComponent 8 /Filter /JPXDecode",
+                &j2k_codestream(60_000),
+                1,
+            ),
+        ),
+        (
+            "jbig2-65535.pdf",
+            pdf_coded_image(
+                "/Height 1 /BitsPerComponent 1 /Filter /JBIG2Decode",
+                &jbig2_page(65_535),
+                1,
+            ),
+        ),
+        (
+            "ccitt-columns.pdf",
+            pdf_coded_image(
+                "/Height 30000 /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 1000000 >>",
+                &[0, 0x10, 1, 0, 0x10, 1],
+                1,
+            ),
+        ),
+    ]
+}
+
+#[cfg(not(feature = "pdf"))]
+fn pdf_seeds() -> Seeds {
+    Vec::new()
+}
+
 #[cfg(feature = "exr")]
 fn exr_seeds() -> Seeds {
-    use hostile::{ExrChunks, ExrPart, exr_file};
+    use hostile::{ExrChunks, ExrPart, exr_file, exr_wrapping_b44};
     let tile = |extra, chunks| ExrPart {
         width: 3840,
         height: 2160,
@@ -79,6 +176,7 @@ fn exr_seeds() -> Seeds {
         ),
         ("lines-40.exr", exr_file(&[lines])),
         ("parts.exr", exr_file(&[lines, tile(400, ExrChunks::Empty)])),
+        ("wrapping-b44.exr", exr_wrapping_b44()),
     ]
 }
 
