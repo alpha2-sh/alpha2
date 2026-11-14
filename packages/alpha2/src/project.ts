@@ -1085,7 +1085,7 @@ export function validateProjectJson(json: string): string[] {
   }
   const read = readJsonText(json);
   if (read === undefined) {
-    return [`project JSON nests deeper than ${MAX_JSON_DEPTH} levels`];
+    return [TOO_DEEP];
   }
   return projectProblems(read.value as Project, read.spelling);
 }
@@ -1133,13 +1133,34 @@ function shapeProblems(
   reusingShapes = reuse;
   try {
     const read = checkShape(shapeRoot, value, "project", problems, spelling);
-    return { problems, read };
+    return { problems: tooDeep ? [TOO_DEEP] : problems, read };
   } finally {
     reusingShapes = false;
+    shapeDepth = 0;
+    tooDeep = false;
   }
 }
 
 let reusingShapes = false;
+// Arrays and objects the shape walk is inside; past `MAX_JSON_DEPTH` it stops descending.
+let shapeDepth = 0;
+let tooDeep = false;
+const TOO_DEEP = `project JSON nests deeper than ${MAX_JSON_DEPTH} levels`;
+
+/** Runs `walk` one container deeper, or reports the depth problem without running it. */
+function nested<T>(value: T, problems: string[], walk: () => T): T {
+  if (shapeDepth >= MAX_JSON_DEPTH) {
+    tooDeep = true;
+    problems.push(TOO_DEEP);
+    return value;
+  }
+  shapeDepth += 1;
+  try {
+    return walk();
+  } finally {
+    shapeDepth -= 1;
+  }
+}
 
 // Cross-field rules the schema cannot state but the engine's parser enforces.
 const FRAME_RATE_SHAPE = (shapeRoot.$defs as Record<string, ShapeNode>)
@@ -1719,10 +1740,14 @@ function walkShape(
       problems.push(`${path} must be well-formed Unicode`);
     }
   } else if (Array.isArray(value)) {
-    return checkArrayShape(schema, value, path, problems, spelling);
+    return nested<unknown>(value, problems, () =>
+      checkArrayShape(schema, value, path, problems, spelling),
+    );
   } else if (isRecord(value)) {
     const before = problems.length;
-    const read = checkObjectShape(schema, value, path, problems, spelling);
+    const read = nested<unknown>(value, problems, () =>
+      checkObjectShape(schema, value, path, problems, spelling),
+    );
     if (
       schema === FRAME_RATE_SHAPE &&
       problems.length === before &&
@@ -1912,9 +1937,15 @@ function checkArrayShape(
   }
   const prefix = (schema.prefixItems ?? []) as readonly ShapeNode[];
   let changed = false;
-  const read = value.map((item, index) => {
+  // By index rather than `map`, so a hole is read as `undefined` and fails its item shape.
+  const read: unknown[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const item = value[index];
     const itemSchema = prefix[index] ?? (schema.items as ShapeNode | undefined);
-    if (itemSchema === undefined) return item;
+    if (itemSchema === undefined) {
+      read.push(item);
+      continue;
+    }
     const itemRead = checkShape(
       itemSchema,
       item,
@@ -1924,8 +1955,8 @@ function checkArrayShape(
       numbers?.get(index),
     );
     if (itemRead !== item) changed = true;
-    return itemRead;
-  });
+    read.push(itemRead);
+  }
   return !changed && reusingShapes && sealed(value)
     ? (value as unknown[])
     : read;

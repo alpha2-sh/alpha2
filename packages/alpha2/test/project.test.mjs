@@ -18,6 +18,7 @@ import {
   MAX_CLIPS,
   MAX_CLIPS_PER_TRACK,
   MAX_COMPOSITIONS,
+  MAX_JSON_DEPTH,
   MAX_PROJECT_JSON_BYTES,
   MAX_TRANSITIONS_PER_TRACK,
   canonicalPaint,
@@ -26,6 +27,8 @@ import {
   validateProject,
   validateProjectJson,
 } from "../dist/project.js";
+import { trim } from "../dist/edit.js";
+import { layout } from "../dist/layout.js";
 import { readValidationCorpus } from "../../../scripts/lib/validation-corpus.mjs";
 import { assertScalesBelow } from "../../../scripts/lib/timing.mjs";
 
@@ -1114,4 +1117,86 @@ test("canonicalProject shares what it does not change and leaves what it cannot 
   const read = canonicalProject(broken);
   assert.equal(read.sources[0].generator.paint, "#ggg");
   assert.match(validateProject(read).join(" "), /invalid color "#ggg"/);
+});
+
+function generatedProject(generator) {
+  return {
+    schema_version: 1,
+    id: "p",
+    name: "P",
+    settings: {
+      width: 1920,
+      height: 1080,
+      frame_rate: { num: 30, den: 1 },
+      sample_rate: 48000,
+    },
+    sources: [{ id: "g", kind: "generated", generator }],
+    timeline: {
+      tracks: [
+        {
+          id: "t",
+          name: "T",
+          kind: "video",
+          clips: [
+            {
+              id: "c",
+              source_id: "g",
+              timeline_range: { start: 0, end: 120000 },
+              source_range: { start: 0, end: 120000 },
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+test("a project object nested deeper than its text may be is reported, not thrown", () => {
+  const nested = (depth) => {
+    let node = {};
+    for (let level = 0; level < depth; level += 1) node = { children: [node] };
+    return node;
+  };
+  const tooDeep = [`project JSON nests deeper than ${MAX_JSON_DEPTH} levels`];
+  assert.deepEqual(validateProject(generatedProject(layout(nested(3)))), []);
+  for (const depth of [600, 5000]) {
+    const project = generatedProject(layout(nested(depth)));
+    assert.deepEqual(validateProject(project), tooDeep);
+    assert.doesNotThrow(() => canonicalProject(project));
+    assert.doesNotThrow(() => trim(project, "c", "end", 60000));
+  }
+  let shape = { type: "group", items: [] };
+  for (let level = 0; level < 600; level += 1)
+    shape = { type: "group", items: [shape] };
+  assert.deepEqual(
+    validateProject(generatedProject({ type: "shapes", items: [shape] })),
+    tooDeep,
+  );
+  // The same depth through the text and through the object.
+  const text = JSON.stringify(generatedProject(layout(nested(200))));
+  assert.deepEqual(validateProjectJson(text), tooDeep);
+  assert.deepEqual(validateProject(JSON.parse(text)), tooDeep);
+});
+
+test("a hole in a project array is a problem, as the same document as text is", () => {
+  const holed = [
+    (project) => (project.sources = new Array(1)),
+    (project) => (project.sources.length = 2),
+    (project) => (project.data = new Array(1)),
+    (project) => (project.timeline.tracks = new Array(1)),
+    (project) => (project.timeline.tracks[0].clips = new Array(1)),
+    (project) => (project.compositions = new Array(1)),
+    (project) => (project.effect_resources = new Array(1)),
+  ];
+  for (const hole of holed) {
+    const project = generatedProject({ type: "fill", paint: "#f00" });
+    hole(project);
+    const problems = validateProject(project);
+    assert.notDeepEqual(problems, [], String(hole));
+    assert.deepEqual(
+      validateProjectJson(JSON.stringify(project)).length > 0,
+      true,
+      String(hole),
+    );
+  }
 });

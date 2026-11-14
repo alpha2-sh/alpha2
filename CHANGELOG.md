@@ -101,6 +101,9 @@ All notable changes to this project are documented in this file.
 - The CPU renderer no longer panics drawing a composition-graph transition whose kernel divides by
   a tiny authored progress (`fold`, `cube`, `slides`); its sampler clamps a coordinate before
   turning it into a texel index.
+- `validateProject` no longer throws on a project object nested deeper than 127 levels or on an
+  array with holes; it reports the depth problem of the text path, and a hole fails its item's
+  shape as `undefined` does.
 
 ## [0.6.0] - 2026-11-08
 
