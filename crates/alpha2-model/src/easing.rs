@@ -71,6 +71,47 @@ impl CubicBezier {
         component(parameter, f64::from(self.y1), f64::from(self.y2))
     }
 
+    /// The part of the curve between linear progress `from` and `to`, rescaled to the unit
+    /// square, so that it shows the same output over that part of a segment. `None` when the
+    /// output is equal at both ends (or the part is empty), which no rescaled curve can show.
+    ///
+    /// Uses only the operations of [`Self::apply`], so every platform gets the same bits.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn between(self, from: f64, to: f64) -> Option<Self> {
+        let parameter = |progress: f64| {
+            if progress <= 0.0 {
+                0.0
+            } else if progress >= 1.0 {
+                1.0
+            } else {
+                self.parameter_at(progress)
+            }
+        };
+        let (u, v) = (parameter(from), parameter(to));
+        let part = |p1: f32, p2: f32| {
+            let points = [0.0, f64::from(p1), f64::from(p2), 1.0];
+            [
+                blossom(points, u, u, u),
+                blossom(points, u, u, v),
+                blossom(points, u, v, v),
+                blossom(points, v, v, v),
+            ]
+        };
+        let (x, y) = (part(self.x1, self.x2), part(self.y1, self.y2));
+        let (width, height) = (x[3] - x[0], y[3] - y[0]);
+        if width <= 0.0 || height == 0.0 {
+            return None;
+        }
+        let curve = Self::new(
+            ((x[1] - x[0]) / width).clamp(0.0, 1.0) as f32,
+            ((y[1] - y[0]) / height) as f32,
+            ((x[2] - x[0]) / width).clamp(0.0, 1.0) as f32,
+            ((y[2] - y[0]) / height) as f32,
+        );
+        curve.is_valid().then_some(curve)
+    }
+
     /// The Bezier parameter whose `x` equals `x`, for `x` in `(0, 1)`.
     fn parameter_at(self, x: f64) -> f64 {
         self.newton(x).unwrap_or_else(|| self.bisection(x))
@@ -123,6 +164,19 @@ fn component(t: f64, p1: f64, p2: f64) -> f64 {
     let b = 3.0 * (p2 - p1) - c;
     let a = 1.0 - c - b;
     ((a * t + b) * t + c) * t
+}
+
+/// The blossom of a cubic with control values `points` at `(u, v, w)`: de Casteljau with one
+/// parameter per level. `(u, u, v)` and `(u, v, v)` are the inner controls of the part `u..=v`.
+fn blossom(points: [f64; 4], u: f64, v: f64, w: f64) -> f64 {
+    let lerp = |a: f64, b: f64, t: f64| a + (b - a) * t;
+    let first = [
+        lerp(points[0], points[1], u),
+        lerp(points[1], points[2], u),
+        lerp(points[2], points[3], u),
+    ];
+    let second = [lerp(first[0], first[1], v), lerp(first[1], first[2], v)];
+    lerp(second[0], second[1], w)
 }
 
 /// The derivative of [`component`] with respect to `t`.
@@ -247,6 +301,45 @@ mod tests {
             let x_back = super::component(found, f64::from(curve.x1), f64::from(curve.x2));
             assert!((x_back - x).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn a_part_of_a_curve_rescaled_shows_the_same_output() {
+        let curves = [
+            EASE,
+            CubicBezier::new(0.42, 0.0, 0.58, 1.0),
+            CubicBezier::new(0.3, -0.5, 0.7, 1.5),
+            CubicBezier::new(0.0, 0.0, 1.0, 1.0),
+        ];
+        for curve in curves {
+            for (from, to) in [
+                (0.0, 0.37),
+                (0.37, 1.0),
+                (0.1, 0.9),
+                (0.5, 0.55),
+                (0.0, 1.0),
+            ] {
+                let part = curve.between(from, to).expect("a curve that moves");
+                assert!(part.is_valid(), "{curve:?} {from} {to}");
+                let (low, high) = (curve.apply(from), curve.apply(to));
+                for step in 0..=1000 {
+                    let x = from + (to - from) * f64::from(step) / 1000.0;
+                    let local = (x - from) / (to - from);
+                    let shown = low + (high - low) * part.apply(local);
+                    // The part's controls are `f32`, as every curve of a document is.
+                    assert!(
+                        (shown - curve.apply(x)).abs() < 1e-6,
+                        "{curve:?} {from}..{to} at {x}: {shown} {}",
+                        curve.apply(x)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_part_has_no_curve() {
+        assert_eq!(EASE.between(0.4, 0.4), None);
     }
 
     #[test]

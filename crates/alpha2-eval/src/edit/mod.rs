@@ -5,10 +5,9 @@
 //! source and time map, keyframes move with their clip or transition, timeline-anchored data and
 //! caption cues are cut and shifted, transitions whose cut point is removed are removed, and mattes
 //! and `via` bindings follow the part beside them or the edit is refused. Every value keyed in
-//! timeline time is reached through the model's walkers. Kept moments render as before except for
-//! track automation with hold or eased keys across a removed range, a linear sample set just
-//! before a cut, reversed parts off the frame grid and a fade under a cut. The result validates
-//! and is canonical.
+//! timeline time is reached through the model's walkers, and bus curves keep their shape across a
+//! cut. Kept moments render as before except for a linear sample set just before a cut, reversed
+//! parts off the frame grid and a fade under a cut. The result validates and is canonical.
 
 mod bake;
 #[cfg(test)]
@@ -502,45 +501,86 @@ fn shift_cues(
     out
 }
 
-/// Keyframes of a curve not tied to a clip, on a rippled timeline: those inside removed ranges
-/// go, the rest move, and the value at each cut is keyed on both sides.
+/// Keyframes of a bus curve on a rippled timeline. Keys inside removed ranges go and the rest
+/// move; the value at each cut is keyed on both sides, a one-tick hold step across the cut. Every
+/// key takes the part of the old curve up to the next key, so kept moments sample as before.
 fn shift_keys(animation: &mut Animated<f32>, removal: &[(i64, i64)]) {
     let Animated::Keyframes { keyframes } = animation else {
         return;
     };
-    let context = crate::SampleContext::NONE;
-    let old = Animated::Keyframes {
-        keyframes: keyframes.clone(),
-    };
-    let value = |tick: i64| crate::sample_scalar(&old, MediaTime(tick), &context);
-    let mut keys: Vec<alpha2_model::Keyframe<f32>> = Vec::new();
-    for keyframe in keyframes.iter() {
-        if let Some(tick) = new_time(keyframe.time.ticks(), removal) {
-            keys.push(alpha2_model::Keyframe {
-                time: MediaTime(tick),
-                ..keyframe.clone()
-            });
-        }
-    }
+    let old = std::mem::take(keyframes);
+    // Each new key at its old time, with the old key it keeps (none for one a cut adds).
+    let mut at = old
+        .iter()
+        .enumerate()
+        .filter(|(_, key)| new_time(key.time.ticks(), removal).is_some())
+        .map(|(index, key)| (key.time.ticks(), Some(index)))
+        .collect::<Vec<_>>();
     for (from, to) in removal {
-        let left = from - 1 - shift_of(from - 1, removal);
-        let right = to - shift_of(*to, removal);
-        if left >= 0 {
-            keys.push(alpha2_model::Keyframe {
-                time: MediaTime(left),
-                value: value(from - 1),
-                interpolation: alpha2_model::Interpolation::Hold,
-            });
+        if from - 1 - shift_of(from - 1, removal) >= 0 {
+            at.push((from - 1, None));
         }
+        at.push((*to, None));
+    }
+    at.sort_by_key(|(tick, kept)| (*tick, kept.is_none()));
+    at.dedup_by_key(|(tick, _)| *tick);
+    let curve = Animated::Keyframes { keyframes: old };
+    let Animated::Keyframes { keyframes: old } = &curve else {
+        return;
+    };
+    let value =
+        |tick: i64| crate::sample_scalar(&curve, MediaTime(tick), &crate::SampleContext::NONE);
+    let mut keys = Vec::with_capacity(at.len());
+    for (position, (tick, kept)) in at.iter().enumerate() {
+        let next = at.get(position + 1).map(|(tick, _)| *tick);
+        let interpolation = match next {
+            Some(next)
+                if removal
+                    .iter()
+                    .any(|(from, to)| *tick < *from && *to <= next) =>
+            {
+                alpha2_model::Interpolation::Hold
+            }
+            Some(next) => part_of_curve(old, *tick, next).unwrap_or_else(|| {
+                kept.map_or(alpha2_model::Interpolation::Linear, |index| {
+                    old[index].interpolation
+                })
+            }),
+            None => kept.map_or(alpha2_model::Interpolation::Linear, |index| {
+                old[index].interpolation
+            }),
+        };
         keys.push(alpha2_model::Keyframe {
-            time: MediaTime(right),
-            value: value(*to),
-            interpolation: alpha2_model::Interpolation::Linear,
+            time: MediaTime(tick - shift_of(*tick, removal)),
+            value: kept.map_or_else(|| value(*tick), |index| old[index].value),
+            interpolation,
         });
     }
-    keys.sort_by_key(|key| key.time);
-    keys.dedup_by_key(|key| key.time);
     *keyframes = keys;
+}
+
+/// The interpolation that shows the old curve from `from` to `to`, which lie in one segment, or
+/// `None` outside every segment, where the curve is constant.
+fn part_of_curve(
+    keys: &[alpha2_model::Keyframe<f32>],
+    from: i64,
+    to: i64,
+) -> Option<alpha2_model::Interpolation> {
+    let next = keys.partition_point(|key| key.time.ticks() <= from);
+    let (start, end) = (keys.get(next.checked_sub(1)?)?, keys.get(next)?);
+    let alpha2_model::Interpolation::CubicBezier(curve) = start.interpolation else {
+        return Some(start.interpolation);
+    };
+    let progress =
+        |tick: i64| crate::animation::interpolation_amount(start.time, end.time, MediaTime(tick));
+    if from == start.time.ticks() && to == end.time.ticks() {
+        return Some(start.interpolation);
+    }
+    // A part whose ends are equal shows a constant; the nearest exact form is a line.
+    Some(curve.between(progress(from), progress(to)).map_or(
+        alpha2_model::Interpolation::Linear,
+        alpha2_model::Interpolation::CubicBezier,
+    ))
 }
 
 /// The parts each processed clip became, as `(old range, new id)`. A clip removed whole has none.

@@ -432,6 +432,9 @@ All notable changes to this project are documented in this file.
 - Edit operations: a ripple moves the keyed parameters of a transition with the transition, and
   keeps every keyframe of a clip it only moves; before, the parameters stayed behind and keys
   outside the moved clip's range were deleted.
+- Edit operations: a ripple keeps the shape of track and master automation across a cut. Hold and
+  eased segments that a removed range crossed became linear ramps (and an eased segment before the
+  cut changed too); each kept key now takes the part of the old curve up to the next key.
 
 ## [0.6.0] - 2026-11-08
 

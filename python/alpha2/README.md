@@ -258,7 +258,7 @@ edited = alpha2.edit.apply(
 ```
 
 Kept moments render as before for clip picture and sound, clip keyframes, captions, hold data
-and linear automation; a matte or a binding read through another clip follows the part beside it
+and track and master automation; a matte or a binding read through another clip follows the part beside it
 or the edit is refused (`matte_source`, `read_through`). The host protocol lists what is not exact
 in this release. `project_json` is the same bytes on every surface.
 A refusal raises `alpha2.Alpha2EditError`, whose `refusal` names why (`unknown_data`,

@@ -158,18 +158,16 @@ pub(super) fn state(project: &Project, time: i64) -> Vec<String> {
             matte
         ));
     }
+    let bus = |animation| crate::sample_scalar(animation, MediaTime(time), &context);
     for track in &project.timeline.tracks {
         out.push(format!(
             "track {} gain {} pan {}",
             track.id,
-            crate::sample_scalar(&track.audio.gain, MediaTime(time), &context),
-            crate::sample_scalar(&track.audio.pan, MediaTime(time), &context)
+            bus(&track.audio.gain),
+            bus(&track.audio.pan)
         ));
     }
-    out.push(format!(
-        "master gain {}",
-        crate::sample_scalar(&project.audio.gain, MediaTime(time), &context)
-    ));
+    out.push(format!("master gain {}", bus(&project.audio.gain)));
     for clip in &frame.audio {
         let original = project
             .timeline
@@ -211,6 +209,26 @@ pub(super) fn state(project: &Project, time: i64) -> Vec<String> {
         out.push(format!("caption {} {spoken}", caption.text.text()));
     }
     out
+}
+
+/// Whether two [`state`]s agree. Keys a cut adds to a bus curve hold `f32` samples of it, so bus
+/// lines (`track ...`, `master gain ...`) agree within 1e-6; every other line exactly.
+pub(super) fn same_state(before: &[String], after: &[String]) -> bool {
+    let bus = |line: &str| line.starts_with("track ") || line.starts_with("master gain ");
+    let close = |before: &str, after: &str| {
+        before.split(' ').count() == after.split(' ').count()
+            && before.split(' ').zip(after.split(' ')).all(|(a, b)| {
+                match (a.parse::<f32>(), b.parse::<f32>()) {
+                    (Ok(a), Ok(b)) => (a - b).abs() < 1e-6,
+                    _ => a == b,
+                }
+            })
+    };
+    before.len() == after.len()
+        && before
+            .iter()
+            .zip(after)
+            .all(|(before, after)| before == after || (bus(before) && close(before, after)))
 }
 
 pub(super) fn kept_moments_hold(
@@ -263,10 +281,10 @@ pub(super) fn kept_moments_hold(
             if mixed {
                 continue;
             }
-            assert_eq!(
-                state(original, tick),
-                state(edited, at),
-                "kept time {tick} now at {at}"
+            let (before, after) = (state(original, tick), state(edited, at));
+            assert!(
+                same_state(&before, &after),
+                "kept time {tick} now at {at}\n{before:#?}\n{after:#?}"
             );
         }
     }
@@ -847,5 +865,108 @@ fn a_ripple_keeps_every_key_of_a_clip_it_only_moves() {
             "{ripple:?}"
         );
         kept_moments_hold(&project, &edited, &report, ripple != Ripple::None);
+    }
+}
+
+fn gain_project(keys: &Value) -> Project {
+    load(&json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": { "width": 640, "height": 360, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+        "sources": [{ "id": "a", "kind": "audio", "locator": "a.m4a" }],
+        "timeline": { "tracks": [{ "id": "t-audio", "name": "A", "kind": "audio",
+            "clips": [clip("au", "a", (0, 600), (0, 600), &json!({ "type": "forward" }))],
+            "audio": { "gain": keys, "pan": keys } }] },
+        "audio": { "gain": keys }
+    }))
+}
+
+/// The largest change of the track gain, track pan and master gain over kept ticks.
+fn worst_bus_change(original: &Project, edited: &Project, removed: &[(i64, i64)]) -> [f32; 3] {
+    let removed = removed
+        .iter()
+        .map(|(from, to)| (from * FRAME, to * FRAME))
+        .collect::<Vec<_>>();
+    let values = |project: &Project, tick: i64| {
+        let track = &project.timeline.tracks[0].audio;
+        [&track.gain, &track.pan, &project.audio.gain].map(|animation| {
+            crate::sample_scalar(animation, MediaTime(tick), &crate::SampleContext::NONE)
+        })
+    };
+    let mut worst = [0.0_f32; 3];
+    for tick in (0..600 * FRAME).step_by(997) {
+        let Some(at) = new_time(tick, &removed) else {
+            continue;
+        };
+        let (before, after) = (values(original, tick), values(edited, at));
+        for place in 0..3 {
+            worst[place] = worst[place].max((before[place] - after[place]).abs());
+        }
+    }
+    worst
+}
+
+#[test]
+fn a_ripple_keeps_hold_linear_and_eased_bus_curves() {
+    let hold = json!({ "type": "hold" });
+    let linear = json!({ "type": "linear" });
+    let eased = json!({ "type": "cubic_bezier", "x1": 0.42, "y1": 0.0, "x2": 0.58, "y2": 1.0 });
+    let overshoot = json!({ "type": "cubic_bezier", "x1": 0.3, "y1": -0.4, "x2": 0.6, "y2": 1.3 });
+    let mixed = json!({ "mode": "keyframes", "keyframes": [
+        { "time": 0, "value": 0.2, "interpolation": eased },
+        { "time": 100 * FRAME, "value": 0.9, "interpolation": hold },
+        { "time": 200 * FRAME, "value": 0.4, "interpolation": overshoot },
+        { "time": 400 * FRAME, "value": 0.6, "interpolation": linear },
+        { "time": 500 * FRAME, "value": 0.1, "interpolation": linear } ] });
+    for keys in [
+        keyed(&[(0, 0.2), (300, 1.0)], &hold),
+        keyed(&[(0, 0.2), (300, 1.0)], &linear),
+        keyed(&[(0, 0.0), (300, 1.0)], &eased),
+        mixed,
+    ] {
+        let project = gain_project(&keys);
+        for ranges in [
+            vec![(120, 180)],
+            vec![(20, 30), (40, 45), (90, 150), (220, 230), (390, 410)],
+        ] {
+            let target = Target::Track(alpha2_model::TrackId::new("t-audio").expect("id"));
+            for ripple in [Ripple::Track, Ripple::Timeline] {
+                let (edited, _) = remove(&project, timeline_list(&ranges), target.clone(), ripple);
+                let [gain, pan, master] = worst_bus_change(&project, &edited, &ranges);
+                assert!(
+                    gain < 1e-6 && pan < 1e-6,
+                    "{keys} {ranges:?} {ripple:?}: {gain} {pan}"
+                );
+                if ripple == Ripple::Timeline {
+                    assert!(master < 1e-6, "{keys} {ranges:?}: master {master}");
+                } else {
+                    assert_eq!(edited.audio.gain, project.audio.gain);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn kept_moments_hold_with_bus_automation_under_a_timeline_ripple() {
+    let mut document = corpus();
+    let hold = json!({ "type": "hold" });
+    let eased = json!({ "type": "cubic_bezier", "x1": 0.42, "y1": 0.0, "x2": 0.58, "y2": 1.0 });
+    document["timeline"]["tracks"][7]["audio"] = json!({
+        "gain": keyed(&[(0, 0.2), (80, 1.0)], &hold),
+        "pan": keyed(&[(0, -0.5), (70, 0.5)], &eased) });
+    document["audio"] = json!({ "gain": keyed(&[(10, 0.5), (60, 1.0)], &eased) });
+    let project = load(&document);
+    for ranges in [
+        vec![(5, 9)],
+        vec![(13, 17), (31, 36), (61, 64)],
+        vec![(0, 3), (45, 52)],
+    ] {
+        let (edited, report) = remove(
+            &project,
+            timeline_list(&ranges),
+            Target::Track(alpha2_model::TrackId::new("t-fwd").expect("id")),
+            Ripple::Timeline,
+        );
+        kept_moments_hold(&project, &edited, &report, true);
     }
 }
