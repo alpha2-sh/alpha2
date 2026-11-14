@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+# A second run of one tag waits for the first; cancelling it could stop a publish half way.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   MACOSX_DEPLOYMENT_TARGET: "11.0"
 
@@ -232,7 +237,6 @@ jobs:
         with:
           name: alpha2-dist-${{ matrix.target }}
           if-no-files-found: error
-          retention-days: 7
           path: target/alpha2-dist/${{ matrix.target }}
 
   pin-node:
@@ -267,13 +271,12 @@ jobs:
         with:
           name: alpha2-npm-node-pinned
           if-no-files-found: error
-          retention-days: 7
           path: npm-pinned/*.tgz
 
   publish-crates:
     name: Publish crates
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [version, package]
+    needs: [version, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: release
@@ -371,8 +374,15 @@ jobs:
             name="$(jq -r .name "$manifest")"
             tarball="./npm-packages/$(jq -r '.name | ltrimstr("@") | gsub("/"; "-")' "$manifest")-$VERSION.tgz"
             test -f "$tarball" || { echo "::error::no $tarball in the CI artifact"; exit 1; }
-            if [[ -n "$(npm view "$name@$VERSION" version 2> /dev/null)" ]]; then
-              echo "$name@$VERSION is on npm; skipped"
+            published="$(npm view "$name@$VERSION" dist.integrity 2> /dev/null || true)"
+            if [[ -n "$published" ]]; then
+              integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 -w 0)"
+              if [[ "$published" != "$integrity" ]]; then
+                echo "::error::$name@$VERSION is on npm with another tarball ($published, this run $integrity):" \
+                  "re-run the failed jobs of the first run, or bump the version"
+                exit 1
+              fi
+              echo "$name@$VERSION is on npm from this build; skipped"
               continue
             fi
             npm publish "$tarball" --provenance --access public --tag "$dist_tag"
@@ -403,7 +413,8 @@ jobs:
           # All wheels or none: alpha2 pins the same-version host on these four platforms.
           test "$(ls wheels/alpha2_host-*.whl | wc -l)" -eq 4
           test "$(ls wheels/alpha2-*.whl | wc -l)" -eq 4
-          # Host first, so an alpha2 never lacks its pinned host. Reruns skip existing files.
+          # Host first, so an alpha2 never lacks its pinned host. --check-url skips a file PyPI has
+          # with the same hash and fails on one with another hash.
           for wheels in "wheels/alpha2_host-*.whl" "wheels/alpha2-*.whl"; do
             # shellcheck disable=SC2086
             uv publish --trusted-publishing always --check-url https://pypi.org/simple/ $wheels
@@ -411,8 +422,9 @@ jobs:
 
   release:
     name: Publish GitHub release
+    # The release is the one channel that can be corrected, so it goes before every registry.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [publish-crates, publish-npm, publish-pypi]
+    needs: [version, distribute, pin-node]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -448,12 +460,59 @@ jobs:
 
       - name: Generate checksums
         working-directory: artifacts
-        run: sha256sum -- *.zip *.tar.gz > checksums.sha256
+        run: |
+          sha256sum -- *.zip *.tar.gz > checksums.sha256
+          echo "$GITHUB_SHA" > commit.txt
+
+      - name: Compare with a release of this tag that exists
+        id: identity
+        working-directory: artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          remedy="re-run the failed jobs of the first run, or bump the version"
+          if ! assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2> "$RUNNER_TEMP/view")"; then
+            grep -q 'release not found' "$RUNNER_TEMP/view" || { cat "$RUNNER_TEMP/view"; exit 1; }
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir "$RUNNER_TEMP/existing"
+          for name in commit.txt checksums.sha256; do
+            if grep -qxF "$name" <<< "$assets"; then
+              gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$RUNNER_TEMP/existing"
+            fi
+          done
+          if [[ -n "$assets" && ! -f "$RUNNER_TEMP/existing/commit.txt" ]]; then
+            echo "::error::release $TAG has assets but no commit.txt, so this workflow did not make it: $remedy"
+            exit 1
+          fi
+          for name in commit.txt checksums.sha256; do
+            if [[ -f "$RUNNER_TEMP/existing/$name" ]] && ! cmp -s "$RUNNER_TEMP/existing/$name" "$name"; then
+              echo "::error::release $TAG has another $name than this run: $remedy"
+              diff "$RUNNER_TEMP/existing/$name" "$name" || true
+              exit 1
+            fi
+          done
+          # A release whose checksums match and that holds every file is complete.
+          missing=0
+          for name in commit.txt checksums.sha256 $(awk '{ print $2 }' checksums.sha256); do
+            grep -qxF "$name" <<< "$assets" || missing=1
+          done
+          if [[ -f "$RUNNER_TEMP/existing/checksums.sha256" && "$missing" == 0 ]]; then
+            echo "release $TAG is published from this build; skipped"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Publish release assets
+        if: steps.identity.outputs.publish == 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           name: alpha2 ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(needs.version.outputs.version, '-') }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           body: |
@@ -483,4 +542,5 @@ jobs:
           files: |
             artifacts/*.zip
             artifacts/*.tar.gz
+            artifacts/commit.txt
             artifacts/checksums.sha256
