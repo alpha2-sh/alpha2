@@ -75,6 +75,11 @@ All notable changes to this project are documented in this file.
   asset) fails with the reason instead of hanging, and `cancel()` stops a timeline extraction.
 - iOS: the player retains the `CAMetalLayer` it is given before `attachWindow` returns, so an app
   that releases its layer right after attaching it no longer leaves the preview a freed layer.
+- Mobile: a preview skips seeks and resizes that later ones replaced before it reached them, a new
+  seek stops the frame an older one is drawing, and `end()` stops the frame or audio decode in
+  progress and skips queued commands instead of carrying them out first. A preview whose audio
+  needs more than a quarter of the free memory (at most 256 MiB) decoded plays silent and says so
+  in `lastError`.
 - Mobile: a source whose video starts after the time a clip reads from (an MP4 with an empty edit,
   a Matroska file whose first video frame is not at 0) shows its first frame until that frame is
   due, instead of every later frame early.

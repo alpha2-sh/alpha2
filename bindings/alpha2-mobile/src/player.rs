@@ -1,9 +1,11 @@
 //! Real-time preview of a project on a window: a library thread decodes, renders and presents
 //! frames at the project's rate while playing, and the frame at the position when paused.
 //!
-//! Every call returns at once and is carried out on that thread in order. The window is
-//! attached and detached with the app's surface lifecycle; nothing is drawn while none is
-//! attached or while the session is paused for the background.
+//! Every call returns at once and is carried out on that thread in order; a seek or a resize that a
+//! later one of its kind replaces before the thread reaches it is skipped, and a newer seek stops
+//! the frame an older one is drawing. The window is attached and detached with the app's surface
+//! lifecycle; nothing is drawn while none is attached or while the session is paused for the
+//! background.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -70,12 +72,35 @@ enum Command {
         width: u32,
         height: u32,
     },
-    Seek(i64),
+    /// A position, and the token the next seek cancels.
+    Seek(i64, CancelToken),
     Play,
     Pause,
 }
 
-/// What the preview thread reports back.
+/// The commands that leave the same end state as `commands` applied in order: every seek but the
+/// last and every resize but the last are dropped, the rest keep their order. A seek only sets the
+/// position and draws, and a resize only sets the size and draws.
+fn coalesce(commands: Vec<Command>) -> Vec<Command> {
+    let last_seek = commands
+        .iter()
+        .rposition(|command| matches!(command, Command::Seek(..)));
+    let last_resize = commands
+        .iter()
+        .rposition(|command| matches!(command, Command::Resize { .. }));
+    commands
+        .into_iter()
+        .enumerate()
+        .filter(|(index, command)| match command {
+            Command::Seek(..) => Some(*index) == last_seek,
+            Command::Resize { .. } => Some(*index) == last_resize,
+            _ => true,
+        })
+        .map(|(_, command)| command)
+        .collect()
+}
+
+/// What the preview thread reports back, and the tokens that stop its work.
 #[derive(Default)]
 struct Shared {
     position: AtomicI64,
@@ -84,6 +109,10 @@ struct Shared {
     presented: AtomicU64,
     dropped: AtomicU64,
     error: Mutex<Option<String>>,
+    /// Set when the player ends: work stops at its next check and no further command runs.
+    stop: CancelToken,
+    /// The newest seek's token, cancelled by the seek after it.
+    seek: Mutex<CancelToken>,
 }
 
 /// A project's preview on an app window, drawn on a GPU device that presents to it whatever the
@@ -167,7 +196,17 @@ impl Player {
 
     /// Moves to timeline tick `ticks` and shows the frame there.
     pub fn seek(&self, ticks: i64) {
-        self.send(Command::Seek(ticks));
+        let token = CancelToken::default();
+        let replaced = std::mem::replace(
+            &mut *self
+                .shared
+                .seek
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            token.clone(),
+        );
+        replaced.cancel();
+        self.send(Command::Seek(ticks, token));
     }
 
     /// Plays from the position at the project's rate.
@@ -217,9 +256,16 @@ impl Player {
             .clone()
     }
 
-    /// Ends the preview and waits for its thread; the player does nothing afterwards. Dropping
-    /// the player (Kotlin `close()`, Swift release) ends it too.
+    /// Ends the preview and waits for its thread, which stops the frame or audio decode it is
+    /// working on and skips the commands still queued; the player does nothing afterwards.
+    /// Dropping the player (Kotlin `close()`, Swift release) ends it too.
     pub fn end(&self) {
+        self.shared.stop.cancel();
+        self.shared
+            .seek
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .cancel();
         drop(
             self.commands
                 .lock()
@@ -404,11 +450,34 @@ impl Output {
     }
 }
 
+/// Carries out `first` and the commands queued behind it, coalesced; `false` once the player
+/// ended.
+fn apply_queued(
+    first: Command,
+    commands: &Receiver<Command>,
+    state: &mut State,
+    session: &Session,
+    shared: &Arc<Shared>,
+) -> bool {
+    let mut queued = vec![first];
+    queued.extend(commands.try_iter());
+    for command in coalesce(queued) {
+        if shared.stop.is_cancelled() {
+            return false;
+        }
+        state.apply(command, session, shared);
+    }
+    !shared.stop.is_cancelled()
+}
+
 /// The preview thread: carries out commands, and renders while playing.
 fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
     let mut state = State::new(&session, shared);
     let frame_length = frame_length(&session);
     loop {
+        if shared.stop.is_cancelled() {
+            return;
+        }
         let command = if state.playing() && state.output.is_some() {
             match commands.recv_timeout(Duration::ZERO) {
                 Ok(command) => Some(command),
@@ -422,14 +491,20 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
             }
         };
         if let Some(command) = command {
-            state.apply(command, &session, shared);
+            if !apply_queued(command, commands, &mut state, &session, shared) {
+                return;
+            }
             continue;
         }
         // In the background nothing renders, but commands are still carried out: an end or a
         // detach must not wait for the app to return to the foreground.
         if session.paused.is_paused() {
             match commands.recv_timeout(PAUSED_POLL) {
-                Ok(command) => state.apply(command, &session, shared),
+                Ok(command) => {
+                    if !apply_queued(command, commands, &mut state, &session, shared) {
+                        return;
+                    }
+                }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
             }
@@ -445,7 +520,7 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
             state.play_frame(last, frame_length, shared);
             if !drawn {
                 state.position = last;
-                state.show(&session, shared);
+                state.show(&session, shared, &shared.stop);
             }
             state.pause_at(last, shared);
             continue;
@@ -456,7 +531,7 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
         if state.played_frame != Some(frame) {
             state.play_frame(time, frame_length, shared);
             state.position = time;
-            state.show(&session, shared);
+            state.show(&session, shared, &shared.stop);
         }
         let next = (frame + 1) * frame_length.ticks().max(1);
         let ahead = u64::try_from(next - state.clock_time().ticks()).unwrap_or(0);
@@ -644,7 +719,7 @@ impl State {
                     Ok(()) => {
                         // A new window shows the frame at the position at once.
                         self.frames.reset();
-                        self.show(session, shared);
+                        self.show(session, shared, &shared.stop);
                     }
                     Err(error) => record(shared, error),
                 }
@@ -666,15 +741,15 @@ impl State {
                     output.resize(width, height);
                 }
                 self.frames.reset();
-                self.show(session, shared);
+                self.show(session, shared, &shared.stop);
             }
-            Command::Seek(ticks) => {
+            Command::Seek(ticks, token) => {
                 let time = MediaTime::from_ticks(ticks.clamp(0, self.end.ticks()));
                 self.position = time;
                 if self.started.is_some() {
                     self.start_playing(time, session, shared);
                 }
-                self.show(session, shared);
+                self.show(session, shared, &token);
             }
             Command::Play => {
                 let from = if self.position >= self.end {
@@ -688,7 +763,7 @@ impl State {
             Command::Pause => {
                 let time = self.clock_time().min(self.end);
                 self.pause_at(time, shared);
-                self.show(session, shared);
+                self.show(session, shared, &shared.stop);
             }
         }
     }
@@ -701,8 +776,7 @@ impl State {
         self.audio = None;
         shared.sounding.store(false, Ordering::Release);
         if matches!(self.sound, Sound::Unread) {
-            self.sound =
-                decode_preview_audio(session, shared).map_or(Sound::Silent, Sound::Decoded);
+            self.sound = decode_preview_audio(session, shared);
         }
         if let Sound::Decoded(sources) = &self.sound {
             let sources = Arc::clone(sources);
@@ -724,17 +798,32 @@ impl State {
         self.started = Some((Instant::now(), from));
     }
 
-    /// Renders and presents the frame at the position.
-    fn show(&mut self, session: &Session, shared: &Shared) {
-        if let Err(error) = self.render(session, shared) {
-            record(shared, error);
+    /// Renders and presents the frame at the position, unless `cancel` stops it first; a stopped
+    /// frame is neither counted nor an error.
+    fn show(&mut self, session: &Session, shared: &Shared, cancel: &CancelToken) {
+        match self.render(session, shared, cancel) {
+            Ok(()) => {}
+            Err(_) if cancel.is_cancelled() => {
+                if let Some(cache) = self.cache.as_mut() {
+                    cache.unpin();
+                }
+            }
+            Err(error) => record(shared, error),
         }
     }
 
-    fn render(&mut self, session: &Session, shared: &Shared) -> Result<(), String> {
+    fn render(
+        &mut self,
+        session: &Session,
+        shared: &Shared,
+        cancel: &CancelToken,
+    ) -> Result<(), String> {
         let (Some(output), Some(cache)) = (self.output.as_ref(), self.cache.as_mut()) else {
             return Ok(());
         };
+        if cancel.is_cancelled() {
+            return Ok(());
+        }
         let time = self.position;
         let snapshot = &session.snapshot;
         let size = QualityProfile::preview()
@@ -753,7 +842,7 @@ impl State {
                 color,
                 (self.index, &needs),
                 &mut self.sources,
-                &CancelToken::default(),
+                cancel,
             )
             .map_err(|error| error.to_string())?;
         self.texts
@@ -810,17 +899,20 @@ fn sources(
     }
 }
 
-/// The project's audible sources, decoded for the preview; `None` for a silent project or one
-/// whose audio does not decode (recorded).
-fn decode_preview_audio(session: &Session, shared: &Shared) -> Option<Arc<DecodedAudioSources>> {
-    let decoders = session.audio.as_ref()?;
+/// The project's audible sources, decoded for the preview within a quarter of the free memory
+/// (at most 256 MiB). Silent for a project without audio or whose audio does not decode or does
+/// not fit (recorded); unread when the player ended during the decode.
+fn decode_preview_audio(session: &Session, shared: &Shared) -> Sound {
+    let Some(decoders) = session.audio.as_ref() else {
+        return Sound::Silent;
+    };
     if !session
         .project
         .sources
         .iter()
         .any(alpha2_model::MediaSource::is_audible)
     {
-        return None;
+        return Sound::Silent;
     }
     let assets = session
         .request
@@ -828,20 +920,32 @@ fn decode_preview_audio(session: &Session, shared: &Shared) -> Option<Arc<Decode
         .iter()
         .map(|(id, path)| (id.clone(), PathBuf::from(path)))
         .collect();
+    let limit = crate::export::audio_bytes_limit();
     match crate::export::decode_audio(
         &session.project,
         &assets,
         decoders.as_ref(),
-        session.project.settings.sample_rate,
-        &CancelToken::default(),
+        (session.project.settings.sample_rate, limit),
+        &shared.stop,
     ) {
-        Ok(sources) => Some(Arc::new(sources)),
+        Ok(sources) => Sound::Decoded(Arc::new(sources)),
+        Err(_) if shared.stop.is_cancelled() => Sound::Unread,
+        Err(error) if error.code() == "RESOURCE_LIMIT" => {
+            record(
+                shared,
+                format!(
+                    "the project's audio needs more than {} MiB decoded; the preview is silent",
+                    limit >> 20
+                ),
+            );
+            Sound::Silent
+        }
         Err(error) => {
             record(
                 shared,
                 format!("the project's audio does not decode: {error:?}"),
             );
-            None
+            Sound::Silent
         }
     }
 }
@@ -854,6 +958,55 @@ fn record(shared: &Shared, error: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn names(commands: &[Command]) -> Vec<String> {
+        commands
+            .iter()
+            .map(|command| match command {
+                Command::Attach { width, .. } => format!("attach {width}"),
+                Command::Detach => "detach".into(),
+                Command::Resize { width, .. } => format!("resize {width}"),
+                Command::Seek(ticks, _) => format!("seek {ticks}"),
+                Command::Play => "play".into(),
+                Command::Pause => "pause".into(),
+            })
+            .collect()
+    }
+
+    fn seek(ticks: i64) -> Command {
+        Command::Seek(ticks, CancelToken::default())
+    }
+
+    const fn resize(width: u32) -> Command {
+        Command::Resize { width, height: 1 }
+    }
+
+    #[test]
+    fn coalescing_keeps_the_last_seek_and_resize_and_the_order_of_the_rest() {
+        let commands = vec![
+            seek(1),
+            resize(10),
+            Command::Play,
+            seek(2),
+            resize(20),
+            Command::Detach,
+            seek(3),
+            Command::Pause,
+        ];
+        assert_eq!(
+            names(&coalesce(commands)),
+            ["play", "resize 20", "detach", "seek 3", "pause"]
+        );
+        assert_eq!(
+            names(&coalesce(vec![
+                Command::Play,
+                Command::Pause,
+                Command::Detach
+            ])),
+            ["play", "pause", "detach"]
+        );
+        assert_eq!(names(&coalesce(vec![seek(4)])), ["seek 4"]);
+    }
 
     #[test]
     fn a_panic_on_the_preview_thread_is_recorded_and_stops_the_preview() {

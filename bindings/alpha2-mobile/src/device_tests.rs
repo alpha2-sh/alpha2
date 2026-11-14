@@ -480,6 +480,149 @@ fn play_through(
     );
 }
 
+/// Seeks 240 times over 2 s between two distant times of the video project's player, which shows
+/// it on a window: the position reaches the last target within 500 ms of the last call (three
+/// single seeks' time on a device slower than that), so no backlog of stale seeks built up. How
+/// many were drawn is printed; a device that draws a cached frame faster than the seeks arrive
+/// draws them all.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn scrub(player: &crate::Player, wait: &dyn Fn(u64, &dyn Fn() -> bool) -> bool) {
+    use std::time::{Duration, Instant};
+
+    let far = 108_000;
+    let single = Instant::now();
+    player.seek(far);
+    assert!(wait(10, &|| player.position_ticks() == far));
+    let single = single.elapsed();
+    player.seek(0);
+    assert!(wait(10, &|| player.position_ticks() == 0));
+    let bound = Duration::from_millis(500).max(single * 3);
+    let (presented, dropped) = (player.frames_presented(), player.frames_dropped());
+    for index in 0..240 {
+        player.seek(if index % 2 == 0 { 0 } else { far });
+        std::thread::sleep(Duration::from_micros(8_333));
+    }
+    let last_call = Instant::now();
+    assert!(
+        wait(5, &|| player.position_ticks() == far),
+        "{:?}",
+        player.last_error()
+    );
+    let reached = last_call.elapsed();
+    let shown = player.frames_presented() - presented + player.frames_dropped() - dropped;
+    eprintln!(
+        "240 seeks: {shown} frames shown, last target reached {reached:?} after the call \
+         (one seek takes {single:?})"
+    );
+    assert!(reached < bound, "{reached:?}");
+    assert_eq!(player.last_error(), None);
+}
+
+/// Writes `seconds` of 16-bit mono silence at `rate` as a WAV file.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn write_silence(path: &std::path::Path, rate: u32, seconds: u32) {
+    use std::io::Write;
+
+    let bytes = rate * seconds * 2;
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path).expect("wav"));
+    let mut header = Vec::new();
+    header.extend(b"RIFF");
+    header.extend((36 + bytes).to_le_bytes());
+    header.extend(b"WAVEfmt ");
+    header.extend(16_u32.to_le_bytes());
+    header.extend(1_u16.to_le_bytes());
+    header.extend(1_u16.to_le_bytes());
+    header.extend(rate.to_le_bytes());
+    header.extend((rate * 2).to_le_bytes());
+    header.extend(2_u16.to_le_bytes());
+    header.extend(16_u16.to_le_bytes());
+    header.extend(b"data");
+    header.extend(bytes.to_le_bytes());
+    file.write_all(&header).expect("header");
+    let block = vec![0_u8; 1 << 20];
+    let mut left = bytes as usize;
+    while left > 0 {
+        let length = left.min(block.len());
+        file.write_all(&block[..length]).expect("samples");
+        left -= length;
+    }
+    file.flush().expect("flush");
+}
+
+/// A preview reads 5 s of a 60 minute recording, which decodes whole to about 690 MB at 48 kHz:
+/// ending it 100 ms into its first play returns within 500 ms, and left alone it plays silent and
+/// says why.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[test]
+fn a_preview_of_a_long_recording_ends_at_once_and_plays_silent_past_the_audio_limit() {
+    use std::time::{Duration, Instant};
+
+    use crate::{Player, PlayerRequest};
+
+    let tests = tests_dir();
+    let wav = std::env::temp_dir().join("alpha2-long-silence.wav");
+    write_silence(&wav, 8_000, 3_600);
+    let mut project: Value = serde_json::from_str(
+        &std::fs::read_to_string(tests.join("cases/host-audio-export-project.json"))
+            .expect("project"),
+    )
+    .expect("JSON");
+    for track in project["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks")
+    {
+        for clip in track["clips"].as_array_mut().expect("clips") {
+            clip["timeline_range"]["end"] = 600_000.into();
+            clip["source_range"]["end"] = 600_000.into();
+        }
+    }
+    let request = PlayerRequest {
+        project_json: project.to_string(),
+        assets: HashMap::from([
+            (
+                "image-source".to_owned(),
+                tests
+                    .join("corpus/cross_topology_parity.png")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "audio-source".to_owned(),
+                wav.to_string_lossy().into_owned(),
+            ),
+        ]),
+        ..PlayerRequest::default()
+    };
+    let engine = Alpha2::new(EngineConfig::default());
+
+    let player = Player::new(Arc::clone(&engine), request.clone()).expect("player");
+    player.play();
+    std::thread::sleep(Duration::from_millis(100));
+    let ending = Instant::now();
+    player.end();
+    let took = ending.elapsed();
+    eprintln!("end() during the audio decode took {took:?}");
+    assert!(took < Duration::from_millis(500), "{took:?}");
+
+    let player = Player::new(engine, request).expect("player");
+    player.play();
+    let until = Instant::now() + Duration::from_secs(300);
+    while player.last_error().is_none() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let error = player.last_error();
+    eprintln!("{error:?}");
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|error| error.contains("MiB decoded; the preview is silent")),
+        "{error:?}"
+    );
+    assert!(!player.is_sounding());
+    player.end();
+    let _ = std::fs::remove_file(wav);
+}
+
 /// Previews into an image reader's window, which only Android has.
 #[cfg(target_os = "android")]
 mod reader_window {
@@ -721,6 +864,39 @@ mod reader_window {
     }
 
     #[test]
+    fn a_scrub_on_a_window_reaches_its_last_target_and_skips_stale_seeks() {
+        use crate::{Player, PlayerRequest};
+
+        let tests = tests_dir();
+        let player = Player::new(
+            Alpha2::new(EngineConfig::default()),
+            PlayerRequest {
+                project_json: std::fs::read_to_string(
+                    tests.join("cases/host-video-export-project.json"),
+                )
+                .expect("project"),
+                assets: HashMap::from([(
+                    "video-source".to_owned(),
+                    tests
+                        .join("corpus/h264-bt709-copy.mp4")
+                        .to_string_lossy()
+                        .into_owned(),
+                )]),
+                ..PlayerRequest::default()
+            },
+        )
+        .expect("player");
+        let reader = WindowReader::new(64, 48);
+        if !attached(&player, &reader, 64, 48) {
+            return;
+        }
+        super::scrub(&player, &|seconds, done| {
+            wait_for(Some(&reader), seconds, done)
+        });
+        player.end();
+    }
+
+    #[test]
     fn preview_of_a_video_presents_its_frames() {
         use crate::{Player, PlayerRequest};
 
@@ -821,6 +997,42 @@ mod metal_layer {
             .expect("reattach");
         assert!(wait_for(10, || player.frames_presented() > before));
         assert_eq!(player.last_error(), None);
+        player.end();
+    }
+
+    #[test]
+    fn a_scrub_on_a_metal_layer_reaches_its_last_target_and_skips_stale_seeks() {
+        use crate::{Player, PlayerRequest};
+
+        let tests = tests_dir();
+        let player = Player::new(
+            Alpha2::new(EngineConfig::default()),
+            PlayerRequest {
+                project_json: std::fs::read_to_string(
+                    tests.join("cases/host-video-export-project.json"),
+                )
+                .expect("project"),
+                assets: HashMap::from([(
+                    "video-source".to_owned(),
+                    tests
+                        .join("corpus/h264-bt709-copy.mp4")
+                        .to_string_lossy()
+                        .into_owned(),
+                )]),
+                ..PlayerRequest::default()
+            },
+        )
+        .expect("player");
+        let layer = objc2_quartz_core::CAMetalLayer::new();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&layer) as u64, 64, 48)
+            .expect("attach");
+        assert!(
+            wait_for(10, || player.frames_presented() >= 1),
+            "{:?}",
+            player.last_error()
+        );
+        super::scrub(&player, &|seconds, done| wait_for(seconds, done));
         player.end();
     }
 
