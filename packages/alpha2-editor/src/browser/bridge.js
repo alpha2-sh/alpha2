@@ -1503,16 +1503,17 @@ export function createBrowserBridge(options) {
    * Gives up the preview worker after `error` (failed start, load or draw). Until the next binding
    * the main renderer, which loads every project the worker does, draws off screen and each frame
    * is copied to the bound surface. `onError` hears once why, unless the worker lost its GPU, which
-   * recovers silently and lets a rebuilt preview try a worker again.
+   * recovers silently and lets a rebuilt preview try a worker again. `starting` is set while a
+   * binding makes its worker, which may have failed before there was one to give up.
    */
-  async function abandonWorker(error) {
+  async function abandonWorker(error, starting = false) {
     const failed = workerPreview;
-    if (!failed) return;
+    if (!failed && !starting) return;
     workerPreview = null;
     workerSent = new Map();
     workerFonts = null;
     copySurface = true;
-    await failed.dispose().catch(() => {});
+    await failed?.dispose().catch(() => {});
     if (isGpuLoss(error)) return;
     workerGivenUp = true;
     const reason = error instanceof Error ? error.message : String(error ?? "");
@@ -1771,24 +1772,24 @@ export function createBrowserBridge(options) {
             : {}),
           extensionModuleUrls: extensionWasmUrls(runtimeAssets),
         };
-        workerPreview = createWorkerPreview(runtimeAssets.workerFactory(), {
-          runtimeAssets: workerRuntime,
-          bitmapOutput: true,
-          width: canvas.width,
-          height: canvas.height,
-          videoConversion,
-          opaqueEngineFrames,
-          // Match the main renderer: the CPU once recovery or `auto` moved there.
-          renderer: onCpu() ? "cpu" : rendererMode,
-        });
-        // A worker that cannot start leaves the surface to the main renderer.
+        // A worker that cannot be made or started leaves the surface to the main renderer.
         try {
+          workerPreview = createWorkerPreview(runtimeAssets.workerFactory(), {
+            runtimeAssets: workerRuntime,
+            bitmapOutput: true,
+            width: canvas.width,
+            height: canvas.height,
+            videoConversion,
+            opaqueEngineFrames,
+            // Match the main renderer: the CPU once recovery or `auto` moved there.
+            renderer: onCpu() ? "cpu" : rendererMode,
+          });
           await workerPreview.ready;
           await workerPreview.setPreviewScale(previewScale);
           if (effectDefinitions.size)
             await workerPreview.registerEffects(keptEffects());
         } catch (error) {
-          await abandonWorker(error);
+          await abandonWorker(error, true);
         }
       }
       if (passTiming || traceUploads) applyTracing();

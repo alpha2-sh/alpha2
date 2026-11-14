@@ -20,6 +20,9 @@ All notable changes to this project are documented in this file.
   before, the conversion kept reading the file and writing origin storage after `dispose()`. A
   conversion that outlives a project switch keeps its proxy and adopts it only for a document that
   has that media.
+- Editor: a preview `workerFactory` that throws (a blocked cross-origin worker script, say) leaves
+  the preview on the main thread with one `preview_worker_failed` report, as documented; before,
+  `bindPreview` rejected and GPU recovery ended with `preview_unavailable`.
 
 ## [0.6.0] - 2026-11-08
 

@@ -1,4 +1,4 @@
-import "./support/preview-stubs.mjs";
+import { FakeCanvas, resetPageGpuLosses } from "./support/preview-stubs.mjs";
 import { register } from "node:module";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -249,6 +249,86 @@ test(
     await second;
     assert.equal(seen.proxyStages, 1, "adopted for a document with its media");
     assert.equal(bridge.proxyStatus("clip").available, true);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+function addColor(editor) {
+  const id = crypto.randomUUID();
+  const trackId = crypto.randomUUID();
+  const result = editor.dispatch({
+    type: "transaction",
+    commands: [
+      {
+        type: "asset.put",
+        asset: { id, kind: "generated", name: "Color", contentRevision: 0 },
+        source: {
+          id,
+          kind: "generated",
+          generator: {
+            type: "fill",
+            paint: {
+              type: "solid",
+              color: { red: 0.8, green: 0.3, blue: 0.2, alpha: 1 },
+            },
+          },
+        },
+      },
+      {
+        type: "track.add",
+        track: { id: trackId, kind: "video", name: "V1", clips: [] },
+      },
+      {
+        type: "clip.insert",
+        trackId,
+        clip: {
+          id: crypto.randomUUID(),
+          source_id: id,
+          timeline_range: { start: 0, end: 120000 },
+          source_range: { start: 0, end: 120000 },
+          time_map: { type: "forward" },
+        },
+      },
+    ],
+  });
+  assert.ok(result.ok, result.error?.message);
+}
+
+async function previewSession({ workerFactory }) {
+  resetPageGpuLosses();
+  const reported = [];
+  const editor = createEditor({
+    document: createEmptyDocument({ width: 64, height: 36 }),
+  });
+  const bridge = createBrowserBridge({
+    editor,
+    audio: false,
+    assetDecisions: await engineWasm(),
+    runtimeAssets: { workerFactory },
+    onError: (error) => reported.push(error),
+  });
+  addColor(editor);
+  return { editor, bridge, reported };
+}
+
+test(
+  "a worker factory that throws leaves the preview on the main thread",
+  { skip },
+  async () => {
+    const { editor, bridge, reported } = await previewSession({
+      workerFactory: () => {
+        throw new DOMException("blocked worker script", "SecurityError");
+      },
+    });
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(bridge.previewBackend, "main-thread");
+    assert.equal(await bridge.seek(0), true);
+    assert.deepEqual(
+      reported.map((e) => e.code),
+      ["preview_worker_failed"],
+    );
+    assert.equal(reported[0].cause.name, "SecurityError");
     await bridge.dispose();
     editor.dispose();
   },
