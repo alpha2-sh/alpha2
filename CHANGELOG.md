@@ -302,6 +302,10 @@ All notable changes to this project are documented in this file.
 - The browser CPU renderer refuses a `VideoFrame` whose own color space is HDR (PQ or HLG) with
   `INVALID_INPUT`, as the GPU renderer does, instead of reading it through a 2D canvas with the
   browser's tone mapping; such frames go through `uploadYuvFrame`.
+- `readRgbaAt` on the browser CPU renderer draws at export quality every time, so the timeline
+  frames an extraction reads (and its digest) no longer depend on whether a preview was drawn
+  before; it matches the native host. The `renderAt` documentation of the CPU renderer is back
+  on `renderAt`.
 
 ## [0.6.0] - 2026-11-08
 
