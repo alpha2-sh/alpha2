@@ -87,12 +87,29 @@ for (const [name, text] of Object.entries(documents)) {
   outcomes[name] = { outcome: outcome.slice(0, 160), ms: Math.round(performance.now() - started) };
 }
 const refused = (name) => outcomes[name].outcome.startsWith("refused: ") && outcomes[name].outcome.includes("too large");
+// usvg keeps a decode of an embedded image per copy; the source reports all of them.
+const noise = new OffscreenCanvas(256, 256);
+const context = noise.getContext("2d");
+const pixels = context.createImageData(256, 256);
+for (let at = 0; at < pixels.data.length; at += 65536) crypto.getRandomValues(pixels.data.subarray(at, at + 65536));
+for (let at = 3; at < pixels.data.length; at += 4) pixels.data[at] = 255;
+context.putImageData(pixels, 0, 0);
+const png = new Uint8Array(await (await noise.convertToBlob({ type: "image/png" })).arrayBuffer());
+let encoded = "";
+for (let at = 0; at < png.length; at += 0x8000) encoded += String.fromCharCode(...png.subarray(at, at + 0x8000));
+const copies = extensions.open({ format: "svg" }, new TextEncoder().encode(doc(
+  '<defs><image id="i" width="4" height="4" href="data:image/png;base64,' + btoa(encoded) + '"/></defs>' +
+    '<use href="#i"/>'.repeat(10),
+)));
+const resident = { png: png.length, residentBytes: copies.residentBytes };
 report({
+  resident,
   ok: outcomes.nestedAsDeepAsAllowed.outcome === "drawn"
     && outcomes.patternsAsDeepAsAllowed.outcome === "drawn"
     && outcomes.patternRing.outcome.startsWith("refused: ") && outcomes.patternRing.outcome.includes("refers to itself")
     && ["nestedTooDeep", "patternsTooDeep", "doublingMasks", "entitiesTooDeep", "entityElements", "entityAttribute", "morphology400", "backtrackingRule", "gzipBomb"].every(refused)
-    && Object.values(outcomes).every((o) => o.ms < 20000),
+    && Object.values(outcomes).every((o) => o.ms < 20000)
+    && resident.residentBytes >= 10 * resident.png,
   outcomes,
 });
 `;
