@@ -1529,7 +1529,7 @@ fn scaler_flags(
     height: i32,
     source: ffi::AVPixelFormat,
     target: ffi::AVPixelFormat,
-) -> u32 {
+) -> ffi::SwsFlags {
     let unscaled_rgb_source = matches!(
         source,
         ffi::AV_PIX_FMT_YUV420P | ffi::AV_PIX_FMT_YUV422P | ffi::AV_PIX_FMT_YUVA420P
