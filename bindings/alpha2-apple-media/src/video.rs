@@ -432,8 +432,8 @@ fn region(size: (usize, usize), extended: Extended, window: Option<Window>) -> R
     }
 }
 
-/// Copies a picture out of `buffer`, rows of each plane `stride` bytes apart, the last row without
-/// its padding.
+/// Copies a picture out of `buffer`, rows of each plane `stride` bytes apart. The last row's padding
+/// is not read, since the buffer may end before it, and is zero in the copy.
 fn copy_picture(buffer: &CVPixelBuffer, outputs: &Outputs) -> Result<Copied, String> {
     let actual = CVPixelBufferGetPixelFormatType(buffer);
     if actual != outputs.pixel_format {
@@ -499,8 +499,11 @@ fn copy_picture(buffer: &CVPixelBuffer, outputs: &Outputs) -> Result<Copied, Str
             let bytes = unsafe {
                 std::slice::from_raw_parts(base.cast::<u8>().sub(offset).cast_const(), length)
             };
+            let mut copy = Vec::with_capacity(stride * rows);
+            copy.extend_from_slice(bytes);
+            copy.resize(stride * rows, 0);
             Ok(Plane {
-                bytes: Bytes::copy_from_slice(bytes),
+                bytes: Bytes::from(copy),
                 stride: u32::try_from(stride).unwrap_or(u32::MAX),
                 width: u32::try_from(columns).unwrap_or(u32::MAX),
                 height: u32::try_from(rows).unwrap_or(u32::MAX),

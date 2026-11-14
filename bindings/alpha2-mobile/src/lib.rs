@@ -33,6 +33,8 @@ mod error;
 )]
 mod export;
 mod extract;
+#[cfg(test)]
+mod extract_cases;
 mod job;
 mod platform;
 mod player;

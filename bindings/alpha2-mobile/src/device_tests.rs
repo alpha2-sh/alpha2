@@ -603,6 +603,64 @@ fn a_source_with_alpha_is_reported_as_drawn_opaque() {
     let _ = std::fs::remove_file(path);
 }
 
+/// A session drawing on the CPU renderer, whose extraction bytes every device pins alike.
+fn cpu_engine() -> Arc<Alpha2> {
+    Alpha2::new(EngineConfig {
+        renderer: crate::RendererMode::Cpu,
+        ..EngineConfig::default()
+    })
+}
+
+#[test]
+fn the_surface_table_source_digests_hash_as_pinned() {
+    let engine = cpu_engine();
+    let mut failures = Vec::new();
+    // MPEG-4 Part 2 (`rotation.mp4`, `sar-16-15.mp4`) has no bit-exact inverse transform, so
+    // only that its frames arrive is checked; the reader conformance suite checks their times.
+    for (name, exact) in [
+        ("digest-source-h264-bt709-copy", true),
+        ("digest-source-hevc-hvc1", true),
+        ("digest-source-rotation", false),
+        ("digest-source-sar-16-15", false),
+        ("digest-source-hdr-pq", true),
+    ] {
+        match crate::extract_cases::client_case_hash(&engine, name) {
+            Ok((found, pinned)) if exact && found != pinned => {
+                failures.push(format!("{name}: {found}, pinned {pinned}"));
+            }
+            Ok(_) => {}
+            // H.264 High 4:4:4 Predictive: a device without a decoder for it refuses it by name.
+            Err(error)
+                if name == "digest-source-hdr-pq" && format!("{error:?}").contains("H.264") =>
+            {
+                eprintln!("{name}: refused: {error:?}");
+            }
+            Err(error) => failures.push(format!("{name}: {error:?}")),
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn a_cancel_during_a_source_extraction_aborts_it() {
+    use crate::extract_cases::{Digest, case, request, settled, table};
+    let table = table();
+    let case = case(&table, "digest-source-h264-bt709-copy");
+    let extractor = Arc::new(Digest::new(&case));
+    let handle = cpu_engine()
+        .extract(
+            request(&table, &case),
+            Arc::clone(&extractor) as Arc<dyn crate::Extractor>,
+        )
+        .expect("started");
+    let _ = extractor.cancel.set(Arc::clone(&handle));
+    let outcome = settled(handle, 60);
+    assert!(
+        matches!(outcome, Err(crate::Alpha2Error::Aborted)),
+        "{outcome:?}"
+    );
+}
+
 #[test]
 fn a_project_with_audio_exports_to_mkv_and_webm() {
     let assets = [

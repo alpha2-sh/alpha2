@@ -872,6 +872,43 @@ mod tests {
     }
 
     #[test]
+    fn the_surface_table_timeline_digest_hashes_as_pinned() {
+        let (found, pinned) =
+            crate::extract_cases::client_case_hash(&engine(), "digest-timeline-cpu").expect("data");
+        assert_eq!(found, pinned);
+    }
+
+    /// The plugin entry point over the repository's digest plugin, packed here for this machine.
+    #[cfg(all(
+        feature = "plugins",
+        not(any(target_os = "android", target_os = "ios"))
+    ))]
+    #[test]
+    fn the_surface_table_plugin_timeline_digest_hashes_as_pinned() {
+        use crate::extract_cases::{case, request, settled, table, tests_dir};
+        let table = table();
+        let case = case(&table, "plugin-digest-timeline-cpu");
+        let dir = std::env::temp_dir().join(format!("alpha2-mobile-plugin-{}", std::process::id()));
+        let (manifest, sha256) = alpha2_test_support::extract::pack_plugin(
+            &tests_dir().join(".."),
+            &dir,
+            case["extractor"]["plugin"].as_str().expect("plugin"),
+        );
+        let plugin = crate::Plugin::load(manifest.to_string_lossy().into_owned(), sha256, false)
+            .expect("the plugin loads");
+        let handle = engine()
+            .extract_plugin(request(&table, &case), plugin)
+            .expect("started");
+        let sets: serde_json::Value =
+            serde_json::from_str(&settled(handle, 120).expect("data")).expect("json");
+        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(
+            alpha2_test_support::extract::data_hash(&sets),
+            case["sha256"].as_str().expect("sha256")
+        );
+    }
+
+    #[test]
     fn an_extractor_whose_making_panics_settles_as_internal() {
         let handle = engine()
             .start_extraction(request(""), Box::new(|_| panic!("no extractor")))

@@ -656,6 +656,10 @@ All notable changes to this project are documented in this file.
   the platform decoders draw opaque, is reported: the export report's `decodeDiagnostics` holds the
   desktop's `layerDropped` entry with code `alpha-dropped`, and a preview writes one diagnostic
   line per source.
+- iOS: a video whose picture rows are narrower than the decoder's row pitch (such as 60 pixels wide)
+  is drawn on the CPU renderer and delivered to extractors. Before, its frames were refused as
+  "RGBA byte length does not match the image size": the copy of each plane lacked the last row's
+  padding.
 
 ## [0.6.0] - 2026-11-08
 

@@ -90,6 +90,7 @@ fn mediacodec() -> ContainerBackend {
 }
 
 conformance_tests!(mediacodec());
+alpha2_reader_conformance::reader_conformance_tests!(mediacodec());
 
 mod encode {
     //! Exports a synthetic clip through the encoders into MP4 or `WebM` and reads it back.

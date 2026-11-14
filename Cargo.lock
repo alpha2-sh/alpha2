@@ -102,6 +102,7 @@ dependencies = [
  "alpha2-container",
  "alpha2-host-core",
  "alpha2-media",
+ "alpha2-reader-conformance",
  "alpha2-test-support",
  "alpha2-time",
  "bytes",
@@ -117,6 +118,7 @@ dependencies = [
  "alpha2-container",
  "alpha2-host-core",
  "alpha2-media",
+ "alpha2-reader-conformance",
  "alpha2-time",
  "bytes",
  "lewton",
@@ -694,6 +696,7 @@ name = "alpha2-test-support"
 version = "0.6.0"
 dependencies = [
  "serde_json",
+ "sha2 0.11.0",
 ]
 
 [[package]]

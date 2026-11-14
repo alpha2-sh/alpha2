@@ -3,12 +3,14 @@
 //! A backend instantiates the cases with [`reader_conformance_tests!`] over its
 //! [`alpha2_backend_conformance::Backend`]. Frames are presented on the CPU renderer, so the
 //! delivered bytes are the same on every machine and pinned in `tests/golden/extract-recipe.json`.
+//! A fixture the backend refuses ([`Backend::refuses`]) must be refused as unsupported and is left
+//! out of the case.
 
 #![allow(clippy::missing_panics_doc)]
 
 use std::sync::Arc;
 
-use alpha2_backend_conformance::{Backend, Outcome, corpus};
+use alpha2_backend_conformance::{Backend, Outcome, corpus, video_or_refusal};
 use alpha2_engine::extract::fixtures::{Digest, video_input};
 use alpha2_engine::extract::{
     Direction, Extractor, FrameFrom, InputFrom, Pass, RequestInput, VideoFormat,
@@ -49,15 +51,20 @@ impl Decoder for Boxed {
     }
 }
 
-fn reader(backend: &dyn Backend, name: &str) -> Result<VideoReader<Boxed>, String> {
+/// A reader over `name`, `None` when the backend refuses it as it says it does.
+fn reader(backend: &dyn Backend, name: &str) -> Result<Option<VideoReader<Boxed>>, String> {
+    // A refusal is checked on a decoder of its own: it may consume the first picture.
+    if video_or_refusal(backend, name)?.is_none() {
+        return Ok(None);
+    }
     let decoder = backend
         .open_video(&corpus(name))
         .map_err(|error| format!("{name}: {error}"))?;
-    Ok(VideoReader::new(
+    Ok(Some(VideoReader::new(
         Boxed(decoder),
         SourceId::new("v").expect("id"),
         CancelToken::default(),
-    ))
+    )))
 }
 
 fn project() -> Project {
@@ -73,14 +80,18 @@ fn project() -> Project {
     .expect("project")
 }
 
-/// The digest fixture's delivered times and hashes over `range` with `passes` at `size`.
+/// The digest fixture's delivered times and hashes over `range` with `passes` at `size`; `None`
+/// when the backend refuses `name`.
 fn digest(
     backend: &dyn Backend,
     name: &str,
     range: (i64, i64),
     passes: Vec<Pass>,
     size: u32,
-) -> Result<Vec<(i64, u32)>, String> {
+) -> Result<Option<Vec<(i64, u32)>>, String> {
+    let Some(reader) = reader(backend, name)? else {
+        return Ok(None);
+    };
     let mut extractor = Digest::new(video_input(VideoFormat::Rgba8, 960));
     let descriptor = extractor.describe().clone();
     let request = alpha2_engine::extract::ExtractRequest {
@@ -105,25 +116,26 @@ fn digest(
         .into(),
     };
     let renderer = CpuRenderer::new(1);
-    let mut supplier =
-        ReaderSupplier::<Boxed, Boxed>::new(&renderer, Some(reader(backend, name)?), None);
+    let mut supplier = ReaderSupplier::<Boxed, Boxed>::new(&renderer, Some(reader), None);
     let sets =
         alpha2_host_core::extract::run(&project(), request, &mut extractor, &mut supplier, None)
             .map_err(|error| error.to_string())?;
     let DataValues::Scalars(samples) = &sets[0].values else {
         return Err("scalars".into());
     };
-    Ok(samples
-        .times
-        .iter()
-        .zip(samples.values.chunks(2))
-        .map(|(time, pair)| {
-            let [hi, lo] = [pair[0].unwrap_or(0.0), pair[1].unwrap_or(0.0)];
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let hash = ((hi * 65_536.0) as u32) << 16 | ((lo * 65_536.0) as u32);
-            (time.ticks(), hash)
-        })
-        .collect())
+    Ok(Some(
+        samples
+            .times
+            .iter()
+            .zip(samples.values.chunks(2))
+            .map(|(time, pair)| {
+                let [hi, lo] = [pair[0].unwrap_or(0.0), pair[1].unwrap_or(0.0)];
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let hash = ((hi * 65_536.0) as u32) << 16 | ((lo * 65_536.0) as u32);
+                (time.ticks(), hash)
+            })
+            .collect(),
+    ))
 }
 
 /// A forward run delivers exactly the frames shown inside the range, by their own pts.
@@ -132,10 +144,10 @@ fn digest(
 /// What differed.
 pub fn reader_delivers_the_frames_shown_inside_the_range(backend: &dyn Backend) -> Outcome {
     // vfr.mp4 presents frames at 0, 4000, 12000, 24000 and 40000 ticks.
-    let times = digest(backend, "vfr.mp4", (5_000, 30_000), vec![], 64)?
-        .into_iter()
-        .map(|(time, _)| time)
-        .collect::<Vec<_>>();
+    let Some(frames) = digest(backend, "vfr.mp4", (5_000, 30_000), vec![], 64)? else {
+        return Ok(());
+    };
+    let times = frames.into_iter().map(|(time, _)| time).collect::<Vec<_>>();
     if times == [4_000, 12_000, 24_000] {
         Ok(())
     } else {
@@ -148,10 +160,10 @@ pub fn reader_delivers_the_frames_shown_inside_the_range(backend: &dyn Backend) 
 /// # Errors
 /// What differed.
 pub fn reader_ends_at_the_stream_end(backend: &dyn Backend) -> Outcome {
-    let times = digest(backend, "vfr.mp4", (30_000, 10_000_000), vec![], 64)?
-        .into_iter()
-        .map(|(time, _)| time)
-        .collect::<Vec<_>>();
+    let Some(frames) = digest(backend, "vfr.mp4", (30_000, 10_000_000), vec![], 64)? else {
+        return Ok(());
+    };
+    let times = frames.into_iter().map(|(time, _)| time).collect::<Vec<_>>();
     if times == [24_000, 40_000] {
         Ok(())
     } else {
@@ -165,7 +177,9 @@ pub fn reader_ends_at_the_stream_end(backend: &dyn Backend) -> Outcome {
 /// What differed.
 pub fn reader_backward_equals_forward_reversed(backend: &dyn Backend) -> Outcome {
     let name = "h264-bt709-copy.mp4";
-    let forward = digest(backend, name, (0, 1_000_000), vec![], 48)?;
+    let Some(forward) = digest(backend, name, (0, 1_000_000), vec![], 48)? else {
+        return Ok(());
+    };
     let last = forward.last().map_or(0, |(time, _)| *time);
     let backward = digest(
         backend,
@@ -176,7 +190,8 @@ pub fn reader_backward_equals_forward_reversed(backend: &dyn Backend) -> Outcome
             direction: Direction::Backward,
         }],
         48,
-    )?;
+    )?
+    .unwrap_or_default();
     if forward.len() > 10 && forward == backward {
         Ok(())
     } else {
@@ -202,7 +217,9 @@ pub fn reader_delivers_the_displayed_size(backend: &dyn Backend) -> Outcome {
         "odd-dimensions.avi",
         "hdr-pq.mp4",
     ] {
-        let mut reader = reader(backend, name)?;
+        let Some(mut reader) = reader(backend, name)? else {
+            continue;
+        };
         let frame = reader
             .frame(FrameFrom::Start(MediaTime::ZERO), Direction::Forward)
             .map_err(|error| error.to_string())?
@@ -233,7 +250,7 @@ pub fn reader_delivers_the_displayed_size(backend: &dyn Backend) -> Outcome {
 }
 
 /// The delivered bytes are the ones pinned in `tests/golden/extract-recipe.json`
-/// (`ALPHA2_UPDATE_GOLDENS=1` rewrites it).
+/// (`ALPHA2_UPDATE_GOLDENS=1` rewrites it from a backend that refuses none of them).
 ///
 /// # Errors
 /// What differed.
@@ -246,7 +263,9 @@ pub fn reader_bytes_match_the_pinned_recipe(backend: &dyn Backend) -> Outcome {
         "sar-16-15.mp4",
         "hdr-pq.mp4",
     ] {
-        let frames = digest(backend, name, (0, 40_000), vec![], 96)?;
+        let Some(frames) = digest(backend, name, (0, 40_000), vec![], 96)? else {
+            continue;
+        };
         found.insert(
             name.to_owned(),
             serde_json::json!(
@@ -260,19 +279,42 @@ pub fn reader_bytes_match_the_pinned_recipe(backend: &dyn Backend) -> Outcome {
     let path = alpha2_backend_conformance::tests_dir().join("golden/extract-recipe.json");
     let text = format!(
         "{}\n",
-        serde_json::to_string_pretty(&serde_json::Value::Object(found)).expect("json")
+        serde_json::to_string_pretty(&serde_json::Value::Object(found.clone())).expect("json")
     );
     if std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1")) {
         std::fs::write(&path, &text).map_err(|error| error.to_string())?;
         return Ok(());
     }
-    let pinned =
-        std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-    if pinned == text {
+    let pinned: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        &std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?,
+    )
+    .map_err(|error| format!("{}: {error}", path.display()))?;
+    // MPEG-4 Part 2: its inverse transform is not bit-exact across decoders.
+    let inexact = ["rotation.mp4", "sar-16-15.mp4"];
+    let times = |frames: Option<&serde_json::Value>| {
+        frames.and_then(serde_json::Value::as_array).map(|frames| {
+            frames
+                .iter()
+                .map(|frame| frame[0].clone())
+                .collect::<Vec<_>>()
+        })
+    };
+    let differ = found
+        .iter()
+        .filter(|(name, frames)| {
+            if inexact.contains(&name.as_str()) && !backend.pins_inexact_codecs() {
+                times(pinned.get(*name)) != times(Some(frames))
+            } else {
+                pinned.get(*name) != Some(frames)
+            }
+        })
+        .map(|(name, _)| name.as_str())
+        .collect::<Vec<_>>();
+    if differ.is_empty() {
         Ok(())
     } else {
         Err(format!(
-            "{} differs from the delivered bytes:\n{text}",
+            "{}: {differ:?} differ from the delivered bytes:\n{text}",
             path.display()
         ))
     }

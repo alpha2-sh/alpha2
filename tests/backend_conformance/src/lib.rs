@@ -73,6 +73,13 @@ pub trait Backend {
     fn resumed_audio_tolerance(&self) -> f32 {
         1e-4
     }
+
+    /// Whether this backend is the `FFmpeg` one whose samples the corpus pins also for codecs
+    /// whose inverse transform the standard leaves inexact (MPEG-4 Part 2). Other decoders of
+    /// those codecs are checked for the frames they deliver, not their bytes.
+    fn pins_inexact_codecs(&self) -> bool {
+        false
+    }
 }
 
 /// One case's verdict: `Err` names what differed.

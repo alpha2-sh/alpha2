@@ -248,6 +248,7 @@ fn apple() -> ContainerBackend {
 }
 
 conformance_tests!(apple());
+alpha2_reader_conformance::reader_conformance_tests!(apple());
 
 /// Decodes the first picture of the default video track of `path`.
 fn first_picture(path: &Path) -> Result<(), String> {
