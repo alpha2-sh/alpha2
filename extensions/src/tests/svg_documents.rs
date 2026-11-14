@@ -923,6 +923,36 @@ fn the_svg_images_an_svg_draws_are_read_within_its_text_budget() {
 
 #[cfg(feature = "svg")]
 #[test]
+fn an_svg_is_charged_for_the_dashes_and_edges_it_draws() {
+    use super::hostile::{svg_dashed_copies, svg_dense_zigzag, svg_outline};
+    // tiny-skia dashes the whole 400,000-dash line before clipping, 17 ms a copy.
+    for copies in [1, 10] {
+        assert_eq!(
+            svg_drawn(&svg_dashed_copies(copies, 1), (0, 0)).expect("drawn"),
+            (1920, 1080)
+        );
+    }
+    refused_as(
+        svg_drawn(&svg_dashed_copies(100, 100), (0, 0)),
+        "drawing the SVG at 1920x1080 costs more than",
+    );
+    // Edges that overlap in one row are sorted against each other in every row they share.
+    assert_eq!(
+        svg_drawn(&svg_dense_zigzag(10_000), (0, 0)).expect("drawn"),
+        (1920, 1080)
+    );
+    assert_eq!(
+        svg_drawn(&svg_outline(50_000), (0, 0)).expect("drawn"),
+        (1920, 1080)
+    );
+    refused_as(
+        svg_drawn(&svg_dense_zigzag(300_000), (0, 0)),
+        "drawing the SVG at 1920x1080 costs more than",
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
 fn an_svg_whose_style_rules_cost_more_than_half_the_reading_budget_to_match_is_refused() {
     // usvg matches the rules again after the metered pass, so each pass gets half the budget.
     let document = svg_document(

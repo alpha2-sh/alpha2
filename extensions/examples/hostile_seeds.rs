@@ -33,8 +33,9 @@ fn main() -> std::io::Result<()> {
 #[cfg(feature = "svg")]
 fn svg_seeds() -> Seeds {
     use hostile::{
-        SvgLink, svg_doubling_masks, svg_entity_attribute, svg_entity_elements,
-        svg_nested_entity_elements, svg_nested_images, svg_reference_chain,
+        SvgLink, svg_dashed_copies, svg_dense_zigzag, svg_doubling_masks, svg_entity_attribute,
+        svg_entity_elements, svg_nested_entity_elements, svg_nested_images, svg_outline,
+        svg_reference_chain,
     };
     let rings = SvgLink::ALL.map(|link| {
         let name = match link {
@@ -54,6 +55,9 @@ fn svg_seeds() -> Seeds {
             svg_reference_chain(SvgLink::Mask, 400, false).into(),
         ),
         ("doubling-masks.svg", svg_doubling_masks(22).into()),
+        ("dashed-copies.svg", svg_dashed_copies(100, 100).into()),
+        ("dense-zigzag.svg", svg_dense_zigzag(300_000).into()),
+        ("outline.svg", svg_outline(50_000).into()),
         (
             "entity-attribute.svg",
             svg_entity_attribute(100_000, 255, 100).into(),

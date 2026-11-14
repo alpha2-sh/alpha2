@@ -45,6 +45,59 @@ pub(crate) fn svg_entity_attribute(text: usize, mid: usize, top: usize) -> Strin
     )
 }
 
+/// A 1920 x 1080 SVG that draws a 200,000-pixel line dashed every half pixel, `copies` times
+/// through one group of `use` copies of `inner` copies.
+#[cfg(feature = "svg")]
+pub(crate) fn svg_dashed_copies(inner: usize, outer: usize) -> String {
+    format!(
+        concat!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080"><defs>"#,
+            r#"<path id="l" d="M -200000 5 H 1" stroke="red" stroke-dasharray="0.25"/>"#,
+            r#"<g id="g">{}</g></defs>{}</svg>"#
+        ),
+        r##"<use href="#l"/>"##.repeat(inner),
+        r##"<use href="#g"/>"##.repeat(outer)
+    )
+}
+
+/// A 1920 x 1080 SVG of one filled zig-zag of `segments` segments inside a 1 x 1 box.
+#[cfg(feature = "svg")]
+pub(crate) fn svg_dense_zigzag(segments: usize) -> String {
+    use std::fmt::Write as _;
+    let mut path = String::from("M 100 100");
+    for at in 0..segments {
+        let x = 100.0 + f64::from(u32::try_from(at * 7919 % 1000).expect("small")) / 1000.0;
+        let y = 100.0 + f64::from(u8::from(at % 2 == 1));
+        let _ = write!(path, " L {x:.3} {y}");
+    }
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080"><path d="{path} Z" fill="red" fill-opacity=".5"/></svg>"#
+    )
+}
+
+/// A 1920 x 1080 SVG of one filled polygon of `segments` vertices around the canvas.
+#[cfg(feature = "svg")]
+pub(crate) fn svg_outline(segments: usize) -> String {
+    use std::fmt::Write as _;
+    let mut path = String::new();
+    for at in 0..segments {
+        let turn = f64::from(u32::try_from(at).expect("small"))
+            / f64::from(u32::try_from(segments).expect("small"))
+            * std::f64::consts::TAU;
+        let radius = 500.0 + 20.0 * f64::from(u8::from(at % 2 == 1));
+        let command = if at == 0 { "M" } else { "L" };
+        let _ = write!(
+            path,
+            "{command} {:.3} {:.3} ",
+            960.0 + radius * turn.cos(),
+            540.0 + radius * turn.sin()
+        );
+    }
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080"><path d="{path}Z" fill="red" fill-opacity=".5"/></svg>"#
+    )
+}
+
 /// An SVG that draws `inner` as `count` separate `data:` SVG images.
 #[cfg(feature = "svg")]
 pub(crate) fn svg_nested_images(inner: &str, count: usize) -> String {
