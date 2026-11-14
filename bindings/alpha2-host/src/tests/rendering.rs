@@ -921,3 +921,57 @@ fn each_export_renders_the_runtime_effects_its_own_request_defines() {
     assert_eq!(error.code, "INVALID_INPUT", "{}", error.message);
     std::fs::remove_dir_all(&directory).ok();
 }
+
+/// A red 10-bit RGB source exports red on both renderers, its codes scaled to full range.
+#[test]
+fn a_ten_bit_rgb_source_exports_its_colour_on_both_renderers() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("rgb10");
+    let end = alpha2_time::TICKS_PER_SECOND / 5;
+    for (name, renderer) in [
+        ("gpu", crate::config::RendererPolicy::Gpu),
+        ("cpu", crate::config::RendererPolicy::Cpu),
+    ] {
+        let output = directory.join(format!("{name}.mp4"));
+        let request = json!({
+            "protocolVersion": 2, "operation": "export", "requestId": name,
+            "project": {
+                "schema_version": 1, "id": "rgb10", "name": "RGB",
+                "settings": {"width": 64, "height": 48, "frame_rate": {"num": 25, "den": 1}, "sample_rate": 48000},
+                "sources": [{"id": "video", "locator": "asset://video", "kind": "video"}],
+                "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                    "id": "clip", "source_id": "video",
+                    "timeline_range": {"start": 0, "end": end},
+                    "source_range": {"start": 0, "end": end}
+                }]}]}
+            },
+            "assets": {"video": corpus("rgb10-bt2020.mkv")},
+            "startTicks": 0, "endTicks": end,
+            "frameRate": {"num": 25, "den": 1},
+            "includeAudio": false,
+            "videoCodec": "mpeg4-part2",
+            "videoQuality": "very-high",
+            "output": output
+        });
+        let mut host =
+            crate::create_host_with(VideoDecodePolicy::Software, renderer).expect("host");
+        host.handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |_| Ok(()),
+        )
+        .expect("export");
+        let frames = decoded_planes(&output);
+        assert!(!frames.is_empty(), "{name}");
+        for planes in frames {
+            let mean = |plane: &Vec<u8>| {
+                plane.iter().map(|value| u64::from(*value)).sum::<u64>() / plane.len() as u64
+            };
+            let (y, u, v) = (mean(&planes[0]), mean(&planes[1]), mean(&planes[2]));
+            // BT.709 limited red is Y 63, Cb 102, Cr 240.
+            assert!(
+                y.abs_diff(63) <= 6 && u.abs_diff(102) <= 6 && v.abs_diff(240) <= 6,
+                "{name}: Y {y} Cb {u} Cr {v}"
+            );
+        }
+    }
+}

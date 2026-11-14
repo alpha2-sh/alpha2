@@ -831,3 +831,131 @@ fn malformed_planes_and_presentations_are_refused_before_they_reach_the_gpu() {
         .expect("the repacks the GPU ran check out");
     assert!(pollster::block_on(scope.pop()).is_none());
 }
+
+/// Planes tagged with the identity matrix, low aligned at `depth` bits: white, red, green, blue,
+/// mid grey, black, white, white over 4x2.
+#[derive(Debug)]
+struct RgbPlanes {
+    depth: u8,
+    planes: [Vec<u8>; 3],
+}
+
+impl RgbPlanes {
+    const SHOWN: [[u8; 3]; 8] = [
+        [255, 255, 255],
+        [255, 0, 0],
+        [0, 255, 0],
+        [0, 0, 255],
+        [127, 127, 127],
+        [0, 0, 0],
+        [255, 255, 255],
+        [255, 255, 255],
+    ];
+
+    fn new(depth: u8) -> Self {
+        let max = (1_u32 << depth) - 1;
+        let code = |shown: u8| match shown {
+            255 => max,
+            127 => max / 2,
+            _ => 0,
+        };
+        let plane = |channel: usize| -> Vec<u8> {
+            Self::SHOWN
+                .iter()
+                .flat_map(|pixel| {
+                    let value = code(pixel[channel]);
+                    if depth > 8 {
+                        u16::try_from(value).expect("code").to_le_bytes().to_vec()
+                    } else {
+                        vec![u8::try_from(value).expect("code")]
+                    }
+                })
+                .collect()
+        };
+        Self {
+            depth,
+            planes: [plane(0), plane(1), plane(2)],
+        }
+    }
+}
+
+impl crate::YuvPlanes for RgbPlanes {
+    fn frame(&self) -> crate::YuvFrame<'_> {
+        let stride = if self.depth > 8 { 8 } else { 4 };
+        let plane = |bytes| crate::SourcePlane { bytes, stride };
+        crate::YuvFrame {
+            format: alpha2_media::YuvFormat::planar(0, 0, self.depth),
+            planes: [
+                plane(&self.planes[0]),
+                plane(&self.planes[1]),
+                plane(&self.planes[2]),
+            ],
+            alpha_plane: None,
+            size: RenderSize::new(4, 2).expect("size"),
+            alpha: 1.0,
+            color: Some(ColorMetadata {
+                primaries: ColorPrimaries::Bt709,
+                transfer: TransferFunction::Bt709,
+                matrix: ColorMatrix::Rgb,
+                range: ColorRange::Full,
+                dynamic_range: DynamicRange::Sdr,
+            }),
+        }
+    }
+}
+
+#[test]
+fn gpu_planes_tagged_rgb_keep_their_code_scale_at_every_depth() {
+    use crate::YuvPlanes;
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    for depth in [8, 10, 12, 16] {
+        let planes = RgbPlanes::new(depth);
+        let pixels = present_yuv(&renderer, planes.frame(), ChromaLocation::Unspecified);
+        assert_rgb_close(&pixels, &RgbPlanes::SHOWN, &format!("{depth} bits"));
+    }
+    // Without 16-bit normalized textures the planes upload as `Uint16`.
+    renderer
+        .features
+        .remove(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
+    for depth in [10, 12, 16] {
+        let planes = RgbPlanes::new(depth);
+        let pixels = present_yuv(&renderer, planes.frame(), ChromaLocation::Unspecified);
+        assert_rgb_close(
+            &pixels,
+            &RgbPlanes::SHOWN,
+            &format!("{depth} bits as Uint16"),
+        );
+    }
+}
+
+#[test]
+fn cpu_planes_tagged_rgb_keep_their_code_scale_at_every_depth() {
+    let cpu = crate::CpuRenderer::new(1);
+    for depth in [8, 10, 12, 16] {
+        let size = RenderSize::new(4, 2).expect("size");
+        let presentation = SourcePresentation {
+            chroma_siting: ChromaLocation::Unspecified,
+            ..SourcePresentation::identity(size)
+        };
+        let (source, _) = cpu
+            .present_yuv(
+                Arc::new(RgbPlanes::new(depth)),
+                presentation,
+                ColorPolicy::RejectHdr,
+            )
+            .expect("CPU presents");
+        let mut graph = RenderGraph::new(size);
+        let node = graph.add_source(SourceView::cpu(&source));
+        let output = graph
+            .add_composite(vec![GraphLayer {
+                source: node,
+                visual: visual([1.0, 1.0], 1.0),
+                blend_mode: BlendMode::Normal,
+            }])
+            .expect("composite");
+        graph.set_output(output).expect("output");
+        let pixels = cpu.execute_graph(&graph).expect("CPU draws").read_rgba8();
+        assert_rgb_close(&pixels, &RgbPlanes::SHOWN, &format!("CPU {depth} bits"));
+    }
+}

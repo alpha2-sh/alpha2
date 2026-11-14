@@ -91,6 +91,8 @@ All notable changes to this project are documented in this file.
   memory-safety fix and updating is the only remedy. Odd-width alpha sources change in color by
   about one code value. Encoding RGBA frames of 6 pixels or less across through `alpha2 transcode`
   or the crate's encode sinks wrote past a buffer the same way.
+- Video stored as red, green and blue planes at 9 to 15 bits (for example FFV1 `gbrp10le`) is
+  drawn at its full level on both renderers; it rendered almost black.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.
