@@ -469,9 +469,10 @@ pub struct Sequence {
     pub id: Option<String>,
     /// The children, in play order.
     pub children: Vec<Node>,
-    /// What joins neighbours: a transition overlaps them by its duration.
-    /// Default `none`. Only single pictures (media, text, color, layout)
-    /// can transition into each other.
+    /// What joins neighbours: a transition overlaps them by its duration, and their sound
+    /// crosses over it. Default `none`. Only single pictures (media, text, color, layout) can
+    /// transition into each other; anything else, or a part shorter than the transition,
+    /// joins by crossfade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<TransitionChoice>,
     /// Seconds from the parent's start (an overlay's: the video's). Ignored in a sequence.

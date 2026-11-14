@@ -7189,7 +7189,7 @@
                   "type": "null"
                 }
               ],
-              "description": "What joins neighbours: a transition overlaps them by its duration.\nDefault `none`. Only single pictures (media, text, color, layout)\ncan transition into each other."
+              "description": "What joins neighbours: a transition overlaps them by its duration, and their sound\ncrosses over it. Default `none`. Only single pictures (media, text, color, layout) can\ntransition into each other; anything else, or a part shorter than the transition,\njoins by crossfade."
             },
             "type": {
               "const": "sequence",

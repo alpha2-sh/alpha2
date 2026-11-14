@@ -220,6 +220,9 @@ All notable changes to this project are documented in this file.
   compiled project is not valid" and no path.
 - A compose zoom (including a slideshow's `ken_burns`) on a video shorter than its node runs once
   over the node; it no longer restarts on the held last frame.
+- The sound of the two sides of a compose sequence join crosses over the transition (equal-power
+  fades, or a clip's own longer fade); both sounds played at full level over the overlap and the
+  outgoing one stopped without a fade.
 
 ## [0.6.0] - 2026-11-08
 

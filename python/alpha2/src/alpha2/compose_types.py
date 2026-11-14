@@ -1326,9 +1326,10 @@ class NodeSequence(TypedDict):
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     transition: NotRequired[TransitionChoice | None]
-    """What joins neighbours: a transition overlaps them by its duration.
-    Default `none`. Only single pictures (media, text, color, layout)
-    can transition into each other.
+    """What joins neighbours: a transition overlaps them by its duration, and their sound
+    crosses over it. Default `none`. Only single pictures (media, text, color, layout) can
+    transition into each other; anything else, or a part shorter than the transition,
+    joins by crossfade.
     """
     type: Literal["sequence"]
 

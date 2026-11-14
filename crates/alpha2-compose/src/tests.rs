@@ -1823,3 +1823,65 @@ fn a_zoom_runs_over_its_node_across_a_held_last_frame() {
         assert_eq!(times, [start, start + 12 * SECOND], "clip {index}");
     }
 }
+
+/// Each sounding clip's `(fade_in, fade_out, fade_shape)`, track by track.
+fn sound_fades(compiled: &Value) -> Vec<(i64, i64, String)> {
+    tracks(compiled)
+        .iter()
+        .flat_map(|track| track["clips"].as_array().into_iter().flatten())
+        .filter(|clip| clip["audio"]["muted"] != true && clip["time_map"]["type"] != "freeze")
+        .map(|clip| {
+            let audio = &clip["audio"];
+            (
+                audio["fade_in"].as_i64().expect("ticks"),
+                audio["fade_out"].as_i64().expect("ticks"),
+                audio["fade_shape"].as_str().expect("shape").to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_sound_of_two_joined_clips_crosses_over_their_transition() {
+    let joined = |transition: Value, second: Value| {
+        compile(
+            &json!({"body": {"type": "sequence", "transition": transition, "children": [
+            {"type": "media", "path": "wide.mp4", "duration": 6}, second]}}),
+        )
+    };
+    let talk = json!({"type": "media", "path": "talk.mp4", "duration": 6});
+    let equal = "equal_power".to_owned();
+    for transition in [
+        json!({"type": "crossfade", "duration": 1}),
+        json!({"type": "wipe-left", "duration": 1}),
+    ] {
+        assert_eq!(
+            sound_fades(&joined(transition, talk.clone())),
+            [(0, SECOND, equal.clone()), (SECOND, 0, equal.clone())]
+        );
+    }
+    let cut = sound_fades(&joined(json!("cut"), talk));
+    assert_eq!(
+        cut,
+        [(0, 0, "linear".to_owned()), (0, 0, "linear".to_owned())]
+    );
+    let muted = joined(
+        json!({"type": "crossfade", "duration": 1}),
+        json!({"type": "media", "path": "talk.mp4", "duration": 6, "muted": true}),
+    );
+    let quiet = visual_clips(&muted)
+        .into_iter()
+        .find(|clip| clip["audio"]["muted"] == true)
+        .expect("the muted clip");
+    assert_eq!(quiet["audio"]["fade_in"], 0);
+    // An audio node keeps its own longer fade and its linear shape.
+    let sounds = compile(&json!({"body": {"type": "sequence",
+    "transition": {"type": "crossfade", "duration": 1}, "children": [
+        {"type": "audio", "path": "music.m4a", "duration": 5, "fade_out": 2},
+        {"type": "audio", "path": "music.m4a", "duration": 5},
+    ]}}));
+    assert_eq!(
+        sound_fades(&sounds),
+        [(0, 2 * SECOND, "linear".to_owned()), (SECOND, 0, equal)]
+    );
+}

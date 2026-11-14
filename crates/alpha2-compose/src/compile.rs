@@ -782,6 +782,16 @@ impl<'a> Context<'a> {
                 ..slot.clone()
             };
             self.emit(child, &child_slot, &mut fresh)?;
+            // Compose owns the sound at a join: the two sides cross over the transition.
+            let followed = overlap > 0
+                && index + 1 < sequence.children.len()
+                && start + length - overlap < end;
+            self.fade_join(
+                &mut fresh,
+                (start, start + len),
+                if joined { overlap } else { 0 },
+                if followed { overlap } else { 0 },
+            );
             let placed = if engine_transition {
                 let from = outgoing.take().expect("a transition follows a picture");
                 let mut visual = std::mem::take(&mut fresh.visual).into_iter();
@@ -830,6 +840,53 @@ impl<'a> Context<'a> {
         }
         out.stack(lanes);
         Ok(())
+    }
+
+    /// Fades in the sound of every clip of `lanes` that starts at `start` over `fade_in`, and
+    /// fades out every one that ends at `end` over `fade_out`, each at most the clip's length.
+    /// A clip without fades of its own fades at equal power.
+    fn fade_join(&self, lanes: &mut Lanes, (start, end): (i64, i64), fade_in: i64, fade_out: i64) {
+        if fade_in == 0 && fade_out == 0 {
+            return;
+        }
+        for clip in lanes
+            .visual
+            .iter_mut()
+            .chain(&mut lanes.audio)
+            .filter(|lane| lane.raw.is_none())
+            .flat_map(|lane| &mut lane.clips)
+        {
+            let sounds = !clip.audio.muted
+                && !matches!(clip.time_map, TimeMap::Freeze { .. })
+                && self
+                    .sources
+                    .iter()
+                    .any(|source| source.id == clip.source_id && source.is_audible());
+            if !sounds {
+                continue;
+            }
+            let (from, to) = (
+                clip.timeline_range.start().ticks(),
+                clip.timeline_range.end().ticks(),
+            );
+            let length = to - from;
+            let audio = &mut clip.audio;
+            let own = audio.fade_in.ticks() > 0 || audio.fade_out.ticks() > 0;
+            let mut faded = false;
+            if fade_in > 0 && from == start {
+                let ticks = audio.fade_in.ticks().max(fade_in.min(length));
+                audio.fade_in = MediaTime::from_ticks(ticks);
+                faded = true;
+            }
+            if fade_out > 0 && to == end {
+                let ticks = audio.fade_out.ticks().max(fade_out.min(length));
+                audio.fade_out = MediaTime::from_ticks(ticks);
+                faded = true;
+            }
+            if faded && !own {
+                audio.fade_shape = alpha2_model::FadeShape::EqualPower;
+            }
+        }
     }
 
     fn emit_stack(
