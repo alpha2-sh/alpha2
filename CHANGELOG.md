@@ -435,6 +435,9 @@ All notable changes to this project are documented in this file.
 - Edit operations: a ripple keeps the shape of track and master automation across a cut. Hold and
   eased segments that a removed range crossed became linear ramps (and an eased segment before the
   cut changed too); each kept key now takes the part of the old curve up to the next key.
+- Edit operations: cutting a linear timeline-anchored sample set keys the value just before each
+  cut as well as just after it, in the engine and in `alpha2/edit`; before, the last kept sample
+  interpolated toward the value after the cut, so values before the cut changed.
 
 ## [0.6.0] - 2026-11-08
 

@@ -1,6 +1,8 @@
 //! Cutting a clip into parts that each continue its source and time map.
 
-use alpha2_model::{Clip, ClipId, DataSet, DataValues, LoopMode, Project, TimeMap};
+use alpha2_model::{
+    Clip, ClipId, DataInterpolation, DataSet, DataValues, LoopMode, Project, TimeMap,
+};
 use alpha2_time::{MediaTime, TimeRange};
 use std::collections::HashSet;
 
@@ -194,7 +196,8 @@ pub(super) fn moved(mut part: Clip, delta: i64) -> Clip {
 }
 
 /// A timeline-anchored set with the removed ranges cut out and later times moved left. A sample
-/// set keeps, at each cut, the value read just after it, so the kept side reads as before.
+/// set keeps, at each cut, the value read just after it (and a linear set the value just before
+/// it), so both kept sides read as before.
 pub(super) fn cut_data(set: &mut DataSet, removal: &[(i64, i64)]) {
     let new_time = |tick: i64| super::new_time(tick, removal);
     match &mut set.values {
@@ -217,20 +220,28 @@ pub(super) fn cut_data(set: &mut DataSet, removal: &[(i64, i64)]) {
                     ));
                 }
             }
-            for (_, to) in removal {
-                let Some(at) = new_time(*to) else { continue };
-                if entries.iter().any(|(tick, _)| *tick == at) {
-                    continue;
+            // A linear set also keys the tick before each cut, so the line before it keeps its
+            // slope; the pair one tick apart is the step.
+            let linear = samples.interpolation == DataInterpolation::Linear;
+            let first = samples.times[0].ticks();
+            for (from, to) in removal {
+                let before = (linear && *from > first).then_some(from - 1);
+                for read in before.into_iter().chain([*to]) {
+                    let Some(at) = new_time(read) else { continue };
+                    if entries.iter().any(|(tick, _)| *tick == at) {
+                        continue;
+                    }
+                    let held = (0..channels)
+                        .flat_map(|channel| {
+                            crate::sample_channel(samples, channel, arity, MediaTime(read))
+                                .map_or_else(
+                                    || vec![None; arity],
+                                    |values| values.into_iter().map(Some).collect(),
+                                )
+                        })
+                        .collect::<Vec<_>>();
+                    entries.push((at, held));
                 }
-                let held = (0..channels)
-                    .flat_map(|channel| {
-                        crate::sample_channel(samples, channel, arity, MediaTime(*to)).map_or_else(
-                            || vec![None; arity],
-                            |values| values.into_iter().map(Some).collect(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                entries.push((at, held));
             }
             entries.sort_by_key(|(tick, _)| *tick);
             samples.times = entries.iter().map(|(tick, _)| MediaTime(*tick)).collect();

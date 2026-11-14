@@ -9867,8 +9867,8 @@
           "anchor": { "type": "timeline" },
           "channels": ["level"],
           "interpolation": "linear",
-          "times": [0, 120000, 160000, 340000],
-          "values": [0, 0.4, 0.5, 0.95]
+          "times": [0, 119999, 120000, 160000, 340000],
+          "values": [0, 0.2999975, 0.4, 0.5, 0.95]
         },
         {
           "id": "said",

@@ -114,7 +114,7 @@ const { project: tight } = await client.edit(project, {
 });
 ```
 
-Kept moments render as before for clip picture and sound, clip keyframes, captions, hold data and track and master automation, a matte or a binding read through another clip follows the part beside it or the edit is refused (`matte_source`, `read_through`), and `projectJson` is the same bytes on every surface. The host protocol lists what is not exact in this release. A refusal rejects with `INVALID_INPUT`, whose `refusal` names why (`unknown_data`, `empty_target`, ...). [The host protocol](../../docs/host-protocol.md#edit) lists the fields.
+Kept moments render as before for clip picture and sound, clip keyframes, captions, timeline-anchored data and track and master automation, a matte or a binding read through another clip follows the part beside it or the edit is refused (`matte_source`, `read_through`), and `projectJson` is the same bytes on every surface. The host protocol lists what is not exact in this release. A refusal rejects with `INVALID_INPUT`, whose `refusal` names why (`unknown_data`, `empty_target`, ...). [The host protocol](../../docs/host-protocol.md#edit) lists the fields.
 
 ## Software H.264 (OpenH264)
 

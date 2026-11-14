@@ -970,3 +970,65 @@ fn kept_moments_hold_with_bus_automation_under_a_timeline_ripple() {
         kept_moments_hold(&project, &edited, &report, true);
     }
 }
+
+#[test]
+fn a_timeline_sample_set_reads_as_before_at_every_kept_tick() {
+    for interpolation in ["linear", "hold"] {
+        let project = load(&json!({
+            "schema_version": 1, "id": "p", "name": "P",
+            "settings": { "width": 640, "height": 360, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+            "sources": [{ "id": "a", "kind": "audio", "locator": "a.m4a" }],
+            "timeline": { "tracks": [{ "id": "t-audio", "name": "A", "kind": "audio",
+                "clips": [clip("au", "a", (0, 600), (0, 600), &json!({ "type": "forward" }))] }] },
+            "data": [{ "id": "ramp", "anchor": { "type": "timeline" }, "kind": "points",
+                       "interpolation": interpolation, "channels": ["x", "y"],
+                       "times": [0, 100 * FRAME, 300 * FRAME],
+                       "values": [0.0, 1.0, 4.0, 5.0, 10.0, 3.0, 6.0, 2.0, 2.0, 8.0, null, null] }]
+        }));
+        let read = |project: &Project, tick: i64| {
+            let samples = project.data[0].values.samples().expect("samples");
+            (0..2)
+                .map(|channel| crate::sample_channel(samples, channel, 2, MediaTime(tick)))
+                .collect::<Vec<_>>()
+        };
+        let target = Target::Track(alpha2_model::TrackId::new("t-audio").expect("id"));
+        for ranges in [
+            vec![(120, 180)],
+            vec![(10, 20), (90, 110), (250, 260)],
+            vec![(280, 350)],
+            vec![(400, 450)],
+        ] {
+            let (edited, _) = remove(
+                &project,
+                timeline_list(&ranges),
+                target.clone(),
+                Ripple::Timeline,
+            );
+            let removed = ranges
+                .iter()
+                .map(|(from, to)| (from * FRAME, to * FRAME))
+                .collect::<Vec<_>>();
+            for tick in (0..600 * FRAME).step_by(331) {
+                let Some(at) = new_time(tick, &removed) else {
+                    continue;
+                };
+                let (before, after) = (read(&project, tick), read(&edited, at));
+                let close =
+                    before
+                        .iter()
+                        .zip(&after)
+                        .all(|(before, after)| match (before, after) {
+                            (Some(before), Some(after)) => {
+                                before.iter().zip(after).all(|(a, b)| (a - b).abs() < 1e-5)
+                            }
+                            (None, None) => true,
+                            _ => false,
+                        });
+                assert!(
+                    close,
+                    "{interpolation} {ranges:?} at {tick}: {before:?} {after:?}"
+                );
+            }
+        }
+    }
+}
