@@ -639,6 +639,9 @@ All notable changes to this project are documented in this file.
   such track was refused as "an unreadable VP9 configuration".
 - iOS: an H.264 source whose sequence parameter set declares an impossible bit depth is refused as
   unreadable. Before, opening it panicked the thread that opened it.
+- iOS: an AAC export of a project at 24 kHz or below encodes at the highest bitrate the system's
+  encoder lists at or below the one asked for, instead of failing; the export report states it in
+  `audioBitrate` (on Android too).
 
 ## [0.6.0] - 2026-11-08
 

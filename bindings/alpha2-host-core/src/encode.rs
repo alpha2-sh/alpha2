@@ -167,6 +167,9 @@ pub trait AudioEncodeBackend: Send {
     /// Samples per channel in each frame it takes.
     fn frame_size(&self) -> usize;
 
+    /// The bits per second it encodes at: the configured rate, or the nearest the encoder takes.
+    fn bitrate(&self) -> u32;
+
     /// Queues one frame of planar samples starting at sample `pts` of the encoded stream; only
     /// the last frame may be short.
     ///

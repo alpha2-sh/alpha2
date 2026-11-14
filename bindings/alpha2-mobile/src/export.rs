@@ -334,6 +334,7 @@ fn attempt(
         None
     };
     let audio_encoder_name = audio.as_ref().map(|(encoder, _)| encoder.name().to_owned());
+    let audio_bitrate = audio.as_ref().map(|(encoder, _)| encoder.bitrate());
     let mut sink = EncodeSink::new(
         writer(container, file),
         video_encoder,
@@ -448,6 +449,7 @@ fn attempt(
         "softwareRetry": software,
         "audioCodec": audio_encoder_name.as_ref().map(|_| audio_codec.as_str()),
         "audioEncoder": audio_encoder_name,
+        "audioBitrate": audio_bitrate,
         "renderer": drawing.name(),
         "surfaceFrames": surface_frames,
         "frames": frames,
@@ -858,6 +860,10 @@ mod tests {
             1_024
         }
 
+        fn bitrate(&self) -> u32 {
+            128_000
+        }
+
         fn submit(
             &mut self,
             pts: i64,
@@ -1035,6 +1041,7 @@ mod tests {
         let report: serde_json::Value =
             serde_json::from_str(&outcome.expect("exported").report_json).expect("report");
         assert_eq!(report["softwareRetry"], true);
+        assert_eq!(report["audioBitrate"], 128_000);
         assert_eq!(report["hardwareEncoder"], false);
         assert_eq!(opened(&encoders), (vec![false, true], 2));
         let _ = std::fs::remove_file(output);

@@ -19,8 +19,8 @@ use bytes::Bytes;
 use objc2_audio_toolbox::{
     AudioConverterFillComplexBuffer, AudioConverterGetProperty, AudioConverterGetPropertyInfo,
     AudioConverterNew, AudioConverterRef, AudioConverterSetProperty, AudioFormatGetProperty,
-    kAudioConverterCompressionMagicCookie, kAudioConverterEncodeBitRate,
-    kAudioConverterInputChannelLayout, kAudioConverterPrimeInfo,
+    kAudioConverterApplicableEncodeBitRates, kAudioConverterCompressionMagicCookie,
+    kAudioConverterEncodeBitRate, kAudioConverterInputChannelLayout, kAudioConverterPrimeInfo,
     kAudioConverterPropertyMaximumOutputPacketSize,
     kAudioFormatProperty_AvailableEncodeSampleRates, kAudioFormatProperty_EncodeFormatIDs,
     kAudioFormatProperty_FormatInfo,
@@ -123,24 +123,10 @@ const fn format_id(codec: AudioCodec) -> u32 {
 /// `kAudioFormatProperty_AvailableEncodeSampleRates` as [`encoder_sample_rate`] picks; `None` when
 /// it lists none.
 fn encode_rate(id: u32, project_rate: u32) -> Option<u32> {
-    let ranges = format_property(
+    let ranges = value_ranges(&format_property(
         kAudioFormatProperty_AvailableEncodeSampleRates,
         &id.to_ne_bytes(),
-    )?;
-    // `AudioValueRange`s: a minimum and a maximum `f64` each.
-    let ranges = ranges
-        .as_chunks::<16>()
-        .0
-        .iter()
-        .map(|range| {
-            let bound = |at: usize| {
-                let mut bytes = [0; 8];
-                bytes.copy_from_slice(&range[at..at + 8]);
-                f64::from_ne_bytes(bytes)
-            };
-            (bound(0), bound(8))
-        })
-        .collect::<Vec<_>>();
+    )?);
     if ranges.is_empty() {
         return None;
     }
@@ -160,6 +146,42 @@ fn encode_rate(id: u32, project_rate: u32) -> Option<u32> {
     Some(encoder_sample_rate(Some(&rates), project_rate))
 }
 
+/// The minimum and maximum of each `AudioValueRange` in `bytes`.
+fn value_ranges(bytes: &[u8]) -> Vec<(f64, f64)> {
+    bytes
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .map(|range| {
+            let bound = |at: usize| {
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&range[at..at + 8]);
+                f64::from_ne_bytes(bytes)
+            };
+            (bound(0), bound(8))
+        })
+        .collect()
+}
+
+/// The bitrate to set for `requested` given the `ranges` an encoder lists: the highest value at
+/// or below the request, else the lowest listed; the request when nothing is listed.
+fn applicable_bitrate(ranges: &[(f64, f64)], requested: u32) -> u32 {
+    let wanted = f64::from(requested);
+    let below = ranges
+        .iter()
+        .filter(|(minimum, _)| *minimum <= wanted)
+        .map(|(_, maximum)| maximum.min(wanted))
+        .max_by(f64::total_cmp);
+    let lowest = ranges
+        .iter()
+        .map(|(minimum, _)| *minimum)
+        .min_by(f64::total_cmp);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    below
+        .or(lowest)
+        .map_or(requested, |rate| rate.round() as u32)
+}
+
 /// An `OpusHead` (RFC 7845 5.1) for channel mapping family 0.
 fn opus_head(channels: u8, pre_skip: u16, rate: u32) -> Bytes {
     let mut head = b"OpusHead".to_vec();
@@ -177,6 +199,7 @@ pub struct AudioToolboxEncoder {
     converter: Converter,
     name: &'static str,
     rate: u32,
+    bitrate: u32,
     channels: usize,
     frame_size: usize,
     priming: u32,
@@ -382,20 +405,21 @@ impl AudioToolboxEncoder {
         if channels > 2 {
             set_input_layout(&converter, name, config.speakers)?;
         }
+        // The encoder refuses a rate it does not list (192 kbit/s stereo AAC at 24 kHz and below).
+        let listed = property_bytes(converter.0, kAudioConverterApplicableEncodeBitRates)
+            .map(|bytes| value_ranges(&bytes))
+            .unwrap_or_default();
+        let bitrate = applicable_bitrate(&listed, config.bitrate);
         let status = set_property(
             &converter,
             kAudioConverterEncodeBitRate,
-            &mut config.bitrate.to_ne_bytes(),
+            &mut bitrate.to_ne_bytes(),
         );
         if status != 0 {
             return Err(refused(
                 name,
                 OpenFailureKind::Unsuitable,
-                format!(
-                    "{} bit/s was refused ({})",
-                    config.bitrate,
-                    sys::status(status)
-                ),
+                format!("{bitrate} bit/s was refused ({})", sys::status(status)),
             ));
         }
         // The encoder delay, which the round trip test pins: 2112 samples for AAC, 312 for Opus.
@@ -409,9 +433,10 @@ impl AudioToolboxEncoder {
             })?;
         let codec_private = match config.codec {
             AudioCodec::Aac => {
-                let cookie = cookie(converter.0).ok_or_else(|| {
-                    refused(name, OpenFailureKind::Unknown, "no magic cookie".into())
-                })?;
+                let cookie = property_bytes(converter.0, kAudioConverterCompressionMagicCookie)
+                    .ok_or_else(|| {
+                        refused(name, OpenFailureKind::Unknown, "no magic cookie".into())
+                    })?;
                 Bytes::copy_from_slice(es_specific_info(&cookie).ok_or_else(|| {
                     refused(
                         name,
@@ -434,6 +459,7 @@ impl AudioToolboxEncoder {
             converter,
             name,
             rate,
+            bitrate,
             channels,
             frame_size,
             priming,
@@ -506,18 +532,12 @@ impl AudioToolboxEncoder {
     }
 }
 
-/// The converter's magic cookie.
-fn cookie(converter: AudioConverterRef) -> Option<Vec<u8>> {
+/// A converter property of variable size.
+fn property_bytes(converter: AudioConverterRef, id: u32) -> Option<Vec<u8>> {
     let mut size = 0_u32;
     // SAFETY: valid out pointers; the converter is live.
-    let status = unsafe {
-        AudioConverterGetPropertyInfo(
-            converter,
-            kAudioConverterCompressionMagicCookie,
-            &raw mut size,
-            ptr::null_mut(),
-        )
-    };
+    let status =
+        unsafe { AudioConverterGetPropertyInfo(converter, id, &raw mut size, ptr::null_mut()) };
     if status != 0 || size == 0 {
         return None;
     }
@@ -526,7 +546,7 @@ fn cookie(converter: AudioConverterRef) -> Option<Vec<u8>> {
     let status = unsafe {
         AudioConverterGetProperty(
             converter,
-            kAudioConverterCompressionMagicCookie,
+            id,
             NonNull::from(&mut size),
             NonNull::new(bytes.as_mut_ptr().cast())?,
         )
@@ -548,6 +568,10 @@ impl AudioEncodeBackend for AudioToolboxEncoder {
 
     fn frame_size(&self) -> usize {
         self.frame_size
+    }
+
+    fn bitrate(&self) -> u32 {
+        self.bitrate
     }
 
     fn submit(&mut self, _pts: i64, planes: &[Vec<f32>]) -> Result<Submit, EncodeError> {

@@ -563,3 +563,49 @@ fn settling_mid_stream_keeps_every_frame() {
         assert!(failures.is_empty(), "{codec:?}: {failures:#?}");
     }
 }
+
+#[test]
+fn aac_takes_the_highest_listed_bitrate_at_or_below_the_request() {
+    // The top of the encoder's list for stereo at each rate, as this system's encoder lists it.
+    let tops = [
+        (8_000, 48_000),
+        (11_025, 64_000),
+        (12_000, 64_000),
+        (16_000, 96_000),
+        (22_050, 128_000),
+        (24_000, 128_000),
+        (32_000, 192_000),
+        (44_100, 320_000),
+        (48_000, 320_000),
+    ];
+    let open = |project_rate: u32, channels: usize, bitrate: u32| {
+        let config = AudioEncodeConfig {
+            codec: AudioCodec::Aac,
+            project_rate,
+            speakers: SpeakerLayout::default_for(channels).expect("layout"),
+            bitrate,
+        };
+        AppleAudioEncoders
+            .open(&config)
+            .map(|encoder| encoder.bitrate())
+            .map_err(|error| format!("{project_rate} Hz, {channels} channels, {bitrate}: {error}"))
+    };
+    let mut failures = Vec::new();
+    for (rate, top) in tops {
+        for asked in [192_000, 256_000] {
+            let expected = Ok(asked.min(top));
+            let applied = open(rate, 2, asked);
+            if applied != expected {
+                failures.push(format!(
+                    "{rate} Hz at {asked}: {applied:?}, not {expected:?}"
+                ));
+            }
+        }
+    }
+    // Mono at 8 kHz lists 8 to 24 kbit/s.
+    let mono = open(8_000, 1, 192_000);
+    if mono != Ok(24_000) {
+        failures.push(format!("mono 8000 Hz: {mono:?}"));
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}

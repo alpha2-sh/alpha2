@@ -184,6 +184,10 @@ impl AudioEncodeBackend for Audio {
         1_024
     }
 
+    fn bitrate(&self) -> u32 {
+        128_000
+    }
+
     fn submit(&mut self, pts: i64, planes: &[Vec<f32>]) -> Result<Submit, EncodeError> {
         assert_eq!(planes.len(), 2);
         if self.fails {
