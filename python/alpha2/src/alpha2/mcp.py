@@ -1,7 +1,9 @@
 """An MCP server over standard input and output, run as ``python -m alpha2 mcp``.
 
 Specs and templates compile in this process and ``alpha2-host`` renders. Relative paths are read
-from the server's working directory.
+from the server's working directory. Every request with an ``id`` gets one reply: a failure inside a
+tool is a tool error, any other a JSON-RPC error, and only the end of input, ``KeyboardInterrupt``
+or ``SystemExit`` ends the server.
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from __future__ import annotations
 import base64
 import functools
 import json
+import math
 import sys
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -18,7 +21,7 @@ from typing import IO, Any, cast
 
 from . import _native
 from . import compose as _compose
-from .builder import TICKS_PER_SECOND
+from .builder import TICKS_PER_SECOND, seconds_to_ticks, ticks
 from .client import HostClient
 from .errors import Alpha2ComposeError, Alpha2HostError
 
@@ -61,7 +64,7 @@ class Tool:
             "annotations": {
                 "title": self.title,
                 "readOnlyHint": self.read_only,
-                "destructiveHint": False,
+                "destructiveHint": not self.read_only,
                 "openWorldHint": False,
             },
         }
@@ -144,29 +147,60 @@ def _effect_variants() -> dict[str, dict[str, Any]]:
     }
 
 
+def _get(value: Any, name: str, kind: type[Any]) -> Any:
+    """``value[name]`` when ``value`` is an object and the field is a ``kind``, else ``None``."""
+    item = value.get(name) if isinstance(value, dict) else None
+    return item if isinstance(item, kind) else None
+
+
 def _summary(project: Mapping[str, Any]) -> dict[str, Any]:
-    settings = project.get("settings", {})
-    rate = settings.get("frame_rate", {})
+    """Total over any JSON object, since it also describes invalid documents."""
+    settings = _get(project, "settings", dict)
+    rate = _get(settings, "frame_rate", dict)
+    num, den = _get(rate, "num", int), _get(rate, "den", int)
     try:
         end = _native.project_end_ticks(json.dumps(project))
     except ValueError:
         end = None
     sources: dict[str, int] = {}
-    for source in project.get("sources", []):
-        sources[source.get("kind", "?")] = sources.get(source.get("kind", "?"), 0) + 1
+    for source in _get(project, "sources", list) or []:
+        kind = _get(source, "kind", str) or "?"
+        sources[kind] = sources.get(kind, 0) + 1
     return {
-        "name": project.get("name"),
-        "width": settings.get("width"),
-        "height": settings.get("height"),
-        "frameRate": f"{rate.get('num')}/{rate.get('den')}",
+        "name": _get(project, "name", str),
+        "width": _get(settings, "width", int),
+        "height": _get(settings, "height", int),
+        "frameRate": None if num is None or den is None else f"{num}/{den}",
         "seconds": None if end is None else end / TICKS_PER_SECOND,
         "sources": sources,
         "tracks": [
-            {"id": track.get("id"), "kind": track.get("kind"), "clips": len(track.get("clips", []))}
-            for track in project.get("timeline", {}).get("tracks", [])
+            {
+                "id": _get(track, "id", str),
+                "kind": _get(track, "kind", str),
+                "clips": len(_get(track, "clips", list) or []),
+            }
+            for track in _get(_get(project, "timeline", dict), "tracks", list) or []
         ],
-        "compositions": len(project.get("compositions", [])),
+        "compositions": len(_get(project, "compositions", list) or []),
     }
+
+
+_MAX_SECONDS = (2**53 - 1) // TICKS_PER_SECOND
+
+
+def _ticks(arguments: Mapping[str, Any], name: str) -> int | None:
+    """The argument ``name``, in seconds, as ticks; ``None`` when it is absent."""
+    if name not in arguments:
+        return None
+    value = arguments[name]
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0 <= value <= _MAX_SECONDS
+    ):
+        raise ToolError(f"{name} must be a number of seconds from 0 to {_MAX_SECONDS}")
+    return seconds_to_ticks(value)
 
 
 def _read_json(path: str, what: str) -> Any:
@@ -231,6 +265,8 @@ class Server:
         template = self.template(arguments["template"])
         data = arguments.get("data", {})
         header = template.get("template", {})
+        if not isinstance(header, dict):
+            raise ToolError("a template's `template` header is an object")
         if header.get("kind", "video") == "node":
             body = {"type": header.get("id"), "with": data}
             return _compose.bind({"body": body}, templates=[template, *self.templates])
@@ -346,10 +382,11 @@ class Server:
     def render_frame(self, arguments: dict[str, Any]) -> Any:
         compiled = self.compiled(arguments)
         output = arguments.get("output")
+        at = ticks(_ticks(arguments, "seconds") or 0)
         result = self.rendered(
             lambda: self.client().still(
                 compiled,
-                float(arguments.get("seconds", 0)),
+                at,
                 output,
                 overwrite=bool(arguments.get("overwrite", False)),
             )
@@ -369,10 +406,10 @@ class Server:
     def render_video(self, arguments: dict[str, Any]) -> Any:
         compiled = self.compiled(arguments)
         options: dict[str, Any] = {"overwrite": bool(arguments.get("overwrite", False))}
-        if "start" in arguments:
-            options["start_ticks"] = round(float(arguments["start"]) * TICKS_PER_SECOND)
-        if "end" in arguments:
-            options["end_ticks"] = round(float(arguments["end"]) * TICKS_PER_SECOND)
+        for name, option in (("start", "start_ticks"), ("end", "end_ticks")):
+            value = _ticks(arguments, name)
+            if value is not None:
+                options[option] = value
         result = self.rendered(
             lambda: self.client().export(compiled, arguments["output"], **options)
         )
@@ -477,7 +514,8 @@ class Server:
                 "render_frame",
                 "Render a frame",
                 "Renders one frame of a spec (or a template with its data) and returns it as a "
-                "PNG image, to see the result before rendering the video.",
+                "PNG image, to see the result before rendering the video. With `output` it also "
+                "writes the PNG there, replacing an existing file only with `overwrite`.",
                 _object(
                     {
                         **_SOURCE,
@@ -499,7 +537,8 @@ class Server:
                 "render_video",
                 "Render a video",
                 "Renders a spec (or a template with its data) to a video file: MP4, MOV, "
-                "Matroska or WebM by the output's extension.",
+                "Matroska or WebM by the output's extension. Writes `output`, replacing an "
+                "existing file only with `overwrite`.",
                 _object(
                     {
                         **_SOURCE,
@@ -575,6 +614,10 @@ def _call(tool: Tool, arguments: dict[str, Any], structured: bool) -> dict[str, 
         return _failure(f"missing argument {error}", {}, structured)
     except (ValueError, TypeError, OSError) as error:
         return _failure(str(error), {}, structured)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except BaseException as error:  # noqa: BLE001 - a native panic is a BaseException
+        return _failure(f"{type(error).__name__}: {error}", {"code": "INTERNAL"}, structured)
 
 
 class _Protocol:
@@ -610,9 +653,12 @@ class _Protocol:
         if method == "tools/list":
             return _result(request_id, {"tools": [tool.listing() for tool in self.tools.values()]})
         if method == "tools/call":
-            tool = self.tools.get(params.get("name", ""))
+            name = params.get("name")
+            if not isinstance(name, str):
+                return _error(request_id, -32602, "name is the name of a tool")
+            tool = self.tools.get(name)
             if tool is None:
-                return _error(request_id, -32602, f"unknown tool {params.get('name')!r}")
+                return _error(request_id, -32602, f"unknown tool {name!r}")
             arguments = params.get("arguments") or {}
             if not isinstance(arguments, dict):
                 return _error(request_id, -32602, "arguments is an object")
@@ -647,17 +693,45 @@ def serve(server: Server, reader: IO[bytes] | None = None, writer: IO[bytes] | N
         for line in reader:
             if not line.strip():
                 continue
-            try:
-                message = json.loads(line)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                reply: dict[str, Any] | None = _error(None, -32700, "not JSON")
-            else:
-                reply = protocol.answer(message)
+            reply = _reply(protocol, line)
             if reply is not None:
-                writer.write(json.dumps(reply, ensure_ascii=False).encode() + b"\n")
+                writer.write(_encoded(reply))
                 writer.flush()
     finally:
         server.close()
+
+
+def _reply(protocol: _Protocol, line: bytes) -> dict[str, Any] | None:
+    try:
+        message = json.loads(line)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except BaseException:  # noqa: BLE001 - also too deep (RecursionError) or not UTF-8
+        return _error(None, -32700, "not JSON")
+    try:
+        return protocol.answer(message)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except BaseException as error:  # noqa: BLE001 - every request gets a reply
+        if not isinstance(message, dict) or "id" not in message:
+            return None
+        return _error(message["id"], -32603, f"{type(error).__name__}: {error}")
+
+
+def _encoded(reply: dict[str, Any]) -> bytes:
+    try:
+        return json.dumps(reply, ensure_ascii=False).encode() + b"\n"
+    except UnicodeEncodeError:
+        # A lone surrogate has no UTF-8 form; an escape carries it.
+        pass
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except BaseException as error:  # noqa: BLE001 - every request gets a reply
+        reply = _error(reply.get("id"), -32603, f"the reply cannot be written: {error}")
+    try:
+        return json.dumps(reply).encode() + b"\n"
+    except (ValueError, TypeError, RecursionError):
+        return json.dumps(_error(None, -32603, "the reply cannot be written")).encode() + b"\n"
 
 
 def load_templates(directories: Sequence[str]) -> list[dict[str, Any]]:

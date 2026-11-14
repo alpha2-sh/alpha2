@@ -149,6 +149,9 @@ All notable changes to this project are documented in this file.
 - The `alpha2-plugin/1` native tables (`HostV1`, `PluginV1`, `alpha2_plugin.h`) carry `size` after
   `abi`; hosts refuse a plugin table shorter than their own or with a null entry. Native plugins
   must be rebuilt.
+- The MCP server answers every request and keeps serving after a malformed tool call, an
+  out-of-range number, an invalid project document or an internal error, including a panic in the
+  native module; `render_frame` and `render_video` are annotated as destructive.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.
