@@ -382,6 +382,8 @@ An `export` that fails, before or while it renders, also has `error.failure`: th
 
 ## Security
 
+[Security](security.md) describes what alpha2 treats as hostile and how to run a host for input or senders it does not trust.
+
 Runtime effects are WGSL that runs on the GPU. A host that takes requests from other users or over a network must decide who may send effect definitions before it passes them on: the engine checks a definition, not who sent it. `assets`, `output` and every other path are paths on the host's file system; moving files to and from the host is the caller's job.
 
 A request can also make the host fetch an `https:` URL (a plugin manifest and the files it names, unless `--plugin-origins` or `--plugins off` forbids it), read a local file of at most 1 MiB as a plugin manifest and learn its SHA-256 (unless `--plugin-root` or `--plugins off` forbids it), run native code inside the host process (a plugin with `allow_native`, on a host started with `--plugins native`), write and evict files under `renderCache.directory`, replace a file at `output` (`overwrite`), and learn whether a path exists (`conform` reports a missing file). Error messages, `failure.diagnostics` and a client's standard error tail carry host paths and device details: they are for the operator, not for whoever sent the request. A host that takes requests from senders it does not trust sets `--plugins off`, or `--plugin-origins` and `--plugin-root`.

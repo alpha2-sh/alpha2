@@ -138,6 +138,10 @@ Native exports encode on the GPU wherever the device and codec allow it. Hardwar
 - **React**: `@alpha2-sh/react` needs React 18 or later, `@alpha2-sh/editor/react` React 19.3 or a later 19.
 - **Rust**: 1.99 or later.
 
+## Security
+
+[`docs/security.md`](docs/security.md) describes what alpha2 treats as hostile input, what it bounds, and how to run it for untrusted work. [SECURITY.md](SECURITY.md) says how to report a vulnerability.
+
 ## License
 
 alpha2 is available under the [MIT License](LICENSE.md), copyright Alpha2 contributors. Third-party components are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
