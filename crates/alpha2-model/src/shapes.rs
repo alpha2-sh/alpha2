@@ -548,7 +548,7 @@ fn validate_ellipse(geometry: &EllipseGeometry, at: &str) -> Checked {
 fn validate_polystar(geometry: &PolystarGeometry, at: &str) -> Checked {
     point(&geometry.center, &format!("{at}.center"))?;
     scalar(&geometry.points, &format!("{at}.points"), |points| {
-        (MIN_POLYSTAR_POINTS..=MAX_POLYSTAR_POINTS).contains(&points)
+        crate::Domain::POLYSTAR_POINTS.contains(points)
     })?;
     scalar(
         &geometry.outer_radius,

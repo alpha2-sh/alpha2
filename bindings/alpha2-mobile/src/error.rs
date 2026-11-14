@@ -76,8 +76,9 @@ pub enum Alpha2Error {
     EditRefused {
         /// Why, in snake case: `invalid_project`, `invalid_request`, `unknown_data`,
         /// `wrong_kind`, `unknown_target`, `empty_target`, `missing_anchor`, `invalid_range`,
-        /// `nothing_to_bake`, `correction_not_bakeable`, `matte_source`, `read_through`,
-        /// `in_transition`, `in_fade`, `too_many_clips`, `too_many_cues` or `result_too_large`.
+        /// `nothing_to_bake`, `correction_not_bakeable`, `unbounded_parameter`, `matte_source`,
+        /// `read_through`, `in_transition`, `in_fade`, `too_many_clips`, `too_many_cues` or
+        /// `result_too_large`.
         refusal: String,
         /// What went wrong.
         reason: String,

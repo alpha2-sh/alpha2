@@ -111,6 +111,21 @@ impl EffectParamSpec {
         }
     }
 
+    /// The range of each scalar component, as [`Self::accepts`] checks it.
+    #[must_use]
+    pub const fn domain(&self) -> crate::Domain {
+        crate::Domain::new(
+            match self.min {
+                Some(min) => min,
+                None => f32::NEG_INFINITY,
+            },
+            match self.max {
+                Some(max) => max,
+                None => f32::INFINITY,
+            },
+        )
+    }
+
     /// Whether the parameter can follow a data set, which only Float and Vec2 ones can.
     #[must_use]
     pub const fn takes_data(&self) -> bool {

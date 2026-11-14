@@ -13,6 +13,8 @@
 
 mod bake;
 #[cfg(test)]
+mod bake_tests;
+#[cfg(test)]
 mod clip_reference_tests;
 mod json;
 mod plan;

@@ -551,8 +551,12 @@ pub(crate) fn valid_point_animation(animation: &AnimatedPoint) -> bool {
 }
 
 fn valid_scalar_animation(animation: &Animated<f32>, unit_interval: bool) -> bool {
-    let valid_value =
-        |value: f32| value.is_finite() && (!unit_interval || (0.0..=1.0).contains(&value));
+    let domain = if unit_interval {
+        crate::Domain::UNIT
+    } else {
+        crate::Domain::ANY
+    };
+    let valid_value = |value: f32| domain.contains(value);
     match animation {
         Animated::Constant { value } => valid_value(*value),
         Animated::Keyframes { keyframes } => {

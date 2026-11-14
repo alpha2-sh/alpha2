@@ -448,6 +448,12 @@ All notable changes to this project are documented in this file.
   (`in_transition`), trims both clips of a transition it crosses without ripple, and starts a range
   widened by a negative `padding` at time 0. A result with more than 4,096 clips or caption cues on
   a track is refused as `too_many_clips` or `too_many_cues`.
+- Edit operations: `bake` clamps each value to the range of the property it writes (opacity, gain,
+  pan, mask and outline lengths, a built-in effect's parameter), as rendering clamps the live
+  value, adds keys where a linear set crosses a bound, and keys the change after the clip so a
+  linear set's last line keeps its slope. Before, data outside the range made the bake fail as
+  `INTERNAL`, and a linear set held its last value to the clip's end. A parameter of a host effect,
+  whose range only the renderer knows, is refused as `unbounded_parameter`.
 
 ## [0.6.0] - 2026-11-08
 

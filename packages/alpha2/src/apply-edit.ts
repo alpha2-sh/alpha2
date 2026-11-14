@@ -117,6 +117,7 @@ export type EditRefusal =
   | "invalid_range"
   | "nothing_to_bake"
   | "correction_not_bakeable"
+  | "unbounded_parameter"
   | "matte_source"
   | "read_through"
   | "in_transition"

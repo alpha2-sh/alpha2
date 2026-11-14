@@ -482,15 +482,15 @@ fn positive_ms(value: f32) -> bool {
 }
 
 fn valid_gain(gain: &Animated<f32>) -> bool {
-    valid_range(gain, 0.0, MAX_GAIN)
+    valid_range(gain, crate::Domain::GAIN)
 }
 
 fn valid_pan(pan: &Animated<f32>) -> bool {
-    valid_range(pan, -1.0, 1.0)
+    valid_range(pan, crate::Domain::PAN)
 }
 
-fn valid_range(animation: &Animated<f32>, low: f32, high: f32) -> bool {
-    let valid = |value: f32| value.is_finite() && (low..=high).contains(&value);
+fn valid_range(animation: &Animated<f32>, domain: crate::Domain) -> bool {
+    let valid = |value: f32| domain.contains(value);
     match animation {
         Animated::Constant { value } => valid(*value),
         Animated::Keyframes { keyframes } => {

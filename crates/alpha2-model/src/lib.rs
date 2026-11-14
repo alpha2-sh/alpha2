@@ -14,6 +14,7 @@ mod data;
 mod data_places;
 #[cfg(test)]
 mod data_tests;
+mod domain;
 mod easing;
 mod effect;
 mod effect_spec;
@@ -74,6 +75,7 @@ pub use data::{
     MAX_DATA_SCALE, MAX_DATA_SETS, MAX_DATA_VALUES, MAX_DATA_WORDS, MadeBy, MadeByPlugin,
     SIMILARITY_ARITY, valid_interval, valid_word, value_in_bounds,
 };
+pub use domain::Domain;
 pub use easing::{CubicBezier, Easing};
 pub use effect::{ClipBlendMode, ClipEffect, EffectValue};
 pub use effect_spec::{

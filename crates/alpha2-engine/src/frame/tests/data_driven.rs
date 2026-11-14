@@ -207,3 +207,50 @@ fn a_held_correction_moves_turns_and_scales_the_picture() {
         None
     );
 }
+
+#[test]
+fn a_baked_parameter_at_its_bound_renders_as_the_live_binding() {
+    // Exposure takes -3..=3; the data drives it to 5 and -4 between in-range samples.
+    let document = serde_json::json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": { "width": W, "height": H, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48000 },
+        "sources": [{ "id": "v", "kind": "video", "locator": "v.mp4" }],
+        "data": [{ "id": "drive", "anchor": { "type": "source", "source_id": "v" }, "kind": "scalars",
+                   "interpolation": "linear", "channels": ["x"],
+                   "times": [0, 30_000, 60_000, 90_000], "values": [0.5, 5.0, -4.0, 1.0] }],
+        "compositions": [{ "id": "look", "output": "fx", "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            { "id": "media", "op": { "type": "media", "source_id": "v" } },
+            { "id": "fx", "op": { "type": "effect", "input": "clip", "effect": {
+                "id": "alpha2.effect.color-controls", "version": 1,
+                "params": { "exposure": { "mode": "data", "data": "drive", "channel": "x",
+                                          "via": { "node": "media" } } } } } }] }],
+        "timeline": { "tracks": [{ "id": "t", "name": "T", "kind": "video",
+                                   "clips": [clip(&serde_json::json!({ "composition": { "id": "look" } }))] }] }
+    });
+    let live = alpha2_model::Project::from_json(&document.to_string()).expect("project");
+    let request = serde_json::from_value(serde_json::json!({ "op": "bake", "targets": [
+        { "composition": "look", "node": "fx", "property": "effect.params.exposure" }] }))
+    .expect("request");
+    let (baked, _) = alpha2_eval::edit::apply(&live, &request).expect("bake");
+    let renderer = alpha2_render::CpuRenderer::new(2);
+    let size = RenderSize::new(PICTURE.0, PICTURE.1).expect("size");
+    let source = alpha2_render::CpuSource::image(Arc::new(
+        alpha2_render::CpuImage::from_premultiplied_rgba8(size, &picture()).expect("picture"),
+    ));
+    let canvas = RenderSize::new(W, H).expect("size");
+    let projects =
+        [live, baked].map(|project| crate::EngineProject::new(project).expect("indexed"));
+    for tick in [0, 15_000, 30_000, 41_000, 60_000, 75_000, 100_000] {
+        let [live, baked] = projects.each_ref().map(|project| {
+            let frame = project.evaluate(MediaTime(tick)).expect("frame");
+            renderer
+                .render_frame(canvas, &frame, &Cpu(&source))
+                .expect("frame renders")
+                .texture
+                .expect("complete")
+                .read_rgba8()
+        });
+        assert!(live == baked, "tick {tick}");
+    }
+}
