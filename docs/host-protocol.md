@@ -340,7 +340,7 @@ A `cancel` without a `target` is answered `INVALID_REQUEST`. The answer to a `ca
 | `INVALID_INPUT` | A value is not accepted: an invalid project, range, rate or setting, or settings that do not go together. |
 | `CONFORM_FAILED` | The export's media is not ready; `details` is the conform report. |
 | `MISSING_INPUT` | A file the render needs was not given: an asset, an effect resource, a font or a frame. |
-| `INCOMPLETE_COMPOSITION` | A composition graph has an input or output that is not connected. |
+| `INCOMPLETE_COMPOSITION` | A composition graph has an input or output that is not connected. An export whose range shows one is refused before its first frame. |
 | `EFFECT_ERROR` | A runtime effect's definition, parameters or shader failed. |
 | `GPU_INIT_FAILED` | The host could not create its GPU device. |
 | `HARDWARE_DECODE_UNAVAILABLE` | The decode mode is `hardware-required` and the host cannot decode in hardware. |

@@ -33,6 +33,60 @@ fn export_request_from(input: &Path, output: &Path, overwrite: bool) -> Request 
 }
 
 #[test]
+fn an_export_whose_late_composition_cannot_draw_fails_before_its_first_frame() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("late-composition");
+    let output = directory.join("out.mp4");
+    // Late enough that no decode lookahead reaches the clip before frame 0 is encoded.
+    let second = alpha2_time::TICKS_PER_SECOND;
+    let (start, end) = (9 * second, 10 * second);
+    let white = json!({"type": "fill", "paint": {"type": "solid",
+        "color": {"red": 1, "green": 1, "blue": 1, "alpha": 1}}});
+    let request = parse_request(
+        &json!({
+            "protocolVersion": 2, "operation": "export", "requestId": "late",
+            "project": {
+                "schema_version": 1, "id": "late", "name": "Late",
+                "settings": {"width": 64, "height": 48, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+                "sources": [{"id": "white", "kind": "generated", "generator": white}],
+                "compositions": [{"id": "g", "nodes": [{"id": "clip", "op": {"type": "clip"}}]}],
+                "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [
+                    {"id": "early", "source_id": "white",
+                        "timeline_range": {"start": 0, "end": start},
+                        "source_range": {"start": 0, "end": start}},
+                    {"id": "late", "source_id": "white", "composition": {"id": "g"},
+                        "timeline_range": {"start": start, "end": end},
+                        "source_range": {"start": 0, "end": end - start}}
+                ]}]}
+            },
+            "assets": {},
+            "startTicks": 0, "endTicks": end,
+            "frameRate": {"num": 30, "den": 1},
+            "includeAudio": false,
+            "videoCodec": "mpeg4-part2",
+            "output": output
+        })
+        .to_string(),
+    )
+    .expect("request");
+    let mut completed = 0;
+    let error = host
+        .handle(request, &mut |progress| {
+            completed = completed.max(progress.completed);
+            Ok(())
+        })
+        .expect_err("the composition has no output");
+    assert_eq!(error.code, "INCOMPLETE_COMPOSITION", "{error:?}");
+    assert_eq!(completed, 0, "no frame was encoded");
+    assert_eq!(
+        std::fs::read_dir(&directory).expect("directory").count(),
+        0,
+        "no output or partial file is left"
+    );
+}
+
+#[test]
 fn an_existing_output_is_replaced_only_when_the_request_overwrites() {
     let _gpu = gpu_test_lock();
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");

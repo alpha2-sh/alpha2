@@ -708,6 +708,11 @@ All notable changes to this project are documented in this file.
   segments, a painting past 4,096 commands or 8 nested layers, and a bitmap strike past 1
   megapixel draw nothing. Before, a font of a few kilobytes could take gigabytes and seconds per
   glyph or stop the process.
+- An export whose range shows a composition that cannot draw (no output, an unconnected input,
+  compositions over the plan budget) fails before its first frame with the error that frame would
+  give, on the desktop host, in the wasm binding's `beginExport` and on mobile, instead of after
+  encoding every frame before it. Mobile reports the engine's code (`INCOMPLETE_COMPOSITION`,
+  `INVALID_INPUT`) for it instead of `RENDER_FAILED`.
 
 ## [0.6.0] - 2026-11-08
 

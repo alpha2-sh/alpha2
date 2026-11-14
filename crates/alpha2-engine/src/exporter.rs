@@ -166,12 +166,14 @@ impl Exporter {
     /// Creates an exporter for frame intervals intersecting a half-open timeline range.
     ///
     /// All refusals happen here, before a host opens an encoder: 4:2:0 output at `quality` must
-    /// have even dimensions, and frames are packed per [`YuvEncoding::export`] for `codec`.
-    /// Later steps refuse any other snapshot with [`EngineError::ExportProjectChanged`].
+    /// have even dimensions, frames are packed per [`YuvEncoding::export`] for `codec`, and no
+    /// frame of the range shows a composition that cannot draw. Later steps refuse any other
+    /// snapshot with [`EngineError::ExportProjectChanged`].
     ///
     /// # Errors
     /// Returns an error for an empty range, invalid quality, timeline overflow,
-    /// or [`EngineError::OddExportDimensions`].
+    /// [`EngineError::OddExportDimensions`], or the error the first frame showing a composition
+    /// that cannot draw would fail with.
     pub fn new(
         snapshot: &EngineProject,
         range: TimeRange,
@@ -180,13 +182,46 @@ impl Exporter {
         codec: VideoCodec,
     ) -> Result<Self, EngineError> {
         quality.export_size(&snapshot.project().settings)?;
-        Self::over(
+        let exporter = Self::over(
             snapshot,
             range,
             frame_rate,
             quality,
             YuvEncoding::export(codec),
-        )
+        )?;
+        exporter.check_compositions(snapshot)?;
+        Ok(exporter)
+    }
+
+    /// Evaluates the first frame of each clip whose composition cannot draw
+    /// ([`EngineProject::plan_errors`]), so the export fails as that frame would before frame 0.
+    fn check_compositions(&self, snapshot: &EngineProject) -> Result<(), EngineError> {
+        for error in snapshot.plan_errors(self.effective_range) {
+            let alpha2_eval::EvalError::IncompleteComposition { clip, .. } = &error else {
+                return Err(error.into());
+            };
+            let Some(shown) = snapshot
+                .project()
+                .timeline
+                .tracks
+                .iter()
+                .flat_map(|track| &track.clips)
+                .find(|candidate| candidate.id == *clip)
+                .and_then(|candidate| candidate.timeline_range.intersection(self.effective_range))
+            else {
+                continue;
+            };
+            let frame = first_frame_at_or_after(self.frame_rate, shown.start())?;
+            let time = self
+                .frame_rate
+                .frame_start(frame)
+                .ok_or(EngineError::OutOfRange)?;
+            // A clip shorter than a frame can lie between two frame times and is never drawn.
+            if time < shown.end() {
+                self.evaluate(snapshot, time)?;
+            }
+        }
+        Ok(())
     }
 
     /// An exporter of the single `frame_rate` frame containing `time`, for hosts that take the

@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use alpha2_container::{MatroskaFlavor, MatroskaWriter, Mp4Flavor, Mp4Writer};
-use alpha2_engine::{EngineProject, Exporter, QualityProfile, TextTextures};
+use alpha2_engine::{
+    EngineError, EngineProject, ErrorCode, Exporter, QualityProfile, TextTextures,
+};
 use alpha2_host_core::audio_stream::{AudioBackends, AudioStream};
 use alpha2_host_core::audio_windows::{AudioWindowError, OpenAudio, WindowedAudioSources};
 use alpha2_host_core::encode::{
@@ -265,7 +267,14 @@ fn attempt(
         QualityProfile::export(),
         video_codec,
     )
-    .map_err(|error| Alpha2Error::invalid(error.to_string()))?
+    .map_err(|error| match &error {
+        // A composition that cannot draw fails with the engine's code, as on the desktop.
+        EngineError::Evaluate(_) => failed(
+            ErrorCode::of(&error).map_or("RENDER_FAILED", ErrorCode::as_str),
+            error.to_string(),
+        ),
+        _ => Alpha2Error::invalid(error.to_string()),
+    })?
     .with_pixels(pixels);
     let size = exporter
         .render_size(&snapshot)
@@ -1047,25 +1056,34 @@ mod tests {
             std::env::temp_dir().join(format!("alpha2-mobile-{}-{name}.mkv", std::process::id()));
         let _ = std::fs::remove_file(&output);
         let path = |path: &Path| path.to_string_lossy().into_owned();
+        let request = crate::ExportRequest {
+            project_json: std::fs::read_to_string(
+                tests.join("cases/host-audio-export-project.json"),
+            )
+            .expect("project"),
+            assets: HashMap::from([
+                (
+                    "image-source".to_owned(),
+                    path(&tests.join("corpus/cross_topology_parity.png")),
+                ),
+                ("audio-source".to_owned(), path(audio)),
+            ]),
+            output_path: path(&output),
+            video_codec: Some("vp9".into()),
+            audio_codec: Some("aac".into()),
+            include_audio: true,
+            ..crate::ExportRequest::default()
+        };
+        (output, run(encoders, request))
+    }
+
+    /// Runs `request` on this thread with `encoders` and the CPU renderer.
+    fn run(
+        encoders: &Arc<Encoders>,
+        request: crate::ExportRequest,
+    ) -> Result<ExportOutcome, Alpha2Error> {
         let job = ExportJob {
-            request: crate::ExportRequest {
-                project_json: std::fs::read_to_string(
-                    tests.join("cases/host-audio-export-project.json"),
-                )
-                .expect("project"),
-                assets: HashMap::from([
-                    (
-                        "image-source".to_owned(),
-                        path(&tests.join("corpus/cross_topology_parity.png")),
-                    ),
-                    ("audio-source".to_owned(), path(audio)),
-                ]),
-                output_path: path(&output),
-                video_codec: Some("vp9".into()),
-                audio_codec: Some("aac".into()),
-                include_audio: true,
-                ..crate::ExportRequest::default()
-            },
+            request,
             config: crate::EngineConfig {
                 renderer: crate::RendererMode::Cpu,
                 ..crate::EngineConfig::default()
@@ -1083,7 +1101,7 @@ mod tests {
             video_encoders: Arc::clone(encoders) as Arc<dyn VideoEncoders>,
             audio_encoders: Arc::clone(encoders) as Arc<dyn AudioEncoders>,
         };
-        (output.clone(), export(&job, &media))
+        export(&job, &media)
     }
 
     fn opened(encoders: &Encoders) -> (Vec<bool>, usize) {
@@ -1093,6 +1111,48 @@ mod tests {
                 .audio_opened
                 .load(std::sync::atomic::Ordering::Relaxed),
         )
+    }
+
+    #[test]
+    fn an_export_whose_late_composition_cannot_draw_fails_before_its_first_frame() {
+        let second = alpha2_time::TICKS_PER_SECOND;
+        let white = json!({"type": "fill", "paint": {"type": "solid",
+            "color": {"red": 1, "green": 1, "blue": 1, "alpha": 1}}});
+        let project = json!({
+            "schema_version": 1, "id": "late", "name": "Late",
+            "settings": {"width": 64, "height": 48, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "white", "kind": "generated", "generator": white}],
+            "compositions": [{"id": "g", "nodes": [{"id": "clip", "op": {"type": "clip"}}]}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [
+                {"id": "early", "source_id": "white",
+                    "timeline_range": {"start": 0, "end": 9 * second},
+                    "source_range": {"start": 0, "end": 9 * second}},
+                {"id": "late", "source_id": "white", "composition": {"id": "g"},
+                    "timeline_range": {"start": 9 * second, "end": 10 * second},
+                    "source_range": {"start": 0, "end": second}}
+            ]}]}
+        });
+        let output =
+            std::env::temp_dir().join(format!("alpha2-mobile-{}-late.mp4", std::process::id()));
+        let _ = std::fs::remove_file(&output);
+        let encoders = Arc::new(Encoders::default());
+        let outcome = run(
+            &encoders,
+            crate::ExportRequest {
+                project_json: project.to_string(),
+                output_path: output.to_string_lossy().into_owned(),
+                video_codec: Some("h264".into()),
+                include_audio: false,
+                ..crate::ExportRequest::default()
+            },
+        );
+        assert!(
+            matches!(&outcome, Err(Alpha2Error::Failed { code, .. })
+                if code == "INCOMPLETE_COMPOSITION"),
+            "{outcome:?}"
+        );
+        assert_eq!(opened(&encoders), (vec![], 0), "no encoder opened");
+        assert!(!output.exists());
     }
 
     #[test]
