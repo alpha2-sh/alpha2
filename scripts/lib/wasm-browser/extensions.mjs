@@ -68,6 +68,7 @@ const documents = {
   nestedTooDeep: nested(100000),
   entitiesTooDeep: '<!DOCTYPE svg [' + entities + ']>' + doc('&d4;'),
   entityElements: '<!DOCTYPE svg [<!ENTITY b "' + '<g/>'.repeat(1000) + '">]>' + doc('&b;'.repeat(10000)),
+  entityAttribute: '<!DOCTYPE svg [<!ENTITY t "' + "x".repeat(1000) + '"><!ENTITY m "' + "&t;".repeat(255) + '">]>' + doc('<desc id="' + "&m;".repeat(200) + '"/>'),
   morphology400: doc('<filter id="f" x="0" y="0" width="1" height="1"><feMorphology operator="dilate" radius="400"/></filter><rect width="1920" height="1080" fill="red" filter="url(#f)"/>', 1920),
   backtrackingRule: doc('<style>x g g g g g rect{fill:red}</style>' + '<g>'.repeat(100) + '<rect width="1" height="1"/>'.repeat(10) + '</g>'.repeat(100)),
   gzipBomb: doc('<image width="8" height="8" href="data:image/svg+xml;base64,' + btoa(binary) + '"/>', 8),
@@ -90,7 +91,7 @@ report({
   ok: outcomes.nestedAsDeepAsAllowed.outcome === "drawn"
     && outcomes.patternsAsDeepAsAllowed.outcome === "drawn"
     && outcomes.patternRing.outcome.startsWith("refused: ") && outcomes.patternRing.outcome.includes("refers to itself")
-    && ["nestedTooDeep", "patternsTooDeep", "doublingMasks", "entitiesTooDeep", "entityElements", "morphology400", "backtrackingRule", "gzipBomb"].every(refused)
+    && ["nestedTooDeep", "patternsTooDeep", "doublingMasks", "entitiesTooDeep", "entityElements", "entityAttribute", "morphology400", "backtrackingRule", "gzipBomb"].every(refused)
     && Object.values(outcomes).every((o) => o.ms < 20000),
   outcomes,
 });

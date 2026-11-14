@@ -29,6 +29,22 @@ pub(crate) fn svg_nested_entity_elements(per_entity: usize, mid: usize, top: usi
     )
 }
 
+/// An SVG with one attribute of `top` references to an entity of `mid` references to an entity
+/// of `text` bytes.
+#[cfg(feature = "svg")]
+pub(crate) fn svg_entity_attribute(text: usize, mid: usize, top: usize) -> String {
+    format!(
+        concat!(
+            "<?xml version=\"1.0\"?>\n<!DOCTYPE svg [\n<!ENTITY b \"{}\">\n<!ENTITY a \"{}\">\n]>\n",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">",
+            "<desc id=\"{}\"/></svg>\n"
+        ),
+        "x".repeat(text),
+        "&b;".repeat(mid),
+        "&a;".repeat(top)
+    )
+}
+
 /// An SVG that draws `inner` as `count` separate `data:` SVG images.
 #[cfg(feature = "svg")]
 pub(crate) fn svg_nested_images(inner: &str, count: usize) -> String {

@@ -236,7 +236,8 @@ impl Reading {
 
 fn too_much_text(limit: usize) -> ExtensionError {
     ExtensionError::Budget(format!(
-        "the SVG and the SVG images it draws are more than {limit} bytes of text together"
+        "the SVG and the SVG images it draws are more than {limit} bytes of text together, \
+         entities expanded"
     ))
 }
 
@@ -252,7 +253,8 @@ fn read_document(
     let text = std::str::from_utf8(text).map_err(|_| malformed(usvg::Error::NotAnUtf8Str))?;
     let base = reading.nesting.load(Ordering::Relaxed);
     let limit = MAX_NESTING.saturating_sub(base);
-    markup::nesting(text, limit)?;
+    // The parser copies or reads every byte an entity reference expands to.
+    reading.take_text(markup::entity_expansion(text, limit)?)?;
     let xml = roxmltree::Document::parse_with_options(
         text,
         roxmltree::ParsingOptions {

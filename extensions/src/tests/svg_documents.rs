@@ -742,21 +742,87 @@ fn an_svg_nested_deeper_than_its_parsers_stack_is_refused_before_it_is_parsed() 
 #[cfg(feature = "svg")]
 #[test]
 fn an_svg_whose_entities_expand_past_the_node_limit_is_refused_while_it_is_parsed() {
-    use super::hostile::{svg_entity_elements, svg_nested_entity_elements};
+    use super::hostile::svg_entity_elements;
     assert_eq!(
         svg_drawn(&svg_entity_elements(1000, 10), (0, 0)).expect("drawn"),
         (10, 10)
     );
-    // Ten million elements, flat and through a nested entity.
+    // Five million elements in 20 MB of expanded text.
+    refused_as(
+        svg_drawn(&svg_entity_elements(1000, 5_000), (0, 0)),
+        "the SVG parses to more than 4000000 nodes",
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_whose_entities_expand_past_its_text_budget_is_refused_before_it_is_parsed() {
+    use super::hostile::{svg_entity_attribute, svg_entity_elements, svg_nested_entity_elements};
+    // Ten million elements, flat and through a nested entity, are 40 MB of text expanded.
     for document in [
         svg_entity_elements(1000, 10_000),
         svg_nested_entity_elements(100, 255, 400),
     ] {
+        refused_as(svg_drawn(&document, (0, 0)), "bytes of text together");
+    }
+    // One attribute of 25.6 MB expanded still opens; 51 MB and 2.6 GB do not.
+    assert_eq!(
+        svg_drawn(&svg_entity_attribute(1000, 255, 100), (0, 0)).expect("drawn"),
+        (10, 10)
+    );
+    for (text, top) in [(1000, 200), (100_000, 100)] {
         refused_as(
-            svg_drawn(&document, (0, 0)),
-            "the SVG parses to more than 4000000 nodes",
+            svg_drawn(&svg_entity_attribute(text, 255, top), (0, 0)),
+            "bytes of text together, entities expanded",
         );
     }
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_naming_its_namespaces_by_entity_draws_as_it_would_without_them() {
+    let body = r##"<rect width="6" height="4" fill="#20a040"/><circle cx="6" cy="4" r="3" fill="#ff8000"/>"##;
+    let plain = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="12" height="8">{body}</svg>"#
+    );
+    let named = format!(
+        concat!(
+            "<?xml version=\"1.0\"?>\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" ",
+            "\"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\" [\n",
+            "<!ENTITY ns_svg \"http://www.w3.org/2000/svg\">\n",
+            "<!ENTITY ns_xlink \"http://www.w3.org/1999/xlink\">\n]>\n",
+            "<svg xmlns=\"&ns_svg;\" xmlns:xlink=\"&ns_xlink;\" width=\"12\" height=\"8\">{}</svg>"
+        ),
+        body
+    );
+    let draw = |text: &str| {
+        Registry::with_defaults()
+            .open(
+                &ProviderSource::Svg,
+                Some(Arc::from(text.as_bytes())),
+                Arc::new(NoResources),
+            )
+            .expect("open")
+            .render(ms(0), (0, 0))
+            .expect("frame")
+    };
+    let frame = draw(&named);
+    assert_eq!((frame.width, frame.height), (12, 8));
+    assert_eq!(frame, draw(&plain));
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_of_two_hundred_thousand_entity_declarations_is_scanned_in_linear_time() {
+    use std::fmt::Write as _;
+    let mut declarations = String::new();
+    for at in 0..200_000 {
+        let _ = write!(declarations, r#"<!ENTITY e{at} "{at}">"#);
+    }
+    let document = format!(
+        r#"<!DOCTYPE svg [{declarations}]><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><desc>&e199999;</desc></svg>"#
+    );
+    assert_eq!(svg_drawn(&document, (0, 0)).expect("drawn"), (10, 10));
 }
 
 #[cfg(feature = "svg")]
@@ -765,7 +831,7 @@ fn an_svg_stops_reading_its_nested_images_after_one_is_refused() {
     use super::hostile::{svg_entity_elements, svg_nested_images};
     refused_as(
         svg_drawn(
-            &svg_nested_images(&svg_entity_elements(1000, 10_000), 50),
+            &svg_nested_images(&svg_entity_elements(1000, 5_000), 50),
             (0, 0),
         ),
         "the SVG parses to more than 4000000 nodes",

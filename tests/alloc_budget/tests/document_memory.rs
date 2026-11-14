@@ -384,31 +384,46 @@ fn a_pdf_page_of_one_photo_opens_holding_a_few_times_its_pixels() {
 
 #[cfg(feature = "svg")]
 #[test]
-fn an_svg_whose_entities_expand_to_a_hundred_million_elements_is_refused_holding_little() {
-    let bytes: Arc<[u8]> = format!(
-        concat!(
-            "<?xml version=\"1.0\"?>\n<!DOCTYPE svg [\n<!ENTITY b \"{}\">\n]>\n",
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">{}</svg>\n"
+fn an_svg_whose_entities_expand_past_its_text_budget_is_refused_holding_little() {
+    let document = |declarations: String, body: String| -> Arc<[u8]> {
+        format!(
+            concat!(
+                "<?xml version=\"1.0\"?>\n<!DOCTYPE svg [\n{}]>\n",
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">{}</svg>\n"
+            ),
+            declarations, body
+        )
+        .into_bytes()
+        .into()
+    };
+    // A hundred million elements, and one attribute of 2.6 GB.
+    for bytes in [
+        document(
+            format!("<!ENTITY b \"{}\">\n", "<g/>".repeat(1000)),
+            "&b;".repeat(100_000),
         ),
-        "<g/>".repeat(1000),
-        "&b;".repeat(100_000)
-    )
-    .into_bytes()
-    .into();
-    let (opened, held) = peak_ratio(&bytes, || {
-        SvgProvider
-            .open(Arc::clone(&bytes), &ProviderSource::Svg, &NoResources)
-            .map(drop)
-    });
-    assert!(
-        matches!(opened, Err(ExtensionError::Budget(_))),
-        "{opened:?}"
-    );
-    #[allow(clippy::cast_precision_loss)]
-    let held = held * bytes.len() as f64;
-    eprintln!("held {held:.0} bytes");
-    // The parser's node limit holds about 300 MB of nodes before it refuses.
-    assert!(held < 512.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
+        document(
+            format!(
+                "<!ENTITY t \"{}\">\n<!ENTITY m \"{}\">\n",
+                "x".repeat(100_000),
+                "&t;".repeat(255)
+            ),
+            format!("<desc id=\"{}\"/>", "&m;".repeat(100)),
+        ),
+    ] {
+        let (opened, held) = peak_ratio(&bytes, || {
+            SvgProvider
+                .open(Arc::clone(&bytes), &ProviderSource::Svg, &NoResources)
+                .map(drop)
+        });
+        assert!(
+            matches!(opened, Err(ExtensionError::Budget(_))),
+            "{opened:?}"
+        );
+        eprintln!("held {held:.2} times the file");
+        // The entity scan keeps only its declarations; the parser never runs.
+        assert!(held < 2.0, "held {held:.2} times the file");
+    }
 }
 
 /// A ZIP-compressed EXR file of one 3840 by 2160 tile with B, G, R and `extra` float channels, whose only

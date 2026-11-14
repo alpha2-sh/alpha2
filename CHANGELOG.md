@@ -170,6 +170,8 @@ All notable changes to this project are documented in this file.
 - The `alpha2` Python wheels carry `THIRD_PARTY_NOTICES.md` and the license texts of the Rust
   crates compiled into them; the `alpha2-host` wheels list every license file of their archive and
   state `License-Expression`. The Android library and the Swift package carry both notice files.
+- An SVG whose entity references expand past its 32 MiB text budget, in text or in attribute
+  values, is refused before it is parsed, and many entity declarations are scanned in linear time.
 
 ## [0.6.0] - 2026-11-08
 
