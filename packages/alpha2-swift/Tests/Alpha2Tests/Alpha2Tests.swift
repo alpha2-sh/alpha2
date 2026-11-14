@@ -98,19 +98,19 @@ final class Alpha2Tests: XCTestCase {
         let lines = Lines()
         setDiagnosticListener(listener: lines)
         defer { setDiagnosticListener(listener: nil) }
-        // The audio source is a picture, so the preview's audio decode fails and says so.
-        let picture = try fixture("cross_topology_parity.png").path
+        // The audio source has no file, so the preview opens no audio and says so.
         let player = try Player(engine: engine(), request: PlayerRequest(
             projectJson: try String(contentsOf: fixture("host-audio-export-project.json"), encoding: .utf8),
-            assets: ["image-source": picture, "audio-source": picture],
+            assets: ["image-source": try fixture("cross_topology_parity.png").path],
             frames: [:], resources: [:]
         ))
         player.play()
+        let expected = "alpha2 preview: no audio: audio source audio-source has no asset path"
         let deadline = Date().addingTimeInterval(20)
-        while !lines.contains("the project's audio does not decode"), Date() < deadline {
+        while !lines.contains(expected), Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
         }
         player.end()
-        XCTAssertTrue(lines.contains("alpha2 preview: the project's audio does not decode"))
+        XCTAssertTrue(lines.contains(expected))
     }
 }

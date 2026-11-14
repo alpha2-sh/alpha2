@@ -285,11 +285,10 @@ class Alpha2Test {
         )
         try {
             engine().use { engine ->
-                // The audio source is a picture, so the preview's audio decode fails and says so.
-                val picture = asset("cross_topology_parity.png")
+                // The audio source has no file, so the preview opens no audio and says so.
                 val request = PlayerRequest(
                     projectJson = text("host-audio-export-project.json"),
-                    assets = mapOf("image-source" to picture, "audio-source" to picture),
+                    assets = mapOf("image-source" to asset("cross_topology_parity.png")),
                     frames = emptyMap(),
                     resources = emptyMap(),
                 )
@@ -299,7 +298,7 @@ class Alpha2Test {
                     var found = false
                     while (!found && System.currentTimeMillis() < deadline) {
                         val line = lines.poll(100, TimeUnit.MILLISECONDS) ?: continue
-                        found = line.contains("alpha2 preview: the project's audio does not decode")
+                        found = line.contains("alpha2 preview: no audio: audio source audio-source has no asset path")
                     }
                     assertTrue("lines: $lines", found)
                 }
