@@ -20,10 +20,12 @@ use crate::video_stream::{
 
 const SIZE: u32 = 16;
 
-/// 30 intra frames at 30 fps; frame `i` is presented at `i` and has luma `16 + 6 i`.
+/// Intra frames presented at `first..end` in the track's units; frame `i` has luma `16 + 6 i`.
 struct Frames {
     tracks: Vec<TrackInfo>,
     next: i64,
+    first: i64,
+    end: i64,
 }
 
 impl ContainerReader for Frames {
@@ -32,12 +34,12 @@ impl ContainerReader for Frames {
     }
 
     fn seek(&mut self, _track: TrackId, pts: i64) -> Result<Option<i64>, DemuxError> {
-        self.next = pts.clamp(0, 29);
+        self.next = pts.clamp(self.first, self.end - 1);
         Ok(Some(self.next))
     }
 
     fn next_packet(&mut self, track: TrackId) -> Result<Option<Packet>, DemuxError> {
-        if self.next >= 30 {
+        if self.next >= self.end {
             return Ok(None);
         }
         let pts = self.next;
@@ -160,13 +162,19 @@ impl VideoBackends for Sessions {
     }
 }
 
+/// 30 frames at 30 fps from time 0.
 fn reader() -> Box<dyn ContainerReader> {
+    late_reader(30, 0, 30)
+}
+
+/// Frames at `first..end` on a clock of `timescale` units per second, one frame per unit.
+fn late_reader(timescale: u32, first: i64, end: i64) -> Box<dyn ContainerReader> {
     Box::new(Frames {
         tracks: vec![TrackInfo {
             id: TrackId(1),
             kind: TrackKind::Video,
-            timescale: 30,
-            duration: Some(30),
+            timescale,
+            duration: Some(end),
             language: None,
             title: None,
             default: true,
@@ -187,7 +195,9 @@ fn reader() -> Box<dyn ContainerReader> {
             }),
             audio: None,
         }],
-        next: 0,
+        next: first,
+        first,
+        end,
     })
 }
 
@@ -244,6 +254,14 @@ impl VideoSink for Collect {
 }
 
 fn export(offset: i64, frames: i64) -> Vec<(u64, u8)> {
+    export_from(reader, offset, frames)
+}
+
+fn export_from(
+    reader: impl Fn() -> Box<dyn ContainerReader> + 'static,
+    offset: i64,
+    frames: i64,
+) -> Vec<(u64, u8)> {
     let snapshot = project(offset, frames);
     let mut exporter = Exporter::for_project(
         &snapshot,
@@ -298,6 +316,39 @@ fn every_frame_renders_once_in_order_with_its_source_frame() {
     // own range, so only order and distinctness are checked.
     let lumas = frames.iter().map(|(_, luma)| *luma).collect::<Vec<_>>();
     assert!(lumas.windows(2).all(|pair| pair[0] < pair[1]), "{lumas:?}");
+}
+
+/// The output frame index at which each run of equal lumas in `frames` starts.
+fn changes(frames: &[(u64, u8)]) -> Vec<u64> {
+    let mut starts = vec![frames[0].0];
+    for pair in frames.windows(2) {
+        assert!(pair[0].1 <= pair[1].1, "{frames:?}");
+        if pair[1].1 != pair[0].1 {
+            starts.push(pair[1].0);
+        }
+    }
+    starts
+}
+
+#[test]
+fn a_source_whose_video_starts_late_holds_its_first_frame_until_its_time() {
+    let frames = export_from(|| late_reader(30, 15, 30), 0, 30);
+    assert_eq!(frames.len(), 30);
+    assert_eq!(
+        changes(&frames),
+        [0].into_iter().chain(16..30).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_late_source_at_twice_the_output_rate_holds_its_first_frame_until_its_time() {
+    // Output frame `i` wants source frame `2 i`; the first is at 10, so outputs 0 to 5 show it.
+    let frames = export_from(|| late_reader(60, 10, 40), 0, 15);
+    assert_eq!(frames.len(), 15);
+    assert_eq!(
+        changes(&frames),
+        [0].into_iter().chain(6..15).collect::<Vec<_>>()
+    );
 }
 
 #[test]

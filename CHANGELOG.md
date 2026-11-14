@@ -68,6 +68,9 @@ All notable changes to this project are documented in this file.
   The outcome fails with `INTERNAL` and the panic's message, and a preview reports it in
   `lastError`. A timeline extraction whose renderer cannot start (an effect resource without an
   asset) fails with the reason instead of hanging, and `cancel()` stops a timeline extraction.
+- Mobile: a source whose video starts after the time a clip reads from (an MP4 with an empty edit,
+  a Matroska file whose first video frame is not at 0) shows its first frame until that frame is
+  due, instead of every later frame early.
 
 ## [0.6.0] - 2026-11-08
 

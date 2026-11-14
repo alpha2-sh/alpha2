@@ -547,7 +547,8 @@ fn source_frame(
 }
 
 /// The frame shown at `time`, decoding forward from where `stream` is; `previous` is the frame it
-/// last answered, still shown when no later frame is due.
+/// last answered, still shown when no later frame is due. That holds for a `previous` later than
+/// `time` too: a seek before the stream's first frame answers that frame, shown until it is due.
 fn decode_forward(
     stream: &mut crate::video_stream::VideoStream,
     time: MediaTime,
@@ -555,14 +556,11 @@ fn decode_forward(
     cancel: &CancelToken,
 ) -> Result<StreamFrame, String> {
     let deadline = time.presentation_deadline(stream.presentation_slack());
-    let mut shown = previous.filter(|frame| frame.facts.pts <= deadline);
-    loop {
-        match stream.peek_pts(cancel).map_err(|error| error.to_string())? {
-            Some(pts) if pts <= deadline || shown.is_none() => {
-                shown = stream.next(cancel).map_err(|error| error.to_string())?;
-            }
-            _ => break,
-        }
+    let mut shown = previous;
+    while let Some(pts) = stream.peek_pts(cancel).map_err(|error| error.to_string())?
+        && pts <= deadline
+    {
+        shown = stream.next(cancel).map_err(|error| error.to_string())?;
     }
     match shown {
         Some(frame) => Ok(frame),
