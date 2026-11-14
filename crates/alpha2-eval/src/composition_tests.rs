@@ -185,6 +185,16 @@ fn an_incomplete_output_fails_only_the_frames_that_show_it() {
         })
     );
     let index = ActiveIndex::build(&project).expect("an incomplete graph still indexes");
+    // An export can ask before its first frame; a range before the clip lists nothing.
+    assert_eq!(index.plan_errors(range(0, 999)), []);
+    assert!(matches!(
+        index.plan_errors(range(0, 5_000)).as_slice(),
+        [EvalError::IncompleteComposition {
+            reason: PlanError::MissingInput { .. },
+            ..
+        }]
+    ));
+    assert!(!index.plans_too_large());
     evaluate(&project, &index, MediaTime(999)).expect("the clip is not shown yet");
     assert!(matches!(
         evaluate(&project, &index, MediaTime(1_000)),
@@ -769,6 +779,8 @@ fn the_plans_of_one_project_hold_at_most_the_plan_budget_together() {
     project.validate().expect("valid project");
     let index = ActiveIndex::build(&project).expect("indexes");
     evaluate(&project, &index, MediaTime(1_500)).expect("only a is shown: it draws");
+    assert!(!index.plans_too_large());
+    assert_eq!(index.plan_errors(range(0, 10_000)), []);
 
     // With b shown too, every composition is refused regardless of compile order.
     let mut clip = project.timeline.tracks[0].clips[0].clone();
@@ -778,6 +790,15 @@ fn the_plans_of_one_project_hold_at_most_the_plan_budget_together() {
     project.timeline.tracks[0].clips.push(clip);
     project.validate().expect("valid project");
     let index = ActiveIndex::build(&project).expect("indexes");
+    // The cause is the whole document, so an export lists it once, for the first clip.
+    assert!(index.plans_too_large());
+    assert!(matches!(
+        index.plan_errors(range(0, 10_000)).as_slice(),
+        [EvalError::IncompleteComposition {
+            reason: PlanError::TooLarge,
+            ..
+        }]
+    ));
     for time in [1_500, 3_500] {
         assert!(
             matches!(

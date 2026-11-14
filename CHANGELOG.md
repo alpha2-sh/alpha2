@@ -13,6 +13,10 @@ All notable changes to this project are documented in this file.
   `restarted` field of `ExportProgress` in Python) on the first report after the export started
   over: the host's restart on the readback path, and the client's own rerun with software decode
   after a hardware decoder stalled. `completed` goes back to 0 only in such a report.
+- `ActiveIndex::plan_errors(range)` and `EngineProject::plan_errors(range)` list the errors
+  evaluation would give in a range because a clip's composition cannot draw, so an export can fail
+  before its first frame; `plans_too_large()` reports compositions that together exceed the plan
+  budget, and compilation stops once they do.
 
 ### Changed
 

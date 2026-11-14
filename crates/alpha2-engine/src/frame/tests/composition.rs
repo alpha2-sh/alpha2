@@ -584,9 +584,13 @@ fn an_unconnected_named_input_makes_the_composition_incomplete() {
         effect_node("fx", "test.multiply-map", "clip", r#"{ "map": null }"#)
     );
     let project = project(&nodes, "fx", "", "");
+    // An export over the whole timeline finds it before its first frame, with the frame's error.
+    let whole = alpha2_time::TimeRange::new(MediaTime::ZERO, MediaTime(i64::MAX)).expect("range");
+    let before = project.plan_errors(whole);
     let error = project
         .evaluate(MediaTime(90_000))
         .expect_err("the map is needed");
+    assert_eq!(before, std::slice::from_ref(&error));
     assert_eq!(
         crate::ErrorCode::of(&error),
         Some(crate::ErrorCode::IncompleteComposition)
