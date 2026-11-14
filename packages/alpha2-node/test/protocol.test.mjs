@@ -1198,6 +1198,46 @@ test("an auto export whose hardware decoder stalls runs again in software", asyn
   assert.deepEqual(result, { frames: 9 });
 });
 
+test("progress marks where an export started over", async () => {
+  const root = await scratch("alpha2-node-restarted-");
+  const hostPath = await fakeHost(
+    root,
+    `import { progress, respond, serve } from ${IO};
+serve((request) => {
+  const report = (completed, extra = {}) =>
+    progress(request, { phase: "frames", completed, total: 9, ...extra });
+  if (process.env.ALPHA2_VIDEO_DECODE === "software") {
+    report(0);
+    report(9);
+    respond(request, { ok: true, result: { frames: 9 } });
+  } else {
+    report(4);
+    // The host's own restart on the readback path.
+    report(0, { restarted: true });
+    report(2);
+    respond(request, { ok: false, error: { code: "DECODE_STALLED", message: "decode shard 0 has been inside one decoder operation for 40001 ms", failure: { code: "GPU_TIMEOUT", origin: "native-host", operation: "export", backend: "native", phase: "decode", resource: "gpu" } } });
+  }
+});
+`,
+  );
+  const reports = [];
+  const client = new Alpha2NodeClient({ hostPath, videoDecode: "auto" });
+  await client.exportProject(
+    exportRequest(join(root, "out.mp4"), {
+      onProgress: ({ completed, restarted }) =>
+        reports.push([completed, restarted === true]),
+    }),
+  );
+  // The software rerun's first report is marked by the client.
+  assert.deepEqual(reports, [
+    [4, false],
+    [0, true],
+    [2, false],
+    [0, true],
+    [9, false],
+  ]);
+});
+
 test("a software run after a stall that fails too keeps the stall", async () => {
   const root = await scratch("alpha2-node-stall-then-fail-");
   const hostPath = await fakeHost(

@@ -946,6 +946,36 @@ def test_an_auto_export_whose_hardware_decoder_stalls_runs_again_in_software(
     assert lines_in(runs) == ["unset", "software"]
 
 
+def test_progress_marks_where_an_export_started_over(tmp_path: Path, fake_host: FakeHost) -> None:
+    host_path = fake_host(
+        tmp_path,
+        """
+        request, _ = read_request()
+        if os.environ.get("ALPHA2_VIDEO_DECODE") == "software":
+            send(request, type="progress", phase="frames", completed=0, total=9)
+            send(request, type="progress", phase="frames", completed=9, total=9)
+            send(request, ok=True, result={"frames": 9})
+        else:
+            send(request, type="progress", phase="frames", completed=4, total=9)
+            # The host's own restart on the readback path.
+            send(request, type="progress", phase="frames", completed=0, total=9, restarted=True)
+            send(request, type="progress", phase="frames", completed=2, total=9)
+            send(request, ok=False, error={"code": "DECODE_STALLED",
+                "message": "decode shard 0 has been inside one decoder operation for 40001 ms",
+                "failure": {"code": "GPU_TIMEOUT", "origin": "native-host", "operation": "export",
+                            "backend": "native", "phase": "decode", "resource": "gpu"}})
+        """,
+    )
+    reports: list[tuple[int, bool]] = []
+    HostClient(host_path=host_path, video_decode="auto").export(
+        **export_args(
+            tmp_path / "out.mp4", on_progress=lambda p: reports.append((p.completed, p.restarted))
+        )
+    )
+    # The software rerun's first report is marked by the client.
+    assert reports == [(4, False), (0, True), (2, False), (0, True), (9, False)]
+
+
 def test_a_stall_is_not_retried_with_only_software_sessions_or_hardware_required(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:

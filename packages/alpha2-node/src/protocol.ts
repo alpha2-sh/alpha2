@@ -59,6 +59,8 @@ export interface ProgressMessage {
   readonly total: number | null;
   /** The extraction pass, for phase `extract`. */
   readonly pass?: number;
+  /** The export started over on the readback path; `completed` is 0. */
+  readonly restarted?: true;
 }
 
 /**

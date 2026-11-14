@@ -246,10 +246,16 @@ export interface ExportProgress {
    * complete only when `exportProject` resolves.
    */
   readonly phase: ProgressPhase;
-  /** Frames encoded so far; at most `total`. */
+  /** Frames encoded so far; at most `total`. It goes back to 0 only in a report with `restarted`. */
   readonly completed: number;
   /** Frames in the export. */
   readonly total: number;
+  /**
+   * The export started over: the host moved it to the readback path after the GPU-resident
+   * encoder refused a frame, or the client reran it with software decode after a hardware decoder
+   * stalled. Set on the first report of the new run.
+   */
+  readonly restarted?: true;
 }
 
 /**
@@ -1574,7 +1580,10 @@ export class Alpha2NodeClient {
             ...request.renderCache,
             directory: absolutePath(request.renderCache.directory),
           };
-    const run = (mode: VideoDecodeMode | undefined) =>
+    const run = (
+      mode: VideoDecodeMode | undefined,
+      onProgress: ExportProgressCallback | undefined,
+    ) =>
       this.#request(
         "export",
         {
@@ -1610,11 +1619,12 @@ export class Alpha2NodeClient {
         },
         { videoDecode: mode, renderer },
         request.signal,
-        request.onProgress,
+        onProgress,
       );
     let result: NativeExportResult;
     try {
-      result = (await run(videoDecode)).result as NativeExportResult;
+      result = (await run(videoDecode, request.onProgress))
+        .result as NativeExportResult;
     } catch (error) {
       // A decoder stuck in the driver cannot be recovered in-process, so rerun on a software
       // decode host. Software stalls would recur and `hardware-required` forbids the fallback.
@@ -1626,7 +1636,8 @@ export class Alpha2NodeClient {
       )
         throw error;
       try {
-        result = (await run("software")).result as NativeExportResult;
+        result = (await run("software", markingRestart(request.onProgress)))
+          .result as NativeExportResult;
       } catch (retryError) {
         throw recordDecodeStall(retryError, error);
       }
@@ -3427,6 +3438,21 @@ function isThenable(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
+/** `callback` with its next report marked `restarted`. */
+function markingRestart(
+  callback: ExportProgressCallback | undefined,
+): ExportProgressCallback | undefined {
+  if (callback === undefined) return undefined;
+  let pending = true;
+  return (progress) => {
+    const marked = pending
+      ? { ...progress, restarted: true as const }
+      : progress;
+    pending = false;
+    return callback(marked);
+  };
+}
+
 function notifyProgress(
   message: ProgressMessage,
   callback: ExportProgressCallback | undefined,
@@ -3440,6 +3466,7 @@ function notifyProgress(
         phase: message.phase ?? "frames",
         completed: message.completed,
         total: message.total ?? message.completed,
+        ...(message.restarted === true ? { restarted: true as const } : {}),
       }),
     );
   } catch (cause) {

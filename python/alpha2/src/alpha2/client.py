@@ -27,7 +27,7 @@ import time
 import unicodedata
 import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
@@ -203,12 +203,33 @@ class ExportProgress:
     """``frames`` while encoding, ``finalizing`` while the output is flushed. The export is complete
     only when the call returns."""
     completed: int
-    """Frames encoded so far; at most ``total``."""
+    """Frames encoded so far; at most ``total``. It goes back to 0 only in a report marked
+    ``restarted``."""
     total: int
     """Frames in the export."""
+    restarted: bool = False
+    """The export started over: the host moved it to the readback path after the GPU-resident
+    encoder refused a frame, or the client reran it with software decode after a hardware decoder
+    stalled. Set on the first report of the new run."""
 
 
 ProgressCallback = Callable[[ExportProgress], object]
+
+
+def _marking_restart(on_progress: ProgressCallback | None) -> ProgressCallback | None:
+    """``on_progress`` with its next report marked ``restarted``."""
+    if on_progress is None:
+        return None
+    pending = [True]
+
+    def forward(progress: ExportProgress) -> object:
+        if pending:
+            pending.clear()
+            progress = replace(progress, restarted=True)
+        return on_progress(progress)
+
+    return forward
+
 
 PathLike = str | os.PathLike[str]
 
@@ -961,7 +982,7 @@ class HostClient:
                     payload,
                     _HostModes("software", drawn_by, self.host_start_timeout),
                     cancel,
-                    on_progress,
+                    _marking_restart(on_progress),
                 )
             except Alpha2HostError as retry_error:
                 raise _record_decode_stall(retry_error, stall) from stall
@@ -1955,6 +1976,7 @@ class _Pool:
                                     message.get("phase", "frames"),
                                     message["completed"],
                                     message["total"],
+                                    message.get("restarted") is True,
                                 )
                             )
                         except Exception as cause:  # noqa: BLE001 - reported as the export's failure

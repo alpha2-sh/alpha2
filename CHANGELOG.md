@@ -9,6 +9,10 @@ All notable changes to this project are documented in this file.
 - An export result's `performance` splits `renderMs` into `setupMs` (with `encoderProbeMs`,
   `encoderOpenMs` and `loudnessMs`), `firstFrameMs` and `finishMs`, and reports `steadyFps`, the
   encode rate without start-up and finish.
+- Both clients' export progress reports carry `restarted` (`restarted: true` in Node, a
+  `restarted` field of `ExportProgress` in Python) on the first report after the export started
+  over: the host's restart on the readback path, and the client's own rerun with software decode
+  after a hardware decoder stalled. `completed` goes back to 0 only in such a report.
 
 ### Changed
 
