@@ -126,7 +126,13 @@ fn encode(
         .open(path)
         .map_err(|error| error.to_string())?;
     let writer = Box::new(Mp4Writer::create(file, Mp4Flavor::Mp4));
-    let mut sink = EncodeSink::new(writer, video, config, Some((audio, audio_config)));
+    let mut sink = EncodeSink::new(
+        writer,
+        video,
+        config,
+        Some((audio, audio_config)),
+        alpha2_media::CancelToken::default(),
+    );
     let (name, hardware, _) = sink.video_encoder();
     let encoder = (name.to_owned(), hardware);
     let cancel = CancelToken::default();

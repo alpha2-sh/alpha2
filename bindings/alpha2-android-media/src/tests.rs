@@ -224,8 +224,13 @@ mod encode {
         } else {
             Box::new(Mp4Writer::create(file, Mp4Flavor::Mp4))
         };
-        let mut sink =
-            EncodeSink::new(writer, encoder, config, Some((audio_encoder, audio_config)));
+        let mut sink = EncodeSink::new(
+            writer,
+            encoder,
+            config,
+            Some((audio_encoder, audio_config)),
+            alpha2_media::CancelToken::default(),
+        );
         for index in 0..FRAMES {
             sink.write_frame(index, &planes(index)).expect("frame");
         }

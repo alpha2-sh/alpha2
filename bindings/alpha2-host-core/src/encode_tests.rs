@@ -31,6 +31,8 @@ struct Writer {
     log: Log,
     tracks: u32,
     written: bool,
+    /// Every packet write fails.
+    fails: bool,
 }
 
 impl ContainerWriter for Writer {
@@ -43,6 +45,9 @@ impl ContainerWriter for Writer {
     }
 
     fn write(&mut self, packet: Packet) -> Result<(), MuxError> {
+        if self.fails {
+            return Err(MuxError::Io(std::io::Error::other("the disk is full")));
+        }
         self.written = true;
         self.log.push(Event::Packet(
             packet.track,
@@ -66,6 +71,13 @@ struct Video {
     queued: VecDeque<(i64, bool)>,
     given: bool,
     ended: bool,
+    /// Every frame is refused as busy and nothing comes out.
+    busy: bool,
+    /// Frame `n` fails to submit.
+    fails_at: Option<usize>,
+    submitted: usize,
+    /// The first waiting receive blocks this long and gives nothing.
+    blocks_once: Option<std::time::Duration>,
 }
 
 impl VideoEncodeBackend for Video {
@@ -88,15 +100,23 @@ impl VideoEncodeBackend for Video {
         keyframe: bool,
     ) -> Result<Submit, EncodeError> {
         assert_eq!(planes.len(), 3);
-        if self.queued.len() >= 2 {
+        if self.fails_at == Some(self.submitted) {
+            return Err(EncodeError::Adapter("the session broke".into()));
+        }
+        if self.busy || self.queued.len() >= 2 {
             return Ok(Submit::Busy);
         }
+        self.submitted += 1;
         self.queued.push_back((pts, keyframe));
         Ok(Submit::Accepted)
     }
 
-    fn receive(&mut self, _wait: bool) -> Result<EncodePoll, EncodeError> {
-        if self.queued.len() < 2 && !self.ended {
+    fn receive(&mut self, wait: bool) -> Result<EncodePoll, EncodeError> {
+        if wait && let Some(delay) = self.blocks_once.take() {
+            std::thread::sleep(delay);
+            return Ok(EncodePoll::Pending);
+        }
+        if self.busy || (self.queued.len() < 2 && !self.ended) {
             return Ok(EncodePoll::Pending);
         }
         Ok(match self.queued.pop_front() {
@@ -136,6 +156,10 @@ struct Audio {
     ended: bool,
     /// The configuration record, when not the AAC one.
     private: Option<Bytes>,
+    /// It never publishes a configuration record.
+    no_record: bool,
+    /// Every submit fails.
+    fails: bool,
 }
 
 impl AudioEncodeBackend for Audio {
@@ -153,6 +177,9 @@ impl AudioEncodeBackend for Audio {
 
     fn submit(&mut self, pts: i64, planes: &[Vec<f32>]) -> Result<Submit, EncodeError> {
         assert_eq!(planes.len(), 2);
+        if self.fails {
+            return Err(EncodeError::Adapter("the audio session broke".into()));
+        }
         self.packets.push_back((pts, planes[0].len()));
         self.next = pts + 1_024;
         Ok(Submit::Accepted)
@@ -181,6 +208,9 @@ impl AudioEncodeBackend for Audio {
     }
 
     fn codec_private(&self) -> Option<Bytes> {
+        if self.no_record {
+            return None;
+        }
         Some(
             self.private
                 .clone()
@@ -233,18 +263,28 @@ fn planes() -> Vec<PlaneBuffer> {
 }
 
 fn sink(log: &Log, audio: bool) -> EncodeSink {
+    sink_of(
+        log,
+        Video::default(),
+        audio.then(Audio::default),
+        CancelToken::default(),
+    )
+}
+
+fn sink_of(log: &Log, video: Video, audio: Option<Audio>, cancel: CancelToken) -> EncodeSink {
     let writer = Box::new(Writer {
         log: log.clone(),
         tracks: 0,
         written: false,
+        fails: false,
     });
-    let audio = audio.then(|| {
+    let audio = audio.map(|encoder| {
         (
-            Box::new(Audio::default()) as Box<dyn AudioEncodeBackend>,
+            Box::new(encoder) as Box<dyn AudioEncodeBackend>,
             audio_config(),
         )
     });
-    EncodeSink::new(writer, Box::new(Video::default()), video_config(), audio)
+    EncodeSink::new(writer, Box::new(video), video_config(), audio, cancel)
 }
 
 fn write_frames(sink: &mut EncodeSink, count: u64) {
@@ -387,6 +427,7 @@ fn feed_thirty_seconds(
             ..video_config()
         },
         Some((Box::new(encoder), config)),
+        CancelToken::default(),
     );
     let cancel = CancelToken::default();
     let write_audio = |sink: &mut EncodeSink| {
@@ -419,6 +460,7 @@ fn logged_feed(audio_first: bool) -> Vec<Event> {
         log: log.clone(),
         tracks: 0,
         written: false,
+        fails: false,
     });
     feed_thirty_seconds(
         writer,
@@ -550,4 +592,141 @@ fn an_mp4_export_is_the_same_bytes_whichever_track_is_encoded_first() {
     let audio_first = feed(true);
     assert!(audio_first.len() > 4_000, "{}", audio_first.len());
     assert_eq!(audio_first, feed(false));
+}
+
+/// Runs `body` on its own thread and fails the test when it takes longer than 10 s.
+fn within_ten_seconds<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+    let (done, wait) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = done.send(body());
+    });
+    wait.recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the sink returns")
+}
+
+fn busy() -> Video {
+    Video {
+        busy: true,
+        ..Video::default()
+    }
+}
+
+#[test]
+fn a_video_encoder_that_accepts_no_frame_fails_the_frame_after_the_stall_bound() {
+    let result = within_ten_seconds(|| {
+        let mut sink = sink_of(&Log::default(), busy(), None, CancelToken::default())
+            .with_stall_limit(std::time::Duration::from_millis(300));
+        sink.write_frame(0, &planes())
+    });
+    assert!(
+        matches!(&result, Err(EncodeError::Adapter(message)) if message.contains("the video encoder accepted no frame")),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn a_cancel_stops_the_wait_on_a_busy_encoder() {
+    let cancel = CancelToken::default();
+    cancel.cancel();
+    let result = within_ten_seconds(move || {
+        let mut sink = sink_of(&Log::default(), busy(), None, cancel);
+        sink.write_frame(0, &planes())
+    });
+    assert!(matches!(result, Err(EncodeError::Cancelled)), "{result:?}");
+}
+
+#[test]
+fn a_drain_that_blocks_once_past_the_stall_bound_still_finishes() {
+    let log = Log::default();
+    let video = Video {
+        blocks_once: Some(std::time::Duration::from_millis(500)),
+        ..Video::default()
+    };
+    let mut sink = sink_of(&log, video, None, CancelToken::default())
+        .with_stall_limit(std::time::Duration::from_millis(300));
+    write_frames(&mut sink, 1);
+    sink.finish().expect("finish");
+    assert_eq!(log.events().last(), Some(&Event::Finished));
+}
+
+#[test]
+fn finish_names_the_encoder_that_published_no_configuration() {
+    let audio = Audio {
+        no_record: true,
+        ..Audio::default()
+    };
+    let mut sink = sink_of(
+        &Log::default(),
+        Video::default(),
+        Some(audio),
+        CancelToken::default(),
+    );
+    write_frames(&mut sink, 2);
+    let result = sink.finish();
+    assert!(
+        matches!(&result, Err(EncodeError::Adapter(message)) if message.contains("the audio encoder published no configuration")),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn a_failing_video_encoder_is_rejected_and_other_failures_are_not() {
+    let video = Video {
+        fails_at: Some(3),
+        ..Video::default()
+    };
+    let mut sink = sink_of(&Log::default(), video, None, CancelToken::default());
+    write_frames(&mut sink, 3);
+    let result = sink.write_frame(3, &planes());
+    assert!(
+        matches!(&result, Err(EncodeError::EncoderRejected { encoder, frame: 3, message })
+            if encoder == "fake" && message.contains("the session broke")),
+        "{result:?}"
+    );
+
+    let mut sink = EncodeSink::new(
+        Box::new(Writer {
+            log: Log::default(),
+            tracks: 0,
+            written: false,
+            fails: true,
+        }),
+        Box::new(Video::default()),
+        video_config(),
+        None,
+        CancelToken::default(),
+    );
+    let mut result = Ok(());
+    for index in 0..4 {
+        result = sink.write_frame(index, &planes());
+        if result.is_err() {
+            break;
+        }
+    }
+    assert!(
+        matches!(&result, Err(error) if !matches!(error, EncodeError::EncoderRejected { .. })),
+        "{result:?}"
+    );
+
+    let audio = Audio {
+        fails: true,
+        ..Audio::default()
+    };
+    let mut sink = sink_of(
+        &Log::default(),
+        Video::default(),
+        Some(audio),
+        CancelToken::default(),
+    );
+    let block = AudioBlock {
+        start_sample: 0,
+        sample_rate: 48_000,
+        speakers: SpeakerLayout::STEREO,
+        channels: vec![vec![0.0; 4_800]; 2],
+    };
+    let result = sink.write_audio(&block, &CancelToken::default());
+    assert!(
+        matches!(&result, Err(EncodeError::Adapter(message)) if message.contains("audio session")),
+        "{result:?}"
+    );
 }

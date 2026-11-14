@@ -101,7 +101,8 @@ pub trait VideoEncodeBackend: Send {
         keyframe: bool,
     ) -> Result<Submit, EncodeError>;
 
-    /// Takes an encoded packet, in decode order. With `wait`, blocks briefly for one.
+    /// Takes an encoded packet, in decode order. With `wait`, blocks briefly for one. Once it
+    /// answers [`EncodePoll::Drained`] it keeps answering it.
     ///
     /// # Errors
     /// A failed encoder.
@@ -161,7 +162,8 @@ pub trait AudioEncodeBackend: Send {
     fn submit(&mut self, pts: i64, planes: &[Vec<f32>]) -> Result<Submit, EncodeError>;
 
     /// Takes an encoded packet, timestamps in samples at [`Self::sample_rate`] counted from the
-    /// first decoded sample, priming included.
+    /// first decoded sample, priming included. Once it answers [`EncodePoll::Drained`] it keeps
+    /// answering it.
     ///
     /// # Errors
     /// A failed encoder.
@@ -190,8 +192,41 @@ pub trait AudioEncoders: Send + Sync {
     fn open(&self, config: &AudioEncodeConfig) -> Result<Box<dyn AudioEncodeBackend>, EncodeError>;
 }
 
-/// How long encoders may hand out no packet while draining before the sink gives up on them.
+/// How long encoders may take no frame and hand out no packet before the sink gives up on them.
 const DRAIN_STALL: Duration = Duration::from_secs(10);
+
+/// The most one turn of a wait adds to a stall, so a process frozen inside a wait adds no more.
+const STALL_TURN: Duration = Duration::from_millis(100);
+
+/// The time a wait on the encoders has made no progress, added up turn by turn.
+struct Stall {
+    last: Instant,
+    stalled: Duration,
+    limit: Duration,
+}
+
+impl Stall {
+    fn new(limit: Duration) -> Self {
+        Self {
+            last: Instant::now(),
+            stalled: Duration::ZERO,
+            limit,
+        }
+    }
+
+    /// Records one turn of the wait; true once the turns without progress reach the limit.
+    fn turn(&mut self, progressed: bool) -> bool {
+        let now = Instant::now();
+        let spent = now.saturating_duration_since(self.last).min(STALL_TURN);
+        self.last = now;
+        self.stalled = if progressed {
+            Duration::ZERO
+        } else {
+            self.stalled + spent
+        };
+        self.stalled >= self.limit
+    }
+}
 
 /// The container codec of `codec` encoded in `layout`: `ProRes` is 4444 (`ap4h`) with alpha, else
 /// 422 HQ (`apch`), as [`crate::codecs::NativeVideoCodec::ProRes`] encodes it.
@@ -271,6 +306,12 @@ pub struct EncodeSink {
     received: u64,
     /// Every input is in: held audio packets go out.
     finishing: bool,
+    /// Stops the waits on a busy encoder.
+    cancel: CancelToken,
+    /// How long the encoders may make no progress before a wait on them fails.
+    stall_limit: Duration,
+    /// Frames the video encoder accepted.
+    video_frames: u64,
 }
 
 impl std::fmt::Debug for EncodeSink {
@@ -283,13 +324,15 @@ impl std::fmt::Debug for EncodeSink {
 }
 
 impl EncodeSink {
-    /// A sink writing `video` (and `audio`, when the export has sound) into `writer`.
+    /// A sink writing `video` (and `audio`, when the export has sound) into `writer`; `cancel`
+    /// stops its waits on a busy encoder.
     #[must_use]
     pub fn new(
         writer: Box<dyn ContainerWriter>,
         video: Box<dyn VideoEncodeBackend>,
         video_config: VideoEncodeConfig,
         audio: Option<(Box<dyn AudioEncodeBackend>, AudioEncodeConfig)>,
+        cancel: CancelToken,
     ) -> Self {
         let audio = audio.map(|(encoder, config)| {
             let input = EncoderAudioInput::new(
@@ -311,7 +354,16 @@ impl EncodeSink {
             video_written: None,
             received: 0,
             finishing: false,
+            cancel,
+            stall_limit: DRAIN_STALL,
+            video_frames: 0,
         }
+    }
+
+    #[cfg(test)]
+    fn with_stall_limit(mut self, limit: Duration) -> Self {
+        self.stall_limit = limit;
+        self
     }
 
     /// The video encoder's name and the rate control it ran.
@@ -390,7 +442,8 @@ impl EncodeSink {
     fn drain(&mut self, wait_video: bool, wait_audio: bool) -> Result<(bool, bool), EncodeError> {
         let mut video_done = false;
         loop {
-            match self.video.receive(wait_video)? {
+            let received = self.video.receive(wait_video);
+            match received.map_err(|error| self.rejected(error))? {
                 EncodePoll::Packet(packet) => {
                     self.received += 1;
                     self.video_track.queued.push_back(packet);
@@ -505,6 +558,7 @@ impl EncodeSink {
     fn submit_audio(&mut self, frames: Vec<Vec<Vec<f32>>>) -> Result<(), EncodeError> {
         for frame in frames {
             let length = i64::try_from(frame.first().map_or(0, Vec::len)).unwrap_or(0);
+            let mut stall = Stall::new(self.stall_limit);
             loop {
                 let pts = self.audio_pts;
                 let Some((encoder, _, _)) = self.audio.as_mut() else {
@@ -512,9 +566,7 @@ impl EncodeSink {
                 };
                 match encoder.submit(pts, &frame)? {
                     Submit::Accepted => break,
-                    Submit::Busy => {
-                        self.drain(false, true)?;
-                    }
+                    Submit::Busy => self.wait_busy(&mut stall, false, "audio")?,
                 }
             }
             self.audio_pts += length;
@@ -526,7 +578,8 @@ impl EncodeSink {
     /// Ends both inputs, drains the encoders and closes the output.
     ///
     /// # Errors
-    /// An encoder or writer failure, or an encoder that never published its configuration.
+    /// As [`Self::write_frame`]; encoders that give no packet for 10 s while draining, or an
+    /// encoder that never published its configuration.
     pub fn finish(mut self) -> Result<(), EncodeError> {
         let tail = self
             .audio
@@ -534,31 +587,40 @@ impl EncodeSink {
             .map(|(_, input, _)| input.finish())
             .unwrap_or_default();
         self.submit_audio(tail)?;
-        self.video.finish_input()?;
+        let finished = self.video.finish_input();
+        finished.map_err(|error| self.rejected(error))?;
         if let Some((encoder, _, _)) = self.audio.as_mut() {
             encoder.finish_input()?;
         }
         let mut done = (false, self.audio.is_none());
-        let mut progressed = Instant::now();
+        let mut stall = Stall::new(self.stall_limit);
         while !(done.0 && done.1) {
             let received = self.received;
             let (video, audio) = self.drain(!done.0, !done.1)?;
             done = (done.0 || video, done.1 || audio);
-            if self.received != received {
-                progressed = Instant::now();
-            } else if progressed.elapsed() > DRAIN_STALL {
+            if stall.turn(self.received != received) {
+                let which = match done {
+                    (false, false) => "video and audio encoders",
+                    (false, true) => "video encoder",
+                    _ => "audio encoder",
+                };
                 return Err(EncodeError::Adapter(format!(
-                    "the encoders gave no packet for {} s while draining",
-                    DRAIN_STALL.as_secs()
+                    "the {which} gave no packet for {} s while draining",
+                    self.stall_limit.as_secs_f64()
                 )));
             }
         }
         self.finishing = true;
         self.flush_tracks()?;
         if self.video_track.id.is_none() {
-            return Err(EncodeError::Adapter(
-                "the video encoder published no configuration".into(),
-            ));
+            let which = if self.video_info().is_none() {
+                "video"
+            } else {
+                "audio"
+            };
+            return Err(EncodeError::Adapter(format!(
+                "the {which} encoder published no configuration"
+            )));
         }
         let writer = self
             .writer
@@ -572,7 +634,9 @@ impl EncodeSink {
     /// Encodes frame `index` of the export, its planes in the configured layout.
     ///
     /// # Errors
-    /// An encoder or writer failure.
+    /// [`EncodeError::EncoderRejected`] for any failure of the video encoder; a writer or audio
+    /// encoder failure as it is; [`EncodeError::Cancelled`] when the token is set while an encoder
+    /// is busy; an encoder that takes no frame and gives no packet for 10 s.
     pub fn write_frame(&mut self, index: u64, planes: &[PlaneBuffer]) -> Result<(), EncodeError> {
         let rate = self.video_config.frame_rate;
         let pts = i64::try_from(index).unwrap_or(i64::MAX)
@@ -581,15 +645,50 @@ impl EncodeSink {
             / i64::from(rate.numerator().max(1));
         let interval = u64::from(self.video_config.keyframe_interval.max(1));
         let keyframe = index.is_multiple_of(interval);
+        let mut stall = Stall::new(self.stall_limit);
         loop {
-            match self.video.submit(pts, planes, keyframe)? {
+            let submitted = self.video.submit(pts, planes, keyframe);
+            match submitted.map_err(|error| self.rejected(error))? {
                 Submit::Accepted => break,
-                Submit::Busy => {
-                    self.drain(true, false)?;
-                }
+                Submit::Busy => self.wait_busy(&mut stall, true, "video")?,
             }
         }
+        self.video_frames += 1;
         self.drain(false, false).map(|_| ())
+    }
+
+    /// One turn of a wait for the `which` encoder to take a frame: drains the encoders, waiting on
+    /// the video one when `video`.
+    fn wait_busy(
+        &mut self,
+        stall: &mut Stall,
+        video: bool,
+        which: &str,
+    ) -> Result<(), EncodeError> {
+        if self.cancel.is_cancelled() {
+            return Err(EncodeError::Cancelled);
+        }
+        let received = self.received;
+        self.drain(video, !video)?;
+        if stall.turn(self.received != received) {
+            return Err(EncodeError::Adapter(format!(
+                "the {which} encoder accepted no frame for {} s",
+                self.stall_limit.as_secs_f64()
+            )));
+        }
+        Ok(())
+    }
+
+    /// A video encoder failure as one another encoder may not have: anything but a cancel.
+    fn rejected(&self, error: EncodeError) -> EncodeError {
+        match error {
+            EncodeError::Cancelled | EncodeError::EncoderRejected { .. } => error,
+            error => EncodeError::EncoderRejected {
+                encoder: self.video.name().to_owned(),
+                frame: self.video_frames,
+                message: error.to_string(),
+            },
+        }
     }
 }
 

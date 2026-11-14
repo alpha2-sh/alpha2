@@ -243,6 +243,13 @@ All notable changes to this project are documented in this file.
   per frame, and a seek after a failed catch-up shows the frame at its time instead of a later one.
   Under the tolerant decode policy a picture a hardware decoder cannot decode is skipped and
   reported, as on the desktop.
+- Mobile: an export whose encoder stops taking frames fails after 10 s without progress, and
+  `cancel()` stops it while it waits, instead of the export hanging. A process frozen while it
+  waits no longer counts the frozen time against that bound.
+- Mobile: an export is run again on the software video encoder only when the hardware video encoder
+  is what failed, after the app is back in the foreground. A full disk, a failed write, an audio
+  encoder failure or a failed publish fail once with their own code; a failed publish keeps its
+  `OUTPUT_PUBLISH_FAILED` error and the path of the kept file.
 
 ## [0.6.0] - 2026-11-08
 

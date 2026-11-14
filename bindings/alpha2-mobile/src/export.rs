@@ -47,21 +47,22 @@ const AUDIO_BLOCK: usize = 4096;
 /// Bytes the open extension sources may hold, as the desktop host's default.
 const PROVIDER_SOURCE_BYTES: u64 = 512 << 20;
 
-/// Exports `job`, once more on the software video encoder when the hardware one fails while
-/// encoding.
+/// Exports `job`, once more on the software video encoder when the hardware video encoder is
+/// what failed.
 pub(crate) fn export(job: &ExportJob, media: &MediaBackends) -> Result<ExportOutcome, Alpha2Error> {
     job.paused.wait_while_paused(&job.cancel, &job.held);
     if job.cancel.is_cancelled() {
         return Err(Alpha2Error::Aborted);
     }
     match attempt(job, media, false) {
-        Err(Failure::Encode {
-            hardware: true,
-            error,
-        }) if !job.cancel.is_cancelled() => {
+        Err(Failure::HardwareEncoder(error)) if !job.cancel.is_cancelled() => {
             alpha2_os::diagnostic!(
-                "alpha2 mobile export: the hardware encoder failed ({error}); exporting again in software"
+                "alpha2 mobile export: the hardware video encoder failed ({error}); exporting again in software"
             );
+            job.paused.wait_while_paused(&job.cancel, &job.held);
+            if job.cancel.is_cancelled() {
+                return Err(Alpha2Error::Aborted);
+            }
             attempt(job, media, true).map_err(Failure::into_error)
         }
         outcome => outcome.map_err(Failure::into_error),
@@ -70,8 +71,8 @@ pub(crate) fn export(job: &ExportJob, media: &MediaBackends) -> Result<ExportOut
 
 /// Why an attempt stopped.
 enum Failure {
-    /// The encoders or the output, with whether the video encoder ran on hardware.
-    Encode { hardware: bool, error: EncodeError },
+    /// The hardware video encoder failed; the software one may succeed.
+    HardwareEncoder(EncodeError),
     /// Anything else.
     Other(Alpha2Error),
 }
@@ -79,7 +80,7 @@ enum Failure {
 impl Failure {
     fn into_error(self) -> Alpha2Error {
         match self {
-            Self::Encode { error, .. } => error.into(),
+            Self::HardwareEncoder(error) => error.into(),
             Self::Other(error) => error,
         }
     }
@@ -291,10 +292,7 @@ fn attempt(
             alpha2_host_core::partial::ExistingOutput::Refuse
         },
     };
-    let encode = |error| Failure::Encode {
-        hardware: false,
-        error,
-    };
+    let encode = |error: EncodeError| Failure::Other(error.into());
     let mut partial = PartialOutput::claim(&target, SeekNeed::Required).map_err(encode)?;
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -324,7 +322,10 @@ fn attempt(
     let video_encoder = media.video_encoders.open(&video_config).map_err(encode)?;
     let hardware = video_encoder.hardware();
     let video_encoder_name = video_encoder.name().to_owned();
-    let encode = |error| Failure::Encode { hardware, error };
+    let encode = |error: EncodeError| match error {
+        EncodeError::EncoderRejected { .. } if hardware => Failure::HardwareEncoder(error),
+        error => Failure::Other(error.into()),
+    };
     let audio = if has_audio {
         let config = AudioEncodeConfig {
             codec: audio_codec,
@@ -337,7 +338,13 @@ fn attempt(
         None
     };
     let audio_encoder_name = audio.as_ref().map(|(encoder, _)| encoder.name().to_owned());
-    let mut sink = EncodeSink::new(writer(container, file), video_encoder, video_config, audio);
+    let mut sink = EncodeSink::new(
+        writer(container, file),
+        video_encoder,
+        video_config,
+        audio,
+        job.cancel.clone(),
+    );
 
     if let Some(sources) = audio_sources.as_mut() {
         let window = exporter
@@ -779,6 +786,8 @@ fn whole(
 
 #[cfg(test)]
 mod tests {
+    use alpha2_host_core::encode::{AudioEncodeBackend, EncodePoll, VideoEncodeBackend};
+
     use super::*;
 
     /// Reads nothing itself; PCM goes through `WithPcm`.
@@ -850,6 +859,320 @@ mod tests {
         cancel.cancel();
         let cancelled = decode_audio(&project, &assets, &decoders, (48_000, 4 << 20), &cancel);
         assert_eq!(code(cancelled), Some("ABORTED".to_owned()));
+        let _ = std::fs::remove_file(wav);
+    }
+
+    /// Video encoders whose hardware sessions fail at a frame, and an audio encoder that fails
+    /// when asked to; both record what they opened.
+    #[derive(Default)]
+    struct Encoders {
+        /// Hardware video sessions fail to submit this frame.
+        hardware_fails_at: Option<u64>,
+        /// The audio encoder fails every frame.
+        audio_fails: bool,
+        /// Whether each video encoder opened was asked for software.
+        video_opened: std::sync::Mutex<Vec<bool>>,
+        audio_opened: std::sync::atomic::AtomicUsize,
+    }
+
+    struct FakeVideo {
+        hardware: bool,
+        fails_at: Option<u64>,
+        submitted: u64,
+        queued: std::collections::VecDeque<i64>,
+        ended: bool,
+        given: bool,
+    }
+
+    impl VideoEncodeBackend for FakeVideo {
+        fn name(&self) -> &'static str {
+            "fake"
+        }
+
+        fn hardware(&self) -> bool {
+            self.hardware
+        }
+
+        fn timescale(&self) -> u32 {
+            90_000
+        }
+
+        fn submit(
+            &mut self,
+            pts: i64,
+            _planes: &[alpha2_host_core::encode::PlaneBuffer],
+            _keyframe: bool,
+        ) -> Result<alpha2_host_core::video_stream::Submit, EncodeError> {
+            if self.hardware && self.fails_at == Some(self.submitted) {
+                return Err(EncodeError::Adapter("the hardware session broke".into()));
+            }
+            self.submitted += 1;
+            self.queued.push_back(pts);
+            Ok(alpha2_host_core::video_stream::Submit::Accepted)
+        }
+
+        fn receive(&mut self, _wait: bool) -> Result<EncodePoll, EncodeError> {
+            Ok(match self.queued.pop_front() {
+                Some(pts) => {
+                    self.given = true;
+                    EncodePoll::Packet(alpha2_host_core::encode::EncodedPacket {
+                        pts,
+                        dts: pts,
+                        keyframe: true,
+                        data: bytes::Bytes::from_static(&[1]),
+                    })
+                }
+                None if self.ended => EncodePoll::Drained,
+                None => EncodePoll::Pending,
+            })
+        }
+
+        fn finish_input(&mut self) -> Result<(), EncodeError> {
+            self.ended = true;
+            Ok(())
+        }
+
+        fn codec_private(&self) -> Option<bytes::Bytes> {
+            self.given.then(|| bytes::Bytes::from_static(&[1, 0, 0, 0]))
+        }
+
+        fn applied_rate_control(&self) -> alpha2_host_core::rate_control::AppliedRateControl {
+            alpha2_host_core::rate_control::AppliedRateControl::Bitrate
+        }
+    }
+
+    struct FakeAudio {
+        fails: bool,
+        queued: std::collections::VecDeque<i64>,
+        ended: bool,
+    }
+
+    impl AudioEncodeBackend for FakeAudio {
+        fn name(&self) -> &'static str {
+            "fake audio"
+        }
+
+        fn sample_rate(&self) -> u32 {
+            48_000
+        }
+
+        fn frame_size(&self) -> usize {
+            1_024
+        }
+
+        fn submit(
+            &mut self,
+            pts: i64,
+            _planes: &[Vec<f32>],
+        ) -> Result<alpha2_host_core::video_stream::Submit, EncodeError> {
+            if self.fails {
+                return Err(EncodeError::Adapter("the audio session broke".into()));
+            }
+            self.queued.push_back(pts);
+            Ok(alpha2_host_core::video_stream::Submit::Accepted)
+        }
+
+        fn receive(&mut self, _wait: bool) -> Result<EncodePoll, EncodeError> {
+            Ok(match self.queued.pop_front() {
+                Some(pts) => EncodePoll::Packet(alpha2_host_core::encode::EncodedPacket {
+                    pts,
+                    dts: pts,
+                    keyframe: true,
+                    data: bytes::Bytes::from_static(&[2]),
+                }),
+                None if self.ended => EncodePoll::Drained,
+                None => EncodePoll::Pending,
+            })
+        }
+
+        fn finish_input(&mut self) -> Result<(), EncodeError> {
+            self.ended = true;
+            Ok(())
+        }
+
+        fn codec_private(&self) -> Option<bytes::Bytes> {
+            Some(bytes::Bytes::from_static(&[0x11, 0x90]))
+        }
+
+        fn priming(&self) -> u32 {
+            0
+        }
+    }
+
+    impl VideoEncoders for Encoders {
+        fn open(
+            &self,
+            config: &VideoEncodeConfig,
+        ) -> Result<Box<dyn VideoEncodeBackend>, EncodeError> {
+            self.video_opened
+                .lock()
+                .expect("lock")
+                .push(config.software);
+            Ok(Box::new(FakeVideo {
+                hardware: !config.software,
+                fails_at: self.hardware_fails_at,
+                submitted: 0,
+                queued: std::collections::VecDeque::new(),
+                ended: false,
+                given: false,
+            }))
+        }
+    }
+
+    impl AudioEncoders for Encoders {
+        fn open(
+            &self,
+            _config: &AudioEncodeConfig,
+        ) -> Result<Box<dyn AudioEncodeBackend>, EncodeError> {
+            self.audio_opened
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(Box::new(FakeAudio {
+                fails: self.audio_fails,
+                queued: std::collections::VecDeque::new(),
+                ended: false,
+            }))
+        }
+    }
+
+    impl VideoBackends for NoDecoders {
+        fn open(
+            &self,
+            _track: &alpha2_container::TrackInfo,
+            _kind: alpha2_host_core::video_stream::BackendKind,
+        ) -> Result<
+            Box<dyn alpha2_host_core::video_stream::VideoDecodeBackend>,
+            alpha2_host_core::video_stream::BackendError,
+        > {
+            Err(alpha2_host_core::video_stream::BackendError::Unsupported(
+                "no decoders".into(),
+            ))
+        }
+    }
+
+    struct Quiet;
+
+    impl crate::ExportProgress for Quiet {
+        fn on_progress(
+            &self,
+            _event: crate::ExportProgressEvent,
+        ) -> Result<(), crate::ProgressFailure> {
+            Ok(())
+        }
+    }
+
+    /// Exports the audio test project (a still and `audio`) to `name`.mkv on this thread with
+    /// `encoders` and the CPU renderer.
+    fn export_with(
+        encoders: &Arc<Encoders>,
+        name: &str,
+        audio: &Path,
+    ) -> (PathBuf, Result<ExportOutcome, Alpha2Error>) {
+        let tests = std::env::var_os("ALPHA2_TESTS_DIR").map_or_else(
+            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests"),
+            PathBuf::from,
+        );
+        let output =
+            std::env::temp_dir().join(format!("alpha2-mobile-{}-{name}.mkv", std::process::id()));
+        let _ = std::fs::remove_file(&output);
+        let path = |path: &Path| path.to_string_lossy().into_owned();
+        let job = ExportJob {
+            request: crate::ExportRequest {
+                project_json: std::fs::read_to_string(
+                    tests.join("cases/host-audio-export-project.json"),
+                )
+                .expect("project"),
+                assets: HashMap::from([
+                    (
+                        "image-source".to_owned(),
+                        path(&tests.join("corpus/cross_topology_parity.png")),
+                    ),
+                    ("audio-source".to_owned(), path(audio)),
+                ]),
+                output_path: path(&output),
+                video_codec: Some("vp9".into()),
+                audio_codec: Some("aac".into()),
+                include_audio: true,
+                ..crate::ExportRequest::default()
+            },
+            config: crate::EngineConfig {
+                renderer: crate::RendererMode::Cpu,
+                ..crate::EngineConfig::default()
+            },
+            fonts: Vec::new(),
+            cancel: CancelToken::default(),
+            paused: Arc::default(),
+            held: Arc::default(),
+            budget: alpha2_host_core::export::FrameBudget::new(1 << 30),
+            progress: Arc::new(crate::session::Progress::new(Arc::new(Quiet))),
+        };
+        let media = MediaBackends {
+            video_decoders: Arc::new(NoDecoders),
+            audio_decoders: Arc::new(alpha2_host_core::audio_stream::WithPcm(NoDecoders)),
+            video_encoders: Arc::clone(encoders) as Arc<dyn VideoEncoders>,
+            audio_encoders: Arc::clone(encoders) as Arc<dyn AudioEncoders>,
+        };
+        (output.clone(), export(&job, &media))
+    }
+
+    fn opened(encoders: &Encoders) -> (Vec<bool>, usize) {
+        (
+            encoders.video_opened.lock().expect("lock").clone(),
+            encoders
+                .audio_opened
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    #[test]
+    fn only_a_failed_hardware_video_encoder_is_retried_in_software() {
+        let wav =
+            std::env::temp_dir().join(format!("alpha2-mobile-retry-{}.wav", std::process::id()));
+        silence(&wav);
+
+        let encoders = Arc::new(Encoders {
+            hardware_fails_at: Some(5),
+            ..Encoders::default()
+        });
+        let (output, outcome) = export_with(&encoders, "hardware", &wav);
+        let report: serde_json::Value =
+            serde_json::from_str(&outcome.expect("exported").report_json).expect("report");
+        assert_eq!(report["softwareRetry"], true);
+        assert_eq!(report["hardwareEncoder"], false);
+        assert_eq!(opened(&encoders), (vec![false, true], 2));
+        let _ = std::fs::remove_file(output);
+
+        let encoders = Arc::new(Encoders {
+            hardware_fails_at: Some(5),
+            audio_fails: true,
+            ..Encoders::default()
+        });
+        let (output, outcome) = export_with(&encoders, "audio", &wav);
+        assert!(
+            matches!(&outcome, Err(Alpha2Error::Failed { code, reason })
+                if code == "ENCODE_FAILED" && reason.contains("audio session")),
+            "{outcome:?}"
+        );
+        assert_eq!(opened(&encoders), (vec![false], 1));
+        assert!(!output.exists());
+
+        let encoders = Arc::new(Encoders::default());
+        let target =
+            std::env::temp_dir().join(format!("alpha2-mobile-{}-publish.mkv", std::process::id()));
+        alpha2_host_core::partial::hooks::FAIL_PUBLISH_TO
+            .with_borrow_mut(|fail| *fail = Some((target.clone(), 28)));
+        let (output, outcome) = export_with(&encoders, "publish", &wav);
+        alpha2_host_core::partial::hooks::FAIL_PUBLISH_TO.with_borrow_mut(|fail| *fail = None);
+        let kept = match outcome {
+            Err(Alpha2Error::OutputPublishFailed {
+                kept_path: Some(kept),
+                ..
+            }) => PathBuf::from(kept),
+            other => panic!("{other:?}"),
+        };
+        assert!(kept.exists(), "{}", kept.display());
+        assert!(!output.exists());
+        assert_eq!(opened(&encoders), (vec![false], 1));
+        let _ = std::fs::remove_file(kept);
         let _ = std::fs::remove_file(wav);
     }
 }
