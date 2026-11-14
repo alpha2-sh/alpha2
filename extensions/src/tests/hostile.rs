@@ -43,6 +43,118 @@ pub(crate) fn svg_nested_images(inner: &str, count: usize) -> String {
     )
 }
 
+/// How one link of an SVG reference chain names the next.
+#[cfg(feature = "svg")]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SvgLink {
+    /// A pattern whose content fills with the next.
+    Fill,
+    /// A pattern whose content strokes with the next.
+    Stroke,
+    /// A pattern whose content a style sheet rule fills with the next.
+    StyleSheet,
+    /// A pattern whose content a `style` attribute fills with the next.
+    StyleAttribute,
+    Mask,
+    ClipPath,
+    /// A filter whose `feImage` draws an element filtered by the next.
+    FeImage,
+}
+
+#[cfg(feature = "svg")]
+impl SvgLink {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::Fill,
+        Self::Stroke,
+        Self::StyleSheet,
+        Self::StyleAttribute,
+        Self::Mask,
+        Self::ClipPath,
+        Self::FeImage,
+    ];
+}
+
+/// An SVG whose drawn rectangle starts a chain of `links` references of one kind. With `ring`, the
+/// last link names the first; otherwise the last one's content names nothing.
+#[cfg(feature = "svg")]
+pub(crate) fn svg_reference_chain(link: SvgLink, links: usize, ring: bool) -> String {
+    use std::fmt::Write as _;
+    let next = |at: usize| {
+        if at + 1 < links {
+            Some(at + 1)
+        } else {
+            ring.then_some(0)
+        }
+    };
+    let property = match link {
+        SvgLink::Fill | SvgLink::StyleSheet | SvgLink::StyleAttribute => "fill",
+        SvgLink::Stroke => "stroke",
+        SvgLink::Mask => "mask",
+        SvgLink::ClipPath => "clip-path",
+        SvgLink::FeImage => "filter",
+    };
+    let mut body = String::new();
+    let mut sheet = String::new();
+    for at in 0..links {
+        let named = next(at).map_or_else(String::new, |next| match link {
+            SvgLink::StyleSheet => {
+                let _ = write!(sheet, "#e{at}{{fill:url(#r{next})}}");
+                String::new()
+            }
+            SvgLink::StyleAttribute => format!(r#" style="fill:url(#r{next})""#),
+            SvgLink::FeImage => String::new(),
+            _ => format!(r#" {property}="url(#r{next})""#),
+        });
+        let content = format!(r#"<rect id="e{at}" width="1" height="1"{named}/>"#);
+        let _ = match link {
+            SvgLink::Fill | SvgLink::Stroke | SvgLink::StyleSheet | SvgLink::StyleAttribute => {
+                write!(
+                    body,
+                    r#"<pattern id="r{at}" width="1" height="1">{content}</pattern>"#
+                )
+            }
+            SvgLink::Mask => write!(body, r#"<mask id="r{at}">{content}</mask>"#),
+            SvgLink::ClipPath => write!(body, r#"<clipPath id="r{at}">{content}</clipPath>"#),
+            SvgLink::FeImage => {
+                let image = next(at).map_or_else(String::new, |next| {
+                    format!(r##"<feImage href="#f{next}"/>"##)
+                });
+                write!(
+                    body,
+                    r#"<filter id="r{at}">{image}<feFlood/></filter><rect id="f{at}" width="1" height="1" filter="url(#r{at})"/>"#
+                )
+            }
+        };
+    }
+    if !sheet.is_empty() {
+        body.insert_str(0, &format!("<style>{sheet}</style>"));
+    }
+    let first = match link {
+        // The first filtered element is drawn where it stands.
+        SvgLink::FeImage => String::new(),
+        _ => format!(r#"<rect width="5" height="5" {property}="url(#r0)"/>"#),
+    };
+    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">{body}{first}</svg>"#)
+}
+
+/// An SVG drawing a rectangle masked by `levels` masks of two rectangles, each masked by the next.
+#[cfg(feature = "svg")]
+pub(crate) fn svg_doubling_masks(levels: usize) -> String {
+    use std::fmt::Write as _;
+    let mut body =
+        String::from(r##"<mask id="m0"><rect width="1" height="1" fill="#fff"/></mask>"##);
+    for level in 1..=levels {
+        let previous = level - 1;
+        let _ = write!(
+            body,
+            r#"<mask id="m{level}"><rect width="1" height="1" mask="url(#m{previous})"/><rect x="1" width="1" height="1" mask="url(#m{previous})"/></mask>"#
+        );
+    }
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">{body}<rect width="10" height="10" mask="url(#m{levels})"/></svg>"#
+    )
+}
+
 /// What the chunks of an [`ExrPart`] hold.
 #[cfg(feature = "exr")]
 #[derive(Clone, Copy)]

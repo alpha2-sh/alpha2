@@ -49,8 +49,22 @@ for (let level = 1; level <= 4; level++) entities += '<!ENTITY d' + level + ' "'
 const packed = new Uint8Array(await new Response(new Blob([doc(' '.repeat(40 << 20), 8)]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
 let binary = "";
 for (let at = 0; at < packed.length; at += 0x8000) binary += String.fromCharCode(...packed.subarray(at, at + 0x8000));
+const patterns = (links, ring) => {
+  let body = "";
+  for (let at = 0; at < links; at++) {
+    const next = at + 1 < links ? at + 1 : ring ? 0 : -1;
+    body += '<pattern id="r' + at + '" width="1" height="1"><rect width="1" height="1"' + (next >= 0 ? ' fill="url(#r' + next + ')"' : "") + "/></pattern>";
+  }
+  return doc(body + '<rect width="5" height="5" fill="url(#r0)"/>');
+};
+let masks = '<mask id="m0"><rect width="1" height="1" fill="#fff"/></mask>';
+for (let level = 1; level <= 20; level++) masks += '<mask id="m' + level + '">' + ('<rect width="1" height="1" mask="url(#m' + (level - 1) + ')"/>').repeat(2) + "</mask>";
 const documents = {
   nestedAsDeepAsAllowed: nested(254),
+  patternsAsDeepAsAllowed: patterns(50, false),
+  patternsTooDeep: patterns(51, false),
+  patternRing: patterns(3, true),
+  doublingMasks: doc(masks + '<rect width="10" height="10" mask="url(#m20)"/>'),
   nestedTooDeep: nested(100000),
   entitiesTooDeep: '<!DOCTYPE svg [' + entities + ']>' + doc('&d4;'),
   entityElements: '<!DOCTYPE svg [<!ENTITY b "' + '<g/>'.repeat(1000) + '">]>' + doc('&b;'.repeat(10000)),
@@ -74,7 +88,9 @@ for (const [name, text] of Object.entries(documents)) {
 const refused = (name) => outcomes[name].outcome.startsWith("refused: ") && outcomes[name].outcome.includes("too large");
 report({
   ok: outcomes.nestedAsDeepAsAllowed.outcome === "drawn"
-    && ["nestedTooDeep", "entitiesTooDeep", "entityElements", "morphology400", "backtrackingRule", "gzipBomb"].every(refused)
+    && outcomes.patternsAsDeepAsAllowed.outcome === "drawn"
+    && outcomes.patternRing.outcome.startsWith("refused: ") && outcomes.patternRing.outcome.includes("refers to itself")
+    && ["nestedTooDeep", "patternsTooDeep", "doublingMasks", "entitiesTooDeep", "entityElements", "morphology400", "backtrackingRule", "gzipBomb"].every(refused)
     && Object.values(outcomes).every((o) => o.ms < 20000),
   outcomes,
 });

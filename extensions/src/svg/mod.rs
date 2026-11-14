@@ -13,6 +13,9 @@ mod markup;
 mod path_data;
 mod render_cost;
 
+#[cfg(test)]
+pub(crate) use document::REFERENCE_LEVELS;
+
 use std::io::Read as _;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};

@@ -31,8 +31,28 @@ fn main() -> std::io::Result<()> {
 
 #[cfg(feature = "svg")]
 fn svg_seeds() -> Seeds {
-    use hostile::{svg_entity_elements, svg_nested_entity_elements, svg_nested_images};
-    vec![
+    use hostile::{
+        SvgLink, svg_doubling_masks, svg_entity_elements, svg_nested_entity_elements,
+        svg_nested_images, svg_reference_chain,
+    };
+    let rings = SvgLink::ALL.map(|link| {
+        let name = match link {
+            SvgLink::Fill => "ring-fill.svg",
+            SvgLink::Stroke => "ring-stroke.svg",
+            SvgLink::StyleSheet => "ring-style-sheet.svg",
+            SvgLink::StyleAttribute => "ring-style-attribute.svg",
+            SvgLink::Mask => "ring-mask.svg",
+            SvgLink::ClipPath => "ring-clip-path.svg",
+            SvgLink::FeImage => "ring-feimage.svg",
+        };
+        (name, svg_reference_chain(link, 3, true).into_bytes())
+    });
+    let mut seeds = vec![
+        (
+            "mask-chain.svg",
+            svg_reference_chain(SvgLink::Mask, 400, false).into(),
+        ),
+        ("doubling-masks.svg", svg_doubling_masks(22).into()),
         (
             "entity-elements.svg",
             svg_entity_elements(1000, 10_000).into(),
@@ -45,7 +65,9 @@ fn svg_seeds() -> Seeds {
             "nested-images.svg",
             svg_nested_images(&svg_entity_elements(1000, 10_000), 2).into(),
         ),
-    ]
+    ];
+    seeds.extend(rings);
+    seeds
 }
 
 #[cfg(not(feature = "svg"))]

@@ -1,3 +1,5 @@
+#[cfg(feature = "svg")]
+use super::hostile::{SvgLink, svg_doubling_masks, svg_reference_chain};
 use super::*;
 
 #[cfg(feature = "svg")]
@@ -733,7 +735,7 @@ fn an_svg_nested_deeper_than_its_parsers_stack_is_refused_before_it_is_parsed() 
     copies.push_str(r##"</defs><use href="#u4"/>"##);
     refused_as(
         svg_drawn(&svg_document(64, 64, &copies), (0, 0)),
-        "nest more than 256 deep with its `use` copies in place",
+        "nest more than 256 deep with its `use` copies and references in place",
     );
 }
 
@@ -851,6 +853,106 @@ fn the_svg_images_an_svg_draws_are_read_within_its_text_budget() {
     };
     assert_eq!(drawn(4).expect("drawn"), (8, 8));
     refused_as(drawn(40), "bytes of text together");
+}
+
+#[cfg(feature = "svg")]
+fn refused_as_ring(result: Result<(u32, u32), ExtensionError>, what: &str) {
+    match result {
+        Err(ExtensionError::Malformed(message)) if message.contains("refers to itself") => {}
+        other => panic!("{what}: expected a refused ring, got {other:?}"),
+    }
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_reference_ring_that_usvg_would_cut_is_refused_too() {
+    for link in SvgLink::ALL {
+        for links in [1, 2] {
+            refused_as_ring(
+                svg_drawn(&svg_reference_chain(link, links, true), (0, 0)),
+                &format!("{link:?} x {links}"),
+            );
+        }
+    }
+    // A clip path's content takes no paint, so usvg draws this; it is a ring all the same.
+    let mixed = svg_document(
+        10,
+        10,
+        r#"<pattern id="p" width="1" height="1"><rect width="1" height="1" mask="url(#m)"/></pattern><mask id="m"><rect width="1" height="1" clip-path="url(#c)"/></mask><clipPath id="c"><rect width="1" height="1" fill="url(#p)"/></clipPath><rect width="5" height="5" fill="url(#p)"/>"#,
+    );
+    refused_as_ring(svg_drawn(&mixed, (0, 0)), "pattern, mask, clip path");
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_reference_ring_is_refused_before_it_overflows_the_stack() {
+    for link in SvgLink::ALL {
+        for links in [3, 4] {
+            refused_as_ring(
+                svg_drawn(&svg_reference_chain(link, links, true), (0, 0)),
+                &format!("{link:?} x {links}"),
+            );
+        }
+    }
+    // The pattern's content inherits the fill that names it.
+    let inherited = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="url(#p)"><pattern id="p" width="1" height="1"><rect width="1" height="1"/></pattern><rect width="5" height="5"/></svg>"#;
+    refused_as_ring(svg_drawn(inherited, (0, 0)), "inherited fill");
+    let crossed = svg_document(
+        10,
+        10,
+        r#"<mask id="m"><rect width="1" height="1" fill="url(#p)"/></mask><pattern id="p" width="1" height="1"><rect width="1" height="1" mask="url(#m)"/></pattern><rect width="5" height="5" fill="url(#p)"/>"#,
+    );
+    refused_as_ring(svg_drawn(&crossed, (0, 0)), "pattern and mask");
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_gradient_or_pattern_template_ring_is_refused_before_it_loops() {
+    for element in ["linearGradient", "radialGradient", "pattern"] {
+        let document = svg_document(
+            10,
+            10,
+            &format!(
+                r##"<{element} id="a" href="#b"/><{element} id="b" xlink:href="#c"/><{element} id="c" href="#b"/><rect width="5" height="5" fill="url(#a)"/>"##
+            ),
+        );
+        refused_as_ring(svg_drawn(&document, (0, 0)), element);
+    }
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_reference_chain_nests_four_levels_a_link() {
+    use crate::svg::{MAX_NESTING, REFERENCE_LEVELS};
+    // The svg element is level 0 and the drawn rectangle 1; each link adds the referenced
+    // element and its rectangle.
+    let longest = (MAX_NESTING - 2) / (REFERENCE_LEVELS + 1);
+    for link in [SvgLink::Fill, SvgLink::Mask, SvgLink::ClipPath] {
+        assert_eq!(
+            svg_drawn(&svg_reference_chain(link, longest, false), (0, 0)).expect("drawn"),
+            (10, 10),
+            "{link:?} x {longest}"
+        );
+        refused_as(
+            svg_drawn(&svg_reference_chain(link, longest + 1, false), (0, 0)),
+            "nest more than 256 deep",
+        );
+    }
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_whose_masks_double_per_level_is_refused_at_open() {
+    // 4096 masked rectangles still convert and draw.
+    assert_eq!(
+        svg_drawn(&svg_doubling_masks(12), (0, 0)).expect("drawn"),
+        (10, 10)
+    );
+    for levels in [20, 40] {
+        let started = std::time::Instant::now();
+        refused_as(svg_drawn(&svg_doubling_masks(levels), (0, 0)), "SVG");
+        assert!(started.elapsed().as_secs_f64() < 5.0, "{levels} levels");
+    }
 }
 
 #[cfg(all(feature = "latex", feature = "pdf"))]

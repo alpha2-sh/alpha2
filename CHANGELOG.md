@@ -55,6 +55,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- An SVG whose patterns, masks, clip paths or filters refer to one another in a ring, or whose
+  gradients or patterns name one another by `href` in a ring, is refused as malformed instead of
+  overflowing the stack or never finishing. Each such reference counts four levels against the
+  nesting limit, and a mask, clip path or filter counts once per element that names it.
 - Editor: an import, relink or caption import that finishes after another project was opened is
   refused with `stale_import` and changes nothing; before, a relink waiting for the engine module
   could add its asset and an undo step to the new project.
