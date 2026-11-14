@@ -670,3 +670,108 @@ pub(crate) fn pdf_far_path() -> Vec<u8> {
         0x30, 0x20, 0x6e, 0x20, 0x0a, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x30, 0x35, 0x0a,
     ]
 }
+
+#[cfg(feature = "lottie")]
+fn lottie_root(layers: &[serde_json::Value], assets: &[serde_json::Value]) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "v": "5.7.4", "fr": 30, "ip": 0, "op": 30, "w": 1920, "h": 1080, "nm": "hostile",
+        "ddd": 0, "assets": assets, "layers": layers,
+    }))
+    .expect("json")
+}
+
+#[cfg(feature = "lottie")]
+fn lottie_transform() -> serde_json::Value {
+    serde_json::json!({
+        "o": {"a": 0, "k": 100}, "r": {"a": 0, "k": 0}, "p": {"a": 0, "k": [0, 0, 0]},
+        "a": {"a": 0, "k": [0, 0, 0]}, "s": {"a": 0, "k": [100, 100, 100]},
+    })
+}
+
+/// A Lottie animation of one filled path of `vertices` vertices in a 1 x 1 box, under repeaters
+/// of the given copies.
+#[cfg(feature = "lottie")]
+pub(crate) fn lottie_dense_path(vertices: usize, repeaters: &[u32]) -> Vec<u8> {
+    let points: Vec<[usize; 2]> = (0..vertices).map(|at| [at % 2, (at / 2) % 2]).collect();
+    let zero = vec![[0, 0]; vertices];
+    let mut items = vec![
+        serde_json::json!({"ty": "sh", "ks": {"a": 0, "k": {"c": true, "v": points, "i": zero, "o": zero}}}),
+        serde_json::json!({"ty": "fl", "c": {"a": 0, "k": [1, 0, 0, 1]}, "o": {"a": 0, "k": 100}, "r": 1}),
+    ];
+    for copies in repeaters {
+        items.push(serde_json::json!({
+            "ty": "rp", "c": {"a": 0, "k": copies}, "o": {"a": 0, "k": 0}, "m": 1,
+            "tr": {"ty": "tr", "p": {"a": 0, "k": [0, 0]}, "a": {"a": 0, "k": [0, 0]},
+                   "s": {"a": 0, "k": [100, 100]}, "r": {"a": 0, "k": 0},
+                   "so": {"a": 0, "k": 100}, "eo": {"a": 0, "k": 100}},
+        }));
+    }
+    items.push(serde_json::json!({
+        "ty": "tr", "p": {"a": 0, "k": [10, 10]}, "a": {"a": 0, "k": [0, 0]},
+        "s": {"a": 0, "k": [100, 100]}, "r": {"a": 0, "k": 0}, "o": {"a": 0, "k": 100},
+    }));
+    let layer = serde_json::json!({
+        "ddd": 0, "ind": 1, "ty": 4, "nm": "dense", "sr": 1, "ks": lottie_transform(), "ao": 0,
+        "shapes": [{"ty": "gr", "nm": "g", "it": items}], "ip": 0, "op": 30, "st": 0, "bm": 0,
+    });
+    lottie_root(&[layer], &[])
+}
+
+/// A Lottie animation of `comps` precomposition layers, each of `per_comp` image layers showing
+/// a 1 x 1 PNG.
+#[cfg(feature = "lottie")]
+pub(crate) fn lottie_image_layers(per_comp: usize, comps: usize) -> Vec<u8> {
+    use base64::Engine as _;
+    // A 1 x 1 RGBA PNG.
+    let png = [
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+    let picture = serde_json::json!({
+        "id": "picture", "w": 1, "h": 1, "e": 1, "u": "",
+        "p": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png)),
+    });
+    let image = |index: usize| {
+        serde_json::json!({"ddd": 0, "ind": index, "ty": 2, "nm": "i", "refId": "picture",
+                           "sr": 1, "ks": lottie_transform(), "ip": 0, "op": 30, "st": 0})
+    };
+    let comp =
+        serde_json::json!({"id": "c", "layers": (1..=per_comp).map(image).collect::<Vec<_>>()});
+    let layers: Vec<serde_json::Value> = (1..=comps)
+        .map(|index| {
+            serde_json::json!({"ddd": 0, "ind": index, "ty": 0, "nm": "c", "refId": "c", "sr": 1,
+                               "ks": lottie_transform(), "w": 1920, "h": 1080, "ip": 0, "op": 30, "st": 0})
+        })
+        .collect();
+    lottie_root(&layers, &[picture, comp])
+}
+
+/// A Lottie animation of `levels` precompositions nested in one another, each clipped to its
+/// size, the innermost filling a rectangle.
+#[cfg(feature = "lottie")]
+pub(crate) fn lottie_nested_precompositions(levels: usize) -> Vec<u8> {
+    let shape = serde_json::json!({
+        "ddd": 0, "ind": 1, "ty": 4, "nm": "s", "sr": 1, "ks": lottie_transform(), "ao": 0,
+        "shapes": [{"ty": "gr", "nm": "g", "it": [
+            {"ty": "rc", "d": 1, "p": {"a": 0, "k": [960, 540]}, "s": {"a": 0, "k": [100, 100]}, "r": {"a": 0, "k": 0}},
+            {"ty": "fl", "c": {"a": 0, "k": [1, 0, 0, 1]}, "o": {"a": 0, "k": 100}, "r": 1},
+            {"ty": "tr", "p": {"a": 0, "k": [0, 0]}, "a": {"a": 0, "k": [0, 0]}, "s": {"a": 0, "k": [100, 100]}, "r": {"a": 0, "k": 0}, "o": {"a": 0, "k": 100}},
+        ]}],
+        "ip": 0, "op": 30, "st": 0, "bm": 0,
+    });
+    let reference = |id: String| {
+        serde_json::json!({"ddd": 0, "ind": 1, "ty": 0, "nm": "c", "refId": id, "sr": 1,
+                           "ks": lottie_transform(), "w": 1920, "h": 1080, "ip": 0, "op": 30, "st": 0})
+    };
+    let mut assets = vec![serde_json::json!({"id": "c0", "layers": [shape]})];
+    for level in 1..levels {
+        assets.push(serde_json::json!({"id": format!("c{level}"), "layers": [reference(format!("c{}", level - 1))]}));
+    }
+    lottie_root(
+        &[reference(format!("c{}", levels.saturating_sub(1)))],
+        &assets,
+    )
+}

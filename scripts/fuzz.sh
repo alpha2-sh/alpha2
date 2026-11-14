@@ -106,6 +106,7 @@ seed() {
         JSON.parse(fs.readFileSync(cases, "utf8")).forEach((test, index) => {
           if (test.animation) fs.writeFileSync(`${dir}/case-${index}.json`, JSON.stringify(test.animation));
         });' "$corpus/normalize-cases.json" "$dir"
+      hostile "$target" "$dir"
       ;;
     project_from_json | project_lint | project_data) projects "$dir" ;;
     edit_apply)

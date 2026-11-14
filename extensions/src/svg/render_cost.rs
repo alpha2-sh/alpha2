@@ -11,10 +11,9 @@ use resvg::tiny_skia::{PathSegment, Rect, Transform};
 use resvg::usvg::{self, Group, Node, Paint, filter};
 
 use crate::api::ExtensionError;
-use crate::budget::{FLOOR_CANVAS, MAX_DASHES, MAX_DRAWING, dash_geometry, fill_geometry};
-
-/// Most intermediate pixels (layers, masks, tiles, filter results) held at once: 1 GiB of RGBA8.
-pub(super) const MAX_HELD_PIXELS: f64 = 268_435_456.0;
+use crate::budget::{
+    FLOOR_CANVAS, MAX_DASHES, MAX_DRAWING, MAX_HELD_PIXELS, dash_geometry, fill_geometry,
+};
 
 /// Most node draws per render, counting repeats through patterns, masks, clips, and filters.
 /// Even an empty node costs resvg about a microsecond.

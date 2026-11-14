@@ -2,7 +2,7 @@
 //!
 //! Usage: `cargo run -p alpha2-extensions --example hostile_seeds -- <target> <dir>`
 
-#[cfg(any(feature = "svg", feature = "exr"))]
+#[cfg(any(feature = "svg", feature = "exr", feature = "lottie"))]
 #[path = "../src/tests/hostile.rs"]
 mod hostile;
 
@@ -18,6 +18,7 @@ fn main() -> std::io::Result<()> {
         "extension_svg" => svg_seeds(),
         "extension_exr" => exr_seeds(),
         "extension_pdf" => pdf_seeds(),
+        "extension_lottie" => lottie_seeds(),
         _ => Vec::new(),
     };
     if seeds.is_empty() {
@@ -81,6 +82,25 @@ fn svg_seeds() -> Seeds {
 
 #[cfg(not(feature = "svg"))]
 fn svg_seeds() -> Seeds {
+    Vec::new()
+}
+
+#[cfg(feature = "lottie")]
+fn lottie_seeds() -> Seeds {
+    use hostile::{lottie_dense_path, lottie_image_layers, lottie_nested_precompositions};
+    vec![
+        ("dense-path.json", lottie_dense_path(500_000, &[])),
+        (
+            "dense-repeated.json",
+            lottie_dense_path(10_000, &[1000, 49]),
+        ),
+        ("image-layers.json", lottie_image_layers(190, 500)),
+        ("nested.json", lottie_nested_precompositions(32)),
+    ]
+}
+
+#[cfg(not(feature = "lottie"))]
+fn lottie_seeds() -> Seeds {
     Vec::new()
 }
 

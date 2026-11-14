@@ -188,6 +188,9 @@ All notable changes to this project are documented in this file.
   device rows (which the rasterizer sorts against each other), and the dashes of a dashed stroke,
   which are made for the whole path before clipping. A dense zig-zag or many copies of a finely
   dashed line are refused before they are drawn; PDF pages are covered by the same estimate.
+- A Lottie frame is charged for the vertices and dashes of its paths, through repeaters and
+  precompositions, and for the canvas-sized clip drawn for every image layer; a render is refused
+  at a size where its nested offscreen layers would hold more than 1 GiB.
 - A PDF image is sized from its own data as its decoder sizes it: JPEG 2000 from the codestream,
   JBIG2 from the embedded page, CCITT from `/Columns`, so a small dictionary size no longer hides a
   multi-gigabyte decode. A CCITT image without a row count is refused.

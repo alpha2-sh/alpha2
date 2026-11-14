@@ -32,7 +32,7 @@ use crate::api::{
     Diagnostic, ExtensionError, Format, FramePixels, ProbeReport, ResourceResolver, Timing,
     VisualFrame, VisualProvider, VisualSource,
 };
-use crate::budget::{check_canvas, check_document_size, check_image_pixels};
+use crate::budget::{MAX_HELD_PIXELS, check_canvas, check_document_size, check_image_pixels};
 
 /// Most frames an animation may span.
 const MAX_LOTTIE_FRAMES: f64 = 100_000.0;
@@ -70,7 +70,7 @@ impl VisualProvider for LottieProvider {
             return Some(Err(error));
         }
         let json = parse_lottie(bytes)?;
-        Some(inspect(json, Format::Lottie).map(|(report, _)| report))
+        Some(inspect(json, Format::Lottie).map(|(report, _, _)| report))
     }
 
     fn open(
@@ -107,7 +107,7 @@ impl LottieSource {
                 .ok_or_else(|| ExtensionError::Mismatch("not a Lottie animation".into()))?;
             (json, None, Format::Lottie)
         };
-        let (mut report, sanitized) = inspect(json, format)?;
+        let (mut report, depth, sanitized) = inspect(json, format)?;
         if let Some(package) = &package {
             report.items.clone_from(&package.ids);
             report.item = Some(item.unwrap_or(&package.ids[0]).to_owned());
@@ -152,6 +152,7 @@ impl LottieSource {
         Ok(Self {
             composition,
             composition_bytes,
+            depth,
             renderer: Renderer::new(),
             images,
             report,
@@ -428,7 +429,7 @@ impl<'a> Package<'a> {
                 .animation(Some(id))
                 .and_then(|json| inspect(json, Format::DotLottie))
             {
-                Ok((report, _)) => {
+                Ok((report, _, _)) => {
                     unreadable.extend(report.diagnostics);
                     return Ok(ProbeReport {
                         items: self.ids.clone(),
@@ -479,8 +480,8 @@ impl<'a> Package<'a> {
     }
 }
 
-/// The animation's report and its normalized JSON.
-fn inspect(json: Value, format: Format) -> Result<(ProbeReport, Value), ExtensionError> {
+/// The animation's report, the most offscreen layers a frame holds, and its normalized JSON.
+fn inspect(json: Value, format: Format) -> Result<(ProbeReport, u64, Value), ExtensionError> {
     let root = json
         .as_object()
         .ok_or_else(|| ExtensionError::Malformed("the animation is not an object".into()))?;
@@ -501,7 +502,9 @@ fn inspect(json: Value, format: Format) -> Result<(ProbeReport, Value), Extensio
         (last - first).ceil() as usize,
     );
     check_canvas(width, height)?;
-    let (diagnostics, sanitized) = normalize::normalize(json)?;
+    let (normalized, sanitized) = normalize::normalize(json)?;
+    let normalize::Normalized { diagnostics, depth } = normalized;
+    check_held(depth, width, height)?;
     Ok((
         ProbeReport {
             format,
@@ -519,8 +522,23 @@ fn inspect(json: Value, format: Format) -> Result<(ProbeReport, Value), Extensio
             color: None,
             diagnostics,
         },
+        depth,
         sanitized,
     ))
+}
+
+/// Refuses drawing at `width` x `height` when the offscreen layers a frame holds, each that size,
+/// and the frame itself pass [`MAX_HELD_PIXELS`].
+fn check_held(depth: u64, width: u32, height: u32) -> Result<(), ExtensionError> {
+    #[allow(clippy::cast_precision_loss)]
+    let held = (depth.saturating_add(1)) as f64 * f64::from(width) * f64::from(height);
+    if held > MAX_HELD_PIXELS {
+        return Err(ExtensionError::Budget(format!(
+            "drawing the Lottie animation at {width}x{height} holds more than {MAX_HELD_PIXELS} \
+             pixels in its {depth} nested offscreen layers"
+        )));
+    }
+    Ok(())
 }
 
 /// A Lottie rate as a rational: NTSC and whole rates exactly, others to a thousandth.
@@ -584,6 +602,8 @@ struct LottieSource {
     composition: Composition,
     /// The normalized text velato parsed, standing for the size of the composition.
     composition_bytes: usize,
+    /// Most offscreen layers a frame holds, each the size drawn.
+    depth: u64,
     renderer: Renderer,
     images: HashMap<String, Pixmap>,
     report: ProbeReport,
@@ -598,6 +618,7 @@ impl VisualSource for LottieSource {
     fn render(&mut self, time: MediaTime, fit: (u32, u32)) -> Result<VisualFrame, ExtensionError> {
         let (index, start, end) = self.report.timing.frame_at(time);
         let (width, height) = fitted(self.report.width, self.report.height, fit);
+        check_held(self.depth, width, height)?;
         if let Some(last) = self
             .last
             .as_ref()
