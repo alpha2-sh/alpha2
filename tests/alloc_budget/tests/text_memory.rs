@@ -104,14 +104,14 @@ fn states(
 }
 
 #[test]
-fn a_caption_scaled_a_hundredfold_is_refused_before_its_tiles_are_drawn() {
+fn a_caption_scaled_tenfold_past_the_tile_budget_is_refused_before_its_tiles_are_drawn() {
     let _lock = LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut rasterizer = rasterizer();
     let caption = request(
         "Twenty char caption.",
-        54.0,
+        300.0,
         vec![TextStroke {
             color: [0, 0, 0, 255],
             width: 2.0,
@@ -121,7 +121,7 @@ fn a_caption_scaled_a_hundredfold_is_refused_before_its_tiles_are_drawn() {
         &rasterizer,
         &caption,
         ClusterState {
-            scale: [100.0, 100.0],
+            scale: [10.0, 10.0],
             ..ClusterState::IDENTITY
         },
     );

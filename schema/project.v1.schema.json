@@ -6657,7 +6657,7 @@
               "type": "null"
             }
           ],
-          "description": "Scales the character about its centre; 1 is none. Each axis in `[0, 10]`."
+          "description": "Scales the character about its centre; 1 is none. Each axis in `[0, 10]`. The scales of\nseveral animators multiply, and the product is at most 10 on each axis."
         },
         "stroke": {
           "anyOf": [

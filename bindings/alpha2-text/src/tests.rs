@@ -2847,38 +2847,41 @@ fn a_tile_reused_from_the_cache_draws_what_a_fresh_tile_draws() {
 }
 
 #[test]
-fn an_animated_raster_past_its_area_or_tile_budget_is_too_large() {
+fn an_animated_raster_past_its_tile_budget_is_too_large() {
     let mut rasterizer = fixture();
     let caption = TextRasterRequest {
         strokes: vec![TextStroke {
             color: [0, 0, 0, 255],
             width: 2.0,
         }],
-        ..request("Twenty char caption.", 54.0)
+        ..request("Twenty char caption.", 300.0)
     };
     let mut states = identity_states(&rasterizer, &caption);
     for state in &mut states {
-        state.scale = [100.0, 100.0];
+        state.scale = [10.0, 10.0];
     }
     assert_eq!(
         rasterizer.rasterize_animated(&caption, &states).map(drop),
         Err(TextRasterError::TooLarge)
     );
-    for state in &mut states {
-        state.scale = [1.0e8, 1.0e8];
+}
+
+#[test]
+fn a_cluster_scaled_past_the_limit_is_an_invalid_request() {
+    let mut rasterizer = fixture();
+    let caption = request("Scaled", 20.0);
+    for scale in [[11.0, 1.0], [1.0, 1.0e8], [-1.0, 1.0], [f32::NAN, 1.0]] {
+        let mut states = identity_states(&rasterizer, &caption);
+        states[0].scale = scale;
+        assert_eq!(
+            rasterizer.rasterize_animated(&caption, &states).map(drop),
+            Err(TextRasterError::InvalidRequest),
+            "{scale:?}"
+        );
     }
-    assert_eq!(
-        rasterizer
-            .rasterize_animated(
-                &TextRasterRequest {
-                    content_version: 2,
-                    ..caption.clone()
-                },
-                &states
-            )
-            .map(drop),
-        Err(TextRasterError::TooLarge)
-    );
+    let mut states = identity_states(&rasterizer, &caption);
+    states[0].scale = [MAX_CLUSTER_SCALE, MAX_CLUSTER_SCALE];
+    assert!(rasterizer.rasterize_animated(&caption, &states).is_ok());
 }
 
 #[test]

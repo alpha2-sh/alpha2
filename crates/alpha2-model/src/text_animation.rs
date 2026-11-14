@@ -357,7 +357,8 @@ pub struct TextAnimatorProperties {
     /// Moves the character, in font sizes, +y down.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<Animated<Vec2>>,
-    /// Scales the character about its centre; 1 is none. Each axis in `[0, 10]`.
+    /// Scales the character about its centre; 1 is none. Each axis in `[0, 10]`. The scales of
+    /// several animators multiply, and the product is at most 10 on each axis.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<Animated<Vec2>>,
     /// Turns the character about its centre, clockwise degrees.

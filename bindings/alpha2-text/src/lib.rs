@@ -29,7 +29,7 @@ mod color;
 mod gradient;
 mod unicode_tables;
 
-pub use animated::{ClusterInfo, ClusterState, ColorMix, LineInfo, TextLayout};
+pub use animated::{ClusterInfo, ClusterState, ColorMix, LineInfo, MAX_CLUSTER_SCALE, TextLayout};
 pub use gradient::{TextGradient, TextGradientKind, TextGradientStop, TextSpread};
 
 const MAX_TEXT_BYTES: usize = 64 * 1024;

@@ -2920,7 +2920,9 @@ class TextAnimatorProperties(TypedDict):
     rotation_degrees: NotRequired[Animated[float] | None]
     """Turns the character about its centre, clockwise degrees."""
     scale: NotRequired[Animated[Vec2] | None]
-    """Scales the character about its centre; 1 is none. Each axis in `[0, 10]`."""
+    """Scales the character about its centre; 1 is none. Each axis in `[0, 10]`. The scales of
+    several animators multiply, and the product is at most 10 on each axis.
+    """
     stroke: NotRequired[Keyframed[Rgba] | None]
     """The color every stroke of a fully selected character takes."""
     tracking: NotRequired[Animated[float] | None]

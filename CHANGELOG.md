@@ -679,6 +679,9 @@ All notable changes to this project are documented in this file.
   tile cache keeps at most 64 MiB, least recently used first out. Before, a caption scaled a
   hundredfold drew for seconds and took most of a gigabyte before the size check, a larger scale
   stopped the browser module, and a title animation left over a gigabyte of tiles held.
+- The scales of several text animators multiply up to 10 on each axis, the limit of one animator;
+  before, eight animators could compound a character's scale to 100,000,000. A text host refuses a
+  character state scaled past 10 as an invalid request.
 
 ## [0.6.0] - 2026-11-08
 

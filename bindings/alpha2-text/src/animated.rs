@@ -77,12 +77,15 @@ pub struct ColorMix {
     pub add: [f32; 4],
 }
 
+/// Largest scale of a [`ClusterState`] on either axis.
+pub const MAX_CLUSTER_SCALE: f32 = 10.0;
+
 /// Animation state of one cluster.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ClusterState {
     /// Translation in pixels, +y down.
     pub offset: [f32; 2],
-    /// Non-negative scale about its center.
+    /// Scale about its center, in `[0, MAX_CLUSTER_SCALE]`.
     pub scale: [f32; 2],
     /// Clockwise rotation about its center, in radians.
     pub rotation: f32,
@@ -125,7 +128,7 @@ impl ClusterState {
             && self
                 .scale
                 .iter()
-                .all(|value| value.is_finite() && *value >= 0.0)
+                .all(|value| (0.0..=MAX_CLUSTER_SCALE).contains(value))
             && self.rotation.is_finite()
             && (0.0..=1.0).contains(&self.opacity)
             && self.tracking.is_finite()

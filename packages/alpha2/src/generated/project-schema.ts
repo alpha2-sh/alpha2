@@ -3851,7 +3851,8 @@ export interface TextAnimatorProperties {
    */
   readonly rotation_degrees?: Animated<number> | null;
   /**
-   * Scales the character about its centre; 1 is none. Each axis in `[0, 10]`.
+   * Scales the character about its centre; 1 is none. Each axis in `[0, 10]`. The scales of
+   * several animators multiply, and the product is at most 10 on each axis.
    */
   readonly scale?: Animated<Vec2> | null;
   /**
