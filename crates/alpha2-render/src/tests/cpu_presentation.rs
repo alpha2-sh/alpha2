@@ -515,3 +515,50 @@ fn the_rgba_table_path_equals_the_per_pixel_path() {
         }
     }
 }
+
+#[test]
+fn the_cpu_reads_an_unspecified_siting_of_horizontally_subsampled_chroma_as_left() {
+    let parity = Parity::new();
+    let color = sdr(
+        ColorMatrix::Bt709,
+        ColorRange::Limited,
+        ColorPrimaries::Bt709,
+    );
+    let size = sized(64, 48);
+    let drawn = |format, siting| {
+        let presentation = SourcePresentation {
+            chroma_siting: siting,
+            ..presentation(size, size)
+        };
+        let (source, _) = parity
+            .cpu
+            .present_yuv(
+                Arc::new(frame(format, size, color)),
+                presentation,
+                ColorPolicy::RejectHdr,
+            )
+            .expect("CPU presents");
+        parity
+            .cpu
+            .execute_graph(&identity_graph(SourceView::cpu(&source), size))
+            .expect("CPU draws")
+            .read_rgba8()
+    };
+    for format in [YuvFormat::planar(1, 0, 10), YuvFormat::planar(2, 0, 8)] {
+        let unspecified = drawn(format, ChromaLocation::Unspecified);
+        assert_eq!(
+            unspecified,
+            drawn(format, ChromaLocation::Left),
+            "{format:?}"
+        );
+        assert_ne!(
+            unspecified,
+            drawn(format, ChromaLocation::Center),
+            "{format:?}"
+        );
+    }
+    assert_eq!(
+        drawn(YuvFormat::I420, ChromaLocation::Unspecified),
+        drawn(YuvFormat::I420, ChromaLocation::Center)
+    );
+}

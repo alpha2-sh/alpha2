@@ -293,7 +293,8 @@ fn packed_len(width: u32, height: u32, sample_bytes: usize) -> Result<usize, Dec
 /// Where the chroma of a `codec` stream or frame sits, given what `FFmpeg` reports.
 ///
 /// H.264 infers location type 0 (left) when the SPS declares none (E.2.1), but `FFmpeg` reports
-/// unspecified, which the renderer would sample centred. HEVC already reports left.
+/// unspecified, which the renderer samples centred for 4:2:0. HEVC 4:2:0 already reports left;
+/// unspecified 4:2:2 and 4:1:1 the renderer reads as left by itself.
 pub(crate) fn decoded_chroma_location(
     codec: ffi::AVCodecID,
     location: ffi::AVChromaLocation,

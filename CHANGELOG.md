@@ -92,6 +92,10 @@ All notable changes to this project are documented in this file.
   gradients or patterns name one another by `href` in a ring, is refused as malformed instead of
   overflowing the stack or never finishing. Each such reference counts four levels against the
   nesting limit, and a mask, clip path or filter counts once per element that names it.
+- 4:2:2 and 4:1:1 sources that declare no chroma siting (ProRes 422, DNxHD, DNxHR, HEVC 4:2:2 as
+  FFmpeg reports them) read their chroma co-sited with even luma columns, as BT.601 and BT.709
+  site it and as ProRes exports pack it, on both renderers. Before, they read it centred, half a
+  luma sample to the right. 4:2:0 is unchanged.
 - GPU renderer: a device that renders half floats but cannot blend them uses the 8-bit
   intermediate. Before, it chose half float and every shape layer, shape mask and layout box
   failed to draw.

@@ -1406,7 +1406,7 @@ pub(crate) fn uniform_bytes(
     let factor_x = (1_u32 << format.chroma_shift_x) as f32;
     let factor_y = (1_u32 << format.chroma_shift_y) as f32;
     // A co-sited chroma sample sits `factor / 2 - 0.5` luma samples before its group's centre.
-    let (cosited_x, cosited_y) = match presentation.chroma_siting {
+    let (cosited_x, cosited_y) = match presentation.chroma_siting.resolved_for(format) {
         ChromaLocation::Left => (true, false),
         ChromaLocation::TopLeft => (true, true),
         ChromaLocation::Unspecified | ChromaLocation::Center => (false, false),
@@ -1716,6 +1716,41 @@ mod tests {
             .into_iter()
             .map(f32::to_bits)
             .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn an_unspecified_siting_of_horizontally_subsampled_chroma_is_left() {
+        let size = RenderSize::new(16, 4).expect("size");
+        let bytes = |format, siting| {
+            uniform_bytes(
+                ColorMetadata::EXPORT,
+                None,
+                1.0,
+                size,
+                SourcePresentation {
+                    chroma_siting: siting,
+                    ..SourcePresentation::identity(size)
+                },
+                format,
+                1.0,
+                64.0,
+            )
+        };
+        for format in [YuvFormat::planar(1, 0, 10), YuvFormat::planar(2, 0, 8)] {
+            assert_eq!(
+                bytes(format, ChromaLocation::Unspecified),
+                bytes(format, ChromaLocation::Left),
+                "{format:?}"
+            );
+        }
+        assert_eq!(
+            bytes(YuvFormat::I420, ChromaLocation::Unspecified),
+            bytes(YuvFormat::I420, ChromaLocation::Center)
+        );
+        assert_ne!(
+            bytes(YuvFormat::I420, ChromaLocation::Unspecified),
+            bytes(YuvFormat::I420, ChromaLocation::Left)
         );
     }
 

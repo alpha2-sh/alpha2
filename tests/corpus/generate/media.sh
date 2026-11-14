@@ -313,6 +313,12 @@ setparams=color_primaries=bt2020:color_trc=smpte2084:colorspace=bt2020nc:range=t
     -flags:v +bitexact "prores-pq-${name}.mov"
 done
 
+# ProRes 422 HQ, which declares no chroma siting, with a blue-difference step halfway across.
+"${FFMPEG[@]}" -f lavfi -i "color=black:size=64x48:rate=30:duration=0.1,format=yuv422p10le,\
+geq=lum='512':cb='if(lt(X,W/2),300,700)':cr='512',\
+setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv" \
+  -an -c:v prores_ks -profile:v 3 -pix_fmt yuv422p10le -flags:v +bitexact prores-422-unsited.mov
+
 # Host parity uses identical pixels: PNG frames for the browser and QuickTime containing those
 # frames for native decoding.
 mkdir -p parity-frames
