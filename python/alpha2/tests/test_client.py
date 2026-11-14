@@ -2411,6 +2411,93 @@ def run_unsendable_emit(scenario: dict[str, Any], tmp_path: Path, fake_host: Fak
     assert len(served_by) == 1 and expect["nextRequest"] == "same host"
 
 
+def preamble_host(pids: Path, stdout: str = "", stderr: str = "") -> str:
+    """Records its pid, writes ``stdout`` and ``stderr`` before any frame, then waits for its
+    input to end."""
+    return f"""
+    record({str(pids)!r}, str(os.getpid()))
+    sys.stderr.write({stderr!r})
+    sys.stderr.flush()
+    sys.stdout.buffer.write({stdout.encode()!r})
+    sys.stdout.buffer.flush()
+    sys.stdin.buffer.read()
+    """
+
+
+def versioned_host(pids: Path, host_version: str | None) -> str:
+    """Records its pid, then reports ready naming ``host_version`` (none when ``None``) and serves."""
+    details = {} if host_version is None else {"hostVersion": host_version}
+    return f"""
+    record({str(pids)!r}, str(os.getpid()))
+    begin()
+    write_message({{"type": "state", "state": "ready", "reason": "started", "details": {details!r}}})
+    serve(lambda request: send(request, ok=True, result={{"output": request["output"]}}))
+    """
+
+
+def refused(client: HostClient) -> Alpha2HostError:
+    with pytest.raises(Alpha2HostError) as caught:
+        client.export(**export_args("out.mp4"))
+    return caught.value
+
+
+def assert_hosts_ended(pids: Path) -> None:
+    started = [int(line) for line in lines_in(pids)]
+    assert started, "no host started"
+    for pid in started:
+        wait_until(lambda pid=pid: pid_exited(pid))
+
+
+def run_foreign_host(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    given, expect = scenario["given"], scenario["expect"]
+    pids = tmp_path / "pids"
+    host_path = fake_host(tmp_path, preamble_host(pids, given["stdout"]), ready=False)
+    client = HostClient(host_path=host_path, host_start_timeout=given["startTimeoutMs"] / 1000)
+    started = time.monotonic()
+    error = refused(client)
+    assert (time.monotonic() - started) * 1000 < expect["withinMs"]
+    assert error.code == expect["code"], error.message
+    for text in expect["messageContains"]:
+        assert text in error.message
+    if expect["namesBinary"]:
+        assert host_path in error.message
+    assert failure_class_of_code(error.code)[0] == "INVALID_INPUT"
+    if expect["hostEnded"]:
+        assert_hosts_ended(pids)
+
+
+def run_host_version(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    expect = scenario["expect"]
+    for index, host_version in enumerate(scenario["given"]["hostVersions"]):
+        pids = tmp_path / f"pids-{index}"
+        host_path = fake_host(
+            tmp_path / str(index), versioned_host(pids, host_version), ready=False
+        )
+        error = refused(HostClient(host_path=host_path))
+        assert error.code == expect["code"], error.message
+        if expect["namesHostVersion"] and host_version is not None:
+            assert host_version in error.message
+        if expect["namesClientVersion"]:
+            assert alpha2.__version__ in error.message
+        if expect["namesBinary"]:
+            assert host_path in error.message
+        if expect["hostEnded"]:
+            assert_hosts_ended(pids)
+
+
+def run_start_timeout(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    given = scenario["given"]
+    host = preamble_host(tmp_path / "pids", given["stdout"], given["stderr"])
+    client = HostClient(
+        host_path=fake_host(tmp_path, host, ready=False),
+        host_start_timeout=given["startTimeoutMs"] / 1000,
+    )
+    error = refused(client)
+    assert error.code == scenario["expect"]["code"], error.message
+    for text in scenario["expect"]["stderrContains"]:
+        assert text in (error.stderr or "")
+
+
 class FloatLike:
     def __float__(self) -> float:
         return 0.25
@@ -2467,6 +2554,9 @@ SCENARIO_DRIVERS: dict[str, Callable[[dict[str, Any], Path, FakeHost], None]] = 
     "fork": run_fork,
     "abandon": run_abandon,
     "unsendable-emit": run_unsendable_emit,
+    "foreign-host": run_foreign_host,
+    "host-version": run_host_version,
+    "start-timeout": run_start_timeout,
 }
 
 

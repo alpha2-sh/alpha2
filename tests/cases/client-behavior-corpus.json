@@ -163,5 +163,46 @@
       "messageContains": "must be",
       "nextRequest": "same host"
     }
+  },
+  {
+    "id": "protocol-1-host-fails-at-once",
+    "kind": "foreign-host",
+    "given": {
+      "stdout": "{\"protocolVersion\":1,\"type\":\"ready\"}\n",
+      "then": "waits for input",
+      "startTimeoutMs": 30000
+    },
+    "expect": {
+      "code": "HOST_VERSION_MISMATCH",
+      "messageContains": ["protocol 1", "protocol 2"],
+      "namesBinary": true,
+      "withinMs": 5000,
+      "hostEnded": true
+    }
+  },
+  {
+    "id": "ready-with-another-version",
+    "kind": "host-version",
+    "given": { "hostVersions": ["0.0.1", null] },
+    "expect": {
+      "code": "HOST_VERSION_MISMATCH",
+      "namesHostVersion": true,
+      "namesClientVersion": true,
+      "namesBinary": true,
+      "hostEnded": true
+    }
+  },
+  {
+    "id": "start-timeout-carries-the-preamble",
+    "kind": "start-timeout",
+    "given": {
+      "stdout": "a library's diagnostic line\n",
+      "stderr": "held before ready\n",
+      "startTimeoutMs": 500
+    },
+    "expect": {
+      "code": "HOST_START_TIMEOUT",
+      "stderrContains": ["a library's diagnostic line", "held before ready"]
+    }
   }
 ]

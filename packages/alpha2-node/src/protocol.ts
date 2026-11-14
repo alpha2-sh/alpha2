@@ -80,6 +80,8 @@ export type HostState = "ready" | "draining";
 
 /** What a host reports about itself, for observation; it may gain fields. */
 export interface HostStateDetails {
+  /** The host's alpha2 release; a client refuses a `ready` host of another one. */
+  readonly hostVersion?: string;
   readonly activity?: "idle" | "busy";
   readonly requestsServed?: number;
   readonly memory?: {

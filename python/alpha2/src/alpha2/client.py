@@ -44,6 +44,7 @@ from .errors import (
 from .extract import ExtractProgress, schema_problem, take_step
 from .install import cached_host_binary, host_cache_directory, host_executable_name, package_version
 from .protocol import (
+    PROTOCOL_VERSION,
     UNREAD_REQUEST_ID,
     create_cancel,
     create_request,
@@ -1466,13 +1467,19 @@ class _Pool:
         with self._condition:
             if kind == "message":
                 if value.get("type") == "state":
-                    if value["state"] == "ready":
-                        host.ready = True
-                    else:
+                    if value["state"] != "ready":
                         host.available = False
+                    elif (client := package_version()) is not None and (
+                        reported := value["details"].get("hostVersion")
+                    ) != client:
+                        # A host of another release is never used, whatever it is asked.
+                        host.available = False
+                        kind, value = "other-release", reported
+                    else:
+                        host.ready = True
                 elif value.get("type") == "fatal" or value.get("hostState") == "draining":
                     host.available = False
-            elif kind in ("invalid", "write-failed"):
+            elif kind in ("invalid", "write-failed", "foreign"):
                 host.available = False
             if host.owner is not None:
                 host.owner.put((kind, value))
@@ -1724,11 +1731,13 @@ class _Pool:
                     host.kill()
                     host.process.wait()
                     start_timed_out = True
+                    host.settle_stderr()
                     outcome = (
                         False,
                         Alpha2HostError(
                             "HOST_START_TIMEOUT",
                             _host_start.start_timeout_message(binary, modes.start_timeout),
+                            stderr=host.stderr_since(stderr_mark),
                         ),
                     )
                     break
@@ -1751,6 +1760,24 @@ class _Pool:
                     write_error = value
                     write_failed_at = time.monotonic()
                     continue
+                if kind in ("foreign", "other-release"):
+                    host.kill()
+                    host.process.wait()
+                    host.settle_stderr()
+                    text = (
+                        _host_start.protocol_mismatch_message(binary, value, PROTOCOL_VERSION)
+                        if kind == "foreign"
+                        else _host_start.version_mismatch_message(
+                            binary, value, package_version() or "unknown"
+                        )
+                    )
+                    outcome = (
+                        False,
+                        Alpha2HostError(
+                            "HOST_VERSION_MISMATCH", text, stderr=host.stderr_since(stderr_mark)
+                        ),
+                    )
+                    break
                 if kind == "invalid":
                     outcome = (
                         False,

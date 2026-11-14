@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from typing import IO, Any, Literal
 
 from . import _native
-from .protocol import parse_host_message
+from .protocol import PROTOCOL_VERSION, parse_host_message
 
 MAGIC = b"\x89A2HOST\n"
 
@@ -26,12 +26,16 @@ _MAX_HEADER_BYTES = 2 * MAX_REQUEST_BYTES
 # Bytes a library may print before the magic; past this the stream is not the host's.
 MAX_PREAMBLE_BYTES = 1 << 20
 
+# A first preamble line longer than this is not a host's announcement.
+_MAX_FIRST_LINE_BYTES = 4096
+
 _LENGTHS = struct.Struct("<II")
 
 Received = (
     tuple[Literal["message"], dict[str, Any]]
     | tuple[Literal["diagnostic"], bytes]
     | tuple[Literal["invalid"], str]
+    | tuple[Literal["foreign"], int]
 )
 
 
@@ -83,11 +87,14 @@ def _skip(stream: IO[bytes], count: int) -> bool:
 def read(stream: IO[bytes]) -> Iterator[Received]:
     """What the host writes, until its output ends.
 
-    Bytes before :data:`MAGIC` are a ``diagnostic``. A frame whose header is not a valid message,
-    or whose attachments differ from what its header lists, is ``invalid`` and skipped whole. Each
-    entry of a message's ``attachments`` gains ``data``, its bytes.
+    Bytes before :data:`MAGIC` are a ``diagnostic``. A first line before it that announces another
+    protocol version, as a host of another release writes, is ``foreign`` and ends the reading. A
+    frame whose header is not a valid message, or whose attachments differ from what its header
+    lists, is ``invalid`` and skipped whole. Each entry of a message's ``attachments`` gains
+    ``data``, its bytes.
     """
     seen = bytearray()
+    first_line = True
     while not seen.endswith(MAGIC):
         if len(seen) >= MAX_PREAMBLE_BYTES + len(MAGIC):
             yield "invalid", f"alpha2-host wrote {len(seen)} bytes without its protocol magic"
@@ -98,6 +105,15 @@ def read(stream: IO[bytes]) -> Iterator[Received]:
                 yield "diagnostic", _line(bytes(seen))
             return
         seen += byte
+        if first_line and byte == b"\n" and not seen.endswith(MAGIC):
+            first_line = False
+            version = _announced_protocol(bytes(seen))
+            if version is not None:
+                yield "diagnostic", bytes(seen)
+                yield "foreign", version
+                return
+        elif first_line and len(seen) > _MAX_FIRST_LINE_BYTES:
+            first_line = False
     if len(seen) > len(MAGIC):
         yield "diagnostic", _line(bytes(seen[: -len(MAGIC)]))
     while (lengths := _exactly(stream, _LENGTHS.size)) is not None:
@@ -127,6 +143,18 @@ def read(stream: IO[bytes]) -> Iterator[Received]:
                 return
             entry["data"] = data
         yield "message", message
+
+
+def _announced_protocol(line: bytes) -> int | None:
+    """The protocol version ``line`` announces when it is not this client's."""
+    try:
+        announced = json.loads(line)
+    except (UnicodeDecodeError, ValueError):
+        return None
+    version = announced.get("protocolVersion") if isinstance(announced, dict) else None
+    if isinstance(version, bool) or not isinstance(version, int | float):
+        return None
+    return None if version == PROTOCOL_VERSION else int(version)
 
 
 def _line(data: bytes) -> bytes:

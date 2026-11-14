@@ -40,6 +40,14 @@ All notable changes to this project are documented in this file.
   capability report and a CPU-renderer export from the unpacked archive on all four targets, and
   the install journeys against the pinned wheels and Node package.
 
+### Changed
+
+- Both clients run only an `alpha2-host` of their own release. A 0.5.x host (its protocol 1 ready
+  line) or a host whose `ready` state names another release in the new `details.hostVersion`, or
+  none, is ended at once and the request fails with `HOST_VERSION_MISMATCH` (not retried), instead
+  of `HOST_START_TIMEOUT` after 30 seconds. `HOST_START_TIMEOUT` now carries what the host wrote in
+  `stderr`.
+
 ### Fixed
 
 - Editor: an import, relink or caption import that finishes after another project was opened is

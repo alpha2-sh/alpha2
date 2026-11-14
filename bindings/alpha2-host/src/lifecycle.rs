@@ -397,6 +397,7 @@ impl Lifecycle {
             "state": state.as_str(),
             "reason": reason,
             "details": {
+                "hostVersion": env!("CARGO_PKG_VERSION"),
                 "activity": if life.running == 0 { "idle" } else { "busy" },
                 "runningRequests": life.running,
                 "requestsServed": life.requests_served,
@@ -697,6 +698,11 @@ mod tests {
         assert_eq!(
             message["details"]["limits"]["maxRequests"],
             DEFAULT_MAX_REQUESTS
+        );
+        assert_eq!(message["details"]["hostVersion"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            lifecycle.status()["details"]["hostVersion"],
+            env!("CARGO_PKG_VERSION")
         );
     }
 }

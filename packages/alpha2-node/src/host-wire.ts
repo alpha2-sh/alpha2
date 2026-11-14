@@ -1,6 +1,10 @@
 import type { Readable, Writable } from "node:stream";
 
-import { type HostMessage, parseHostMessage } from "./protocol.js";
+import {
+  type HostMessage,
+  parseHostMessage,
+  PROTOCOL_VERSION,
+} from "./protocol.js";
 
 /** What `serve` writes before its first frame; output before it is diagnostics. */
 export const HOST_MAGIC = Buffer.from([
@@ -9,6 +13,9 @@ export const HOST_MAGIC = Buffer.from([
 
 /** Output before the magic past this means stdout is not a host's. */
 const MAX_PREAMBLE_BYTES = 1024 * 1024;
+
+/** A first preamble line longer than this is not a host's announcement. */
+const MAX_FIRST_LINE_BYTES = 4096;
 
 /** A larger header length from the host is a broken frame, not a message. */
 const MAX_HEADER_BYTES = 128 * 1024 * 1024;
@@ -50,6 +57,11 @@ export interface WireEvents {
   readonly invalid: (cause: Error) => void;
   /** Output on stdout before the magic, such as a loaded library's diagnostics. */
   readonly diagnostic: (bytes: Buffer) => void;
+  /**
+   * The first line before the magic announces another protocol version, as a host of another
+   * release does; nothing more is read from it.
+   */
+  readonly foreign: (protocolVersion: number) => void;
 }
 
 /** Frames to and from one host on its standard streams. */
@@ -65,6 +77,8 @@ export class HostWire {
   #pendingBytes = 0;
   #magicSeen = false;
   #preambleBytes = 0;
+  /** The reported start of the preamble's first line; `undefined` once it was decided. */
+  #firstLine: Buffer | undefined = Buffer.alloc(0);
   #closed = false;
 
   constructor(input: Writable, output: Readable, events: WireEvents) {
@@ -128,6 +142,18 @@ export class HostWire {
     const at = bytes.indexOf(HOST_MAGIC);
     const kept =
       at >= 0 ? at : Math.max(0, bytes.length - (HOST_MAGIC.length - 1));
+    const foreign = this.#foreignFirstLine(bytes, at >= 0 ? at : bytes.length);
+    if (foreign !== undefined) {
+      this.#events.diagnostic(bytes.subarray(0, at >= 0 ? at : bytes.length));
+      this.close();
+      this.#events.foreign(foreign);
+      return false;
+    }
+    if (this.#firstLine !== undefined)
+      this.#firstLine = Buffer.concat([
+        this.#firstLine,
+        bytes.subarray(0, kept),
+      ]);
     if (kept > 0) this.#events.diagnostic(bytes.subarray(0, kept));
     this.#preambleBytes += kept;
     const rest = bytes.subarray(at >= 0 ? at + HOST_MAGIC.length : kept);
@@ -144,6 +170,33 @@ export class HostWire {
         ),
       );
     return false;
+  }
+
+  /**
+   * The protocol version the preamble's first line announces when it is not this client's. The
+   * bytes held back for a split magic count, since such a host writes nothing after its line.
+   */
+  #foreignFirstLine(bytes: Buffer, end: number): number | undefined {
+    if (this.#firstLine === undefined) return undefined;
+    const seen = Buffer.concat([this.#firstLine, bytes.subarray(0, end)]);
+    const newline = seen.indexOf(0x0a);
+    if (newline < 0) {
+      if (seen.length > MAX_FIRST_LINE_BYTES || end < bytes.length)
+        this.#firstLine = undefined;
+      return undefined;
+    }
+    this.#firstLine = undefined;
+    let announced: unknown;
+    try {
+      announced = JSON.parse(seen.subarray(0, newline).toString("utf8"));
+    } catch {
+      return undefined;
+    }
+    const version = (announced as { protocolVersion?: unknown } | null)
+      ?.protocolVersion;
+    return typeof version === "number" && version !== PROTOCOL_VERSION
+      ? version
+      : undefined;
   }
 
   /** Reports the bytes held back for a split magic once stdout ends without one. */

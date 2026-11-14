@@ -52,6 +52,7 @@ import {
   type ProgressPhase,
   type ProtocolError,
   type ResponseMessage,
+  PROTOCOL_VERSION,
   createRequest,
   describeExit,
   loaderRefused,
@@ -66,8 +67,10 @@ import {
 import {
   glibcHint,
   hostBlockedMessage,
+  hostProtocolMismatchMessage,
   hostStartTimeout,
   hostStartTimeoutMessage,
+  hostVersionMismatchMessage,
   oomKillCount,
   spawnRefusal,
   windowsStatus,
@@ -2492,6 +2495,9 @@ function environmentKey(environment: NodeJS.ProcessEnv): string {
 /** Times a request answered `HOST_RETIRING` is sent to another host before it fails. */
 const MAX_RETIRING_RESENDS = 3;
 
+/** The release a host must name in its `ready` state; undefined if package.json is unreadable. */
+const CLIENT_VERSION = packageVersion();
+
 /** How long a failed answer waits for stderr, which arrives on its own pipe. */
 const STDERR_SETTLE_MS = 50;
 
@@ -3056,16 +3062,30 @@ class Host {
             ),
         ),
       diagnostic: (bytes) => this.#appendStderr(bytes),
+      foreign: (hostProtocol) =>
+        this.#fail(
+          (stderr) =>
+            new Alpha2HostError(
+              "HOST_VERSION_MISMATCH",
+              hostProtocolMismatchMessage(
+                binary,
+                hostProtocol,
+                PROTOCOL_VERSION,
+              ),
+              { stderr },
+            ),
+        ),
     });
     // A host held before running (approval prompt, scan, stopped process) writes nothing.
     const timeoutMs = this.#pool.startTimeoutMs;
     if (timeoutMs <= MAX_TIMER_MS)
       this.#startTimer = setTimeout(() => {
         this.#startTimedOut = true;
-        this.#startError ??= () =>
+        this.#startError ??= (stderr) =>
           new Alpha2HostError(
             "HOST_START_TIMEOUT",
             hostStartTimeoutMessage(binary, timeoutMs),
+            { stderr },
           );
         this.#retired = true;
         child.kill("SIGKILL");
@@ -3075,7 +3095,22 @@ class Host {
   #receive(message: HostMessage, attachments: readonly Attachment[]): void {
     if ("type" in message && message.type === "state") {
       if (message.state === "draining") this.retire();
-      else if (!this.#ready && !this.#retired) this.#becomeReady();
+      else if (!this.#ready && !this.#retired) {
+        const hostVersion = message.details.hostVersion;
+        if (CLIENT_VERSION !== undefined && hostVersion !== CLIENT_VERSION) {
+          const binary = this.#pool.binary;
+          this.#fail(
+            (stderr) =>
+              new Alpha2HostError(
+                "HOST_VERSION_MISMATCH",
+                hostVersionMismatchMessage(binary, hostVersion, CLIENT_VERSION),
+                { stderr },
+              ),
+          );
+          return;
+        }
+        this.#becomeReady();
+      }
       return;
     }
     if ("type" in message && message.type === "fatal") {

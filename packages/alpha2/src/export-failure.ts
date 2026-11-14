@@ -263,6 +263,7 @@ const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
   ALPHA2_ERROR: unknown,
   // `@alpha2-sh/node` setup errors that a retry does not fix.
   HOST_NOT_FOUND: permanent,
+  HOST_VERSION_MISMATCH: permanent,
   HOST_NOT_EXECUTABLE: permanent,
   HOST_LOAD_FAILED: permanent,
   HOST_START_FAILED: unknown,

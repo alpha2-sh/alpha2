@@ -134,7 +134,7 @@ The library is Cisco's binary, under [Cisco's terms](https://www.openh264.org/BI
 
 ## Errors
 
-Every rejection is an `Alpha2HostError` with a `code`, the protocol's error codes and the client's own (`HOST_NOT_FOUND`, `HOST_EXITED`, `HOST_OOM_KILLED` (a host the kernel's out-of-memory killer ended, on Linux), `HOST_LOAD_FAILED`, `HOST_START_TIMEOUT`, `HOST_QUARANTINED`, `HOST_BLOCKED`, `ABORTED`, and others). Its `failure` classifies it for a retry policy (`alpha2/export-failure`, `alpha2/export-retry`): the step and frame it failed at, and whether it is evidence of a lost device, running out of memory or bad input. `stderr` holds the end of the host's standard error. Subclasses:
+Every rejection is an `Alpha2HostError` with a `code`, the protocol's error codes and the client's own (`HOST_NOT_FOUND`, `HOST_EXITED`, `HOST_OOM_KILLED` (a host the kernel's out-of-memory killer ended, on Linux), `HOST_LOAD_FAILED`, `HOST_START_TIMEOUT`, `HOST_QUARANTINED`, `HOST_BLOCKED`, `HOST_VERSION_MISMATCH` (a host of another alpha2 release, which is ended at once), `ABORTED`, and others). Its `failure` classifies it for a retry policy (`alpha2/export-failure`, `alpha2/export-retry`): the step and frame it failed at, and whether it is evidence of a lost device, running out of memory or bad input. `stderr` holds the end of the host's standard error. Subclasses:
 
 - `Alpha2ProjectValidationError`: the project is invalid (`problems`).
 - `Alpha2ConformError`: the media is not ready, so nothing was rendered (`report` says, per source, what is missing, offline or not the media the project recorded). `client.conform({ project, assets })` asks the same question without exporting.

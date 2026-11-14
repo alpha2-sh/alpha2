@@ -818,8 +818,8 @@ test("a frame the host writes in pieces is read whole", async () => {
   const root = await scratch("alpha2-node-split-frames-");
   const hostPath = await fakeHost(
     root,
-    `import { MAGIC, frame, requests } from ${IO};
-const ready = frame({ protocolVersion: 2, type: "state", state: "ready", reason: "started", details: {} });
+    `import { HOST_VERSION, MAGIC, frame, requests } from ${IO};
+const ready = frame({ protocolVersion: 2, type: "state", state: "ready", reason: "started", details: { hostVersion: HOST_VERSION } });
 const bytes = Buffer.concat([MAGIC, ready]);
 const trickle = (data, done) => {
   if (data.length === 0) return done();
@@ -2980,6 +2980,10 @@ const corpusValue = (value) =>
       ? CORPUS_NUMBERS[value]
       : value;
 
+const CLIENT_VERSION = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+).version;
+
 const CLIENT_SCENARIOS = JSON.parse(
   await readFile(
     new URL(
@@ -3042,7 +3046,98 @@ const SCENARIO_CALLS = {
   compose: (client, { action, ...fields }) => client.compose(action, fields),
 };
 
+/** Records its pid, writes `stdout` and `stderr` before any frame, then waits for its input. */
+const PREAMBLE_HOST = (
+  pids,
+  { stdout = "", stderr = "" },
+) => `import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");
+process.stderr.write(${JSON.stringify(stderr)});
+process.stdout.write(${JSON.stringify(stdout)});
+process.stdin.resume();
+process.stdin.on("end", () => process.exit(0));
+`;
+
+/** Records its pid, then reports ready naming `hostVersion` (none when null) and serves. */
+const VERSIONED_HOST = (
+  pids,
+  hostVersion,
+) => `import { appendFileSync } from "node:fs";
+import { requests, respond, send } from ${IO};
+appendFileSync(${JSON.stringify(pids)}, process.pid + "\\n");
+send({ type: "state", state: "ready", reason: "started", details: ${JSON.stringify(hostVersion === null ? {} : { hostVersion })} });
+requests((request) => respond(request, { ok: true, result: { output: request.output } }));
+`;
+
+async function refusal(client) {
+  return client.exportProject(exportRequest("out.mp4")).then(
+    () => assert.fail("the export resolved"),
+    (cause) => cause,
+  );
+}
+
+async function assertHostsEnded(pids) {
+  const started = (await startsIn(pids)).map(Number);
+  assert.ok(started.length > 0, "no host started");
+  for (const pid of started)
+    await waitUntil(() => !alive(pid), `host ${pid} ended`);
+}
+
 const SCENARIO_DRIVERS = {
+  async "foreign-host"(scenario) {
+    const root = await scratch("alpha2-node-foreign-host-");
+    const pids = join(root, "pids");
+    const hostPath = await fakeHost(
+      root,
+      PREAMBLE_HOST(pids, { stdout: scenario.given.stdout }),
+    );
+    const client = new Alpha2NodeClient({
+      hostPath,
+      hostStartTimeoutMs: scenario.given.startTimeoutMs,
+    });
+    const started = Date.now();
+    const error = await refusal(client);
+    assert.ok(
+      Date.now() - started < scenario.expect.withinMs,
+      `took ${Date.now() - started} ms`,
+    );
+    assert.equal(error.code, scenario.expect.code, error.message);
+    for (const text of scenario.expect.messageContains)
+      assert.ok(error.message.includes(text), error.message);
+    if (scenario.expect.namesBinary)
+      assert.ok(error.message.includes(hostPath), error.message);
+    assert.equal(failureOf(error).code, "INVALID_INPUT");
+    if (scenario.expect.hostEnded) await assertHostsEnded(pids);
+  },
+  async "host-version"(scenario) {
+    for (const hostVersion of scenario.given.hostVersions) {
+      const root = await scratch("alpha2-node-host-version-");
+      const pids = join(root, "pids");
+      const hostPath = await fakeHost(root, VERSIONED_HOST(pids, hostVersion));
+      const client = new Alpha2NodeClient({ hostPath });
+      const error = await refusal(client);
+      assert.equal(error.code, scenario.expect.code, error.message);
+      if (scenario.expect.namesHostVersion && hostVersion !== null)
+        assert.ok(error.message.includes(hostVersion), error.message);
+      if (scenario.expect.namesClientVersion)
+        assert.ok(error.message.includes(CLIENT_VERSION), error.message);
+      if (scenario.expect.namesBinary)
+        assert.ok(error.message.includes(hostPath), error.message);
+      if (scenario.expect.hostEnded) await assertHostsEnded(pids);
+    }
+  },
+  async "start-timeout"(scenario) {
+    const root = await scratch("alpha2-node-start-timeout-");
+    const pids = join(root, "pids");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(root, PREAMBLE_HOST(pids, scenario.given)),
+      hostStartTimeoutMs: scenario.given.startTimeoutMs,
+    });
+    const error = await refusal(client);
+    assert.equal(error.code, scenario.expect.code, error.message);
+    for (const text of scenario.expect.stderrContains)
+      assert.ok(error.stderr?.includes(text), String(error.stderr));
+  },
   async "unsendable-emit"(scenario) {
     const root = await scratch("alpha2-node-unsendable-emit-");
     const log = join(root, "log");

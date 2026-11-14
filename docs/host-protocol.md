@@ -17,7 +17,7 @@ A frame with attachments lists them in its header, in order, as `"attachments": 
 
 The host owns standard output: before its first frame it writes the 8 bytes `89 41 32 48 4F 53 54 0A` (`\x89A2HOST\n`), and from then on whatever a library in the process prints to standard output goes to standard error. A client reads past those 8 bytes, keeping whatever came before them as diagnostics.
 
-The first frame the host writes, before it reads any input, is its `ready` state (see [Host state](#host-state)): `{"protocolVersion":2,"type":"state","state":"ready","reason":"started","details":{...}}`. A host that writes nothing for long is held before it runs (a Gatekeeper check on macOS, an antivirus scan or an App Control policy on Windows, a stopped process); `@alpha2-sh/node` and the Python client end it after 30 seconds and fail with `HOST_START_TIMEOUT`. A host that dies of `SIGKILL` while its cgroup's `oom_kill` count (cgroup v2 `memory.events`, Linux) rises fails with `HOST_OOM_KILLED` in both clients.
+The first frame the host writes, before it reads any input, is its `ready` state (see [Host state](#host-state)): `{"protocolVersion":2,"type":"state","state":"ready","reason":"started","details":{...}}`. A host that writes nothing for long is held before it runs (a Gatekeeper check on macOS, an antivirus scan or an App Control policy on Windows, a stopped process); `@alpha2-sh/node` and the Python client end it after 30 seconds and fail with `HOST_START_TIMEOUT`, whose `stderr` holds what it wrote. A host that dies of `SIGKILL` while its cgroup's `oom_kill` count (cgroup v2 `memory.events`, Linux) rises fails with `HOST_OOM_KILLED` in both clients.
 
 A request has a `requestId`, a string that is not empty, and an `operation`: `capabilities`, `conform`, `export`, `still`, `compose`, `edit`, `extract`, `cancel` or `status`; a client running an extractor also sends `extract.ack` (see [`extract`](#extract)).
 
@@ -71,10 +71,11 @@ It also drains, with no limit to compare, when its GPU device is lost (`device-l
 
 A response written when the request moved the host to `draining` carries `"hostState": "draining"`, after the `state` message. A request the host reads while `draining`, or has read but not started when it drains, is answered `HOST_RETIRING` without running; send it to another host. A draining host exits once no request runs and either its input has ended or 5 seconds have passed since it started draining; it waits for running requests without a time limit. After `device-lost` and `threads-abandoned` it exits as soon as the requests it runs have answered, or after 60 seconds, when a request still running gets no response.
 
-`details` is for observation, and may gain fields:
+`details` is for observation, and may gain fields; only `hostVersion` is meant for a decision:
 
 | Field | |
 | --- | --- |
+| `hostVersion` | the alpha2 release of this host, such as `0.6.1`; both clients refuse a host whose `ready` state names another release than their own, or none, with `HOST_VERSION_MISMATCH` |
 | `activity` | `idle` or `busy` |
 | `runningRequests` | requests running now |
 | `requestsServed` | requests answered so far |
@@ -95,6 +96,7 @@ Takes no other fields, and is answered as soon as the host reads it, without wai
 Starting a host costs a process, a GPU device and its probes, so a client keeps hosts and sends them one request after another. `@alpha2-sh/node` and the Python client follow these rules, which are all a client in another language needs:
 
 - Run at most `concurrency` hosts, and send each one request at a time.
+- Use only a host of the client's own release: refuse one whose `ready` state names another `details.hostVersion`, or none, and one whose first line before the magic is the `ready` line of another protocol version (`{"protocolVersion":1,"type":"ready"}` from 0.5.x). Both clients end such a host and fail at once with `HOST_VERSION_MISMATCH`, which no retry mends.
 - Send a request to an idle `ready` host. With none, start a new host, which counts as started once its `ready` message arrives; at the limit, end an idle host of other modes to make room, or wait for a host to come free.
 - A host takes its settings from the environment it was started with, the renderer and decode modes (`ALPHA2_RENDERER`, `ALPHA2_VIDEO_DECODE`) among them, so hosts are kept apart by the whole environment they start with: a request goes only to a host started with the environment it would start one with now.
 - Stop sending to a host when it reports `draining`, in a `state` message or a response's `hostState`, or when it exits. Close its standard input once it runs nothing.

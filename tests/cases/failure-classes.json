@@ -50,6 +50,7 @@
   },
   "node": {
     "HOST_NOT_FOUND": { "code": "INVALID_INPUT", "resource": "unknown" },
+    "HOST_VERSION_MISMATCH": { "code": "INVALID_INPUT", "resource": "unknown" },
     "HOST_NOT_EXECUTABLE": { "code": "INVALID_INPUT", "resource": "unknown" },
     "HOST_LOAD_FAILED": { "code": "INVALID_INPUT", "resource": "unknown" },
     "HOST_START_FAILED": { "code": "UNKNOWN", "resource": "unknown" },

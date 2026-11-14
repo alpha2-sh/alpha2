@@ -52,7 +52,9 @@ print(result["output"], result["videoPipeline"], result["frames"])
   (seconds, a `HostClient` argument, 30 by default, `None` to wait forever) is killed and the
   request fails with `HOST_START_TIMEOUT`; a host macOS has quarantined is refused before it starts
   with `HOST_QUARANTINED`, one Windows refuses by policy is `HOST_BLOCKED`, and a Linux host whose
-  program interpreter is missing (musl) or whose glibc is too old is `HOST_LOAD_FAILED`.
+  program interpreter is missing (musl) or whose glibc is too old is `HOST_LOAD_FAILED`. A host of
+  another alpha2 release (an older `alpha2-host` on `PATH` or in `ALPHA2_HOST_PATH`) is ended at
+  once and the request fails with `HOST_VERSION_MISMATCH`.
 - Options you write use snake_case (`loudness={"target_lufs": -14, ...}`); what the host reports
   keeps the protocol's camelCase keys (`result["effectiveRange"]`).
 
