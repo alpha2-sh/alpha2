@@ -922,6 +922,57 @@ fn the_svg_images_an_svg_draws_are_read_within_its_text_budget() {
 }
 
 #[cfg(feature = "svg")]
+#[test]
+fn an_svg_text_is_charged_for_its_layout_with_or_without_a_font() {
+    let text = |chars: usize| {
+        let words: String = (0..chars)
+            .map(|at| if at % 6 == 5 { ' ' } else { 'a' })
+            .collect();
+        svg_document(
+            1920,
+            1080,
+            &format!(
+                r#"<text x="2" y="16" font-family="DejaVu Sans" font-size="16">{words}</text>"#
+            ),
+        )
+    };
+    let font: Arc<[u8]> = std::fs::read(corpus("../../fonts/Alpha2Fixture.ttf"))
+        .expect("font")
+        .into();
+    let open = |document: &str, fonts: Vec<Arc<[u8]>>| {
+        Registry::with_defaults()
+            .open(
+                &ProviderSource::Svg,
+                Some(Arc::from(document.as_bytes())),
+                Arc::new(Files {
+                    files: HashMap::new(),
+                    fonts,
+                }),
+            )
+            .map(|mut source| source.render(ms(0), (0, 0)).map(drop))
+    };
+    // A paragraph draws.
+    let paragraph = text(2000);
+    assert!(matches!(
+        open(&paragraph, vec![Arc::clone(&font)]),
+        Ok(Ok(()))
+    ));
+    assert_eq!(svg_drawn(&paragraph, (0, 0)).expect("drawn"), (1920, 1080));
+    // 200 kB lays out in about 10 s and 2 MiB in about 20 minutes.
+    for chars in [200_000, 2 << 20] {
+        let document = text(chars);
+        refused_as(svg_drawn(&document, (0, 0)), "SVG");
+        assert!(
+            matches!(
+                open(&document, vec![Arc::clone(&font)]),
+                Err(ExtensionError::Budget(_))
+            ),
+            "{chars} characters with a font"
+        );
+    }
+}
+
+#[cfg(feature = "svg")]
 fn refused_as_ring(result: Result<(u32, u32), ExtensionError>, what: &str) {
     match result {
         Err(ExtensionError::Malformed(message)) if message.contains("refers to itself") => {}

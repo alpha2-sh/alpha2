@@ -172,6 +172,9 @@ All notable changes to this project are documented in this file.
   state `License-Expression`. The Android library and the Swift package carry both notice files.
 - An SVG whose entity references expand past its 32 MiB text budget, in text or in attribute
   values, is refused before it is parsed, and many entity declarations are scanned in linear time.
+- Reading an SVG counts the layout of its text, so one `<text>` of more than about 60,000
+  characters is refused, with or without a registered font. The count stops as soon as a budget is
+  passed: many `use` copies of a large group, or a shape with many markers, are refused at once.
 
 ## [0.6.0] - 2026-11-08
 

@@ -40,6 +40,14 @@ pub(crate) const REFERENCE_LEVELS: usize = 4;
 /// Most vertices of a basic shape (a rounded rectangle's lines and corner cubics).
 const SHAPE_VERTICES: u64 = 16;
 
+/// Steps per character of a `<text>` element: shaping and one outline per glyph take about
+/// 1.4 us a character natively.
+const TEXT_CHAR_STEPS: u64 = 190;
+
+/// Character pairs of one `<text>` element per step. usvg's horizontal layout walks a chunk from
+/// its start for every cluster, about 0.5 ns per pair of characters natively.
+const TEXT_PAIRS_PER_STEP: u64 = 15;
+
 /// A property whose value can name another element.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Property {
@@ -204,6 +212,8 @@ struct Count<'a> {
     shared: HashSet<NodeId>,
     /// Steps spent resolving the paints contexts name, one per candidate element.
     resolving: u64,
+    /// Elements under and including each `<use>` target, which usvg checks per copy.
+    descendants: HashMap<NodeId, u64>,
     paths: HashMap<NodeId, PathData>,
 }
 
@@ -223,6 +233,7 @@ impl<'a> Count<'a> {
             references: 0,
             shared: HashSet::new(),
             resolving: 0,
+            descendants: HashMap::new(),
             paths: HashMap::new(),
         }
     }
@@ -346,15 +357,11 @@ impl<'a> Count<'a> {
                 subtree.elements = subtree.elements.saturating_add(child.elements);
                 subtree.work = subtree.work.saturating_add(child.work);
                 subtree.height = subtree.height.max(child.height);
+                self.within_budget(&subtree)?;
             }
             subtree
         };
-        if own.cost() > self.budget {
-            return Err(too_costly(self.budget));
-        }
-        if own.elements > MAX_ELEMENTS {
-            return Err(too_many());
-        }
+        self.within_budget(&own)?;
         self.subtrees.insert(key, Counted::Done(own));
         Ok(own)
     }
@@ -380,7 +387,9 @@ impl<'a> Count<'a> {
         if name == "use" {
             if let Some(link) = self.link(node) {
                 // usvg checks the copy's descendants for a `<use>` naming it.
-                let checked = u64::try_from(link.descendants().count()).unwrap_or(u64::MAX);
+                let checked = *self.descendants.entry(link.id()).or_insert_with(|| {
+                    u64::try_from(link.descendants().count()).unwrap_or(u64::MAX)
+                });
                 subtree.work = subtree.work.saturating_add(checked);
                 let copy = self.subtree(link, level + 1, here)?;
                 subtree.add(copy);
@@ -389,7 +398,23 @@ impl<'a> Count<'a> {
             for child in node.children().filter(Node::is_element) {
                 let child = self.subtree(child, level + 1, here)?;
                 subtree.add(child);
+                self.within_budget(&subtree)?;
             }
+        }
+        if name == "text" {
+            // Every glyph becomes an outline, whether or not a font is registered here.
+            let chars: u64 = node
+                .descendants()
+                .filter(Node::is_text)
+                .map(|text| text.text().map_or(0, |text| text.chars().count() as u64))
+                .sum();
+            let pairs = chars.saturating_mul(chars) / 2;
+            subtree.elements = subtree.elements.saturating_add(chars);
+            subtree.work = subtree
+                .work
+                .saturating_add(chars.saturating_mul(TEXT_CHAR_STEPS))
+                .saturating_add(pairs / TEXT_PAIRS_PER_STEP);
+            self.within_budget(&subtree)?;
         }
         let steps = self.path(node).steps;
         subtree.work = subtree.work.saturating_add(steps);
@@ -408,6 +433,7 @@ impl<'a> Count<'a> {
                 let outside = self.outside_context(marker);
                 let instance = self.subtree(marker, level + 1, outside)?;
                 subtree.add_copies(instance, vertices);
+                self.within_budget(&subtree)?;
             }
         }
         for (target, shared) in self.referenced(node, here, &mut subtree) {
@@ -425,8 +451,20 @@ impl<'a> Count<'a> {
                 subtree.add(counted);
                 subtree.height = subtree.height.max(counted.height + REFERENCE_LEVELS);
             }
+            self.within_budget(&subtree)?;
         }
         Ok(subtree)
+    }
+
+    /// Refuses a subtree being counted as soon as it is past the step or element budget.
+    fn within_budget(&self, subtree: &Subtree) -> Result<(), ExtensionError> {
+        if subtree.cost() > self.budget {
+            return Err(too_costly(self.budget));
+        }
+        if subtree.elements > MAX_ELEMENTS {
+            return Err(too_many());
+        }
+        Ok(())
     }
 
     /// The elements usvg converts in place of `node`'s references, and whether each is converted
@@ -934,5 +972,60 @@ mod tests {
             .err()
             .expect("refused");
         assert!(error.to_string().contains("looks more than 512"), "{error}");
+    }
+
+    /// Counts `text` with the full budgets, answering the result and the counter.
+    fn counted(text: &str) -> (Result<Subtree, ExtensionError>, usize, usize, usize) {
+        let doc = parse(text);
+        let mut count = Count::new(super::super::MAX_READING, usize::MAX);
+        count.match_styles(&doc).expect("matched");
+        count.index(&doc);
+        let result = count.subtree(doc.root(), 0, 0);
+        (
+            result,
+            count.subtrees.len(),
+            count.descendants.len(),
+            count.outside.len(),
+        )
+    }
+
+    #[test]
+    fn many_use_copies_of_a_large_target_are_refused_after_few_visits() {
+        let text = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><defs><g id="t">{}</g></defs>{}</svg>"#,
+            "<rect/>".repeat(100_000),
+            r##"<use href="#t"/>"##.repeat(200_000)
+        );
+        let (result, subtrees, descendants, _) = counted(&text);
+        let error = result.err().expect("refused");
+        assert!(error.to_string().contains("elements"), "{error}");
+        // The target's elements, and the first few copies before the running count is past the
+        // budget; its descendants are counted once.
+        assert_eq!(descendants, 1);
+        assert!(subtrees < 100_100, "{subtrees} subtrees counted");
+    }
+
+    #[test]
+    fn a_shape_naming_many_markers_is_refused_before_it_counts_them_all() {
+        use std::fmt::Write as _;
+        let mut text = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg"><style>"#);
+        for at in 0..1000 {
+            let _ = write!(text, "path{{marker-mid:url(#m{at})}}");
+        }
+        text.push_str("</style>");
+        for at in 0..1000 {
+            let _ = write!(text, r#"<marker id="m{at}"><rect/></marker>"#);
+        }
+        let _ = write!(
+            text,
+            r#"<defs><path id="p" d="M 0 0 {}"/></defs>{}</svg>"#,
+            "L 1 1 ".repeat(1000),
+            r##"<use href="#p"/>"##.repeat(1000)
+        );
+        let (result, _, _, outside) = counted(&text);
+        let error = result.err().expect("refused");
+        assert!(error.to_string().contains("elements"), "{error}");
+        // Each marker costs its two elements at each of the path's 1001 vertices.
+        assert!(outside < 1000, "{outside} markers placed");
     }
 }
