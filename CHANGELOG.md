@@ -479,6 +479,9 @@ All notable changes to this project are documented in this file.
   instead of 1.0 s, 4 million in 3.7 s instead of 7.9 s with a third less heap, and 15 million no
   longer exhaust a 2 GB heap. `@alpha2-sh/node` validates the project object it holds (and its
   serialized size) instead of parsing its own `JSON.stringify` text again.
+- Transitions that start on the same tick (three clips overlapping on a track) reach the renderer
+  in the order their track lists them; before, the order depended on how many transitions the
+  project had elsewhere. Audio clips are no longer listed as frame needs.
 
 ## [0.6.0] - 2026-11-08
 

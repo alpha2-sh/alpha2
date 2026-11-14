@@ -224,8 +224,8 @@ fn centred_progress(range: TimeRange, frame_rate: FrameRate, time: MediaTime) ->
 /// Describes all source frames needed at a timestamp.
 ///
 /// The list is in evaluation order with no duplicate `(source, timestamp)` pairs. Generated
-/// sources need no frames. A visual clip needs its own source only when it draws it
-/// ([`ActiveClip::needs_source`]) plus every source its composition reads. A matte clip needs
+/// sources and audio clips need no frames. A visual clip needs its own source only when it draws
+/// it ([`ActiveClip::needs_source`]) plus every source its composition reads. A matte clip needs
 /// frames only while an active clip names it ([`FrameDesc::draws`]).
 ///
 /// # Errors
@@ -238,12 +238,7 @@ pub fn frame_needs(
 ) -> Result<Vec<FrameNeed>, EvalError> {
     let frame = evaluate(project, index, time)?;
     let mut needs = Needs::default();
-    for item in frame
-        .visual
-        .iter()
-        .filter(|item| frame.draws(item))
-        .chain(&frame.audio)
-    {
+    for item in frame.visual.iter().filter(|item| frame.draws(item)) {
         if item.needs_source() {
             needs.ask(item.clip_id, item.source_id, item.source_time, || None);
         }

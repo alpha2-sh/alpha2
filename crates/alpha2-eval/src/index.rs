@@ -109,19 +109,17 @@ impl ActiveIndex {
                     clip_order,
                 });
             }
-            transitions.extend(
-                track
-                    .transitions
-                    .iter()
-                    .map(|transition| IndexedTransition {
-                        from_clip: transition.from_clip.clone(),
-                        to_clip: transition.to_clip.clone(),
-                        timeline_range: transition.timeline_range,
-                        easing: transition.easing,
-                        effect: transition.effect.clone(),
-                        track_order,
-                    }),
-            );
+            transitions.extend(track.transitions.iter().enumerate().map(
+                |(list_order, transition)| IndexedTransition {
+                    from_clip: transition.from_clip.clone(),
+                    to_clip: transition.to_clip.clone(),
+                    timeline_range: transition.timeline_range,
+                    easing: transition.easing,
+                    effect: transition.effect.clone(),
+                    track_order,
+                    list_order,
+                },
+            ));
         }
         let captions = project
             .timeline
@@ -148,7 +146,11 @@ impl ActiveIndex {
         let max_active = deepest_overlap(&entries);
         let (nodes, root) = build_tree(entries);
         transitions.sort_unstable_by_key(|transition| {
-            (transition.timeline_range.start(), transition.track_order)
+            (
+                transition.timeline_range.start(),
+                transition.track_order,
+                transition.list_order,
+            )
         });
         Ok(Self {
             project_id: project.id.clone(),
