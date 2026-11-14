@@ -43,6 +43,10 @@ pub(crate) const PRESENT_REFUSED: &str = "the GPU cannot present to this window"
 /// returned.
 const PAUSED_POLL: Duration = Duration::from_millis(50);
 
+/// How long the heard audio may stand still, with samples waiting for the device, before the
+/// preview takes the output for stopped and keeps time by the wall clock.
+const AUDIO_STALL: Duration = Duration::from_millis(500);
+
 /// Most bytes of decoded source frames a preview keeps.
 const PREVIEW_FRAME_BYTES: u64 = 256 << 20;
 
@@ -481,13 +485,15 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
             return;
         }
         let paused = session.paused.is_paused();
-        if !paused {
+        if paused {
+            state.hold(shared);
+        } else {
             state.resume(&session, shared);
         }
         // In the background nothing touches the GPU, but commands are still carried out: an end
         // or a detach must not wait for the app to return to the foreground.
         let wait = if paused {
-            (state.deferred.is_some() || state.playing()).then_some(PAUSED_POLL)
+            (state.deferred.is_some() || state.held).then_some(PAUSED_POLL)
         } else {
             (state.playing() && state.output.is_some()).then_some(Duration::ZERO)
         };
@@ -511,6 +517,7 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
         if paused {
             continue;
         }
+        state.watch_audio(shared);
         let time = state.clock_time();
         let end = state.end;
         if time >= end {
@@ -602,6 +609,29 @@ struct State {
     audio: Option<PreviewAudio>,
     /// What the session's pause held back, done when it resumes.
     deferred: Option<Deferred>,
+    /// Playing stopped by the session's pause, at the position, to go on when it resumes.
+    held: bool,
+    /// When the heard audio last moved.
+    heard: HeardClock,
+}
+
+/// Tells an audio output that stopped taking samples from one that is playing.
+#[derive(Clone, Copy, Debug, Default)]
+struct HeardClock {
+    sample: i64,
+    since: Duration,
+}
+
+impl HeardClock {
+    /// Whether the output stopped: the heard `sample` has not moved for [`AUDIO_STALL`] up to
+    /// `now` while the ring held samples (`buffered`).
+    fn stalled(&mut self, sample: i64, now: Duration, buffered: bool) -> bool {
+        if sample != self.sample || !buffered {
+            *self = Self { sample, since: now };
+            return false;
+        }
+        now.saturating_sub(self.since) >= AUDIO_STALL
+    }
 }
 
 /// GPU work a paused session held back: a window to attach, a size to configure, and a frame to
@@ -654,12 +684,54 @@ impl State {
             sound: Sound::Unread,
             audio: None,
             deferred: None,
+            held: false,
+            heard: HeardClock::default(),
         }
+    }
+
+    /// Stops playing at the position when the session pauses; it goes on in [`Self::resume`].
+    fn hold(&mut self, shared: &Shared) {
+        if self.started.is_none() {
+            return;
+        }
+        self.position = self.clock_time().min(self.end);
+        self.started = None;
+        self.played_frame = None;
+        self.audio = None;
+        self.held = true;
+        shared.sounding.store(false, Ordering::Release);
+    }
+
+    /// Lets the picture keep time by the wall clock from the heard position when the audio output
+    /// stopped taking samples or reported an error.
+    fn watch_audio(&mut self, shared: &Shared) {
+        let (Some(audio), Some((at, _))) = (self.audio.as_ref(), self.started) else {
+            return;
+        };
+        let heard = audio.heard_sample();
+        let reason = audio.stream_error().or_else(|| {
+            self.heard
+                .stalled(heard, at.elapsed(), audio.buffered())
+                .then(|| format!("it took no sample for {} ms", AUDIO_STALL.as_millis()))
+        });
+        let Some(reason) = reason else {
+            return;
+        };
+        alpha2_os::diagnostic!(
+            "alpha2 preview: the audio output stopped ({reason}); playing on silent"
+        );
+        let from = self.clock_time();
+        self.audio = None;
+        shared.sounding.store(false, Ordering::Release);
+        self.started = Some((Instant::now(), from));
     }
 
     /// Does what the pause held back: attaches the window, configures the size and draws the frame
     /// at the position.
     fn resume(&mut self, session: &Session, shared: &Arc<Shared>) {
+        if std::mem::take(&mut self.held) {
+            self.start_playing(self.position, session, shared);
+        }
         let Some(deferred) = self.deferred.take() else {
             return;
         };
@@ -757,6 +829,7 @@ impl State {
 
     fn pause_at(&mut self, time: MediaTime, shared: &Shared) {
         self.position = time;
+        self.held = false;
         self.started = None;
         self.played_frame = None;
         self.audio = None;
@@ -788,6 +861,7 @@ impl State {
                     self.position = self.clock_time();
                     self.started = None;
                 }
+                self.held = false;
                 self.audio = None;
                 shared.sounding.store(false, Ordering::Release);
                 shared.playing.store(false, Ordering::Release);
@@ -809,7 +883,7 @@ impl State {
             Command::Seek(ticks, token) => {
                 let time = MediaTime::from_ticks(ticks.clamp(0, self.end.ticks()));
                 self.position = time;
-                if self.started.is_some() {
+                if self.started.is_some() || self.held {
                     self.start_playing(time, session, shared);
                 }
                 self.show(session, shared, &token);
@@ -833,10 +907,16 @@ impl State {
 
     /// Starts the clock, and the project's audio with it, at `from`.
     fn start_playing(&mut self, from: MediaTime, session: &Session, shared: &Shared) {
+        if session.paused.is_paused() {
+            self.position = from;
+            self.held = true;
+            return;
+        }
         // Frames from `from` on count: one the clock passes before the first draw (audio that
         // starts a little in) is dropped like any other.
         self.played_frame = Some(from.ticks() / frame_length(session).ticks().max(1) - 1);
         self.audio = None;
+        self.heard = HeardClock::default();
         shared.sounding.store(false, Ordering::Release);
         if matches!(self.sound, Sound::Unread) {
             self.sound = decode_preview_audio(session, shared);
@@ -1082,6 +1162,31 @@ mod tests {
             ["play", "pause", "detach"]
         );
         assert_eq!(names(&coalesce(vec![seek(4)])), ["seek 4"]);
+    }
+
+    #[test]
+    fn the_output_counts_as_stopped_when_the_heard_sample_stands_still_with_samples_waiting() {
+        let ms = Duration::from_millis;
+        let mut clock = HeardClock::default();
+        let moving = [(100, 0), (900, 20), (1_700, 40), (2_500, 60)];
+        assert!(
+            moving
+                .into_iter()
+                .all(|(sample, at)| !clock.stalled(sample, ms(at), true))
+        );
+        assert!(!clock.stalled(2_500, ms(300), true), "200 ms still");
+        assert!(!clock.stalled(2_500, ms(559), true), "499 ms still");
+        assert!(clock.stalled(2_500, ms(560), true), "500 ms still");
+        assert!(!clock.stalled(3_300, ms(580), true), "it moved again");
+
+        let mut starved = HeardClock::default();
+        assert!(!starved.stalled(0, ms(0), false));
+        assert!(
+            !starved.stalled(0, ms(2_000), false),
+            "an empty ring is a mix that fell behind, not a stopped output"
+        );
+        assert!(!starved.stalled(0, ms(2_100), true));
+        assert!(starved.stalled(0, ms(2_600), true));
     }
 
     #[test]

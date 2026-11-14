@@ -366,8 +366,8 @@ pub fn render_offline(
 
 #[cfg(feature = "cpal-host")]
 mod realtime {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, PoisonError};
 
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{SampleFormat, Stream, StreamConfig};
@@ -422,10 +422,11 @@ mod realtime {
 
     impl std::error::Error for CpalHostError {}
 
-    /// Running cpal output stream and observable underrun count.
+    /// Running cpal output stream, its observable underrun count and its last stream error.
     pub struct CpalOutputHost {
         stream: Stream,
         underruns: Arc<AtomicU64>,
+        stream_error: Arc<Mutex<Option<String>>>,
         sample_rate: u32,
         channels: u16,
         latency_samples: u32,
@@ -486,6 +487,8 @@ mod realtime {
             let underruns = Arc::new(AtomicU64::new(0));
             let callback_underruns = Arc::clone(&underruns);
             let error_underruns = Arc::clone(&underruns);
+            let stream_error = Arc::new(Mutex::new(None));
+            let error_text = Arc::clone(&stream_error);
             let mut sample_position = 0_i64;
             let latency_samples = source.latency_samples();
             let stream = device
@@ -503,8 +506,10 @@ mod realtime {
                             callback_underruns.fetch_add(1, Ordering::Relaxed);
                         }
                     },
-                    move |_| {
+                    move |error| {
                         error_underruns.fetch_add(1, Ordering::Relaxed);
+                        *error_text.lock().unwrap_or_else(PoisonError::into_inner) =
+                            Some(error.to_string());
                     },
                     None,
                 )
@@ -512,6 +517,7 @@ mod realtime {
             Ok(Self {
                 stream,
                 underruns,
+                stream_error,
                 sample_rate: device_rate,
                 channels: config.channels,
                 latency_samples,
@@ -531,6 +537,15 @@ mod realtime {
         #[must_use]
         pub fn underruns(&self) -> u64 {
             self.underruns.load(Ordering::Relaxed)
+        }
+        /// The last error the stream reported (a device that went away, for one), `None` while
+        /// it reported none.
+        #[must_use]
+        pub fn stream_error(&self) -> Option<String> {
+            self.stream_error
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
         }
         /// Negotiated device sample rate.
         #[must_use]

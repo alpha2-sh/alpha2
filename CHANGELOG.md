@@ -438,6 +438,9 @@ All notable changes to this project are documented in this file.
   before every frame, also on the software retry; `stills()` and timeline frames of an extraction
   wait before each frame; a preview attaches a window, resizes and draws a seek only when the
   session resumes. A cancel ends a held export or extraction at once.
+- Mobile: a preview whose audio output stops taking samples for 500 ms or reports an error (a
+  headset pulled, Bluetooth off) plays on silent by the wall clock instead of freezing the picture.
+  `Alpha2.pause()` silences a playing preview and keeps its position; `resume()` plays on from it.
 - A browser export cancelled while its sink is finishing rejects at once with `cancelled` and
   commits nothing, also when `finish` never settles; before, the export waited for `finish` and
   then reported a committed file as cancelled. `MediabunnySink.finish` rejects with

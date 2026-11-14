@@ -201,6 +201,18 @@ impl PreviewAudio {
         self.ring.short.load(Ordering::Relaxed) + self.host.underruns()
     }
 
+    /// Whether the ring holds mixed samples the device has not taken.
+    #[must_use]
+    pub fn buffered(&self) -> bool {
+        self.ring.written.load(Ordering::Acquire) > self.ring.read.load(Ordering::Acquire)
+    }
+
+    /// The last error the output stream reported, `None` while it reported none.
+    #[must_use]
+    pub fn stream_error(&self) -> Option<String> {
+        self.host.stream_error()
+    }
+
     /// The mix's last failure, `None` while every block mixed.
     #[must_use]
     pub fn last_error(&self) -> Option<MixFailure> {

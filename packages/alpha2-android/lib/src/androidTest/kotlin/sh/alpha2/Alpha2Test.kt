@@ -208,4 +208,66 @@ class Alpha2Test {
         reader.close()
         drawing.quitSafely()
     }
+
+    @Test
+    fun aPausedSessionSilencesItsPreviewAndPlaysOnWhenResumed() {
+        val drawing = HandlerThread("alpha2-test-compositor").apply { start() }
+        val reader = ImageReader.newInstance(
+            64,
+            48,
+            PixelFormat.RGBA_8888,
+            4,
+            HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or HardwareBuffer.USAGE_CPU_READ_OFTEN,
+        )
+        reader.setOnImageAvailableListener({ it.acquireLatestImage()?.close() }, Handler(drawing.looper))
+        // Five seconds, so the preview is still playing when the session pauses.
+        val project = JSONObject(text("host-audio-export-project.json"))
+        val tracks = project.getJSONObject("timeline").getJSONArray("tracks")
+        for (track in 0 until tracks.length()) {
+            val clips = tracks.getJSONObject(track).getJSONArray("clips")
+            for (clip in 0 until clips.length()) {
+                clips.getJSONObject(clip).getJSONObject("timeline_range").put("end", 600_000)
+                clips.getJSONObject(clip).getJSONObject("source_range").put("end", 600_000)
+            }
+        }
+        fun waitFor(millis: Long, done: () -> Boolean): Boolean {
+            val until = System.currentTimeMillis() + millis
+            while (!done() && System.currentTimeMillis() < until) Thread.sleep(5)
+            return done()
+        }
+        engine().use { engine ->
+            val request = PlayerRequest(
+                projectJson = project.toString(),
+                assets = audioAssets,
+                frames = emptyMap(),
+                resources = emptyMap(),
+            )
+            Player(engine, request).use { player ->
+                Alpha2Android.attach(player, reader.surface, 64u, 48u)
+                waitFor(10_000) { player.framesPresented() > 0uL || player.lastError() != null }
+                val refused = player.lastError()
+                assumeFalse(
+                    "skipped: $refused",
+                    refused?.startsWith("the GPU cannot present to this window") == true,
+                )
+                assertNull(refused)
+                player.play()
+                assertTrue("sounding", waitFor(5_000) { player.isSounding() })
+                engine.pause()
+                assertTrue("silent while paused", waitFor(2_000) { !player.isSounding() })
+                assertTrue(player.isPlaying())
+                val held = player.positionTicks()
+                Thread.sleep(300)
+                assertEquals(held, player.positionTicks())
+                engine.resume()
+                assertTrue("sounding again", waitFor(5_000) { player.isSounding() })
+                assertTrue("moving again", waitFor(5_000) { player.positionTicks() > held })
+                assertNull(player.lastError())
+                player.pause()
+                player.detachWindow()
+            }
+        }
+        reader.close()
+        drawing.quitSafely()
+    }
 }
