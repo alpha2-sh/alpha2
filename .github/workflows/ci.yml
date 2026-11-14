@@ -453,7 +453,7 @@ jobs:
           uv pip install -q --group dev
           uv pip install -q --no-deps -e .
           ALPHA2_HOST_BINARY="$GITHUB_WORKSPACE/target/release/alpha2-host" ALPHA2_TEST_OPENH264_ARCHIVE="$archive" \
-            .venv/bin/pytest tests/test_e2e.py -k openh264
+            .venv/bin/pytest tests/e2e/test_e2e.py -k openh264
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
@@ -1302,7 +1302,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           ALPHA2_HOST_BINARY: ${{ github.workspace }}/target/debug/alpha2-host${{ runner.os == 'Windows' && '.exe' || '' }}
-        run: '"$PY/pytest" python/alpha2/tests/test_e2e.py python/alpha2/tests/test_scenes.py'
+        run: '"$PY/pytest" python/alpha2/tests/e2e'
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
