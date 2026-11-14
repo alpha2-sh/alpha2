@@ -80,6 +80,10 @@ pub enum EncodePoll {
 }
 
 /// One video encoder session, used from one thread at a time.
+///
+/// A session the platform takes away fails the encoder, unless the backend can resume in place
+/// with the same configuration record (`VideoToolbox` does); a reclaimed Android `MediaCodec`
+/// fails.
 pub trait VideoEncodeBackend: Send {
     /// The encoder's name, for reports.
     fn name(&self) -> &str;
@@ -107,6 +111,15 @@ pub trait VideoEncodeBackend: Send {
     /// # Errors
     /// A failed encoder.
     fn receive(&mut self, wait: bool) -> Result<EncodePoll, EncodeError>;
+
+    /// Finishes every frame submitted so far without ending the input, so none is inside the
+    /// session while the app is away. The default does nothing.
+    ///
+    /// # Errors
+    /// A failed encoder.
+    fn settle(&mut self) -> Result<(), EncodeError> {
+        Ok(())
+    }
 
     /// No more frames follow.
     ///
@@ -657,6 +670,16 @@ impl EncodeSink {
         self.drain(false, false).map(|_| ())
     }
 
+    /// Lets the video encoder finish the frames it holds and takes their packets.
+    ///
+    /// # Errors
+    /// As [`Self::write_frame`].
+    pub fn settle(&mut self) -> Result<(), EncodeError> {
+        let settled = self.video.settle();
+        settled.map_err(|error| self.rejected(error))?;
+        self.drain(false, false).map(|_| ())
+    }
+
     /// One turn of a wait for the `which` encoder to take a frame: drains the encoders, waiting on
     /// the video one when `video`.
     fn wait_busy(
@@ -702,6 +725,10 @@ impl crate::export::VideoSink for EncodeSink {
         planes: &[PlaneBuffer],
     ) -> Result<(), EncodeError> {
         self.write_frame(index, planes)
+    }
+
+    fn settle(&mut self) -> Result<(), EncodeError> {
+        Self::settle(self)
     }
 }
 

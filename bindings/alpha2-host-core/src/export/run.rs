@@ -99,6 +99,14 @@ pub trait VideoSink {
         layout: PixelLayout,
         planes: &[PlaneBuffer],
     ) -> Result<(), EncodeError>;
+
+    /// Finishes the frames the encoder holds, before the export waits. The default does nothing.
+    ///
+    /// # Errors
+    /// An encoder or output failure.
+    fn settle(&mut self) -> Result<(), EncodeError> {
+        Ok(())
+    }
 }
 
 /// Why an export stopped.
@@ -241,8 +249,9 @@ impl SourceFrameCache {
 /// Renders every frame of `exporter` into `sink`, decoding sources through `sources`.
 ///
 /// Frames wait for their sources and never repeat a late one, so output does not depend on
-/// decode timing. Decoded frames stay within `budget`, read before every frame. `progress` is
-/// told after each frame.
+/// decode timing. Decoded frames stay within `budget`, read before every frame. `before_frame`
+/// runs at the top of every turn with the sink (it may block, as a host's pause does), and
+/// `progress` is told after each frame.
 ///
 /// # Errors
 /// Cancellation, a source or render failure, a frame whose sources never arrive, or a sink
@@ -256,6 +265,7 @@ pub fn export_video(
     sources: &mut dyn SourceFrames,
     sink: &mut dyn VideoSink,
     (budget, cancel): (&FrameBudget, &CancelToken),
+    before_frame: &mut dyn FnMut(&mut dyn VideoSink) -> Result<(), EncodeError>,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<(), ExportError> {
     let size = exporter
@@ -279,6 +289,7 @@ pub fn export_video(
         .collect::<Vec<_>>();
     let mut refills = 0;
     loop {
+        before_frame(sink).map_err(ExportError::Encode)?;
         if cancel.is_cancelled() {
             return Err(ExportError::Cancelled);
         }

@@ -151,9 +151,9 @@ fn encode(
     Ok(encoder)
 }
 
-/// Reads `path` back: packets in order with keyframes at the interval, every frame at its level,
-/// and the tone from sample 0 within `tolerance` samples of its phase.
-fn check(path: &std::path::Path, layout: PixelLayout, tolerance: f64) -> Vec<String> {
+/// Reads the video of `path` back: packets in order with keyframes at the interval, every frame
+/// at its level. Returns the failures and the keyframe indices.
+fn check_video(path: &std::path::Path, layout: PixelLayout) -> (Vec<String>, Vec<u64>) {
     let mut failures = Vec::new();
     let mut reader = alpha2_container::open(path).expect("readable output");
     let video = alpha2_container::default_track(reader.tracks(), TrackKind::Video).expect("video");
@@ -203,7 +203,14 @@ fn check(path: &std::path::Path, layout: PixelLayout, tolerance: f64) -> Vec<Str
     if index != FRAMES {
         failures.push(format!("{index} frames decoded, not {FRAMES}"));
     }
+    (failures, keyframes)
+}
 
+/// Reads `path` back: the video as [`check_video`] does, and the tone from sample 0 within
+/// `tolerance` samples of its phase.
+fn check(path: &std::path::Path, layout: PixelLayout, tolerance: f64) -> Vec<String> {
+    let (mut failures, _) = check_video(path, layout);
+    let cancel = CancelToken::default();
     let mut audio = AudioStream::open_file(
         path,
         &WithPcm(AppleAudio),
@@ -446,4 +453,90 @@ fn an_encoder_without_a_delay_bound_holds_at_most_the_frames_in_flight_cap() {
         most <= MAX_IN_FLIGHT,
         "{most} frames in flight, over {MAX_IN_FLIGHT}"
     );
+}
+
+/// Encodes the flat clip without audio to `path`, losing the session at frame `lose_at` and
+/// settling before frame `settle_at`.
+fn encode_through_a_loss(
+    path: &std::path::Path,
+    codec: VideoCodec,
+    lose_at: Option<(u64, bool)>,
+    settle_at: Option<u64>,
+) -> Result<(), alpha2_media::EncodeError> {
+    let config = VideoEncodeConfig {
+        codec,
+        ..h264_config(WIDTH, HEIGHT, false)
+    };
+    let mut encoder = VideoToolboxEncoder::open(&config)?;
+    if let Some((index, other_record)) = lose_at {
+        encoder.lose_session_at(index, other_record);
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .expect("output");
+    let writer = Box::new(Mp4Writer::create(file, Mp4Flavor::Mp4));
+    let mut sink = EncodeSink::new(
+        writer,
+        Box::new(encoder),
+        config,
+        None,
+        CancelToken::default(),
+    );
+    for index in 0..FRAMES {
+        if settle_at == Some(index) {
+            sink.settle()?;
+        }
+        sink.write_frame(index, &frame(index, PixelLayout::YUV420P))?;
+    }
+    sink.finish()
+}
+
+fn scratch_mp4(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("alpha2-apple-{name}-{}.mp4", std::process::id()))
+}
+
+#[test]
+fn a_lost_session_is_replaced_and_the_stream_goes_on_from_a_keyframe() {
+    for codec in [VideoCodec::H264, VideoCodec::Hevc] {
+        let path = scratch_mp4(&format!("lost-{codec:?}"));
+        encode_through_a_loss(&path, codec, Some((18, false)), None)
+            .unwrap_or_else(|error| panic!("{codec:?}: {error}"));
+        let (failures, keyframes) = check_video(&path, PixelLayout::YUV420P);
+        let _ = std::fs::remove_file(&path);
+        assert!(failures.is_empty(), "{codec:?}: {failures:#?}");
+        let resumed = keyframes.iter().any(|&index| index > 10 && index <= 18);
+        assert!(
+            resumed,
+            "{codec:?}: keyframes {keyframes:?}, none where the session was replaced"
+        );
+    }
+}
+
+#[test]
+fn a_replaced_session_with_another_configuration_rejects_the_encoder() {
+    let path = scratch_mp4("lost-other-record");
+    let result = encode_through_a_loss(&path, VideoCodec::H264, Some((18, true)), None);
+    let _ = std::fs::remove_file(&path);
+    match result {
+        Err(alpha2_media::EncodeError::EncoderRejected { message, .. }) => {
+            assert!(message.contains("configuration record"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn settling_mid_stream_keeps_every_frame() {
+    for codec in [VideoCodec::H264, VideoCodec::Hevc] {
+        let path = scratch_mp4(&format!("settled-{codec:?}"));
+        encode_through_a_loss(&path, codec, None, Some(7))
+            .unwrap_or_else(|error| panic!("{codec:?}: {error}"));
+        let (failures, _) = check_video(&path, PixelLayout::YUV420P);
+        let _ = std::fs::remove_file(&path);
+        assert!(failures.is_empty(), "{codec:?}: {failures:#?}");
+    }
 }

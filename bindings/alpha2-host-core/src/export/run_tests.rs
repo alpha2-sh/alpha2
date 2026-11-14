@@ -293,6 +293,7 @@ fn export_from(
         &mut sources,
         &mut sink,
         (&budget, &CancelToken::default()),
+        &mut |_| Ok(()),
         &mut |done, total| {
             budget.halve();
             reports.push((done, total));
@@ -381,9 +382,62 @@ fn a_cancelled_export_stops() {
         &mut sources,
         &mut Collect::default(),
         (&FrameBudget::new(1 << 30), &cancel),
+        &mut |_| Ok(()),
         &mut |_, _| {},
     );
     assert!(matches!(result, Err(ExportError::Cancelled)), "{result:?}");
+}
+
+#[test]
+fn the_frame_hook_runs_before_every_turn_and_its_failure_stops_the_export() {
+    let snapshot = project(0, 5);
+    let run = |fail_at: Option<usize>| {
+        let mut exporter = Exporter::for_project(
+            &snapshot,
+            QualityProfile::export(),
+            alpha2_media::VideoCodec::H264,
+        )
+        .expect("exporter");
+        let renderer = CpuRenderer::new(1);
+        let mut sources = StreamSources::new(|_: &SourceId| {
+            VideoStream::open(
+                reader(),
+                0,
+                Arc::new(Sessions(false)),
+                StreamOptions::default(),
+            )
+            .map(|stream| SourceStream::Video(Box::new(stream)))
+            .map_err(|error| error.to_string())
+        });
+        let mut sink = Collect::default();
+        let mut calls = 0;
+        let result = export_video(
+            &snapshot,
+            &mut exporter,
+            ExportRenderer::Cpu(&renderer),
+            &mut TextTextures::new(),
+            &mut sources,
+            &mut sink,
+            (&FrameBudget::new(1 << 30), &CancelToken::default()),
+            &mut |sink| {
+                sink.settle()?;
+                if fail_at == Some(calls) {
+                    return Err(EncodeError::Adapter("held".into()));
+                }
+                calls += 1;
+                Ok(())
+            },
+            &mut |_, _| {},
+        );
+        (result, calls, sink.0.len())
+    };
+    let (result, calls, frames) = run(None);
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(frames, 5);
+    assert!(calls > frames, "{calls} turns for {frames} frames");
+    let (result, _, frames) = run(Some(2));
+    assert!(matches!(result, Err(ExportError::Encode(_))), "{result:?}");
+    assert_eq!(frames, 2);
 }
 
 /// Exports a project whose source decodes into surfaces, with the CPU renderer.
@@ -417,6 +471,7 @@ fn export_surfaces(import: Option<Arc<dyn SurfaceImport>>) -> Result<(), ExportE
         &mut sources,
         &mut Collect::default(),
         (&FrameBudget::new(1 << 30), &CancelToken::default()),
+        &mut |_| Ok(()),
         &mut |_, _| {},
     )
 }
@@ -751,6 +806,7 @@ fn export_counted(snapshot: &EngineProject, sessions: &Counted, managed: bool) -
         &mut sources,
         &mut sink,
         (&FrameBudget::new(1 << 30), &CancelToken::default()),
+        &mut |_| Ok(()),
         &mut |_, _| {},
     )
     .expect("export");

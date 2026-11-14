@@ -288,6 +288,7 @@ fn rendered_frames(project: &str, assets: &[(&str, &str)], wanted: &[u64]) -> Ve
             &FrameBudget::new(1 << 30),
             &alpha2_media::CancelToken::default(),
         ),
+        &mut |_| Ok(()),
         &mut |_, _| {},
     )
     .expect("renders");
@@ -1827,6 +1828,7 @@ mod gpu_frames {
                 &alpha2_host_core::export::FrameBudget::new(1 << 30),
                 &CancelToken::default(),
             ),
+            &mut |_| Ok(()),
             &mut |_, _| {},
         )
         .unwrap_or_else(|error| panic!("{name}: {error}"));

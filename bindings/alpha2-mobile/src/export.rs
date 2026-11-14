@@ -412,6 +412,14 @@ fn attempt(
         &mut sources,
         &mut sink,
         (&job.budget, &job.cancel),
+        &mut |sink| {
+            // No frame stays inside the encoder while the app is away.
+            if job.paused.is_paused() {
+                sink.settle()?;
+            }
+            job.paused.wait_while_paused(&job.cancel, &job.held);
+            Ok(())
+        },
         &mut |done, total| {
             frames = done;
             job.progress.report(
@@ -421,7 +429,6 @@ fn attempt(
                 },
                 &job.cancel,
             );
-            job.paused.wait_while_paused(&job.cancel, &job.held);
         },
     )
     .map_err(|error| match error {

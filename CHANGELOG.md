@@ -430,6 +430,10 @@ All notable changes to this project are documented in this file.
   until the end. A preview keeps at most two more sessions open than its timeline reads at once,
   closing the one read longest ago, and every clip of one image shares one decoded picture. The
   decoded frames sources hold count against the frame budget.
+- iOS: an export whose VideoToolbox encoder session the system invalidates (a trip to the
+  background) goes on in a new session from a keyframe instead of starting over in software (H.264)
+  or failing (HEVC). A paused export lets the encoder finish the frames it holds first, and a
+  dropped encoder completes its frames before the session goes.
 - A browser export cancelled while its sink is finishing rejects at once with `cancelled` and
   commits nothing, also when `finish` never settles; before, the export waited for `finish` and
   then reported a committed file as cancelled. `MediabunnySink.finish` rejects with

@@ -67,6 +67,7 @@ impl ContainerWriter for Writer {
 /// Holds two frames, gives each back one frame late, and publishes its configuration with the
 /// first packet.
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)]
 struct Video {
     queued: VecDeque<(i64, bool)>,
     given: bool,
@@ -78,6 +79,8 @@ struct Video {
     submitted: usize,
     /// The first waiting receive blocks this long and gives nothing.
     blocks_once: Option<std::time::Duration>,
+    /// Gives every queued frame until the next submit.
+    settled: bool,
 }
 
 impl VideoEncodeBackend for Video {
@@ -107,6 +110,7 @@ impl VideoEncodeBackend for Video {
             return Ok(Submit::Busy);
         }
         self.submitted += 1;
+        self.settled = false;
         self.queued.push_back((pts, keyframe));
         Ok(Submit::Accepted)
     }
@@ -116,7 +120,7 @@ impl VideoEncodeBackend for Video {
             std::thread::sleep(delay);
             return Ok(EncodePoll::Pending);
         }
-        if self.busy || (self.queued.len() < 2 && !self.ended) {
+        if self.busy || (self.queued.len() < 2 && !self.ended && !self.settled) {
             return Ok(EncodePoll::Pending);
         }
         Ok(match self.queued.pop_front() {
@@ -131,6 +135,11 @@ impl VideoEncodeBackend for Video {
             }
             None => EncodePoll::Drained,
         })
+    }
+
+    fn settle(&mut self) -> Result<(), EncodeError> {
+        self.settled = true;
+        Ok(())
     }
 
     fn finish_input(&mut self) -> Result<(), EncodeError> {
@@ -291,6 +300,22 @@ fn write_frames(sink: &mut EncodeSink, count: u64) {
     for index in 0..count {
         sink.write_frame(index, &planes()).expect("frame");
     }
+}
+
+#[test]
+fn settling_writes_every_frame_the_video_encoder_holds() {
+    let log = Log::default();
+    let mut sink = sink(&log, false);
+    write_frames(&mut sink, 1);
+    assert!(log.events().is_empty(), "the encoder holds the frame");
+    sink.settle().expect("settled");
+    assert_eq!(
+        log.events(),
+        [
+            Event::Track(TrackKind::Video, 0),
+            Event::Packet(TrackId(1), 0, 3_000, true)
+        ]
+    );
 }
 
 #[test]
