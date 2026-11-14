@@ -8,7 +8,7 @@ use serde_json::Value;
 
 /// A runtime effect as the protocol sends it (camelCase JSON).
 #[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EffectRequest {
     pub id: String,
     pub version: u32,

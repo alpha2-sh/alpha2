@@ -116,6 +116,8 @@ All notable changes to this project are documented in this file.
   counts it as ended and serves the next request; it was never answered and the host stayed busy.
 - A 10-bit export on a host whose renderer stores 8 bits is refused with `INVALID_INPUT`, a code the
   protocol lists.
+- Every host request refuses a field it does not know with `INVALID_REQUEST` naming the field; a
+  misspelled option such as `includeaudio` silently changed an export.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

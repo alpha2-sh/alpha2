@@ -77,6 +77,9 @@ pub struct ExtractHostRequest {
     pub protocol_version: u32,
     pub request_id: String,
     pub operation: String,
+    /// The frame's attachment list, read with the frame.
+    #[serde(default, rename = "attachments")]
+    pub(crate) _attachments: serde::de::IgnoredAny,
     pub project: ProjectJson,
     pub assets: HashMap<String, PathBuf>,
     #[serde(default)]

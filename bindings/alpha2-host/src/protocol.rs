@@ -42,10 +42,16 @@ pub enum Request {
 
 /// A compose or template request, answered without a GPU or reading media.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ComposeRequest {
     pub protocol_version: u32,
     pub request_id: String,
+    /// Read by the dispatcher.
+    #[serde(default, rename = "operation")]
+    pub(crate) _operation: serde::de::IgnoredAny,
+    /// The frame's attachment list, read with the frame.
+    #[serde(default, rename = "attachments")]
+    pub(crate) _attachments: serde::de::IgnoredAny,
     /// `compile`, `bind`, `dataSchema`, `lint`, `requirements` or `templates`.
     pub action: String,
     /// The spec `compile` and `requirements` read.
@@ -69,10 +75,16 @@ pub struct ComposeRequest {
 
 /// An edit operation applied to a project, answered without a GPU or reading media.
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EditRequest {
     pub protocol_version: u32,
     pub request_id: String,
+    /// Read by the dispatcher.
+    #[serde(default, rename = "operation")]
+    pub(crate) _operation: serde::de::IgnoredAny,
+    /// The frame's attachment list, read with the frame.
+    #[serde(default, rename = "attachments")]
+    pub(crate) _attachments: serde::de::IgnoredAny,
     pub project: ProjectJson,
     /// The operation: `remove_ranges`, `split_at` or `bake`.
     pub edit: Box<RawValue>,
@@ -122,7 +134,7 @@ impl ProjectJson {
 /// `UNSUPPORTED_PROTOCOL` for another protocol version, `INVALID_REQUEST` for a malformed header or
 /// an empty `requestId`.
 pub fn parse_status(line: &str) -> Result<String, HostError> {
-    let status: CancelRequest = serde_json::from_str(line)
+    let status: StatusRequest = serde_json::from_str(line)
         .map_err(|error| HostError::new("INVALID_REQUEST", format!("invalid request: {error}")))?;
     check_version(status.protocol_version)?;
     if status.request_id.is_empty() {
@@ -145,11 +157,18 @@ fn check_version(version: u64) -> Result<(), HostError> {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CapabilitiesRequest {
     #[serde(rename = "protocolVersion")]
     protocol_version: u32,
     #[serde(rename = "requestId")]
     request_id: String,
+    /// Read by the dispatcher.
+    #[serde(default, rename = "operation")]
+    pub(crate) _operation: serde::de::IgnoredAny,
+    /// The frame's attachment list, read with the frame.
+    #[serde(default, rename = "attachments")]
+    pub(crate) _attachments: serde::de::IgnoredAny,
 }
 
 /// A longer header goes to the server, which refuses it. A cancel names two ids and nothing else,
@@ -157,6 +176,7 @@ struct CapabilitiesRequest {
 pub const MAX_CONTROL_HEADER_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CancelRequest {
     #[serde(rename = "protocolVersion")]
     protocol_version: u64,
@@ -164,6 +184,27 @@ pub struct CancelRequest {
     pub request_id: String,
     #[serde(default)]
     pub target: String,
+    /// Read by the dispatcher.
+    #[serde(default, rename = "operation")]
+    pub(crate) _operation: serde::de::IgnoredAny,
+    /// The frame's attachment list, read with the frame.
+    #[serde(default, rename = "attachments")]
+    pub(crate) _attachments: serde::de::IgnoredAny,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StatusRequest {
+    #[serde(rename = "protocolVersion")]
+    protocol_version: u64,
+    #[serde(rename = "requestId", default)]
+    request_id: String,
+    /// Read by the dispatcher.
+    #[serde(default, rename = "operation")]
+    pub(crate) _operation: serde::de::IgnoredAny,
+    /// The frame's attachment list, read with the frame.
+    #[serde(default, rename = "attachments")]
+    pub(crate) _attachments: serde::de::IgnoredAny,
 }
 
 /// # Errors
@@ -189,11 +230,18 @@ pub fn parse_cancel(line: &str) -> Result<CancelRequest, HostError> {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExportRequest {
     #[serde(rename = "protocolVersion")]
     pub protocol_version: u32,
     #[serde(rename = "requestId")]
     pub request_id: String,
+    /// Read by the dispatcher.
+    #[serde(default, rename = "operation")]
+    pub(crate) _operation: serde::de::IgnoredAny,
+    /// The frame's attachment list, read with the frame.
+    #[serde(default, rename = "attachments")]
+    pub(crate) _attachments: serde::de::IgnoredAny,
     pub project: ProjectJson,
     pub assets: HashMap<String, PathBuf>,
     /// By source ID.
@@ -455,11 +503,18 @@ fn check_format_names(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConformRequest {
     #[serde(rename = "protocolVersion")]
     pub protocol_version: u32,
     #[serde(rename = "requestId")]
     pub request_id: String,
+    /// Read by the dispatcher.
+    #[serde(default, rename = "operation")]
+    pub(crate) _operation: serde::de::IgnoredAny,
+    /// The frame's attachment list, read with the frame.
+    #[serde(default, rename = "attachments")]
+    pub(crate) _attachments: serde::de::IgnoredAny,
     pub project: ProjectJson,
     #[serde(default)]
     pub assets: HashMap<String, PathBuf>,
@@ -477,6 +532,9 @@ pub struct StillRequest {
     pub protocol_version: u32,
     pub request_id: String,
     pub operation: String,
+    /// The frame's attachment list, read with the frame.
+    #[serde(default, rename = "attachments")]
+    pub(crate) _attachments: serde::de::IgnoredAny,
     pub project: ProjectJson,
     pub assets: HashMap<String, PathBuf>,
     #[serde(default)]
@@ -705,6 +763,7 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             let CapabilitiesRequest {
                 protocol_version,
                 request_id,
+                ..
             } = serde_json::from_str(line).map_err(invalid)?;
             Request::Capabilities {
                 protocol_version,
@@ -1143,6 +1202,7 @@ impl HostError {
 }
 
 #[derive(Copy, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RateRequest {
     pub num: u32,
     pub den: u32,

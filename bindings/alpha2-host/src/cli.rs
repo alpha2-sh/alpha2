@@ -156,6 +156,8 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
         None => Vec::new(),
     };
     let request = ExportRequest {
+        _operation: serde::de::IgnoredAny,
+        _attachments: serde::de::IgnoredAny,
         protocol_version: PROTOCOL_VERSION,
         request_id: "cli-export".to_owned(),
         project: ProjectJson::from_value(&project)?,

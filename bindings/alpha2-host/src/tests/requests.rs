@@ -2250,3 +2250,88 @@ fn ten_bit_output_on_an_eight_bit_renderer_is_invalid_input() {
         .expect_err("refused");
     assert_eq!(error.code, "INVALID_INPUT", "{}", error.message);
 }
+
+#[test]
+fn every_operation_refuses_an_unknown_field_and_takes_an_attachment_list() {
+    let project = json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": {"width": 64, "height": 48, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+        "sources": [], "timeline": {"tracks": []}
+    });
+    let requests = [
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "export", "project": project,
+               "assets": {}, "startTicks": 0, "endTicks": 4000, "frameRate": {"num": 30, "den": 1},
+               "output": "/nowhere/out.mp4"}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "conform", "project": project}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "compose", "action": "templates"}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "edit", "project": project,
+               "edit": {"op": "split_at", "time": 0}}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "capabilities"}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "still", "project": project,
+               "assets": {}, "stills": [{"time": 0}]}),
+    ];
+    let refusal = |result: Result<(), HostError>, what: &str| {
+        let error = result.err().unwrap_or_else(|| panic!("{what}: accepted"));
+        assert_eq!(error.code, "INVALID_REQUEST", "{what}: {}", error.message);
+        assert!(
+            error.message.contains("aUnknownField"),
+            "{what}: {}",
+            error.message
+        );
+    };
+    for request in &requests {
+        let operation = request["operation"].as_str().expect("operation");
+        let mut with_attachments = request.clone();
+        with_attachments["attachments"] = json!([]);
+        assert!(
+            parse_request(&with_attachments.to_string()).is_ok(),
+            "{operation} with an attachment list"
+        );
+        let mut unknown = request.clone();
+        unknown["aUnknownField"] = json!(true);
+        refusal(parse_request(&unknown.to_string()).map(|_| ()), operation);
+    }
+    let cancel =
+        json!({"protocolVersion": 2, "requestId": "c", "operation": "cancel", "target": "r"});
+    let status = json!({"protocolVersion": 2, "requestId": "s", "operation": "status"});
+    for (name, request) in [("cancel", &cancel), ("status", &status)] {
+        let mut unknown = request.clone();
+        unknown["aUnknownField"] = json!(true);
+        let parse = |line: &str| {
+            if name == "cancel" {
+                crate::protocol::parse_cancel(line).map(|_| ())
+            } else {
+                crate::protocol::parse_status(line).map(|_| ())
+            }
+        };
+        let mut with_attachments = request.clone();
+        with_attachments["attachments"] = json!([]);
+        assert!(parse(&with_attachments.to_string()).is_ok(), "{name}");
+        refusal(parse(&unknown.to_string()), name);
+    }
+    for (field, value) in [
+        ("includeaudio", json!(false)),
+        ("overWrite", json!(true)),
+        ("bitdepth", json!(10)),
+        ("inputpolicy", json!("cpu-readback")),
+        ("loudnes", json!({"targetLufs": -16.0})),
+        ("rendercache", json!({"directory": "/nowhere"})),
+        ("proxys", json!({})),
+    ] {
+        let mut request = requests[0].clone();
+        request[field] = value;
+        let error = parse_request(&request.to_string())
+            .err()
+            .unwrap_or_else(|| panic!("{field}: accepted"));
+        assert_eq!(error.code, "INVALID_REQUEST", "{field}");
+        assert!(error.message.contains(field), "{field}: {}", error.message);
+    }
+    let mut rate = requests[0].clone();
+    rate["frameRate"]["denominator"] = json!(1);
+    assert_eq!(
+        parse_request(&rate.to_string())
+            .err()
+            .map(|error| error.code),
+        Some("INVALID_REQUEST")
+    );
+}
