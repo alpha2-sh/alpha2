@@ -165,6 +165,9 @@ struct Shared {
     /// Output callbacks that ran.
     #[cfg(test)]
     callbacks: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// The time of the first frame each replacing session encoded, `None` for the next frame.
+    #[cfg(test)]
+    resumed: std::sync::Arc<Mutex<Vec<Option<i64>>>>,
 }
 
 /// The configuration record in a sample's format description.
@@ -678,6 +681,8 @@ impl VideoToolboxEncoder {
             strip_sei: config.codec == VideoCodec::H264,
             #[cfg(test)]
             callbacks: std::sync::Arc::default(),
+            #[cfg(test)]
+            resumed: std::sync::Arc::default(),
         });
         let (session, pool, applied) = create(config, codec_type, input, &encoder.id, &shared)?;
         Ok(Self {
@@ -927,6 +932,12 @@ impl VideoToolboxEncoder {
                 outputs.checked = false;
             }
             self.key_next = self.kept.is_empty();
+            #[cfg(test)]
+            self.shared
+                .resumed
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(self.kept.front().map(|frame| frame.pts));
             let mut lost = false;
             for (index, frame) in self.kept.iter().enumerate() {
                 match self.encode(frame, frame.keyframe || index == 0) {
@@ -1089,6 +1100,11 @@ impl VideoToolboxEncoder {
     /// `other_record` the replacing session's record differs from the published one.
     pub(crate) fn lose_session_at(&mut self, index: u64, other_record: bool) {
         self.lose_at = Some((index, other_record));
+    }
+
+    /// Where each replacing session started, which outlives the encoder.
+    pub(crate) fn resumed(&self) -> std::sync::Arc<Mutex<Vec<Option<i64>>>> {
+        std::sync::Arc::clone(&self.shared.resumed)
     }
 
     /// The count of output callbacks that ran, which outlives the encoder.

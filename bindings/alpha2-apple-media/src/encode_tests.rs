@@ -397,32 +397,44 @@ fn h264_config(width: u32, height: u32, software: bool) -> VideoEncodeConfig {
     }
 }
 
-#[test]
-fn an_encoder_dropped_with_frames_in_flight_completes_them_first() {
-    for software in [false, true] {
-        let config = h264_config(640, 360, software);
-        let pictures = (0..4).map(|seed| noise(640, 360, seed)).collect::<Vec<_>>();
-        for round in 0..100 {
-            let mut encoder = VideoToolboxEncoder::open(&config).expect("an encoder opens");
-            let callbacks = encoder.callbacks();
-            let step = i64::from(encoder.timescale()) / 30;
-            let mut accepted = 0;
-            for index in 0..16_i64 {
-                let picture = &pictures[usize::try_from(index % 4).expect("small")];
-                match encoder.submit(index * step, picture, index == 0) {
-                    Ok(Submit::Accepted) => accepted += 1,
-                    Ok(Submit::Busy) => break,
-                    Err(error) => panic!("round {round}, frame {index}: {error}"),
-                }
+/// Drops `rounds` encoders, hardware or software, each with up to 16 frames submitted and none
+/// received: every frame's callback has run when the drop returns.
+fn drop_with_frames_in_flight(software: bool, rounds: usize) {
+    let config = h264_config(WIDTH, HEIGHT, software);
+    let pictures = (0..4)
+        .map(|seed| noise(WIDTH, HEIGHT, seed))
+        .collect::<Vec<_>>();
+    for round in 0..rounds {
+        let mut encoder = VideoToolboxEncoder::open(&config).expect("an encoder opens");
+        let callbacks = encoder.callbacks();
+        let step = i64::from(encoder.timescale()) / 30;
+        let mut accepted = 0;
+        for index in 0..16_i64 {
+            let picture = &pictures[usize::try_from(index % 4).expect("small")];
+            match encoder.submit(index * step, picture, index == 0) {
+                Ok(Submit::Accepted) => accepted += 1,
+                Ok(Submit::Busy) => break,
+                Err(error) => panic!("round {round}, frame {index}: {error}"),
             }
-            drop(encoder);
-            assert_eq!(
-                callbacks.load(Ordering::SeqCst),
-                accepted,
-                "software {software}, round {round}: every submitted frame completed before the drop returned"
-            );
         }
+        drop(encoder);
+        assert_eq!(
+            callbacks.load(Ordering::SeqCst),
+            accepted,
+            "software {software}, round {round}: every submitted frame completed before the drop returned"
+        );
     }
+}
+
+#[test]
+fn a_hardware_encoder_dropped_with_frames_in_flight_completes_them_first() {
+    drop_with_frames_in_flight(false, 100);
+}
+
+#[test]
+fn a_software_encoder_dropped_with_frames_in_flight_completes_them_first() {
+    // A software drop takes about 0.2 s on a phone; 60 keep the test within iOS's 20 s launch limit.
+    drop_with_frames_in_flight(true, 60);
 }
 
 #[test]
@@ -456,13 +468,13 @@ fn an_encoder_without_a_delay_bound_holds_at_most_the_frames_in_flight_cap() {
 }
 
 /// Encodes the flat clip without audio to `path`, losing the session at frame `lose_at` and
-/// settling before frame `settle_at`.
+/// settling before frame `settle_at`; returns the frame each replacing session started at.
 fn encode_through_a_loss(
     path: &std::path::Path,
     codec: VideoCodec,
     lose_at: Option<(u64, bool)>,
     settle_at: Option<u64>,
-) -> Result<(), alpha2_media::EncodeError> {
+) -> Result<Vec<Option<u64>>, alpha2_media::EncodeError> {
     let config = VideoEncodeConfig {
         codec,
         ..h264_config(WIDTH, HEIGHT, false)
@@ -471,6 +483,8 @@ fn encode_through_a_loss(
     if let Some((index, other_record)) = lose_at {
         encoder.lose_session_at(index, other_record);
     }
+    let resumed = encoder.resumed();
+    let timescale = i64::from(encoder.timescale());
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -492,7 +506,12 @@ fn encode_through_a_loss(
         }
         sink.write_frame(index, &frame(index, PixelLayout::YUV420P))?;
     }
-    sink.finish()
+    sink.finish()?;
+    let resumed = resumed.lock().expect("resumed").clone();
+    Ok(resumed
+        .into_iter()
+        .map(|pts| pts.and_then(|pts| u64::try_from(pts * 30 / timescale).ok()))
+        .collect())
 }
 
 fn scratch_mp4(name: &str) -> std::path::PathBuf {
@@ -503,15 +522,19 @@ fn scratch_mp4(name: &str) -> std::path::PathBuf {
 fn a_lost_session_is_replaced_and_the_stream_goes_on_from_a_keyframe() {
     for codec in [VideoCodec::H264, VideoCodec::Hevc] {
         let path = scratch_mp4(&format!("lost-{codec:?}"));
-        encode_through_a_loss(&path, codec, Some((18, false)), None)
+        let resumed = encode_through_a_loss(&path, codec, Some((18, false)), None)
             .unwrap_or_else(|error| panic!("{codec:?}: {error}"));
         let (failures, keyframes) = check_video(&path, PixelLayout::YUV420P);
         let _ = std::fs::remove_file(&path);
         assert!(failures.is_empty(), "{codec:?}: {failures:#?}");
-        let resumed = keyframes.iter().any(|&index| index > 10 && index <= 18);
+        // One replacement; it re-encoded the frames in flight from the earliest unfinished one.
+        let [Some(frame)] = resumed[..] else {
+            panic!("{codec:?}: replacements {resumed:?}");
+        };
+        assert!(frame <= 18, "{codec:?}: resumed at frame {frame}");
         assert!(
-            resumed,
-            "{codec:?}: keyframes {keyframes:?}, none where the session was replaced"
+            keyframes.contains(&frame),
+            "{codec:?}: keyframes {keyframes:?}, none at frame {frame} where the session was replaced"
         );
     }
 }
