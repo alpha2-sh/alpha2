@@ -10,7 +10,7 @@ use std::sync::{Arc, OnceLock};
 use alpha2_media::{ColorMetadata, YuvFormat};
 
 use super::CpuRenderer;
-use super::curves::{exact_srgb_to_linear, extended_linear_to_srgb, linear_to_srgb};
+use super::curves::{self, extended_linear_to_srgb, linear_to_srgb};
 use super::half;
 use super::image::{CpuImage, PixelBox};
 use super::renderer::add_elapsed;
@@ -539,42 +539,77 @@ impl Plane<'_> {
     }
 }
 
-/// The presentation shader's sRGB EOTF, clamped first.
-fn srgb_eotf(value: f32) -> f32 {
-    exact_srgb_to_linear(value.clamp(0.0, 1.0))
+/// The transfer functions the presenter evaluates per sample.
+trait Transfer {
+    fn srgb_eotf(value: f32) -> f32;
+    fn pq_eotf(code: f32) -> f32;
+    fn pq_inverse_eotf(nits: f32) -> f32;
+    fn hlg_inverse_oetf(code: f32) -> f32;
+    fn pow(base: f32, exponent: f32) -> f32;
 }
 
-// SMPTE ST 2084 and ARIB STD-B67 as yuv-to-linear.wesl computes them in `f32`; `libm` keeps
-// every target identical.
-const PQ_M1: f32 = 0.159_301_76;
-const PQ_M2: f32 = 78.843_75;
-const PQ_C1: f32 = 0.835_937_5;
-const PQ_C2: f32 = 18.851_563;
-const PQ_C3: f32 = 18.6875;
+/// The presenter's curves: `libm`-built tables, identical on every target.
+struct Tabled;
 
-fn pq_eotf(code: f32) -> f32 {
-    let e = libm::powf(code.clamp(0.0, 1.0).max(1.0e-10), 1.0 / PQ_M2);
-    let y = libm::powf((e - PQ_C1).max(0.0) / (PQ_C2 - PQ_C3 * e), 1.0 / PQ_M1);
-    y * 10_000.0
-}
-
-fn pq_inverse_eotf(nits: f32) -> f32 {
-    let y = libm::powf((nits / 10_000.0).clamp(0.0, 1.0).max(1.0e-10), PQ_M1);
-    libm::powf((PQ_C1 + PQ_C2 * y) / (1.0 + PQ_C3 * y), PQ_M2)
-}
-
-fn hlg_inverse_oetf(code: f32) -> f32 {
-    let e = code.clamp(0.0, 1.0);
-    if e <= 0.5 {
-        return e * e / 3.0;
+impl Transfer for Tabled {
+    #[inline]
+    fn srgb_eotf(value: f32) -> f32 {
+        curves::srgb_to_linear(value.clamp(0.0, 1.0))
     }
-    (libm::expf((e - 0.559_910_7) / 0.178_832_77) + 0.284_668_92) / 12.0
+
+    #[inline]
+    fn pq_eotf(code: f32) -> f32 {
+        curves::pq_eotf(code)
+    }
+
+    #[inline]
+    fn pq_inverse_eotf(nits: f32) -> f32 {
+        curves::pq_inverse_eotf(nits)
+    }
+
+    #[inline]
+    fn hlg_inverse_oetf(code: f32) -> f32 {
+        curves::hlg_inverse_oetf(code)
+    }
+
+    #[inline]
+    fn pow(base: f32, exponent: f32) -> f32 {
+        curves::table_pow(curves::pow_tables(), base, exponent)
+    }
+}
+
+/// The references the tables are built from.
+#[cfg(test)]
+struct Exact;
+
+#[cfg(test)]
+impl Transfer for Exact {
+    fn srgb_eotf(value: f32) -> f32 {
+        curves::exact_srgb_to_linear(value.clamp(0.0, 1.0))
+    }
+
+    fn pq_eotf(code: f32) -> f32 {
+        crate::hdr::pq_eotf(code)
+    }
+
+    fn pq_inverse_eotf(nits: f32) -> f32 {
+        crate::hdr::pq_inverse_eotf(nits)
+    }
+
+    fn hlg_inverse_oetf(code: f32) -> f32 {
+        crate::hdr::hlg_inverse_oetf(code)
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    fn pow(base: f32, exponent: f32) -> f32 {
+        libm::pow(f64::from(base), f64::from(exponent)) as f32
+    }
 }
 
 impl YuvConversion {
-    fn bt2390_eetf(&self, nits: f32) -> f32 {
+    fn bt2390_eetf<T: Transfer>(&self, nits: f32) -> f32 {
         let source = self.tone[2];
-        let value = pq_inverse_eotf(nits.min(self.tone[0])) / source;
+        let value = T::pq_inverse_eotf(nits.min(self.tone[0])) / source;
         let max_lum = self.tone[3] / source;
         let knee = 1.5 * max_lum - 0.5;
         let mut mapped = value;
@@ -586,7 +621,7 @@ impl YuvConversion {
                 + (t3 - 2.0 * t2 + t) * (1.0 - knee)
                 + (-2.0 * t3 + 3.0 * t2) * max_lum;
         }
-        pq_eotf(mapped * source)
+        T::pq_eotf(mapped * source)
     }
 
     fn to_bt709(&self, rgb: [f32; 3]) -> [f32; 3] {
@@ -594,19 +629,19 @@ impl YuvConversion {
             .map(|row| row[0] * rgb[0] + row[1] * rgb[1] + row[2] * rgb[2])
     }
 
-    fn hdr_to_working(&self, encoded: [f32; 3]) -> [f32; 3] {
+    fn hdr_to_working<T: Transfer>(&self, encoded: [f32; 3]) -> [f32; 3] {
         let nits = if self.transfer == 2 {
-            let scene = encoded.map(hlg_inverse_oetf);
+            let scene = encoded.map(T::hlg_inverse_oetf);
             let luma = (0.2627 * scene[0] + 0.678 * scene[1] + 0.0593 * scene[2]).max(0.0);
-            let gain = self.tone[0] * libm::powf(luma.max(1.0e-10), self.hlg_gamma - 1.0);
+            let gain = self.tone[0] * T::pow(luma.max(1.0e-10), self.hlg_gamma - 1.0);
             scene.map(|value| value * gain)
         } else {
-            encoded.map(pq_eotf)
+            encoded.map(T::pq_eotf)
         };
         let converted = self.to_bt709(nits);
         let largest = converted[0].max(converted[1].max(converted[2]));
         let scale = if largest > 0.0 {
-            self.bt2390_eetf(largest) / largest
+            self.bt2390_eetf::<T>(largest) / largest
         } else {
             0.0
         };
@@ -646,10 +681,14 @@ impl YuvConversion {
 
     /// Encoded R'G'B' converted to the linear working space.
     fn linear_from_encoded(&self, encoded: [f32; 3]) -> [f32; 3] {
+        self.linear_from_encoded_with::<Tabled>(encoded)
+    }
+
+    fn linear_from_encoded_with<T: Transfer>(&self, encoded: [f32; 3]) -> [f32; 3] {
         if self.transfer != 0 {
-            return self.hdr_to_working(encoded.map(|value| value.clamp(0.0, 1.0)));
+            return self.hdr_to_working::<T>(encoded.map(|value| value.clamp(0.0, 1.0)));
         }
-        self.to_bt709(encoded.map(srgb_eotf))
+        self.to_bt709(encoded.map(T::srgb_eotf))
             .map(|value| value.clamp(0.0, 1.0))
     }
 
@@ -859,7 +898,9 @@ fn present_yuv(
     {
         return image;
     }
-    if path.tables() && let Some(image) = present_tables(renderer, output, &planes, conversion) {
+    if path.tables()
+        && let Some(image) = present_tables(renderer, output, &planes, conversion)
+    {
         return image;
     }
     let geometry = conversion.geometry;
@@ -1835,5 +1876,111 @@ impl CpuRenderer {
             geometry: Geometry::from_uniform(&bytes),
             encoding,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alpha2_media::{
+        ColorMatrix, ColorMetadata, ColorPrimaries, ColorRange, DynamicRange, TransferFunction,
+        YuvFormat,
+    };
+
+    use super::{Exact, Tabled, Transfer, YuvConversion, half};
+    use crate::hdr::HdrToneMap;
+    use crate::yuv::{PlaneStorage, uniform_bytes};
+    use crate::{RenderSize, SourcePresentation};
+
+    fn conversion(
+        primaries: ColorPrimaries,
+        transfer: TransferFunction,
+        peak: u32,
+    ) -> YuvConversion {
+        let hdr = matches!(transfer, TransferFunction::Pq | TransferFunction::Hlg);
+        let color = ColorMetadata {
+            primaries,
+            transfer,
+            matrix: ColorMatrix::Bt2020Ncl,
+            range: ColorRange::Limited,
+            dynamic_range: if hdr {
+                DynamicRange::Hdr
+            } else {
+                DynamicRange::Sdr
+            },
+        };
+        let size = RenderSize::new(16, 16).expect("size");
+        let format = YuvFormat::P010;
+        let bytes = uniform_bytes(
+            color,
+            hdr.then_some(HdrToneMap {
+                source_peak_nits: peak,
+            }),
+            1.0,
+            size,
+            SourcePresentation::identity(size),
+            format,
+            PlaneStorage::Unorm16.code_scale(format),
+            64.0,
+        );
+        YuvConversion::from_uniform(&bytes, format)
+    }
+
+    /// The stored value of encoded R'G'B' `encoded` with the curves of `T`.
+    fn stored<T: Transfer>(conversion: &YuvConversion, encoded: [f32; 3]) -> [f32; 4] {
+        let rgb = conversion.linear_from_encoded_with::<T>(encoded);
+        YuvConversion::stored_linear([rgb[0], rgb[1], rgb[2], 1.0])
+    }
+
+    /// One half-float step at `value`'s magnitude.
+    fn half_step(value: f32) -> f32 {
+        let exponent = (half::store(value.abs()) >> 10) & 0x1f;
+        libm::exp2f(f32::from(exponent.max(1)) - 25.0)
+    }
+
+    #[test]
+    fn the_presentation_tables_stay_far_below_a_half_float_step() {
+        let cases = [
+            (ColorPrimaries::Bt2020, TransferFunction::Pq, 1_000),
+            (ColorPrimaries::Bt2020, TransferFunction::Pq, 4_000),
+            (ColorPrimaries::Bt2020, TransferFunction::Hlg, 1_000),
+            (ColorPrimaries::Bt2020, TransferFunction::Hlg, 400),
+            (ColorPrimaries::Bt2020, TransferFunction::Bt709, 0),
+            (ColorPrimaries::Bt601, TransferFunction::Bt709, 0),
+        ];
+        let mut state = 0x9e37_79b9_u32;
+        for (primaries, transfer, peak) in cases {
+            let conversion = conversion(primaries, transfer, peak);
+            let (mut worst, mut worst_raw) = (0.0_f32, 0.0_f32);
+            let (mut changed, mut values) = (0_u32, 0_u32);
+            // Every 10-bit grey, then random 10-bit colors.
+            let codes = (0..1024_u32)
+                .map(|code| [code; 3])
+                .chain((0..200_000).map(|_| {
+                    [0; 3].map(|_| {
+                        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                        state >> 22
+                    })
+                }));
+            for code in codes {
+                #[allow(clippy::cast_precision_loss)]
+                let encoded = code.map(|code| code as f32 / 1023.0);
+                let exact = stored::<Exact>(&conversion, encoded);
+                let tabled = stored::<Tabled>(&conversion, encoded);
+                let brightest = exact[0].max(exact[1]).max(exact[2]);
+                for (exact, tabled) in exact.iter().zip(tabled) {
+                    let error = (tabled - exact).abs();
+                    worst = worst.max(error / half_step(exact.max(brightest)));
+                    worst_raw = worst_raw.max(error / half_step(*exact));
+                    changed += u32::from(half::store(tabled) != half::store(*exact));
+                    values += 1;
+                }
+            }
+            println!(
+                "{transfer:?} {primaries:?} peak {peak}: worst {worst:.4} half steps of the \
+                 brightest channel, {worst_raw:.4} of the channel, {changed} of {values} \
+                 stored values differ"
+            );
+            assert!(worst < 0.05, "{transfer:?} {primaries:?} {peak}: {worst}");
+        }
     }
 }

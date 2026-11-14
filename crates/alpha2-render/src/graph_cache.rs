@@ -167,7 +167,7 @@ pub(crate) fn cpu_renderer_cache_key(
     hash.f32(blend_space);
     hash.u32(quality.max_filter_samples);
     hash.u32(quality.motion_blur_subframes);
-    hash.string("cpu/rgba16float/1");
+    hash.string("cpu/rgba16float/2");
     RenderCacheKey(hash.finish())
 }
 

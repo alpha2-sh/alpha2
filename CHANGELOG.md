@@ -27,6 +27,11 @@ All notable changes to this project are documented in this file.
 - Mobile: apps attach a preview window with `Alpha2Android.attach(player, surface, width, height)`
   on Android and `Player.attach(layer:width:height:)` in Swift. `Alpha2Android.windowFromSurface`
   is no longer public, so an app never holds a raw window reference.
+- The CPU renderer presents quarter-turned (portrait) and downscaled video and RGBA stills about
+  five times faster, with identical output.
+- The CPU renderer converts HLG, PQ, non-BT.709 and alpha-plane sources through tabled transfer
+  curves instead of per-pixel `pow` and `exp`. Their pictures move by under 0.01 of a half-float
+  step of the brightest channel; SDR BT.709 sources without alpha are unchanged.
 
 ### Fixed
 

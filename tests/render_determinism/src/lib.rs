@@ -24,7 +24,7 @@ use alpha2_render::{
     EffectParams, EffectRuntime, GAUSSIAN_BLUR_ID, GraphLayer, LayerTransform, Lut3dData,
     ParamValue, PlaneTarget, RenderControls, RenderGraph, RenderNodeId, RenderSize, SourceAlpha,
     SourcePlane, SourcePresentation, SourceView, Yuv420pTargets, YuvFrame, YuvPlanes,
-    pack_cpu_image,
+    hdr::HdrToneMap, pack_cpu_image,
 };
 use alpha2_time::MediaTime;
 
@@ -41,7 +41,7 @@ pub const PINNED_PROJECT_HASH: u64 = 8_340_324_065_314_071_693;
 pub const PINNED_TEXT_FIT_HASH: u64 = 2_492_912_094_599_430_155;
 
 /// [`sources_hash`] on linux-x64.
-pub const PINNED_SOURCES_HASH: u64 = 2_959_719_393_052_563_085;
+pub const PINNED_SOURCES_HASH: u64 = 2_463_240_201_688_655_318;
 
 /// Captions, text generators and a layout with fitted font sizes and clamped lines.
 pub const TEXT_FIT_PROJECT_JSON: &str = include_str!("../../cases/text-fit-project.json");
@@ -417,9 +417,9 @@ fn packed(picture: &CpuImage, layout: PixelLayout, encoding: YuvEncoding) -> Vec
 
 /// FNV-1a hash of decoded sources through every presentation path: I420 upright, in all eight
 /// orientations, cropped and anamorphic, minified 3x and 5x; NV12; P010 and BT.2020 SDR; YUVA
-/// with a soft edge; straight RGBA8 minified; a gradient fill. Each picture is packed as 10-bit
-/// 4:4:4 with alpha, then all are composited and packed as 8-bit 4:2:0, 10-bit 4:2:2 and 8-bit
-/// 4:4:4 with alpha.
+/// with a soft edge; HLG and PQ tone-mapped; straight RGBA8 minified; a gradient fill. Each
+/// picture is packed as 10-bit 4:4:4 with alpha, then all are composited and packed as 8-bit
+/// 4:2:0, 10-bit 4:2:2 and 8-bit 4:4:4 with alpha.
 ///
 /// # Panics
 /// Panics if the renderer refuses a source or the graph.
@@ -435,6 +435,13 @@ pub fn sources_hash() -> u64 {
         matrix,
         range: ColorRange::Limited,
         dynamic_range: DynamicRange::Sdr,
+    };
+    let hdr = |transfer| ColorMetadata {
+        primaries: ColorPrimaries::Bt2020,
+        transfer,
+        matrix: ColorMatrix::Bt2020Ncl,
+        range: ColorRange::Limited,
+        dynamic_range: DynamicRange::Hdr,
     };
     let bt709 = ColorMetadata::EXPORT;
     let placed = |source: RenderSize| SourcePresentation {
@@ -492,15 +499,32 @@ pub fn sources_hash() -> u64 {
             placed(canvas),
         ),
         (YuvFormat::I420.with_alpha(), canvas, bt709, placed(canvas)),
+        (
+            YuvFormat::P010,
+            canvas,
+            hdr(TransferFunction::Hlg),
+            placed(canvas),
+        ),
+        (
+            YuvFormat::P010,
+            canvas,
+            hdr(TransferFunction::Pq),
+            placed(canvas),
+        ),
     ]);
     let mut sources = cases
         .into_iter()
         .map(|(format, size, color, presentation)| {
+            let policy = if color.is_hdr() {
+                ColorPolicy::ToneMapHdr(HdrToneMap::default())
+            } else {
+                ColorPolicy::RejectHdr
+            };
             renderer
                 .present_yuv(
                     Arc::new(synthetic_planes(format, size, color)),
                     presentation,
-                    ColorPolicy::RejectHdr,
+                    policy,
                 )
                 .expect("present")
                 .0
