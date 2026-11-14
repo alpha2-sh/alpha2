@@ -191,6 +191,9 @@ All notable changes to this project are documented in this file.
 - A Lottie frame is charged for the vertices and dashes of its paths, through repeaters and
   precompositions, and for the canvas-sized clip drawn for every image layer; a render is refused
   at a size where its nested offscreen layers would hold more than 1 GiB.
+- A Lottie animation reads each image asset file once, however many assets name it, decodes the
+  assets that name one file once, and checks the pixel budget as each asset arrives, so it never
+  holds more than one encoded asset at a time.
 - A PDF image is sized from its own data as its decoder sizes it: JPEG 2000 from the codestream,
   JBIG2 from the embedded page, CCITT from `/Columns`, so a small dictionary size no longer hides a
   multi-gigabyte decode. A CCITT image without a row count is refused.

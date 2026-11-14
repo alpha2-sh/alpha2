@@ -328,14 +328,78 @@ fn an_svg_reads_a_registered_image_once_however_often_it_is_drawn() {
 
 #[cfg(feature = "lottie")]
 #[test]
-fn the_image_assets_a_lottie_animation_holds_are_held_to_four_canvases_together() {
-    use base64::Engine as _;
-    let canvas = declared_png(7_680, 4_320);
-    let animation = |count: usize| -> Arc<[u8]> {
+fn a_lottie_animation_reads_a_shared_image_asset_once_and_stops_at_the_pixel_budget() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Counting {
+        png: Arc<[u8]>,
+        asked: AtomicUsize,
+    }
+    impl ResourceResolver for Counting {
+        fn bytes(&self, locator: &str) -> Result<Arc<[u8]>, ExtensionError> {
+            self.asked.fetch_add(1, Ordering::Relaxed);
+            if locator.starts_with("large") {
+                return Ok(declared_png(7_680, 4_320).into());
+            }
+            Ok(Arc::clone(&self.png))
+        }
+    }
+    let animation = |names: &dyn Fn(usize) -> String, count: usize| -> Arc<[u8]> {
         let mut json: serde_json::Value =
             serde_json::from_slice(&bytes("moving.json")).expect("moving.json");
         json["assets"] = (0..count)
             .map(|index| {
+                serde_json::json!({"id": format!("a{index}"), "w": 16, "h": 16, "e": 0, "u": "", "p": names(index)})
+            })
+            .collect();
+        serde_json::to_vec(&json).expect("json").into()
+    };
+    // A real 512 x 512 picture: 1 MiB decoded.
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, 512, 512);
+        encoder.set_color(png::ColorType::Rgba);
+        let mut writer = encoder.write_header().expect("header");
+        writer
+            .write_image_data(&vec![200; 512 * 512 * 4])
+            .expect("pixels");
+    }
+    let open = |file: Arc<[u8]>| {
+        let resolver = Arc::new(Counting {
+            png: png.clone().into(),
+            asked: AtomicUsize::new(0),
+        });
+        let opened = Registry::with_defaults().open(
+            &ProviderSource::Lottie { animation: None },
+            Some(file),
+            Arc::clone(&resolver) as Arc<dyn ResourceResolver>,
+        );
+        (opened, resolver.asked.load(Ordering::Relaxed))
+    };
+    let (shared, asked) = open(animation(&|_| "photo.png".to_owned(), 1000));
+    assert_eq!(asked, 1);
+    let held = shared.expect("opens").resident_bytes();
+    assert!(held < 2 << 20, "one decoded picture is held: {held}");
+    // The fifth distinct canvas passes four canvases; the rest are never read.
+    let (refused, asked) = open(animation(&|index| format!("large-{index}.png"), 10));
+    assert!(
+        matches!(&refused, Err(ExtensionError::Budget(message)) if message.contains("images decode to")),
+        "{:?}",
+        refused.err()
+    );
+    assert_eq!(asked, 5);
+}
+
+#[cfg(feature = "lottie")]
+#[test]
+fn the_image_assets_a_lottie_animation_holds_are_held_to_four_canvases_together() {
+    use base64::Engine as _;
+    let animation = |count: usize| -> Arc<[u8]> {
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&bytes("moving.json")).expect("moving.json");
+        // Distinct pictures: assets of one picture share it and count once.
+        json["assets"] = (0..count)
+            .map(|index| {
+                let canvas = declared_png(7_680, 4_320 - u32::try_from(index).expect("small"));
                 serde_json::json!({
                     "id": format!("canvas{index}"), "w": 16, "h": 16, "e": 1, "u": "",
                     "p": format!(

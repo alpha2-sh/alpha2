@@ -130,6 +130,76 @@ fn a_lottie_animation_opens_holding_one_parse_of_it_at_a_time() {
 
 #[cfg(feature = "lottie")]
 #[test]
+fn a_lottie_animation_of_a_thousand_assets_naming_one_file_holds_one_decode() {
+    struct Photo(Arc<[u8]>);
+    impl alpha2_extensions::ResourceResolver for Photo {
+        fn bytes(&self, _: &str) -> Result<Arc<[u8]>, ExtensionError> {
+            Ok(Arc::clone(&self.0))
+        }
+    }
+    // A 512 x 512 RGBA PNG of 1 MiB of samples, stored without compression.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = u32::MAX;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8], data: &[u8]| {
+        png.extend_from_slice(&u32::try_from(data.len()).expect("small").to_be_bytes());
+        let body = [kind, data].concat();
+        png.extend_from_slice(&body);
+        png.extend_from_slice(&crc32(&body).to_be_bytes());
+    };
+    let mut header = [512_u32.to_be_bytes(), 512_u32.to_be_bytes()].concat();
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(b"IHDR", &header);
+    let mut rows = Vec::with_capacity(512 * (1 + 512 * 4));
+    for _ in 0..512 {
+        rows.push(0);
+        rows.extend_from_slice(&[200; 512 * 4]);
+    }
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::none());
+    std::io::Write::write_all(&mut encoder, &rows).expect("compress");
+    chunk(b"IDAT", &encoder.finish().expect("compressed"));
+    chunk(b"IEND", &[]);
+    let assets: Vec<String> = (0..1000)
+        .map(|index| format!(r#"{{"id":"a{index}","w":512,"h":512,"e":0,"u":"","p":"photo.png"}}"#))
+        .collect();
+    let bytes: Arc<[u8]> = format!(
+        r#"{{"v":"5.7.0","w":64,"h":64,"fr":30,"ip":0,"op":30,"assets":[{}],"layers":[]}}"#,
+        assets.join(",")
+    )
+    .into_bytes()
+    .into();
+    let resolver = Photo(png.into());
+    let (opened, held) = peak_ratio(&bytes, || {
+        LottieProvider
+            .open(
+                Arc::clone(&bytes),
+                &ProviderSource::Lottie { animation: None },
+                &resolver,
+            )
+            .map(drop)
+    });
+    opened.expect("opens");
+    #[allow(clippy::cast_precision_loss)]
+    let held = held * bytes.len() as f64;
+    eprintln!("held {held:.0} bytes");
+    // The decoded picture, 1 MiB, and the parsed document; 1000 copies were 2 GB.
+    assert!(held < 17.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
+}
+
+#[cfg(feature = "lottie")]
+#[test]
 fn a_lottie_file_past_its_limit_is_refused_holding_nothing() {
     let mut text = br#"{"v":"5.7.0","w":64,"h":64,"fr":30,"ip":0,"op":30,"layers":[]}"#.to_vec();
     text.resize(MAX_LOTTIE_DOCUMENT_BYTES + 1, b' ');
