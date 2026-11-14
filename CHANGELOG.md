@@ -438,6 +438,16 @@ All notable changes to this project are documented in this file.
 - Edit operations: cutting a linear timeline-anchored sample set keys the value just before each
   cut as well as just after it, in the engine and in `alpha2/edit`; before, the last kept sample
   interpolated toward the value after the cut, so values before the cut changed.
+- Edit operations decide before editing, so a valid request no longer ends as `INTERNAL`
+  (`invalid_result`). `split_at` leaves out a cut inside one of the clip's transitions or fades,
+  one that would start a loop part inside a transition, and one of a matte source or a clip read
+  through whose counterpart is not cut alike, and lists each in the new `report.skipped`
+  (`{clip, time, reason}`); before, a cut inside a transition failed the whole request and the
+  matte and read-through cases refused it. `remove_ranges` refuses a range edge inside a fade
+  (`in_fade`, before: the fade was dropped) and a loop part boundary inside a transition
+  (`in_transition`), trims both clips of a transition it crosses without ripple, and starts a range
+  widened by a negative `padding` at time 0. A result with more than 4,096 clips or caption cues on
+  a track is refused as `too_many_clips` or `too_many_cues`.
 
 ## [0.6.0] - 2026-11-08
 

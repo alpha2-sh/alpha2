@@ -58,7 +58,7 @@ fn piece(clip: &Clip, window: (i64, i64), source: (i64, i64), time_map: TimeMap)
 
 /// The pieces showing `window` of `clip`. That is one clip, or for a loop a head for a partial
 /// pass, whole passes as a loop and, for a ping-pong starting backward, a reversed pass.
-fn pieces(clip: &Clip, window: (i64, i64)) -> Vec<Clip> {
+pub(super) fn pieces(clip: &Clip, window: (i64, i64)) -> Vec<Clip> {
     let (t0, t1) = (
         clip.timeline_range.start().ticks(),
         clip.timeline_range.end().ticks(),

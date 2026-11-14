@@ -6,13 +6,18 @@
 //! caption cues are cut and shifted, transitions whose cut point is removed are removed, and mattes
 //! and `via` bindings follow the part beside them or the edit is refused. Every value keyed in
 //! timeline time is reached through the model's walkers, and bus curves keep their shape across a
-//! cut. Kept moments render as before except for a linear sample set just before a cut, reversed
-//! parts off the frame grid and a fade under a cut. The result validates and is canonical.
+//! cut. Before editing, `split_at` leaves out cuts it cannot make exactly and `remove_ranges`
+//! refuses them, so a valid request never ends as an invalid result. Kept moments render as before
+//! except for reversed parts off the frame grid and the sound at a loop wrap a cut turns into a
+//! part boundary. The result validates and is canonical.
 
 mod bake;
 #[cfg(test)]
 mod clip_reference_tests;
 mod json;
+mod plan;
+#[cfg(test)]
+mod plan_tests;
 mod request;
 mod split;
 #[cfg(test)]
@@ -23,11 +28,11 @@ mod tests;
 pub use json::{EditFailure, EditedJson, apply_json};
 pub use request::{
     BakeTarget, Created, DataRef, EditError, EditReport, EditRequest, Moved, RangeList, Ranges,
-    RawRange, Ripple, Target, TimeList, Times,
+    RawRange, Ripple, SkipReason, Skipped, Target, TimeList, Times,
 };
 
 use alpha2_model::{
-    Animated, Clip, ClipId, ClipReference, DataAnchor, DataValues, Project, TimelineOwner,
+    Animated, Clip, ClipId, ClipReference, DataAnchor, DataValues, Project, TimelineOwner, Track,
 };
 use alpha2_time::{FrameRate, MediaTime, TimeRange};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -58,8 +63,33 @@ pub fn apply(project: &Project, request: &EditRequest) -> Result<(Project, EditR
         EditRequest::SplitAt { times, target } => split_at(project, times, target)?,
         EditRequest::Bake { targets } => bake::bake(project, targets)?,
     };
+    check_counts(&edited)?;
     edited.validate().map_err(EditError::InvalidResult)?;
     Ok((edited, report))
+}
+
+/// Refuses a result with more clips or caption cues on a track than a track holds.
+fn check_counts(edited: &Project) -> Result<(), EditError> {
+    let maximum = alpha2_model::MAX_CLIPS_PER_TRACK;
+    for track in &edited.timeline.tracks {
+        if track.clips.len() > maximum {
+            return Err(EditError::TooManyClips {
+                track: track.id.clone(),
+                found: track.clips.len(),
+                maximum,
+            });
+        }
+        if let Some(captions) = &track.captions
+            && captions.cues.len() > maximum
+        {
+            return Err(EditError::TooManyCues {
+                track: track.id.clone(),
+                found: captions.cues.len(),
+                maximum,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The target clips as `(track position, clip)`, in document order.
@@ -257,11 +287,12 @@ fn remove_ranges(
         }
         removal = complement;
     }
-    // Padding keeps material at each edge; cuts then land on the project's frame grid.
+    // Padding keeps material at each edge (a negative one widens, not before 0); cuts then land on
+    // the project's frame grid.
     let removal = union(
         removal
             .into_iter()
-            .map(|(start, end)| (start + padding.ticks(), end - padding.ticks()))
+            .map(|(start, end)| ((start + padding.ticks()).max(0), end - padding.ticks()))
             .filter(|(start, end)| end - start >= min_duration.ticks().max(1))
             .map(|(start, end)| (snap(start, rate), snap(end, rate)))
             .collect(),
@@ -289,17 +320,20 @@ fn remove_ranges(
     let mut ids = split::IdPool::new(project);
     let mut renamed = Parts::new();
     let crossed = crossed_transitions(project, &removal, &shifted_tracks, &cut_clips);
+    let original_tracks = &project.timeline.tracks;
     for (position, track) in edited.timeline.tracks.iter_mut().enumerate() {
         let shifts = shifted_tracks.contains(&position);
         let mut clips = Vec::with_capacity(track.clips.len());
         for clip in &track.clips {
-            if !shifts && !cut_clips.contains(&clip.id) {
+            // A clip named by a crossed transition loses its overlap even when not targeted.
+            if !shifts && !cut_clips.contains(&clip.id) && !crossed.contains_key(&clip.id) {
                 clips.push(clip.clone());
                 continue;
             }
             let mut own = removal.clone();
             own.extend(crossed.get(&clip.id).into_iter().flatten().copied());
             let keep = kept_windows(clip.timeline_range, &union(own));
+            refuse_unsafe_cut(clip, &original_tracks[position], &keep, &removal)?;
             let parts = split::parts(clip, &keep, &mut ids, &mut report.created);
             let mut placed = Vec::with_capacity(parts.len());
             for part in parts {
@@ -350,6 +384,46 @@ fn remove_ranges(
     retarget_clip_references(&mut edited, project, &renamed, &transition_spans)?;
     report.moved = moved_stretches(project, &removal, &shifted_tracks);
     Ok((edited, report))
+}
+
+/// Refuses a removal that cuts `clip` (into the windows `keep`) inside one of its fades, or that
+/// leaves a loop piece boundary inside one of its transitions no removed range crosses.
+fn refuse_unsafe_cut(
+    clip: &Clip,
+    track: &Track,
+    keep: &[(i64, i64)],
+    removal: &[(i64, i64)],
+) -> Result<(), EditError> {
+    let (start, end) = (
+        clip.timeline_range.start().ticks(),
+        clip.timeline_range.end().ticks(),
+    );
+    if keep == [(start, end)] {
+        return Ok(());
+    }
+    let edge = keep
+        .iter()
+        .flat_map(|(from, to)| [*from, *to])
+        .find(|edge| plan::inside_fade(clip, *edge));
+    if let Some(edge) = edge {
+        return Err(EditError::InFade {
+            clip: clip.id.clone(),
+            time: MediaTime(edge),
+        });
+    }
+    let kept = |transition: &alpha2_model::ClipTransition| {
+        let range = transition.timeline_range;
+        !removal
+            .iter()
+            .any(|(from, to)| *from < range.end().ticks() && range.start().ticks() < *to)
+    };
+    match plan::loop_boundary_in_transition(clip, track, keep, kept) {
+        Some((_, boundary)) => Err(EditError::InTransition {
+            clip: clip.id.clone(),
+            time: MediaTime(boundary),
+        }),
+        None => Ok(()),
+    }
 }
 
 /// For each clip of a transition a removed range crosses, what it also loses so the two no longer
@@ -606,7 +680,9 @@ fn retarget_transitions(
                 .iter()
                 .any(|(from, to)| *from < range.end().ticks() && range.start().ticks() < *to);
             if crosses
-                && (shifted.contains(&position) || renamed.contains_key(&transition.from_clip))
+                && (shifted.contains(&position)
+                    || renamed.contains_key(&transition.from_clip)
+                    || renamed.contains_key(&transition.to_clip))
             {
                 continue;
             }
@@ -832,12 +908,12 @@ fn moved_stretches(
     moved
 }
 
-fn split_at(
+/// The timeline times `times` maps to through the target clips, on the project's frame grid.
+fn split_cuts(
     project: &Project,
     times: &Times,
-    target: &Target,
-) -> Result<(Project, EditReport), EditError> {
-    let targets = target_clips(project, target)?;
+    targets: &[(usize, &Clip)],
+) -> Result<BTreeSet<i64>, EditError> {
     let rate = project.settings.frame_rate;
     let (anchor, instants) = match times {
         Times::Data(DataRef { data }) => {
@@ -863,7 +939,7 @@ fn split_at(
         ),
     };
     let mut cuts: BTreeSet<i64> = BTreeSet::new();
-    for (_, clip) in &targets {
+    for (_, clip) in targets {
         match &anchor {
             DataAnchor::Timeline => {
                 cuts.extend(instants.iter().map(|time| snap(time.ticks(), rate)));
@@ -884,31 +960,77 @@ fn split_at(
             DataAnchor::Source { .. } => {}
         }
     }
-    let target_ids = targets
-        .iter()
-        .map(|(_, clip)| &clip.id)
-        .collect::<HashSet<_>>();
+    Ok(cuts)
+}
+
+fn split_at(
+    project: &Project,
+    times: &Times,
+    target: &Target,
+) -> Result<(Project, EditReport), EditError> {
+    let targets = target_clips(project, target)?;
+    let cuts = split_cuts(project, times, &targets)?;
+    let mut planned = Vec::with_capacity(targets.len());
+    for (track, clip) in &targets {
+        let (start, end) = (
+            clip.timeline_range.start().ticks(),
+            clip.timeline_range.end().ticks(),
+        );
+        let cuts = cuts.range(start + 1..end).copied().collect::<BTreeSet<_>>();
+        if !cuts.is_empty()
+            && !planned
+                .iter()
+                .any(|entry: &plan::Planned<'_>| entry.clip.id == clip.id)
+        {
+            planned.push(plan::Planned {
+                track: *track,
+                clip,
+                cuts,
+            });
+        }
+    }
     let mut edited = project.clone();
     let mut report = EditReport::default();
+    let mut skipped = plan::skip_cuts(project, &mut edited, &mut planned);
+    skipped.sort_by_key(|(index, cut, _)| {
+        let entry = &planned[*index];
+        let order = project.timeline.tracks[entry.track]
+            .clips
+            .iter()
+            .position(|clip| clip.id == entry.clip.id);
+        (entry.track, order, *cut)
+    });
+    report.skipped = skipped
+        .into_iter()
+        .map(|(index, cut, reason)| Skipped {
+            clip: planned[index].clip.id.clone(),
+            time: MediaTime(cut),
+            reason,
+        })
+        .collect();
+    let cut_by = planned
+        .iter()
+        .filter(|entry| !entry.cuts.is_empty())
+        .map(|entry| (&entry.clip.id, &entry.cuts))
+        .collect::<HashMap<_, _>>();
     let mut ids = split::IdPool::new(project);
     let mut renamed = HashMap::new();
     for track in &mut edited.timeline.tracks {
         let mut clips = Vec::with_capacity(track.clips.len());
         for clip in &track.clips {
+            let Some(inside) = cut_by.get(&clip.id) else {
+                clips.push(clip.clone());
+                continue;
+            };
             let (start, end) = (
                 clip.timeline_range.start().ticks(),
                 clip.timeline_range.end().ticks(),
             );
-            let inside = cuts.range(start + 1..end).copied().collect::<Vec<_>>();
-            if !target_ids.contains(&clip.id) || inside.is_empty() {
-                clips.push(clip.clone());
-                continue;
-            }
             let mut windows = Vec::with_capacity(inside.len() + 1);
             let mut cursor = start;
-            for cut in inside {
-                windows.push((cursor, cut));
-                cursor = cut;
+            for cut in *inside {
+                windows.push((cursor, *cut));
+                cursor = *cut;
             }
             windows.push((cursor, end));
             let parts = split::parts(clip, &windows, &mut ids, &mut report.created);

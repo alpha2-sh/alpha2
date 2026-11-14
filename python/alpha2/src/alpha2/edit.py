@@ -34,8 +34,9 @@ class Edited:
 
     ``project_json`` is the engine's canonical text of ``project``, byte for byte what every
     surface answers. ``report`` has ``removed`` (old timeline ranges), ``moved`` (``from`` and
-    ``to`` ranges) and ``created`` (``id`` and ``from``: each new clip and the clip it was cut
-    from).
+    ``to`` ranges), ``created`` (``id`` and ``from``: each new clip and the clip it was cut
+    from) and, when ``split_at`` left cuts out, ``skipped`` (``clip``, ``time`` and ``reason``:
+    ``in_transition``, ``in_fade``, ``matte_source`` or ``read_through``).
     """
 
     project: dict[str, Any]

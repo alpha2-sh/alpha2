@@ -266,7 +266,8 @@ class Alpha2EditError(ValueError):
     ``refusal`` names why in snake case: ``invalid_project``, ``invalid_request``,
     ``unknown_data``, ``wrong_kind``, ``unknown_target``, ``empty_target``, ``missing_anchor``,
     ``invalid_range``, ``nothing_to_bake``, ``correction_not_bakeable``, ``matte_source``,
-    ``read_through``, ``result_too_large`` or ``invalid_result``.
+    ``read_through``, ``in_transition``, ``in_fade``, ``too_many_clips``, ``too_many_cues``,
+    ``result_too_large`` or ``invalid_result``.
     """
 
     code: str
