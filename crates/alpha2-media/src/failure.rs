@@ -31,13 +31,15 @@ pub enum FailureClass {
     ResourceBusy,
     /// The caller cancelled.
     Cancelled,
+    /// The engine faulted (a panic or a wasm trap).
+    Defect,
     /// Nothing in the evidence names a class.
     Unknown,
 }
 
 impl FailureClass {
     /// Every class.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 16] = [
         Self::OutOfMemory,
         Self::AllocationFailed,
         Self::DeviceLost,
@@ -52,6 +54,7 @@ impl FailureClass {
         Self::ResourceLimit,
         Self::ResourceBusy,
         Self::Cancelled,
+        Self::Defect,
         Self::Unknown,
     ];
 
@@ -73,6 +76,7 @@ impl FailureClass {
             Self::ResourceLimit => "RESOURCE_LIMIT",
             Self::ResourceBusy => "RESOURCE_BUSY",
             Self::Cancelled => "CANCELLED",
+            Self::Defect => "DEFECT",
             Self::Unknown => "UNKNOWN",
         }
     }

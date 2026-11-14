@@ -1350,6 +1350,66 @@
         "retry": false,
         "failureCode": "DEVICE_LOST"
       }
+    },
+    {
+      "name": "a DEFECT retries once at once with the same settings",
+      "history": [
+        {
+          "failure": {
+            "code": "DEFECT",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": true,
+        "delayMs": 0,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a second DEFECT stops",
+      "history": [
+        {
+          "failure": {
+            "code": "DEFECT",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "DEFECT",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "DEFECT"
+      }
     }
   ]
 }

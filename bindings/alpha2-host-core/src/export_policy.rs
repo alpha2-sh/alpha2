@@ -252,8 +252,9 @@ fn backoff(failed: usize) -> u64 {
 /// An export is retried whole on a fresh device; attempts change the in-flight budget, the
 /// renderer and the video encoder, never the output settings. A GPU that hangs on the export's
 /// own work moves to the CPU renderer; memory exhaustion steps down a profile; an encode failure
-/// retries once in software; a busy resource waits; anything else transient retries unchanged and
-/// steps down only when it recurs at the same point.
+/// retries once in software; a busy resource waits; an engine fault (`DEFECT`) retries once,
+/// unchanged and at once; anything else transient retries unchanged and steps down only when it
+/// recurs at the same point.
 // One rule after another, in the reference policy's order.
 #[allow(clippy::too_many_lines)]
 #[must_use]
@@ -322,6 +323,34 @@ pub fn decide_retry(history: &[AttemptOutcome], options: RetryOptions) -> RetryD
             format!("{code}: the export's own GPU work stops the GPU, and {why}"),
             note,
             FailureClass::DeviceHung,
+        );
+    }
+    if code == FailureClass::Defect {
+        let defects = history
+            .iter()
+            .filter(|attempt| attempt.failure.code == FailureClass::Defect)
+            .count();
+        if defects > 1 {
+            return stop(
+                "DEFECT again on a fresh attempt: the engine fails this export the same way".into(),
+                note,
+                code,
+            );
+        }
+        if !attempts_left {
+            return stop(
+                format!("all {} attempts failed", options.max_attempts),
+                note,
+                code,
+            );
+        }
+        return retry(
+            "DEFECT: an engine fault; retrying once on a fresh host".into(),
+            note,
+            None,
+            None,
+            None,
+            Some(0),
         );
     }
     if !retryable(failure) {
