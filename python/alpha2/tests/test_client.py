@@ -2514,6 +2514,50 @@ def run_dies_reading(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHo
     assert len(starts_in(log)) == scenario["expect"]["hosts"]
 
 
+def abandoning_host(log: Path) -> str:
+    """Answers, starts a sleeper that inherits its stdout and stderr, and exits."""
+    return f"""
+    record({str(log)!r}, "start " + str(os.getpid()))
+    import subprocess
+    request, _ = read_request()
+    send(request, ok=True, result={{"pid": os.getpid()}})
+    sleeper = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"], stdin=subprocess.DEVNULL
+    )
+    record({str(log)!r}, "sleeper " + str(sleeper.pid))
+    os._exit(0)
+    """
+
+
+def run_grandchild_holds_the_pipes(
+    scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost
+) -> None:
+    if sys.platform == "win32":
+        pytest.skip("a POSIX scenario")
+    log = tmp_path / "log"
+    client = HostClient(
+        host_path=fake_host(tmp_path, abandoning_host(log)),
+        concurrency=scenario["given"]["concurrency"],
+    )
+    try:
+        first = client.export(**export_args("out.mp4"))["pid"]
+        wait_until(lambda: pid_exited(first))
+        started = time.monotonic()
+        following = client.export(**export_args("out.mp4"))["pid"]
+        assert following != first
+        assert (time.monotonic() - started) * 1000 < scenario["expect"]["withinMs"]
+        started = time.monotonic()
+        client.close()
+        assert (time.monotonic() - started) * 1000 < scenario["expect"]["closeWithinMs"]
+    finally:
+        for line in lines_in(log):
+            if line.startswith("sleeper "):
+                try:
+                    os.kill(int(line.split(" ")[1]), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
 def run_foreign_host(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
     given, expect = scenario["given"], scenario["expect"]
     pids = tmp_path / "pids"
@@ -2623,6 +2667,7 @@ SCENARIO_DRIVERS: dict[str, Callable[[dict[str, Any], Path, FakeHost], None]] = 
     "foreign-host": run_foreign_host,
     "dead-idle-host": run_dead_idle_host,
     "dies-reading": run_dies_reading,
+    "grandchild-holds-the-pipes": run_grandchild_holds_the_pipes,
     "host-version": run_host_version,
     "start-timeout": run_start_timeout,
 }

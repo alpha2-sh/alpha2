@@ -223,5 +223,19 @@
     "kind": "dies-reading",
     "given": { "projectNameBytes": 1048576 },
     "expect": { "code": "HOST_EXITED", "hosts": 4 }
+  },
+  {
+    "id": "grandchild-holds-the-pipes",
+    "kind": "grandchild-holds-the-pipes",
+    "platforms": ["posix"],
+    "given": {
+      "host": "answers, starts a sleeper that inherits its stdout and stderr, exits",
+      "concurrency": 1
+    },
+    "expect": {
+      "nextRequest": "ok on another host",
+      "withinMs": 9000,
+      "closeWithinMs": 9000
+    }
   }
 ]

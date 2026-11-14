@@ -2710,6 +2710,7 @@ class Host {
   #startTimer: NodeJS.Timeout | undefined;
   #terminateTimer: NodeJS.Timeout | undefined;
   #killTimer: NodeJS.Timeout | undefined;
+  #drainTimer: NodeJS.Timeout | undefined;
   #oomKillsAtStart: number | undefined;
   /** The last bytes of stderr, and how many were written in all. */
   #stderr = Buffer.alloc(0);
@@ -3048,6 +3049,7 @@ class Host {
       if (streamsMissing) failWithoutHost(startFailed(cause));
       else this.#fail(() => startFailed(cause));
     });
+    child.on("exit", (code, exitSignal) => this.#ended(code, exitSignal));
     child.on("close", (code, exitSignal) => this.#exit(code, exitSignal));
     if (streamsMissing) {
       // Fallback in case Node does not report the cause on the next tick.
@@ -3215,6 +3217,7 @@ class Host {
       this.#startTimer,
       this.#terminateTimer,
       this.#killTimer,
+      this.#drainTimer,
     ])
       clearTimeout(timer);
     this.#wire?.close();
@@ -3226,6 +3229,20 @@ class Host {
     if (run !== undefined) run.exited(code, exitSignal);
     else if (!this.#ready && waiter !== undefined)
       void this.#startFailure(code, exitSignal).then(waiter.refuse);
+  }
+
+  /**
+   * The process ended. A process that inherited its stdout or stderr can keep them open, so the
+   * last output is awaited for at most the shutdown timeout before the host leaves the pool.
+   */
+  #ended(code: number | null, exitSignal: string | null): void {
+    if (this.#gone || this.#drainTimer !== undefined) return;
+    this.#retired = true;
+    this.#drainTimer = setTimeout(() => {
+      this.#child?.stdout?.destroy();
+      this.#child?.stderr?.destroy();
+      this.#exit(code, exitSignal);
+    }, HOST_SHUTDOWN_TIMEOUT_MS);
   }
 
   async #startFailure(

@@ -3123,7 +3123,57 @@ function requestsOf(lines, pid) {
   return lines.filter((line) => line === `request ${pid}`).length;
 }
 
+/** Answers, starts a sleeper that inherits its stdout and stderr, and exits. */
+const ABANDONING_HOST = (log) => `import { spawn } from "node:child_process";
+import { appendFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+const record = (line) => appendFileSync(${JSON.stringify(log)}, line + "\\n");
+record("start " + process.pid);
+serve((request) => {
+  respond(request, { ok: true, result: { pid: process.pid } }, () => {
+    const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
+      stdio: ["ignore", "inherit", "inherit"],
+      detached: true,
+    });
+    record("sleeper " + sleeper.pid);
+    sleeper.unref();
+    process.exit(0);
+  });
+});
+`;
+
 const SCENARIO_DRIVERS = {
+  async "grandchild-holds-the-pipes"(scenario) {
+    const root = await scratch("alpha2-node-grandchild-");
+    const log = join(root, "log");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(root, ABANDONING_HOST(log)),
+      concurrency: scenario.given.concurrency,
+    });
+    const sleepers = async () =>
+      (await startsIn(log))
+        .filter((line) => line.startsWith("sleeper "))
+        .map((line) => Number(line.split(" ")[1]));
+    try {
+      const first = await exported(client);
+      await waitUntil(() => !alive(first.pid), "the host to exit");
+      let started = Date.now();
+      const next = await exported(client);
+      assert.notEqual(next.pid, first.pid);
+      assert.ok(
+        Date.now() - started < scenario.expect.withinMs,
+        `the next request took ${Date.now() - started} ms`,
+      );
+      started = Date.now();
+      await client.close();
+      assert.ok(
+        Date.now() - started < scenario.expect.closeWithinMs,
+        `close took ${Date.now() - started} ms`,
+      );
+    } finally {
+      for (const pid of await sleepers()) if (alive(pid)) process.kill(pid);
+    }
+  },
   async "dead-idle-host"(scenario) {
     for (const end of scenario.given.ends) {
       const root = await scratch("alpha2-node-dead-idle-host-");
@@ -3324,8 +3374,17 @@ const SCENARIO_DRIVERS = {
 };
 
 for (const scenario of CLIENT_SCENARIOS)
-  test(`client behavior scenario ${scenario.id}`, async () => {
-    const driver = SCENARIO_DRIVERS[scenario.kind];
-    assert.ok(driver, `no driver for scenario kind ${scenario.kind}`);
-    await driver(scenario);
-  });
+  test(
+    `client behavior scenario ${scenario.id}`,
+    {
+      skip:
+        scenario.platforms?.includes("posix") && process.platform === "win32"
+          ? "a POSIX scenario"
+          : false,
+    },
+    async () => {
+      const driver = SCENARIO_DRIVERS[scenario.kind];
+      assert.ok(driver, `no driver for scenario kind ${scenario.kind}`);
+      await driver(scenario);
+    },
+  );

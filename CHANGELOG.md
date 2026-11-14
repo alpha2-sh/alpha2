@@ -142,6 +142,9 @@ All notable changes to this project are documented in this file.
 - A text raster larger than the largest frame (67,108,864 pixels) or whose planes would take over
   1 GiB is refused as too large before anything is allocated. Before, only each side was limited,
   and the browser module aborted on the allocation.
+- `@alpha2-sh/node` takes a host whose process ended out of its pool within 5 seconds even while a
+  process the host started keeps its output open; until then later requests and `close()` waited
+  for that process.
 - Both clients send a request to another host when the host they wrote it to exited before taking
   all of it (a host that ended while idle), instead of failing it with `HOST_EXITED`; such resends
   share the bound of three that `HOST_RETIRING` resends have.
