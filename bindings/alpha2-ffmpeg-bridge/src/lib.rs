@@ -3319,6 +3319,19 @@ impl Yuv420pFrameBuffer {
         &self.frame
     }
 
+    /// Bytes of the visible planes, without row padding.
+    #[must_use]
+    pub fn visible_bytes(&self) -> usize {
+        if self.planes.is_empty() {
+            let chroma = self.width.div_ceil(2) * self.height.div_ceil(2);
+            return self.width * self.height + 2 * chroma;
+        }
+        self.planes
+            .iter()
+            .map(|&(row_bytes, rows)| row_bytes * rows)
+            .sum()
+    }
+
     /// Coded luma dimensions this buffer was allocated for.
     #[must_use]
     pub const fn size(&self) -> (usize, usize) {

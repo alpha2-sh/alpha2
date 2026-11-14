@@ -415,6 +415,11 @@ All notable changes to this project are documented in this file.
   its budget to its own frames or releases the renderer's pools under it: the cache holds the sum of
   the running requests' budgets. The host releases the cache and the pools when the last running
   request ends, so an idle GPU host no longer keeps up to four intermediate frames.
+- The in-flight budget prices readbacks and queued frames in the export's pixel layout: ProRes,
+  10-bit and alpha readback exports no longer exceed `inFlightBytes` 1.6 to 5 times, their queues
+  run shallower, and `peakEncodeQueueBytes`, the admission estimate and the refusal text use the real
+  frame size. A budget left at its default is raised to the least an export needs instead of
+  refusing it.
 
 ## [0.6.0] - 2026-11-08
 

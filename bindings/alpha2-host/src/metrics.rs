@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::decode::HardwareFallbackCounts;
-use crate::frames::{estimated_staging_bytes, packed_yuv420_bytes};
+use crate::frames::estimated_staging_bytes;
 use crate::{MAX_ENCODE_CHANNEL_DEPTH, MAX_IN_FLIGHT_VIDEO_FRAMES, MIN_ENCODE_CHANNEL_DEPTH};
 use alpha2_render::RenderSize;
 use serde_json::{Value, json};
@@ -315,20 +315,20 @@ pub struct ExportPipelineLimits {
 /// is a configuration error rather than backpressure.
 pub fn export_pipeline_limits(
     size: RenderSize,
-    format: wgpu::TextureFormat,
+    (format, layout): (wgpu::TextureFormat, alpha2_media::PixelLayout),
     budget: crate::memory::InFlightBudget,
     requested_depth: usize,
     requested_encode_depth: Option<usize>,
 ) -> Result<ExportPipelineLimits, String> {
-    let staging_bytes_per_frame = estimated_staging_bytes(size, format);
-    let packed_bytes_per_frame = packed_yuv420_bytes(size);
-    // A retry's scale never takes the budget below what a rendezvous channel needs.
-    let byte_budget = budget.holding(
-        staging_bytes_per_frame.saturating_add(
-            packed_bytes_per_frame
-                .saturating_mul(u64::try_from(readback_encode_frame_bound(0)).unwrap_or(u64::MAX)),
-        ),
+    let staging_bytes_per_frame = estimated_staging_bytes(size, format, layout);
+    let packed_bytes_per_frame = layout.frame_bytes(size.width, size.height);
+    let least = staging_bytes_per_frame.saturating_add(
+        packed_bytes_per_frame
+            .saturating_mul(u64::try_from(readback_encode_frame_bound(0)).unwrap_or(u64::MAX)),
     );
+    // A retry's scale never takes the budget below what a rendezvous channel needs, and a default
+    // budget never refuses what this export needs at least.
+    let byte_budget = budget.at_least_unless_asked(least).holding(least);
     let start = requested_encode_depth.map_or_else(
         || {
             derived_encode_channel_depth(
@@ -368,10 +368,11 @@ pub fn export_pipeline_limits(
         }
     }
     Err(crate::memory::resource_limit(format!(
-        "{} cannot hold one readback and two packed {}x{} YUV420P frames",
+        "{} cannot hold one readback and two packed {}x{} {} frames",
         budget.describe(),
         size.width,
-        size.height
+        size.height,
+        layout.ffmpeg_name()
     )))
 }
 

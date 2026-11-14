@@ -81,6 +81,42 @@ pub fn yuv420p_staging_bytes(size: RenderSize) -> Result<u64, RenderError> {
     Yuv420StagingLayout::new(size).map(|layout| layout.bytes + CANARY_BYTES)
 }
 
+/// The mapped buffer a layout readback ([`Renderer::begin_layout_readback`]) of a `size` frame in
+/// `format` takes, canary included: one aligned row of texels per row.
+///
+/// # Errors
+/// Returns [`RenderError::TextureReadback`] for a format the readback does not copy, or a size
+/// that overflows.
+pub fn layout_staging_bytes(
+    size: RenderSize,
+    format: wgpu::TextureFormat,
+) -> Result<u64, RenderError> {
+    let texel_bytes = match format {
+        wgpu::TextureFormat::Rgba16Float => 8,
+        wgpu::TextureFormat::Rgba8Unorm => 4,
+        _ => {
+            return Err(RenderError::TextureReadback(
+                ReadbackFailure::UnsupportedTarget,
+            ));
+        }
+    };
+    texel_staging(size, texel_bytes).map(|(_, bytes)| bytes)
+}
+
+/// The row pitch and the buffer size, canary included, of a texel readback.
+fn texel_staging(size: RenderSize, texel_bytes: u32) -> Result<(u32, u64), RenderError> {
+    let row_bytes = size
+        .width
+        .checked_mul(texel_bytes)
+        .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
+    let pitch = aligned_copy_row(row_bytes)?;
+    let bytes = u64::from(pitch)
+        .checked_mul(u64::from(size.height))
+        .and_then(|image| image.checked_add(CANARY_BYTES))
+        .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
+    Ok((pitch, bytes))
+}
+
 fn plane_rows(
     mapped: &[u8],
     (offset, pitch, width, rows): (u64, u32, u32, u32),
@@ -416,18 +452,9 @@ impl Renderer {
                 ));
             }
         };
-        let row_bytes = target
-            .size
-            .width
-            .checked_mul(texel_bytes)
-            .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
-        let pitch = aligned_copy_row(row_bytes)?;
-        let image_bytes = u64::from(pitch)
-            .checked_mul(u64::from(target.size.height))
-            .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
-        let buffer_size = image_bytes
-            .checked_add(CANARY_BYTES)
-            .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
+        let (pitch, buffer_size) = texel_staging(target.size, texel_bytes)?;
+        let image_bytes = buffer_size - CANARY_BYTES;
+        let row_bytes = target.size.width * texel_bytes;
         let mut encoder = self.command_encoder("alpha2 texel readback encoder");
         let buffer =
             self.readback_buffers

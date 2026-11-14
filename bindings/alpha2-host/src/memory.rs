@@ -363,6 +363,19 @@ impl InFlightBudget {
         .holding(least)
     }
 
+    /// A budget neither the request nor the environment set reaches at least `least`: only an
+    /// explicit budget refuses an export as too small.
+    #[must_use]
+    pub fn at_least_unless_asked(mut self, least: u64) -> Self {
+        if !matches!(
+            self.source,
+            BudgetSource::Request | BudgetSource::Environment
+        ) {
+            self.unscaled = self.unscaled.max(least);
+        }
+        self
+    }
+
     /// Names the setting that applied (`memory.inFlightBytes`, `ALPHA2_EXPORT_IN_FLIGHT_BYTES`, or
     /// the default) and any scale. Since the least is held whatever the scale, what refuses a
     /// pipeline is the unscaled budget.
@@ -457,16 +470,22 @@ pub struct LeastWorkingSet {
 
 impl LeastWorkingSet {
     pub fn estimate(
-        (width, height): (u32, u32),
+        (size, format, layout): (
+            alpha2_render::RenderSize,
+            wgpu::TextureFormat,
+            alpha2_media::PixelLayout,
+        ),
         (videos, decoder_threads): (usize, i64),
         frame_bytes: u64,
         renderer: u64,
     ) -> Self {
-        let pixels = u64::from(width).saturating_mul(u64::from(height));
-        // An rgba16float readback, two 8-bit 4:2:0 packed frames.
-        let in_flight = pixels
-            .saturating_mul(8)
-            .saturating_add(pixels.saturating_mul(3));
+        // One readback and two packed frames, in the output's layout.
+        let in_flight = crate::frames::estimated_staging_bytes(size, format, layout)
+            .saturating_add(
+                layout
+                    .frame_bytes(size.width, size.height)
+                    .saturating_mul(2),
+            );
         let sessions = u64::try_from(videos.min(crate::MAX_DECODER_SESSIONS)).unwrap_or(1);
         Self {
             in_flight,

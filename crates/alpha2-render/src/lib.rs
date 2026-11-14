@@ -119,7 +119,7 @@ pub use pipeline::{PipelineCacheStats, WarmupReport};
 pub use pool::{ReadbackBufferPoolStats, TexturePoolStats, UploadTexture, UploadTexturePoolStats};
 pub use readback::{
     EncodedNv12Pack, Nv12PlaneTargets, PlaneTarget, Rgba8Readback, StagingPlane, Yuv420pPlanes,
-    Yuv420pReadback, Yuv420pTargets, yuv420p_staging_bytes,
+    Yuv420pReadback, Yuv420pTargets, layout_staging_bytes, yuv420p_staging_bytes,
 };
 pub use renderer::{LossClassifier, RenderQualityControls, Renderer};
 pub use repack::RepackSource;

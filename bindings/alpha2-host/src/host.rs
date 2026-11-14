@@ -23,7 +23,7 @@ use crate::encode::{
     PooledFrame, drain_encode_worker, encode_event_bytes, handle_encode_worker_event,
 };
 use crate::export_decode::ExportDecodePlan;
-use crate::frames::{NativeFrames, packed_yuv420_bytes};
+use crate::frames::NativeFrames;
 #[cfg(feature = "hwencode")]
 use crate::gpu_export::GpuEncodeOutcome;
 use crate::media::{PendingMedia, PendingVideoReadback, ready_pending_media, unpack_baked};
@@ -1097,7 +1097,7 @@ impl Host {
         &self,
         project: &Project,
         assets: &HashMap<String, PathBuf>,
-        size: RenderSize,
+        (size, pixels): (RenderSize, alpha2_media::PixelLayout),
         range: TimeRange,
     ) -> Result<(), String> {
         let largest =
@@ -1150,7 +1150,7 @@ impl Host {
         };
         crate::memory::admit(
             crate::memory::LeastWorkingSet::estimate(
-                (size.width, size.height),
+                (size, self.renderer.intermediate_format(), pixels),
                 (videos, threads.decoder_threads),
                 largest.bytes,
                 renderer,
@@ -2053,7 +2053,7 @@ impl Host {
             }
         };
         // Refused before any output opens rather than killed by the kernel part way through.
-        self.admit_render(&project, assets, size, exporter.effective_range())?;
+        self.admit_render(&project, assets, (size, pixels), exporter.effective_range())?;
         // On Linux the hardware encoder is not in `codec_capabilities` (the software sinks cannot
         // feed it), so the GPU path is decided here.
         let input_policy = self.input_policy;
@@ -2364,7 +2364,7 @@ impl Host {
         let mut gpu_frames = self.export_gpu_frames(size, &project);
         let mut cpu_frames = crate::cpu_frames::NativeCpuFrames::new(size, self.cache_scope);
         cpu_frames.color = gpu_frames.color;
-        let packed_bytes_per_frame = packed_yuv420_bytes(size);
+        let packed_bytes_per_frame = pixels.frame_bytes(size.width, size.height);
         let mut decode_scheduler = DecodeScheduler::new(decode_lookahead, &project);
         let mut audio_sources = has_audio
             .then(|| {
@@ -2379,7 +2379,7 @@ impl Host {
             .transpose()?;
         let pipeline_limits = export_pipeline_limits(
             size,
-            self.renderer.intermediate_format(),
+            (self.renderer.intermediate_format(), pixels),
             self.memory.in_flight_budget(),
             configured_frame_depth(),
             configured_encode_channel_depth(),

@@ -449,9 +449,7 @@ pub enum EncodeWorkerEvent {
 }
 
 fn packed_frame_bytes(frame: &Yuv420pFrameBuffer) -> u64 {
-    let (width, height) = frame.size();
-    let luma = u64::try_from(width.saturating_mul(height)).unwrap_or(u64::MAX);
-    luma.saturating_add(luma / 2)
+    u64::try_from(frame.visible_bytes()).unwrap_or(u64::MAX)
 }
 
 pub fn encode_event_bytes(event: &EncodeEvent) -> u64 {
