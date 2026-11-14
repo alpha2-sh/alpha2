@@ -91,7 +91,15 @@ pub fn answer(request: &ComposeRequest) -> Result<Value, HostError> {
                 &fonts,
             )
             .map_err(|error| refused(&error))?;
-            parsed(&compiled)
+            let mut answer = parsed(&compiled)?;
+            // An answer's loudness is the one `export` takes.
+            if let Some(loudness) = answer.get_mut("loudness").filter(|value| !value.is_null()) {
+                *loudness = json!({
+                    "targetLufs": loudness["target_lufs"],
+                    "truePeakCeilingDbtp": loudness["true_peak_ceiling_dbtp"],
+                });
+            }
+            Ok(answer)
         }
         "bind" => parsed(
             &alpha2_compose::bind_json(

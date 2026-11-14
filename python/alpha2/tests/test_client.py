@@ -268,6 +268,11 @@ def test_options_written_in_python_reach_the_host_in_the_protocols_names(
         assert absent not in request
     alpha2.export(**export_args(tmp_path / "without.mp4"), host_path=host_path)
     assert json.loads(recorded.read_text())["resources"] == {}
+    # The host takes -1 dBTP for a loudness without a ceiling.
+    alpha2.export(
+        **export_args(tmp_path / "loud.mp4", loudness={"target_lufs": -16}), host_path=host_path
+    )
+    assert json.loads(recorded.read_text())["loudness"] == {"targetLufs": -16}
 
 
 def test_an_export_defaults_to_the_whole_project_at_its_own_rate(
@@ -1516,7 +1521,7 @@ def test_conform_sends_the_purpose_as_the_host_spells_it(
     import json
 
     request = json.loads(recorded.read_text())
-    assert request["purpose"] == "preview-proxy"
+    assert request["purpose"] == "preview_proxy"
     assert request["assets"] == {"a": os.path.abspath("/a.mov")}
     with pytest.raises(Alpha2ProjectValidationError):
         HostClient(host_path=host_path).conform({**project_document(), "schema_version": 9})

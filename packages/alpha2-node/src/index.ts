@@ -664,8 +664,8 @@ export type RenderCacheReport =
 export interface LoudnessTarget {
   /** Integrated loudness, `-60..=0` LUFS; streaming platforms use -14 to -16. */
   readonly targetLufs: number;
-  /** True-peak ceiling, `-20..=0` dBTP; EBU R128 uses -1. */
-  readonly truePeakCeilingDbtp: number;
+  /** True-peak ceiling, `-20..=0` dBTP. Defaults to -1, EBU R128's. */
+  readonly truePeakCeilingDbtp?: number;
 }
 
 /** A proxy made from a source's original. */
@@ -1489,7 +1489,7 @@ export class Alpha2NodeClient {
           assets: pathRecord(request.assets),
           proxies: proxiesPayload(request.proxies),
           frames: framesPayload(request.frames),
-          purpose: (request.purpose ?? "export_original").replace(/_/g, "-"),
+          purpose: request.purpose ?? "export_original",
         },
         { videoDecode: this.#videoDecode, renderer: this.#renderer },
         request.signal,
@@ -2419,7 +2419,7 @@ function validateLoudness(request: ExportProjectRequest): void {
     throw new Alpha2HostError("INVALID_INPUT", message);
   };
   if (typeof loudness !== "object" || loudness === null)
-    invalid("loudness must be an object { targetLufs, truePeakCeilingDbtp }");
+    invalid("loudness must be an object { targetLufs, truePeakCeilingDbtp? }");
   const unknown = Object.keys(loudness).find(
     (key) => key !== "targetLufs" && key !== "truePeakCeilingDbtp",
   );
@@ -2436,7 +2436,8 @@ function validateLoudness(request: ExportProjectRequest): void {
       invalid(`loudness.${key} must be within ${low}..=0, received ${value}`);
   };
   within("targetLufs", -60);
-  within("truePeakCeilingDbtp", -20);
+  if (loudness.truePeakCeilingDbtp !== undefined)
+    within("truePeakCeilingDbtp", -20);
   if (request.includeAudio === false)
     invalid(
       "loudness normalizes the export's audio and needs includeAudio: true",

@@ -7,14 +7,15 @@ use crate::effect_request::EffectRequest;
 use crate::host::Host;
 use crate::protocol::{
     AudioQualityRequest, ExportMedia, ExportRequest, HostError, LoudnessRequest, ProjectJson,
-    PurposeRequest, RateRequest, Request, VideoQualityRequest,
+    RateRequest, Request, VideoQualityRequest,
 };
 use crate::{PROTOCOL_VERSION, create_host_with, write_stdout};
+use alpha2_assets::MediaPurpose;
 use alpha2_media::{AudioCodec, Container, VideoCodec};
 use serde_json::{Value, json};
 
 pub fn usage() -> String {
-    "usage: alpha2-host serve [--max-running <count>] [--max-memory-share <fraction>] [--max-memory-growth <bytes>] [--max-requests <count>] [--max-handles <count>] [--idle-timeout <ms>] [--extract-step-timeout <ms>] [--plugin-call-timeout <ms>] [--plugin-memory-limit <bytes>]\n       alpha2-host conform --project <project.json> [--asset <source-id>=<path>]... [--proxy <source-id>=<path>]... [--purpose preview|preview-proxy|thumbnail|remote-edit|export-original|export-proxy]\n       alpha2-host export --project <project.json> [--asset <source-id>=<path>]... [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] [--effect-asset <resource-id>=<path>]... [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--overwrite] [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--alpha] [--bit-depth 8|10] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]\n       alpha2-host probe-gpu-encode [<width> [<height>]]".to_owned()
+    "usage: alpha2-host serve [--max-running <count>] [--max-memory-share <fraction>] [--max-memory-growth <bytes>] [--max-requests <count>] [--max-handles <count>] [--idle-timeout <ms>] [--extract-step-timeout <ms>] [--plugin-call-timeout <ms>] [--plugin-memory-limit <bytes>]\n       alpha2-host conform --project <project.json> [--asset <source-id>=<path>]... [--proxy <source-id>=<path>]... [--purpose preview|preview_proxy|thumbnail|remote_edit|export_original|export_proxy]\n       alpha2-host export --project <project.json> [--asset <source-id>=<path>]... [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] [--effect-asset <resource-id>=<path>]... [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--overwrite] [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--alpha] [--bit-depth 8|10] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]\n       alpha2-host probe-gpu-encode [<width> [<height>]]".to_owned()
 }
 
 #[derive(Default)]
@@ -25,7 +26,8 @@ pub struct ExportCliOptions {
     pub frames: HashMap<String, Vec<Option<PathBuf>>>,
     pub resources: HashMap<String, HashMap<String, PathBuf>>,
     pub media: ExportMedia,
-    pub purpose: PurposeRequest,
+    /// `None` for `export_original`.
+    pub purpose: Option<MediaPurpose>,
     pub effect_assets: HashMap<String, PathBuf>,
     pub font_files: Vec<PathBuf>,
     pub effects: Option<PathBuf>,
@@ -79,7 +81,7 @@ pub fn conform_cli(args: Vec<String>) -> Result<(), HostError> {
         &project,
         &media,
         &media,
-        options.purpose.purpose(),
+        options.purpose.unwrap_or(MediaPurpose::ExportOriginal),
         &hardware,
     );
     let ready = resolved.report.ready;
@@ -197,10 +199,12 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
         audio_codec: options.audio_codec,
         audio_quality: options.audio_quality,
         loudness: match (options.loudness_target, options.true_peak_ceiling) {
-            // EBU R128's broadcast ceiling, and the platforms' usual one.
             (Some(target), ceiling) => Some(
-                LoudnessRequest::new(target, ceiling.unwrap_or(-1.0))
-                    .map_err(HostError::invalid_input)?,
+                LoudnessRequest::new(
+                    target,
+                    ceiling.unwrap_or(alpha2_compose::DEFAULT_TRUE_PEAK_CEILING_DBTP),
+                )
+                .map_err(HostError::invalid_input)?,
             ),
             (None, Some(_)) => {
                 return Err(HostError::invalid_input(
@@ -338,11 +342,12 @@ pub fn parse_export_args(args: Vec<String>) -> Result<ExportCliOptions, HostErro
                     .map_err(|_| HostError::invalid_input("--media must be original or proxies"))?;
             }
             "--purpose" => {
-                options.purpose = serde_json::from_value(json!(value(&mut args)?)).map_err(|_| {
-                    HostError::invalid_input(
-                        "--purpose must be preview, preview-proxy, thumbnail, remote-edit, export-original, or export-proxy",
-                    )
-                })?;
+                options.purpose =
+                    Some(serde_json::from_value(json!(value(&mut args)?)).map_err(|_| {
+                        HostError::invalid_input(
+                            "--purpose must be preview, preview_proxy, thumbnail, remote_edit, export_original, or export_proxy",
+                        )
+                    })?);
             }
             "--font" => {
                 let path = value(&mut args)?;

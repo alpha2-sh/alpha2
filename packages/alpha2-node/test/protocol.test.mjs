@@ -332,6 +332,61 @@ test("a CONFORM_FAILED error carries the host's report", async () => {
   assert.deepEqual(message.error.details, report);
 });
 
+test("conform sends the purpose in the spelling the report uses", async () => {
+  const root = await scratch("alpha2-node-purpose-");
+  const log = join(root, "requests");
+  const hostPath = await fakeHost(
+    root,
+    `import { appendFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+serve((request) => {
+  appendFileSync(${JSON.stringify(log)}, JSON.stringify(request) + "\\n");
+  respond(request, { ok: true, result: { catalog: { assets: [] }, report: { purpose: request.purpose, ready: true, sources: [] } } });
+});
+`,
+  );
+  const client = new Alpha2NodeClient({ hostPath });
+  const project = exportRequest("x.mp4").project;
+  const answered = await client.conform({ project, purpose: "preview_proxy" });
+  await client.conform({ project, purpose: answered.report.purpose });
+  await client.conform({ project });
+  const sent = (await readFile(log, "utf8"))
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line).purpose);
+  assert.deepEqual(sent, ["preview_proxy", "preview_proxy", "export_original"]);
+});
+
+test("a loudness target without a ceiling leaves the ceiling to the host", async () => {
+  const root = await scratch("alpha2-node-loudness-");
+  const log = join(root, "requests");
+  const hostPath = await fakeHost(
+    root,
+    `import { appendFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+serve((request) => {
+  appendFileSync(${JSON.stringify(log)}, JSON.stringify(request.loudness) + "\\n");
+  respond(request, { ok: true, result: {} });
+});
+`,
+  );
+  const client = new Alpha2NodeClient({ hostPath });
+  await client.exportProject(
+    exportRequest(join(root, "out.mp4"), { loudness: { targetLufs: -16 } }),
+  );
+  assert.deepEqual(JSON.parse(await readFile(log, "utf8")), {
+    targetLufs: -16,
+  });
+  await assert.rejects(
+    client.exportProject(
+      exportRequest(join(root, "out.mp4"), {
+        loudness: { targetLufs: -16, truePeakCeilingDbtp: 1 },
+      }),
+    ),
+    { code: "INVALID_INPUT" },
+  );
+});
+
 test("binary resolution maps Electron ASAR paths to unpacked resources", async () => {
   const root = await scratch("alpha2-node-test-");
   const unpacked = join(root, "app.asar.unpacked", "bin");

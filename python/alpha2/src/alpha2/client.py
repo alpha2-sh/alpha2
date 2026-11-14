@@ -29,7 +29,7 @@ import weakref
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
 from . import _host_start, _native, _wire
 from ._quarantine import quarantine_refusal
@@ -157,8 +157,8 @@ class LoudnessTarget(TypedDict):
 
     target_lufs: float
     """Integrated loudness, -60..=0 LUFS; streaming platforms use -14 to -16."""
-    true_peak_ceiling_dbtp: float
-    """True-peak ceiling, -20..=0 dBTP; EBU R128 uses -1."""
+    true_peak_ceiling_dbtp: NotRequired[float]
+    """True-peak ceiling, -20..=0 dBTP. Defaults to -1, EBU R128's."""
 
 
 class RenderCacheOptions(TypedDict, total=False):
@@ -532,7 +532,7 @@ def _loudness(loudness: object, include_audio: bool) -> dict[str, float] | None:
     if loudness is None:
         return None
     if not isinstance(loudness, Mapping):
-        raise _invalid("loudness must be a dict {target_lufs, true_peak_ceiling_dbtp}")
+        raise _invalid("loudness must be a dict {target_lufs, true_peak_ceiling_dbtp?}")
     unknown = next(
         (key for key in loudness if key not in ("target_lufs", "true_peak_ceiling_dbtp")), None
     )
@@ -546,6 +546,8 @@ def _loudness(loudness: object, include_audio: bool) -> dict[str, float] | None:
         ("target_lufs", -60, "targetLufs"),
         ("true_peak_ceiling_dbtp", -20, "truePeakCeilingDbtp"),
     ):
+        if key == "true_peak_ceiling_dbtp" and key not in loudness:
+            continue
         value = loudness.get(key)
         if not isinstance(value, (int, float)) or isinstance(value, bool) or not low <= value <= 0:
             raise _invalid(f"loudness.{key} must be within {low}..=0, received {value}")
@@ -789,7 +791,7 @@ class HostClient:
             "assets": _path_record("assets", assets, "asset path"),
             "proxies": _proxies_payload(proxies),
             "frames": _frames_payload(frames),
-            "purpose": purpose.replace("_", "-"),
+            "purpose": purpose,
         }
         return self._pool.request(  # type: ignore[no-any-return]
             "conform",

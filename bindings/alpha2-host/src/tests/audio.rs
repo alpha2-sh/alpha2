@@ -981,7 +981,7 @@ fn loudness_requests_are_checked_and_need_audio() {
             json!({"targetLufs": -14, "truePeakCeilingDbtp": 1}),
             "truePeakCeilingDbtp",
         ),
-        (json!({"targetLufs": -14}), "truePeakCeilingDbtp"),
+        (json!({"truePeakCeilingDbtp": -1}), "targetLufs"),
         (
             json!({"targetLufs": -14, "truePeakCeilingDbtp": -1, "gate": 1}),
             "gate",

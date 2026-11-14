@@ -78,8 +78,11 @@ pub struct LoudnessTarget {
     pub true_peak_ceiling_dbtp: f64,
 }
 
+/// The true-peak ceiling a loudness target without one takes, in dBTP: EBU R128's.
+pub const DEFAULT_TRUE_PEAK_CEILING_DBTP: f64 = -1.0;
+
 const fn default_ceiling() -> f64 {
-    -1.0
+    DEFAULT_TRUE_PEAK_CEILING_DBTP
 }
 
 /// A compiled spec: the project, and what an export of it needs besides.

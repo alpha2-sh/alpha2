@@ -121,7 +121,7 @@ Reports which media each source of a project would read, and what blocks it, wit
 | `assets` | `{ "<source-id>": "<path>" }` | `{}` | The original file of each source. |
 | `proxies` | `{ "<source-id>": [{ "path": "<path>", "madeFrom"?: <fingerprint>, "colorPipeline"?: "<string>" }] }` | `{}` | Proxies made from each original, in order of preference. |
 | `frames` | `{ "<source-id>": ["<path>" or null, ...] }` | `{}` | The frame files of each image sequence, in order; `null` where the sequence has a gap. |
-| `purpose` | `preview`, `preview-proxy`, `thumbnail`, `remote-edit`, `export-original`, `export-proxy` | `export-original` | What the media is read for. |
+| `purpose` | `preview`, `preview_proxy`, `thumbnail`, `remote_edit`, `export_original`, `export_proxy` | `export_original` | What the media is read for, in the spelling the report's `purpose` has. |
 
 The result is `{ "catalog": ..., "report": ... }`: what the host found for each source, and per source what the purpose reads and its issues. `report.ready` is `false` when an issue blocks. The types are `AssetCatalog` and `ConformReport` in `alpha2/assets`. An `offline` original and its `offline` issue carry `path`, the path the host looked up and found nothing at, when the request gave one; the `CONFORM_FAILED` message names it (`<source>: offline (<path> not found)`), and adds a file beside it whose name is the same text in another Unicode normalization when there is one. Every path reaches FFmpeg as a `file:` URL of its absolute path, so a name such as `take:1.mov` is a file, never a protocol.
 
@@ -152,7 +152,7 @@ Renders a range of a project and encodes it into an MP4, MOV, Matroska or WebM f
 | `videoQuality` | a level, or `{ "bitrate", "mode"?, "quantizer"? }` | `high` | Levels are `very-low`, `low`, `medium`, `high`, `very-high`; the host turns a level into a rate for the codec, size and frame rate. `bitrate` is in bits per second, `mode` is `constant` or `variable`. |
 | `audioCodec` | `aac`, `opus` | the container's | One the container offers (below). |
 | `audioQuality` | a level, or `{ "bitrate" }` | `high` | |
-| `loudness` | `{ "targetLufs", "truePeakCeilingDbtp" }` | none | Normalizes the audio to an integrated loudness (-60 to 0 LUFS) under a true-peak ceiling (-20 to 0 dBTP). Needs `includeAudio`. |
+| `loudness` | `{ "targetLufs", "truePeakCeilingDbtp"? }` | none | Normalizes the audio to an integrated loudness (-60 to 0 LUFS) under a true-peak ceiling (-20 to 0 dBTP, -1 when absent). Needs `includeAudio`. A `compose` `compile` answer's `loudness` is this object. |
 | `inputPolicy` | `auto`, `gpu-required`, `cpu-readback` | `auto` | How frames reach the encoder: `auto` stays on the GPU where the host can and reads back otherwise; `gpu-required` fails with `GPU_OUTPUT_UNAVAILABLE` instead; `cpu-readback` always reads back. |
 | `strategy` | `render`, `prefer-copy`, `require-copy` | `render` | `prefer-copy` copies the sources' compressed packets instead of rendering when the range shows them untouched, and renders otherwise; `require-copy` fails with `COPY_INELIGIBLE` instead. |
 | `renderCache` | `{ "directory", "quotaBytes"?, "backlog"? }` | none | A directory to keep rendered frames in, so a later export of the same project, files and effects by the same host build on the same GPU takes them instead of rendering them again. `quotaBytes` is 4 GiB by default; `backlog` is `skip` (default) or `wait`. |
@@ -179,7 +179,7 @@ A finished partial file is synced to the disk, moved into place, and its folder 
 
 A finished render is never deleted. When it cannot be moved into place (a file appeared at `output` while the export ran, the folder refused, a program held the file past the wait), it is moved beside `output` as `<stem>.a2kept.<ext>` (or `a2kept2` to `a2kept99` when that name is taken) and the request fails with `OUTPUT_PUBLISH_FAILED`, whose message names `output`, the operating system's error and the kept file, and whose `details.keptPath` is the kept file's absolute path. The kept file is the caller's to move or remove. When even that move fails, the message says so and the file stays as the partial file, which the next export to `output` removes.
 
-Before it renders, the host conforms the media for `export-original` (or `export-proxy` with `media: "proxies"`); an export whose media is not ready fails with `CONFORM_FAILED`, and the error's `details` is the conform report.
+Before it renders, the host conforms the media for `export_original` (or `export_proxy` with `media: "proxies"`); an export whose media is not ready fails with `CONFORM_FAILED`, and the error's `details` is the conform report.
 
 Before any output opens, a render whose least working set (one frame in flight, one software decoder session per video read at once at the decoder thread count the export fits, 1 to 6, and the renderer's pictures where they are in system memory) is more than the machine can give the host now (the lower of the memory the operating system reports available and what its cgroup or job limit has left, not counting file cache) fails with `RESOURCE_LIMIT`, `failure.stage` `machine-memory` and a message naming both numbers. On Linux the host also looks at the lowest cgroup memory limit on its path (v2 or v1) every 50 ms while it renders, and stops the export with `RESOURCE_LIMIT`, `failure.stage` `memory-limit-reached`, once the working set there (the charge less the `inactive_file` and `active_file` page cache the kernel reclaims first, the figure admission uses) reaches 95 % of the limit. Neither catches every allocation: a host the kernel's out-of-memory killer ends gets no response, and the clients report it as `HOST_OOM_KILLED` (class `OUT_OF_MEMORY`) when the cgroup's `oom_kill` count rose while it ran.
 
@@ -207,7 +207,7 @@ Compiles compose specs and binds templates, without a GPU and without reading me
 
 | `action` | Fields | Result |
 | --- | --- | --- |
-| `compile` | `spec`, `facts` (`{}`), `fonts` (font file paths, `[]`), `templates` (`[]`) | `{project, assets, loudness, warnings}` |
+| `compile` | `spec`, `facts` (`{}`), `fonts` (font file paths, `[]`), `templates` (`[]`) | `{project, assets, loudness, warnings}`; `loudness` is `null` or `{targetLufs, truePeakCeilingDbtp}`, as `export` takes it |
 | `bind` | `template`, `data` (`{}`), `theme`, `templates` (`[]`) | `{spec}`: the template bound to its data, or a spec with its template nodes expanded |
 | `dataSchema` | `template` | `{schema}`: the JSON Schema of the template's data |
 | `lint` | `template`, `data`, `templates` (`[]`) | `{issues}`: `{path, code, message, severity}` each |

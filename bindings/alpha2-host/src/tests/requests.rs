@@ -2347,6 +2347,68 @@ fn an_answer_whose_header_is_over_the_limit_is_refused_and_the_host_serves_the_n
 }
 
 #[test]
+fn a_compile_answer_and_a_conform_report_feed_export_and_conform_as_they_are() {
+    let compose = json!({
+        "protocolVersion": 2, "requestId": "c", "operation": "compose", "action": "compile",
+        "spec": {"duration": 1, "body": {"type": "color", "color": "#336699"}, "loudness": -14}
+    });
+    let Ok(Request::Compose(compose)) = parse_request(&compose.to_string()) else {
+        panic!("a compose request");
+    };
+    let answer = crate::compose_request::answer(&compose).expect("compiled");
+    assert_eq!(
+        answer["loudness"],
+        json!({"targetLufs": -14.0, "truePeakCeilingDbtp": -1.0})
+    );
+    let export = |loudness: &Value| {
+        let request = json!({
+            "protocolVersion": 2, "requestId": "e", "operation": "export",
+            "project": {}, "assets": {}, "startTicks": 0, "endTicks": 120_000,
+            "frameRate": {"num": 30, "den": 1}, "output": "/tmp/out.mp4", "loudness": loudness
+        });
+        match parse_request(&request.to_string()) {
+            Ok(Request::Export(export)) => export.loudness,
+            _ => panic!("an export request"),
+        }
+    };
+    let expected = LoudnessRequest::new(-14.0, -1.0).expect("in range");
+    assert_eq!(export(&answer["loudness"]), Some(expected));
+    assert_eq!(export(&json!({"targetLufs": -14})), Some(expected));
+    let purpose = serde_json::to_value(alpha2_assets::MediaPurpose::ExportProxy).expect("JSON");
+    let conform = json!({
+        "protocolVersion": 2, "requestId": "f", "operation": "conform",
+        "project": {}, "purpose": purpose
+    });
+    let Ok(Request::Conform(conform)) = parse_request(&conform.to_string()) else {
+        panic!("a conform request");
+    };
+    assert_eq!(conform.purpose, alpha2_assets::MediaPurpose::ExportProxy);
+    // The shared corpus chains the same two answers to the requests that take them.
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../../../tests/cases/host-protocol-corpus.json"
+    ))
+    .expect("protocol corpus is JSON");
+    let fixture = |name: &str| {
+        fixtures
+            .as_array()
+            .expect("an array")
+            .iter()
+            .find(|fixture| fixture["name"] == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .clone()
+    };
+    assert_eq!(
+        fixture("a compile answer carries the loudness export takes")["messages"][0]["result"]["loudness"],
+        fixture("export takes a compile answer's loudness")["request"]["loudness"]
+    );
+    let conformed = fixture("conform takes the purpose a report names");
+    assert_eq!(
+        conformed["messages"][0]["result"]["report"]["purpose"],
+        conformed["request"]["purpose"]
+    );
+}
+
+#[test]
 fn every_corpus_answer_is_framed_as_its_utf8_json() {
     let fixtures: Value = serde_json::from_str(include_str!(
         "../../../../tests/cases/host-protocol-corpus.json"

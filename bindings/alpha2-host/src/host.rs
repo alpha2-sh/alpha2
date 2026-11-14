@@ -3850,7 +3850,7 @@ fn conform_answer(
         &assets,
         &proxies,
         &frames,
-        purpose.purpose(),
+        purpose,
         &conform_hardware(policy),
         None,
     )?;

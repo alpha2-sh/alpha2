@@ -69,6 +69,12 @@ All notable changes to this project are documented in this file.
   (a large `extract` or `edit` result) is answered `RESOURCE_LIMIT` with `details.headerBytes` and
   `details.limit`, and the host keeps serving. `@alpha2-sh/node` reads headers up to the same size
   (128 MiB before), so such answers no longer kill the host after the work is done.
+- Host protocol: a `compose` `compile` answer's `loudness` is `{targetLufs, truePeakCeilingDbtp}`,
+  the object `export` takes, and `export`'s `loudness.truePeakCeilingDbtp` is optional (-1 dBTP,
+  as the command line and compose specs already default). `conform`'s `purpose` (and the
+  command line's `--purpose`) takes the conform report's spelling, `export_original` and so on;
+  the kebab-case spelling is refused. Both clients send the purpose as given and accept a loudness
+  without a ceiling.
 
 ### Fixed
 

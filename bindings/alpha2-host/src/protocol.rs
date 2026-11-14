@@ -526,8 +526,12 @@ pub struct ConformRequest {
     pub proxies: HashMap<String, Vec<ProxyRequest>>,
     #[serde(default)]
     pub frames: HashMap<String, Vec<Option<PathBuf>>>,
-    #[serde(default)]
-    pub purpose: PurposeRequest,
+    #[serde(default = "export_original")]
+    pub purpose: MediaPurpose,
+}
+
+const fn export_original() -> MediaPurpose {
+    MediaPurpose::ExportOriginal
 }
 
 #[derive(Deserialize)]
@@ -657,31 +661,6 @@ impl ExportMedia {
         match self {
             Self::Original => MediaPurpose::ExportOriginal,
             Self::Proxies => MediaPurpose::ExportProxy,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum PurposeRequest {
-    Preview,
-    PreviewProxy,
-    Thumbnail,
-    RemoteEdit,
-    #[default]
-    ExportOriginal,
-    ExportProxy,
-}
-
-impl PurposeRequest {
-    pub const fn purpose(self) -> MediaPurpose {
-        match self {
-            Self::Preview => MediaPurpose::Preview,
-            Self::PreviewProxy => MediaPurpose::PreviewProxy,
-            Self::Thumbnail => MediaPurpose::Thumbnail,
-            Self::RemoteEdit => MediaPurpose::RemoteEdit,
-            Self::ExportOriginal => MediaPurpose::ExportOriginal,
-            Self::ExportProxy => MediaPurpose::ExportProxy,
         }
     }
 }
@@ -1318,7 +1297,8 @@ impl<'de> Deserialize<'de> for VideoQualityRequest {
     }
 }
 
-/// EBU R128 / ITU-R BS.1770-4: `{ "targetLufs": <LUFS>, "truePeakCeilingDbtp": <dBTP> }`.
+/// EBU R128 / ITU-R BS.1770-4: `{ "targetLufs": <LUFS>, "truePeakCeilingDbtp"?: <dBTP> }`, the
+/// ceiling [`alpha2_compose::DEFAULT_TRUE_PEAK_CEILING_DBTP`] when absent.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct LoudnessRequest {
     /// Integrated loudness, in `-60..=0` LUFS.
@@ -1354,7 +1334,7 @@ impl LoudnessRequest {
     pub fn from_json(value: &Value) -> Result<Self, String> {
         let Value::Object(fields) = value else {
             return Err(format!(
-                "loudness must be an object {{ targetLufs, truePeakCeilingDbtp }}, received {value}"
+                "loudness must be an object {{ targetLufs, truePeakCeilingDbtp? }}, received {value}"
             ));
         };
         if let Some(key) = fields
@@ -1365,14 +1345,19 @@ impl LoudnessRequest {
                 "loudness has an unknown key \"{key}\"; it takes targetLufs and truePeakCeilingDbtp"
             ));
         }
-        let number = |key: &str| {
-            fields
-                .get(key)
-                .ok_or_else(|| format!("loudness.{key} is required"))?
+        let number = |key: &str, default: Option<f64>| match fields.get(key) {
+            Some(value) => value
                 .as_f64()
-                .ok_or_else(|| format!("loudness.{key} must be a number"))
+                .ok_or_else(|| format!("loudness.{key} must be a number")),
+            None => default.ok_or_else(|| format!("loudness.{key} is required")),
         };
-        Self::new(number("targetLufs")?, number("truePeakCeilingDbtp")?)
+        Self::new(
+            number("targetLufs", None)?,
+            number(
+                "truePeakCeilingDbtp",
+                Some(alpha2_compose::DEFAULT_TRUE_PEAK_CEILING_DBTP),
+            )?,
+        )
     }
 }
 
