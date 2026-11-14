@@ -306,6 +306,18 @@ pub struct DataSet {
 }
 
 impl DataSet {
+    /// Its latest time: the last sample, or the latest word or interval end.
+    #[must_use]
+    pub fn last_time(&self) -> Option<MediaTime> {
+        match &self.values {
+            DataValues::Points(samples)
+            | DataValues::Scalars(samples)
+            | DataValues::Similarity(samples) => samples.times.last().copied(),
+            DataValues::Words(words) => words.iter().map(|word| word.end).max(),
+            DataValues::Intervals(intervals) => intervals.iter().map(|interval| interval.end).max(),
+        }
+    }
+
     /// The kind of the values.
     #[must_use]
     pub const fn kind(&self) -> DataKind {
@@ -736,8 +748,6 @@ pub enum DataProblem {
     TimesNotAscending,
     /// A time is negative.
     NegativeTime,
-    /// A time is past the source fingerprint's duration.
-    PastSourceEnd,
     /// A value is not finite, outside its kind's bounds, or a lost marker covers only part of a
     /// channel or sample.
     InvalidValue {
@@ -785,7 +795,6 @@ impl fmt::Display for DataProblem {
                 formatter.write_str("has times that are not strictly ascending")
             }
             Self::NegativeTime => formatter.write_str("has a negative time"),
-            Self::PastSourceEnd => formatter.write_str("has a time past its source's duration"),
             Self::InvalidValue { index } => {
                 write!(formatter, "has an invalid value at values[{index}]")
             }
@@ -942,11 +951,13 @@ pub fn valid_interval(interval: &DataInterval) -> bool {
 
 impl DataSet {
     /// Checks the set on its own against the model's rules (everything but its anchor's
-    /// existence). `source_duration` is the anchored source's duration in ticks, when known.
+    /// existence). A time past its source's recorded duration is stale data, which
+    /// [`crate::Project::lint`] reports, not an invalid set: the duration is evidence a host may
+    /// replace.
     ///
     /// # Errors
     /// The first [`DataProblem`] found.
-    pub fn validate(&self, source_duration: Option<i64>) -> Result<(), DataProblem> {
+    pub fn validate(&self) -> Result<(), DataProblem> {
         if self.id.as_str().len() > MAX_DATA_ID_BYTES {
             return Err(DataProblem::IdTooLong);
         }
@@ -969,9 +980,6 @@ impl DataSet {
         let time_ok = |time: MediaTime| -> Result<(), DataProblem> {
             if time.ticks() < 0 {
                 return Err(DataProblem::NegativeTime);
-            }
-            if source_duration.is_some_and(|end| time.ticks() > end) {
-                return Err(DataProblem::PastSourceEnd);
             }
             Ok(())
         };

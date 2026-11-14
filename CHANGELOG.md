@@ -130,6 +130,9 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Data: a data set with a time past its source's recorded duration loads, and `lint()` reports it
+  as stale data. Before, a relink to a file whose recorded duration was shorter made the project
+  fail to load until the data set was removed by hand.
 - Projects: `Project::validate` refuses a time past 2^53 - 1 ticks either way, which no project
   document can hold, so a project built in memory validates only if its JSON loads. Before, such a
   project validated and every writer produced text `Project::from_json` refused.

@@ -66,27 +66,20 @@ pub(crate) fn validate_data(
             data: set.id.clone(),
             problem,
         };
-        let duration = match &set.anchor {
-            DataAnchor::Source { source_id } => {
-                let source = sources
-                    .get(source_id)
-                    .ok_or_else(|| invalid(crate::DataProblem::UnknownSource(source_id.clone())))?;
-                if !matches!(
-                    source.kind,
-                    MediaKind::Video | MediaKind::Audio | MediaKind::Image
-                ) {
-                    return Err(invalid(crate::DataProblem::SourceWithoutMedia(
-                        source_id.clone(),
-                    )));
-                }
-                source
-                    .fingerprint
-                    .as_ref()
-                    .and_then(|fingerprint| fingerprint.duration_ticks)
+        if let DataAnchor::Source { source_id } = &set.anchor {
+            let source = sources
+                .get(source_id)
+                .ok_or_else(|| invalid(crate::DataProblem::UnknownSource(source_id.clone())))?;
+            if !matches!(
+                source.kind,
+                MediaKind::Video | MediaKind::Audio | MediaKind::Image
+            ) {
+                return Err(invalid(crate::DataProblem::SourceWithoutMedia(
+                    source_id.clone(),
+                )));
             }
-            DataAnchor::Timeline => None,
-        };
-        set.validate(duration).map_err(invalid)?;
+        }
+        set.validate().map_err(invalid)?;
     }
     let mut places = Places {
         data,

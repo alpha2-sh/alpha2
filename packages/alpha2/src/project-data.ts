@@ -79,7 +79,6 @@ function label(text: unknown): boolean {
 /** Mirrors `DataSet::check`. */
 function setProblem(
   set: Json,
-  sourceDuration: number | undefined,
   validFingerprint: (fingerprint: unknown) => boolean,
 ): string | undefined {
   const id = String(set.id);
@@ -102,12 +101,8 @@ function setProblem(
     if (anchor.type === "timeline") return "has an invalid made_from.anchor";
     if (!validFingerprint(set.made_from)) return "has an invalid made_from";
   }
-  const timeProblem = (time: unknown): string | undefined => {
-    if (typeof time !== "number" || time < 0) return "has a negative time";
-    if (sourceDuration !== undefined && time > sourceDuration)
-      return "has a time past its source's duration";
-    return undefined;
-  };
+  const timeProblem = (time: unknown): string | undefined =>
+    typeof time !== "number" || time < 0 ? "has a negative time" : undefined;
   const kind = set.kind;
   const arity = arityOf(kind);
   if (arity !== undefined) {
@@ -625,8 +620,8 @@ export function dataReferences(project: object): DataReference[] {
   return references;
 }
 
-/** Data sets whose own checks passed, by the source duration they passed with. */
-const passedSets = new WeakMap<object, number | undefined>();
+/** Data sets whose own checks passed. */
+const passedSets = new WeakSet<object>();
 
 /**
  * Problems of the project's data sets and of every binding, correction and caption words
@@ -660,7 +655,6 @@ export function dataProblems(
     }
     data.set(id, set);
     const anchor = isRecord(set.anchor) ? set.anchor : {};
-    let duration: number | undefined;
     if (anchor.type === "source") {
       const source = sources.get(String(anchor.source_id));
       if (source === undefined) {
@@ -675,18 +669,11 @@ export function dataProblems(
         );
         continue;
       }
-      const fingerprint = isRecord(source.fingerprint)
-        ? source.fingerprint
-        : {};
-      duration =
-        typeof fingerprint.duration_ticks === "number"
-          ? fingerprint.duration_ticks
-          : undefined;
     }
-    if (passedSets.has(set) && passedSets.get(set) === duration) continue;
-    const problem = setProblem(set, duration, validFingerprint);
+    if (passedSets.has(set)) continue;
+    const problem = setProblem(set, validFingerprint);
     if (problem) problems.push(`data set ${id} ${problem}`);
-    else if (sealed(set)) passedSets.set(set, duration);
+    else if (sealed(set)) passedSets.add(set);
   }
 
   const timeline = isRecord(project.timeline) ? project.timeline : {};

@@ -250,9 +250,32 @@ fn times_ascend_from_zero_within_the_source() {
         data_problem(&with_data(vec![set])),
         DataProblem::NegativeTime
     );
+}
+
+#[test]
+fn a_time_past_the_recorded_duration_is_stale_data_not_an_error() {
+    let stale = |project: &Project| {
+        project
+            .lint()
+            .into_iter()
+            .filter(|issue| matches!(issue, crate::LintIssue::StaleData { .. }))
+            .collect::<Vec<_>>()
+    };
     let mut project = with_data(vec![scalars("s", &source("music"))]);
+    project["sources"][1]["fingerprint"] = json!({ "duration_ticks": 8008 });
+    assert_eq!(
+        stale(&load(&project).expect("within the duration")),
+        Vec::new()
+    );
     project["sources"][1]["fingerprint"] = json!({ "duration_ticks": 5000 });
-    assert_eq!(data_problem(&project), DataProblem::PastSourceEnd);
+    let shorter = load(&project).expect("a shorter recorded duration still loads");
+    assert_eq!(
+        stale(&shorter),
+        vec![crate::LintIssue::StaleData {
+            data: crate::DataSetId::new("s".to_owned()).expect("id"),
+            source: alpha2_media::SourceId::new("music".to_owned()).expect("id"),
+        }]
+    );
 }
 
 #[test]

@@ -394,8 +394,6 @@ pub struct ExtractSession {
     request: ExtractRequest,
     input: Input,
     anchor: DataAnchor,
-    /// The source's fingerprinted duration in ticks, which the data must lie within.
-    duration: Option<i64>,
     passes: Vec<Pass>,
     phase: Phase,
     progress: Vec<PassProgress>,
@@ -488,7 +486,7 @@ impl ExtractSession {
         {
             return Err(RequestError::InvalidRange);
         }
-        let (source, duration) = match read.from {
+        let source = match read.from {
             InputFrom::Source => {
                 let id = read.source_id.as_ref().ok_or_else(|| {
                     RequestError::InvalidInput("source input needs source_id".to_owned())
@@ -518,7 +516,7 @@ impl ExtractSession {
                 {
                     return Err(RequestError::RangePastSource(duration));
                 }
-                (Some(id.clone()), duration)
+                Some(id.clone())
             }
             InputFrom::Timeline => {
                 if read.source_id.is_some() {
@@ -526,7 +524,7 @@ impl ExtractSession {
                         "timeline input takes no source_id".to_owned(),
                     ));
                 }
-                (None, None)
+                None
             }
         };
         let input = match (&descriptor.input, source.clone()) {
@@ -649,7 +647,6 @@ impl ExtractSession {
             request,
             input,
             anchor,
-            duration,
             progress: Vec::new(),
             passes,
             phase: Phase::BeforePass(0),
@@ -1310,7 +1307,7 @@ impl ExtractSession {
                 made_by: Some(made_by.clone()),
                 made_from: None,
             };
-            set.validate(self.duration).map_err(|problem| {
+            set.validate().map_err(|problem| {
                 SessionError::InvalidResult(format!("data set {id} {problem}"))
             })?;
             sets.push(set);

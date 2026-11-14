@@ -91,8 +91,9 @@ pub enum LintIssue {
         /// The style's name.
         style: String,
     },
-    /// A source-anchored data set whose `made_from` differs from its source's current
-    /// fingerprint. Reported only by [`Project::stale_data`], where the host compares.
+    /// A source-anchored data set made from other media: its `made_from` differs from its
+    /// source's current fingerprint ([`Project::stale_data`], where the host compares), or one of
+    /// its times is past the duration its source's fingerprint records ([`Project::lint`]).
     StaleData {
         /// The data set.
         data: crate::DataSetId,
@@ -300,7 +301,30 @@ impl Project {
         }
         self.lint_keyframes_in_other_times(&mut issues);
         self.lint_text_animators(&mut issues);
+        self.lint_data_past_its_source(&mut issues);
         issues
+    }
+
+    /// Every source-anchored data set with a time past its source's recorded duration.
+    fn lint_data_past_its_source(&self, issues: &mut Vec<LintIssue>) {
+        for set in &self.data {
+            let Some(source) = set.anchor.source() else {
+                continue;
+            };
+            let duration = self
+                .sources
+                .iter()
+                .find(|candidate| &candidate.id == source)
+                .and_then(|source| source.fingerprint.as_ref()?.duration_ticks);
+            if let (Some(duration), Some(last)) = (duration, set.last_time())
+                && last.ticks() > duration
+            {
+                issues.push(LintIssue::StaleData {
+                    data: set.id.clone(),
+                    source: source.clone(),
+                });
+            }
+        }
     }
 
     /// Every text animator that sets nothing, in text generators and layout text nodes.

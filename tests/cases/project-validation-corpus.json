@@ -32344,11 +32344,83 @@
     }
   },
   {
-    "name": "data-past-source-end",
-    "valid": false,
-    "rejected_by": "model",
-    "problems": ["data set s has a time past its source's duration"],
-    "error": "data set s has a time past its source's duration",
+    "name": "data-within-the-recorded-source-duration",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        {
+          "id": "a1",
+          "kind": "audio",
+          "locator": "c.m4a",
+          "fingerprint": { "duration_ticks": 4000 }
+        },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "s",
+          "anchor": { "type": "source", "source_id": "a1" },
+          "kind": "scalars",
+          "interpolation": "linear",
+          "channels": ["rms"],
+          "times": [0, 4000],
+          "values": [0.1, 0.2]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-past-the-recorded-source-duration-loads",
+    "valid": true,
     "project": {
       "schema_version": 1,
       "id": "p1",
