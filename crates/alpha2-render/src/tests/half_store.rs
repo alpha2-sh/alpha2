@@ -8,9 +8,15 @@
     clippy::unreadable_literal
 )]
 
+use std::sync::Arc;
+
 use super::device_precision::{Probe, TEXELS, VALUES};
-use super::{adapter_gpu, gpu_test_lock};
-use crate::cpu::half;
+use super::{adapter_gpu, gpu_test_lock, read_stored, rgba_image_texture, visual};
+use crate::cpu::{Pixels, half};
+use crate::{
+    BlendMode, BlendSpace, CompositeLayer, CpuImage, CpuRenderer, CpuSource, GraphLayer,
+    RenderGraph, RenderSize, Renderer, SourceView,
+};
 
 struct Lcg(u64);
 
@@ -185,4 +191,129 @@ fn premultiplied_over_stays_within_sixteen_half_ulps_of_the_cpu_model() {
         "the device's premultiplied over is {worst_ulps} half ULPs ({worst_codes} codes) from \
          the CPU model; at most 16 and 0.25 allowed"
     );
+}
+
+/// An opaque picture whose channels walk through many half-float exponents.
+fn gradient(size: RenderSize) -> Vec<u8> {
+    let mut state = 0x2f6b_u32;
+    (0..size.height)
+        .flat_map(|y| (0..size.width).map(move |x| (x, y)))
+        .flat_map(|(x, y)| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            [
+                x as u8,
+                ((x * 3 + y * 5) % 256) as u8,
+                (state >> 24) as u8,
+                255,
+            ]
+        })
+        .collect()
+}
+
+fn stacked_size() -> RenderSize {
+    RenderSize::new(256, 64).expect("size")
+}
+
+fn gpu_stack(renderer: &Renderer, transparent_layers: usize, scale: f32) -> Vec<u8> {
+    let size = stacked_size();
+    let picture = rgba_image_texture(renderer, size, &gradient(size));
+    let picture = picture.create_view(&wgpu::TextureViewDescriptor::default());
+    let clear = rgba_image_texture(
+        renderer,
+        size,
+        &vec![0; size.width as usize * size.height as usize * 4],
+    );
+    let clear = clear.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut layers = vec![CompositeLayer {
+        texture: &picture,
+        visual: visual([1.0, 1.0], 1.0),
+        blend_mode: BlendMode::Normal,
+    }];
+    layers.extend((0..transparent_layers).map(|_| CompositeLayer {
+        texture: &clear,
+        visual: visual([scale, scale], 1.0),
+        blend_mode: BlendMode::Normal,
+    }));
+    let output = renderer.render_layers(size, &layers).expect("draws");
+    read_stored(renderer, &output)
+}
+
+fn cpu_stack(cpu: &CpuRenderer, transparent_layers: usize, space: BlendSpace) -> Vec<[u16; 4]> {
+    let size = stacked_size();
+    let picture = CpuSource::image(Arc::new(
+        CpuImage::from_premultiplied_rgba8(size, &gradient(size)).expect("picture"),
+    ));
+    let clear = CpuSource::image(Arc::new(
+        CpuImage::from_premultiplied_rgba8(
+            size,
+            &vec![0; size.width as usize * size.height as usize * 4],
+        )
+        .expect("picture"),
+    ));
+    let mut graph = RenderGraph::new(size);
+    graph.set_blend_space(space);
+    let mut layers = vec![GraphLayer {
+        source: graph.add_source(SourceView::cpu(&picture)),
+        visual: visual([1.0, 1.0], 1.0),
+        blend_mode: BlendMode::Normal,
+    }];
+    for _ in 0..transparent_layers {
+        layers.push(GraphLayer {
+            source: graph.add_source(SourceView::cpu(&clear)),
+            visual: visual([1.0, 1.0], 1.0),
+            blend_mode: BlendMode::Normal,
+        });
+    }
+    let output = graph.add_composite(layers).expect("composite");
+    graph.set_output(output).expect("output");
+    match cpu.execute_graph(&graph).expect("CPU draws").pixels() {
+        Pixels::Half(pixels) => pixels.clone(),
+        Pixels::Unorm8(_) => panic!("a composite stores halves"),
+    }
+}
+
+#[test]
+fn transparent_layers_leave_the_stored_backdrop_unchanged() {
+    let _lock = gpu_test_lock();
+    for space in [BlendSpace::LinearLight, BlendSpace::SrgbEncoded] {
+        let mut renderer = Renderer::new(adapter_gpu());
+        if renderer.intermediate_format() != wgpu::TextureFormat::Rgba16Float {
+            eprintln!("skipped: the adapter's intermediate is not half float");
+            return;
+        }
+        renderer.blend_space = space;
+        // Canvas-size layers draw one pass each; smaller ones batch through the loop program.
+        for scale in [1.0, 0.6] {
+            let base = gpu_stack(&renderer, 0, scale);
+            for count in [1, 4, 8, 16, 32] {
+                let stacked = gpu_stack(&renderer, count, scale);
+                let changed = base
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .zip(stacked.as_chunks::<8>().0)
+                    .filter(|(a, b)| a != b)
+                    .count();
+                assert_eq!(
+                    changed, 0,
+                    "{space:?} scale {scale}: {count} transparent layers changed {changed} stored pixels"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn transparent_layers_leave_the_cpu_backdrop_unchanged() {
+    let cpu = CpuRenderer::new(1);
+    for space in [BlendSpace::LinearLight, BlendSpace::SrgbEncoded] {
+        let base = cpu_stack(&cpu, 0, space);
+        for count in [1, 4, 8, 16, 32] {
+            assert_eq!(
+                base,
+                cpu_stack(&cpu, count, space),
+                "{space:?} {count} layers"
+            );
+        }
+    }
 }

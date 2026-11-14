@@ -413,7 +413,8 @@ fn composite_layer(
         }
     }
     let source = sample_source(input, index, looped);
-    if source.coverage <= 0.0 {
+    // A transparent source leaves the backdrop in every mode; re-encoding it would lose a step.
+    if source.coverage <= 0.0 || source.color.a <= 0.0 {
         return backdrop;
     }
     let color = composite(backdrop, source.color, batch.layers[index].blend.x);
