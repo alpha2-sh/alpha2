@@ -187,12 +187,7 @@ impl CpuRenderer {
         let image = outputs[plan.output.index]
             .take()
             .ok_or(GraphError::SourceOutput)?;
-        if !inserts.is_empty() {
-            let mut cache = self.lock_cache();
-            for (key, image, pinned) in &inserts {
-                cache.insert(*key, image, *pinned);
-            }
-        }
+        self.keep_results(cached.clears, &inserts);
         self.stats.graphs.fetch_add(1, Ordering::Relaxed);
         self.stats.nodes.fetch_add(drawn, Ordering::Relaxed);
         add_elapsed(&self.stats.render_micros, started);
@@ -332,6 +327,24 @@ impl CpuRenderer {
     }
 
     /// Result-cache lookups, as the GPU executor's `cached_results`.
+    /// Stores drawn results unless the cache was cleared since `clears` was read with the lookups;
+    /// mirrors `Renderer::complete_graph_work`.
+    pub(crate) fn keep_results(
+        &self,
+        clears: u64,
+        inserts: &[(RenderCacheKey, Arc<CpuImage>, bool)],
+    ) {
+        if inserts.is_empty() {
+            return;
+        }
+        let mut cache = self.lock_cache();
+        if cache.clears() == clears {
+            for (key, image, pinned) in inserts {
+                cache.insert(*key, image, *pinned);
+            }
+        }
+    }
+
     fn cached_results(
         &self,
         graph: &RenderGraph<'_>,
@@ -344,6 +357,7 @@ impl CpuRenderer {
             hits: vec![None; count],
             store: vec![None; count],
             needed: vec![true; count],
+            clears: 0,
         };
         if graph.intents.iter().all(Option::is_none) {
             return cached;
@@ -352,6 +366,7 @@ impl CpuRenderer {
         if !cache.enabled() {
             return cached;
         }
+        cached.clears = cache.clears();
         let eligibility = graph.eligibility();
         let (mut hits, mut misses, mut ineligible) = (0, 0, 0);
         cached.needed = vec![false; count];
@@ -396,6 +411,8 @@ struct CachedResults {
     hits: Vec<Option<Arc<CpuImage>>>,
     store: Vec<Option<(RenderCacheKey, bool)>>,
     needed: Vec<bool>,
+    /// The cache's clear count read with the lookups.
+    clears: u64,
 }
 
 fn output(outputs: &[Option<Arc<CpuImage>>], node: RenderNodeId) -> &CpuImage {

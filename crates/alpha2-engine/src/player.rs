@@ -177,6 +177,7 @@ impl<I> Player<I> {
             self.quality.max_filter_samples,
             self.quality.motion_blur_subframes,
         );
+        let epoch = renderer.content_epoch();
         let built = renderer.build_frame_graph(size, &frame, frames)?;
         if let Some(graph) = built.graph {
             let key = match graph.output().map(|output| graph.cache_eligibility(output)) {
@@ -192,8 +193,9 @@ impl<I> Player<I> {
             if !unchanged {
                 let texture = renderer.render_frame_graph(&graph, &built.pending)?;
                 self.last_frame = Some((time, texture));
-                // Read after the render, which may itself have cleared the result cache.
-                self.shown = key.map(|key| (size, key, renderer.content_epoch()));
+                // The epoch from before the build, so a clear while the frame was built or drawn
+                // (another thread's, or the render's own) makes the next frame draw again.
+                self.shown = key.map(|key| (size, key, epoch));
             }
             let (presented_time, texture) =
                 self.last_frame.as_mut().ok_or(EngineError::OutOfRange)?;

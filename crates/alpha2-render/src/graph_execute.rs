@@ -19,6 +19,8 @@ pub(crate) struct EncodedGraph {
     /// Results to keep after the submission is accepted; keeping them earlier could leave
     /// unwritten textures after a failure.
     cache_inserts: Vec<(RenderCacheKey, RenderedTexture, bool)>,
+    /// The result cache's clear count at lookup; a later clear drops `cache_inserts`.
+    cache_clears: u64,
     uniforms: UniformArenaLease,
     pending_timings: Vec<PendingEffectTiming>,
     encoded_nodes: u64,
@@ -405,6 +407,7 @@ impl Renderer {
         Ok(EncodedGraph {
             texture,
             cache_inserts,
+            cache_clears: cached.clears,
             uniforms,
             pending_timings,
             encoded_nodes,
@@ -437,6 +440,7 @@ impl Renderer {
         let EncodedGraph {
             texture,
             cache_inserts,
+            cache_clears,
             uniforms,
             pending_timings,
             encoded_nodes,
@@ -445,8 +449,11 @@ impl Renderer {
         uniforms.recycle();
         if !cache_inserts.is_empty() {
             let mut cache = self.lock_result_cache();
-            for (key, result, pinned) in &cache_inserts {
-                cache.insert(*key, result, *pinned);
+            // A clear since the lookup may have changed what these results should show.
+            if cache.clears() == cache_clears {
+                for (key, result, pinned) in &cache_inserts {
+                    cache.insert(*key, result, *pinned);
+                }
             }
         }
         crate::diagnostics::record_graph_work(
@@ -556,6 +563,8 @@ struct CachedResults {
     hits: Vec<Option<RenderedTexture>>,
     store: Vec<Option<(RenderCacheKey, bool)>>,
     needed: Vec<bool>,
+    /// The cache's clear count read with the lookups.
+    clears: u64,
 }
 
 impl Renderer {
@@ -573,6 +582,7 @@ impl Renderer {
             hits: vec![None; count],
             store: vec![None; count],
             needed: vec![true; count],
+            clears: 0,
         };
         if graph.intents.iter().all(Option::is_none) {
             return cached;
@@ -581,6 +591,7 @@ impl Renderer {
         if !cache.enabled() {
             return cached;
         }
+        cached.clears = cache.clears();
         let eligibility = graph.eligibility();
         let (mut hits, mut misses, mut ineligible) = (0, 0, 0);
         // From the output down: look a node up only if still needed; a hit's inputs are then needed
