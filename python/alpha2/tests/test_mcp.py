@@ -209,7 +209,8 @@ MALFORMED: dict[str, tuple[str, Any, str]] = {
         "tool error",
     ),
     "a tool name that is a list": (raw_call(["describe_project"], {}), 1, "-32602"),
-    "a line nested too deep to parse": ("[" * 100_000 + "]" * 100_000, None, "-32700"),
+    # A parser without a nesting limit (Python 3.15) reads it and finds no request instead.
+    "a line nested too deep to parse": ("[" * 100_000 + "]" * 100_000, None, "-32700|-32600"),
     "a ping whose id is a lone surrogate": (
         '{"jsonrpc":"2.0","id":"\\ud800","method":"ping"}',
         "\ud800",
@@ -249,7 +250,7 @@ def test_every_malformed_request_is_answered_and_the_server_keeps_serving(
     if outcome == "result":
         assert "result" in first and not first["result"].get("isError")
     elif outcome.startswith("-"):
-        assert first["error"]["code"] == int(outcome)
+        assert first["error"]["code"] in {int(code) for code in outcome.split("|")}
     else:
         assert first["result"]["isError"] is True
         if outcome == "INTERNAL":
