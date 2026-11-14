@@ -93,6 +93,12 @@ All notable changes to this project are documented in this file.
   or the crate's encode sinks wrote past a buffer the same way.
 - Video stored as red, green and blue planes at 9 to 15 bits (for example FFV1 `gbrp10le`) is
   drawn at its full level on both renderers; it rendered almost black.
+- A compose spec without a template header keeps `{{` in its text, paths and data as written;
+  only its template nodes are expanded, and a `$if`, `$switch`, `$each` or `$param` object outside
+  a template is refused with its path. Data bound into a template is no longer interpolated again
+  when the spec is compiled.
+- A video that loops in compose (`loop`, `when_short: "loop"` or a `longest_loop` grid cell)
+  refuses a `speed` other than 1; the speed was silently ignored.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

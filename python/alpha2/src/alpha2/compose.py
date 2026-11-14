@@ -412,7 +412,8 @@ def Media(
     in a comparison grid. ``when_short`` (``freeze``, ``loop``, ``stretch``, ``blank``,
     ``error``) and ``when_long`` (``trim``, ``stretch``, ``error``) say what a video does when its
     node outlasts it or it outlasts its node. At a
-    ``speed`` other than 1 its sound keeps its pitch unless ``preserve_pitch`` is false."""
+    ``speed`` other than 1 its sound keeps its pitch unless ``preserve_pitch`` is false; a video
+    that loops (``loop``, ``when_short="loop"`` or a ``longest_loop`` grid) takes only speed 1."""
     return _node(
         "media",
         **_rename_loop(

@@ -8,8 +8,8 @@
 //! [`Facts`], gathered by a binding from [`requirements`]. The same spec, facts, fonts and
 //! compiler version give a byte-identical project.
 //!
-//! The spec is data without logic (no loops, conditions or expressions); components that take
-//! any number of inputs are Rust code here.
+//! A spec has no logic. A [`template`] adds parameters, `$if`, `$switch`, `$each` and `{{name}}`,
+//! which binding removes. Components that take any number of inputs are Rust code here.
 
 mod compile;
 mod de;

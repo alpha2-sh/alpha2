@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::{Facts, compile_json, requirements_json};
+use crate::{Facts, bind_json, compile_json, requirements_json};
 
 const SECOND: i64 = 120_000;
 
@@ -469,6 +469,82 @@ fn requirements_list_each_file_once_with_its_kind() {
         })
     );
     assert!(serde_json::from_str::<Facts>("{}").is_ok());
+}
+
+fn holds_string(value: &Value, wanted: &str) -> bool {
+    match value {
+        Value::String(text) => text == wanted,
+        Value::Array(items) => items.iter().any(|item| holds_string(item, wanted)),
+        Value::Object(object) => object.values().any(|item| holds_string(item, wanted)),
+        _ => false,
+    }
+}
+
+fn text_spec(text: &str) -> Value {
+    json!({"duration": 1, "body": {"type": "text", "text": text}})
+}
+
+fn headline_template(text: &str) -> String {
+    json!({
+        "compose_version": 1,
+        "template": {"id": "acme/line", "version": 1, "kind": "video"},
+        "params": [{"name": "headline", "type": "text"}],
+        "duration": 1,
+        "body": {"type": "text", "text": text},
+    })
+    .to_string()
+}
+
+fn bound_text(template: &str, headline: &str) -> Value {
+    let data = json!({ "headline": headline }).to_string();
+    serde_json::from_str(&bind_json(template, &data, "{}").expect("binds")).expect("JSON")
+}
+
+#[test]
+fn a_plain_spec_keeps_double_braces_in_its_text_and_paths() {
+    let compiled = compile(&text_spec("Use {{name}} here"));
+    assert!(holds_string(&compiled["project"], "Use {{name}} here"));
+    assert_eq!(compiled["warnings"], json!([]));
+    assert!(compile_json(&text_spec("a {{ b").to_string(), &facts().to_string(), &[]).is_ok());
+
+    let spec = json!({"duration": 1, "body": {"type": "media", "path": "Use {{name}} here.jpg"}});
+    let needs: Value =
+        serde_json::from_str(&requirements_json(&spec.to_string()).expect("parses")).expect("JSON");
+    assert_eq!(needs["media"][0]["path"], "Use {{name}} here.jpg");
+}
+
+#[test]
+fn bound_data_is_not_interpolated_again_by_compile() {
+    let template = headline_template("{{headline}}");
+    let bound = bound_text(&template, "50% off {{today}}");
+    assert_eq!(bound["body"]["text"], "50% off {{today}}");
+    assert!(holds_string(
+        &compile(&bound)["project"],
+        "50% off {{today}}"
+    ));
+    let bound = bound_text(&template, "smile {{ :)");
+    assert!(holds_string(&compile(&bound)["project"], "smile {{ :)"));
+}
+
+#[test]
+fn an_escaped_brace_survives_bind_then_compile() {
+    let bound = bound_text(&headline_template("{{{{x}} and {{headline}}"), "Hi");
+    assert_eq!(bound["body"]["text"], "{{x}} and Hi");
+    assert!(holds_string(&compile(&bound)["project"], "{{x}} and Hi"));
+}
+
+#[test]
+fn a_plain_spec_refuses_template_directives_and_expands_template_nodes() {
+    let error = compile_error(
+        &json!({"duration": 1, "body": {"type": "stack", "children": [
+            {"type": "color", "color": "#ff0000"},
+            {"$if": "x", "then": {"type": "color", "color": "#00ff00"}},
+        ]}}),
+    );
+    assert!(error.starts_with("spec.body.children[1]"), "{error}");
+
+    let title = compile(&json!({"duration": 1, "body": {"type": "title", "text": "50% {{off}}"}}));
+    assert!(holds_string(&title["project"], "50% {{off}}"));
 }
 
 #[test]
@@ -1429,4 +1505,46 @@ fn a_video_shorter_or_longer_than_its_node_does_what_it_says() {
     assert_eq!(span(&hurried[0], "source_range"), 31 * SECOND);
     let refused = video_clips(&json!({"duration": 10, "when_long": "error"})).expect_err("refused");
     assert!(refused.contains("longer"), "{refused}");
+}
+
+#[test]
+fn a_looping_video_refuses_a_speed_other_than_one() {
+    // grid1.mp4 lasts 31 s, grid4.mp4 34 s.
+    for fields in [
+        json!({"duration": 62, "loop": true, "speed": 2}),
+        json!({"duration": 62, "when_short": "loop", "speed": 2}),
+        json!({"loop": true, "speed": 2}),
+    ] {
+        let error = video_clips(&fields).expect_err("refused");
+        assert!(error.starts_with("spec.body.speed: "), "{error}");
+    }
+    let grid = |speed: f64| {
+        json!({"body": {"type": "grid", "length": "longest_loop", "children": [
+            {"type": "media", "path": "grid1.mp4", "speed": speed},
+            {"type": "media", "path": "grid4.mp4"},
+        ]}})
+    };
+    let error = compile_error(&grid(2.0));
+    assert!(
+        error.starts_with("spec.body.children[0].speed: "),
+        "{error}"
+    );
+
+    let looped = video_clips(&json!({"duration": 62, "loop": true})).expect("compiles");
+    assert_eq!(looped[0]["time_map"]["type"], "loop");
+    let faster = video_clips(&json!({"speed": 2})).expect("compiles");
+    let span = |clip: &Value, field: &str| {
+        clip[field]["end"].as_i64().unwrap() - clip[field]["start"].as_i64().unwrap()
+    };
+    assert_eq!(
+        span(&faster[0], "source_range"),
+        2 * span(&faster[0], "timeline_range")
+    );
+    // At half speed grid1.mp4 is the longest cell, so it plays once and does not loop.
+    let slower = &visual_clips(&compile(&grid(0.5)))[0];
+    assert_eq!(slower["time_map"]["type"], "forward");
+    assert_eq!(
+        span(slower, "timeline_range"),
+        2 * span(slower, "source_range")
+    );
 }
