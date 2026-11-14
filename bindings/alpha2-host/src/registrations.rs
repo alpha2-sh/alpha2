@@ -69,6 +69,7 @@ impl Registrations {
             live.get(key)
                 .is_some_and(|held| held.users > 0 && held.identity != *identity)
         }) {
+            let _idle = crate::heartbeat::request_idle();
             live = self
                 .released
                 .wait(live)

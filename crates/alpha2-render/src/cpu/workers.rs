@@ -4,6 +4,49 @@
 /// Approximate pixels per band: enough to amortize scheduling, small enough to stay in cache.
 const BAND_PIXELS: usize = 16_384;
 
+type Progress = std::sync::Arc<dyn Fn() + Send + Sync>;
+
+std::thread_local! {
+    static BAND_PROGRESS: std::cell::RefCell<Option<Progress>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Calls `progress` once per band of every pass the CPU renderer draws for the calling thread,
+/// from whichever thread draws the band, until the guard drops. A watcher of the caller then sees
+/// a long frame progress.
+#[must_use = "the report ends when the guard drops"]
+pub fn report_band_progress(progress: Progress) -> BandProgress {
+    let previous = BAND_PROGRESS.with(|current| current.replace(Some(progress)));
+    BandProgress {
+        previous,
+        thread: std::marker::PhantomData,
+    }
+}
+
+/// Ends a [`report_band_progress`] report, restoring the one before it.
+pub struct BandProgress {
+    previous: Option<Progress>,
+    thread: std::marker::PhantomData<*const ()>,
+}
+
+impl Drop for BandProgress {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        BAND_PROGRESS.with(|current| {
+            current.replace(previous);
+        });
+    }
+}
+
+fn band_progress() -> impl Fn() + Send + Sync {
+    let progress = BAND_PROGRESS.with(|current| current.borrow().clone());
+    move || {
+        if let Some(progress) = &progress {
+            progress();
+        }
+    }
+}
+
 /// The threads one CPU renderer draws with.
 pub(crate) struct Workers {
     #[cfg(not(target_arch = "wasm32"))]
@@ -87,6 +130,11 @@ impl Workers {
             return;
         }
         let rows = self.band_rows(width);
+        let progress = band_progress();
+        let draw = |row, chunk: &mut [T]| {
+            progress();
+            draw(row, chunk);
+        };
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(pool) = &self.pool {
             use rayon::prelude::*;
@@ -148,6 +196,11 @@ impl Workers {
         init: impl Fn() -> S + Sync + Send,
         draw: impl Fn(&mut S, usize, &mut [T]) + Sync + Send,
     ) {
+        let progress = band_progress();
+        let draw = |scratch: &mut S, row, chunk: &mut [T]| {
+            progress();
+            draw(scratch, row, chunk);
+        };
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(pool) = &self.pool {
             use rayon::prelude::*;
@@ -223,5 +276,33 @@ impl crate::layout_pack::Bands for Workers {
 
     fn run(&self, count: usize, job: &(dyn Fn(usize) + Sync)) {
         self.for_each(count, job);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn every_band_reports_progress_to_the_calling_threads_watcher_on_any_thread() {
+        let width = 512;
+        let rows = band_rows(width);
+        for threads in [1, 4] {
+            let workers = Workers::new(threads);
+            let reported = Arc::new(AtomicUsize::new(0));
+            let counter = Arc::clone(&reported);
+            let report = report_band_progress(Arc::new(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }));
+            let mut pixels = vec![0_u8; width * rows * 9];
+            workers.bands(&mut pixels, width, |_, chunk| chunk.fill(1));
+            workers.bands_with(&mut pixels, width, || (), |(), _, chunk| chunk.fill(2));
+            assert_eq!(reported.load(Ordering::Relaxed), 18, "{threads} threads");
+            drop(report);
+            workers.bands(&mut pixels, width, |_, chunk| chunk.fill(3));
+            assert_eq!(reported.load(Ordering::Relaxed), 18, "the report ended");
+        }
     }
 }

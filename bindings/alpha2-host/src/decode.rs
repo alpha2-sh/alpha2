@@ -548,6 +548,7 @@ impl DecodeWorker {
     }
 
     pub fn result_timeout(&self, timeout: Duration) -> Result<Option<DecodedFrameSet>, String> {
+        crate::heartbeat::beat_request();
         self.check_status()?;
         let frames = self
             .frames
@@ -621,6 +622,7 @@ impl DecodeWorker {
     /// ([`crate::protocol::HARDWARE_DECODE_STALL_MARKER`] and `HARDWARE_STALL` evidence), which
     /// tells a caller whether a software retry can help.
     pub fn check_stall(&self) -> Result<(), String> {
+        crate::heartbeat::beat_request();
         let Some((shard, stalled_for, hardware, activity)) = self
             .heartbeats
             .iter()

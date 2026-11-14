@@ -178,6 +178,7 @@ impl Host {
         codec: alpha2_native::NativeVideoCodec,
         pinned: Option<&str>,
     ) -> Result<(HardwareEncodeDevice, HardwareEncodeCapability), GpuOutputRefusal> {
+        crate::heartbeat::request_step(crate::heartbeat::RequestSide::Output, "encoder probe");
         // macOS has one encoder, whose codec is checked below.
         let asked = cfg!(any(target_os = "windows", target_os = "linux")).then_some(codec);
         let device = self.hardware_encode_device();
@@ -311,6 +312,7 @@ impl Host {
         .map_err(GpuEncodeOutcome::Unavailable)?;
 
         let open_started = Instant::now();
+        crate::heartbeat::request_step(crate::heartbeat::RequestSide::Output, "encoder open");
         let (session, mut input) = device
             .open(&HardwareEncodeRequest {
                 width: size.width,
@@ -506,6 +508,10 @@ impl Host {
                         .audio_needs(snapshot, absolute, count)
                         .map_err(error_message)?;
                     let decode_started = Instant::now();
+                    crate::heartbeat::request_step(
+                        crate::heartbeat::RequestSide::Input,
+                        "audio windows",
+                    );
                     sources
                         .prepare(&needs, &cancel)
                         .map_err(crate::audio::window_error_message)?;

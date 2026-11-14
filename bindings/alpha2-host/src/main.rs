@@ -1341,6 +1341,7 @@ fn serve(host: &mut Option<Host>, options: ServeOptions) -> Result<(), HostError
     let out = Arc::new(Responder::claimed_stdout());
     let lifecycle = Arc::new(Lifecycle::new(options.limits));
     lifecycle::install(&lifecycle, &out);
+    heartbeat::supervise_requests(request_stalled);
     install_termination();
     if let Err(error) = alpha2_os::watch_parent() {
         alpha2_os::diagnostic!(
@@ -1575,7 +1576,14 @@ fn dispatch<'scope>(
             Err(_) => refused_export,
         };
         // Taken first, so a request that runs alone answers before the next one makes the device.
-        slots.acquire();
+        // A request thread the supervisor left never frees its slot.
+        if !slots.acquire_unless(&heartbeat::request_thread_left) {
+            let reason = lifecycle
+                .draining_since()
+                .map_or(DrainReason::InputClosed, |(reason, _)| reason);
+            refuse_retiring(out, &request_id, is_export, reason, &lifecycle)?;
+            continue;
+        }
         let device = if needs_host {
             match serving.device() {
                 Ok(device) => Some(device),
@@ -1683,6 +1691,9 @@ impl RequestWork {
         // Until the answer is written, a termination waits for this request instead of ending the
         // process.
         let guard = termination::terminations().begin_request(&request_id);
+        let (side, step) = request_start(envelope.as_ref().ok());
+        let watch =
+            heartbeat::watch_request(&request_id, Some(guard.sequence()), is_export, side, step);
         let mut ended = RequestEnd {
             lifecycle: &lifecycle,
             ended: false,
@@ -1705,18 +1716,7 @@ impl RequestWork {
             },
             Ok(request) => match host.as_mut() {
                 Some(host) => host.handle(request, &mut |progress| {
-                    let mut event = json!({
-                        "protocolVersion": PROTOCOL_VERSION,
-                        "type": "progress",
-                        "requestId": request_id,
-                        "phase": progress.phase.as_str(),
-                        "completed": progress.completed,
-                        "total": progress.total,
-                    });
-                    if progress.restarted {
-                        event["restarted"] = json!(true);
-                    }
-                    out.send(&event)
+                    out.send(&progress_event(&request_id, &progress))
                 }),
                 None => Err(missing()),
             },
@@ -1750,6 +1750,11 @@ impl RequestWork {
             .unwrap_or_default();
         // Its effects and resources go back before the answer, for the next request.
         drop(host);
+        if !watch.claim_answer() {
+            // The supervisor answered it as stuck; the host retires.
+            return Ok(());
+        }
+        heartbeat::request_step(heartbeat::RequestSide::Output, "answer");
         ended.ended = true;
         answer(
             &lifecycle,
@@ -1760,10 +1765,78 @@ impl RequestWork {
             &attachments,
             unusable,
         )?;
+        drop(watch);
         // A termination ends the process here, once the last answer is out.
         drop(guard);
         Ok(())
     }
+}
+
+fn progress_event(request_id: &str, progress: &crate::protocol::Progress) -> Value {
+    let mut event = json!({
+        "protocolVersion": PROTOCOL_VERSION,
+        "type": "progress",
+        "requestId": request_id,
+        "phase": progress.phase.as_str(),
+        "completed": progress.completed,
+        "total": progress.total,
+    });
+    if progress.restarted {
+        event["restarted"] = json!(true);
+    }
+    event
+}
+
+/// The side and name of a request's first step, before it reports one.
+fn request_start(
+    request: Option<&crate::protocol::Request>,
+) -> (heartbeat::RequestSide, &'static str) {
+    use crate::protocol::Request;
+    match request {
+        Some(Request::Compose(_) | Request::Edit(_)) => {
+            (heartbeat::RequestSide::Compute, "compute")
+        }
+        Some(Request::Capabilities { .. }) => (heartbeat::RequestSide::Output, "capabilities"),
+        _ => (heartbeat::RequestSide::Input, "prepare"),
+    }
+}
+
+/// Answers a request the supervisor found stuck in one step, stops what it runs, and retires
+/// the host: the stuck thread never returns, so [`retire`] ends the process. On the command line
+/// it reports the error and exits.
+fn request_stalled(watch: &heartbeat::RequestWatch, stalled_for: Duration) {
+    heartbeat::leave_request_thread();
+    if let Some(sequence) = watch.sequence {
+        termination::terminations().stop_for_recorded_cause(Some(sequence));
+    }
+    let message = format!(
+        "the request was stuck in its {} step for {} ms, past the {} ms limit; the host retires",
+        watch.step(),
+        stalled_for.as_millis(),
+        heartbeat::request_stall_limit().as_millis()
+    );
+    let code = termination::requested().map_or(1, alpha2_os::Termination::exit_code);
+    let Some((lifecycle, out)) = lifecycle::served() else {
+        alpha2_os::diagnostic!("alpha2-host: {message}");
+        alpha2_os::exit_without_handlers(code);
+    };
+    // Also bounds a write that blocks: the answer, or the dispatcher's.
+    let deadline = termination::retire_grace().saturating_add(heartbeat::STALL_POLL);
+    let _ = std::thread::Builder::new()
+        .name("alpha2-watch-deadline".to_owned())
+        .spawn(move || {
+            std::thread::sleep(deadline);
+            alpha2_os::exit_without_handlers(code);
+        });
+    let side = watch.side();
+    let mut error = HostError::new(side.code(), message);
+    if watch.export {
+        let failure =
+            crate::failure::minimal_failure_json(error.code, &error.message, None, watch.phase());
+        error = error.with_failure(failure);
+    }
+    let _ = lifecycle.drain(DrainReason::ThreadsAbandoned, out);
+    let _ = write_answer(out, &watch.id, Err(error), &[], lifecycle);
 }
 
 /// A request the host stopped because it retires is answered `CANCELLED` with
@@ -1833,15 +1906,21 @@ impl Slots {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn acquire(&self) {
+    /// Waits for a free slot and takes it, or returns false once `stop` says so.
+    fn acquire_unless(&self, stop: &dyn Fn() -> bool) -> bool {
         let mut state = self.lock();
         while state.0 >= self.limit {
+            if stop() {
+                return false;
+            }
             state = self
                 .freed
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
+                .wait_timeout(state, DISPATCH_POLL)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
         }
         state.0 += 1;
+        true
     }
 
     fn release(&self) {

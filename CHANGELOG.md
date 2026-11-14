@@ -398,6 +398,11 @@ All notable changes to this project are documented in this file.
   still setting up when the limit was reached (before, nothing was stopped and the kernel could
   kill the host), and records the cause only on the export it stopped. It reads the page cache
   figures only near the limit.
+- `serve` and the command-line `export` watch each request's own thread: a request that stays in
+  one step (an audio read, the loudness pass, an encoder open, a native plugin call, ...) for three
+  times the stall limit is answered with the code of that step's side (`DECODE_STALLED`,
+  `GPU_TIMEOUT`, `ENCODE_STALLED`, `PLUGIN_LIMIT` or `INTERNAL`) naming the step, and the host
+  retires. Before, a read that never returned left the request unanswered and the host alive.
 
 ## [0.6.0] - 2026-11-08
 

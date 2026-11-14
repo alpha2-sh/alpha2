@@ -117,6 +117,14 @@ pub fn export_cli(args: Vec<String>, host: &mut Option<Host>) -> Result<(), Host
     let (request, output) = export_request(options)?;
     crate::install_termination();
     crate::termination::terminations().hold_busy();
+    crate::heartbeat::supervise_requests(crate::request_stalled);
+    let _watch = crate::heartbeat::watch_request(
+        "cli-export",
+        None,
+        true,
+        crate::heartbeat::RequestSide::Input,
+        "prepare",
+    );
     let host = host.insert(create_host_with(policy, renderer)?);
     let result = host.handle(request, &mut report_progress)?;
     write_stdout(&json!({

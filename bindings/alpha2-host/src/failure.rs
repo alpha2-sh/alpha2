@@ -197,6 +197,7 @@ impl FailureContext {
     }
 
     pub fn enter(&self, phase: ExportPhase, frame: Option<u64>) {
+        crate::heartbeat::request_phase(phase);
         self.phase.set(phase);
         self.frame.set(frame);
     }
@@ -440,6 +441,16 @@ pub fn failure_json(
 
 /// For a start that failed before any device exists; only the build is known.
 pub fn startup_failure_json(host_code: &str, message: &str, native: Option<&str>) -> Value {
+    minimal_failure_json(host_code, message, native, ExportPhase::Prepare)
+}
+
+/// [`startup_failure_json`] at `phase`, for an export answered from outside its thread.
+pub fn minimal_failure_json(
+    host_code: &str,
+    message: &str,
+    native: Option<&str>,
+    phase: ExportPhase,
+) -> Value {
     let mut diagnostics = Map::new();
     diagnostics.insert(
         "environment".to_owned(),
@@ -459,7 +470,7 @@ pub fn startup_failure_json(host_code: &str, message: &str, native: Option<&str>
         host_code,
         message,
         native,
-        (ExportPhase::Prepare, None),
+        (phase, None),
         &GpuDiagnosticSnapshot::default(),
         diagnostics,
     )

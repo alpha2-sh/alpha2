@@ -460,6 +460,11 @@ pub(crate) fn install(lifecycle: &Arc<Lifecycle>, out: &Arc<Responder>) {
     let _ = ANNOUNCED.set((Arc::clone(lifecycle), Arc::clone(out)));
 }
 
+/// What `serve` installed, for a thread that answers outside a request's own.
+pub(crate) fn served() -> Option<&'static (Arc<Lifecycle>, Arc<Responder>)> {
+    ANNOUNCED.get()
+}
+
 /// Writes the `terminating` state message, when `serve` installed one and no other thread holds
 /// the output. Nothing may depend on it: the client may have closed the pipe or stopped reading.
 pub(crate) fn announce_termination() {

@@ -1483,6 +1483,7 @@ impl Host {
         })?;
         let mut texts = TextTextures::new();
         for face in faces {
+            crate::heartbeat::request_step(crate::heartbeat::RequestSide::Compute, "fonts");
             texts
                 .add_font(face.family, face.bytes, face.face_index)
                 .map_err(|error| code_tag("INVALID_INPUT", error.to_string()))?;
@@ -1513,6 +1514,10 @@ impl Host {
                     format!("effect resource {} has no supplied asset path", resource.id),
                 )
             })?;
+            crate::heartbeat::request_step(
+                crate::heartbeat::RequestSide::Input,
+                "effect resources",
+            );
             match resource.kind {
                 alpha2_model::EffectResourceKind::Lut3d => {
                     let bytes = fs::read(path).map_err(|error| {
@@ -1599,6 +1604,10 @@ impl Host {
                     return None;
                 };
                 let effect = definitions.remove(key)?;
+                crate::heartbeat::request_step(
+                    crate::heartbeat::RequestSide::Gpu,
+                    "effect registration",
+                );
                 let refused = match (effect.into_definition(), device.renderer.gpu()) {
                     (Ok(effect), Some(renderer)) => {
                         pollster::block_on(renderer.register_effect(effect))
@@ -2228,6 +2237,7 @@ impl Host {
         // Only now, and only this codec's: an encoder that must be opened to prove it runs (NVENC)
         // is opened only for an export that can use it.
         let inventory_started = Instant::now();
+        crate::heartbeat::request_step(crate::heartbeat::RequestSide::Output, "encoder probe");
         let inventory = alpha2_native::video_encoder_inventory(video_codec);
         let encoder_probe = gpu_probe.saturating_add(inventory_started.elapsed());
         let video_encoder = inventory
@@ -2360,6 +2370,7 @@ impl Host {
             error_message(error)
         };
         let open_started = Instant::now();
+        crate::heartbeat::request_step(crate::heartbeat::RequestSide::Output, "encoder open");
         let sink = if has_audio {
             NativeExportSink::AudioVideo(
                 NativeAvEncodeSink::create_with_video_encoder_threads(
@@ -2936,6 +2947,10 @@ impl Host {
                         .audio_needs(&snapshot, absolute, count)
                         .map_err(error_message)?;
                     let decode_started = Instant::now();
+                    crate::heartbeat::request_step(
+                        crate::heartbeat::RequestSide::Input,
+                        "audio windows",
+                    );
                     sources
                         .prepare(&needs, &cancel)
                         .map_err(crate::audio::window_error_message)?;
@@ -3547,6 +3562,7 @@ pub(crate) fn normalize_export_audio(
         .map_err(error_message)?;
     let mut measured = 0_usize;
     while measured < frames {
+        crate::heartbeat::request_step(crate::heartbeat::RequestSide::Input, "loudness pass");
         let count = (frames - measured).min(4_096);
         let absolute = start_sample.saturating_add(i64::try_from(measured).unwrap_or(i64::MAX));
         let needs = renderer

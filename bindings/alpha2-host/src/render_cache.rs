@@ -792,6 +792,7 @@ impl RenderCache {
             .ok_or("render cache reader has no thread")?;
         let first = spawn(&first_beat, Some(made))?;
         loop {
+            crate::heartbeat::beat_request();
             match opened.recv_timeout(STALL_POLL) {
                 Ok(Ok(())) => break,
                 Ok(Err(reason)) => {
@@ -892,6 +893,7 @@ impl RenderCache {
                     return None;
                 }
             }
+            crate::heartbeat::beat_request();
             match reader.found.recv_timeout(STALL_POLL) {
                 Ok((found_key, found)) => {
                     reader.arrived.insert(found_key, found);
@@ -969,6 +971,7 @@ impl RenderCache {
                 return;
             }
             writer.progress.wait_past(seen, STALL_POLL);
+            crate::heartbeat::beat_request();
         }
     }
 

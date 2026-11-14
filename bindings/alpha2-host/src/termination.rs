@@ -177,7 +177,6 @@ impl Terminations {
     /// so the export reports that cause, not a cancel: its running exports are cancelled and
     /// those it starts later begin cancelled. Cancels every running export when `request` is
     /// unknown.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
     pub(crate) fn stop_for_recorded_cause(&self, request: Option<u64>) {
         let mut state = self.lock();
         let State {
@@ -296,6 +295,10 @@ pub(crate) struct RequestGuard {
 impl RequestGuard {
     pub(crate) const fn cancelled_before_start(&self) -> bool {
         self.cancelled_before_start
+    }
+
+    pub(crate) const fn sequence(&self) -> u64 {
+        self.sequence
     }
 
     /// The drain reason, when the host stopped this request because it retires.

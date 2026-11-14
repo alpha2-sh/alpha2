@@ -219,6 +219,8 @@ impl Client<'_> {
             .then_some(self.timeout)
             .flatten()
             .map(|timeout| started + timeout);
+        // The client's step, with no deadline of its own for `begin` and `end`.
+        let _idle = crate::heartbeat::request_idle();
         loop {
             if self.cancel.is_cancelled() {
                 return Err(HostError::new(
@@ -368,6 +370,7 @@ fn run_client(
         match session.next() {
             Step::Need(need) => match &need {
                 Need::SourceFrame { .. } | Need::TimelineFrame { .. } => {
+                    extract_media_step();
                     match supplier.frame(&need).map_err(HostError::classify)? {
                         Some(frame) => session
                             .supply_video(frame)
@@ -378,6 +381,7 @@ fn run_client(
                     }
                 }
                 Need::SourceAudio { .. } | Need::TimelineAudio { .. } => {
+                    extract_media_step();
                     let block = supplier.audio(&need).map_err(HostError::classify)?;
                     session
                         .supply_audio(block)
@@ -617,7 +621,14 @@ pub fn handle(
     };
     let (mut sets, waited) = match plugin.as_mut() {
         Some(plugin) => (
-            run_plugin(session, &mut supplier, plugin, out, &request_id, &cancel)?,
+            run_plugin(
+                session,
+                &mut supplier,
+                (plugin.is_native(), plugin),
+                out,
+                &request_id,
+                &cancel,
+            )?,
             Duration::ZERO,
         ),
         None => run_client(
@@ -672,16 +683,29 @@ fn load_plugin(
     plugins::load(&manifest, request.params.clone(), &policy, &mut fetcher).map_err(plugin_error)
 }
 
+fn extract_media_step() {
+    crate::heartbeat::request_step(crate::heartbeat::RequestSide::Input, "extract media");
+}
+
 /// Runs a plugin the host loaded through the session, with progress and cancel as for a client.
 fn run_plugin(
     mut session: ExtractSession,
     supplier: &mut dyn Supplier,
-    extractor: &mut dyn alpha2_engine::extract::Extractor,
+    (native, extractor): (bool, &mut dyn alpha2_engine::extract::Extractor),
     out: &Responder,
     request_id: &str,
     cancel: &CancelToken,
 ) -> Result<Vec<alpha2_model::DataSet>, HostError> {
     use alpha2_engine::extract::{Emitter, ExtractorError, PassInfo};
+    // A native call is watched as the request's work; a wasm call ends at its own deadline.
+    let call = || {
+        if native {
+            crate::heartbeat::request_step(crate::heartbeat::RequestSide::Plugin, "plugin call");
+            None
+        } else {
+            crate::heartbeat::request_idle()
+        }
+    };
     let failed = |error: ExtractorError| match error.code {
         Some(code) => HostError::new(code, error.message),
         None => HostError::new(
@@ -690,7 +714,9 @@ fn run_plugin(
         ),
     };
     let internal = |error: SessionError| HostError::new("INTERNAL", error.to_string());
+    let called = call();
     extractor.begin(&session.context()).map_err(failed)?;
+    drop(called);
     let mut pass = 0;
     loop {
         if cancel.is_cancelled() {
@@ -702,12 +728,14 @@ fn run_plugin(
         match session.next() {
             Step::Need(need) => match &need {
                 Need::SourceFrame { .. } | Need::TimelineFrame { .. } => {
+                    extract_media_step();
                     match supplier.frame(&need).map_err(HostError::classify)? {
                         Some(frame) => session.supply_video(frame).map_err(internal)?,
                         None => session.supply_end().map_err(internal)?,
                     }
                 }
                 Need::SourceAudio { .. } | Need::TimelineAudio { .. } => {
+                    extract_media_step();
                     let block = supplier.audio(&need).map_err(HostError::classify)?;
                     session.supply_audio(block).map_err(internal)?;
                 }
@@ -717,20 +745,24 @@ fn run_plugin(
                 direction,
             } => {
                 pass = index;
+                let called = call();
                 extractor
                     .pass(&PassInfo {
                         pass: index,
                         direction,
                     })
                     .map_err(failed)?;
+                drop(called);
             }
             Step::Deliver(delivery) => {
                 let mut emitter = Emitter::default();
+                let called = call();
                 match &delivery {
                     Delivery::Video(frame) => extractor.video(frame, &mut emitter),
                     Delivery::Audio(block) => extractor.audio(block, &mut emitter),
                 }
                 .map_err(failed)?;
+                drop(called);
                 emit_into(&mut session, emitter.emits())?;
                 if let Some(progress) = session.progress().get(pass) {
                     out.send(&progress_message(request_id, pass, *progress))?;
@@ -740,7 +772,9 @@ fn run_plugin(
         }
     }
     let mut emitter = Emitter::default();
+    let called = call();
     extractor.end(&mut emitter).map_err(failed)?;
+    drop(called);
     emit_into(&mut session, emitter.emits())?;
     session
         .finish()

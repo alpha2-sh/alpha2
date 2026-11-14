@@ -44,6 +44,7 @@ The host answers each request with one response that carries its `requestId`:
 - While an export runs, the host also writes progress messages: `{"protocolVersion":2,"type":"progress","requestId":"...","phase":"frames","completed":12,"total":30}`. `phase` is `frames` while frames are encoded and `finalizing` once every frame is and the file is being completed. A message with `"restarted": true` and `completed` 0 says the export started over on the readback path, because the GPU-resident encoder rejected a frame on a device that was still usable; the result's `gpuOutputPathFallback` names the encoder, the frame and the reason. The export is finished only when its response arrives.
 - When the host cannot start its GPU device (or, in `hardware-required` decode mode, its decode device) for the first request that needs it, it writes `{"protocolVersion":2,"type":"fatal","error":{...}}` and exits; that request and the ones after it get no response. `conform`, `compose` and `edit` need no GPU. A setting it does not take is `fatal` too, with `INVALID_INPUT`: an unknown `ALPHA2_VIDEO_DECODE` right after `ready`, an unknown `ALPHA2_RENDERER` or an `ALPHA2_GPU_ADAPTER` that names no adapter at the first request that needs a device.
 - When the host's device is lost or a decoder or encoder thread is stuck, the host goes `draining`, answers those it has read but not started with `HOST_RETIRING`, stops the requests it runs and answers them `CANCELLED` with `details.hostRetiring` naming the reason (an export stopped this way leaves no output), and exits. It waits for those answers for the stall limit plus 5 seconds, as a termination does (see [Cancelling](#cancelling)); a request still running then gets no response.
+- A request whose own thread stays in one step for three times the stall limit (120 seconds by default) is answered by the host with the code of that step's side: `DECODE_STALLED` while it reads media (conform, audio, the loudness pass), `GPU_TIMEOUT` while it renders or reads back, `ENCODE_STALLED` while it probes or opens an encoder, encodes, publishes or writes its answer, `PLUGIN_LIMIT` in a native plugin call, `INTERNAL` otherwise. The message names the step and the time; an export's answer carries a `failure` report. The thread never comes back, so the host then retires as for `threads-abandoned`. Waits on a client (an extraction step) or on a bound of their own do not count.
 - The end of standard input means no more requests: the host answers every request it has read, then exits. A client that may cancel keeps standard input open until it has its answer.
 - The process exits with status 0 once it has drained or its input has ended, 70 after a `fatal` with `GPU_INIT_FAILED`, 1 after any other `fatal` and when it retires after `device-lost` or `threads-abandoned`, the status the signal gives after a termination signal (see [Cancelling](#cancelling)), and 101 after a defect outside every request.
 
@@ -335,9 +336,9 @@ A `cancel` without a `target` is answered `INVALID_REQUEST`. The answer to a `ca
 | `HARDWARE_DECODE_UNAVAILABLE` | The decode mode is `hardware-required` and the host cannot decode in hardware. |
 | `GPU_DEVICE_LOST` | The GPU device was lost, or no longer runs the work it is given. |
 | `GPU_DEVICE_HUNG` | The GPU device was lost to the export's own work: a submission shortly before the loss kept the GPU busy for at least half the GPU watchdog (2000 ms, `ALPHA2_GPU_WATCHDOG_MS`), or the platform reported a reset for a command that ran too long. Running it on the GPU again stops the GPU again; `failure.diagnostics.gpuSubmission` names the longest submission (`maxMs`, `watchdogMs`, `frameIndex`, `effects`, and `predictedMs` when its frame was planned). |
-| `GPU_TIMEOUT` | GPU work did not complete in time. |
-| `DECODE_STALLED` | A decoder stopped making progress. |
-| `ENCODE_STALLED` | The encoder or muxer stopped making progress. |
+| `GPU_TIMEOUT` | GPU work did not complete in time, or the request stayed in a render or readback step. |
+| `DECODE_STALLED` | A decoder stopped making progress, or the request stayed in a step that reads media. |
+| `ENCODE_STALLED` | The encoder or muxer stopped making progress, or the request stayed in an output step (an encoder probe or open, the publish, its answer). |
 | `COPY_INELIGIBLE` | `strategy: "require-copy"` and the range cannot be copied. |
 | `GPU_OUTPUT_UNAVAILABLE` | `inputPolicy: "gpu-required"` and the GPU-resident encode path cannot take the export. |
 | `ENCODE_ERROR` | Encoding or muxing failed. |
@@ -359,7 +360,7 @@ A `cancel` without a `target` is answered `INVALID_REQUEST`. The answer to a `ca
 | `PLUGIN_UNSUPPORTED_FEATURE` | The wasm module uses relaxed SIMD, threads, shared memory, more than one memory or 64-bit memory, or imports something other than the host functions. |
 | `PLUGIN_LOAD_FAILED` | The manifest is not one (including a `url` outside its directory), or the artifact did not load (including a native table shorter than this host's or with a null entry). |
 | `PLUGIN_TRAPPED` | The wasm module trapped, or the native plugin caught a panic at its boundary. |
-| `PLUGIN_LIMIT` | A wasm plugin ran past its memory cap or table bound, or a call past its deadline. |
+| `PLUGIN_LIMIT` | A wasm plugin ran past its memory cap or table bound, or a call past its deadline, or a native plugin call did not return within three stall limits. |
 | `HOST_RETIRING` | The host is `draining` and did not start the request; send it to another host. |
 | `INTERNAL` | A defect in the host failed the request. The host answers the requests after it. |
 | `ALPHA2_ERROR` | A failure no other code describes. |

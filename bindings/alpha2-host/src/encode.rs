@@ -1033,6 +1033,7 @@ impl EncodeWorker {
 
     pub fn result(&self) -> Result<EncodeWorkerEvent, String> {
         loop {
+            crate::heartbeat::beat_request();
             match self.results.recv_timeout(STALL_POLL) {
                 Ok(EncodeWorkerEvent::Failed(error)) => return Err(self.failure.cause_or(error)),
                 Ok(event) => return Ok(event),
@@ -1067,6 +1068,7 @@ impl EncodeWorker {
     /// [`crate::protocol::HARDWARE_ENCODE_STALL_MARKER`] and `HARDWARE_STALL` evidence; a software
     /// one is most likely blocked writing its output.
     pub fn check_stall(&self) -> Result<(), String> {
+        crate::heartbeat::beat_request();
         let Some(stalled_for) = self.heartbeat.stuck_past(self.stall_timeout) else {
             return Ok(());
         };

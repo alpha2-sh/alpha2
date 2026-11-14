@@ -270,3 +270,19 @@ fn an_extraction_whose_input_ends_before_an_acknowledgement_is_cancelled() {
     );
     assert_eq!(serving.finish(), Some(0));
 }
+
+#[test]
+fn a_client_that_takes_two_request_stall_limits_over_begin_is_not_stalled() {
+    let _gpu = gpu_test_lock();
+    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_REQUEST_STALL_MS", "500")]);
+    serving.write(&extract("x", 40_000));
+    let (answer, _) = run_client(&mut serving, "x", |seq, _| {
+        if seq == 1 {
+            std::thread::sleep(Duration::from_millis(1000));
+        }
+        None
+    });
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["hostState"], "ready", "{answer}");
+    assert_eq!(serving.finish(), Some(0));
+}

@@ -64,6 +64,7 @@ mod providers;
 mod render_cache;
 mod rendering;
 mod request_isolation;
+mod request_watch;
 mod requests;
 mod stalls;
 mod stills;

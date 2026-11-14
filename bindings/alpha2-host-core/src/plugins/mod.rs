@@ -404,6 +404,7 @@ pub struct PluginExtractor {
     params: serde_json::Map<String, serde_json::Value>,
     plugin: MadeByPlugin,
     transport: Box<dyn Transport>,
+    native: bool,
 }
 
 impl fmt::Debug for PluginExtractor {
@@ -435,6 +436,7 @@ pub fn load(
     }
     let (path, bytes) = read_verified(fetch, &artifact.url, &artifact.sha256, artifact.bytes)?;
     let caps = output_caps(&manifest.descriptor);
+    let native = artifact.kind == ArtifactKind::Cdylib;
     let mut transport: Box<dyn Transport> = match artifact.kind {
         ArtifactKind::Wasm => Box::new(wasm::WasmTransport::new(
             &manifest.id,
@@ -479,10 +481,18 @@ pub fn load(
             artifact_sha256: artifact.sha256.clone(),
         },
         transport,
+        native,
     })
 }
 
 impl PluginExtractor {
+    /// A native library runs in the process with no deadline of its own; a wasm module's calls
+    /// end at the policy's call deadline.
+    #[must_use]
+    pub const fn is_native(&self) -> bool {
+        self.native
+    }
+
     /// What `made_by.plugin` records for data this plugin makes.
     #[must_use]
     pub fn made_by(&self) -> &MadeByPlugin {

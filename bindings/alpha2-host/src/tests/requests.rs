@@ -1774,6 +1774,16 @@ fn serve_standard_input() {
         *crate::termination::TEST_GRACE.lock().expect("grace") =
             Some(Duration::from_millis(milliseconds.parse().expect("ms")));
     }
+    if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_REQUEST_STALL_MS") {
+        *crate::heartbeat::TEST_REQUEST_STALL_LIMIT
+            .lock()
+            .expect("limit") = Some(Duration::from_millis(milliseconds.parse().expect("ms")));
+    }
+    if let Ok(step) = std::env::var("ALPHA2_TEST_REQUEST_STALL_AT") {
+        *crate::heartbeat::INJECT_REQUEST_STALL
+            .lock()
+            .expect("stall") = Some(Box::leak(step.into_boxed_str()));
+    }
     if std::env::var_os("ALPHA2_TEST_REQUEST_PANIC").is_some() {
         crate::compose_request::INJECT_REQUEST_PANIC
             .store(true, std::sync::atomic::Ordering::Relaxed);
