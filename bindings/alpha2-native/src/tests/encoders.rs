@@ -1567,3 +1567,70 @@ fn the_reserve_scales_with_the_budget() {
         "{workstation:?}"
     );
 }
+
+#[test]
+fn an_nvenc_capability_refusal_is_unsuitable_not_absent() {
+    use crate::capabilities::classify_open_failure;
+    for warning in [
+        "Max B-frames 2 exceed 0",
+        "Width 8192 exceeds 4096",
+        "10 bit encode not supported",
+    ] {
+        assert_eq!(
+            classify_open_failure(
+                "hevc_nvenc",
+                "Generic error in an external library",
+                &[
+                    log_line("hevc_nvenc", warning),
+                    log_line("hevc_nvenc", "No capable devices found")
+                ]
+            ),
+            OpenFailureKind::Unsuitable,
+            "{warning}"
+        );
+    }
+}
+
+/// A device limit below the B-frames asked for, emulated by asking for more than any NVENC
+/// device has.
+#[test]
+fn an_nvenc_device_with_fewer_b_frames_opens_without_them() {
+    crate::require_pinned_ffmpeg_for_tests();
+    let ask_for = |b_frames| {
+        crate::capabilities::FORCED_B_FRAMES.with(|forced| forced.set(b_frames));
+    };
+    for (codec, name) in [
+        (NativeVideoCodec::H264, "h264_nvenc"),
+        (NativeVideoCodec::Hevc, "hevc_nvenc"),
+    ] {
+        let Some(candidate) = crate::capabilities::registered_video_encoders(codec)
+            .into_iter()
+            .find(|candidate| candidate.name() == name)
+        else {
+            continue;
+        };
+        if let Err(refusal) = crate::capabilities::probe_open(&candidate, name) {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::Nvenc,
+                "{name} does not encode here: {refusal:?}"
+            );
+            return;
+        }
+        ask_for(Some(16));
+        let probed = crate::capabilities::probe_open(&candidate, name);
+        let path = output_path(&format!("{name}-b-frames")).with_extension("mp4");
+        let _ = fs::remove_file(&path);
+        let mut config = super::av_config(48_000).video;
+        config.codec = codec;
+        config.width = 256;
+        config.height = 144;
+        let sink =
+            NativeVideoEncodeSink::create_with_encoder_threads(&path, config, Some(name), &|_| 1);
+        ask_for(None);
+        probed.expect("the probe opens again without B-frames");
+        let sink = sink.expect("the export opens again without B-frames");
+        assert_eq!(sink.selection().encoder_name, name);
+        drop(sink);
+        let _ = fs::remove_file(&path);
+    }
+}

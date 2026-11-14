@@ -505,6 +505,10 @@ All notable changes to this project are documented in this file.
   software one, and moves on to GL when a listed Vulkan adapter cannot open a device; before,
   the first backend that listed any adapter was the only one tried. When every adapter fails, the
   error names each attempt.
+- An NVENC device that refuses a setting of the request (fewer B-frames than asked, a size above
+  its limit) is reported as unsuitable, not absent, and a device with fewer B-frames than the two
+  alpha2 asks for opens again without B-frames. Before, such a GPU reported no HEVC encoder and the
+  export failed with "no usable hevc encoder". Devices that take two B-frames encode as before.
 
 ## [0.6.0] - 2026-11-08
 

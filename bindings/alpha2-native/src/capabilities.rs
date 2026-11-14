@@ -725,20 +725,26 @@ fn probe_outcome(
 }
 
 /// Encodes one probe frame and classifies a failure from what the encoder logged.
-fn probe_open(
+pub(crate) fn probe_open(
     candidate: &VideoEncoderCandidate,
     name: &str,
 ) -> Result<(), (OpenFailureKind, String)> {
-    let mark = alpha2_ffmpeg_bridge::log_mark();
-    match probe_software_encode(candidate, name, 256, 144, None).0 {
-        None => Ok(()),
-        Some(error) => {
-            let lines = alpha2_ffmpeg_bridge::log_since(mark, &[name]);
-            Err((
-                classify_open_failure(name, &error, &lines),
-                format!("{error}{}", alpha2_ffmpeg_bridge::log_detail(&lines)),
-            ))
+    let mut b_frames = requested_b_frames(name);
+    loop {
+        let mark = alpha2_ffmpeg_bridge::log_mark();
+        let Some(error) = probe_encode_with(candidate, name, 256, 144, None, b_frames).0 else {
+            return Ok(());
+        };
+        let lines = alpha2_ffmpeg_bridge::log_since(mark, &[name]);
+        // A device without B-frames opens once they are off, as the export then opens it.
+        if b_frames > 0 && nvenc_may_refuse_b_frames(name, &error, &lines) {
+            b_frames = 0;
+            continue;
         }
+        return Err((
+            classify_open_failure(name, &error, &lines),
+            format!("{error}{}", alpha2_ffmpeg_bridge::log_detail(&lines)),
+        ));
     }
 }
 
@@ -763,6 +769,9 @@ pub(crate) fn classify_open_failure(
         return match lines.iter().find_map(|line| nvenc_status(&line.text)) {
             Some(10 | 13 | 18 | 21) => OpenFailureKind::Busy,
             Some(1..=5) => OpenFailureKind::Absent,
+            // The capability check warns about each limit the request exceeds, then logs "No
+            // capable devices found": the device is there and refused this request.
+            None if nvenc_capability_refusal(lines) => OpenFailureKind::Unsuitable,
             None if said("No capable devices found") || said("Cannot load") => {
                 OpenFailureKind::Absent
             }
@@ -801,6 +810,44 @@ pub(crate) fn classify_open_failure(
 }
 
 /// The first parenthesized number in an `nvenc_print_error` line.
+/// Whether NVENC's capability check refused a setting of the request (`nvenc.c`
+/// `nvenc_check_capabilities`: "... not supported", "Width 8192 exceeds 4096", "Max B-frames 2
+/// exceed 0").
+fn nvenc_capability_refusal(lines: &[LogLine]) -> bool {
+    lines
+        .iter()
+        .any(|line| line.text.contains(" not supported") || line.text.contains(" exceed"))
+}
+
+/// Whether an NVENC open may have been refused for asking more B-frames than the device has.
+///
+/// The capability check says so in a warning, but a full log ring can lose that line, so a refusal
+/// without an NVENC status or a library load failure (how every capability refusal ends) counts too.
+pub(crate) fn nvenc_may_refuse_b_frames(encoder: &str, error: &str, lines: &[LogLine]) -> bool {
+    let said =
+        |words: &str| error.contains(words) || lines.iter().any(|line| line.text.contains(words));
+    encoder.ends_with("_nvenc")
+        && (said("Max B-frames")
+            || (!said("Cannot load")
+                && lines.iter().all(|line| nvenc_status(&line.text).is_none())))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The B-frames a first open on this thread asks for in place of [`encoder_max_b_frames`].
+    pub(crate) static FORCED_B_FRAMES: std::cell::Cell<Option<i32>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The B-frames a first open of `name` asks for.
+fn requested_b_frames(name: &str) -> i32 {
+    #[cfg(test)]
+    if let Some(forced) = FORCED_B_FRAMES.with(std::cell::Cell::get) {
+        return forced;
+    }
+    encoder_max_b_frames(name)
+}
+
 fn nvenc_status(line: &str) -> Option<u32> {
     line.match_indices('(').find_map(|(start, _)| {
         let rest = &line[start + 1..];
@@ -1427,12 +1474,39 @@ fn open_one_video_encoder(
         .map(|encoder| (encoder, crate::AppliedRateControl::Bitrate, refused, pixels))
 }
 
+/// Opens `candidate` with [`encoder_max_b_frames`], and once more without B-frames when an NVENC
+/// device has fewer than that.
 fn open_video_encoder_context(
     request: &VideoEncoderOpenRequest<'_>,
     candidate: &VideoEncoderCandidate,
     name: &str,
     quantized: Option<&crate::rate_control::MechanismRequest>,
     pixels: alpha2_media::PixelLayout,
+) -> Result<EncoderContext, (NativeEncoderRejection, EncodeError)> {
+    let b_frames = requested_b_frames(name);
+    let mark = alpha2_ffmpeg_bridge::log_mark();
+    match open_context_with(request, candidate, name, quantized, pixels, b_frames) {
+        Err((NativeEncoderRejection::OpenFailed, error))
+            if b_frames > 0
+                && nvenc_may_refuse_b_frames(
+                    name,
+                    &error.to_string(),
+                    &alpha2_ffmpeg_bridge::log_since(mark, &[name]),
+                ) =>
+        {
+            open_context_with(request, candidate, name, quantized, pixels, 0)
+        }
+        opened => opened,
+    }
+}
+
+fn open_context_with(
+    request: &VideoEncoderOpenRequest<'_>,
+    candidate: &VideoEncoderCandidate,
+    name: &str,
+    quantized: Option<&crate::rate_control::MechanismRequest>,
+    pixels: alpha2_media::PixelLayout,
+    b_frames: i32,
 ) -> Result<EncoderContext, (NativeEncoderRejection, EncodeError)> {
     let mut encoder = EncoderContext::from(AVCodecContext::new(&candidate.encoder));
     encoder.set_width(request.width);
@@ -1462,7 +1536,7 @@ fn open_video_encoder_context(
         |quantized| quantized.bit_rate,
     ));
     encoder.set_gop_size(keyframe_interval(request.config.frame_rate));
-    encoder.set_max_b_frames(encoder_max_b_frames(name));
+    encoder.set_max_b_frames(b_frames);
     if request.global_header {
         let flags = encoder.flags | i32::try_from(ffi::AV_CODEC_FLAG_GLOBAL_HEADER).unwrap_or(0);
         encoder.set_flags(flags);
@@ -1820,6 +1894,25 @@ fn probe_software_encode(
     height: u32,
     request: Option<&crate::rate_control::MechanismRequest>,
 ) -> (Option<String>, u32) {
+    probe_encode_with(
+        candidate,
+        name,
+        width,
+        height,
+        request,
+        encoder_max_b_frames(name),
+    )
+}
+
+/// [`probe_software_encode`] asking for `b_frames` B-frames.
+fn probe_encode_with(
+    candidate: &VideoEncoderCandidate,
+    name: &str,
+    width: u32,
+    height: u32,
+    request: Option<&crate::rate_control::MechanismRequest>,
+    b_frames: i32,
+) -> (Option<String>, u32) {
     let Ok(coded_width) = i32::try_from(width) else {
         return (Some("width is out of range".to_owned()), 0);
     };
@@ -1843,7 +1936,7 @@ fn probe_software_encode(
     context.set_framerate(rsmpeg::avutil::ra(30, 1));
     context.set_bit_rate(request.map_or(2_000_000, |request| request.bit_rate));
     context.set_gop_size(12);
-    context.set_max_b_frames(encoder_max_b_frames(name));
+    context.set_max_b_frames(b_frames);
     let options = video_encoder_options(
         ColorMetadata::EXPORT,
         encoder,
