@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alpha2_container::{Packet, TrackInfo, VideoCodec};
-use alpha2_host_core::parameter_sets::vp9_bit_depth;
+use alpha2_host_core::parameter_sets::vp9_format;
 use alpha2_host_core::video_stream::{
     BackendError, BackendFrame, BackendImage, BackendKind, Poll, Submit, VideoBackends,
     VideoDecodeBackend,
@@ -1085,7 +1085,7 @@ impl VideoDecodeBackend for MediaCodecVideo {
     fn submit(&mut self, packet: &Packet) -> Result<Submit, BackendError> {
         if self.depth == Depth::FirstFrame {
             self.depth = Depth::Eight;
-            if vp9_bit_depth(&packet.data).is_some_and(|depth| depth > 8) {
+            if vp9_format(&packet.data).is_some_and(|format| format.bit_depth > 8) {
                 self.restart_ten_bit()?;
             }
         }

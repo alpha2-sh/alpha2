@@ -202,6 +202,7 @@ macro_rules! conformance_tests {
             video_frame_color_is_the_streams,
             video_chroma_siting_is_the_streams,
             video_crop_shows_exactly_the_cropped_columns,
+            video_vp9_without_a_record_decodes_exactly,
             video_pixel_aspect_is_the_streams,
             audio_starts_where_the_stream_starts,
             audio_surround_keeps_the_contract_speaker_order,

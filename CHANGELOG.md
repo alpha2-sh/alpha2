@@ -634,6 +634,9 @@ All notable changes to this project are documented in this file.
   host no longer keeps a busy or lost D3D12VA test encode for the process, and on macOS a
   VideoToolbox probe that times out is not repeated (at most one stuck probe thread). An export's
   `videoEncoderFallbacks` also lists the encoders a probe passed over when another one opened.
+- iOS: VP9 in WebM and Matroska, which carries no `vpcC` record, opens on a device with a VP9
+  decoder: the session opens at the first key frame, from the format it declares. Before, every
+  such track was refused as "an unreadable VP9 configuration".
 
 ## [0.6.0] - 2026-11-08
 

@@ -1,6 +1,6 @@
 //! What H.264 and HEVC sequence parameter sets declare (coded size, cropping, the VUI's aspect
 //! ratio, color and chroma siting) and HEVC VPS layer declarations, read from a stream's sample
-//! description, and the bit depth a VP9 frame header declares.
+//! description, and the format a VP9 frame header declares.
 
 use alpha2_media::{ChromaLocation, ColorMetadata, SampleAspectRatio};
 
@@ -742,18 +742,118 @@ fn skip_short_term_ref_pic_sets(bits: &mut Bits<'_>) -> Option<()> {
     Some(())
 }
 
-/// The bit depth a VP9 frame's uncompressed header declares (VP9 bitstream 6.2): 8 for profiles
-/// 0 and 1, 10 or 12 for profiles 2 and 3. `None` for a frame without a color config (an inter
-/// frame, or one that shows an existing frame) or a header that does not parse.
+/// The picture format a VP9 key frame or intra-only frame declares in its uncompressed header
+/// (VP9 bitstream 6.2).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Vp9Format {
+    /// `Profile`, 0 to 3.
+    pub profile: u8,
+    /// Bits per sample: 8 for profiles 0 and 1, 10 or 12 for profiles 2 and 3.
+    pub bit_depth: u8,
+    /// `subsampling_x` and `subsampling_y`: `(true, true)` is 4:2:0, `(true, false)` 4:2:2.
+    pub subsampling: (bool, bool),
+    /// `color_space` (VP9 7.2.2): 1 BT.601, 2 BT.709, 3 SMPTE 170, 4 SMPTE 240, 5 BT.2020, 7 RGB.
+    pub color_space: u8,
+    /// `color_range`: full range when set.
+    pub full_range: bool,
+    /// Frame width in luma samples.
+    pub width: u32,
+    /// Frame height in luma samples.
+    pub height: u32,
+}
+
+impl Vp9Format {
+    /// A `vpcC` body (VP Codec ISO Media File Format Binding 2.2, version 1) for a stream of
+    /// this format. The color codes are `color`'s when the container declares one, else what
+    /// `color_space` implies, and the level is the lowest whose picture size holds the frame.
+    #[must_use]
+    pub fn vpcc_record(&self, color: Option<ColorMetadata>) -> [u8; 12] {
+        use alpha2_media::{ColorMatrix, ColorPrimaries, TransferFunction};
+        let (primaries, transfer, matrix) = match color {
+            Some(color) => (
+                match color.primaries {
+                    ColorPrimaries::Bt601 => 6,
+                    ColorPrimaries::Bt709 => 1,
+                    ColorPrimaries::Bt2020 => 9,
+                },
+                match color.transfer {
+                    TransferFunction::Bt709 => 1,
+                    TransferFunction::Srgb => 13,
+                    TransferFunction::Pq => 16,
+                    TransferFunction::Hlg => 18,
+                },
+                match color.matrix {
+                    ColorMatrix::Bt601 => 6,
+                    ColorMatrix::Bt709 => 1,
+                    ColorMatrix::Bt2020Ncl => 9,
+                    ColorMatrix::Rgb => 0,
+                },
+            ),
+            None => (
+                2,
+                2,
+                match self.color_space {
+                    1 | 3 => 6,
+                    2 => 1,
+                    4 => 7,
+                    5 => 9,
+                    7 => 0,
+                    _ => 2,
+                },
+            ),
+        };
+        // 0 and 1 are both 4:2:0 (1 sited with luma); 4:4:0 has no code.
+        let chroma = match self.subsampling {
+            (true, true) => 1,
+            (true, false) => 2,
+            (false, _) => 3,
+        };
+        // VP9 Annex A: the largest luma picture size of each level.
+        let samples = u64::from(self.width) * u64::from(self.height);
+        let level = [
+            (36_864, 10),
+            (73_728, 11),
+            (122_880, 20),
+            (245_760, 21),
+            (552_960, 30),
+            (983_040, 31),
+            (2_228_224, 40),
+            (8_912_896, 50),
+            (35_651_584, 60),
+        ]
+        .iter()
+        .find(|(size, _)| samples <= *size)
+        .map_or(62, |(_, level)| *level);
+        [
+            1,
+            0,
+            0,
+            0,
+            self.profile,
+            level,
+            (self.bit_depth << 4) | (chroma << 1) | u8::from(self.full_range),
+            primaries,
+            transfer,
+            matrix,
+            0,
+            0,
+        ]
+    }
+}
+
+/// The format a VP9 frame's uncompressed header declares. `None` for a frame without a color
+/// config (an inter frame, or one that shows an existing frame) or a header that does not parse.
+/// Intra-only frames of profile 0 carry no color config and are 8-bit 4:2:0 BT.601.
 #[must_use]
-pub fn vp9_bit_depth(frame: &[u8]) -> Option<u32> {
+pub fn vp9_format(frame: &[u8]) -> Option<Vp9Format> {
     const SYNC_CODE: u32 = 0x49_83_42;
+    const CS_RGB: u8 = 7;
     let mut bits = Bits::new(frame);
     if bits.read(2)? != 2 {
         return None;
     }
     let low = bits.read(1)?;
-    let profile = (bits.read(1)? << 1) | low;
+    let profile = u8::try_from((bits.read(1)? << 1) | low).ok()?;
     if profile == 3 {
         bits.skip(1)?;
     }
@@ -763,25 +863,56 @@ pub fn vp9_bit_depth(frame: &[u8]) -> Option<u32> {
     let key_frame = !bits.flag()?;
     let show_frame = bits.flag()?;
     let error_resilient = bits.flag()?;
-    if !key_frame {
+    let mut format = Vp9Format {
+        profile,
+        bit_depth: 8,
+        subsampling: (true, true),
+        color_space: 1,
+        full_range: false,
+        width: 0,
+        height: 0,
+    };
+    let intra_only = if key_frame {
+        false
+    } else {
         let intra_only = !show_frame && bits.flag()?;
         if !error_resilient {
             bits.skip(2)?;
         }
-        if !intra_only || bits.read(24)? != SYNC_CODE {
+        if !intra_only {
             return None;
         }
-        // Intra-only frames of profile 0 carry no color config and are 8-bit.
-        if profile == 0 {
-            return Some(8);
-        }
-    } else if bits.read(24)? != SYNC_CODE {
+        true
+    };
+    if bits.read(24)? != SYNC_CODE {
         return None;
     }
-    if profile < 2 {
-        return Some(8);
+    if !intra_only || profile > 0 {
+        if profile >= 2 {
+            format.bit_depth = if bits.flag()? { 12 } else { 10 };
+        }
+        format.color_space = u8::try_from(bits.read(3)?).ok()?;
+        let four_four_four = profile == 1 || profile == 3;
+        if format.color_space == CS_RGB {
+            format.full_range = true;
+            if four_four_four {
+                format.subsampling = (false, false);
+                bits.skip(1)?;
+            }
+        } else {
+            format.full_range = bits.flag()?;
+            if four_four_four {
+                format.subsampling = (bits.flag()?, bits.flag()?);
+                bits.skip(1)?;
+            }
+        }
     }
-    Some(if bits.flag()? { 12 } else { 10 })
+    if intra_only {
+        bits.skip(8)?; // refresh_frame_flags
+    }
+    format.width = bits.read(16)? + 1;
+    format.height = bits.read(16)? + 1;
+    Some(format)
 }
 
 fn unescape(escaped: &[u8]) -> Vec<u8> {
@@ -851,9 +982,11 @@ impl<'a> Bits<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HevcLayers, ParameterSetCodec, avc_decoder_config, crop_window, hevc_decoder_config,
-        hevc_layers, leading_crop, length_prefixed_units, sequence_facts, vp9_bit_depth,
+        HevcLayers, ParameterSetCodec, Vp9Format, avc_decoder_config, crop_window,
+        hevc_decoder_config, hevc_layers, leading_crop, length_prefixed_units, sequence_facts,
+        vp9_format,
     };
+    use alpha2_media::ColorMetadata;
 
     /// The VPS of `tests/corpus/hevc-alpha.mov` (`hevc_videotoolbox` with `-alpha_quality`): two
     /// layers, the second auxiliary.
@@ -1147,46 +1280,132 @@ mod tests {
 
     const VP9_SYNC: &str = "01001001 10000011 01000010";
 
+    /// 16-bit `frame_width_minus_1` and `frame_height_minus_1` of a 128x96 frame.
+    const SIZE_128X96: &str = "00000000 01111111 00000000 01011111";
+
+    fn vp9(profile: u8, bit_depth: u8, subsampling: (bool, bool), color_space: u8) -> Vp9Format {
+        Vp9Format {
+            profile,
+            bit_depth,
+            subsampling,
+            color_space,
+            full_range: color_space == 7,
+            width: 128,
+            height: 96,
+        }
+    }
+
     #[test]
-    fn vp9_keyframes_declare_their_bit_depth() {
-        // The first bytes of libvpx keyframes: profile 0 (`tests/corpus/vp9.webm`), then
-        // profile 2 at 10 and at 12 bits.
-        assert_eq!(vp9_bit_depth(&[0x82, 0x49, 0x83, 0x42, 0x00]), Some(8));
-        assert_eq!(vp9_bit_depth(&[0x92, 0x49, 0x83, 0x42, 0x00]), Some(10));
-        assert_eq!(vp9_bit_depth(&[0x92, 0x49, 0x83, 0x42, 0x80]), Some(12));
-        // Profile 3 has a reserved bit after the profile; profile 1 is 8-bit.
+    fn vp9_keyframes_declare_their_format() {
+        // The first bytes of the key frames of `tests/corpus/vp9.webm` and `vp9-color.webm`.
+        let corpus = vp9_format(&[0x82, 0x49, 0x83, 0x42, 0x00, 0x07, 0xf0, 0x05, 0xf6]);
+        assert_eq!(corpus, Some(vp9(0, 8, (true, true), 0)));
+        let color = vp9_format(&[0x82, 0x49, 0x83, 0x42, 0x40, 0x0f, 0xf0, 0x03, 0xf6]);
         assert_eq!(
-            vp9_bit_depth(&packed(&format!("10 1 1 0 0 0 1 0 {VP9_SYNC} 1"))),
-            Some(12)
+            color,
+            Some(Vp9Format {
+                color_space: 2,
+                width: 256,
+                height: 64,
+                ..vp9(0, 8, (true, true), 2)
+            })
+        );
+        // Profile 2 at 10 and 12 bits, BT.2020, full range.
+        assert_eq!(
+            vp9_format(&packed(&format!(
+                "10 0 1 0 0 1 0 {VP9_SYNC} 0 101 1 {SIZE_128X96}"
+            ))),
+            Some(Vp9Format {
+                full_range: true,
+                ..vp9(2, 10, (true, true), 5)
+            })
         );
         assert_eq!(
-            vp9_bit_depth(&packed(&format!("10 1 0 0 0 1 0 {VP9_SYNC}"))),
-            Some(8)
+            vp9_format(&packed(&format!(
+                "10 0 1 0 0 1 0 {VP9_SYNC} 1 010 0 {SIZE_128X96}"
+            ))),
+            Some(vp9(2, 12, (true, true), 2))
+        );
+        // Profile 1 4:2:2, then profile 3 (a reserved bit after the profile) 12-bit RGB 4:4:4.
+        assert_eq!(
+            vp9_format(&packed(&format!(
+                "10 1 0 0 0 1 0 {VP9_SYNC} 010 0 1 0 0 {SIZE_128X96}"
+            ))),
+            Some(vp9(1, 8, (true, false), 2))
+        );
+        assert_eq!(
+            vp9_format(&packed(&format!(
+                "10 1 1 0 0 0 1 0 {VP9_SYNC} 1 111 0 {SIZE_128X96}"
+            ))),
+            Some(vp9(3, 12, (false, false), 7))
         );
     }
 
     #[test]
-    fn vp9_intra_only_frames_declare_their_bit_depth() {
-        // Not shown, not error resilient, intra-only, two bits of reset_frame_context.
+    fn vp9_intra_only_frames_declare_their_format() {
+        // Not shown, not error resilient, intra-only, two bits of reset_frame_context, then the
+        // color config of profiles above 0 and eight bits of refresh_frame_flags.
         assert_eq!(
-            vp9_bit_depth(&packed(&format!("10 0 1 0 1 0 0 1 00 {VP9_SYNC} 0"))),
-            Some(10)
+            vp9_format(&packed(&format!(
+                "10 0 1 0 1 0 0 1 00 {VP9_SYNC} 0 010 0 11111111 {SIZE_128X96}"
+            ))),
+            Some(vp9(2, 10, (true, true), 2))
         );
         assert_eq!(
-            vp9_bit_depth(&packed(&format!("10 0 0 0 1 0 0 1 00 {VP9_SYNC}"))),
-            Some(8)
+            vp9_format(&packed(&format!(
+                "10 0 0 0 1 0 0 1 00 {VP9_SYNC} 11111111 {SIZE_128X96}"
+            ))),
+            Some(vp9(0, 8, (true, true), 1))
         );
     }
 
     #[test]
     fn vp9_frames_without_a_color_config_declare_nothing() {
         // An inter frame, a frame showing an existing one, a broken sync code, a wrong marker,
-        // a truncated header.
-        assert_eq!(vp9_bit_depth(&[0x86, 0x00, 0x00, 0x00]), None);
-        assert_eq!(vp9_bit_depth(&[0x88]), None);
-        assert_eq!(vp9_bit_depth(&[0x82, 0x49, 0x83, 0x43, 0x00]), None);
-        assert_eq!(vp9_bit_depth(&[0x42, 0x49, 0x83, 0x42, 0x00]), None);
-        assert_eq!(vp9_bit_depth(&[0x92, 0x49]), None);
-        assert_eq!(vp9_bit_depth(&[]), None);
+        // headers cut short in the sync code and before the frame size.
+        assert_eq!(vp9_format(&[0x86, 0x00, 0x00, 0x00]), None);
+        assert_eq!(vp9_format(&[0x88]), None);
+        assert_eq!(
+            vp9_format(&[0x82, 0x49, 0x83, 0x43, 0x00, 0x07, 0xf0, 0x05]),
+            None
+        );
+        assert_eq!(
+            vp9_format(&[0x42, 0x49, 0x83, 0x42, 0x00, 0x07, 0xf0, 0x05]),
+            None
+        );
+        assert_eq!(vp9_format(&[0x92, 0x49]), None);
+        assert_eq!(vp9_format(&[0x82, 0x49, 0x83, 0x42, 0x00]), None);
+        assert_eq!(vp9_format(&[]), None);
+    }
+
+    #[test]
+    fn a_vp9_format_makes_the_vpcc_body_videotoolbox_reads() {
+        let hd = Vp9Format {
+            width: 1920,
+            height: 1080,
+            ..vp9(0, 8, (true, true), 2)
+        };
+        assert_eq!(
+            hd.vpcc_record(Some(ColorMetadata::EXPORT)),
+            [1, 0, 0, 0, 0, 40, 0x82, 1, 1, 1, 0, 0]
+        );
+        // Without a container color only the matrix is known; a small frame is level 1.
+        assert_eq!(
+            vp9(0, 8, (true, true), 2).vpcc_record(None),
+            [1, 0, 0, 0, 0, 10, 0x82, 2, 2, 1, 0, 0]
+        );
+        let full = Vp9Format {
+            full_range: true,
+            ..vp9(2, 10, (true, true), 0)
+        };
+        assert_eq!(
+            full.vpcc_record(None),
+            [1, 0, 0, 0, 2, 10, 0xa3, 2, 2, 2, 0, 0]
+        );
+        assert_eq!(vp9(1, 8, (true, false), 1).vpcc_record(None)[6], 0x84);
+        assert_eq!(
+            vp9(3, 12, (false, false), 7).vpcc_record(None)[4..10],
+            [3, 10, 0xc7, 2, 2, 0]
+        );
     }
 }
