@@ -96,7 +96,7 @@ impl Renderer {
             runtime,
             output,
         } = pass;
-        let drawn = self.effect_pipeline(registered);
+        let drawn = self.effect_pipeline(registered)?;
         let source_b = match (registered.definition.kind, source_b) {
             (EffectKind::Transition, Some(source)) => source,
             (EffectKind::Transition, None) => return Err(RenderError::MissingEffectInput),

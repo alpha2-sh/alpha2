@@ -577,7 +577,7 @@ impl Renderer {
             output_format,
             "alpha2 RGBA presentation target",
         );
-        let cached = self.rgba_presentation_pipeline();
+        let cached = self.rgba_presentation_pipeline()?;
         let uniform_bytes = presentation_uniform_bytes(
             source_size,
             presentation,
@@ -663,8 +663,8 @@ impl Renderer {
         self.render_yuv420p_presented(frame, SourcePresentation::identity(frame.size), policy)
     }
 
-    fn rgba_presentation_pipeline(&self) -> &CachedSampledPipeline {
-        self.pipelines.rgba_present.get_or_init(|| {
+    fn rgba_presentation_pipeline(&self) -> Result<&CachedSampledPipeline, RenderError> {
+        crate::gpu_errors::checked_cell(&self.pipelines.rgba_present, self.gpu.device(), || {
             let output_format = self.intermediate_format();
             let bind_group_layout =
                 self.gpu
@@ -997,7 +997,7 @@ impl Renderer {
             "alpha2 YUV conversion target",
         );
         let output_view = output.view().clone();
-        let cached = self.yuv_pipeline(storage == PlaneStorage::Uint16);
+        let cached = self.yuv_pipeline(storage == PlaneStorage::Uint16)?;
         let uniform_bytes = uniform_bytes(
             color,
             tone,
@@ -1177,13 +1177,13 @@ impl Renderer {
     }
 
     /// With `integer_planes`, the pipeline for 16-bit containers uploaded as unsigned integers.
-    fn yuv_pipeline(&self, integer_planes: bool) -> &CachedYuvPipeline {
+    fn yuv_pipeline(&self, integer_planes: bool) -> Result<&CachedYuvPipeline, RenderError> {
         let (cache, source) = if integer_planes {
             (&self.pipelines.yuv16, YUV16_TO_LINEAR_WGSL)
         } else {
             (&self.pipelines.yuv, YUV_TO_LINEAR_WGSL)
         };
-        cache.get_or_init(|| {
+        crate::gpu_errors::checked_cell(cache, self.gpu.device(), || {
             let bind_group_layout = self.yuv_bind_group_layout(if integer_planes {
                 wgpu::TextureSampleType::Uint
             } else {

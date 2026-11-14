@@ -49,6 +49,7 @@ mod gpu_error;
 mod half_store;
 mod layer_bounds;
 mod masks;
+mod pipeline_creation;
 mod presentation;
 mod readbacks;
 mod release;

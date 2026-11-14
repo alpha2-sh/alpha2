@@ -5,6 +5,7 @@ use std::sync::{Arc, PoisonError, RwLockReadGuard, RwLockWriteGuard};
 use alpha2_gpu::{CapabilityTier, GpuContext};
 
 use crate::effect::EffectKey;
+use crate::gpu_errors::{Answer, CreationErrorScopes, ScopeErrors, create_checked};
 use crate::loop_bound::{BUDGET, MAX_LOOP_ITERATIONS, blank_comments, bound_for_loops};
 use crate::uniform::{PARAM_SLOT_BYTES, RUNTIME_UNIFORM_WORDS, param_uniform_bytes};
 
@@ -37,37 +38,6 @@ const INPUT_BINDING_BASE: u32 = 5 + 2 * MAX_EFFECT_RESOURCES as u32;
 /// `ResourceMetadata_<name>`: `domain_min` and `domain_max`, two `vec4f`.
 const RESOURCE_METADATA_BYTES: usize = 32;
 
-/// Scopes for every error class shader-module or pipeline creation can raise.
-///
-/// `wgpu` routes an error only to a scope of its class. A backend compiler rejecting code
-/// generated from valid WGSL reports an internal error, and OOM its own class; uncaught, either
-/// leaves an invalid pipeline that invalidates every submission drawing it.
-struct CreationErrorScopes([wgpu::ErrorScopeGuard; 3]);
-
-impl CreationErrorScopes {
-    fn push(device: &wgpu::Device) -> Self {
-        Self([
-            device.push_error_scope(wgpu::ErrorFilter::Internal),
-            device.push_error_scope(wgpu::ErrorFilter::OutOfMemory),
-            device.push_error_scope(wgpu::ErrorFilter::Validation),
-        ])
-    }
-
-    /// Pops the scopes in reverse push order and returns what they caught.
-    fn pop(self) -> ScopeErrors {
-        let [internal, out_of_memory, validation] = self.0;
-        let validation = validation.pop();
-        let out_of_memory = out_of_memory.pop();
-        let internal = internal.pop();
-        Box::pin(async move {
-            [validation.await, out_of_memory.await, internal.await]
-                .into_iter()
-                .flatten()
-                .collect()
-        })
-    }
-}
-
 /// Stack size for D3D12 effect pipeline compiles. DXC recurses per operand and needs about
 /// 1.5 MiB at [`MAX_WGSL_STATEMENT_OPERATORS`], more than a Windows main thread has.
 #[cfg(not(target_arch = "wasm32"))]
@@ -96,14 +66,6 @@ fn on_compile_stack<T: Send>(gpu: &GpuContext, make: impl FnOnce() -> T + Send) 
 fn on_compile_stack<T>(_gpu: &GpuContext, make: impl FnOnce() -> T) -> T {
     make()
 }
-
-/// Not `Send` in a browser, where the device answers on its own event loop.
-#[cfg(not(target_arch = "wasm32"))]
-type Answer<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send>>;
-#[cfg(target_arch = "wasm32")]
-type Answer<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T>>>;
-
-type ScopeErrors = Answer<Vec<wgpu::Error>>;
 
 /// A runtime effect created on the device, awaiting the device's verdict.
 ///
@@ -339,22 +301,50 @@ impl Renderer {
         Ok(id)
     }
 
-    /// The effect's pipeline, created now if needed.
-    pub(crate) fn effect_pipeline<'a>(&self, effect: &'a RegisteredEffect) -> &'a EffectPipeline {
-        effect.pipeline.get_or_init(|| {
-            crate::diagnostics::timed_pipeline_creation(
-                &self.diagnostics,
-                || effect.definition.id.as_str().to_owned(),
-                || {
-                    let device = self.gpu.device();
-                    let shader = effect_shader(device, &effect.definition);
-                    let format = self.intermediate_format();
-                    on_compile_stack(&self.gpu, || {
+    /// The effect's pipeline, created now if needed; a failed creation is not kept.
+    ///
+    /// # Errors
+    /// [`crate::RenderError::Gpu`] with the class of the creation's error.
+    pub(crate) fn effect_pipeline<'a>(
+        &self,
+        effect: &'a RegisteredEffect,
+    ) -> Result<&'a EffectPipeline, crate::RenderError> {
+        if let Some(pipeline) = effect.pipeline.get() {
+            return Ok(pipeline);
+        }
+        let created = crate::diagnostics::timed_pipeline_creation(
+            &self.diagnostics,
+            || effect.definition.id.as_str().to_owned(),
+            || {
+                let device = self.gpu.device();
+                let shader = create_checked(device, || self.lazy_effect_shader(effect))?;
+                let format = self.intermediate_format();
+                // Scopes are per thread, so the compile thread pushes its own.
+                on_compile_stack(&self.gpu, || {
+                    create_checked(device, || {
                         effect_pipeline(device, &effect.definition, shader, format)
                     })
-                },
-            )
-        })
+                })
+            },
+        )
+        .map_err(|kind| crate::RenderError::Gpu { kind })?;
+        Ok(effect.pipeline.get_or_init(|| created))
+    }
+
+    fn lazy_effect_shader(&self, effect: &RegisteredEffect) -> wgpu::ShaderModule {
+        let device = self.gpu.device();
+        #[cfg(test)]
+        if self
+            .fail_next_pipeline
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            // A module without the entry points the pipeline names.
+            return device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("alpha2 test module without entry points"),
+                source: wgpu::ShaderSource::Wgsl("fn unused() {}".into()),
+            });
+        }
+        effect_shader(device, &effect.definition)
     }
 
     /// Adds an effect this renderer compiled.
@@ -519,8 +509,19 @@ impl Renderer {
     /// passes) so the first frame does not wait on the compiler.
     ///
     /// # Errors
-    /// Names the first unregistered effect.
+    /// Names the first unregistered effect, or the first pipeline whose creation failed.
     pub fn warmup(&self, effects: &[EffectId]) -> Result<(), ShaderDiagnostics> {
+        let create = |effect: &EffectId, registered: &RegisteredEffect| {
+            self.effect_pipeline(registered)
+                .map(|_| ())
+                .map_err(|error| {
+                    ShaderDiagnostics::error(format!(
+                        "effect {} version {}: {error}",
+                        effect.as_str(),
+                        effect.version()
+                    ))
+                })
+        };
         for effect in effects {
             let Some(registered) = self.effects().get(effect) else {
                 return Err(ShaderDiagnostics::error(format!(
@@ -529,10 +530,11 @@ impl Renderer {
                     effect.version()
                 )));
             };
-            self.effect_pipeline(&registered);
+            create(effect, &registered)?;
             for pass in crate::gaussian_blur::expanded_passes(effect.as_str()).unwrap_or_default() {
-                if let Some(registered) = self.effects().get(&EffectId::from_static(pass, 1)) {
-                    self.effect_pipeline(&registered);
+                let pass = EffectId::from_static(pass, 1);
+                if let Some(registered) = self.effects().get(&pass) {
+                    create(&pass, &registered)?;
                 }
             }
         }

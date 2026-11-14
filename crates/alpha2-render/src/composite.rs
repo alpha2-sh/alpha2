@@ -119,7 +119,7 @@ impl Renderer {
             return Ok(1);
         }
 
-        let cached = self.composite_pipeline();
+        let cached = self.composite_pipeline()?;
         let preparation = BatchPreparationContext {
             device: self.gpu.device(),
             layout: &cached.bind_group_layout,
@@ -152,7 +152,7 @@ impl Renderer {
                 &first,
                 output_view,
                 first_pass,
-            );
+            )?;
             return Ok(1);
         }
 
@@ -173,7 +173,7 @@ impl Renderer {
             &first,
             views[current],
             first_pass,
-        );
+        )?;
         for (batch, bounds) in rest {
             let other = 1 - current;
             let program = self.batch_program(batch);
@@ -192,7 +192,7 @@ impl Renderer {
                         load: wgpu::LoadOp::Load,
                         scissor: Some(*bounds),
                     },
-                );
+                )?;
             } else {
                 let prepared = prepare_batch(&preparation, Some(views[current]), batch, uniforms);
                 self.draw_batch(
@@ -202,7 +202,7 @@ impl Renderer {
                     &prepared,
                     views[other],
                     PassTarget::WHOLE,
-                );
+                )?;
                 current = other;
             }
         }
@@ -230,8 +230,8 @@ impl Renderer {
         bind_group: &wgpu::BindGroup,
         target: &wgpu::TextureView,
         pass: PassTarget,
-    ) {
-        let pipeline = self.composite_program_pipeline(cached, program);
+    ) -> Result<(), RenderError> {
+        let pipeline = self.composite_program_pipeline(cached, program)?;
         #[cfg(test)]
         {
             let mut log = self
@@ -245,6 +245,7 @@ impl Renderer {
         #[cfg(not(test))]
         let _ = (tier, layers);
         encode_batch(encoder, pipeline, bind_group, target, pass);
+        Ok(())
     }
 
     /// Whether small layers are batched and drawn with the loop pipeline: on a GPU, and in tests
@@ -300,9 +301,9 @@ impl Renderer {
     }
 
     /// Shader, layout and sampler shared by both composite pipelines, created on first use.
-    pub(crate) fn composite_pipeline(&self) -> &CachedCompositePipeline {
-        self.pipelines.composite.get_or_init(|| {
-            let device = self.gpu.device();
+    pub(crate) fn composite_pipeline(&self) -> Result<&CachedCompositePipeline, RenderError> {
+        let device = self.gpu.device();
+        crate::gpu_errors::checked_cell(&self.pipelines.composite, device, || {
             let bind_group_layout = batch_layout(device);
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("alpha2 layer composite shader"),
@@ -329,24 +330,28 @@ impl Renderer {
         &self,
         cached: &'a CachedCompositePipeline,
         program: CompositeProgram,
-    ) -> &'a wgpu::RenderPipeline {
+    ) -> Result<&'a wgpu::RenderPipeline, RenderError> {
         let (slot, entry, label) = match program {
             CompositeProgram::Loop => (0, "fs", "alpha2 small layer composite pipeline"),
             CompositeProgram::OneLayer => (1, "fs_layer", "alpha2 large layer composite pipeline"),
         };
-        cached.programs[slot].get_or_init(|| {
-            #[cfg(test)]
-            {
-                self.composite_pipelines
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .created
-                    .push(program);
-            }
-            crate::diagnostics::timed_pipeline_creation(
-                &self.diagnostics,
-                || label.to_owned(),
-                || {
+        if let Some(pipeline) = cached.programs[slot].get() {
+            return Ok(pipeline);
+        }
+        #[cfg(test)]
+        let entry = if self
+            .fail_next_pipeline
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            "an_entry_point_the_shader_lacks"
+        } else {
+            entry
+        };
+        let created = crate::diagnostics::timed_pipeline_creation(
+            &self.diagnostics,
+            || label.to_owned(),
+            || {
+                crate::gpu_errors::create_checked(self.gpu.device(), || {
                     composite_pipeline(
                         self.gpu.device(),
                         &cached.bind_group_layout,
@@ -355,9 +360,19 @@ impl Renderer {
                         entry,
                         label,
                     )
-                },
-            )
-        })
+                })
+            },
+        )
+        .map_err(|kind| RenderError::Gpu { kind })?;
+        #[cfg(test)]
+        {
+            self.composite_pipelines
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .created
+                .push(program);
+        }
+        Ok(cached.programs[slot].get_or_init(|| created))
     }
 
     /// Drawn layers by index with their reachable target pixels and tier; skips layers that miss
@@ -403,15 +418,16 @@ impl Renderer {
         composite_batches(&drawn, self.composite_batch_layers()).len()
     }
 
-    pub(crate) fn warm_composite(&self, layers: usize) {
+    pub(crate) fn warm_composite(&self, layers: usize) -> Result<(), RenderError> {
         if layers == 0 {
-            return;
+            return Ok(());
         }
-        let cached = self.composite_pipeline();
-        self.composite_program_pipeline(cached, CompositeProgram::OneLayer);
+        let cached = self.composite_pipeline()?;
+        self.composite_program_pipeline(cached, CompositeProgram::OneLayer)?;
         if self.batches_small_layers() {
-            self.composite_program_pipeline(cached, CompositeProgram::Loop);
+            self.composite_program_pipeline(cached, CompositeProgram::Loop)?;
         }
+        Ok(())
     }
 }
 

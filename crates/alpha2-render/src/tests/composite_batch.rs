@@ -264,9 +264,13 @@ fn a_small_layer_draws_with_the_batch_pipeline_alone_and_a_large_one_with_one_st
     // Small layers a pass each, two and eight to a pass, then one each again.
     let passes = [1, 2, COMPOSITE_BATCH_LAYERS, 1].map(draw);
     assert_eq!(passes, [12, 7, 5, 12]);
-    let cached = renderer.composite_pipeline();
-    let looped = renderer.composite_program_pipeline(cached, CompositeProgram::Loop);
-    let one_layer = renderer.composite_program_pipeline(cached, CompositeProgram::OneLayer);
+    let cached = renderer.composite_pipeline().expect("created");
+    let looped = renderer
+        .composite_program_pipeline(cached, CompositeProgram::Loop)
+        .expect("created");
+    let one_layer = renderer
+        .composite_program_pipeline(cached, CompositeProgram::OneLayer)
+        .expect("created");
     assert_ne!(looped, one_layer);
     {
         let log = renderer.composite_pipelines.lock().expect("log");

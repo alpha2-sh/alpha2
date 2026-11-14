@@ -298,7 +298,7 @@ impl Renderer {
         let buffer =
             self.readback_buffers
                 .acquire(self.gpu.device(), buffer_size, "alpha2 RGBA8 readback");
-        let packed_texture = self.encode_readback_pack(target, &mut encoder);
+        let packed_texture = self.encode_readback_pack(target, &mut encoder)?;
         let copy_source = packed_texture
             .as_ref()
             .map_or(&target.texture, TextureLease::texture);
@@ -556,7 +556,7 @@ impl Renderer {
             encoder,
             &uniforms,
             uniform,
-        );
+        )?;
         encode_plane_copy(
             encoder,
             y_texture.texture(),
@@ -704,7 +704,7 @@ impl Renderer {
             u64::try_from(uniform_bytes.len()).unwrap_or(u64::MAX),
         );
         let uniform = uniforms.write(&uniform_bytes);
-        let cached = self.yuv_readback_pipeline();
+        let cached = self.yuv_readback_pipeline()?;
         let bind_group = self.yuv_pack_bind_group(target, cached, &uniforms, uniform);
         let luma_view = crate::pool::default_view(planes.luma);
         encode_yuv_render_pass(
@@ -764,8 +764,8 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         uniforms: &crate::uniform::UniformArenaLease,
         uniform: crate::uniform::UniformSlice,
-    ) {
-        let cached = self.yuv_readback_pipeline();
+    ) -> Result<(), RenderError> {
+        let cached = self.yuv_readback_pipeline()?;
         let bind_group = self.yuv_pack_bind_group(target, cached, uniforms, uniform);
         let [y_view, u_view, v_view] = plane_views;
         encode_yuv_render_pass(
@@ -782,10 +782,11 @@ impl Renderer {
             &bind_group,
             [u_view, v_view],
         );
+        Ok(())
     }
 
-    fn yuv_readback_pipeline(&self) -> &CachedYuvReadbackPipeline {
-        self.pipelines.yuv_readback.get_or_init(|| {
+    fn yuv_readback_pipeline(&self) -> Result<&CachedYuvReadbackPipeline, RenderError> {
+        crate::gpu_errors::checked_cell(&self.pipelines.yuv_readback, self.gpu.device(), || {
             let bind_group_layout =
                 self.gpu
                     .device()
@@ -862,9 +863,9 @@ impl Renderer {
         &self,
         target: &RenderedTexture,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> Option<TextureLease> {
+    ) -> Result<Option<TextureLease>, RenderError> {
         if target.format != wgpu::TextureFormat::Rgba16Float {
-            return None;
+            return Ok(None);
         }
         let texture = self.textures.acquire(
             self.gpu.device(),
@@ -872,7 +873,7 @@ impl Renderer {
             wgpu::TextureFormat::Rgba8Unorm,
             "alpha2 GPU-packed RGBA8 readback texture",
         );
-        let cached = self.readback_pack_pipeline();
+        let cached = self.readback_pack_pipeline()?;
         let bind_group = self
             .gpu
             .device()
@@ -905,11 +906,11 @@ impl Renderer {
             pass.set_bind_group(0, &bind_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        Some(texture)
+        Ok(Some(texture))
     }
 
-    fn readback_pack_pipeline(&self) -> &CachedPipeline {
-        self.pipelines.readback_pack.get_or_init(|| {
+    fn readback_pack_pipeline(&self) -> Result<&CachedPipeline, RenderError> {
+        crate::gpu_errors::checked_cell(&self.pipelines.readback_pack, self.gpu.device(), || {
             let bind_group_layout =
                 self.gpu
                     .device()

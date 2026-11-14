@@ -50,7 +50,7 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
-        let cached = self.quad_pipeline();
+        let cached = self.quad_pipeline()?;
         let input_view = crate::pool::default_view(&input);
         let group = self
             .gpu
@@ -88,8 +88,8 @@ impl Renderer {
         Ok(RenderedTexture::pooled(size, format, target))
     }
 
-    pub(crate) fn quad_pipeline(&self) -> &CachedPipeline {
-        self.pipelines.quad.get_or_init(|| {
+    pub(crate) fn quad_pipeline(&self) -> Result<&CachedPipeline, RenderError> {
+        crate::gpu_errors::checked_cell(&self.pipelines.quad, self.gpu.device(), || {
             let bind_group_layout =
                 self.gpu
                     .device()

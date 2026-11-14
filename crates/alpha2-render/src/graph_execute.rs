@@ -58,7 +58,8 @@ impl Renderer {
     /// Initializes all pipelines referenced by one graph.
     ///
     /// # Errors
-    /// Returns graph validation errors or diagnostics for an unknown effect.
+    /// Returns graph validation errors, or diagnostics for an unknown effect or a pipeline whose
+    /// creation failed.
     pub fn warmup_graph(&self, graph: &RenderGraph<'_>) -> Result<WarmupReport, ShaderDiagnostics> {
         self.warmup_graphs(&[graph])
     }
@@ -66,7 +67,8 @@ impl Renderer {
     /// Initializes the deduplicated pipeline set referenced by project graphs.
     ///
     /// # Errors
-    /// Returns diagnostics for a malformed graph or an unknown effect.
+    /// Returns diagnostics for a malformed graph, an unknown effect or a pipeline whose creation
+    /// failed.
     pub fn warmup_graphs(
         &self,
         graphs: &[&RenderGraph<'_>],
@@ -104,11 +106,12 @@ impl Renderer {
             }
         }
         self.warmup(&effects)?;
+        let failed = |error: crate::RenderError| ShaderDiagnostics::error(error.to_string());
         for layers in composite_layers {
-            self.warm_composite(layers);
+            self.warm_composite(layers).map_err(failed)?;
         }
         for space in &vector_spaces {
-            self.warm_vector(*space);
+            self.warm_vector(*space).map_err(failed)?;
         }
         Ok(WarmupReport {
             runtime_effects: effects.len(),
