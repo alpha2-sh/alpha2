@@ -579,12 +579,12 @@ fn extreme_keyframe_times_and_values_remain_finite() {
     clip.visual.rotation_degrees = Animated::Keyframes {
         keyframes: vec![
             Keyframe {
-                time: MediaTime(i64::MIN),
+                time: MediaTime(-alpha2_time::MAX_SERIALIZED_TICKS),
                 value: -3.0e38,
                 interpolation: Interpolation::Linear,
             },
             Keyframe {
-                time: MediaTime(i64::MAX),
+                time: MediaTime(alpha2_time::MAX_SERIALIZED_TICKS),
                 value: 3.0e38,
                 interpolation: Interpolation::Hold,
             },

@@ -38,6 +38,7 @@ mod source;
 pub(crate) mod tests;
 mod text;
 mod text_animation;
+mod time_bound;
 mod time_map;
 mod timeline;
 mod timeline_values;

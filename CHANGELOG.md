@@ -130,6 +130,9 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Projects: `Project::validate` refuses a time past 2^53 - 1 ticks either way, which no project
+  document can hold, so a project built in memory validates only if its JSON loads. Before, such a
+  project validated and every writer produced text `Project::from_json` refused.
 - Video: timestamps on a coarse grid count as rounded only when one constant period explains them.
   A video of stills held for unequal times (or exact frames of two rates mixed) no longer gets half
   a grid unit of slack, so each picture changes on its timestamp instead of up to half a unit early

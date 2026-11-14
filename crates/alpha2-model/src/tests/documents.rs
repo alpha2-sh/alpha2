@@ -661,3 +661,28 @@ fn a_model_error_names_the_object_it_is_about() {
         Some(crate::ErrorSubject::Clip(&clip("second")))
     );
 }
+
+#[test]
+fn a_time_no_document_holds_is_refused_by_validation_as_by_loading() {
+    let mut project = project();
+    let past = alpha2_time::MAX_SERIALIZED_TICKS + 1;
+    project.timeline.tracks[0].clips[0].timeline_range =
+        TimeRange::new(MediaTime(past - 120_000), MediaTime(past)).expect("range");
+    assert_eq!(
+        project.validate(),
+        Err(crate::ModelError::UnwritableTime { ticks: past })
+    );
+    let json = serde_json::to_string(&project).expect("serializes");
+    assert!(matches!(
+        Project::from_json(&json),
+        Err(crate::ProjectLoadError::Json(_))
+    ));
+    project.timeline.tracks[0].clips[0].timeline_range = TimeRange::new(
+        MediaTime(alpha2_time::MAX_SERIALIZED_TICKS - 120_000),
+        MediaTime(alpha2_time::MAX_SERIALIZED_TICKS),
+    )
+    .expect("range");
+    project
+        .validate()
+        .expect("the largest time a document holds");
+}

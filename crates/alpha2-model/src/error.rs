@@ -529,6 +529,11 @@ pub enum ModelError {
         /// The caption track.
         track: TrackId,
     },
+    /// A time lies past [`alpha2_time::MAX_SERIALIZED_TICKS`] either way, which no document holds.
+    UnwritableTime {
+        /// The time, in ticks.
+        ticks: i64,
+    },
     /// The project has more than [`crate::MAX_EFFECT_RESOURCES`] effect resources.
     TooManyEffectResources {
         /// Number supplied by the document.
@@ -677,6 +682,7 @@ impl ModelError {
             | Self::TooManyInlinedNodes { .. }
             | Self::TooManyCompositions { .. }
             | Self::TooManyEffectResources { .. }
+            | Self::UnwritableTime { .. }
             | Self::TooManySources { .. }
             | Self::TooManyTracks { .. }
             | Self::TooManyClips { .. }
@@ -1014,6 +1020,11 @@ impl fmt::Display for ModelError {
                 "track {track} derives more than {} caption cues or maps more than {} words",
                 crate::MAX_DERIVED_CUES,
                 crate::MAX_DATA_WORDS
+            ),
+            Self::UnwritableTime { ticks } => write!(
+                formatter,
+                "a time of {ticks} ticks is beyond {} either way",
+                alpha2_time::MAX_SERIALIZED_TICKS
             ),
             Self::TooManyEffectResources { found, maximum } => write!(
                 formatter,

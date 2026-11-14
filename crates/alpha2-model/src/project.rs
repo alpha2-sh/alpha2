@@ -489,7 +489,7 @@ impl Project {
         ensure_ducking_is_acyclic(&self.timeline)?;
         ensure_mattes_are_usable(&self.timeline)?;
         ensure_frames_fit(&self.timeline, &index.sources, &inlined)?;
-        Ok(())
+        crate::time_bound::ensure_times_are_writable(self)
     }
 
     /// Checks each source, and returns them by ID.

@@ -1,11 +1,12 @@
-//! Extreme positions, unsupported layouts, and fades at the end of the tick range.
+//! Extreme positions, unsupported layouts, and fades at the end of the document's time range.
 
 use super::*;
 
 #[test]
 fn extreme_positions_return_errors_instead_of_overflowing() {
-    // Any i64 can arrive from the JavaScript binding; overflow must not panic.
-    let end = i64::MAX;
+    // Any i64 can arrive from the JavaScript binding; overflow must not panic. A clip ends at
+    // the latest time a document holds.
+    let end = alpha2_time::MAX_SERIALIZED_TICKS;
     let late = end - MediaTime::from_seconds(1).ticks();
     for rate in [8_000, RATE, 96_000] {
         let mut project = project(
@@ -86,13 +87,14 @@ fn renderer_rejects_unsupported_layouts_and_blocks() {
 }
 
 #[test]
-fn a_fade_near_the_end_of_the_tick_range_does_not_overflow() {
+fn a_fade_near_the_end_of_the_time_range_does_not_overflow() {
     // Pre-roll can read before a latent clip's start; fade arithmetic must not overflow.
-    let mut clip = audio_clip("c1", "tone", 0, i64::MAX);
+    let latest = alpha2_time::MAX_SERIALIZED_TICKS;
+    let mut clip = audio_clip("c1", "tone", 0, latest);
     clip.source_range = TimeRange::new(MediaTime(0), MediaTime(120_000)).expect("range");
     clip.audio.fade_in = MediaTime(120_000);
     clip.audio.effects = vec![lookahead()];
-    let mut faded_out = audio_clip("c2", "tone", 0, i64::MAX - 600);
+    let mut faded_out = audio_clip("c2", "tone", 0, latest - 600);
     faded_out.source_range = TimeRange::new(MediaTime(0), MediaTime(120_000)).expect("range");
     faded_out.audio.fade_in = MediaTime(120_000);
     faded_out.audio.fade_out = MediaTime(120_000);
