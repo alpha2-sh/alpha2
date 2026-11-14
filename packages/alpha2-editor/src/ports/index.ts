@@ -109,7 +109,8 @@ export type ExportArtifact = (
    * browser export adds `videoDecode` (the decode mode used), `videoConversion` (`engine` or
    * `browser`), and `decodeFallbacks`. Those list, per source, frames read by element seeks instead
    * of decoding (`kind: "element-seek"`, with reason, count and whether permanent), and sources
-   * that `videoDecode: "software"` could not decode in software (`kind: "software-unavailable"`).
+   * that `videoDecode: "software"` could not decode in software (`kind: "software-unavailable"`),
+   * and `silentAudioSources`, the ids of sources whose audio was written silent.
    */
   readonly report?: Readonly<Record<string, unknown>>;
 };

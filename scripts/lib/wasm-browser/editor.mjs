@@ -173,3 +173,53 @@ report({
 await bridge.dispose();
 `;
 }
+
+// An export holding audio this browser cannot decode is refused naming it; with undecodableAudio
+// "silence" it runs, keeps the other clip's sound and lists the source as written silent.
+export function editorExportUndecodableAudio() {
+  return `${prelude}
+const fetched = async (name) => new File([await (await fetch("/tests/corpus/" + name)).blob()], name);
+const editor = createEditor();
+const bridge = createBrowserBridge({ editor, runtimeAssets, audio: false });
+await bridge.importFiles([await fetched("audio-ac3-5.1.mp4"), await fetched("audio-only-aac-priming.m4a")]);
+const [surround, voice] = Object.values(editor.document.assets).map((asset) => asset.id);
+if (bridge.getAsset(surround).audioDecodable !== false)
+  skip("ac3-audio-decode", "this browser decodes AC-3 audio, so nothing is undecodable");
+if (bridge.getAsset(voice).audioDecodable !== true)
+  skip("webcodecs-audio", "this browser decodes no AAC audio");
+const span = { start: 0, end: 60000 };
+const result = editor.dispatch({ type: "transaction", commands: [
+  { type: "asset.put", asset: { id: "color", kind: "generated", name: "Color", contentRevision: 0 },
+    source: { id: "color", kind: "generated", generator: { type: "fill",
+      paint: { type: "solid", color: { red: 0.2, green: 0.4, blue: 0.8, alpha: 1 } } } } },
+  { type: "track.add", track: { id: "v", kind: "video", name: "V", clips: [
+    { id: "picture", source_id: "color", timeline_range: span, source_range: span }] } },
+  { type: "track.add", track: { id: "a", kind: "audio", name: "A", clips: [
+    { id: "surround-clip", source_id: surround, timeline_range: span, source_range: span }] } },
+  { type: "track.add", track: { id: "b", kind: "audio", name: "B", clips: [
+    { id: "voice-clip", source_id: voice, timeline_range: span, source_range: span }] } },
+] });
+if (!result.ok) throw result.error;
+await bridge.conform("export_original");
+let refused = null;
+try {
+  bridge.startExport({ output: { kind: "memory" } });
+} catch (error) {
+  refused = { code: error.code, names: error.message.includes("audio-ac3-5.1.mp4"), cause: error.cause?.code };
+}
+const job = bridge.startExport({ output: { kind: "memory" }, undecodableAudio: "silence" });
+const artifact = await job.result;
+const blob = artifact.kind === "blob" ? artifact.blob : artifact.file;
+const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+const audioTrack = await input.getPrimaryAudioTrack();
+input.dispose();
+report({
+  ok: refused?.code === "unsupported_media" && refused.names && refused.cause === "DECODE_UNAVAILABLE"
+    && JSON.stringify(artifact.report?.silentAudioSources) === JSON.stringify([surround])
+    && audioTrack !== null,
+  refused, silent: artifact.report?.silentAudioSources ?? null, audio: audioTrack !== null,
+});
+await artifact.release?.();
+await bridge.dispose();
+`;
+}

@@ -90,8 +90,10 @@ export interface RuntimeAsset {
   readonly hasAudio?: boolean;
   /**
    * `false` when this browser cannot decode the file's audio (Safari before 26 has no
-   * `AudioDecoder`). It then plays and exports silent in this session, while the document still
-   * records the audio for native hosts and other browsers.
+   * `AudioDecoder`). It then plays silent in this session, and an export that would write its
+   * sound is refused unless `BrowserExportOptions.undecodableAudio` is `silence`; the document
+   * still records the audio for native hosts and other browsers. `conform` for an export purpose
+   * decodes a trial again and updates it.
    */
   readonly audioDecodable?: boolean;
   /** When `audioDecodable` is `false`, what the trial decode at import found. */
@@ -299,6 +301,13 @@ export interface BrowserExportOptions {
    * an `EditorError` `invalid_video_conversion`.
    */
   readonly videoConversion?: "engine" | "browser";
+  /**
+   * What an export does with audible sources whose audio this browser cannot decode
+   * (`RuntimeAsset.audioDecodable` `false`): `refuse` (the default) refuses the export before it
+   * renders; `silence` writes them silent. The result's `report.silentAudioSources` lists the
+   * sources written silent either way (empty when none).
+   */
+  readonly undecodableAudio?: "refuse" | "silence";
 }
 /** Where a browser export writes its file. */
 export type ExportOutputTarget =
@@ -771,10 +780,13 @@ export interface BrowserBridge {
    * (`export_busy`), `frameRate` is not one the engine reads (`invalid_frame_rate`), `videoDecode`
    * is not `auto` or `software` (`invalid_video_decode`), `videoConversion` is not `engine` or
    * `browser` (`invalid_video_conversion`), the asset decisions are not loaded (`conform_pending`),
-   * the media is not ready (`ConformError`), the document does not compile, or it shows an HDR
+   * the media is not ready (`ConformError`), the document does not compile, it shows an HDR
    * source this browser previews only degraded (`unsupported_media`, its `cause` a
-   * `PlanarDecodeUnavailableError` naming the sources). Later failures arrive through the job's
-   * `result`.
+   * `PlanarDecodeUnavailableError` naming the sources), `undecodableAudio` is not `refuse` or
+   * `silence` (`invalid_undecodable_audio`), or it would write audio this browser cannot decode
+   * (`unsupported_media`, its `cause` a `DecodeUnavailableError` and `details.sources` each
+   * source's `id`, `name` and import-time `facts`). `conform` for an export purpose decodes a trial
+   * of such audio again first. Later failures arrive through the job's `result`.
    */
   startExport(options?: BrowserExportOptions): ExportJob;
   /**

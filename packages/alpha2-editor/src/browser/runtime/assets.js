@@ -664,7 +664,7 @@ async function containerDuration(file) {
  * Whether this browser decodes a file's primary audio, using the preview decoder's trial decode
  * (`probeAudioSource`), and the refusal facts when not.
  */
-async function audioDecoding(file) {
+export async function audioDecoding(file) {
   try {
     await probeAudioSource(file.name, file);
     return { decodable: true, facts: null };

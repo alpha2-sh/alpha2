@@ -15,7 +15,10 @@ import { containerPolicy } from "alpha2/containers";
 import { applyEdit as applyEngineEdit } from "alpha2/apply-edit";
 import { runExtractor } from "alpha2/extract";
 import { loadPlugin } from "alpha2/plugins";
-import { PlanarDecodeUnavailableError } from "alpha2/hdr-frames";
+import {
+  DecodeUnavailableError,
+  PlanarDecodeUnavailableError,
+} from "alpha2/hdr-frames";
 import { drawnEffectResources, shownSources } from "../core/compositions.js";
 import { ResourceRegistry } from "./resources.js";
 import { ExportJob, ExtractionJob, requireExportFrameRate } from "./jobs.js";
@@ -28,7 +31,7 @@ import { attemptOptions } from "./runtime/budget.js";
 import { readUserText } from "./runtime/text.js";
 import { createWorkerPreview } from "./worker.js";
 import { registerCaptionFonts } from "./runtime/caption-fonts.js";
-import { AssetLibrary, streamPeaks } from "./runtime/assets.js";
+import { AssetLibrary, audioDecoding, streamPeaks } from "./runtime/assets.js";
 import {
   SourcePixels,
   providerSettings,
@@ -580,12 +583,44 @@ export function createBrowserBridge(options) {
     const compiled = compileEditorDocument(document);
     if (compiled.diagnostics.length) throw compiled.diagnostics[0];
     requireShownText(document, compiled.project);
+    if (purpose === "export_original" || purpose === "export_proxy")
+      await reprobeAudio(document, compiled.project, purpose);
     return conformProject(
       binding,
       compiled.project,
       catalogOf(document),
       purpose,
     );
+  }
+  /**
+   * Decodes a trial of each shown source's audio that the import found undecodable again, so
+   * `startExport` decides by facts taken when the export is prepared (the import probe has a 2 s
+   * limit). The runtime is updated in place, as `analyze` does for peaks.
+   */
+  async function reprobeAudio(document, project, purpose) {
+    const used = shownSources(project);
+    for (const source of project.sources) {
+      if (!used.has(source.id)) continue;
+      const runtimes = [originalOf(document, source.id)];
+      if (purpose === "export_proxy")
+        runtimes.push(
+          proxies.get(hashOf(document.assets[source.id]))?.lease.value,
+        );
+      for (const runtime of runtimes) {
+        if (
+          !runtime?.file ||
+          !runtime.hasAudio ||
+          runtime.audioDecodable !== false ||
+          runtime.audioBuffer
+        )
+          continue;
+        const fresh = await audioDecoding(runtime.file).catch(() => null);
+        if (!fresh) continue;
+        runtime.audioDecodable = fresh.decodable;
+        if (fresh.decodable) delete runtime.audioDecodeFacts;
+        else if (fresh.facts) runtime.audioDecodeFacts = fresh.facts;
+      }
+    }
   }
   const pendingImports = new Set();
   const assetListeners = new Set();
@@ -2391,6 +2426,54 @@ export function createBrowserBridge(options) {
       },
     );
   }
+  /**
+   * The audible sources an export reads whose audio this browser cannot decode, by the runtime it
+   * reads (`map`), as `{ id, name, facts }`. None when the export writes no audio.
+   */
+  function undecodableAudioOf(document, project, used, map, options) {
+    if (options.includeAudio === false) return [];
+    return project.sources
+      .filter(
+        (source) =>
+          used.has(source.id) &&
+          (source.kind === "audio" || source.has_audio === true),
+      )
+      .filter((source) => {
+        const runtime = map.get(source.id);
+        return (
+          runtime?.hasAudio === true &&
+          runtime.audioDecodable === false &&
+          !runtime.audioBuffer
+        );
+      })
+      .map((source) => ({
+        id: source.id,
+        name: document.assets[source.id]?.name ?? source.id,
+        facts: map.get(source.id).audioDecodeFacts ?? null,
+      }));
+  }
+  /**
+   * Refuses an export whose audible audio this browser cannot decode, unless `undecodableAudio` is
+   * `silence`: the file would lack those sources' sound.
+   */
+  function refuseUndecodableAudio(undecodable) {
+    const [first] = undecodable;
+    const names = undecodable.map((source) => source.name).join(", ");
+    throw new EditorError(
+      "unsupported_media",
+      `This browser cannot decode the sound of ${names}; export with undecodableAudio: "silence" to write them silent, or with the native host`,
+      "export",
+      first.id,
+      true,
+      {
+        cause: new DecodeUnavailableError(
+          `${first.name}: no audio decoder in this browser`,
+          first.facts ?? { kind: "audio", codec: null },
+        ),
+        details: { sources: undecodable },
+      },
+    );
+  }
   let sweptExports = false;
   /** Settles when the running export does. */
   let exportSettled = Promise.resolve();
@@ -2422,6 +2505,13 @@ export function createBrowserBridge(options) {
       options.videoConversion ?? videoConversion,
       "export",
     );
+    const undecodableAudio = options.undecodableAudio ?? "refuse";
+    if (undecodableAudio !== "refuse" && undecodableAudio !== "silence")
+      throw new EditorError(
+        "invalid_undecodable_audio",
+        `Export undecodableAudio must be "refuse" or "silence"; received ${JSON.stringify(undecodableAudio)}`,
+        "export",
+      );
     materializeText(editor.document);
     const snapshot = editor.document,
       revision = editor.revision,
@@ -2461,6 +2551,17 @@ export function createBrowserBridge(options) {
     } catch (error) {
       held.forEach((l) => l.release());
       throw error;
+    }
+    const silentAudio = undecodableAudioOf(
+      snapshot,
+      compiled.project,
+      used,
+      map,
+      options,
+    );
+    if (silentAudio.length > 0 && undecodableAudio !== "silence") {
+      held.forEach((l) => l.release());
+      refuseUndecodableAudio(silentAudio);
     }
     let fontsReported = false;
     const backend = {
@@ -2573,6 +2674,7 @@ export function createBrowserBridge(options) {
               videoDecode,
               videoConversion: exportConversion,
               decodeFallbacks: pixels.decodeFallbacks,
+              silentAudioSources: silentAudio.map((source) => source.id),
               renderer: renderer.rendererChoice,
             },
           };

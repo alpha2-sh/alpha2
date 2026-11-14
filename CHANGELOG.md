@@ -10,6 +10,12 @@ All notable changes to this project are documented in this file.
   adopted proxies no longer count, so a project with many titles or proxies previews and exports;
   media removed from the document still counts while undo can bring it back, and the import refusal
   says so.
+- Editor: a browser export that would write audio this browser cannot decode is refused before it
+  renders with `unsupported_media` naming the sources (`details.sources`, `cause` a
+  `DecodeUnavailableError`); option `undecodableAudio: "silence"` writes them silent, and the
+  result's `report.silentAudioSources` lists them either way. `conform` for an export purpose
+  decodes a trial of such audio again, so the decision uses facts taken at export time. Before, the
+  file silently lacked those sources' sound.
 
 ### Fixed
 
