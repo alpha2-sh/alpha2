@@ -99,6 +99,8 @@ All notable changes to this project are documented in this file.
   when the spec is compiled.
 - A video that loops in compose (`loop`, `when_short: "loop"` or a `longest_loop` grid cell)
   refuses a `speed` other than 1; the speed was silently ignored.
+- Animated captions and titles that differ only in an animator or in their background box no
+  longer draw with each other's pixels, in one frame or after an edit, in preview and export.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

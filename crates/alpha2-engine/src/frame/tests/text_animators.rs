@@ -235,3 +235,112 @@ fn a_layout_text_node_animates_its_characters() {
     );
     assert_eq!(unselected, still);
 }
+
+/// A caption track `id` with one project-long cue "Rise" at height `y` over `background`,
+/// animated as [`RISE`] (settled after one second) with an offset of `offset` when `animated`.
+fn boxed_track(id: &str, y: f32, background: &str, animated: bool, offset: f32) -> String {
+    let animators = if animated {
+        format!(
+            r#", "animators": [ {{ "selector": {{ "type": "range", "shape": "ramp_up",
+               "offset": {{ "mode": "keyframes", "keyframes": [
+                   {{ "time": 0, "value": -100, "interpolation": {{ "type": "linear" }} }},
+                   {{ "time": 120000, "value": 100, "interpolation": {{ "type": "hold" }} }} ] }} }},
+             "properties": {{ "offset": {{ "mode": "constant", "value": {{ "x": 0, "y": {offset} }} }},
+                             "opacity": {{ "mode": "constant", "value": 0 }} }} }} ]"#
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        r#", {{ "id": "{id}", "name": "{id}", "kind": "caption", "captions": {{
+            "style": {{ "font_size": 0.16, "position": {{ "x": 0.5, "y": {y} }}, "anchor": {{ "x": 0.5, "y": 0.5 }}
+                        {background} {animators} }},
+            "cues": [ {{ "timeline_range": {{ "start": 0, "end": 240000 }}, "text": "Rise" }} ] }} }}"#
+    )
+}
+
+const BLUE_BOX: &str = r#", "background": { "color": { "red": 0, "green": 0, "blue": 1, "alpha": 1 }, "padding": 0.3 }"#;
+const RED_BOX: &str = r#", "background": { "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }, "padding": 0.3 }"#;
+const WIDE_RED_BOX: &str = r#", "background": { "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }, "padding": 0.9 }"#;
+
+fn cpu_caption_frame(
+    texts: &mut crate::TextTextures,
+    project: &crate::EngineProject,
+    ticks: i64,
+) -> Vec<u8> {
+    let size = RenderSize::new(160, 90).expect("size");
+    let renderer = alpha2_render::CpuRenderer::new(2);
+    let frame = project.evaluate(MediaTime(ticks)).expect("frame");
+    texts.prepare(&renderer, &frame, size).expect("text");
+    renderer
+        .render_frame(size, &frame, &CaptionFrames(texts))
+        .expect("frame renders")
+        .texture
+        .expect("complete")
+        .read_rgba8()
+}
+
+/// Rows `rows` of a 160-pixel-wide picture.
+fn rows(pixels: &[u8], rows: std::ops::Range<usize>) -> &[u8] {
+    &pixels[rows.start * 640..rows.end * 640]
+}
+
+#[test]
+fn animated_texts_with_different_boxes_in_one_frame_draw_their_own() {
+    for animated in [true, false] {
+        let top_only = text_project("", "", &boxed_track("top", 0.25, BLUE_BOX, animated, 0.6));
+        let bottom_only =
+            text_project("", "", &boxed_track("bottom", 0.75, RED_BOX, animated, 0.6));
+        let both = text_project(
+            "",
+            "",
+            &format!(
+                "{}{}",
+                boxed_track("top", 0.25, BLUE_BOX, animated, 0.6),
+                boxed_track("bottom", 0.75, RED_BOX, animated, 0.6)
+            ),
+        );
+        for ticks in [45_000_i64, 150_000] {
+            let top = cpu_caption_frame(&mut fixture_texts(), &top_only, ticks);
+            let bottom = cpu_caption_frame(&mut fixture_texts(), &bottom_only, ticks);
+            let combined = cpu_caption_frame(&mut fixture_texts(), &both, ticks);
+            assert!(
+                rows(&combined, 0..45) == rows(&top, 0..45),
+                "animated {animated} at {ticks}: the top text"
+            );
+            assert!(
+                rows(&combined, 45..90) == rows(&bottom, 45..90),
+                "animated {animated} at {ticks}: the bottom text"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_edited_box_or_animator_draws_like_a_new_store() {
+    let edits = [
+        (
+            boxed_track("subs", 0.5, BLUE_BOX, true, 0.6),
+            boxed_track("subs", 0.5, WIDE_RED_BOX, true, 0.6),
+        ),
+        (
+            boxed_track("subs", 0.5, BLUE_BOX, false, 0.6),
+            boxed_track("subs", 0.5, WIDE_RED_BOX, false, 0.6),
+        ),
+        (
+            boxed_track("subs", 0.5, BLUE_BOX, true, 0.6),
+            boxed_track("subs", 0.5, BLUE_BOX, true, 0.2),
+        ),
+    ];
+    for (index, (before, after)) in edits.iter().enumerate() {
+        let (before, after) = (text_project("", "", before), text_project("", "", after));
+        // One store across the edit, as an editor's engine object keeps one.
+        for ticks in [45_000_i64, 150_000] {
+            let mut texts = fixture_texts();
+            cpu_caption_frame(&mut texts, &before, ticks);
+            let edited = cpu_caption_frame(&mut texts, &after, ticks);
+            let fresh = cpu_caption_frame(&mut fixture_texts(), &after, ticks);
+            assert!(edited == fresh, "edit {index} at {ticks}");
+        }
+    }
+}
