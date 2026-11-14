@@ -20,7 +20,7 @@ const DEFAULT_MAX_MEMORY_GROWTH_BYTES: u64 = 1 << 30;
 const DEFAULT_MAX_REQUESTS: u64 = 1000;
 const DEFAULT_MAX_HANDLES: u64 = 4096;
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
-const DEFAULT_MAX_RUNNING: usize = 2;
+const DEFAULT_MAX_RUNNING: usize = 1;
 
 /// `serve`'s flags.
 #[derive(Clone, Copy, Debug, PartialEq)]

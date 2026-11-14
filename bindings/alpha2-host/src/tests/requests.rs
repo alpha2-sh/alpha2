@@ -1659,7 +1659,10 @@ fn serve_writes_ready_before_reading_input() {
 #[test]
 fn the_end_of_input_finishes_queued_requests_before_exiting() {
     let _gpu = gpu_test_lock();
-    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[("ALPHA2_TEST_SERVE_ARGS", "--max-running 2")],
+    );
     serving.write(r#"{"protocolVersion":2,"requestId":"one","operation":"capabilities"}"#);
     serving.write(r#"{"protocolVersion":2,"requestId":"two","operation":"capabilities"}"#);
     drop(serving.stdin.take());
@@ -2002,7 +2005,13 @@ fn a_cancel_line_stops_the_running_export_and_the_host_serves_the_next_request()
         "output": output
     });
     // 120 frames at 100 ms each: far longer than the cancel takes to arrive.
-    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SLOW_ENCODE_MS", "100")]);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_SLOW_ENCODE_MS", "100"),
+            ("ALPHA2_TEST_SERVE_ARGS", "--max-running 2"),
+        ],
+    );
     assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
     serving.write(&export.to_string());
     let progress = serving.message(Duration::from_secs(60));

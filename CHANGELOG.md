@@ -35,9 +35,11 @@ All notable changes to this project are documented in this file.
   environment they start with. `Alpha2NodeClient.close()` and `HostClient.close()` end them; idle
   hosts keep no Node or Python process alive. The MCP server reuses hosts across tool calls.
 - A `still` without an `output` returns its PNG in the response instead of a file.
-- `serve` runs up to `--max-running` requests at once on its one GPU device. Requests hold the
-  runtime effects and effect resources they define, so two that define one id differently take
-  turns, and the memory watchdog stops the newest export first.
+- `serve` runs up to `--max-running` requests at once on its one GPU device, 1 by default. With a
+  higher count, requests share the device: budgets and codec threads are not divided, and an
+  export's GPU counters cover the requests that ran with it. Requests hold the runtime effects and
+  effect resources they define, so two that define one id differently take turns, and the memory
+  watchdog stops the newest export first.
 - Data sets in the project: `points`, `scalars`, `similarity`, `words` and `intervals`, anchored to
   a source or the timeline. Animated values can follow a data set, a clip can take a similarity
   correction from one, and a caption track can take its cues from words.
