@@ -2065,11 +2065,22 @@ function checkArrayShape(
     problems.push(`${path} must have at most ${schema.maxItems} items`);
   }
   const prefix = (schema.prefixItems ?? []) as readonly ShapeNode[];
+  const scalar =
+    prefix.length === 0 && schema.items !== undefined
+      ? plainScalar(schema.items as ShapeNode)
+      : undefined;
   let changed = false;
   // By index rather than `map`, so a hole is read as `undefined` and fails its item shape.
   const read: unknown[] = [];
   for (let index = 0; index < value.length; index += 1) {
     const item = value[index];
+    // Valid numbers of a plain number schema need no path or generic walk.
+    const quick = scalar?.(item, numbers?.get(index));
+    if (quick !== undefined) {
+      if (quick !== item) changed = true;
+      read.push(quick);
+      continue;
+    }
     const itemSchema = prefix[index] ?? (schema.items as ShapeNode | undefined);
     if (itemSchema === undefined) {
       read.push(item);
@@ -2090,6 +2101,66 @@ function checkArrayShape(
     ? (value as unknown[])
     : read;
 }
+
+/**
+ * For an item schema that is only a number, integer or null type, a reader that returns a valid
+ * item as the generic walk reads it, and `undefined` for anything it leaves to that walk.
+ */
+function plainScalar(
+  node: ShapeNode,
+): ((item: unknown, texts?: readonly string[]) => unknown) | undefined {
+  const known = plainScalars.get(node);
+  if (known !== undefined || plainScalars.has(node)) return known ?? undefined;
+  const schema = resolveShape(node);
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+  const plain =
+    !SHAPE_READERS.has(schema) &&
+    schema.oneOf === undefined &&
+    schema.anyOf === undefined &&
+    !("const" in schema) &&
+    schema.enum === undefined &&
+    schema.minimum === undefined &&
+    schema.maximum === undefined &&
+    types.every(
+      (type) => type === "number" || type === "integer" || type === "null",
+    ) &&
+    !(types.includes("number") && types.includes("integer"));
+  let reader:
+    ((item: unknown, texts?: readonly string[]) => unknown) | undefined;
+  if (plain) {
+    const nullable = types.includes("null");
+    const float = schema.format === "float";
+    const { min, max } = types.includes("integer")
+      ? integerBounds(schema)
+      : { min: undefined, max: undefined };
+    const low = min === undefined ? -Infinity : Number(min);
+    const high = max === undefined ? Infinity : Number(max);
+    reader = types.includes("integer")
+      ? (item, texts) =>
+          (nullable && item === null) ||
+          (texts === undefined &&
+            Number.isSafeInteger(item) &&
+            (item as number) >= low &&
+            (item as number) <= high)
+            ? item
+            : undefined
+      : (item) =>
+          nullable && item === null
+            ? item
+            : typeof item === "number" && Number.isFinite(item)
+              ? float
+                ? Math.fround(item)
+                : item
+              : undefined;
+  }
+  plainScalars.set(node, reader);
+  return reader;
+}
+
+const plainScalars = new Map<
+  ShapeNode,
+  ((item: unknown, texts?: readonly string[]) => unknown) | undefined
+>();
 
 function checkObjectShape(
   schema: ShapeNode,

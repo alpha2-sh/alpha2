@@ -29,11 +29,7 @@ import type { ExportFailure, ExportPhase } from "alpha2/export-failure";
 import { failureForCode } from "alpha2/export-failure";
 import type { BuiltinEffectCatalog, EffectDefinition } from "alpha2/effects";
 import type { FrameRate, MediaFingerprint, Project } from "alpha2/project";
-import {
-  MAX_PROJECT_JSON_BYTES,
-  validateProject,
-  validateProjectJson,
-} from "alpha2/project";
+import { MAX_PROJECT_JSON_BYTES, validateProject } from "alpha2/project";
 
 import {
   type ExtractContext,
@@ -1927,13 +1923,22 @@ function recordDecodeStall(
   return retryError;
 }
 
-/** Shape and serialized size (`MAX_PROJECT_JSON_BYTES`) problems the engine would refuse. */
+/**
+ * Shape and serialized size (`MAX_PROJECT_JSON_BYTES`) problems the engine would refuse. The object
+ * is validated as it is: its own `JSON.stringify` text cannot repeat a key or spell an integer as
+ * a float, so reading that text again would only cost time and memory.
+ */
 function projectProblems(project: Project): string[] {
   // `undefined` does not serialize; let the object validator report it.
   const json = JSON.stringify(project) as string | undefined;
-  return json === undefined
-    ? validateProject(project)
-    : validateProjectJson(json);
+  if (json !== undefined) {
+    const bytes = Buffer.byteLength(json);
+    if (bytes > MAX_PROJECT_JSON_BYTES)
+      return [
+        `project JSON is ${bytes} bytes, over the ${MAX_PROJECT_JSON_BYTES} byte limit`,
+      ];
+  }
+  return validateProject(project);
 }
 
 const convenienceClients = new Map<string, Alpha2NodeClient>();

@@ -95,7 +95,17 @@ export function readJsonText(
         skipSpace();
         at += 1;
         const [item, text] = readValue(depth + 1);
-        if (Object.hasOwn(object, key)) note(spelling.repeated, object, key);
+        if (Object.hasOwn(object, key)) {
+          note(spelling.repeated, object, key);
+          // A fraction was not recorded on its own; for a repeated key every value counts.
+          const earlier = object[key];
+          if (
+            typeof earlier === "number" &&
+            !Number.isInteger(earlier) &&
+            !spelling.numbers.get(object)?.has(key)
+          )
+            noteNumber(object, key, JSON.stringify(earlier));
+        }
         // The engine reads every value of a repeated key, so each text counts.
         if (text !== undefined) noteNumber(object, key, text);
         // `__proto__` is an own property in parsed JSON, not the prototype.
@@ -114,9 +124,14 @@ export function readJsonText(
     while (at < json.length && !",]} \t\n\r".includes(json[at])) at += 1;
     const token = json.slice(start, at);
     const value = JSON.parse(token) as unknown;
+    // Only integer fields read spellings, and a fraction already fails there by value, so a
+    // spelling is kept only for an integer the value alone does not show.
     const unspelled =
       typeof value === "number" &&
-      (/[.eE]/.test(token) || token === "-0" || !Number.isSafeInteger(value));
+      Number.isInteger(value) &&
+      (/[.eE]/.test(token) ||
+        Object.is(value, -0) ||
+        !Number.isSafeInteger(value));
     return [value, unspelled ? token : undefined];
   };
   try {

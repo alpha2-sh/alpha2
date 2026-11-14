@@ -474,6 +474,11 @@ All notable changes to this project are documented in this file.
   `clip.detachComposition` command does that for a graph, and `compositionUsers` lists what draws a
   composition. An engine edit removes the compositions, graph layout and names of what it stopped
   drawing.
+- `validateProjectJson` records the spelling of a number only where an integer field needs it,
+  and checks arrays of plain numbers in one loop: 0.4 million data values validate in 0.4 s
+  instead of 1.0 s, 4 million in 3.7 s instead of 7.9 s with a third less heap, and 15 million no
+  longer exhaust a 2 GB heap. `@alpha2-sh/node` validates the project object it holds (and its
+  serialized size) instead of parsing its own `JSON.stringify` text again.
 
 ## [0.6.0] - 2026-11-08
 

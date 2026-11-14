@@ -1200,3 +1200,28 @@ test("a hole in a project array is a problem, as the same document as text is", 
     );
   }
 });
+
+test("an integer field spelled as a float is refused, and fractions elsewhere are not recorded", () => {
+  const text = JSON.stringify(project());
+  for (const spelling of ["1920.0", "1.92e3", "-0"]) {
+    const problems = validateProjectJson(
+      text.replace('"width":1920', `"width":${spelling}`),
+    );
+    assert.ok(
+      problems.some((p) => p.includes("integer") || p.includes("at least")),
+      `${spelling}: ${problems}`,
+    );
+  }
+  // A repeated integer key keeps the fraction of its first value.
+  const repeated = validateProjectJson(
+    text.replace('"width":1920', '"width":1.5,"width":1920'),
+  );
+  assert.ok(
+    repeated.some((p) => p.includes("integer")),
+    repeated.join("; "),
+  );
+  assert.deepEqual(
+    validateProjectJson(text.replace('"width":1920', '"width":1920')),
+    [],
+  );
+});
