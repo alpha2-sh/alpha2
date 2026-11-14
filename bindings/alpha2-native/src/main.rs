@@ -146,6 +146,13 @@ fn run(mut args: Vec<String>, decoding: &mut Decoding) -> Result<(), String> {
     if command == "probe-encoders" {
         return probe_encoders(args);
     }
+    if command == "features" {
+        ensure_no_more(args)?;
+        for feature in compiled_features() {
+            out!("{feature}")?;
+        }
+        return Ok(());
+    }
     // Hidden: `probe-encoders` runs it as a child so a driver crash takes down only the child.
     #[cfg(all(target_os = "windows", feature = "hwencode"))]
     if command == D3D12VA_RATE_CONTROL_SUBCOMMAND {
@@ -452,8 +459,21 @@ fn waveform_json(
     Ok(json)
 }
 
+/// The optional Cargo features this binary was built with.
+fn compiled_features() -> Vec<&'static str> {
+    [
+        ("hwdecode", cfg!(feature = "hwdecode")),
+        ("hwencode", cfg!(feature = "hwencode")),
+        ("timeline", cfg!(feature = "timeline")),
+        ("cpal-host", cfg!(feature = "cpal-host")),
+    ]
+    .into_iter()
+    .filter_map(|(name, on)| on.then_some(name))
+    .collect()
+}
+
 fn usage() -> String {
-    "usage: alpha2 probe|decode|decode-audio <media-path>\n       alpha2 probe-hwdecode <media-path> [frame-limit]\n       alpha2 probe-encoders [width] [height]\n       alpha2 render <media-path> <png-path>\n       alpha2 thumbnail <media-path> <png-path> [--auto | --at <source-seconds>]\n       alpha2 transcode <media-path> <output-media> [--proxy half|quarter] [--video-codec <id>]\n       alpha2 export-audio <media-path> <output.wav>\n       alpha2 waveform <media-path> [bucket-ms=10] [levels=6]\n\n       decode, decode-audio, render, thumbnail, transcode, export-audio and waveform take\n       --decode-policy strict|tolerant: how damaged input is handled (default: ALPHA2_DECODE_POLICY, else strict)".to_owned()
+    "usage: alpha2 probe|decode|decode-audio <media-path>\n       alpha2 probe-hwdecode <media-path> [frame-limit]\n       alpha2 probe-encoders [width] [height]\n       alpha2 features\n       alpha2 render <media-path> <png-path>\n       alpha2 thumbnail <media-path> <png-path> [--auto | --at <source-seconds>]\n       alpha2 transcode <media-path> <output-media> [--proxy half|quarter] [--video-codec <id>]\n       alpha2 export-audio <media-path> <output.wav>\n       alpha2 waveform <media-path> [bucket-ms=10] [levels=6]\n\n       decode, decode-audio, render, thumbnail, transcode, export-audio and waveform take\n       --decode-policy strict|tolerant: how damaged input is handled (default: ALPHA2_DECODE_POLICY, else strict)".to_owned()
 }
 
 /// Reports what every registered video encoder declares and whether it actually opens and encodes.

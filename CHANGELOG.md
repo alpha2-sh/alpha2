@@ -35,6 +35,10 @@ All notable changes to this project are documented in this file.
 - The CPU renderer packs 10-bit, 4:2:2, 4:4:4 and alpha layouts on its own threads
   (`ALPHA2_RENDER_THREADS`) instead of starting up to eight more per frame. In `alpha2-render`,
   `pack_cpu_image` is now the method `CpuRenderer::pack_image`.
+- `alpha2 features` lists the optional features the `alpha2` binary was built with. The release
+  checks each native archive by running it before anything is published: the feature list, a
+  capability report and a CPU-renderer export from the unpacked archive on all four targets, and
+  the install journeys against the pinned wheels and Node package.
 
 ### Fixed
 

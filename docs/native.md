@@ -143,7 +143,7 @@ Cisco's binary is under Cisco's own licence, reproduced in `THIRD_PARTY_NOTICES.
 
 The commands that decode take `--decode-policy strict|tolerant`: `strict` fails at the first damaged input, `tolerant` skips damaged input and reports what it skipped when it ends. Without the flag the policy is `ALPHA2_DECODE_POLICY`, else `strict`.
 
-Two more commands are diagnostics for support cases: `alpha2 probe-encoders [width] [height]` reports what every video encoder of the runtime declares and whether it opens and encodes a frame at that size (1920x1080 by default), and on Linux `alpha2 probe-hwdecode <media> [frame-limit]` decodes up to that many frames (120 by default) with Vulkan Video and reports what it did.
+Three more commands are diagnostics for support cases: `alpha2 probe-encoders [width] [height]` reports what every video encoder of the runtime declares and whether it opens and encodes a frame at that size (1920x1080 by default), on Linux `alpha2 probe-hwdecode <media> [frame-limit]` decodes up to that many frames (120 by default) with Vulkan Video and reports what it did, and `alpha2 features` lists the optional features the binary was built with (`hwdecode`, `hwencode`, `timeline`, `cpal-host`), one per line.
 
 ## Installing from crates.io
 
