@@ -412,7 +412,7 @@ fn audio_frame_grids() -> Value {
         .collect::<Vec<_>>();
     let mut missing = rounded(0, 1_024, 48_000, 1_000, frames);
     missing.remove(10);
-    let streams: [(i64, u32, Vec<i64>); 12] = [
+    let streams: [(i64, u32, Vec<i64>); 16] = [
         // AAC in Matroska, 48 and 44.1 kHz, from its priming frame.
         (1_000, 48_000, rounded(-1_024, 1_024, 48_000, 1_000, frames)),
         (1_000, 44_100, rounded(-1_024, 1_024, 44_100, 1_000, frames)),
@@ -434,6 +434,11 @@ fn audio_frame_grids() -> Value {
         (1_000, 48_000, vec![0, 21]),
         // Opus's 20 ms frames, which milliseconds hold exactly.
         (1_000, 48_000, (0..frames).map(|k| k * 20).collect()),
+        // Timestamps that allow too many periods to search, and the two sides of the bound.
+        (1_000, 48_000, vec![0, 3_000_000, 7_000_000]),
+        (1_000, 48_000, vec![0, 3_000_000_000_000, 7_000_000_000_000]),
+        (12, 48_000, vec![0, 2, 5]),
+        (11, 48_000, vec![0, 2, 5]),
     ];
     streams
         .into_iter()

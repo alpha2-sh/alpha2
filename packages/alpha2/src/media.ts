@@ -53,6 +53,9 @@ export interface AudioFrameGrid {
   readonly trimmedTolerance: number;
 }
 
+/** Most whole-sample periods `audioFrameGrid` tries. Mirrors `audio_frame_grid`. */
+const MAX_GRID_CANDIDATES = 4096n;
+
 /**
  * The frame grid an audio stream's first packet timestamps show at `sampleRate`, for timestamps in
  * whole units of `1 / timeResolution` seconds. Matches the engine's `audio_frame_grid`. Returns
@@ -93,6 +96,7 @@ export function audioFrameGrid(
   let shortest = floorDiv(span - rounding, den * frames);
   if (shortest < 2n * trimmed + 1n) shortest = 2n * trimmed + 1n;
   const longest = floorDiv(span + rounding, den * frames) + 1n;
+  if (longest - shortest >= MAX_GRID_CANDIDATES) return undefined;
   let best: { period: bigint; low: bigint; high: bigint } | undefined;
   for (let period = shortest; period <= longest; period += 1n) {
     let low: bigint | undefined;
