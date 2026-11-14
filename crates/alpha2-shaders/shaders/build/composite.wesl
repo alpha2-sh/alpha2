@@ -303,9 +303,7 @@ struct SampledSource {
     coverage: f32,
 };
 
-// Samples layer `index` at this pixel. In the loop it runs only for whole 2 x 2 quads, so
-// derivatives are valid even though uniformity analysis cannot prove it.
-@diagnostic(off, derivative_uniformity)
+// Samples layer `index` at this pixel.
 fn sample_source(input: VertexOutput, index: u32, looped: bool) -> SampledSource {
     let layer = batch.layers[index];
     let position = layer.position_anchor.xy;
@@ -328,9 +326,9 @@ fn sample_source(input: VertexOutput, index: u32, looped: bool) -> SampledSource
     );
     let local = rotated_pixel_offset / output_dimensions;
     let source_uv = local / scale + anchor;
-    // Evaluate derivatives before any per-fragment early return.
-    let dx = dpdx(source_uv);
-    let dy = dpdy(source_uv);
+    // The affine mapping's exact derivatives per output pixel, in the CPU renderer's order.
+    let dx = vec2f(cosine / output_dimensions.x / scale.x, -sine / output_dimensions.y / scale.y);
+    let dy = vec2f(sine / output_dimensions.x / scale.x, cosine / output_dimensions.y / scale.y);
     var coverage = rectangle_coverage(source_uv, abs(dx) + abs(dy));
     // In the loop, skip pixels outside the layer's bounds, since a batch covers other layers too.
     if looped {

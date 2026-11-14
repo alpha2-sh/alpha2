@@ -857,3 +857,73 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
         "the frame at another time is found"
     );
 }
+
+#[test]
+fn a_clip_filling_a_uhd_canvas_keeps_its_columns() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    for width in [1920_u32, 3840] {
+        let size = RenderSize::new(width, 8).unwrap();
+        let pixels = (0..8)
+            .flat_map(|_| {
+                (0..width).flat_map(|x| {
+                    if x % 2 == 0 {
+                        [0, 0, 0, 255]
+                    } else {
+                        [255, 255, 255, 255]
+                    }
+                })
+            })
+            .collect::<Vec<u8>>();
+        let texture = rgba_image_texture(&renderer, size, &pixels);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let source = SourceId::new("source").unwrap();
+        let clip = ActiveClip {
+            data: alpha2_eval::SampleContext::NONE,
+            correction: None,
+            clip_id: leak(ClipId::new("clip").unwrap()),
+            source_id: leak(source.clone()),
+            track_id: leak(TrackId::new("track").unwrap()),
+            source_time: MediaTime::ZERO,
+            visual: Some(visual(Vec2::new(1.0, 1.0), 1.0)),
+            composition: None,
+            blend_mode: ClipBlendMode::Normal,
+            cache: alpha2_model::CacheIntent::Auto,
+            masks: &[],
+            matte: None,
+            is_matte: false,
+            generator: None,
+            plan: None,
+            source_composition: None,
+        };
+        let frame = FrameDesc {
+            background: Some(alpha2_model::Rgb::BLACK),
+            blend_space: alpha2_model::BlendSpace::LinearLight,
+            time: MediaTime::ZERO,
+            visual: vec![clip],
+            audio: vec![],
+            transitions: vec![],
+            captions: Vec::new(),
+        };
+        let output = renderer
+            .render_frame(
+                size,
+                &frame,
+                &SingleFrame {
+                    source,
+                    texture: &view,
+                },
+            )
+            .unwrap()
+            .texture
+            .unwrap();
+        let drawn = read_rgba8(&renderer, &output);
+        let wrong = drawn
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(pixels.as_chunks::<4>().0)
+            .position(|(drawn, source)| drawn != source);
+        assert_eq!(wrong, None, "{width} wide: the first differing pixel");
+    }
+}

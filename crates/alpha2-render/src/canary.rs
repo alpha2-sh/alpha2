@@ -508,9 +508,17 @@ mod tests {
                 kind: alpha2_gpu::GpuErrorKind::OutOfMemory
             })
         );
-        assert_eq!(canaries.lost(), None, "a rejected submission leaves the device usable");
+        assert_eq!(
+            canaries.lost(),
+            None,
+            "a rejected submission leaves the device usable"
+        );
         let later = canaries.issue();
-        assert_eq!(later.check(&later.expected()), Ok(()), "only reports since issue count");
+        assert_eq!(
+            later.check(&later.expected()),
+            Ok(()),
+            "only reports since issue count"
+        );
     }
 
     #[test]
