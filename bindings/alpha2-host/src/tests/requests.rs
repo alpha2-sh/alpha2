@@ -674,6 +674,113 @@ fn a_host_that_cannot_take_another_request_drains_and_exits_after_answering() {
 }
 
 #[test]
+fn a_retiring_host_answers_what_it_read_then_stops_and_answers_what_runs() {
+    let _gpu = gpu_test_lock();
+    let running = scratch_directory("retire-running");
+    let stalled = scratch_directory("retire-stalled");
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_SLOW_ENCODE_MS", "100"),
+            ("ALPHA2_TEST_SECOND_EXPORT_STALLS", "1"),
+            ("ALPHA2_TEST_SERVE_ARGS", "--max-running 2"),
+        ],
+    );
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    // 150 frames at 100 ms each: still running long after the second export stalls.
+    serving.write(&slow_export("running", &running.join("out.mp4"), 5));
+    let progress = serving.message(Duration::from_secs(60));
+    assert_eq!(progress["requestId"], "running", "{progress}");
+    serving.write(&slow_export("stalls", &stalled.join("out.mp4"), 1));
+    // The first waits for a slot in the dispatcher, the second in the queue.
+    serving.write(&templates("waiting"));
+    serving.write(&templates("queued"));
+    let mut order = Vec::new();
+    let mut answers = HashMap::new();
+    let mut states = Vec::new();
+    while !answers.contains_key("running") {
+        let message = serving.message(Duration::from_secs(60));
+        if message["type"] == "state" {
+            states.push(message);
+        } else if message.get("ok").is_some() {
+            let id = message["requestId"].as_str().unwrap_or_default().to_owned();
+            order.push(id.clone());
+            answers.insert(id, message);
+        }
+    }
+    assert_eq!(states.len(), 1, "{states:?}");
+    assert_eq!(states[0]["reason"], "threads-abandoned", "{states:?}");
+    assert_eq!(order, ["stalls", "waiting", "queued", "running"]);
+    assert_eq!(answers["stalls"]["error"]["code"], "ENCODE_STALLED");
+    for id in ["waiting", "queued"] {
+        assert_eq!(
+            answers[id]["error"]["code"], "HOST_RETIRING",
+            "{}",
+            answers[id]
+        );
+    }
+    let stopped = &answers["running"];
+    assert_eq!(stopped["error"]["code"], "CANCELLED", "{stopped}");
+    assert_eq!(
+        stopped["error"]["failure"]["code"], "CANCELLED",
+        "{stopped}"
+    );
+    assert_eq!(
+        stopped["error"]["details"]["hostRetiring"], "threads-abandoned",
+        "{stopped}"
+    );
+    assert!(
+        stopped["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("the host is retiring (threads-abandoned)")),
+        "{stopped}"
+    );
+    assert_eq!(stopped["hostState"], "draining", "{stopped}");
+    assert_eq!(serving.finish(), Some(1));
+    let left = std::fs::read_dir(&running)
+        .expect("directory")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect::<Vec<_>>();
+    assert!(left.is_empty(), "the stopped export left {left:?}");
+}
+
+#[test]
+fn a_drain_between_the_dispatchers_reads_is_not_missed() {
+    let limits = SoftLimits {
+        max_requests: Some(1),
+        ..SoftLimits::OFF
+    };
+    let mut serving = Serving::with_lifecycle(
+        VideoDecodePolicy::Software,
+        Arc::new(Lifecycle::new(limits)),
+        1,
+    );
+    serving.create = no_gpu;
+    serving.pause_between_reads = true;
+    let (sender, requests) = crate::serve_io::request_queue();
+    assert!(sender.send(crate::serve_io::InputFrame::Request {
+        header: templates(BETWEEN_READS_REQUEST),
+        attachments: Ok(Vec::new()),
+    }));
+    let output = crate::serve_io::Captured::default();
+    let out = output.responder();
+    let (done, served) = mpsc::channel();
+    // The input stays open, so only the drain can end the dispatcher.
+    std::thread::spawn(move || {
+        let _ = done.send(serve_requests(&mut serving, &requests, &out, &|_| None));
+    });
+    let served = served
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the dispatcher missed the drain");
+    assert_eq!(served.ok(), Some(Served::Drained(DrainReason::Requests)));
+    let messages = crate::serve_io::messages_of(&output.bytes());
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_eq!(messages[0].0["reason"], "requests");
+    assert_eq!(messages[1].0["ok"], true);
+    drop(sender);
+}
+
+#[test]
 #[ignore = "run by an_unknown_decode_mode_is_a_fatal_invalid_input with ALPHA2_VIDEO_DECODE set"]
 fn serve_with_an_unknown_decode_mode() {
     let error = serve(&mut None, test_serve_limits()).expect_err("an unknown mode");
@@ -1643,7 +1750,8 @@ impl ServeChild {
 }
 
 /// `ALPHA2_TEST_SLOW_ENCODE_MS` makes the first export's encoder take that long over each frame;
-/// `ALPHA2_TEST_TEARDOWN_STALL` makes it stall in its teardown, after the output is in place.
+/// `ALPHA2_TEST_TEARDOWN_STALL` makes it stall in its teardown, after the output is in place;
+/// `ALPHA2_TEST_SECOND_EXPORT_STALLS` makes the second export's encoder stall.
 #[test]
 #[ignore = "run by the tests that start a ServeChild"]
 fn serve_standard_input() {
@@ -1670,20 +1778,29 @@ fn serve_standard_input() {
         crate::compose_request::INJECT_REQUEST_PANIC
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    let mut first = crate::encode::ServeExportHooks::default();
     if std::env::var_os("ALPHA2_TEST_TEARDOWN_STALL").is_some() {
-        *crate::encode::SERVE_ENCODE_STALL
-            .lock()
-            .expect("encode stall") = Some((
+        first.stall = Some((
             crate::heartbeat::InjectedStall::OnTeardown,
             Duration::from_millis(500),
         ));
     }
     if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_SLOW_ENCODE_MS") {
-        let milliseconds = milliseconds.parse().expect("milliseconds");
-        *crate::encode::SERVE_SLOW_ENCODE
-            .lock()
-            .expect("slow encode") = Some(Duration::from_millis(milliseconds));
+        first.slow = Some(Duration::from_millis(
+            milliseconds.parse().expect("milliseconds"),
+        ));
     }
+    let mut hooks = vec![first];
+    if std::env::var_os("ALPHA2_TEST_SECOND_EXPORT_STALLS").is_some() {
+        hooks.push(crate::encode::ServeExportHooks {
+            slow: None,
+            stall: Some((
+                crate::heartbeat::InjectedStall::AfterOperations(2),
+                Duration::from_millis(500),
+            )),
+        });
+    }
+    *crate::encode::SERVE_EXPORT_HOOKS.lock().expect("hooks") = hooks;
     let mut host = None;
     serve(&mut host, test_serve_limits()).expect("serve");
 }

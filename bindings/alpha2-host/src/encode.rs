@@ -822,14 +822,18 @@ thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-/// [`INJECT_SLOW_ENCODE`] for the first export `serve` runs.
+/// [`INJECT_SLOW_ENCODE`] and [`INJECT_ENCODE_STALL`] for the exports `serve` runs, one entry per
+/// export in the order they start.
 #[cfg(test)]
-pub static SERVE_SLOW_ENCODE: std::sync::Mutex<Option<Duration>> = std::sync::Mutex::new(None);
+pub static SERVE_EXPORT_HOOKS: std::sync::Mutex<Vec<ServeExportHooks>> =
+    std::sync::Mutex::new(Vec::new());
 
-/// [`INJECT_ENCODE_STALL`] for the first export `serve` runs.
 #[cfg(test)]
-pub static SERVE_ENCODE_STALL: std::sync::Mutex<Option<(InjectedStall, Duration)>> =
-    std::sync::Mutex::new(None);
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ServeExportHooks {
+    pub slow: Option<Duration>,
+    pub stall: Option<(InjectedStall, Duration)>,
+}
 
 #[cfg(test)]
 pub const INJECTED_WRITE_FAILURE: &str =

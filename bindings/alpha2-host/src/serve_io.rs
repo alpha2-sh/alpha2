@@ -260,7 +260,7 @@ pub(crate) fn request_queue() -> (FrameSender, Requests) {
 impl FrameSender {
     /// Waits while the queue holds more than [`MAX_QUEUED_BYTES`]. Returns `false` when the
     /// request thread is gone.
-    fn send(&self, frame: InputFrame) -> bool {
+    pub(crate) fn send(&self, frame: InputFrame) -> bool {
         let bytes = frame.queued_bytes();
         let mut queued = self
             .queued

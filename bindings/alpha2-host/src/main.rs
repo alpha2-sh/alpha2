@@ -1395,6 +1395,8 @@ struct Serving {
     max_running: usize,
     /// As [`crate::lifecycle::ServeOptions::extract`].
     extract: crate::extract_request::ExtractOptions,
+    #[cfg(test)]
+    pause_between_reads: bool,
 }
 
 impl Serving {
@@ -1410,6 +1412,8 @@ impl Serving {
             lifecycle,
             max_running,
             extract: crate::extract_request::ExtractOptions::DEFAULT,
+            #[cfg(test)]
+            pause_between_reads: false,
         }
     }
 
@@ -1463,9 +1467,6 @@ type Unusable<'a> = dyn Fn(Option<&HostDevice>) -> Option<DrainReason> + Sync + 
 /// How often the dispatcher looks at the host's state while requests run.
 const DISPATCH_POLL: Duration = Duration::from_millis(100);
 
-/// How long a host that cannot take another request waits for those it runs to answer.
-const RETIRE_WAIT: Duration = Duration::from_secs(60);
-
 /// When the GPU device cannot be made, the `fatal` notification is written and its error returned,
 /// and that request and later ones go unanswered. A request cancelled before it started is
 /// answered `CANCELLED` without running. Requests run on worker threads, up to
@@ -1501,13 +1502,21 @@ fn dispatch<'scope>(
 ) -> Result<Served, HostError> {
     let lifecycle = Arc::clone(&serving.lifecycle);
     loop {
+        // Read first: a request drains or fails before it frees its slot, so a host found idle
+        // here shows that drain or failure below.
+        let idle = slots.idle_for();
+        #[cfg(test)]
+        if idle.is_none() && std::mem::take(&mut serving.pause_between_reads) {
+            BETWEEN_DISPATCH_READS.wait();
+            slots.wait_idle(None);
+        }
         if let Some(error) = failed.lock().unwrap_or_else(PoisonError::into_inner).take() {
             return Err(error);
         }
         if let Some((reason, _)) = lifecycle.draining_since() {
             return retire(requests, out, &lifecycle, reason, slots);
         }
-        let wait = match (slots.idle_for(), lifecycle.idle_timeout()) {
+        let wait = match (idle, lifecycle.idle_timeout()) {
             (Some(idle), Some(limit)) => Some(limit.saturating_sub(idle)),
             (Some(_), None) => None,
             (None, _) => Some(DISPATCH_POLL),
@@ -1629,6 +1638,15 @@ fn dispatch<'scope>(
     }
 }
 
+/// Holds the request [`BETWEEN_READS_REQUEST`] until a dispatcher with
+/// [`Serving::pause_between_reads`] has read the slots, which then waits until it has ended.
+#[cfg(test)]
+static BETWEEN_DISPATCH_READS: std::sync::LazyLock<std::sync::Barrier> =
+    std::sync::LazyLock::new(|| std::sync::Barrier::new(2));
+
+#[cfg(test)]
+const BETWEEN_READS_REQUEST: &str = "ends-between-dispatch-reads";
+
 /// A request handed to a worker thread.
 struct RequestWork {
     request_id: String,
@@ -1657,6 +1675,10 @@ impl RequestWork {
         #[cfg(test)]
         if matches!(envelope, Ok(crate::protocol::Request::Export(_))) {
             arm_serve_encode_hooks();
+        }
+        #[cfg(test)]
+        if request_id == BETWEEN_READS_REQUEST {
+            BETWEEN_DISPATCH_READS.wait();
         }
         // Until the answer is written, a termination waits for this request instead of ending the
         // process.
@@ -1714,6 +1736,10 @@ impl RequestWork {
             );
             Err(if is_export { fatal_error(error) } else { error })
         });
+        let response = match (response, guard.retired()) {
+            (Err(error), Some(reason)) => Err(stopped_by_retiring(error, reason, is_export)),
+            (response, _) => response,
+        };
         if is_extract && let Some(host) = host.as_mut() {
             host.end_extract();
         }
@@ -1740,23 +1766,37 @@ impl RequestWork {
     }
 }
 
-/// Hands the first export `serve` runs the encode hooks a test set for it.
+/// A request the host stopped because it retires is answered `CANCELLED` with
+/// `details.hostRetiring`; an export that failed for a reason of its own keeps that reason.
+fn stopped_by_retiring(error: HostError, reason: &str, is_export: bool) -> HostError {
+    let mut error = if error.code == "CANCELLED" {
+        error
+    } else if is_export {
+        return error;
+    } else {
+        HostError::new("CANCELLED", termination::retiring_message(reason))
+    };
+    let mut details = match error.details.take() {
+        Some(Value::Object(details)) => details,
+        _ => serde_json::Map::new(),
+    };
+    details.insert("hostRetiring".to_owned(), json!(reason));
+    error.with_details(Value::Object(details))
+}
+
+/// Hands each export `serve` runs the encode hooks a test set for it.
 #[cfg(test)]
 fn arm_serve_encode_hooks() {
-    if let Some(slow) = crate::encode::SERVE_SLOW_ENCODE
+    let mut hooks = crate::encode::SERVE_EXPORT_HOOKS
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take()
-    {
-        crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(Some(slow)));
+        .unwrap_or_else(PoisonError::into_inner);
+    if hooks.is_empty() {
+        return;
     }
-    if let Some(stall) = crate::encode::SERVE_ENCODE_STALL
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take()
-    {
-        crate::encode::INJECT_ENCODE_STALL.with(|injected| injected.set(Some(stall)));
-    }
+    let next = hooks.remove(0);
+    drop(hooks);
+    crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(next.slow));
+    crate::encode::INJECT_ENCODE_STALL.with(|injected| injected.set(next.stall));
 }
 
 /// Counts a request as ended when its thread unwinds before [`answer`] does.
@@ -1938,8 +1978,11 @@ fn answer(
 }
 
 /// Answers `HOST_RETIRING` to every request read but not started, and to those that arrive until
-/// the input ends or [`lifecycle::DRAIN_GRACE`] after draining, once nothing runs. A host that
-/// cannot take another request waits up to [`RETIRE_WAIT`] for those it runs, then exits.
+/// the input ends or [`lifecycle::DRAIN_GRACE`] after draining, once nothing runs.
+///
+/// A host that cannot take another request answers what it has read first, then stops what runs
+/// ([`termination::Terminations::retire`]), waits for those answers as long as a termination
+/// waits ([`termination::retire_grace`]), and exits.
 fn retire(
     requests: &Requests,
     out: &Responder,
@@ -1948,12 +1991,16 @@ fn retire(
     slots: &Slots,
 ) -> Result<Served, HostError> {
     if reason.exits_at_once() {
-        slots.wait_idle(Some(RETIRE_WAIT));
-        while let Some(input) = requests.queued() {
-            if matches!(input, InputFrame::End) {
+        refuse_queued(requests, out, reason, lifecycle)?;
+        termination::terminations().retire(reason.as_str());
+        let deadline = std::time::Instant::now() + termination::retire_grace();
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let idle = slots.wait_idle(Some(left.min(DISPATCH_POLL)));
+            refuse_queued(requests, out, reason, lifecycle)?;
+            if idle || left.is_zero() {
                 break;
             }
-            refuse_frame(out, &input, reason, lifecycle)?;
         }
         let served = Ok(Served::Drained(reason));
         // A request stuck past the wait would hold the worker threads' scope open.
@@ -1964,23 +2011,37 @@ fn retire(
         .draining_since()
         .map_or_else(std::time::Instant::now, |(_, since)| since);
     let deadline = since + lifecycle::DRAIN_GRACE;
-    let mut ended = false;
     loop {
         let now = std::time::Instant::now();
-        if (ended || now >= deadline) && slots.idle_for().is_some() {
-            return Ok(Served::Drained(reason));
+        if now >= deadline {
+            break;
         }
-        if ended {
-            slots.wait_idle(None);
-            continue;
-        }
-        let wait = deadline.saturating_duration_since(now).min(DISPATCH_POLL);
-        match requests.next_within(wait.max(Duration::from_millis(1))) {
+        match requests.next_within(deadline.saturating_duration_since(now).min(DISPATCH_POLL)) {
             None => {}
-            Some(InputFrame::End) => ended = true,
+            Some(InputFrame::End) => break,
             Some(input) => refuse_frame(out, &input, reason, lifecycle)?,
         }
     }
+    while !slots.wait_idle(Some(DISPATCH_POLL)) {
+        refuse_queued(requests, out, reason, lifecycle)?;
+    }
+    Ok(Served::Drained(reason))
+}
+
+/// Answers `HOST_RETIRING` to every request read and not taken yet.
+fn refuse_queued(
+    requests: &Requests,
+    out: &Responder,
+    reason: DrainReason,
+    lifecycle: &Lifecycle,
+) -> Result<(), HostError> {
+    while let Some(input) = requests.queued() {
+        if matches!(input, InputFrame::End) {
+            break;
+        }
+        refuse_frame(out, &input, reason, lifecycle)?;
+    }
+    Ok(())
 }
 
 fn refuse_frame(

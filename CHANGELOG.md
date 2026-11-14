@@ -386,6 +386,11 @@ All notable changes to this project are documented in this file.
 - `alpha2-host` no longer repeats a plugin URL's user info, query or fragment (where a signed URL
   carries its token) in fetch failure messages; the scheme, host, port and path are kept, and file
   paths are shown whole.
+- A host that retires after a lost device or a stuck thread answers the requests it has read
+  first, then stops the requests it runs and answers them `CANCELLED` with `details.hostRetiring`
+  (an export leaves no output), and exits within the stall limit plus 5 s. Before, a running request
+  got no answer and kept its partial file when it needed more than 60 s, and the queue waited as
+  long. A drain that a request causes while the dispatcher looks at the host is no longer missed.
 
 ## [0.6.0] - 2026-11-08
 
