@@ -465,6 +465,10 @@ All notable changes to this project are documented in this file.
 - Editor: a command that removes clips or tracks removes their metadata (names, flags, mask, cue
   and transition ids) too; before, a track added with a removed track's id was born with its flags,
   and the saved file kept metadata of every clip ever created.
+- Editor: `applyEdit` keeps the committed document's objects wherever the engine's result reads
+  the same (`shareUnchangedParts` in `alpha2/project`, which counts an omitted field as its
+  default), so an edit that leaves a locked track alone goes in; before, any locked track refused
+  every engine edit, even an empty bake, and every identity cache missed after one.
 
 ## [0.6.0] - 2026-11-08
 

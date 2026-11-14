@@ -65,7 +65,11 @@ test(
       });
       assert.ok(result.ok, `${fixture.name}: ${result.error?.message}`);
       assert.deepEqual(result.value.report, fixture.expected.report);
-      assert.deepEqual(result.value.document.project, applied.project);
+      // Parts the edit left alone keep the committed objects; the engine reads both alike.
+      assert.equal(
+        canonicalText(wasm, result.value.document.project),
+        applied.projectJson,
+      );
       assert.equal(
         sha256(canonicalText(wasm, editor.document.project)),
         fixture.expected.project_sha256,
@@ -259,3 +263,101 @@ test(
     assert.equal(result.error?.code, "locked");
   },
 );
+
+{
+  const SECOND = 120000;
+  const clip = (id, start, end) => ({
+    id,
+    source_id: "s",
+    timeline_range: { start: start * SECOND, end: end * SECOND },
+    source_range: { start: start * SECOND, end: end * SECOND },
+    time_map: { type: "forward" },
+  });
+  const twoTracks = () => ({
+    schema_version: 1,
+    id: "p",
+    name: "Locks",
+    settings: {
+      width: 64,
+      height: 48,
+      frame_rate: { num: 30, den: 1 },
+      sample_rate: 48000,
+    },
+    sources: [{ id: "s", kind: "video", locator: "test://s" }],
+    timeline: {
+      tracks: [
+        { id: "V1", name: "V1", kind: "video", clips: [clip("a", 0, 4)] },
+        { id: "V2", name: "V2", kind: "video", clips: [clip("b", 0, 4)] },
+      ],
+    },
+    data: [
+      {
+        id: "level",
+        kind: "scalars",
+        anchor: { type: "source", source_id: "s" },
+        channels: ["level"],
+        interpolation: "linear",
+        times: Array.from({ length: 20_000 }, (_, i) => i * 24),
+        values: Array.from({ length: 20_000 }, (_, i) => (i % 100) / 100),
+      },
+    ],
+  });
+  const range = (from, to) => ({
+    list: [{ start: from * SECOND, end: to * SECOND }],
+    anchor: { type: "timeline" },
+  });
+  for (const [name, request] of [
+    [
+      "split_at",
+      {
+        op: "split_at",
+        times: { list: [2 * SECOND], anchor: { type: "timeline" } },
+        target: { clips: ["b"] },
+      },
+    ],
+    [
+      "remove_ranges without ripple",
+      {
+        op: "remove_ranges",
+        ranges: range(1, 2),
+        target: { clips: ["b"] },
+        ripple: "none",
+      },
+    ],
+    [
+      "remove_ranges rippling its track",
+      {
+        op: "remove_ranges",
+        ranges: range(1, 2),
+        target: { clips: ["b"] },
+        ripple: "track",
+      },
+    ],
+    ["an empty bake", { op: "bake", targets: [] }],
+  ])
+    test(
+      `an edit result that leaves a locked track as it was goes in: ${name}`,
+      { skip },
+      async () => {
+        const wasm = await engine();
+        const editor = createEditor({ document: createDocument(twoTracks()) });
+        assert.ok(
+          editor.dispatch({
+            type: "track.metadata",
+            id: "V1",
+            patch: { locked: true },
+          }).ok,
+        );
+        const before = editor.document.project;
+        const { project, read } = editor.editProject();
+        const applied = applyEdit(wasm, project, request);
+        const result = editor.applyEdit(applied, { read, request });
+        assert.ok(result.ok, `${result.error?.code}: ${result.error?.message}`);
+        const after = editor.document.project;
+        // What the edit did not touch is the committed document's own objects.
+        assert.equal(after.timeline.tracks[0], before.timeline.tracks[0]);
+        assert.equal(after.data[0], before.data[0]);
+        assert.equal(after.sources, before.sources);
+      },
+    );
+}

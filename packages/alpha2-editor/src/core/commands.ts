@@ -36,7 +36,7 @@ import type {
   DataSet,
   DataReference,
 } from "alpha2/project";
-import { dataReferences } from "alpha2/project";
+import { dataReferences, shareUnchangedParts } from "alpha2/project";
 import type { AppliedEdit } from "alpha2/apply-edit";
 import {
   assertClipsUnread,
@@ -1884,7 +1884,8 @@ function withoutRemovedMetadata(
  * Puts an engine edit result (`alpha2/apply-edit` `AppliedEdit`, computed from `document`'s
  * project) in `document`, then runs `then` on it as one transaction. Clips the edit created get the
  * editor metadata of the clip each was cut from (`report.created[].from`); removed clips lose
- * theirs. The engine's project is kept as it is.
+ * theirs. Every part the edit left equal to `document`'s keeps `document`'s object, so a locked
+ * track the edit did not touch passes the lock check; the rest is the engine's project as written.
  *
  * Never throws. A refusal is `{ ok: false }` with an `EditorError`, `locked` for a change to a
  * locked track, `invalid_result` for a result that does not validate (an engine defect), or the
@@ -1900,7 +1901,10 @@ export function executeEditResult(
     edited = withValidated(() => {
       let next: DraftDocument = withoutRemovedMetadata(document, {
         ...document,
-        project: JSON.parse(applied.projectJson) as Project,
+        project: shareUnchangedParts(
+          document.project,
+          JSON.parse(applied.projectJson) as Project,
+        ),
       });
       for (const created of applied.report.created)
         next = afterSplit(next, created.id, created.from);

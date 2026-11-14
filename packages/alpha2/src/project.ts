@@ -1676,6 +1676,135 @@ function canonicalWalk(node: ShapeNode, value: unknown): unknown {
   return read === undefined ? value : { ...value, ...read };
 }
 
+/**
+ * `next` with every part that equals the matching part of `previous` replaced by that part, so
+ * a project an engine edit wrote keeps the objects of the project it was computed from wherever
+ * the edit changed nothing. A field one side omits counts as its schema default, as the engine
+ * reads it; arrays match items by string `id` when they have one, else by position. Both projects
+ * must be valid. The result reads as `next` does, though parts taken from `previous` keep its
+ * spelling of defaults.
+ */
+export function shareUnchangedParts<T extends Project>(
+  previous: Project,
+  next: T,
+): T {
+  return shareAt(shapeRoot, previous, next) as T;
+}
+
+const idOfItem = (item: unknown): unknown =>
+  isRecord(item) ? item.id : undefined;
+
+/** Whether `value` can be an instance of variant `node`, judged by its constant fields. */
+function fitsVariant(node: ShapeNode, value: unknown): boolean {
+  const schema = resolveShape(node);
+  if ("const" in schema) return value === schema.const;
+  if (schema.type === "null") return value === null;
+  if (schema.type === "array") return Array.isArray(value);
+  if (schema.type === "object" || schema.properties !== undefined) {
+    if (!isRecord(value)) return false;
+    const properties = (schema.properties ?? {}) as Record<string, ShapeNode>;
+    return Object.entries(properties).every(([key, field]) => {
+      const constant = resolveShape(field);
+      return !("const" in constant) || value[key] === constant.const;
+    });
+  }
+  if (schema.type === "string") return typeof value === "string";
+  if (schema.type === "number" || schema.type === "integer")
+    return typeof value === "number";
+  if (schema.type === "boolean") return typeof value === "boolean";
+  return true;
+}
+
+/** Whether `value` is the default of `field`, or `field` has none and `value` is absent. */
+function isFieldDefault(field: ShapeNode | boolean, value: unknown): boolean {
+  if (typeof field !== "object" || field.default === undefined)
+    return value === undefined;
+  return (
+    value === undefined ||
+    shareAt(field, field.default, value) === field.default
+  );
+}
+
+function shareAt(
+  node: ShapeNode | boolean,
+  previous: unknown,
+  next: unknown,
+): unknown {
+  if (previous === next) return previous;
+  if (typeof node !== "object") return next;
+  const schema = resolveShape(node);
+  const variants = (schema.oneOf ?? schema.anyOf) as ShapeNode[] | undefined;
+  if (variants !== undefined) {
+    const variant = variants.find((candidate) => fitsVariant(candidate, next));
+    return variant === undefined || !fitsVariant(variant, previous)
+      ? next
+      : shareAt(variant, previous, next);
+  }
+  if (
+    typeof next !== "object" ||
+    next === null ||
+    typeof previous !== "object" ||
+    previous === null
+  )
+    return next;
+  if (Array.isArray(next)) {
+    if (!Array.isArray(previous)) return next;
+    let same = next.length === previous.length;
+    let nested = false;
+    for (let index = 0; same && index < next.length; index++) {
+      const item: unknown = next[index];
+      if (typeof item === "object" && item !== null) nested = true;
+      else if (item !== previous[index]) same = false;
+    }
+    if (same && !nested) return previous;
+    const prefix = schema.prefixItems as ShapeNode[] | undefined;
+    const rest = (schema.items ?? true) as ShapeNode | boolean;
+    let byId: Map<unknown, unknown> | undefined;
+    const items = next.map((item: unknown, index) => {
+      const id = idOfItem(item);
+      let counterpart: unknown = previous[index];
+      if (typeof id === "string" && idOfItem(counterpart) !== id) {
+        byId ??= new Map(
+          previous.map((other: unknown) => [idOfItem(other), other]),
+        );
+        counterpart = byId.get(id);
+      }
+      const field =
+        prefix !== undefined && index < prefix.length ? prefix[index] : rest;
+      const shared =
+        counterpart === undefined ? item : shareAt(field, counterpart, item);
+      if (shared !== previous[index]) same = false;
+      return shared;
+    });
+    return same ? previous : items;
+  }
+  if (Array.isArray(previous) || !isRecord(next) || !isRecord(previous))
+    return next;
+  const properties = (schema.properties ?? {}) as Record<string, ShapeNode>;
+  const extra = (schema.additionalProperties ?? true) as ShapeNode | boolean;
+  const fieldOf = (key: string) =>
+    Object.hasOwn(properties, key) ? properties[key] : extra;
+  let same = true;
+  const read: Record<string, unknown> = {};
+  for (const key of Object.keys(next)) {
+    const value = next[key];
+    if (value === undefined) continue;
+    const before = previous[key];
+    if (before === undefined) {
+      if (!isFieldDefault(fieldOf(key), value)) same = false;
+      read[key] = value;
+      continue;
+    }
+    const shared = shareAt(fieldOf(key), before, value);
+    if (shared !== before) same = false;
+    read[key] = shared;
+  }
+  for (const key of Object.keys(previous))
+    if (next[key] === undefined && !isFieldDefault(fieldOf(key), previous[key]))
+      same = false;
+  return same ? previous : read;
+}
+
 function walkShape(
   node: ShapeNode,
   value: unknown,
