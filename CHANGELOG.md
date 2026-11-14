@@ -299,6 +299,9 @@ All notable changes to this project are documented in this file.
   before it left the binding uncoded, which cost the editor its preview worker. An export frame
   the browser cannot copy out of memory rejects with a coded failure (`OUT_OF_MEMORY`, stage
   `copy-out`) instead of leaving the readback unsettled, on the GPU and the CPU renderer.
+- The browser CPU renderer refuses a `VideoFrame` whose own color space is HDR (PQ or HLG) with
+  `INVALID_INPUT`, as the GPU renderer does, instead of reading it through a 2D canvas with the
+  browser's tone mapping; such frames go through `uploadYuvFrame`.
 
 ## [0.6.0] - 2026-11-08
 

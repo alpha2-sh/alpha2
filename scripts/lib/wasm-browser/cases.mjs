@@ -68,6 +68,7 @@ import {
 import { crashGpuOnSignal, gpuResetLadder } from "./recovery.mjs";
 import {
   cpuGrid,
+  cpuHdrFrameRefused,
   cpuRuntimeEffectRefusedWhenDrawn,
   cpuWorkerHost,
   rendererFallbackAdapter,
@@ -234,6 +235,7 @@ export const cases = {
   "cpu-worker": () => rendererWorker("cpu"),
   "cpu-grid-1080p": cpuGrid,
   "cpu-runtime-effect-refused-when-drawn": cpuRuntimeEffectRefusedWhenDrawn,
+  "cpu-hdr-frame-refused": cpuHdrFrameRefused,
   "cpu-fixed-audio-mix": () => fixedAudioMix(true),
   "webcodecs-decode-order": webcodecsDecodeOrder,
   "safari-sim-quality-silent": () =>

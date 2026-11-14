@@ -1211,12 +1211,7 @@ impl WebEffectRegistry {
             PresentedImage::Bitmap(_) => self.hdr_source(source_id),
         };
         if hdr && !degraded {
-            return Err(invalid_input(format!(
-                "source {source_id} is HDR (PQ or HLG): upload its frames' planes with \
-                 uploadYuvFrame, which converts them under the project's color pipeline; a \
-                 {} upload would show the browser's own conversion",
-                image.kind()
-            )));
+            return Err(hdr_upload_refusal(source_id, image.kind()));
         }
         let (width, height) = image.size();
         if width == 0 || height == 0 {
@@ -1665,18 +1660,7 @@ impl WebEffectRegistry {
                 .find(|source| source.id.as_str() == source_id)
                 .and_then(|source| source.color_metadata)
         });
-        declared.map_or_else(
-            || {
-                matches!(
-                    frame.color_space().transfer(),
-                    Some(
-                        web_sys::VideoTransferCharacteristics::Pq
-                            | web_sys::VideoTransferCharacteristics::Hlg
-                    )
-                )
-            },
-            alpha2_render::is_hdr,
-        )
+        frame_shows_hdr(declared, frame)
     }
 
     /// Whether the loaded project declares `source_id` an HDR (PQ or HLG) source, whose frames
@@ -3313,4 +3297,34 @@ pub(crate) fn result_cache_json(cache: alpha2_render::ResultCacheStats) -> serde
             "gpuError": cache.invalidations[4],
         },
     })
+}
+
+/// Whether a `VideoFrame` of a source shows HDR (PQ or HLG): by the project's declared color for
+/// the source, else by the frame's own `colorSpace`.
+pub(crate) fn frame_shows_hdr(
+    declared: Option<ColorMetadata>,
+    frame: &web_sys::VideoFrame,
+) -> bool {
+    declared.map_or_else(
+        || {
+            matches!(
+                frame.color_space().transfer(),
+                Some(
+                    web_sys::VideoTransferCharacteristics::Pq
+                        | web_sys::VideoTransferCharacteristics::Hlg
+                )
+            )
+        },
+        alpha2_render::is_hdr,
+    )
+}
+
+/// The refusal of an HDR source's frame offered as a `kind` upload, which would show the
+/// browser's own conversion.
+pub(crate) fn hdr_upload_refusal(source_id: &str, kind: &str) -> JsValue {
+    invalid_input(format!(
+        "source {source_id} is HDR (PQ or HLG): upload its frames' planes with uploadYuvFrame, \
+         which converts them under the project's color pipeline; a {kind} upload would show \
+         the browser's own conversion"
+    ))
 }

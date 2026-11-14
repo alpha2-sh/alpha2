@@ -326,14 +326,13 @@ impl WebCpuRenderer {
         output_size: RenderSize,
         orientation: Orientation,
     ) -> Result<CpuFrame, JsValue> {
-        if self
-            .declared_color(source_id)
-            .is_some_and(alpha2_render::is_hdr)
-        {
-            return Err(invalid_input(format!(
-                "source {source_id} is HDR (PQ or HLG): upload its frames' planes with \
-                 uploadYuvFrame, which converts them under the project's color pipeline"
-            )));
+        let declared = self.declared_color(source_id);
+        let (hdr, kind) = match image.dyn_ref::<web_sys::VideoFrame>() {
+            Some(frame) => (crate::web::frame_shows_hdr(declared, frame), "VideoFrame"),
+            None => (declared.is_some_and(alpha2_render::is_hdr), "ImageBitmap"),
+        };
+        if hdr {
+            return Err(crate::web::hdr_upload_refusal(source_id, kind));
         }
         let size = RenderSize::new(width, height).map_err(|error| typed_error(&error))?;
         let pixels = image_pixels(image, width, height).map_err(|error| {
