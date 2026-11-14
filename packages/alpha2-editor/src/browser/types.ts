@@ -708,7 +708,9 @@ export interface BrowserBridge {
   /**
    * Makes preview read a fresh proxy wherever a source has one (`proxies`), or the original
    * wherever it is online (`original`, the default). Preview only: an export reads what its own
-   * `media` says. {@link BrowserBridge.proxyStatus} reports what each source reads.
+   * `media` says. {@link BrowserBridge.proxyStatus} reports what each source reads. A kept proxy
+   * that cannot be staged or held goes to `onError` once (`EditorError` `proxy_unavailable`), and
+   * its source reads the original.
    */
   setPreviewMedia(media: "original" | "proxies"): void;
   /** What {@link BrowserBridge.setPreviewMedia} last set. */

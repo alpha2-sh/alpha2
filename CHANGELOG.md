@@ -171,6 +171,9 @@ All notable changes to this project are documented in this file.
   clip's start on sync tracks, in timeline-anchored data and for timeline markers; they edited at the
   clip's old end. A start trim that would close time where a sync track has content is refused
   (`sync_conflict`).
+- In the editor, a kept proxy that cannot be staged or has no room in the runtime no longer makes
+  every preview load, `conform()` and `nativeAssets()` reject; it is reported once to `onError`
+  (`proxy_unavailable`) and its source reads the original.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

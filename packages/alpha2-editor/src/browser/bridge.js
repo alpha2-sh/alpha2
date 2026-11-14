@@ -521,7 +521,12 @@ export function createBrowserBridge(options) {
   }
   /** Hashes with no stored proxy, not asked again this session. */
   let absentProxies = new Set();
-  /** Finds kept proxies for offline sources, and for every source while preview prefers proxies. */
+  /** Kept proxies that failed to adopt, by hash, not tried again until something frees room. */
+  let failedProxies = new Map();
+  /**
+   * Finds kept proxies for offline sources, and for every source while preview prefers proxies. A
+   * proxy that fails to adopt is reported once and its source reads the original.
+   */
   async function discoverProxies(document) {
     for (const source of document.project.sources) {
       const descriptor = document.assets[source.id];
@@ -530,6 +535,7 @@ export function createBrowserBridge(options) {
         !hash ||
         proxies.has(hash) ||
         absentProxies.has(hash) ||
+        failedProxies.has(hash) ||
         (preferredPreviewMedia === "original" &&
           originalOf(document, source.id))
       )
@@ -537,10 +543,27 @@ export function createBrowserBridge(options) {
       // Hold before reading so no other page removes it in between.
       const hold = await proxyStore.hold(hash);
       const found = await proxyStore.find(hash).catch(() => null);
-      if (found) await adoptProxy(hash, found, hold);
-      else {
+      if (!found) {
         absentProxies.add(hash);
         void hold.release();
+        continue;
+      }
+      try {
+        await adoptProxy(hash, found, hold);
+      } catch (error) {
+        if (failedProxies.has(hash)) continue;
+        failedProxies.set(hash, error);
+        if (!disposed)
+          onError(
+            new EditorError(
+              "proxy_unavailable",
+              `The kept proxy of ${source.id} cannot be used (${error instanceof Error ? error.message : String(error)})`,
+              "proxy",
+              source.id,
+              true,
+              { cause: error },
+            ),
+          );
       }
     }
   }
@@ -1141,6 +1164,7 @@ export function createBrowserBridge(options) {
       previewSelection = new Map();
       previewConformKey = null;
       absentProxies = new Set();
+      failedProxies = new Map();
     }
     scheduleSweep();
     scheduleTextReports();
@@ -1236,6 +1260,7 @@ export function createBrowserBridge(options) {
     const media = new Set(),
       hashes = new Set(),
       seen = new Set();
+    let released = false;
     for (const document of editor.reachableDocuments()) {
       // Commands that leave assets alone share them, so history is read once per media change.
       if (seen.has(document.assets)) continue;
@@ -1256,6 +1281,7 @@ export function createBrowserBridge(options) {
         owners.delete(resourceKey);
         analyses.get(owner.lease.value)?.abort();
         owner.lease.release();
+        released = true;
       }
     for (const resourceKey of textFailures.keys())
       if (!shown.has(resourceKey)) textFailures.delete(resourceKey);
@@ -1263,7 +1289,10 @@ export function createBrowserBridge(options) {
       if (!hashes.has(hash)) {
         proxies.delete(hash);
         proxy.lease.release();
+        released = true;
       }
+    // A proxy refused for want of room may fit now.
+    if (released) failedProxies = new Map();
   }
   const nextFrame = (fn) =>
     typeof requestAnimationFrame === "function"
@@ -2888,6 +2917,7 @@ export function createBrowserBridge(options) {
             const adopted = adoptProxy(hash, found, hold);
             hold = null;
             await adopted;
+            failedProxies.delete(hash);
             break;
           } catch (error) {
             if (!turn.signal.aborted || signal?.aborted) throw error;
@@ -2953,6 +2983,7 @@ export function createBrowserBridge(options) {
     async removeProxies(hashes) {
       const wanted = new Set(hashes);
       const unlocked = [];
+      for (const hash of wanted) failedProxies.delete(hash);
       for (const [hash, proxy] of proxies)
         if (wanted.has(hash)) {
           proxies.delete(hash);
