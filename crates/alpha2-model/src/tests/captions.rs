@@ -375,3 +375,79 @@ fn style_patch_has_every_text_style_field() {
         properties(schemars::schema_for!(crate::TextStyle))
     );
 }
+
+/// Words 10,000 ticks apart, each 8,000 long, with the cue texts and run texts they group to.
+fn grouped(words: &[&str], max_chars: u32) -> Vec<(String, Vec<String>)> {
+    let words = words
+        .iter()
+        .zip(0..)
+        .map(|(text, index): (&&str, i64)| crate::DataWord {
+            start: MediaTime(index * 10_000),
+            end: MediaTime(index * 10_000 + 8_000),
+            text: (*text).to_owned(),
+            speaker: None,
+        })
+        .collect::<Vec<_>>();
+    crate::group_words(&words, max_chars)
+        .into_iter()
+        .map(|cue| {
+            let crate::TextContent::Runs(runs) = &cue.text else {
+                panic!("cues from words have runs");
+            };
+            let runs = runs.iter().map(|run| run.text.clone()).collect::<Vec<_>>();
+            (runs.concat(), runs)
+        })
+        .collect()
+}
+
+#[test]
+fn japanese_words_are_joined_without_spaces() {
+    let cues = grouped(&["今日", "は", "いい", "天気", "です", "ね"], 42);
+    assert_eq!(cues.len(), 1);
+    assert_eq!(cues[0].0, "今日はいい天気ですね");
+    assert_eq!(cues[0].1[0], "今日", "a run carries no separator");
+}
+
+#[test]
+fn mixed_latin_and_japanese_words_are_spaced_only_between_latin_words() {
+    let cues = grouped(&["Alpha2", "Studio", "で", "編集", "して", "OK"], 42);
+    assert_eq!(cues[0].0, "Alpha2 Studio で編集して OK");
+}
+
+#[test]
+fn thai_words_are_joined_without_spaces() {
+    let cues = grouped(&["สวัสดี", "ครับ", "ทุก", "คน"], 42);
+    assert_eq!(cues[0].0, "สวัสดีครับทุกคน");
+}
+
+#[test]
+fn a_cue_of_unspaced_words_counts_no_separators() {
+    // Ten two-character words fill 20 characters exactly; with spaces they would take 29.
+    let words = ["日本"; 10];
+    assert_eq!(grouped(&words, 20).len(), 1);
+    assert_eq!(
+        grouped(&["a1", "b2", "c3"], 7).len(),
+        2,
+        "Latin words still count a space"
+    );
+}
+
+#[test]
+fn fullwidth_terminators_end_a_sentence() {
+    for end in ["！", "？", "．", "。"] {
+        let first = format!("はい{end}");
+        let cues = grouped(&[first.as_str(), "次", "です"], 42);
+        assert_eq!(cues.len(), 2, "{end}");
+        assert_eq!(cues[1].0, "次です");
+    }
+}
+
+#[test]
+fn latin_words_group_with_a_space_between_each_two() {
+    let cues = grouped(&["Hello", "there.", "General", "Kenobi"], 42);
+    assert_eq!(
+        cues.iter().map(|cue| cue.0.as_str()).collect::<Vec<_>>(),
+        ["Hello there.", "General Kenobi"]
+    );
+    assert_eq!(cues[1].1, ["General ", "Kenobi"]);
+}

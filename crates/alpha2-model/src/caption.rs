@@ -325,33 +325,68 @@ mod double_option {
     }
 }
 
+/// What joins word `left` to word `right` in a cue: nothing between two characters of scripts
+/// written without word spaces, else one space.
+fn word_separator(left: &str, right: &str) -> &'static str {
+    match (left.chars().next_back(), right.chars().next()) {
+        (Some(last), Some(first)) if unspaced(last) && unspaced(first) => "",
+        _ => " ",
+    }
+}
+
+/// Whether `character` is of line breaking class ID, CJ or SA (UAX #14), as far as scripts
+/// written without spaces between words go. Hangul is spaced and not included.
+fn unspaced(character: char) -> bool {
+    matches!(
+        u32::from(character),
+        0x0E00..=0x0EFF // Thai, Lao
+            | 0x1000..=0x109F // Myanmar
+            | 0x1780..=0x17FF // Khmer
+            | 0x19E0..=0x19FF // Khmer symbols
+            | 0x2E80..=0x2FDF // CJK and Kangxi radicals
+            | 0x3000..=0x303F // CJK symbols and punctuation
+            | 0x3040..=0x30FF // Hiragana, Katakana
+            | 0x3100..=0x312F // Bopomofo
+            | 0x31F0..=0x31FF // Katakana phonetic extensions
+            | 0x3400..=0x4DBF // CJK extension A
+            | 0x4E00..=0x9FFF // CJK unified ideographs
+            | 0xA9E0..=0xA9FF // Myanmar extended B
+            | 0xAA60..=0xAA7F // Myanmar extended A
+            | 0xF900..=0xFAFF // CJK compatibility ideographs
+            | 0xFF00..=0xFFEF // Halfwidth and fullwidth forms
+            | 0x20000..=0x3FFFF // CJK extensions B and later
+    )
+}
+
 /// The longest gap between two words of one cue, in ticks (0.6 s).
 pub const WORD_PAUSE_TICKS: i64 = 72_000;
 
 /// Words grouped into cues that end at `max_chars` characters, a sentence's end, a pause longer
-/// than [`WORD_PAUSE_TICKS`] or a change of speaker. Each cue has one run per word (with its
-/// trailing space), timed from the cue's start, so Timing selectors follow the speech.
+/// than [`WORD_PAUSE_TICKS`] or a change of speaker. Each cue has one run per word (with the
+/// separator that follows it), timed from the cue's start, so Timing selectors follow the speech.
+///
+/// Words are joined by a space, except where both neighbouring characters belong to scripts
+/// written without spaces between words: the Unicode line breaking classes ID, CJ and SA (UAX
+/// #14), which cover Han, kana, CJK punctuation, fullwidth forms, Thai, Lao, Khmer and Myanmar.
 ///
 /// `words` are in start order, each ending after it starts with non-empty trimmed text. Where
 /// words overlap, each cue ends where the next starts.
 #[must_use]
 pub fn group_words(words: &[crate::DataWord], max_chars: u32) -> Vec<CaptionCue> {
-    // Each cue being built: its start, end, speaker and words with their times.
-    type Words = (i64, i64, Option<String>, Vec<(String, i64, i64)>);
+    // Each cue being built: its start, end, speaker, words with their times and its length.
+    type Words = (i64, i64, Option<String>, Vec<(String, i64, i64)>, usize);
     let mut groups: Vec<Words> = Vec::new();
     let mut current: Option<Words> = None;
     for word in words {
         let (start, end) = (word.start.ticks(), word.end.ticks());
         let text = word.text.trim().to_owned();
-        if let Some((_, cue_end, speaker, held)) = &mut current {
-            let length = held
-                .iter()
-                .map(|(word, ..)| word.chars().count() + 1)
-                .sum::<usize>()
-                + text.chars().count();
-            let sentence_end = held
-                .last()
-                .is_some_and(|(word, ..)| word.ends_with(['.', '?', '!', '\u{3002}']));
+        let characters = text.chars().count();
+        if let Some((_, cue_end, speaker, held, held_length)) = &mut current {
+            let last = held.last().map_or("", |(word, ..)| word.as_str());
+            let length = *held_length + word_separator(last, &text).len() + characters;
+            let sentence_end = last.ends_with([
+                '.', '?', '!', '\u{3002}', '\u{ff01}', '\u{ff0e}', '\u{ff1f}',
+            ]);
             if length <= max_chars as usize
                 && start - *cue_end <= WORD_PAUSE_TICKS
                 && !sentence_end
@@ -359,24 +394,33 @@ pub fn group_words(words: &[crate::DataWord], max_chars: u32) -> Vec<CaptionCue>
             {
                 held.push((text, start, end));
                 *cue_end = (*cue_end).max(end);
+                *held_length = length;
                 continue;
             }
             groups.extend(current.take());
         }
-        current = Some((start, end, word.speaker.clone(), vec![(text, start, end)]));
+        current = Some((
+            start,
+            end,
+            word.speaker.clone(),
+            vec![(text, start, end)],
+            characters,
+        ));
     }
     groups.extend(current);
     let mut cues = groups
         .into_iter()
-        .filter_map(|(start, end, speaker, held)| {
-            let count = held.len();
+        .filter_map(|(start, end, speaker, held, _)| {
+            let separators = held
+                .windows(2)
+                .map(|pair| word_separator(&pair[0].0, &pair[1].0))
+                .chain([""])
+                .collect::<Vec<_>>();
             let runs = held
                 .into_iter()
-                .enumerate()
-                .map(|(index, (mut text, from, to))| {
-                    if index + 1 < count {
-                        text.push(' ');
-                    }
+                .zip(separators)
+                .map(|((mut text, from, to), separator)| {
+                    text.push_str(separator);
                     crate::TextRun {
                         text,
                         class: Vec::new(),

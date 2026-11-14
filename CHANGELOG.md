@@ -89,6 +89,9 @@ All notable changes to this project are documented in this file.
   gradients or patterns name one another by `href` in a ring, is refused as malformed instead of
   overflowing the stack or never finishing. Each such reference counts four levels against the
   nesting limit, and a mask, clip path or filter counts once per element that names it.
+- Captions grouped from words join Chinese, Japanese, Thai, Lao, Khmer and Myanmar words without a
+  space, and a fullwidth exclamation mark, question mark or full stop (U+FF01, U+FF1F, U+FF0E) ends
+  a sentence. Latin-script cues are unchanged.
 - Layout measurement reports a text box the text host cannot draw (over 16,384 pixels a side) as
   overflowing; frames still fail on it. A full-width text box on a 16,384 pixel wide picture now
   draws: the wrap slack no longer takes its width past the text host's limit.
