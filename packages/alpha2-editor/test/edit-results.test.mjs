@@ -6,7 +6,9 @@ import { applyEdit } from "alpha2/apply-edit";
 import {
   createDocument,
   createEditor,
+  compositionUsers,
   dataValue,
+  effectStack,
   serializeDocument,
 } from "../dist/index.js";
 import {
@@ -360,4 +362,174 @@ test(
         assert.equal(after.sources, before.sources);
       },
     );
+}
+
+{
+  const SECOND = 120000;
+  const clip = (id, start, end) => ({
+    id,
+    source_id: "s",
+    timeline_range: { start: start * SECOND, end: end * SECOND },
+    source_range: { start: start * SECOND, end: end * SECOND },
+    time_map: { type: "forward" },
+  });
+  const project = () => ({
+    schema_version: 1,
+    id: "p",
+    name: "Shared",
+    settings: {
+      width: 64,
+      height: 48,
+      frame_rate: { num: 30, den: 1 },
+      sample_rate: 48000,
+    },
+    sources: [{ id: "s", kind: "video", locator: "test://s" }],
+    timeline: {
+      tracks: [
+        {
+          id: "V1",
+          name: "V1",
+          kind: "video",
+          clips: [clip("a", 0, 4), clip("b", 4, 6)],
+        },
+      ],
+    },
+  });
+  const effect = { id: "alpha2.effect.invert", version: 1, params: {} };
+  const split = {
+    op: "split_at",
+    times: { list: [2 * SECOND], anchor: { type: "timeline" } },
+    target: { clips: ["a"] },
+  };
+  /** An editor whose clip `a` has one effect, split in two by the engine. */
+  async function shared() {
+    const wasm = await engine();
+    const editor = createEditor({ document: createDocument(project()) });
+    assert.ok(
+      editor.dispatch({ type: "effect.add", id: "a", instanceId: "fx", effect })
+        .ok,
+    );
+    const { project: base, read } = editor.editProject();
+    const result = editor.applyEdit(applyEdit(wasm, base, split), {
+      read,
+      request: split,
+    });
+    assert.ok(result.ok, result.error?.message);
+    const right = result.value.report.created[0].id;
+    const composition = (id) =>
+      editor.query().clips.get(id).clip.composition?.id;
+    assert.equal(composition(right), composition("a"));
+    return { editor, right, composition };
+  }
+  const stack = (editor, id) =>
+    effectStack(
+      editor.document.project,
+      editor.query().clips.get(id).clip,
+    )?.map((entry) => `${entry.id}${entry.bypass ? "(bypassed)" : ""}`);
+
+  test(
+    "an effect edit on one part of an engine split leaves the other part's",
+    { skip },
+    async () => {
+      const { editor, right, composition } = await shared();
+      const first = editor.document.project.compositions.find(
+        (c) => c.id === composition("a"),
+      );
+      assert.deepEqual(
+        compositionUsers(editor.document.project, composition("a")).clips,
+        ["a", right],
+      );
+      assert.ok(
+        editor.dispatch({
+          type: "effect.update",
+          id: right,
+          instanceId: "fx",
+          effect,
+          bypass: true,
+        }).ok,
+      );
+      assert.deepEqual(stack(editor, "a"), ["fx"]);
+      assert.deepEqual(stack(editor, right), ["fx(bypassed)"]);
+      assert.equal(
+        editor.document.project.compositions.find(
+          (c) => c.id === composition("a"),
+        ),
+        first,
+      );
+    },
+  );
+
+  test(
+    "removing the last effect of one part keeps the other part's",
+    { skip },
+    async () => {
+      const { editor, right } = await shared();
+      assert.ok(
+        editor.dispatch({ type: "effect.remove", id: right, instanceId: "fx" })
+          .ok,
+      );
+      assert.deepEqual(stack(editor, "a"), ["fx"]);
+      assert.equal(editor.query().clips.get(right).clip.composition, undefined);
+    },
+  );
+
+  test(
+    "clip.detachComposition gives one part its own graph",
+    { skip },
+    async () => {
+      const { editor, right, composition } = await shared();
+      assert.ok(
+        editor.dispatch({ type: "clip.detachComposition", id: right }).ok,
+      );
+      assert.notEqual(composition(right), composition("a"));
+      assert.deepEqual(stack(editor, right), ["fx"]);
+      // A clip that owns its graph already is left as it is.
+      const before = editor.document;
+      assert.equal(
+        editor.dispatch({ type: "clip.detachComposition", id: "b" }).value,
+        before,
+      );
+    },
+  );
+
+  test(
+    "an engine edit that removes a clip whole removes the composition only it drew",
+    { skip },
+    async () => {
+      const wasm = await engine();
+      const editor = createEditor({ document: createDocument(project()) });
+      assert.ok(
+        editor.dispatch({
+          type: "effect.add",
+          id: "b",
+          instanceId: "fx",
+          effect,
+        }).ok,
+      );
+      const drawn = editor.query().clips.get("b").clip.composition.id;
+      assert.ok(
+        editor.dispatch({
+          type: "metadata.update",
+          patch: { graphNames: { [drawn]: "Look" } },
+        }).ok,
+      );
+      const request = {
+        op: "remove_ranges",
+        ranges: {
+          list: [{ start: 4 * SECOND, end: 6 * SECOND }],
+          anchor: { type: "timeline" },
+        },
+        target: { clips: ["b"] },
+      };
+      const { project: base, read } = editor.editProject();
+      const result = editor.applyEdit(applyEdit(wasm, base, request), {
+        read,
+        request,
+      });
+      assert.ok(result.ok, result.error?.message);
+      assert.deepEqual(editor.document.project.compositions ?? [], []);
+      assert.equal(editor.document.metadata.graphNames?.[drawn], undefined);
+      assert.equal("b" in editor.document.metadata.clips, false);
+    },
+  );
 }

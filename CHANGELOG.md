@@ -469,6 +469,11 @@ All notable changes to this project are documented in this file.
   the same (`shareUnchangedParts` in `alpha2/project`, which counts an omitted field as its
   default), so an edit that leaves a locked track alone goes in; before, any locked track refused
   every engine edit, even an empty bake, and every identity cache missed after one.
+- Editor: clips may share a composition (the parts of an engine cut do). An effect command on one
+  of them first gives that clip its own copy, so it no longer changes the others; the new
+  `clip.detachComposition` command does that for a graph, and `compositionUsers` lists what draws a
+  composition. An engine edit removes the compositions, graph layout and names of what it stopped
+  drawing.
 
 ## [0.6.0] - 2026-11-08
 

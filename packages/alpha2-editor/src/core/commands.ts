@@ -16,6 +16,7 @@ import {
   acceptsInput,
   correspondingCompositions,
   ownComposition,
+  detachComposition,
   withEffectStack,
   withoutUndrawn,
   withInput,
@@ -289,6 +290,12 @@ export type Command =
       readonly id: string;
       readonly ids: readonly string[];
     }
+  /**
+   * Gives clip `id` its own copy of its composition tree when another clip, source or group draws
+   * part of it, so a graph command on it changes only this clip. Effect commands do this
+   * themselves; graph commands name a composition and change every clip that shows it.
+   */
+  | { readonly type: "clip.detachComposition"; readonly id: string }
   /** Gives a clip without one a composition that shows its picture. */
   | {
       readonly type: "graph.create";
@@ -1161,7 +1168,9 @@ function reduce(
     case "effect.reorder": {
       const found = indexDocument(document).clips.get(command.id);
       if (!found) fail("Unknown clip", command.id);
-      const current = effectStack(project, found.clip);
+      // Another clip may show the same composition; the edit is this clip's alone.
+      const detached = detachComposition(project, command.id);
+      const current = effectStack(detached.project, found.clip);
       if (!current)
         fail(
           "The clip's composition is a graph, not an effect stack; edit it as a graph",
@@ -1191,10 +1200,22 @@ function reduce(
             bypass: command.bypass ?? stack[i].bypass,
           };
       }
-      return {
-        ...document,
-        project: withEffectStack(project, command.id, stack),
-      };
+      return withCopiedGraphs(
+        {
+          ...document,
+          project: withEffectStack(detached.project, command.id, stack),
+        },
+        detached.copies,
+      );
+    }
+    case "clip.detachComposition": {
+      if (!indexDocument(document).clips.has(command.id))
+        fail("Unknown clip", command.id);
+      const detached = detachComposition(project, command.id);
+      return withCopiedGraphs(
+        { ...document, project: detached.project },
+        detached.copies,
+      );
     }
     case "graph.create": {
       const found = indexDocument(document).clips.get(command.clipId);
@@ -1908,6 +1929,13 @@ export function executeEditResult(
       });
       for (const created of applied.report.created)
         next = afterSplit(next, created.id, created.from);
+      // What the edit stopped drawing goes, with its graph layout and names.
+      const undrawn = withoutUndrawn(document.project, next.project);
+      if (undrawn.removed.size)
+        next = withoutGraphs(
+          { ...next, project: undrawn.project },
+          undrawn.removed,
+        );
       assertLocksKept(document, next, { type: "edit" });
       const result = freeze(withInstanceIds(canonicalDocument(next)));
       try {
