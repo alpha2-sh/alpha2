@@ -2702,6 +2702,7 @@ impl Host {
                         metrics.decode_stages = metrics.decode_stages.merged(decoded.stage_timings);
                         metrics.peak_decode_queue_bytes =
                             metrics.peak_decode_queue_bytes.max(worker.peak_bytes());
+                        metrics.decode_queue_oversized_sets = worker.oversized_sets();
                         // A cached frame uploads no sources: an upload's staging is freed only by
                         // a render's submission.
                         let lookup_started = Instant::now();

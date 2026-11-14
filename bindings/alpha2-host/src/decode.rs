@@ -220,34 +220,34 @@ pub enum DecodeWorkerStatus {
 pub struct DecodeBudgetState {
     pub bytes: u64,
     pub peak_bytes: u64,
+    /// Sets larger than the budget, each held alone.
+    pub oversized_sets: u64,
 }
 
 /// The byte budget on decoded frame sets queued for the host but not yet released.
 pub struct DecodeBudget {
-    /// A frame set larger than this still fits alone up to the unscaled budget
-    /// ([`crate::memory::ByteBudget::holding`]).
+    /// A frame set larger than this waits for an empty queue and is then held alone: it is
+    /// already decoded, so refusing it would free nothing.
     pub limit: crate::memory::ByteBudget,
     pub state: Mutex<DecodeBudgetState>,
     pub available: Condvar,
 }
 
 impl DecodeBudget {
+    /// Waits until `bytes` fits or the queue is empty. Sets are taken in order and each release
+    /// notifies, so the wait ends.
+    ///
     /// # Errors
-    /// A frame set larger than the whole budget, or a cancelled export.
+    /// A cancelled export.
     pub fn reserve(&self, bytes: u64, cancel: &CancelToken) -> Result<(), String> {
         let limit = self.limit.holding(bytes);
-        if bytes > limit {
-            return Err(crate::memory::resource_limit(format!(
-                "one decoded frame set requires {bytes} bytes, exceeding the {limit} byte decode queue budget"
-            )));
-        }
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // A plain wait suffices: `cancel` takes this mutex before notifying, so a cancellation
         // between the check and the wait cannot be missed.
-        while state.bytes.saturating_add(bytes) > limit {
+        while state.bytes > 0 && state.bytes.saturating_add(bytes) > limit {
             if cancel.is_cancelled() {
                 return Err("decode worker was cancelled".to_owned());
             }
@@ -256,9 +256,19 @@ impl DecodeBudget {
                 .wait(state)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
+        if bytes > limit {
+            state.oversized_sets = state.oversized_sets.saturating_add(1);
+        }
         state.bytes = state.bytes.saturating_add(bytes);
         state.peak_bytes = state.peak_bytes.max(state.bytes);
         Ok(())
+    }
+
+    pub fn oversized_sets(&self) -> u64 {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .oversized_sets
     }
 
     pub fn release(&self, bytes: u64) {
@@ -678,6 +688,10 @@ impl DecodeWorker {
 
     pub fn peak_bytes(&self) -> u64 {
         self.budget.peak_bytes()
+    }
+
+    pub fn oversized_sets(&self) -> u64 {
+        self.budget.oversized_sets()
     }
 }
 

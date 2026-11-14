@@ -466,6 +466,9 @@ pub struct LeastWorkingSet {
     pub decoder_sessions: u64,
     /// What the renderer keeps in system memory (the CPU renderer, or a GPU with shared memory).
     pub renderer: u64,
+    /// One decoded frame set: each video read at once, at the largest source frame. The decode
+    /// queue holds a set larger than its budget alone, so this is the least it holds.
+    pub decode_queue: u64,
 }
 
 impl LeastWorkingSet {
@@ -492,6 +495,7 @@ impl LeastWorkingSet {
             decoder_sessions: crate::config::decoder_session_bytes(frame_bytes, decoder_threads)
                 .saturating_mul(sessions),
             renderer,
+            decode_queue: frame_bytes.saturating_mul(u64::try_from(videos).unwrap_or(u64::MAX)),
         }
     }
 
@@ -499,6 +503,7 @@ impl LeastWorkingSet {
         self.in_flight
             .saturating_add(self.decoder_sessions)
             .saturating_add(self.renderer)
+            .saturating_add(self.decode_queue)
     }
 
     /// A quarter more for what no estimate counts (codec buffers, inter-stage queues); measured
@@ -523,12 +528,13 @@ pub fn admit(least: LeastWorkingSet, capacity: &alpha2_os::MemoryCapacity) -> Re
     }
     Err(machine_memory_limit(format!(
         "the export needs about {} bytes of memory (in flight {}, decoder sessions {}, \
-         renderer {}, and a quarter more for the codecs and queues), and this machine can give \
-         the host {headroom} bytes now ({}{})",
+         renderer {}, decode queue {}, and a quarter more for the codecs and queues), and this \
+         machine can give the host {headroom} bytes now ({}{})",
         least.expected_peak(),
         least.in_flight,
         least.decoder_sessions,
         least.renderer,
+        least.decode_queue,
         capacity.available_bytes.map_or_else(
             || "available unknown".to_owned(),
             |bytes| format!("{bytes} available")
@@ -1019,6 +1025,7 @@ mod tests {
             in_flight: 100 << 20,
             decoder_sessions: 100 << 20,
             renderer: 0,
+            decode_queue: 0,
         };
         let cached = alpha2_os::MemoryCapacity {
             physical_bytes: Some(64 << 30),

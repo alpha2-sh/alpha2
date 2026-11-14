@@ -245,7 +245,7 @@ fn a_retry_scale_holds_the_least_an_export_needs() {
 }
 
 #[test]
-fn a_scaled_decode_queue_holds_one_frame_set_up_to_its_unscaled_budget() {
+fn a_scaled_decode_queue_holds_one_frame_set_alone_whatever_its_size() {
     let budget = DecodeBudget {
         limit: crate::memory::ByteBudget {
             bytes: 8,
@@ -257,12 +257,13 @@ fn a_scaled_decode_queue_holds_one_frame_set_up_to_its_unscaled_budget() {
     let cancel = CancelToken::default();
     budget.reserve(20, &cancel).expect("one set fits alone");
     budget.release(20);
-    let error = budget
+    budget
         .reserve(33, &cancel)
-        .expect_err("over the unscaled budget");
-    assert!(error.contains("32 byte decode queue budget"), "{error}");
+        .expect("a set over the unscaled budget is held alone");
+    assert_eq!(budget.oversized_sets(), 1);
+    budget.release(33);
     budget.reserve(6, &cancel).expect("fits the scaled budget");
-    assert_eq!(budget.peak_bytes(), 20);
+    assert_eq!(budget.peak_bytes(), 33);
 }
 
 #[test]

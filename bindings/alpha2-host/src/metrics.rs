@@ -88,6 +88,8 @@ pub struct ExportMetrics {
     pub pending_depth_total: u64,
     pub pending_depth_samples: u64,
     pub peak_decode_queue_bytes: u64,
+    /// Decoded frame sets larger than the decode queue budget, each held alone.
+    pub decode_queue_oversized_sets: u64,
     pub max_decode_queue: usize,
     pub decode_backpressure: u64,
     pub ready_readback_dispatches: u64,
@@ -206,6 +208,7 @@ impl ExportMetrics {
 
     pub fn record_decode_pool(&mut self, worker: &crate::decode::DecodeWorker) {
         self.peak_decode_queue_bytes = self.peak_decode_queue_bytes.max(worker.peak_bytes());
+        self.decode_queue_oversized_sets = worker.oversized_sets();
         self.decode_budget_wait = worker.waits.budget();
         self.decode_handoff_wait = worker.waits.handoff();
     }
@@ -750,6 +753,7 @@ pub fn export_metrics_json(
         "rgbaFallbackFrames": metrics.rgba_fallback_frames,
         "physicalSourceReuses": metrics.physical_source_reuses,
     });
+    value["decodeQueueOversizedSets"] = json!(metrics.decode_queue_oversized_sets);
     add_decode_path_metrics(&mut value, metrics);
     add_stage_split_metrics(&mut value, metrics);
     value["decodeConcurrency"] = json!(metrics.decode_concurrency);

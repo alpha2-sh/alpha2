@@ -420,6 +420,10 @@ All notable changes to this project are documented in this file.
   run shallower, and `peakEncodeQueueBytes`, the admission estimate and the refusal text use the real
   frame size. A budget left at its default is raised to the least an export needs instead of
   refusing it.
+- An export whose output frame reads more decoded pictures than `decodeQueueBytes` holds that frame
+  set alone instead of failing with `RESOURCE_LIMIT` at that frame, after it had decoded the set and
+  written part of the file; `performance.decodeQueueOversizedSets` counts such sets. Admission counts
+  one decoded frame set, so a machine that cannot hold it refuses before any output opens.
 
 ## [0.6.0] - 2026-11-08
 

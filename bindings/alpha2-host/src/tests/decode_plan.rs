@@ -1189,18 +1189,165 @@ fn a_full_decode_budget_waits_for_a_release_or_a_cancellation() {
 }
 
 #[test]
-fn decode_byte_budget_rejects_an_oversized_frame_set() {
-    let budget = DecodeBudget {
+fn an_oversized_frame_set_waits_for_an_empty_queue_and_is_then_held_alone() {
+    let budget = Arc::new(DecodeBudget {
         limit: 16.into(),
         state: Mutex::new(DecodeBudgetState::default()),
         available: Condvar::new(),
+    });
+    budget
+        .reserve(10, &CancelToken::default())
+        .expect("a set within the budget");
+    let (reserved, waited) = mpsc::channel();
+    let waiting = {
+        let budget = Arc::clone(&budget);
+        std::thread::spawn(move || {
+            let result = budget.reserve(40, &CancelToken::default());
+            let _ = reserved.send(());
+            result
+        })
     };
-    assert!(budget.reserve(17, &CancelToken::default()).is_err());
+    assert!(
+        waited.recv_timeout(Duration::from_millis(200)).is_err(),
+        "an oversized set waits while the queue holds another"
+    );
+    budget.release(10);
+    waiting.join().expect("join").expect("admitted alone");
+    assert_eq!((budget.peak_bytes(), budget.oversized_sets()), (40, 1));
+    budget.release(40);
     budget
         .reserve(16, &CancelToken::default())
-        .expect("exact budget fits");
-    assert_eq!(budget.peak_bytes(), 16);
-    budget.release(16);
+        .expect("the exact budget fits");
+    assert_eq!(budget.oversized_sets(), 1);
+}
+
+#[test]
+fn a_cancel_wakes_a_frame_set_waiting_for_the_queue() {
+    let budget = Arc::new(DecodeBudget {
+        limit: 16.into(),
+        state: Mutex::new(DecodeBudgetState::default()),
+        available: Condvar::new(),
+    });
+    budget
+        .reserve(16, &CancelToken::default())
+        .expect("a full queue");
+    let cancel = CancelToken::default();
+    let waiting = {
+        let (budget, cancel) = (Arc::clone(&budget), cancel.clone());
+        std::thread::spawn(move || budget.reserve(40, &cancel))
+    };
+    std::thread::sleep(Duration::from_millis(50));
+    cancel.cancel();
+    budget.cancel();
+    let error = waiting.join().expect("join").expect_err("cancelled");
+    assert!(error.contains("cancelled"), "{error}");
+}
+
+fn two_video_project(end: i64) -> Value {
+    let clip = |id: &str, source: &str, start: i64| {
+        json!({"id": id, "source_id": source,
+               "timeline_range": {"start": start, "end": end},
+               "source_range": {"start": start, "end": end}})
+    };
+    json!({
+        "schema_version": 1, "id": "queue", "name": "Queue",
+        "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+        "sources": [{"id": "one", "locator": "asset://one", "kind": "video"},
+                    {"id": "two", "locator": "asset://two", "kind": "video"}],
+        "timeline": {"tracks": [
+            {"id": "v1", "name": "V1", "kind": "video", "clips": [clip("a", "one", 0)]},
+            {"id": "v2", "name": "V2", "kind": "video", "clips": [clip("b", "two", end / 2)]}
+        ]}
+    })
+}
+
+fn two_video_export(project: &Value, end: i64, output: &Path, decode_queue: u64) -> Request {
+    parse_request(
+        &json!({
+            "protocolVersion": 2, "operation": "export", "requestId": "Q",
+            "project": project,
+            "assets": {"one": corpus("h264-long-gop.mp4"), "two": corpus("h264-long-gop.mp4")},
+            "startTicks": 0, "endTicks": end,
+            "frameRate": {"num": 30, "den": 1},
+            "includeAudio": false,
+            "videoCodec": "mpeg4-part2",
+            "memory": {"decodeQueueBytes": decode_queue},
+            "output": output
+        })
+        .to_string(),
+    )
+    .expect("request")
+}
+
+#[test]
+fn an_export_whose_frame_set_outgrows_the_decode_queue_budget_completes() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("decode-queue-oversized");
+    let end = 2 * alpha2_time::TICKS_PER_SECOND;
+    let project = two_video_project(end);
+    let output = directory.join("out.mp4");
+    // Less than one frame of the source: every set is held alone.
+    let result = host
+        .handle(two_video_export(&project, end, &output, 1), &mut |_| Ok(()))
+        .expect("the export completes");
+    assert_eq!(result["frames"], 60, "{result}");
+    let performance = &result["performance"];
+    assert!(
+        performance["decodeQueueOversizedSets"]
+            .as_u64()
+            .is_some_and(|sets| sets >= 30),
+        "{performance}"
+    );
+    assert!(output.is_file());
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn admission_counts_one_decoded_frame_set_and_refuses_before_any_output() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("decode-queue-admission");
+    let end = 2 * alpha2_time::TICKS_PER_SECOND;
+    let project = two_video_project(end);
+    crate::memory::injected::CAPACITY.with(|capacity| {
+        capacity.set(Some(alpha2_os::MemoryCapacity {
+            physical_bytes: Some(64 << 30),
+            // Below one readback of this small export.
+            available_bytes: Some(64 << 10),
+            ..alpha2_os::MemoryCapacity::default()
+        }));
+    });
+    let error = host
+        .handle(
+            two_video_export(&project, end, &directory.join("out.mp4"), 1 << 30),
+            &mut |_| Ok(()),
+        )
+        .expect_err("the machine cannot hold it");
+    crate::memory::injected::CAPACITY.with(|capacity| capacity.set(None));
+    assert_eq!(error.code, "RESOURCE_LIMIT", "{}", error.message);
+    assert_eq!(
+        error.failure.as_ref().expect("a failure report")["stage"],
+        "machine-memory"
+    );
+    let queue: u64 = error
+        .message
+        .split("decode queue ")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .and_then(|bytes| bytes.parse().ok())
+        .unwrap_or_else(|| panic!("{}", error.message));
+    assert!(
+        queue > 0 && queue.is_multiple_of(2),
+        "two videos read at once: {}",
+        error.message
+    );
+    let left = std::fs::read_dir(&directory)
+        .expect("directory")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect::<Vec<_>>();
+    assert!(left.is_empty(), "{left:?}");
+    std::fs::remove_dir_all(&directory).ok();
 }
 
 #[test]
