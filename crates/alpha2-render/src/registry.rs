@@ -928,6 +928,37 @@ fn wgsl_type(param_type: ParamType) -> &'static str {
     }
 }
 
+/// What registration learns about a runtime effect before any device sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedEffect {
+    /// The WGSL module the device would compile: the body, its loops bounded, in the wrapper.
+    pub module: String,
+    /// Functions the body declares.
+    pub functions: usize,
+    /// The most function bodies one invocation of any of them runs once calls are inlined.
+    pub calls: u64,
+    /// The invocation's cost in units of the registration cap.
+    pub cost_units: u64,
+}
+
+/// Checks `definition` as registration does before the device compiles it: the schema, the
+/// lexical rules of the body, its calls and its cost. Device limits (uniform size, texture
+/// bindings) and the compile itself are not checked.
+///
+/// # Errors
+/// The diagnostics registration would return.
+pub fn check_effect(definition: &EffectDef) -> Result<CheckedEffect, ShaderDiagnostics> {
+    validate_definition(definition)?;
+    let code = blank_comments(&definition.wgsl_body);
+    let (calls, _) = crate::call_budget::invocation_calls(&code)?;
+    Ok(CheckedEffect {
+        module: build_shader(definition),
+        functions: crate::call_budget::declarations(&code).len(),
+        calls,
+        cost_units: crate::effect_cost::invocation_cost(&code).units(),
+    })
+}
+
 fn validate_definition(definition: &EffectDef) -> Result<(), ShaderDiagnostics> {
     if !valid_identifier(&definition.id) {
         return Err(ShaderDiagnostics::error(

@@ -42,7 +42,7 @@ mod pool;
 mod present;
 mod readback;
 mod registry;
-pub use registry::{CompiledEffect, MAX_EFFECT_INPUTS, PendingEffect};
+pub use registry::{CheckedEffect, CompiledEffect, MAX_EFFECT_INPUTS, PendingEffect, check_effect};
 mod renderer;
 mod repack;
 mod result_cache;

@@ -205,6 +205,38 @@ seed() {
         [...strings].forEach((text, index) => fs.writeFileSync(`${dir}/value-${index}`, text));
       ' tests/golden/layout_measure.json "$dir"
       ;;
+    compose_compile)
+      node -e '
+        const [golden, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        JSON.parse(fs.readFileSync(golden, "utf8")).forEach((test, index) =>
+          fs.writeFileSync(`${dir}/spec-${index}.json`, JSON.stringify(test.spec)));
+      ' crates/alpha2-compose/tests/old-specs.golden.json "$dir"
+      ;;
+    effect_validate)
+      for file in crates/alpha2-shaders/shaders/runtime/*/*.wgsl; do
+        cp "$file" "$dir/$(basename "$(dirname "$file")")-$(basename "$file")"
+      done
+      node -e '
+        const [dir, ...files] = process.argv.slice(1);
+        const fs = require("fs");
+        for (const file of files)
+          JSON.parse(fs.readFileSync(file, "utf8")).forEach((effect, index) =>
+            fs.writeFileSync(`${dir}/${file.split("/").pop()}-${index}.wgsl`, effect.wgslBody));
+      ' "$dir" tests/cases/gpu-watchdog/*-effects.json
+      ;;
+    lut_cube) cp tests/corpus/*.cube "$dir"/ ;;
+    text_raster)
+      # Header: 16 parameter bytes (size, width, spacing, align, one stroke, a state), then the text.
+      node -e '
+        const [golden, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        const head = Buffer.from([6, 0, 40, 64, 64, 0, 0, 1, 128, 128, 128, 26, 26, 0, 255, 128]);
+        JSON.parse(fs.readFileSync(golden, "utf8")).cases.forEach((test, index) =>
+          fs.writeFileSync(`${dir}/text-${index}`, Buffer.concat([head, Buffer.from(test.request.text)])));
+      ' tests/golden/text_raster.json "$dir"
+      ;;
+    font_bytes) cp tests/fonts/*.ttf tests/fonts/*.ttc "$dir"/ ;;
     host_frames)
       # Frames as docs/host-protocol.md lays them out: one plain, one with an attachment, both.
       node -e '

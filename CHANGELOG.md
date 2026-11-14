@@ -26,6 +26,8 @@ All notable changes to this project are documented in this file.
   under the tag `alpha2` on Android (which discards an app's standard error) and to standard
   error on iOS. Export and stills reports gain `gpuUnavailable`, the reason no GPU drew when one
   was allowed.
+- `alpha2_render::check_effect` checks a runtime effect as registration does (schema, code rules,
+  calls, cost) without a GPU device and returns the module the device would compile.
 
 ### Changed
 

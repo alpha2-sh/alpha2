@@ -275,6 +275,21 @@ fn array_sizes_are_literal_and_bounded() {
 }
 
 #[test]
+fn an_effect_is_checked_without_a_device_as_registration_checks_it() {
+    let checked = check_effect(&definition(Vec::new(), Vec::new())).expect("a valid effect");
+    assert!(checked.module.contains("fn effect("), "{}", checked.module);
+    assert_eq!(checked.functions, 1);
+    let refused = EffectDef {
+        wgsl_body: "fn effect(uv: vec2f, src: vec4f) -> vec4f { loop { } }".into(),
+        ..definition(Vec::new(), Vec::new())
+    };
+    assert_eq!(
+        check_effect(&refused).map(drop),
+        validate_definition(&refused)
+    );
+}
+
+#[test]
 fn delimiters_in_comments_are_not_counted() {
     // Balance is checked on code only; a comment may contain a half-open range.
     assert_eq!(
