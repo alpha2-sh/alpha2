@@ -34,6 +34,9 @@ pub use settings::{
 };
 pub use still::{MAX_STILL_DIMENSION, MAX_STILLS, StillEntry, StillRequest, StillSize};
 
+#[cfg(test)]
+mod tests;
+
 /// The protocol major version this host speaks.
 pub const PROTOCOL_VERSION: u32 = 2;
 
@@ -202,6 +205,19 @@ fn invalid(error: serde_json::Error) -> RequestError {
     RequestError::invalid_request(format!("invalid request: {error}"))
 }
 
+/// The header's top-level fields as raw text. A typed parse alone would also take a JSON array,
+/// as the fields in order.
+fn fields(line: &str) -> Result<HashMap<String, &RawValue>, RequestError> {
+    serde_json::from_str(line).map_err(|error| {
+        let what = if error.is_data() {
+            "a request is a JSON object"
+        } else {
+            "invalid JSON"
+        };
+        RequestError::invalid_request(format!("{what}: {error}"))
+    })
+}
+
 /// The `requestId` of a `status` request.
 ///
 /// # Errors
@@ -209,6 +225,7 @@ fn invalid(error: serde_json::Error) -> RequestError {
 /// an empty `requestId`.
 pub fn parse_status(line: &str) -> Result<String, RequestError> {
     let status: StatusRequest = serde_json::from_str(line).map_err(invalid)?;
+    fields(line)?;
     check_version(status.protocol_version)?;
     if status.request_id.is_empty() {
         return Err(RequestError::invalid_request("requestId must not be empty"));
@@ -221,6 +238,7 @@ pub fn parse_status(line: &str) -> Result<String, RequestError> {
 /// an empty `requestId` or `target`.
 pub fn parse_cancel(line: &str) -> Result<CancelRequest, RequestError> {
     let cancel: CancelRequest = serde_json::from_str(line).map_err(invalid)?;
+    fields(line)?;
     check_version(cancel.protocol_version)?;
     if cancel.request_id.is_empty() {
         return Err(RequestError::invalid_request("requestId must not be empty"));
@@ -244,14 +262,7 @@ pub fn parse_cancel(line: &str) -> Result<CancelRequest, RequestError> {
 /// an unknown field or operation, or an empty `requestId`, and `INVALID_INPUT` naming a setting or
 /// cross-field rule that refuses the request.
 pub fn parse_request(line: &str) -> Result<Request, RequestError> {
-    let fields: HashMap<String, &RawValue> = serde_json::from_str(line).map_err(|error| {
-        let what = if error.is_data() {
-            "a request is a JSON object"
-        } else {
-            "invalid JSON"
-        };
-        RequestError::invalid_request(format!("{what}: {error}"))
-    })?;
+    let fields = fields(line)?;
     let setting = |name: &str| -> Result<Option<Value>, RequestError> {
         let Some(raw) = fields.get(name) else {
             return Ok(None);

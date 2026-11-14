@@ -255,6 +255,14 @@ seed() {
           fs.writeFileSync(`${dir}/${name}`, bytes);
       ' "$dir"
       ;;
+    host_requests)
+      node -e '
+        const [cases, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        JSON.parse(fs.readFileSync(cases, "utf8")).forEach((test, index) =>
+          fs.writeFileSync(`${dir}/request-${index}.json`, JSON.stringify(test.request)));
+      ' tests/cases/host-protocol-corpus.json "$dir"
+      ;;
     evaluate | audio_render | vector_raster) ;;
     *) echo "unknown target $target" >&2; exit 2 ;;
   esac

@@ -48,6 +48,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "alpha2-assets"
+version = "0.6.0"
+dependencies = [
+ "alpha2-media",
+ "alpha2-model",
+ "alpha2-time",
+ "serde",
+]
+
+[[package]]
 name = "alpha2-audio"
 version = "0.6.0"
 dependencies = [
@@ -201,15 +211,25 @@ dependencies = [
 name = "alpha2-host-core"
 version = "0.6.0"
 dependencies = [
+ "alpha2-assets",
  "alpha2-audio",
+ "alpha2-compose",
  "alpha2-container",
+ "alpha2-engine",
+ "alpha2-eval",
+ "alpha2-gpu",
  "alpha2-media",
+ "alpha2-model",
  "alpha2-os",
+ "alpha2-render",
  "alpha2-time",
  "bytes",
  "image-webp",
  "png",
+ "serde",
  "serde_json",
+ "unicode-normalization",
+ "wgpu",
  "zune-core",
  "zune-jpeg",
 ]
