@@ -7,6 +7,16 @@ TICKS_PER_SECOND: int
 COMPOSE_VERSION: int
 COMPOSE_THEMES: list[str]
 
+class InternalError(RuntimeError):
+    """An engine defect (a Rust panic) inside a native call, with the panic message.
+
+    Every function and method here raises it for a panic; a :class:`TextMeasurer` whose call
+    panicked raises it again on every later call.
+    """
+
+    code: str
+    """Always ``INTERNAL``."""
+
 def validate_project_json(json: str) -> list[str]:
     """The problems the engine finds in a project document, as JSON text: empty when it is valid."""
 

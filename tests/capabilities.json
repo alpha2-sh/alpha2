@@ -127,6 +127,10 @@
     "description": "A Python that imports alpha2.",
     "probe": "a Python that imports alpha2 (host-cli-parity)"
   },
+  "native-test-hooks": {
+    "description": "The test hooks of a debug build of the Python native module.",
+    "probe": "alpha2._native has _panic"
+  },
   "host": {
     "description": "A built alpha2-host.",
     "probe": "ALPHA2_HOST_BINARY or the cargo-built alpha2-host exists"

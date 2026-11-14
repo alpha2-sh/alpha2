@@ -221,11 +221,28 @@ MALFORMED: dict[str, tuple[str, Any, str]] = {
         1,
         "INTERNAL",
     ),
+    "a failure of no known class": (
+        raw_call("describe_project", {"project": project_document()}),
+        1,
+        "UNKNOWN",
+    ),
 }
 
 
-class _Panic(BaseException):
-    """Stands in for the native module's panic, which is not an ``Exception``."""
+class _Unknown(BaseException):
+    pass
+
+
+def _native_panic(_text: str) -> list[str]:
+    panic = getattr(mcp._native, "_panic", None)
+    if panic is None:
+        raise mcp._native.InternalError("alpha2 internal error: attempt to negate with overflow")
+    panic("attempt to negate with overflow")
+    return []
+
+
+def _unknown(_text: str) -> list[str]:
+    raise _Unknown("attempt to negate with overflow")
 
 
 @pytest.mark.parametrize("case", list(MALFORMED))
@@ -233,12 +250,9 @@ def test_every_malformed_request_is_answered_and_the_server_keeps_serving(
     case: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     line, request_id, outcome = MALFORMED[case]
-    if outcome == "INTERNAL":
-
-        def panic(_text: str) -> list[str]:
-            raise _Panic("attempt to negate with overflow")
-
-        monkeypatch.setattr(mcp._native, "validate_project_json", panic)
+    if outcome in ("INTERNAL", "UNKNOWN"):
+        failing = _native_panic if outcome == "INTERNAL" else _unknown
+        monkeypatch.setattr(mcp._native, "validate_project_json", failing)
     monkeypatch.chdir(tmp_path)
     reader = io.BytesIO(f"{line}\n".encode() + b'{"jsonrpc":"2.0","id":99,"method":"ping"}\n')
     writer = io.BytesIO()
@@ -253,9 +267,11 @@ def test_every_malformed_request_is_answered_and_the_server_keeps_serving(
         assert first["error"]["code"] in {int(code) for code in outcome.split("|")}
     else:
         assert first["result"]["isError"] is True
-        if outcome == "INTERNAL":
+        if outcome in ("INTERNAL", "UNKNOWN"):
+            text = first["result"]["content"][0]["text"]
             assert first["result"]["structuredContent"] == {"code": "INTERNAL"}
-            assert first["result"]["content"][0]["text"].startswith("_Panic: ")
+            assert text.startswith("INTERNAL: " if outcome == "INTERNAL" else "_Unknown: ")
+            assert "attempt to negate with overflow" in text
     assert not (tmp_path / "never.mp4").exists()
 
 

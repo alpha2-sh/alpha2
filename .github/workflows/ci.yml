@@ -1328,7 +1328,7 @@ jobs:
         shell: bash
         working-directory: python/alpha2
     env:
-      ALPHA2_REQUIRE: ""
+      ALPHA2_REQUIRE: native-test-hooks
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

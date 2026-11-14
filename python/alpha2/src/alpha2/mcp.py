@@ -23,7 +23,7 @@ from . import _native
 from . import compose as _compose
 from .builder import TICKS_PER_SECOND, seconds_to_ticks, ticks
 from .client import HostClient
-from .errors import Alpha2ComposeError, Alpha2HostError
+from .errors import Alpha2ComposeError, Alpha2HostError, Alpha2InternalError
 
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 """The MCP versions this server speaks, newest first."""
@@ -610,13 +610,15 @@ def _call(tool: Tool, arguments: dict[str, Any], structured: bool) -> dict[str, 
         return _failure(str(error), {"path": error.path, "problem": error.problem}, structured)
     except Alpha2HostError as error:
         return _failure(f"{error.code}: {error}", {"code": error.code}, structured)
+    except Alpha2InternalError as error:
+        return _failure(f"INTERNAL: {error}", {"code": "INTERNAL"}, structured)
     except KeyError as error:
         return _failure(f"missing argument {error}", {}, structured)
     except (ValueError, TypeError, OSError) as error:
         return _failure(str(error), {}, structured)
     except (KeyboardInterrupt, SystemExit, GeneratorExit):
         raise
-    except BaseException as error:  # noqa: BLE001 - a native panic is a BaseException
+    except BaseException as error:  # noqa: BLE001 - every tool call gets an answer
         return _failure(f"{type(error).__name__}: {error}", {"code": "INTERNAL"}, structured)
 
 

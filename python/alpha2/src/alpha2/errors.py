@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from ._native import InternalError as Alpha2InternalError
+
 __all__ = [
     "Alpha2AbortError",
     "Alpha2ComposeError",
@@ -17,6 +19,7 @@ __all__ = [
     "Alpha2GpuInitializationError",
     "Alpha2HostError",
     "Alpha2HostInstallError",
+    "Alpha2InternalError",
     "Alpha2ProjectValidationError",
     "ExportPhase",
     "failure_class_of_code",

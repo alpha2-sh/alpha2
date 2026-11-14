@@ -309,6 +309,10 @@ All notable changes to this project are documented in this file.
 - `loadProject` in the browser binding drops a source's uploaded frames and audio when its kind,
   provider (a dotLottie animation, an image sequence's frames) or fingerprint changes, not only
   its ID or locator; before, the old media kept showing and playing under the changed source.
+- Python: a panic inside the native module (validation, compose, edit operations, text measuring)
+  raises `alpha2.Alpha2InternalError`, a `RuntimeError` with `code` `INTERNAL`, instead of a
+  `BaseException` that `except Exception` does not catch. A `TextMeasurer` whose call panicked
+  raises it again on every later call.
 
 ## [0.6.0] - 2026-11-08
 

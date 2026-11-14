@@ -79,6 +79,8 @@ pub enum Capability {
     Browser,
     /// A Python that imports alpha2.
     Python,
+    /// The test hooks of a debug build of the Python native module.
+    NativeTestHooks,
     /// A built alpha2-host.
     Host,
     /// A host that renders on the GPU.
@@ -162,6 +164,7 @@ impl Capability {
         Self::Wasm,
         Self::Browser,
         Self::Python,
+        Self::NativeTestHooks,
         Self::Host,
         Self::GpuRenderer,
         Self::H264,
@@ -223,6 +226,7 @@ impl Capability {
             Self::Wasm => "wasm",
             Self::Browser => "browser",
             Self::Python => "python",
+            Self::NativeTestHooks => "native-test-hooks",
             Self::Host => "host",
             Self::GpuRenderer => "gpu-renderer",
             Self::H264 => "h264",

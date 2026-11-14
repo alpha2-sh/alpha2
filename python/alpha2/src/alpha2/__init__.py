@@ -68,6 +68,7 @@ from .errors import (
     Alpha2GpuInitializationError,
     Alpha2HostError,
     Alpha2HostInstallError,
+    Alpha2InternalError,
     Alpha2ProjectValidationError,
 )
 from .install import (
@@ -119,6 +120,7 @@ __all__ = [
     "Alpha2GpuInitializationError",
     "Alpha2HostError",
     "Alpha2HostInstallError",
+    "Alpha2InternalError",
     "Alpha2ProjectValidationError",
     "CaptionTrackBuilder",
     "ExportProgress",
