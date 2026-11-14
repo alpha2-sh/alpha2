@@ -45,6 +45,11 @@ All notable changes to this project are documented in this file.
   of `HOST_START_TIMEOUT` after 30 seconds. `HOST_START_TIMEOUT` now carries what the host wrote in
   `stderr`.
 
+- `@alpha2-sh/node` serves requests in the order they were made, as the Python client does: only
+  the oldest waiting request is considered, so a request of other modes (such as the software
+  rerun after `DECODE_STALLED`) no longer waits behind every younger request of the busy host's
+  modes. The host protocol's "Keeping hosts" states the rule.
+
 ### Fixed
 
 - Editor: an import, relink or caption import that finishes after another project was opened is

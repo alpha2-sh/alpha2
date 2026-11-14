@@ -2600,32 +2600,44 @@ class HostPool {
     await Promise.all(hosts.map((host) => host.exited));
   }
 
-  /** Gives each waiting request an idle host of its modes, a new host, or room for one. */
+  /**
+   * Serves requests in the order they were made: only the oldest waiting one is considered. It gets
+   * an idle host of its modes, else a new host while there is room, else one idle host of other
+   * modes is ended for it and nothing more happens until that host is gone.
+   */
   dispatch(): void {
-    for (const waiter of [...this.#waiting]) {
-      const host = [...this.#hosts].find(
-        (candidate) => candidate.idle && candidate.key === waiter.key,
-      );
-      if (host === undefined || !this.#dequeue(waiter)) continue;
-      host.lease();
-      waiter.grant(host);
-    }
-    for (const waiter of [...this.#waiting]) {
-      if (!this.#waiting.includes(waiter)) continue;
+    for (;;) {
+      const waiter = this.#waiting[0];
+      if (waiter === undefined) return;
+      let idle: Host | undefined;
+      let match: Host | undefined;
+      for (const host of this.#hosts) {
+        if (!host.idle) continue;
+        idle ??= host;
+        if (host.key === waiter.key) {
+          match = host;
+          break;
+        }
+      }
+      if (match !== undefined) {
+        this.#waiting.shift();
+        match.lease();
+        waiter.grant(match);
+        continue;
+      }
       if (this.#hosts.size < this.#limit) {
-        this.#dequeue(waiter);
+        this.#waiting.shift();
         const host = new Host(this, waiter);
         this.#hosts.add(host);
         void host.start();
         continue;
       }
       if (waiter.evicted !== undefined && this.#hosts.has(waiter.evicted))
-        continue;
-      // Idle hosts left after the first pass serve no waiting request.
-      const idle = [...this.#hosts].find((candidate) => candidate.idle);
+        return;
       if (idle === undefined) return;
       waiter.evicted = idle;
       idle.retire();
+      return;
     }
   }
 
@@ -2670,6 +2682,8 @@ class HostPool {
         this.#dequeue(waiter);
         for (const host of this.#hosts) host.withdraw(waiter);
         waiter.refuse(new Alpha2AbortError());
+        // The request behind it may be able to go now.
+        this.dispatch();
       };
       signal?.addEventListener("abort", abort, { once: true });
       this.#waiting.push(waiter);

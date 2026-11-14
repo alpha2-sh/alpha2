@@ -237,5 +237,16 @@
       "withinMs": 9000,
       "closeWithinMs": 9000
     }
+  },
+  {
+    "id": "another-environment-is-not-starved",
+    "kind": "arrival-order",
+    "given": {
+      "concurrency": 1,
+      "first": "software",
+      "second": "auto",
+      "thenKeepPending": { "videoDecode": "software", "depth": 2, "total": 12 }
+    },
+    "expect": { "secondCompletes": 2 }
   }
 ]

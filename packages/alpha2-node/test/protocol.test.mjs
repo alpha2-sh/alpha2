@@ -34,6 +34,7 @@ import {
   windowsPolicyBlocked,
 } from "../dist/protocol.js";
 import { failureOf } from "alpha2/export-failure";
+import { assertScalesBelow } from "../../../scripts/lib/timing.mjs";
 import { decideRetry, RETRY_PROFILES } from "alpha2/export-retry";
 
 const scratchDirectories = [];
@@ -2777,6 +2778,27 @@ test("a request answered HOST_RETIRING is sent again to another host, a few time
   );
 });
 
+test("queued requests are dispatched with work that grows linearly with the queue", async () => {
+  const root = await scratch("alpha2-node-pool-queue-");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(root, POOLED_HOST(join(root, "log"))),
+    concurrency: 1,
+  });
+  await exported(client);
+  // The large size queues 10,000 requests at once.
+  await assertScalesBelow(
+    "dispatching a queue of requests",
+    1_250,
+    (size) => size,
+    (size) =>
+      Promise.all(
+        Array.from({ length: size }, () =>
+          client.exportProject(exportRequest("out.mp4")),
+        ),
+      ),
+  );
+});
+
 test("hosts are kept apart by decode mode and renderer", async () => {
   const root = await scratch("alpha2-node-pool-modes-");
   const log = join(root, "log");
@@ -3142,7 +3164,40 @@ serve((request) => {
 });
 `;
 
+/** Answers each request 20 ms after it arrives. */
+const SLOW_HOST = `import { respond, serve } from ${IO};
+serve((request) => setTimeout(() => respond(request, { ok: true, result: { pid: process.pid } }), 20));
+`;
+
 const SCENARIO_DRIVERS = {
+  async "arrival-order"(scenario) {
+    const { given } = scenario;
+    const root = await scratch("alpha2-node-arrival-order-");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(root, SLOW_HOST),
+      concurrency: given.concurrency,
+    });
+    const completed = [];
+    const keep = given.thenKeepPending;
+    let submitted = 0;
+    const run = (label, videoDecode) =>
+      exported(client, { videoDecode }).then(() => {
+        completed.push(label);
+        if (label === "stream" && submitted < keep.total) return stream();
+      });
+    const stream = () => {
+      submitted += 1;
+      return run("stream", keep.videoDecode);
+    };
+    const all = [run("first", given.first), run("second", given.second)];
+    for (let index = 0; index < keep.depth; index += 1) all.push(stream());
+    await Promise.all(all);
+    assert.equal(
+      completed.indexOf("second") + 1,
+      scenario.expect.secondCompletes,
+      completed.join(" "),
+    );
+  },
   async "grandchild-holds-the-pipes"(scenario) {
     const root = await scratch("alpha2-node-grandchild-");
     const log = join(root, "log");

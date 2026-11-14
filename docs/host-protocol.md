@@ -97,7 +97,7 @@ Starting a host costs a process, a GPU device and its probes, so a client keeps 
 
 - Run at most `concurrency` hosts, and send each one request at a time.
 - Use only a host of the client's own release: refuse one whose `ready` state names another `details.hostVersion`, or none, and one whose first line before the magic is the `ready` line of another protocol version (`{"protocolVersion":1,"type":"ready"}` from 0.5.x). Both clients end such a host and fail at once with `HOST_VERSION_MISMATCH`, which no retry mends.
-- Send a request to an idle `ready` host. With none, start a new host, which counts as started once its `ready` message arrives; at the limit, end an idle host of other modes to make room, or wait for a host to come free.
+- Serve requests in the order they were made, and consider only the oldest waiting one: send it to an idle `ready` host of its modes. With none, start a new host for it, which counts as started once its `ready` message arrives; at the limit, end one idle host of other modes to make room, or wait for a host to come free. A younger request never takes a host the oldest one is waiting for.
 - A host takes its settings from the environment it was started with, the renderer and decode modes (`ALPHA2_RENDERER`, `ALPHA2_VIDEO_DECODE`) among them, so hosts are kept apart by the whole environment they start with: a request goes only to a host started with the environment it would start one with now.
 - Stop sending to a host when it reports `draining`, in a `state` message or a response's `hostState`, or when it exits. Close its standard input once it runs nothing.
 - Send a request answered `HOST_RETIRING` again, to another host.

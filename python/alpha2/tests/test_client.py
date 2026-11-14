@@ -2558,6 +2558,43 @@ def run_grandchild_holds_the_pipes(
                     pass
 
 
+def run_arrival_order(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    given = scenario["given"]
+    keep = given["thenKeepPending"]
+    answer = "time.sleep(0.02)\n        send(request, ok=True, result={})"
+    client = HostClient(
+        host_path=fake_host(tmp_path, pooled_host(tmp_path / "log", answer)),
+        concurrency=given["concurrency"],
+    )
+    completed: list[str] = []
+    lock = threading.Lock()
+    submitted = 0
+
+    def run(label: str, decode: str) -> None:
+        nonlocal submitted
+        client.export(**export_args("out.mp4", video_decode=decode))
+        with lock:
+            completed.append(label)
+            more = label == "stream" and submitted < keep["total"]
+            if more:
+                submitted += 1
+        if more:
+            pool.submit(run, "stream", keep["videoDecode"])
+
+    with ThreadPoolExecutor(8) as pool:
+        # Each request is queued before the next is made, so the order is the order of the calls.
+        pool.submit(run, "first", given["first"])
+        time.sleep(0.2)
+        pool.submit(run, "second", given["second"])
+        time.sleep(0.05)
+        for _ in range(keep["depth"]):
+            with lock:
+                submitted += 1
+            pool.submit(run, "stream", keep["videoDecode"])
+        wait_until(lambda: len(completed) == 2 + keep["total"], 30)
+    assert completed.index("second") + 1 == scenario["expect"]["secondCompletes"], completed
+
+
 def run_foreign_host(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
     given, expect = scenario["given"], scenario["expect"]
     pids = tmp_path / "pids"
@@ -2668,6 +2705,7 @@ SCENARIO_DRIVERS: dict[str, Callable[[dict[str, Any], Path, FakeHost], None]] = 
     "dead-idle-host": run_dead_idle_host,
     "dies-reading": run_dies_reading,
     "grandchild-holds-the-pipes": run_grandchild_holds_the_pipes,
+    "arrival-order": run_arrival_order,
     "host-version": run_host_version,
     "start-timeout": run_start_timeout,
 }
