@@ -166,8 +166,11 @@ export interface BrowserBridgeOptions {
   /** Defaults to `createMediaAdapter(runtimeAssets)`. */
   readonly mediaAdapter?: BrowserMediaAdapter;
   /**
-   * The most runtime resources (imported media, rasterized text, proxies) held at once,
-   * default 128. An import past it is refused with `EditorError` `resource_budget`.
+   * The most imported media files (videos, images, audio, fonts, LUTs) this session holds at
+   * once, default 128. Media removed from the document still counts while undo or redo can bring
+   * it back. Rasterized text and adopted proxies are not counted. An import past the limit is
+   * refused with `EditorError` `resource_budget` and changes nothing; the media already held is
+   * unaffected.
    */
   readonly resourceLimit?: number;
   /** `false` renders picture only: no AudioContext opens and playback runs on the wall clock. */
@@ -391,7 +394,9 @@ export interface BrowserBridge {
   /** The playhead, in ticks. */
   readonly tick: number;
   readonly playing: boolean;
-  /** Runtime resources currently held (see `BrowserBridgeOptions.resourceLimit`). */
+  /**
+   * Runtime resources currently held, counted or not (see `BrowserBridgeOptions.resourceLimit`).
+   */
   readonly resourceCount: number;
   /**
    * Preview output volume from 0 to 1, a monitor control outside the project and exports. Kept by

@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Editor: the browser bridge's `resourceLimit` counts only imported media files. Titles and
+  adopted proxies no longer count, so a project with many titles or proxies previews and exports;
+  media removed from the document still counts while undo can bring it back, and the import refusal
+  says so.
+
 ## [0.6.0] - 2026-11-08
 
 ### Added

@@ -423,7 +423,7 @@ test(
 );
 
 test(
-  "a kept proxy the runtime has no room for is reported, and preview draws the rest",
+  "a kept proxy adopts when imported media fill the runtime limit",
   { skip },
   async () => {
     const { editor, bridge, reported } = await session({
@@ -454,17 +454,15 @@ test(
     await bridge.bindPreview(new FakeCanvas(64, 36));
     assert.equal(await bridge.seek(0), true);
     assert.ok(await bridge.conform("preview"));
-    assert.deepEqual(
-      reported.map((e) => [e.code, e.entityId, e.cause?.code]),
-      [["proxy_unavailable", "clip", "resource_budget"]],
-    );
+    assert.deepEqual(reported, []);
+    assert.equal(bridge.proxyStatus("clip").available, true);
     await bridge.dispose();
     editor.dispose();
   },
 );
 
 test(
-  "proxy preview of more sources than the runtime holds reads the originals of the rest",
+  "proxy preview of more sources than the runtime limit reads every proxy",
   { skip },
   async () => {
     const sha = (n) => n.toString(16).padStart(64, "0");
@@ -485,17 +483,12 @@ test(
     bridge.setPreviewMedia("proxies");
     assert.equal(await bridge.seek(0), true);
     assert.equal(bridge.proxyStatus("f1").reading, "proxy");
-    assert.equal(bridge.proxyStatus(`f${count}`).reading, "original");
-    const refused = reported.map((e) => e.entityId);
-    assert.ok(refused.length > 0);
-    assert.ok(reported.every((e) => e.code === "proxy_unavailable"));
-    assert.equal(new Set(refused).size, refused.length, "once per proxy");
-    assert.ok(refused.includes(`f${count}`));
-    const staged = counts.proxyStages;
+    assert.equal(bridge.proxyStatus(`f${count}`).reading, "proxy");
+    assert.equal(counts.proxyStages, count);
+    assert.deepEqual(reported, []);
     ok(editor.dispatch({ type: "project.update", patch: { name: "edited" } }));
     assert.equal(await bridge.seek(4000), true);
-    assert.equal(counts.proxyStages, staged);
-    assert.equal(reported.length, refused.length);
+    assert.equal(counts.proxyStages, count);
     await bridge.dispose();
     editor.dispose();
   },

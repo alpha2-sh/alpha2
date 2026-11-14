@@ -12,18 +12,29 @@ export interface Lease<T> {
  * history, keyed by id and revision and kept alive by leases from owners and export jobs.
  */
 export class ResourceRegistry<T> {
-  #entries = new Map<string, { value: T; refs: number; dispose: () => void }>();
+  #entries = new Map<
+    string,
+    { value: T; refs: number; counted: boolean; dispose: () => void }
+  >();
+  #counted = 0;
   #closed = false;
-  /** @param limit Most entries held at once (default 128). */
+  /** @param limit Most counted entries held at once (default 128). */
   constructor(readonly limit = 128) {}
   /**
    * Stores `value` under `id` at `revision` and returns its first lease. `dispose` runs once,
-   * when the last lease is released or the registry is disposed.
+   * when the last lease is released or the registry is disposed. An entry put with
+   * `counted: false` is held whatever the limit and does not use its room.
    *
    * Throws `EditorError` `disposed` after {@link dispose}, `duplicate_resource` if that revision
-   * is already stored, and `resource_budget` when `limit` entries are held.
+   * is already stored, and `resource_budget` when a counted entry finds `limit` counted entries.
    */
-  put(id: string, revision: number, value: T, dispose: () => void): Lease<T> {
+  put(
+    id: string,
+    revision: number,
+    value: T,
+    dispose: () => void,
+    { counted = true }: { counted?: boolean } = {},
+  ): Lease<T> {
     if (this.#closed)
       throw new EditorError("disposed", "Resources are closed", "resource");
     const key = JSON.stringify([id, revision]);
@@ -34,7 +45,7 @@ export class ResourceRegistry<T> {
         "resource",
         id,
       );
-    if (this.#entries.size >= this.limit)
+    if (counted && this.#counted >= this.limit)
       throw new EditorError(
         "resource_budget",
         "Resource budget reached",
@@ -42,9 +53,11 @@ export class ResourceRegistry<T> {
         id,
       );
     let closed = false;
+    if (counted) this.#counted++;
     this.#entries.set(key, {
       value,
       refs: 0,
+      counted,
       dispose: () => {
         if (!closed) {
           closed = true;
@@ -74,6 +87,7 @@ export class ResourceRegistry<T> {
         released = true;
         if (--entry.refs === 0) {
           this.#entries.delete(key);
+          if (entry.counted) this.#counted--;
           entry.dispose();
         }
       },
@@ -82,6 +96,10 @@ export class ResourceRegistry<T> {
   /** Entries currently held. */
   get size() {
     return this.#entries.size;
+  }
+  /** Entries currently held that count against `limit`. */
+  get counted() {
+    return this.#counted;
   }
   /**
    * Disposes every entry regardless of outstanding leases and refuses later `put` calls.
@@ -92,5 +110,6 @@ export class ResourceRegistry<T> {
     this.#closed = true;
     for (const entry of this.#entries.values()) entry.dispose();
     this.#entries.clear();
+    this.#counted = 0;
   }
 }

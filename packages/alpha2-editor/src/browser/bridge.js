@@ -505,10 +505,17 @@ export function createBrowserBridge(options) {
       try {
         const runtime = { ...staged.runtime, id: `proxy:${hash}` };
         proxy.revision = issue(runtime.id);
-        proxy.lease = registry.put(runtime.id, proxy.revision, runtime, () => {
-          staged.dispose();
-          proxy.unlocked = hold.release();
-        });
+        // At most one proxy per original, so it does not count against the import limit.
+        proxy.lease = registry.put(
+          runtime.id,
+          proxy.revision,
+          runtime,
+          () => {
+            staged.dispose();
+            proxy.unlocked = hold.release();
+          },
+          { counted: false },
+        );
         proxies.set(hash, proxy);
       } catch (error) {
         staged.dispose();
@@ -521,7 +528,7 @@ export function createBrowserBridge(options) {
   }
   /** Hashes with no stored proxy, not asked again this session. */
   let absentProxies = new Set();
-  /** Kept proxies that failed to adopt, by hash, not tried again until something frees room. */
+  /** Kept proxies that failed to adopt, by hash, not tried again in this project. */
   let failedProxies = new Map();
   /**
    * Finds kept proxies for offline sources, and for every source while preview prefers proxies. A
@@ -882,9 +889,14 @@ export function createBrowserBridge(options) {
           { id: asset.id },
         );
         const revision = issue(asset.id);
+        // Bounded by the document's own limits, so it does not count against the import limit.
         owners.set(resourceKey, {
-          lease: registry.put(asset.id, revision, runtime, () =>
-            staged.dispose(),
+          lease: registry.put(
+            asset.id,
+            revision,
+            runtime,
+            () => staged.dispose(),
+            { counted: false },
           ),
           revision,
         });
@@ -1260,7 +1272,6 @@ export function createBrowserBridge(options) {
     const media = new Set(),
       hashes = new Set(),
       seen = new Set();
-    let released = false;
     for (const document of editor.reachableDocuments()) {
       // Commands that leave assets alone share them, so history is read once per media change.
       if (seen.has(document.assets)) continue;
@@ -1281,7 +1292,6 @@ export function createBrowserBridge(options) {
         owners.delete(resourceKey);
         analyses.get(owner.lease.value)?.abort();
         owner.lease.release();
-        released = true;
       }
     for (const resourceKey of textFailures.keys())
       if (!shown.has(resourceKey)) textFailures.delete(resourceKey);
@@ -1289,10 +1299,7 @@ export function createBrowserBridge(options) {
       if (!hashes.has(hash)) {
         proxies.delete(hash);
         proxy.lease.release();
-        released = true;
       }
-    // A proxy refused for want of room may fit now.
-    if (released) failedProxies = new Map();
   }
   const nextFrame = (fn) =>
     typeof requestAnimationFrame === "function"
@@ -2198,10 +2205,23 @@ export function createBrowserBridge(options) {
           ...(item.fingerprint ? { fingerprint: item.fingerprint } : {}),
           authoring,
         };
-        // Call as a method, since a staged asset may be a class instance.
-        const lease = registry.put(id, contentRevision, runtime, () =>
-          item.dispose(),
-        );
+        let lease;
+        try {
+          // Call as a method, since a staged asset may be a class instance.
+          lease = registry.put(id, contentRevision, runtime, () =>
+            item.dispose(),
+          );
+        } catch (error) {
+          if (error?.code !== "resource_budget") throw error;
+          throw new EditorError(
+            "resource_budget",
+            `${fileName} is not imported: this session holds ${registry.limit} imported media files, its resourceLimit. Removed media counts while undo can still reach it`,
+            "import",
+            id,
+            true,
+            { cause: error },
+          );
+        }
         leases.push({ id, contentRevision, lease });
         commands.push({
           type: "asset.put",
