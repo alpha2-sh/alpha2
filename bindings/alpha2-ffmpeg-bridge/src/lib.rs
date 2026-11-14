@@ -1346,10 +1346,7 @@ impl fmt::Display for BridgeError {
 ///
 /// Coefficient arguments are `SWS_CS_*` constants. RGB endpoints still need
 /// an explicit full-range flag.
-///
-/// # Errors
-/// Returns an error when `libswscale` rejects the configuration.
-pub fn configure_colorspace(
+fn configure_colorspace(
     context: &mut SwsContext,
     source_coefficients: i32,
     source_full_range: bool,
@@ -1377,62 +1374,230 @@ pub fn configure_colorspace(
     }
 }
 
-/// Converts `frame` into `output` as `target`'s planes packed without row padding (the
-/// `av_image_copy_to_buffer` layout at alignment 1).
+/// Row alignment of every `sws_scale` destination: 16 RGBA pixels, the widest block a SIMD
+/// converter stores per iteration.
+const SCALER_DESTINATION_ALIGN: i32 = 64;
+
+/// Converts frames of one size and pixel format into another pixel format at the same size.
 ///
-/// # Errors
-/// Returns an error when `output` is not exactly that layout's size, or when `libswscale` fails.
-pub fn scale_frame_packed(
-    context: &mut SwsContext,
-    frame: &AVFrame,
+/// The destination of `sws_scale` is always a frame this type allocates with
+/// `av_frame_get_buffer(.., 64)` for its own format and size, zero filled before use. Some
+/// converters write whole blocks past a row's last pixel or skip the last columns, so a caller's
+/// slice is never a destination: rows padded to 64 bytes keep every block inside the frame, and
+/// zero fill leaves defined bytes where a converter writes nothing.
+pub struct PackedScaler {
+    context: SwsContext,
+    width: i32,
+    height: i32,
+    source: ffi::AVPixelFormat,
     target: ffi::AVPixelFormat,
-    output: &mut [u8],
-) -> Result<(), BridgeError> {
-    // SAFETY: a pure size computation over plain values.
-    let size = unsafe { ffi::av_image_get_buffer_size(target, frame.width, frame.height, 1) };
-    if size < 0 {
-        return Err(BridgeError::FfmpegCode(size));
-    }
-    if usize::try_from(size).ok() != Some(output.len()) {
-        return Err(BridgeError::InvalidInput(
-            "packed output is not the size of the converted frame",
-        ));
-    }
-    let mut data = [ptr::null_mut::<u8>(); 4];
-    let mut linesize = [0; 4];
-    // SAFETY: `output` holds exactly the bytes this layout needs, and the arrays fit every plane.
-    let filled = unsafe {
-        ffi::av_image_fill_arrays(
-            data.as_mut_ptr(),
-            linesize.as_mut_ptr(),
-            output.as_mut_ptr(),
+    destination: AVFrame,
+}
+
+impl PackedScaler {
+    /// A scaler from `source` to `target` at `width`x`height`, with bilinear filtering.
+    ///
+    /// # Errors
+    /// Returns an error when `libswscale` has no conversion between the formats or a frame of that
+    /// size cannot be allocated.
+    pub fn new(
+        width: i32,
+        height: i32,
+        source: ffi::AVPixelFormat,
+        target: ffi::AVPixelFormat,
+    ) -> Result<Self, BridgeError> {
+        if width <= 0 || height <= 0 {
+            return Err(BridgeError::InvalidInput("scaler size is not positive"));
+        }
+        let context = SwsContext::get_context(
+            width,
+            height,
+            source,
+            width,
+            height,
             target,
-            frame.width,
-            frame.height,
-            1,
+            scaler_flags(width, height, source, target),
+            None,
+            None,
+            None,
         )
-    };
-    if filled < 0 {
-        return Err(BridgeError::FfmpegCode(filled));
+        .ok_or(BridgeError::InvalidInput(
+            "libswscale has no conversion between these pixel formats",
+        ))?;
+        let destination = padded_zeroed_frame(width, height, target)?;
+        Ok(Self {
+            context,
+            width,
+            height,
+            source,
+            target,
+            destination,
+        })
     }
-    // SAFETY: the context is exclusively borrowed, the source planes belong to the live `frame`,
-    // and every destination pointer lies inside the exclusively borrowed `output`.
+
+    /// Applies explicit matrix and range coefficients (`SWS_CS_*` constants) to the conversion.
+    /// RGB endpoints still need an explicit full-range flag.
+    ///
+    /// # Errors
+    /// Returns an error when `libswscale` rejects the configuration.
+    pub fn configure_colorspace(
+        &mut self,
+        source_coefficients: i32,
+        source_full_range: bool,
+        destination_coefficients: i32,
+        destination_full_range: bool,
+    ) -> Result<(), BridgeError> {
+        configure_colorspace(
+            &mut self.context,
+            source_coefficients,
+            source_full_range,
+            destination_coefficients,
+            destination_full_range,
+        )
+    }
+
+    /// Converts `frame` and returns the target's planes packed without row padding, in plane
+    /// order (the `av_image_copy_to_buffer` layout at alignment 1).
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for a frame of another size or format than the scaler's, and an
+    /// error when `libswscale` fails.
+    pub fn convert(&mut self, frame: &AVFrame) -> Result<Vec<u8>, BridgeError> {
+        self.check_source(frame)?;
+        scale_into(&mut self.context, frame, &mut self.destination, self.height)?;
+        // SAFETY: a pure size computation over plain values.
+        let size =
+            unsafe { ffi::av_image_get_buffer_size(self.target, self.width, self.height, 1) };
+        let len = usize::try_from(size).map_err(|_| BridgeError::FfmpegCode(size))?;
+        let mut packed = vec![0_u8; len];
+        // SAFETY: `packed` holds exactly `size` bytes, and the destination frame's planes hold
+        // `height` rows of the target format at their linesizes.
+        let copied = unsafe {
+            ffi::av_image_copy_to_buffer(
+                packed.as_mut_ptr(),
+                size,
+                self.destination.data.as_ptr().cast(),
+                self.destination.linesize.as_ptr(),
+                self.target,
+                self.width,
+                self.height,
+                1,
+            )
+        };
+        if copied < 0 {
+            return Err(BridgeError::FfmpegCode(copied));
+        }
+        Ok(packed)
+    }
+
+    /// Converts `frame` into a new frame of the target format with padded rows, for an encoder
+    /// that keeps references to its input.
+    ///
+    /// # Errors
+    /// As [`Self::convert`], and when the new frame cannot be allocated.
+    pub fn convert_to_frame(&mut self, frame: &AVFrame) -> Result<AVFrame, BridgeError> {
+        self.check_source(frame)?;
+        let mut output = padded_zeroed_frame(self.width, self.height, self.target)?;
+        scale_into(&mut self.context, frame, &mut output, self.height)?;
+        Ok(output)
+    }
+
+    fn check_source(&self, frame: &AVFrame) -> Result<(), BridgeError> {
+        if frame.width != self.width || frame.height != self.height || frame.format != self.source {
+            return Err(BridgeError::InvalidInput(
+                "frame size or format differs from the scaler's",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for PackedScaler {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PackedScaler")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("source", &self.source)
+            .field("target", &self.target)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Bilinear, plus accurate rounding where `libswscale` would otherwise pick its unscaled
+/// 4:2:0/4:2:2-to-RGB converter for an odd width: its C version never writes the last column.
+fn scaler_flags(
+    width: i32,
+    height: i32,
+    source: ffi::AVPixelFormat,
+    target: ffi::AVPixelFormat,
+) -> u32 {
+    let unscaled_rgb_source = matches!(
+        source,
+        ffi::AV_PIX_FMT_YUV420P | ffi::AV_PIX_FMT_YUV422P | ffi::AV_PIX_FMT_YUVA420P
+    );
+    // SAFETY: `av_pix_fmt_desc_get` accepts any value and returns null or a static descriptor.
+    let rgb_target = unsafe { ffi::av_pix_fmt_desc_get(target).as_ref() }
+        .is_some_and(|descriptor| descriptor.flags & u64::from(ffi::AV_PIX_FMT_FLAG_RGB) != 0);
+    if unscaled_rgb_source && rgb_target && height % 2 == 0 && width % 2 == 1 {
+        ffi::SWS_BILINEAR | ffi::SWS_ACCURATE_RND
+    } else {
+        ffi::SWS_BILINEAR
+    }
+}
+
+/// A frame of `format` with rows aligned to [`SCALER_DESTINATION_ALIGN`], every byte zero.
+fn padded_zeroed_frame(
+    width: i32,
+    height: i32,
+    format: ffi::AVPixelFormat,
+) -> Result<AVFrame, BridgeError> {
+    let mut frame = AVFrame::new();
+    frame.set_format(format);
+    frame.set_width(width);
+    frame.set_height(height);
+    frame.get_buffer(SCALER_DESTINATION_ALIGN)?;
+    for buffer in frame.buf {
+        // SAFETY: a non-null `AVFrame::buf` entry is live, and this new frame is its only owner.
+        if let Some(buffer) = unsafe { buffer.as_ref() } {
+            // SAFETY: as above.
+            unsafe { ptr::write_bytes(buffer.data, 0, buffer.size) };
+        }
+    }
+    Ok(frame)
+}
+
+/// The workspace's only `sws_scale` call. `destination` is a frame from [`padded_zeroed_frame`]
+/// of the context's target format and size.
+fn scale_into(
+    context: &mut SwsContext,
+    source: &AVFrame,
+    destination: &mut AVFrame,
+    height: i32,
+) -> Result<(), BridgeError> {
+    // SAFETY: the context is exclusively borrowed and was made for this size and both formats,
+    // the source planes belong to the live `source`, and the destination planes belong to a frame
+    // this crate allocated for the target format and size with padded rows.
     let rows = unsafe {
         ffi::sws_scale(
             context.as_mut_ptr(),
-            frame.data.as_ptr().cast(),
-            frame.linesize.as_ptr(),
+            source.data.as_ptr().cast(),
+            source.linesize.as_ptr(),
             0,
-            frame.height,
-            data.as_ptr(),
-            linesize.as_ptr(),
+            height,
+            destination.data.as_ptr().cast(),
+            destination.linesize.as_ptr(),
         )
     };
     if rows < 0 {
-        Err(BridgeError::FfmpegCode(rows))
-    } else {
-        Ok(())
+        return Err(BridgeError::FfmpegCode(rows));
     }
+    if rows != height {
+        return Err(BridgeError::InvalidInput(
+            "libswscale wrote fewer rows than the frame has",
+        ));
+    }
+    Ok(())
 }
 
 impl Error for BridgeError {}

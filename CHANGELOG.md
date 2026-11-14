@@ -79,6 +79,16 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Decoding video or images whose pixels are 8-bit 4:2:0 with alpha (VP9 with alpha in WebM or
+  Matroska, lossy WebP with alpha) wrote up to 60 bytes past a heap buffer on x86-64 at any width
+  that is not a multiple of 16, or left the rightmost 1 to 7 columns transparent; on arm64 the last
+  column of an odd width stayed transparent. A host could abort with a heap-corruption message or
+  crash later, or show a transparent strip at the right edge of the layer, in preview and export.
+  Every earlier release is affected (0.5.0 to 0.5.3 for VP9 alpha, 0.1.0 to 0.5.3 for WebP alpha);
+  hardware decode does not avoid it, because alpha sources always decode in software. This is a
+  memory-safety fix and updating is the only remedy. Odd-width alpha sources change in color by
+  about one code value. Encoding RGBA frames of 6 pixels or less across through `alpha2 transcode`
+  or the crate's encode sinks wrote past a buffer the same way.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.
