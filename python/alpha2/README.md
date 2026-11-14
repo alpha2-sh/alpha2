@@ -32,6 +32,17 @@ print(result["output"], result["videoPipeline"], result["frames"])
 
 - `alpha2.export`, `alpha2.conform` and `alpha2.capabilities` run on a shared `HostClient`; make
   your own (`alpha2.HostClient(concurrency=2)`) to bound or separate them.
+- `export` renders from time 0 to where the project ends (its last clip or caption cue) at the
+  project's frame rate unless `start_ticks`, `end_ticks` or `frame_rate` say otherwise, and returns
+  the host's export result (`alpha2.results.ExportResult`, with `output`). `on_progress` receives
+  `ExportProgress(phase, completed, total, restarted)`: `restarted` is true on the first report
+  after the export started over (the host moved a GPU-resident export to the readback path, or the
+  client reran it with software decode after a hardware decoder stalled), the only report in which
+  `completed` goes back to 0.
+- The package installs no command. Its command line is `python -m alpha2` with `install`,
+  `export`, `still`, `mcp` and `capabilities`. The `alpha2` program in a
+  [native archive](https://github.com/alpha2-sh/alpha2/blob/main/docs/native.md) is another
+  program, a media tool.
 - A client keeps up to `concurrency` `alpha2-host` processes and sends each one request at a
   time, so later requests skip the start. A host serves until it decides a new process would do
   better (memory, request count, idle time) and drains; the client then starts another. A host
@@ -234,8 +245,13 @@ with alpha2.HostClient() as client:
 - A [plugin](../../docs/plugin-abi.md) runs inside the host instead: pass
   `plugin={"manifest": ..., "sha256": ...}` and no extractor. The host fetches the manifest (an
   `https:` URL or a path), checks every file against its pinned SHA-256 and runs the wasm artifact
-  sandboxed; `"allow_native": True` lets a native artifact run with the host's rights. A plugin
-  that is refused, does not load, traps or runs past its limits fails with a `PLUGIN_*` code.
+  sandboxed. A plugin that is refused, does not load, traps or runs past its limits fails with a
+  `PLUGIN_*` code.
+- `HostClient(plugins={...})` decides what the client's hosts allow: `"mode"` (`"off"`, `"wasm"`
+  by default, or `"native"`), `"origins"` (`"none"` or the `https:` origins manifests and files
+  may come from) and `"root"` (the directory local manifests must lie under, or `"none"`). Only
+  under `"mode": "native"` does a request's `"allow_native": True` let a native artifact run,
+  with the host's rights.
 
 ## Apply data with edit operations
 

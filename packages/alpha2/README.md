@@ -111,6 +111,28 @@ const { dataSets } = await runExtractor(
 
 A timeline input needs `timelineFrame(time, width, height)`, such as the CPU renderer's `readRgbaAt`, and an audio input `audioBinding: wasm`. `loadPlugin(manifest, sha256)` in `alpha2/plugins` loads an [extractor plugin](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md)'s wasm artifact, checked against its pinned hashes; pass it as `plugin` with `plugin.extractor(params)`. `applyEdit` in `alpha2/apply-edit` then applies data to the project, such as `remove_ranges` over silences.
 
+## Compose
+
+`alpha2/compose` compiles compose specs (videos described by intent: sequences, stacks, grids, media, text and templates) into projects in the browser, with the engine's own compose code, so a spec compiles to the same project here as in Python or in `alpha2-host`. It runs in a wasm module of its own (`alpha2/compose-wasm`, file `alpha2/wasm/alpha2_compose_bg.wasm`), which a page that only plays and exports projects never fetches:
+
+```js
+import { bindTemplate, compileCompose, composeRequirements, loadCompose } from "alpha2/compose";
+
+const compose = await loadCompose(); // or loadCompose(wasmUrl) when a bundler moved the .wasm
+const spec = bindTemplate(compose, template, { headline: "Summer sale", photo: "beach.jpg" });
+const { media, texts } = composeRequirements(compose, spec); // the files to gather facts about
+const facts = await describeFiles(media, texts); // the application's own probe, shape below
+const fonts = [new Uint8Array(await (await fetch("/fonts/Inter.ttf")).arrayBuffer())];
+const { project, assets, loudness, warnings } = compileCompose(compose, spec, { facts, fonts });
+```
+
+- `facts` describes the files the spec names: `{ media: { [path]: { width, height, frame_rate, duration_ticks, has_audio } }, texts: { [path]: text } }`. A video the spec plays unmuted needs `has_audio`.
+- Fonts are font file bytes; text needs at least one font.
+- `compileCompose` takes no templates: bind a spec's own templates with `bindTemplate` first (its `templates` option names node templates; `theme` replaces a video template's theme). Built-in `alpha2/` template nodes expand at compile time; `builtinTemplates` lists them.
+- The result's `project` is a project document; `assets` maps each source id to the path it reads, `loudness` is `null` or the spec's target (`{ target_lufs, true_peak_ceiling_dbtp }`), and `warnings` are notes for the author.
+- `templateDataSchema` gives the JSON Schema of a template's data, for a form, an API or a model to fill in, and `lintTemplate` lists a template's problems (`{ path, code, message, severity }`).
+- A spec, template or data that does not compile or bind throws an `Error` whose message is `path: problem`, with `path` and `problem` as properties.
+
 ## Preview in a worker
 
 `alpha2/worker` runs the engine in a worker that owns the GPU device and an `OffscreenCanvas` (`installRenderWorker`, `createWasmRenderWorkerHost`), and `WorkerRenderBackend` drives it from the page. The host's `renderer` option is `"auto"` (WebGPU, else WebGL2, on a hardware adapter, else the CPU renderer), `"gpu"` (any adapter, software ones included) or `"cpu"`; `WorkerRenderBackend.rendererChoice` says which renderer the worker made and why it draws on the CPU, as the native host's `renderer` and `rendererReason` do. `Alpha2Player` in `alpha2/player` presents times through such a backend: it serializes presentations (one runs and only the latest request waits), asks for the frames a presentation lacks and shows them once they arrive, and recovers a lost GPU through `GpuRecoveryLadder` (`alpha2/gpu-recovery`): the GPU again after a first external loss, the CPU renderer once the loss was the work's own (`GPU_DEVICE_HUNG`), recurred at the same frame, or the page has lost the GPU twice (the browser withdraws GPU access after its next reset). A recovery that needs a new canvas takes one from the player's `replaceSurface` option; `@alpha2-sh/react` supplies it.
@@ -126,6 +148,7 @@ A timeline input needs `timelineFrame(time, width, height)`, such as the CPU ren
 | `alpha2/apply-edit` | `applyEdit`: the engine's edit operations that apply data to a project (`remove_ranges`, `split_at`, `bake`), the same canonical result on every surface. |
 | `alpha2/extract`, `alpha2/plugins` | `runExtractor`: extractors of your own over a source or the timeline, decoded in the browser; `loadPlugin`: [extractor plugins](https://github.com/alpha2-sh/alpha2/blob/main/docs/plugin-abi.md) run sandboxed. |
 | `alpha2/extractor` | The extractor contract every surface shares (`Extractor`, `ExtractorDescriptor`, `ExtractRun`, `ExtractResult`), types only, without a media library. |
+| `alpha2/compose`, `alpha2/compose-wasm` | Compose specs and templates (`loadCompose`, `composeRequirements`, `compileCompose`, `bindTemplate`, `templateDataSchema`, `lintTemplate`, `builtinTemplates`), and the wasm module they load. See [Compose](#compose). |
 | `alpha2/captions` | SRT and WebVTT import into caption tracks. |
 | `alpha2/geometry` | Shape geometry for editors, from the engine's own code: item bounds, hit tests, nearest points, path lengths, trims, resampling, convert to path, motion paths. |
 | `alpha2/layout` | Layout generators: `measureLayout` (where every box lies and what overflows, laid out with the engine's fonts, pixels those of the project canvas) and a builder from CSS-like props, flexbox and grid. See [docs/layout.md](https://github.com/alpha2-sh/alpha2/blob/main/docs/layout.md). |
@@ -143,13 +166,16 @@ A timeline input needs `timelineFrame(time, width, height)`, such as the CPU ren
 | `alpha2/exporter` | `Alpha2Exporter` and `exportToSink`. |
 | `alpha2/export-destination` | Where an export's bytes go: a file, or memory. |
 | `alpha2/export-failure`, `alpha2/export-retry` | How export failures are classified, and a retry policy over them. |
+| `alpha2/export-metrics` | `ExportMetrics` and `BrowserExportPerformance`: the timing and memory of a browser export, under the names the native host's `performance` uses for the same quantities, and the encoder probe results. |
+| `alpha2/worker-error` | Errors as plain data across a worker boundary, keeping their code and failure class (`serializeError`, `Alpha2WasmError`), and `wasmTrapCode`. |
+| `alpha2/abort`, `alpha2/active-clock` | `AbortSignal` helpers (`abortError`, `throwIfAborted`, `raceAbort`); timeouts that count active time, so a frozen or sleeping page does not count as a stall (`activeTimeout`, `withinActiveTime`, `ActiveStopwatch`). |
 | `alpha2/containers` | The export containers (MP4, MOV, MKV, WebM) and the codecs each offers. |
 | `alpha2/rate-control` | Output bitrates for the engine's quality levels. |
 | `alpha2/audio`, `alpha2/audio-worker` | Offline audio rendering into a sink, in a worker or not. |
 | `alpha2/audio-timeline`, `alpha2/audio-worklet`, `alpha2/audio-worklet-processor` | Real-time audio: the shared ring, its pump, and the AudioWorklet and its processor module. |
 | `alpha2/loudness`, `alpha2/waveform` | Loudness measurement and normalization; waveform summaries. |
 | `alpha2/robustness` | Browser capability detection. |
-| `alpha2` | `alpha2/assets`, `audio`, `audio-timeline`, `audio-worker`, `audio-worklet`, `containers`, `effects`, `exporter`, `extensions`, `frame-supply`, `hdr-frames`, `loudness`, `media`, `player`, `project`, `rate-control`, `robustness`, `text`, `waveform` and `worker` in one import. |
+| `alpha2` | `alpha2/assets`, `audio`, `audio-timeline`, `audio-worker`, `audio-worklet`, `compose`, `containers`, `effects`, `exporter`, `export-metrics`, `extensions`, `frame-supply`, `gpu-recovery`, `hdr-frames`, `loudness`, `media`, `player`, `project`, `rate-control`, `renderer-choice`, `robustness`, `text`, `waveform` and `worker` in one import. |
 
 Each module's declarations document its API.
 
