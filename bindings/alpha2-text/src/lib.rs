@@ -26,6 +26,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 mod animated;
 mod color;
+mod font_check;
 mod gradient;
 mod unicode_tables;
 
@@ -481,8 +482,7 @@ const WGHT: ttf_parser::Tag = ttf_parser::Tag::from_bytes(b"wght");
 impl LoadedFont {
     /// Validates the face and reads its family and weight; outlines are read lazily.
     fn parse(source: TextFont) -> Result<Self, TextRasterError> {
-        let face = ttf_parser::Face::parse(&source.bytes, source.face_index)
-            .map_err(|error| TextRasterError::InvalidFont(error.to_string()))?;
+        let face = parse_checked(&source.bytes, source.face_index)?;
         let weight = face.weight().to_number().clamp(1, 1000);
         let wght = face
             .variation_axes()
@@ -546,12 +546,28 @@ fn weight_order(weights: &[(u16, u16)], desired: u16) -> Vec<usize> {
 /// Checks that `bytes` hold an OpenType face at `face_index`, as [`TextRasterizer::add_font`]
 /// would, so a host can reject a file at import.
 ///
+/// Fonts are untrusted input: a collection may hold 256 faces, a glyph may expand to 1,024
+/// simple glyphs through its components, and a color glyph's painting may visit 16,384 paints.
+///
 /// # Errors
-/// Returns [`TextRasterError::InvalidFont`] with the parser's reason.
+/// Returns [`TextRasterError::InvalidFont`] with the parser's or the budget's reason.
 pub fn check_font(bytes: &[u8], face_index: u32) -> Result<(), TextRasterError> {
-    ttf_parser::Face::parse(bytes, face_index)
-        .map(|_| ())
-        .map_err(|error| TextRasterError::InvalidFont(error.to_string()))
+    parse_checked(bytes, face_index).map(drop)
+}
+
+fn parse_checked(bytes: &[u8], face_index: u32) -> Result<ttf_parser::Face<'_>, TextRasterError> {
+    if ttf_parser::fonts_in_collection(bytes)
+        .is_some_and(|faces| faces > font_check::MAX_COLLECTION_FACES)
+    {
+        return Err(TextRasterError::InvalidFont(format!(
+            "the font collection holds more than {} faces",
+            font_check::MAX_COLLECTION_FACES
+        )));
+    }
+    let face = ttf_parser::Face::parse(bytes, face_index)
+        .map_err(|error| TextRasterError::InvalidFont(error.to_string()))?;
+    font_check::check_face(&face).map_err(TextRasterError::InvalidFont)?;
+    Ok(face)
 }
 
 /// Number of faces in a font collection (`.ttc`, `.otc`), else 1.
@@ -2140,6 +2156,9 @@ impl Outline {
         let mut sink = OutlineSink::default();
         face.outline_glyph(GlyphId(glyph), &mut sink);
         sink.close();
+        if sink.overflow {
+            return Self::default();
+        }
         sink.outline
     }
 
@@ -2249,14 +2268,25 @@ fn quadratic_roots(a: f32, b: f32, c: f32) -> [Option<f32>; 2] {
     ]
 }
 
+/// Most segments one glyph outline may hold; a glyph past it draws nothing.
+const MAX_GLYPH_SEGMENTS: usize = 65_536;
+
 #[derive(Default)]
 struct OutlineSink {
     outline: Outline,
     start: [f32; 2],
     pen: [f32; 2],
+    overflow: bool,
 }
 
 impl OutlineSink {
+    /// Whether another segment fits; the font parser cannot be stopped, so past the limit the
+    /// sink only stops recording.
+    fn room(&mut self) -> bool {
+        self.overflow |= self.outline.segments.len() >= MAX_GLYPH_SEGMENTS;
+        !self.overflow
+    }
+
     fn include(&mut self, points: &[[f32; 2]]) {
         for &[x, y] in points {
             let bounds = self.outline.bounds.get_or_insert([x, y, x, y]);
@@ -2278,6 +2308,9 @@ impl OutlineBuilder for OutlineSink {
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
+        if !self.room() {
+            return;
+        }
         let to = [x, y];
         self.include(&[self.pen, to]);
         self.outline.segments.push(Segment::Line(self.pen, to));
@@ -2285,6 +2318,9 @@ impl OutlineBuilder for OutlineSink {
     }
 
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        if !self.room() {
+            return;
+        }
         let (control, to) = ([x1, y1], [x, y]);
         self.include(&[self.pen, control, to]);
         self.outline
@@ -2294,6 +2330,9 @@ impl OutlineBuilder for OutlineSink {
     }
 
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        if !self.room() {
+            return;
+        }
         let (first, second, to) = ([x1, y1], [x2, y2], [x, y]);
         self.include(&[self.pen, first, second, to]);
         self.outline

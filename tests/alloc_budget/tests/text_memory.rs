@@ -197,3 +197,28 @@ fn a_rotating_title_never_holds_more_than_the_caches() {
         );
     }
 }
+
+#[test]
+fn a_font_strike_past_the_pixel_budget_is_drawn_without_decoding_it() {
+    let _lock = LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fonts/Alpha2HostileStrike.ttf"
+    ))
+    .expect("fixture font");
+    let mut rasterizer = TextRasterizer::new(vec![TextFont {
+        family: "Strike".into(),
+        bytes: bytes.into(),
+        face_index: 0,
+    }])
+    .expect("the strike font registers");
+    let start = LIVE.load(Ordering::Relaxed);
+    PEAK.store(start, Ordering::Relaxed);
+    rasterizer
+        .rasterize(&request("A", 40.0, Vec::new()))
+        .expect("draws");
+    let peak = PEAK.load(Ordering::Relaxed) - start;
+    assert!(peak < 16 << 20, "peak {peak} bytes");
+}

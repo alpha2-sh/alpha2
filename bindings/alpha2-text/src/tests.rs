@@ -27,6 +27,79 @@ fn a_font_check_refuses_what_adding_the_font_refuses() {
     assert_eq!(refused.to_string(), added.to_string());
 }
 
+fn hostile(name: &str) -> Vec<u8> {
+    std::fs::read(format!("../../tests/fonts/{name}")).expect("hostile fixture font")
+}
+
+#[test]
+fn a_font_whose_glyphs_expand_past_a_budget_is_refused_at_registration() {
+    for (name, reason) in [
+        ("Alpha2HostileComposite.ttf", "composite glyph"),
+        ("Alpha2HostilePaint.ttf", "painting"),
+        ("Alpha2HostileCollection.ttc", "256 faces"),
+    ] {
+        let bytes = hostile(name);
+        let started = std::time::Instant::now();
+        let refused = check_font(&bytes, 0).expect_err(name);
+        assert!(refused.to_string().contains(reason), "{name}: {refused}");
+        let added = TextRasterizer::empty()
+            .add_font(TextFont {
+                family: "Hostile".into(),
+                bytes: bytes.into(),
+                face_index: 0,
+            })
+            .expect_err(name);
+        assert_eq!(added.to_string(), refused.to_string());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_strike_past_the_pixel_budget_is_not_decoded() {
+    let mut rasterizer = TextRasterizer::new(vec![TextFont {
+        family: "Strike".into(),
+        bytes: hostile("Alpha2HostileStrike.ttf").into(),
+        face_index: 0,
+    }])
+    .expect("the strike font registers");
+    let raster = rasterizer.rasterize(&request("A", 40.0)).expect("draws");
+    assert!(raster.pixels.rgba8.iter().all(|byte| *byte == 0));
+}
+
+#[test]
+fn an_outline_past_the_segment_budget_stops_recording() {
+    let mut sink = OutlineSink::default();
+    sink.move_to(0.0, 0.0);
+    #[allow(clippy::cast_precision_loss)]
+    for step in 0..MAX_GLYPH_SEGMENTS + 10 {
+        sink.line_to(step as f32, 1.0);
+    }
+    sink.close();
+    assert!(sink.overflow);
+    assert_eq!(sink.outline.segments.len(), MAX_GLYPH_SEGMENTS);
+}
+
+#[test]
+fn every_fixture_font_passes_the_registration_checks() {
+    for name in [
+        "Alpha2Fixture.ttf",
+        "Alpha2FixtureHangul.ttf",
+        "Alpha2FixtureEmojiColr.ttf",
+        "Alpha2FixtureEmojiBitmap.ttf",
+        "Alpha2FixtureColor.ttf",
+        "Alpha2FixtureVariable.ttf",
+        "Alpha2FixturePair.ttc",
+    ] {
+        let bytes = hostile(name);
+        for face in 0..face_count(&bytes) {
+            check_font(&bytes, face).unwrap_or_else(|error| panic!("{name} {face}: {error}"));
+        }
+    }
+}
+
 /// Must match the hash in `scripts/test-wasm-parity.mjs` and `test-wasm-browser.mjs`.
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {

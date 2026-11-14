@@ -88,6 +88,8 @@ impl Painting {
             transform: Transform::default(),
             transforms: Vec::new(),
             pending: None,
+            layers: 0,
+            overflow: false,
         };
         let [red, green, blue, alpha] = foreground;
         face.paint_color_glyph(
@@ -97,7 +99,7 @@ impl Painting {
             &mut recorder,
         )?;
         let painting = recorder.painting;
-        painting.bounds.is_some().then_some(painting)
+        (painting.bounds.is_some() && !recorder.overflow).then_some(painting)
     }
 
     /// `[x_min, y_min, x_max, y_max]` in font units.
@@ -255,10 +257,38 @@ struct Recorder<'f, 'a> {
     transforms: Vec<Transform>,
     /// Outline for the next fill or clip (v0 fills it directly, v1 clips to it first).
     pending: Option<Shape>,
+    /// Open layers.
+    layers: usize,
+    /// Set once the painting passes a budget; it is then dropped.
+    overflow: bool,
 }
 
+/// Most commands and outlines one recorded painting may hold.
+const MAX_PAINT_COMMANDS: usize = 4_096;
+
+/// Most layers a painting may nest; each takes 16 bytes per pixel of the glyph box.
+const MAX_PAINT_LAYERS: usize = 8;
+
+/// Largest bitmap strike decoded, in pixels.
+const MAX_STRIKE_PIXELS: u64 = 1 << 20;
+
 impl Recorder<'_, '_> {
+    /// Records `command` unless the painting is past its budget.
+    fn push(&mut self, command: Command) {
+        self.overflow |=
+            self.painting.commands.len() + self.painting.outlines.len() >= MAX_PAINT_COMMANDS;
+        if !self.overflow {
+            self.painting.commands.push(command);
+        }
+    }
+
     fn add(&mut self, outline: Outline) -> Shape {
+        if self.overflow {
+            return Shape {
+                outline: 0,
+                transform: self.transform,
+            };
+        }
         if let Some([x_min, y_min, x_max, y_max]) = outline.bounds {
             for corner in [
                 [x_min, y_min],
@@ -286,14 +316,18 @@ impl Recorder<'_, '_> {
 
 impl<'a> Painter<'a> for Recorder<'_, 'a> {
     fn outline_glyph(&mut self, glyph_id: GlyphId) {
+        if self.overflow {
+            return;
+        }
         let outline = Outline::of(self.face, glyph_id.0);
         self.pending = Some(self.add(outline));
     }
 
     fn paint(&mut self, paint: Paint<'a>) {
         let fill = Fill::of(&paint);
-        self.painting.commands.push(Command::Fill {
-            shape: self.pending.take(),
+        let shape = self.pending.take();
+        self.push(Command::Fill {
+            shape,
             transform: self.transform,
             fill,
         });
@@ -304,7 +338,7 @@ impl<'a> Painter<'a> for Recorder<'_, 'a> {
             Some(shape) => shape,
             None => self.add(Outline::default()),
         };
-        self.painting.commands.push(Command::PushClip(shape));
+        self.push(Command::PushClip(shape));
     }
 
     fn push_clip_box(&mut self, clip_box: ClipBox) {
@@ -327,19 +361,22 @@ impl<'a> Painter<'a> for Recorder<'_, 'a> {
             bounds: Some([x_min, y_min, x_max, y_max]),
         };
         let shape = self.add(outline);
-        self.painting.commands.push(Command::PushClip(shape));
+        self.push(Command::PushClip(shape));
     }
 
     fn pop_clip(&mut self) {
-        self.painting.commands.push(Command::PopClip);
+        self.push(Command::PopClip);
     }
 
     fn push_layer(&mut self, mode: CompositeMode) {
-        self.painting.commands.push(Command::PushLayer(mode));
+        self.layers += 1;
+        self.overflow |= self.layers > MAX_PAINT_LAYERS;
+        self.push(Command::PushLayer(mode));
     }
 
     fn pop_layer(&mut self) {
-        self.painting.commands.push(Command::PopLayer);
+        self.layers = self.layers.saturating_sub(1);
+        self.push(Command::PopLayer);
     }
 
     fn push_transform(&mut self, transform: Transform) {
@@ -690,6 +727,10 @@ fn decode_png(data: &[u8]) -> Option<(usize, usize, Vec<Color>)> {
     let mut decoder = png::Decoder::new(Cursor::new(data));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().ok()?;
+    let info = reader.info();
+    if u64::from(info.width) * u64::from(info.height) > MAX_STRIKE_PIXELS {
+        return None;
+    }
     let mut buffer = vec![0_u8; reader.output_buffer_size()?];
     let frame = reader.next_frame(&mut buffer).ok()?;
     let (width, height) = (

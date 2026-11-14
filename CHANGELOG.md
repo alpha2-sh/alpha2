@@ -682,6 +682,13 @@ All notable changes to this project are documented in this file.
 - The scales of several text animators multiply up to 10 on each axis, the limit of one animator;
   before, eight animators could compound a character's scale to 100,000,000. A text host refuses a
   character state scaled past 10 as an invalid request.
+- Fonts are checked for what they make the text host do when they are registered: a collection
+  of more than 256 faces, a glyph that expands to more than 1,024 simple glyphs through its
+  components, and a color glyph whose painting visits more than 16,384 paints, or whose components
+  or paints refer to themselves, are refused as invalid fonts. A glyph outline past 65,536
+  segments, a painting past 4,096 commands or 8 nested layers, and a bitmap strike past 1
+  megapixel draw nothing. Before, a font of a few kilobytes could take gigabytes and seconds per
+  glyph or stop the process.
 
 ## [0.6.0] - 2026-11-08
 
