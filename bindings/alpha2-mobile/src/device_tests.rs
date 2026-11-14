@@ -761,6 +761,7 @@ fn an_export_paused_as_it_starts_holds_before_any_frame() {
         ]),
         output_path: output.to_string_lossy().into_owned(),
         overwrite: true,
+        include_audio: true,
         ..ExportRequest::default()
     };
     let handle = engine
