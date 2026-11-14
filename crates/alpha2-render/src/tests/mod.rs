@@ -51,6 +51,7 @@ mod layer_bounds;
 mod masks;
 mod pipeline_creation;
 mod presentation;
+mod quad;
 mod readbacks;
 mod release;
 mod render_graph;

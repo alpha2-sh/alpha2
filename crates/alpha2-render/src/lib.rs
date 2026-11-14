@@ -40,7 +40,6 @@ mod paint_wgsl;
 mod pipeline;
 mod pool;
 mod present;
-mod quad;
 mod readback;
 mod registry;
 pub use registry::{CompiledEffect, MAX_EFFECT_INPUTS, PendingEffect};

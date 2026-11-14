@@ -3,11 +3,8 @@ use alpha2_shaders::FULLSCREEN_TEXTURE_QUAD_WGSL;
 
 impl Renderer {
     /// Draws one premultiplied RGBA texel over an opaque clear target.
-    ///
-    /// # Errors
-    /// Returns [`RenderError::Gpu`] when the GPU rejected the draw.
     #[allow(clippy::too_many_lines)]
-    pub fn render_quad(
+    pub(crate) fn render_quad(
         &self,
         size: RenderSize,
         source: [u8; 4],
@@ -88,7 +85,7 @@ impl Renderer {
         Ok(RenderedTexture::pooled(size, format, target))
     }
 
-    pub(crate) fn quad_pipeline(&self) -> Result<&CachedPipeline, RenderError> {
+    fn quad_pipeline(&self) -> Result<&CachedPipeline, RenderError> {
         crate::gpu_errors::checked_cell(&self.pipelines.quad, self.gpu.device(), || {
             let bind_group_layout =
                 self.gpu

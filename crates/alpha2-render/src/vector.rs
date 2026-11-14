@@ -218,12 +218,11 @@ enum Step {
 }
 
 impl Renderer {
-    /// Whether vector scenes draw in linear light: the graph blends in linear light and half floats
-    /// are renderable and blendable.
+    /// Whether vector scenes draw in linear light: the graph blends in linear light into a
+    /// half-float intermediate, which is blendable wherever it is chosen.
     pub(crate) fn vector_linear(&self, blend_space: crate::BlendSpace) -> bool {
         blend_space == crate::BlendSpace::LinearLight
             && self.intermediate_format() == wgpu::TextureFormat::Rgba16Float
-            && self.gpu.capabilities().half_float_blendable
     }
 
     fn vector_pipeline(&self) -> Result<&CachedVectorPipeline, RenderError> {

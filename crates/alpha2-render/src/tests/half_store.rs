@@ -132,10 +132,10 @@ fn rgba16float_stores_match_the_cpu_half_model() {
 fn premultiplied_over_stays_within_sixteen_half_ulps_of_the_cpu_model() {
     let _lock = gpu_test_lock();
     let gpu = adapter_gpu();
-    if !gpu.capabilities().half_float_blendable {
+    if gpu.capabilities().intermediate_format != alpha2_gpu::IntermediateFormat::Rgba16Float {
         alpha2_test_support::skip!(
             alpha2_test_support::Capability::HalfFloatBlend,
-            "the adapter does not blend half floats"
+            "the adapter's intermediate is not half float"
         );
         return;
     }

@@ -21,6 +21,8 @@ pub struct WarmupReport {
 #[derive(Debug, Default)]
 pub(crate) struct PipelineCache {
     pub(crate) composite: OnceLock<CachedCompositePipeline>,
+    /// Test-only: the full-screen quad.
+    #[cfg(test)]
     pub(crate) quad: OnceLock<CachedPipeline>,
     pub(crate) readback_pack: OnceLock<CachedPipeline>,
     pub(crate) rgba_present: OnceLock<CachedSampledPipeline>,
@@ -84,11 +86,12 @@ pub(crate) struct CachedYuvRepackPipeline {
 
 impl PipelineCache {
     pub(crate) fn builtin_count(&self) -> usize {
+        #[cfg(test)]
+        let quad = usize::from(self.quad.get().is_some());
+        #[cfg(not(test))]
+        let quad = 0;
         usize::from(self.composite.get().is_some())
-            + [&self.quad]
-                .into_iter()
-                .filter(|pipeline| pipeline.get().is_some())
-                .count()
+            + quad
             + usize::from(self.yuv.get().is_some())
             + usize::from(self.yuv16.get().is_some())
             + usize::from(self.rgba_present.get().is_some())

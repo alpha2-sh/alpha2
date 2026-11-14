@@ -16,6 +16,9 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- `alpha2-gpu`: `Capabilities::half_float_blendable` is removed; a half-float
+  `intermediate_format` now implies blending. `Renderer::render_quad` is removed (it had no use
+  outside the renderer's tests).
 - Editor: the browser bridge's `resourceLimit` counts only imported media files. Titles and
   adopted proxies no longer count, so a project with many titles or proxies previews and exports;
   media removed from the document still counts while undo can bring it back, and the import refusal
@@ -89,6 +92,9 @@ All notable changes to this project are documented in this file.
   gradients or patterns name one another by `href` in a ring, is refused as malformed instead of
   overflowing the stack or never finishing. Each such reference counts four levels against the
   nesting limit, and a mask, clip path or filter counts once per element that names it.
+- GPU renderer: a device that renders half floats but cannot blend them uses the 8-bit
+  intermediate. Before, it chose half float and every shape layer, shape mask and layout box
+  failed to draw.
 - Captions grouped from words join Chinese, Japanese, Thai, Lao, Khmer and Myanmar words without a
   space, and a fullwidth exclamation mark, question mark or full stop (U+FF01, U+FF1F, U+FF0E) ends
   a sentence. Latin-script cues are unchanged.
