@@ -26,6 +26,8 @@ const HEIGHT = 8;
 const FRAME_BYTES = WIDTH * HEIGHT * 4;
 
 const decoder = { surfacesHeld: 0, decoded: 0, live: new Set() };
+// Chrome intermittently refuses `copyTo` of a hardware frame with `InvalidStateError`.
+const copies = { failures: 0, attempts: 0, drawn: 0 };
 
 /** A frame built from another shares its surface; one built from bytes owns it. */
 class TestVideoFrame {
@@ -83,6 +85,11 @@ class TestVideoFrame {
   }
 
   async copyTo(destination) {
+    copies.attempts += 1;
+    if (copies.failures > 0) {
+      copies.failures -= 1;
+      throw new DOMException("Cannot read the frame.", "InvalidStateError");
+    }
     new Uint8Array(destination).set(this.surface.bytes);
     return [{ offset: 0, stride: this.codedWidth * 4 }];
   }
@@ -171,6 +178,11 @@ class CountingDecoder extends CustomVideoDecoder {
 }
 
 globalThis.VideoFrame = TestVideoFrame;
+// The browser's drawn conversion, which a reverse window must not use for a planar frame.
+globalThis.createImageBitmap = async (frame) => {
+  copies.drawn += 1;
+  return { buffer: new ArrayBuffer(frame.allocationSize()), close() {} };
+};
 registerDecoder(CountingDecoder);
 
 async function stream(start = 0, fps = FPS) {
@@ -301,6 +313,63 @@ test("a reverse run plays from windows of copies, decoding each interval a few t
     video.close();
   }
   assert.equal(decoder.surfacesHeld, 0, "closing releases every surface");
+});
+
+async function presentedFormat(video, frame) {
+  const decoded = await video.refill({
+    sourceId: "clip",
+    mediaTimeTicks: BigInt(frame) * TICKS_PER_FRAME,
+    reason: "prefetch",
+    generation: 0,
+  });
+  const answer = { index: decoded.frame.index, format: decoded.frame.format };
+  decoded.frame.close();
+  return answer;
+}
+
+test("a frame a reverse window cannot read at first is read again, not drawn", async () => {
+  const clean = await open();
+  try {
+    for (let frame = 40; frame >= 30; frame -= 1)
+      await presentedFormat(clean, frame);
+  } finally {
+    clean.close();
+  }
+  const video = await open();
+  Object.assign(copies, { failures: 1, attempts: 0, drawn: 0 });
+  try {
+    for (let frame = 40; frame >= 30; frame -= 1)
+      assert.deepEqual(await presentedFormat(video, frame), {
+        index: frame,
+        format: "RGBA",
+      });
+    assert.equal(video.reverseWindowsBuilt, clean.reverseWindowsBuilt);
+    assert.equal(video.reverseCacheHits, clean.reverseCacheHits);
+    assert.equal(copies.drawn, 0);
+  } finally {
+    copies.failures = 0;
+    video.close();
+  }
+  assert.equal(decoder.surfacesHeld, 0);
+});
+
+test("a frame a reverse window can never read leaves the request to the forward path", async () => {
+  const video = await open();
+  Object.assign(copies, { failures: Infinity, attempts: 0, drawn: 0 });
+  try {
+    for (let frame = 40; frame >= 30; frame -= 1)
+      assert.deepEqual(await presentedFormat(video, frame), {
+        index: frame,
+        format: "RGBA",
+      });
+    assert.equal(copies.drawn, 0);
+    assert.ok(copies.attempts > 0);
+    assert.equal(video.reverseWindowsBuilt, 0, "no window was kept");
+  } finally {
+    copies.failures = 0;
+    video.close();
+  }
+  assert.equal(decoder.surfacesHeld, 0);
 });
 
 test("a loop's wrap is a seek, and forward play continues from it", async () => {

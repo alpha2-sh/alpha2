@@ -266,6 +266,9 @@ All notable changes to this project are documented in this file.
   returns a decoder that fell back to its original acceleration, and `DecoderRefillCoordinator`
   closes a cursor whose refill failed in its decoder and opens a new one on the next request. One
   damaged packet no longer fails every later read of that clip.
+- A frame of a reversed clip that the browser refuses to copy out is read again and, if it still
+  fails, decoded on the forward path; before, it was drawn through the browser's own RGB
+  conversion and could reach an export with colors that differ from the decoded frame.
 
 ## [0.6.0] - 2026-11-08
 

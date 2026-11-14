@@ -100,19 +100,33 @@ export async function intakeVideoFrame(
  * Reads the frame's planes, retrying up to {@link READBACK_RETRIES} times a task apart on readback
  * failures. Rejects with {@link NonPlanarVideoFrameError} or the last read's error.
  */
-export async function readPlanesWithRetries(
+export function readPlanesWithRetries(
   frame: VideoFrame,
   declared: ColorMetadata | null,
   identity: PlanarFrameIdentity,
   pool: PlanarCopyPool,
   counters: Pick<ReadbackCounters, "readbackRetries">,
 ): Promise<PlanarYuvFrame> {
+  return withReadbackRetries(
+    () => readPlanarYuvFrame(frame, declared, identity, pool),
+    () => (counters.readbackRetries += 1),
+  );
+}
+
+/**
+ * Runs `read`, retrying up to {@link READBACK_RETRIES} times a task apart while it fails with
+ * {@link isUnreadableFrame}. Rejects with the last read's error.
+ */
+export async function withReadbackRetries<T>(
+  read: () => Promise<T>,
+  onRetry: () => void = () => {},
+): Promise<T> {
   for (let retry = 0; ; retry += 1) {
     try {
-      return await readPlanarYuvFrame(frame, declared, identity, pool);
+      return await read();
     } catch (error) {
       if (retry >= READBACK_RETRIES || !isUnreadableFrame(error)) throw error;
-      counters.readbackRetries += 1;
+      onRetry();
       await nextTask();
     }
   }

@@ -24,6 +24,7 @@ export type {
   VideoLatencyProbe,
 } from "./export-metrics.js";
 import { decodeFailureOf, withSoftwareFallback } from "./decoder-fallback.js";
+import { isUnreadableFrame, withReadbackRetries } from "./frame-intake.js";
 import {
   ALL_FORMATS,
   AudioSample,
@@ -531,6 +532,12 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
           sample.close();
         }
       }
+    } catch (error) {
+      if (!(error instanceof UnreadableFrameError)) throw error;
+      // The forward path answers this request; it decodes and reads frames again.
+      this.#reverse.clear();
+      this.#backwardSteps = 0;
+      return;
     } finally {
       await iterator.return?.();
     }
@@ -812,7 +819,14 @@ export async function streamChromaSiting(
   );
 }
 
-/** A copy that holds no decoder resources; opaque (GPU) frames are drawn into a bitmap. */
+/** A planar frame whose planes the browser would not copy out, even after retries. */
+class UnreadableFrameError extends Error {}
+
+/**
+ * A copy that holds no decoder resources. Opaque (GPU) frames and layouts the copy cannot express
+ * are drawn into a bitmap; a planar frame the browser refuses to copy is retried, then rejected
+ * with {@link UnreadableFrameError}, since the drawn conversion would differ from a decoded frame.
+ */
 async function detachVideoFrame(frame: VideoFrame): Promise<VideoFrame> {
   const format = frame.format;
   if (format !== null) {
@@ -824,7 +838,7 @@ async function detachVideoFrame(frame: VideoFrame): Promise<VideoFrame> {
         height: frame.codedHeight,
       };
       const buffer = new ArrayBuffer(frame.allocationSize());
-      const layout = await frame.copyTo(buffer);
+      const layout = await withReadbackRetries(() => frame.copyTo(buffer));
       // `transfer` is missing from the DOM typings.
       const init: VideoFrameBufferInit & { transfer: ArrayBuffer[] } = {
         format,
@@ -839,7 +853,11 @@ async function detachVideoFrame(frame: VideoFrame): Promise<VideoFrame> {
         transfer: [buffer],
       };
       return new VideoFrame(buffer, init);
-    } catch {
+    } catch (error) {
+      if (isUnreadableFrame(error))
+        throw new UnreadableFrameError("the browser could not read a frame", {
+          cause: error,
+        });
       // A layout the copy cannot express falls through to a drawn copy.
     }
   }

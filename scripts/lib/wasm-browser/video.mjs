@@ -543,6 +543,76 @@ report({
 `;
 }
 
+// A backward run reads its frames from reverse windows of copies. Each must hold the decoder's
+// planes as the forward path gives them, also when the browser refuses a copy once.
+export function reverseWindowPixels() {
+  return `
+if (globalThis.VideoDecoder === undefined) skip("webcodecs-video", "this browser has no WebCodecs VideoDecoder");
+const { MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
+const bytes = new Uint8Array(await (await fetch("/tests/corpus/h264-long-gop.mp4")).arrayBuffer());
+const FRAMES = 24;
+const read = async (frame) => {
+  const copy = new Uint8Array(frame.allocationSize());
+  await frame.copyTo(copy);
+  return { format: frame.format, copy };
+};
+const decodeAll = async (order, refuseOnce) => {
+  const decoder = await MediabunnyVideoDecoder.open("clip", bytes);
+  const copyTo = VideoFrame.prototype.copyTo;
+  let refused = 0;
+  const frames = new Map();
+  try {
+    for (const index of order) {
+      if (refuseOnce) {
+        let calls = 0;
+        VideoFrame.prototype.copyTo = function (...args) {
+          calls += 1;
+          if (calls === 2) {
+            refused += 1;
+            return Promise.reject(new DOMException("injected readback refusal", "InvalidStateError"));
+          }
+          return copyTo.apply(this, args);
+        };
+      }
+      let decoded;
+      try {
+        decoded = await decoder.refill({ sourceId: "clip", mediaTimeTicks: BigInt(index) * 4000n, reason: "prefetch", generation: 0 });
+      } finally {
+        VideoFrame.prototype.copyTo = copyTo;
+      }
+      frames.set(index, await read(decoded.frame));
+      decoded.frame.close();
+    }
+    return { frames, windows: decoder.reverseWindowsBuilt, refused };
+  } finally {
+    decoder.close();
+  }
+};
+const indices = [...Array(FRAMES).keys()];
+const forward = await decodeAll(indices, false);
+const results = {};
+for (const refuseOnce of [false, true]) {
+  const reverse = await decodeAll([...indices].reverse(), refuseOnce);
+  let maxDiff = 0;
+  const formats = new Set();
+  for (const index of indices) {
+    const a = forward.frames.get(index);
+    const b = reverse.frames.get(index);
+    formats.add(b.format);
+    if (a.format !== b.format || a.copy.length !== b.copy.length) { maxDiff = Infinity; continue; }
+    for (let i = 0; i < a.copy.length; i += 1) maxDiff = Math.max(maxDiff, Math.abs(a.copy[i] - b.copy[i]));
+  }
+  results[refuseOnce ? "refusedOnce" : "clean"] = { maxDiff, windows: reverse.windows, refused: reverse.refused, formats: [...formats] };
+}
+const forwardFormat = forward.frames.get(0).format;
+report({
+  ok: Object.values(results).every((result) => result.maxDiff === 0 && result.windows > 0)
+    && results.refusedOnce.refused > 0,
+  forwardFormat, ...results,
+});
+`;
+}
+
 // Phone HDR video (HEVC Main 10, HLG) through the SDK and the editor's import: either it renders on
 // every route, or both refuse it at import, typed. With `degraded`, a source decoded only to frames
 // without planes is previewed through the browser's tone mapping and its export refused.
