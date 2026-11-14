@@ -26,7 +26,7 @@ use crate::lower::{
     AnimPrim, AudioPrim, BoxContent, BoxPrim, BoxTree, CaptionsPrim, Content, CounterContent,
     Coverage, CoveragePrim, EffectPrim, GeometryPrim, GridLayout, GroupPrim, Head, KeyPrim,
     KeyTime, MaskShapePrim, NodeMotion, PaintPrim, Preset, Prim, RevealPrim, SequencePrim,
-    ShapeContent, StackPrim, Visual, add_ticks, align_point, ticks_scaled,
+    ShapeContent, StackPrim, VideoContent, Visual, add_ticks, align_point, ticks_scaled,
 };
 use crate::spec::{
     Canvas, CustomCanvas, Fit, FrameRateChoice, GridLength, Loudness, Transition, VideoSpec,
@@ -679,6 +679,7 @@ impl<'a> Context<'a> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn emit_sequence(
         &mut self,
         sequence: &SequencePrim,
@@ -689,13 +690,15 @@ impl<'a> Context<'a> {
         let end = slot.start + slot.len;
         let overlap = sequence.transition.as_ref().map_or(0, transition_ticks);
         let mut cursor = slot.start;
-        // The lane and clip of the previous child, when it was one picture.
-        let mut previous: Option<(usize, ClipId, i64)> = None;
+        // The previous child's last clip, when the child was one picture.
+        let mut outgoing: Option<Outgoing> = None;
+        // The previous child's start, length and path, and whether a transition led into it.
+        let mut prior: Option<(i64, i64, &str, bool)> = None;
         for (index, child) in sequence.children.iter().enumerate() {
             let length = self.length(child)?.resolve();
             let joined = index > 0 && overlap > 0;
             if joined {
-                let previous_length = previous.as_ref().map_or(i64::MAX, |(_, _, length)| *length);
+                let previous_length = outgoing.as_ref().map_or(i64::MAX, |out| out.length);
                 if length < overlap || previous_length < overlap {
                     return Err(ComposeError::new(
                         &child.head().path,
@@ -710,9 +713,54 @@ impl<'a> Context<'a> {
             if start >= end {
                 break;
             }
+            if joined
+                && let Some((prior_start, prior_length, prior_path, true)) = prior
+                && start < prior_start + overlap
+            {
+                return Err(ComposeError::new(
+                    prior_path,
+                    format!(
+                        "it lasts {} s, shorter than the two {} s transitions around it",
+                        seconds(prior_length),
+                        seconds(overlap)
+                    ),
+                ));
+            }
+            let len = length.min(end - start);
             let single = matches!(child, Prim::Visual(_));
-            let engine_transition = joined && single && previous.is_some();
             let transition = sequence.transition.as_ref().filter(|_| joined);
+            let mut engine_transition = joined && single && outgoing.is_some();
+            if engine_transition && let (Some(transition), Some(out)) = (transition, &outgoing) {
+                let first = edge_clips(child, len).map_or(len, |(first, _)| first);
+                let short_out = out.last < overlap.min(out.len);
+                let short_in = first < overlap.min(len);
+                if (short_out || short_in) && is_crossfade(transition) {
+                    engine_transition = false;
+                } else if short_out {
+                    return Err(ComposeError::new(
+                        &out.path,
+                        format!(
+                            "its last {} part lasts {} s, shorter than the {} s {} transition out \
+                             of it; a crossfade fits, or a longer node",
+                            if out.held { "held" } else { "played" },
+                            seconds(out.last),
+                            seconds(overlap),
+                            transition.kind
+                        ),
+                    ));
+                } else if short_in {
+                    return Err(ComposeError::new(
+                        &child.head().path,
+                        format!(
+                            "its first part plays {} s, shorter than the {} s {} transition into \
+                             it; a crossfade fits, or a longer video",
+                            seconds(first),
+                            seconds(overlap),
+                            transition.kind
+                        ),
+                    ));
+                }
+            }
             if let Some(transition) = transition
                 && !engine_transition
                 && !is_crossfade(transition)
@@ -728,21 +776,21 @@ impl<'a> Context<'a> {
             let mut fresh = Lanes::default();
             let child_slot = Slot {
                 start,
-                len: length.min(end - start),
+                len,
                 ramp: (joined && !engine_transition).then_some((start, overlap)),
                 hold: Hold::None,
                 ..slot.clone()
             };
             self.emit(child, &child_slot, &mut fresh)?;
             let placed = if engine_transition {
-                let (lane, from, _) = previous.take().expect("a transition follows a picture");
+                let from = outgoing.take().expect("a transition follows a picture");
                 let mut visual = std::mem::take(&mut fresh.visual).into_iter();
                 let incoming = visual.next().expect("a picture makes one lane");
                 let to = incoming.clips[0].id.clone();
-                lanes.visual[lane].absorb(incoming);
+                lanes.visual[from.lane].absorb(incoming);
                 let transition = transition.expect("joined");
-                lanes.visual[lane].transitions.push(ClipTransition {
-                    from_clip: from,
+                lanes.visual[from.lane].transitions.push(ClipTransition {
+                    from_clip: from.clip,
                     to_clip: to,
                     timeline_range: range(start, (start + overlap).min(end)),
                     easing: transition.easing.unwrap_or(alpha2_model::Easing::Linear),
@@ -754,10 +802,10 @@ impl<'a> Context<'a> {
                     },
                 });
                 lanes.share(fresh);
-                vec![lane]
+                vec![from.lane]
             } else if joined {
-                // A crossfade over what is not one picture: the incoming node fades in over the
-                // outgoing one, in lanes above it.
+                // A crossfade over what is not one picture, or into or out of a part shorter than
+                // it: the incoming node fades in over the outgoing one, in lanes above it.
                 let first = lanes.visual.len();
                 let count = fresh.visual.len();
                 lanes.stack(fresh);
@@ -765,13 +813,19 @@ impl<'a> Context<'a> {
             } else {
                 lanes.share(fresh)
             };
-            previous = match (single, placed.first()) {
-                (true, Some(&lane)) => lanes.visual[lane]
-                    .clips
-                    .last()
-                    .map(|clip| (lane, clip.id.clone(), length)),
+            outgoing = match (single, placed.first()) {
+                (true, Some(&lane)) => lanes.visual[lane].clips.last().map(|clip| Outgoing {
+                    lane,
+                    clip: clip.id.clone(),
+                    length,
+                    len,
+                    last: clip.timeline_range.end().ticks() - clip.timeline_range.start().ticks(),
+                    held: matches!(clip.time_map, TimeMap::Freeze { .. }),
+                    path: child.head().path.clone(),
+                }),
                 _ => None,
             };
+            prior = Some((start, length, &child.head().path, joined));
             cursor = start + length;
         }
         out.stack(lanes);
@@ -1896,81 +1950,50 @@ impl<'a> Context<'a> {
         let mut lane = Lane::new(TrackKind::Video, &slot.owners);
         match &visual.content {
             Content::Video(video) => {
+                let plan = video_plan(video, &visual.head.path, slot.hold, slot.len)?;
                 let source = self.media_source(&video.file, ModelKind::Video, video.has_audio);
-                let natural = video.natural();
-                let short = match video.when_short {
-                    Some(policy) => policy,
-                    None => match slot.hold {
-                        Hold::Loop => WhenShort::Loop,
-                        Hold::Freeze | Hold::None => WhenShort::Freeze,
-                    },
-                };
-                let refuse = |what: &str| {
-                    ComposeError::new(
-                        &visual.head.path,
-                        format!("the video is {what} than its node, and it says to refuse that"),
-                    )
-                };
-                if slot.len > natural && !video.looped && short == WhenShort::Error {
-                    return Err(refuse("shorter"));
-                }
-                if slot.len < natural && video.when_long == WhenLong::Error {
-                    return Err(refuse("longer"));
-                }
-                let stretches = !video.looped
-                    && ((slot.len > natural && short == WhenShort::Stretch)
-                        || (slot.len < natural && video.when_long == WhenLong::Stretch));
-                let looped = video.looped || (short == WhenShort::Loop && slot.len > natural);
                 let mut clips = Vec::new();
-                if stretches {
-                    clips.push(Clip::new(
+                match plan {
+                    VideoPlan::Stretch => clips.push(Clip::new(
                         self.clip_id(),
                         source.clone(),
                         range(start, end),
                         range(video.trim_start, video.trim_end),
-                    ));
-                } else if looped {
-                    #[allow(clippy::float_cmp)]
-                    let sped = video.speed != 1.0;
-                    if sped {
-                        return Err(ComposeError::new(
-                            &format!("{}.speed", visual.head.path),
-                            "a video that loops (loop, when_short loop or a longest_loop grid) \
-                             plays at speed 1",
-                        ));
-                    }
-                    let mut clip = Clip::new(
-                        self.clip_id(),
-                        source,
-                        range(start, end),
-                        range(video.trim_start, video.trim_end),
-                    );
-                    clip.time_map = TimeMap::Loop {
-                        mode: LoopMode::Repeat,
-                    };
-                    clips.push(clip);
-                } else {
-                    let play = slot.len.min(natural);
-                    let source_end =
-                        (video.trim_start + ticks_scaled(play, video.speed)).min(video.trim_end);
-                    clips.push(Clip::new(
-                        self.clip_id(),
-                        source.clone(),
-                        range(start, start + play),
-                        range(video.trim_start, source_end.max(video.trim_start + 1)),
-                    ));
-                    if short == WhenShort::Freeze && slot.len > play {
-                        let last = (video.trim_end - video.frame_ticks).max(video.trim_start);
-                        let mut freeze = Clip::new(
+                    )),
+                    VideoPlan::Loop => {
+                        let mut clip = Clip::new(
                             self.clip_id(),
                             source,
-                            range(start + play, end),
-                            range(last, video.trim_end),
+                            range(start, end),
+                            range(video.trim_start, video.trim_end),
                         );
-                        freeze.time_map = TimeMap::Freeze {
-                            source_time: MediaTime::from_ticks(last),
+                        clip.time_map = TimeMap::Loop {
+                            mode: LoopMode::Repeat,
                         };
-                        clips.push(freeze);
+                        clips.push(clip);
+                    }
+                    VideoPlan::Play { play, freeze } => {
+                        let source_end = (video.trim_start + ticks_scaled(play, video.speed))
+                            .min(video.trim_end);
+                        clips.push(Clip::new(
+                            self.clip_id(),
+                            source.clone(),
+                            range(start, start + play),
+                            range(video.trim_start, source_end.max(video.trim_start + 1)),
+                        ));
+                        if freeze {
+                            let last = (video.trim_end - video.frame_ticks).max(video.trim_start);
+                            let mut held = Clip::new(
+                                self.clip_id(),
+                                source,
+                                range(start + play, end),
+                                range(last, video.trim_end),
+                            );
+                            held.time_map = TimeMap::Freeze {
+                                source_time: MediaTime::from_ticks(last),
+                            };
+                            clips.push(held);
+                        }
                     }
                 }
                 let composition = video.blur.map(|radius| self.blur_composition(radius));
@@ -2641,6 +2664,99 @@ impl<'a> Context<'a> {
             .map(|target| (target, audio.duck_depth_db, audio.head.path.clone()));
         out.audio.push(lane);
     }
+}
+
+/// The last clip of a sequence child that is one picture, which a transition out of it starts on.
+struct Outgoing {
+    lane: usize,
+    clip: ClipId,
+    /// The child's own length and its slot's.
+    length: i64,
+    len: i64,
+    /// The clip's timeline length, and whether it holds a frame.
+    last: i64,
+    held: bool,
+    path: String,
+}
+
+/// The timeline lengths of the first and last clip `prim` emits in a slot `len` long, when it
+/// is one picture.
+fn edge_clips(prim: &Prim, len: i64) -> Option<(i64, i64)> {
+    let Prim::Visual(visual) = prim else {
+        return None;
+    };
+    Some(match &visual.content {
+        Content::Video(video) => {
+            match video_plan(video, &visual.head.path, Hold::None, len).ok()? {
+                VideoPlan::Play { play, freeze: true } => (play, len - play),
+                VideoPlan::Play { play, .. } => (play, play),
+                VideoPlan::Stretch | VideoPlan::Loop => (len, len),
+            }
+        }
+        _ => (len, len),
+    })
+}
+
+/// The clips a video becomes in a slot `len` long.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VideoPlan {
+    /// One clip whose source range fills the slot at another speed.
+    Stretch,
+    /// One clip that repeats its source range.
+    Loop,
+    /// One clip that plays `play` ticks, then a held last frame to the slot's end if `freeze`.
+    Play { play: i64, freeze: bool },
+}
+
+/// How `video` fills a slot `len` long under `hold`, or why it refuses to.
+fn video_plan(
+    video: &VideoContent,
+    path: &str,
+    hold: Hold,
+    len: i64,
+) -> Result<VideoPlan, ComposeError> {
+    let natural = video.natural();
+    let short = match video.when_short {
+        Some(policy) => policy,
+        None => match hold {
+            Hold::Loop => WhenShort::Loop,
+            Hold::Freeze | Hold::None => WhenShort::Freeze,
+        },
+    };
+    let refuse = |what: &str| {
+        ComposeError::new(
+            path,
+            format!("the video is {what} than its node, and it says to refuse that"),
+        )
+    };
+    if len > natural && !video.looped && short == WhenShort::Error {
+        return Err(refuse("shorter"));
+    }
+    if len < natural && video.when_long == WhenLong::Error {
+        return Err(refuse("longer"));
+    }
+    let stretches = !video.looped
+        && ((len > natural && short == WhenShort::Stretch)
+            || (len < natural && video.when_long == WhenLong::Stretch));
+    if stretches {
+        return Ok(VideoPlan::Stretch);
+    }
+    if video.looped || (short == WhenShort::Loop && len > natural) {
+        #[allow(clippy::float_cmp)]
+        let sped = video.speed != 1.0;
+        if sped {
+            return Err(ComposeError::new(
+                &format!("{path}.speed"),
+                "a video that loops (loop, when_short loop or a longest_loop grid) plays at speed 1",
+            ));
+        }
+        return Ok(VideoPlan::Loop);
+    }
+    let play = len.min(natural);
+    Ok(VideoPlan::Play {
+        play,
+        freeze: short == WhenShort::Freeze && len > play,
+    })
 }
 
 fn transition_ticks(transition: &Transition) -> i64 {

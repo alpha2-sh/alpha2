@@ -1679,3 +1679,106 @@ fn a_counter_counts_over_at_most_its_frame_budget() {
     assert!(started.elapsed() < std::time::Duration::from_secs(10));
     compile(&counter(60.0, 60));
 }
+
+fn incoming_ramps_in_over(compiled: &Value, overlap: i64) {
+    let lanes = tracks(compiled)
+        .iter()
+        .filter(|track| track["kind"] == "video")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lanes.len(),
+        2,
+        "the incoming picture takes a lane of its own"
+    );
+    assert!(
+        lanes
+            .iter()
+            .all(|lane| lane["transitions"].as_array().is_none_or(Vec::is_empty))
+    );
+    let clips = lanes[1]["clips"].as_array().expect("clips");
+    let start = clips[0]["timeline_range"]["start"].as_i64().expect("ticks");
+    // The ramp may run on across a played part into a held frame.
+    let keys = clips
+        .iter()
+        .flat_map(|clip| {
+            let opacity = &clip["visual"]["opacity"];
+            keyframe_times(opacity)
+                .into_iter()
+                .zip(keyframe_values(opacity))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(keys[0], (start, json!(0.0)));
+    assert!(keys.contains(&(start + overlap, json!(1.0))), "{keys:?}");
+}
+
+#[test]
+fn a_join_into_or_out_of_a_part_shorter_than_its_transition_crossfades_or_is_refused() {
+    // wide.mp4 lasts 10 s: in 10.5 s its held last frame lasts 0.5 s.
+    let held_out = |transition: &str| {
+        json!({"body": {"type": "sequence", "transition": {"type": transition, "duration": 1},
+        "children": [
+            {"type": "media", "path": "wide.mp4", "duration": 10.5},
+            {"type": "media", "path": "slides/01.jpg", "duration": 3},
+        ]}})
+    };
+    // Trimmed to 0.5 s, it plays 0.5 s and then holds its frame.
+    let short_in = |transition: &str| {
+        json!({"body": {"type": "sequence", "transition": {"type": transition, "duration": 1},
+        "children": [
+            {"type": "media", "path": "slides/01.jpg", "duration": 3},
+            {"type": "media", "path": "wide.mp4", "trim_end": 0.5, "duration": 3},
+        ]}})
+    };
+    incoming_ramps_in_over(&compile(&held_out("crossfade")), SECOND);
+    incoming_ramps_in_over(&compile(&short_in("crossfade")), SECOND);
+    let error = compile_error(&held_out("wipe-left"));
+    assert!(
+        error.starts_with("spec.body.children[0]: its last held part lasts 0.5 s"),
+        "{error}"
+    );
+    let error = compile_error(&short_in("wipe-left"));
+    assert!(
+        error.starts_with("spec.body.children[1]: its first part plays 0.5 s"),
+        "{error}"
+    );
+    // Parts as long as the transition keep the engine transition.
+    let covered = compile(&json!({"body": {"type": "sequence",
+    "transition": {"type": "wipe-left", "duration": 1}, "children": [
+        {"type": "media", "path": "wide.mp4", "duration": 11},
+        {"type": "media", "path": "slides/01.jpg", "duration": 3},
+    ]}}));
+    assert_eq!(
+        tracks(&covered)[0]["transitions"].as_array().map(Vec::len),
+        Some(1)
+    );
+}
+
+#[test]
+fn a_middle_child_shorter_than_its_two_transitions_is_refused() {
+    let error = compile_error(&json!({"body": {"type": "sequence",
+    "transition": {"type": "crossfade", "duration": 0.5}, "children": [
+        {"type": "media", "path": "slides/01.jpg", "duration": 0.8},
+        {"type": "media", "path": "slides/02.jpg", "duration": 0.8},
+        {"type": "media", "path": "slides/03.jpg", "duration": 0.8},
+    ]}}));
+    assert_eq!(
+        error,
+        "spec.body.children[1]: it lasts 0.8 s, shorter than the two 0.5 s transitions around it"
+    );
+    let error = compile_error(&json!({"body": {"type": "slideshow",
+        "items": ["slides/01.jpg", "slides/02.jpg", "slides/03.jpg"],
+        "seconds": 0.8, "transition": {"type": "crossfade", "duration": 0.5}}}));
+    assert!(
+        error.starts_with("spec.body.seconds: each slide lasts 0.8 s, shorter than the two 0.5 s"),
+        "{error}"
+    );
+    let error = compile_error(&json!({"body": {"type": "slideshow",
+        "items": ["slides/01.jpg", "slides/02.jpg", "slides/03.jpg"], "fit_to": "music.m4a",
+        "transition": {"type": "crossfade", "duration": 30}}}));
+    assert!(error.starts_with("spec.body.fit_to: "), "{error}");
+    // Two slides have no middle one.
+    compile(
+        &json!({"body": {"type": "slideshow", "items": ["slides/01.jpg", "slides/02.jpg"],
+        "seconds": 0.8, "transition": {"type": "crossfade", "duration": 0.5}}}),
+    );
+}

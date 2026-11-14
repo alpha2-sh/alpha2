@@ -2258,6 +2258,11 @@ impl Context<'_> {
             .as_ref()
             .map_or(0.0, |transition| transition.duration);
         let slides = slideshow.items.len();
+        let field = if slideshow.seconds.is_none() && slideshow.fit_to.is_some() {
+            "fit_to"
+        } else {
+            "seconds"
+        };
         #[allow(clippy::cast_precision_loss)]
         let seconds = match (slideshow.seconds, &slideshow.fit_to) {
             (Some(seconds), _) => seconds,
@@ -2269,9 +2274,19 @@ impl Context<'_> {
         };
         if !(seconds.is_finite() && seconds > overlap) {
             return Err(Self::error(
-                &format!("{path}.seconds"),
+                &format!("{path}.{field}"),
                 format!(
                     "each slide lasts {seconds} s, which is not longer than its {overlap} s transition"
+                ),
+            ));
+        }
+        // A middle slide is joined at both ends, so its two transitions must not overlap.
+        if slides >= 3 && seconds < 2.0 * overlap {
+            return Err(Self::error(
+                &format!("{path}.{field}"),
+                format!(
+                    "each slide lasts {seconds} s, shorter than the two {overlap} s transitions \
+                     around a middle slide"
                 ),
             ));
         }

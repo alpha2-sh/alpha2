@@ -213,6 +213,11 @@ All notable changes to this project are documented in this file.
   path where the budget runs out, `$each` no longer copies its scope per item, and a counter counts
   over at most 100,000 frames. Nested `$each`, large declared minimums in lint and long counters
   hung or exhausted memory. Lint's sample data now meets a `min_chars` above 4.
+- A compose sequence checks a transition against the clips it joins: a crossfade into or out of a
+  part shorter than it (a held last frame, a short video) fades the incoming node in on a lane of
+  its own, another transition is refused at the child whose part is short, and a middle child or
+  slide shorter than its two transitions is refused at its path. Such specs failed with "the
+  compiled project is not valid" and no path.
 
 ## [0.6.0] - 2026-11-08
 
