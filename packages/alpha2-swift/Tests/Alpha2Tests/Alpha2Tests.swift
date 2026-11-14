@@ -76,4 +76,41 @@ final class Alpha2Tests: XCTestCase {
         XCTAssertTrue(result.contains("\"width\":64"), result)
         XCTAssertTrue(FileManager.default.fileExists(atPath: output))
     }
+
+    private final class Lines: DiagnosticListener {
+        private let lock = NSLock()
+        private var lines: [String] = []
+
+        func onDiagnostic(line: String) throws {
+            lock.lock()
+            lines.append(line)
+            lock.unlock()
+        }
+
+        func contains(_ text: String) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return lines.contains { $0.contains(text) }
+        }
+    }
+
+    func testADiagnosticListenerReceivesThePreviewsLines() throws {
+        let lines = Lines()
+        setDiagnosticListener(listener: lines)
+        defer { setDiagnosticListener(listener: nil) }
+        // The audio source is a picture, so the preview's audio decode fails and says so.
+        let picture = try fixture("cross_topology_parity.png").path
+        let player = try Player(engine: engine(), request: PlayerRequest(
+            projectJson: try String(contentsOf: fixture("host-audio-export-project.json"), encoding: .utf8),
+            assets: ["image-source": picture, "audio-source": picture],
+            frames: [:], resources: [:]
+        ))
+        player.play()
+        let deadline = Date().addingTimeInterval(20)
+        while !lines.contains("the project's audio does not decode"), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        player.end()
+        XCTAssertTrue(lines.contains("alpha2 preview: the project's audio does not decode"))
+    }
 }

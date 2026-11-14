@@ -44,7 +44,7 @@ pub(crate) fn render(
     let times = order
         .into_iter()
         .map(|index| (index, request.stills[index].time_ticks));
-    let renderer = render_each(
+    let (renderer, gpu_unavailable) = render_each(
         request,
         (gate, &CancelToken::default()),
         (config, fonts),
@@ -72,14 +72,18 @@ pub(crate) fn render(
             Ok(())
         },
     )?;
-    Ok(json!({ "stills": answers, "renderer": renderer }))
+    Ok(json!({
+        "stills": answers,
+        "renderer": renderer,
+        "gpuUnavailable": gpu_unavailable,
+    }))
 }
 
 /// Renders the project's frame at each `(key, time)` of `times`, in that order, through the steps
 /// an export takes, and hands `sink` the key, the frame's time, its size and its premultiplied
-/// RGBA8 pixels. Returns the renderer's name. `request.stills` is not read. Waits while `gate` is
-/// closed before it opens the GPU and before each still, and stops with
-/// [`Alpha2Error::Aborted`] once `cancel` is set.
+/// RGBA8 pixels. Returns the renderer's name and why no GPU drew, when one was allowed and none
+/// could be used. `request.stills` is not read. Waits while `gate` is closed before it opens the
+/// GPU and before each still, and stops with [`Alpha2Error::Aborted`] once `cancel` is set.
 pub(crate) fn render_each(
     request: &StillsRequest,
     (gate, cancel): (&PauseGate, &CancelToken),
@@ -93,7 +97,7 @@ pub(crate) fn render_each(
         alpha2_render::RenderSize,
         Vec<u8>,
     ) -> Result<(), Alpha2Error>,
-) -> Result<&'static str, Alpha2Error> {
+) -> Result<(&'static str, Option<String>), Alpha2Error> {
     let project = Project::from_json(&request.project_json)
         .map_err(|error| Alpha2Error::invalid(error.to_string()))?;
     let snapshot = EngineProject::new(project.clone())
@@ -177,7 +181,7 @@ pub(crate) fn render_each(
         cache.unpin();
         sink(key, frame_time, size, pixels)?;
     }
-    Ok(drawing.name())
+    Ok((drawing.name(), drawing.gpu_unavailable().map(str::to_owned)))
 }
 
 /// The still `exporter` stands at, drawn and read back as premultiplied RGBA8.
@@ -202,7 +206,7 @@ fn draw(
                 .read_rgba8(&texture)
                 .map_err(|error| failed("RENDER_FAILED", error.to_string()))
         }
-        Drawing::Cpu(renderer) => {
+        Drawing::Cpu(renderer, _) => {
             texts
                 .prepare_at(&**renderer, snapshot, time, size)
                 .map_err(text_failed)?;

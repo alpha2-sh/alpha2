@@ -643,14 +643,42 @@ pub fn create_private_directory(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Writes one line to standard error like `eprintln!`, but drops it instead of panicking when the
-/// stream is closed, so a client closing the pipe cannot abort an export. Use [`diagnostic!`].
-pub fn write_diagnostic(line: std::fmt::Arguments<'_>) {
-    use std::io::Write;
-    let _ = writeln!(io::stderr().lock(), "{line}");
+/// Receives each diagnostic line in place of the default output.
+pub type DiagnosticSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+static DIAGNOSTIC_SINK: std::sync::RwLock<Option<DiagnosticSink>> = std::sync::RwLock::new(None);
+
+/// Sends every later diagnostic line of the process to `sink`, or with `None` back to the default
+/// output: standard error, and on Android, which discards an app's standard error, the system log
+/// under the tag `alpha2`.
+pub fn set_diagnostic_sink(sink: Option<DiagnosticSink>) {
+    *DIAGNOSTIC_SINK
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = sink;
 }
 
-/// `eprintln!` that drops the line instead of panicking ([`write_diagnostic`]).
+/// Writes one diagnostic line to the sink [`set_diagnostic_sink`] chose. The default output drops
+/// the line instead of panicking when standard error is closed, so a client closing the pipe
+/// cannot abort an export. Use [`diagnostic!`].
+pub fn write_diagnostic(line: std::fmt::Arguments<'_>) {
+    // Called outside the lock, so a sink may write diagnostics or replace itself.
+    let sink = DIAGNOSTIC_SINK
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    match sink {
+        Some(sink) => sink(&line.to_string()),
+        #[cfg(target_os = "android")]
+        None => platform::android_log(&line.to_string()),
+        #[cfg(not(target_os = "android"))]
+        None => {
+            use std::io::Write;
+            let _ = writeln!(io::stderr().lock(), "{line}");
+        }
+    }
+}
+
+/// `eprintln!` through the process's diagnostic sink ([`write_diagnostic`]).
 #[macro_export]
 macro_rules! diagnostic {
     ($($argument:tt)*) => {
@@ -662,6 +690,22 @@ macro_rules! diagnostic {
 mod tests {
     use super::*;
     use std::fs::{self, OpenOptions};
+
+    #[test]
+    fn a_diagnostic_sink_receives_each_line_until_it_is_removed() {
+        let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept = std::sync::Arc::clone(&lines);
+        // Other tests of this process may write while the sink is set; only marked lines count.
+        set_diagnostic_sink(Some(std::sync::Arc::new(move |line: &str| {
+            if line.contains("sink-test") {
+                kept.lock().expect("lines").push(line.to_owned());
+            }
+        })));
+        diagnostic!("sink-test {}", 1);
+        set_diagnostic_sink(None);
+        diagnostic!("sink-test 2");
+        assert_eq!(*lines.lock().expect("lines"), ["sink-test 1"]);
+    }
 
     #[test]
     fn the_awake_clock_advances_with_time_and_never_goes_back() {

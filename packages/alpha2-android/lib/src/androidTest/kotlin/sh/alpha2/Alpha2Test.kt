@@ -8,6 +8,8 @@ import android.os.HandlerThread
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -269,5 +271,41 @@ class Alpha2Test {
         }
         reader.close()
         drawing.quitSafely()
+    }
+
+    @Test
+    fun aDiagnosticListenerReceivesThePreviewsLines() {
+        val lines = LinkedBlockingQueue<String>()
+        setDiagnosticListener(
+            object : DiagnosticListener {
+                override fun onDiagnostic(line: String) {
+                    lines.add(line)
+                }
+            },
+        )
+        try {
+            engine().use { engine ->
+                // The audio source is a picture, so the preview's audio decode fails and says so.
+                val picture = asset("cross_topology_parity.png")
+                val request = PlayerRequest(
+                    projectJson = text("host-audio-export-project.json"),
+                    assets = mapOf("image-source" to picture, "audio-source" to picture),
+                    frames = emptyMap(),
+                    resources = emptyMap(),
+                )
+                Player(engine, request).use { player ->
+                    player.play()
+                    val deadline = System.currentTimeMillis() + 20_000
+                    var found = false
+                    while (!found && System.currentTimeMillis() < deadline) {
+                        val line = lines.poll(100, TimeUnit.MILLISECONDS) ?: continue
+                        found = line.contains("alpha2 preview: the project's audio does not decode")
+                    }
+                    assertTrue("lines: $lines", found)
+                }
+            }
+        } finally {
+            setDiagnosticListener(null)
+        }
     }
 }

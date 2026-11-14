@@ -324,6 +324,7 @@ impl Alpha2 {
     #[uniffi::constructor]
     #[must_use]
     pub fn new(config: EngineConfig) -> Arc<Self> {
+        crate::diagnostics::report_panics();
         Arc::new(Self {
             config,
             platform: platform::current(),

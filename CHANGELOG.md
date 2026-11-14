@@ -20,6 +20,12 @@ All notable changes to this project are documented in this file.
   evaluation would give in a range because a clip's composition cannot draw, so an export can fail
   before its first frame; `plans_too_large()` reports compositions that together exceed the plan
   budget, and compilation stops once they do.
+- Mobile: `setDiagnosticListener` (Kotlin) and `setDiagnosticListener(listener:)` (Swift) hand an app
+  the library's diagnostic lines: GPU device errors, why an export draws on the CPU, a preview's
+  failures and every panic with its location. Without a listener the lines go to the system log
+  under the tag `alpha2` on Android (which discards an app's standard error) and to standard
+  error on iOS. Export and stills reports gain `gpuUnavailable`, the reason no GPU drew when one
+  was allowed.
 
 ### Changed
 

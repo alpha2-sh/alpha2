@@ -709,3 +709,20 @@ pub(crate) fn thread_cpu_work() -> Option<u64> {
             .saturating_add(nanoseconds)
     })
 }
+
+/// Writes `line` to the Android system log at warning priority under the tag `alpha2`.
+#[cfg(target_os = "android")]
+pub(crate) fn android_log(line: &str) {
+    #[link(name = "log")]
+    unsafe extern "C" {
+        fn __android_log_write(
+            priority: libc::c_int,
+            tag: *const libc::c_char,
+            text: *const libc::c_char,
+        ) -> libc::c_int;
+    }
+    const ANDROID_LOG_WARN: libc::c_int = 5;
+    let text = std::ffi::CString::new(line.replace('\0', " ")).unwrap_or_default();
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    unsafe { __android_log_write(ANDROID_LOG_WARN, c"alpha2".as_ptr(), text.as_ptr()) };
+}

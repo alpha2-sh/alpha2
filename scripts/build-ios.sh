@@ -91,5 +91,6 @@ xcodebuild -create-xcframework "${frameworks[@]}" -output "$package/$module.xcfr
 # The package tests' fixtures.
 fixtures=$package/Tests/Alpha2Tests/Fixtures
 mkdir -p "$fixtures"
-cp tests/cases/host-parity-project.json tests/corpus/cross_topology_parity.png "$fixtures/"
+cp tests/cases/host-parity-project.json tests/cases/host-audio-export-project.json \
+  tests/corpus/cross_topology_parity.png "$fixtures/"
 echo "$package/$module.xcframework"

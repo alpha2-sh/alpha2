@@ -143,24 +143,27 @@ pub(crate) fn text_textures(
 }
 
 /// The renderer an export draws with; the GPU renderer's frames stay on its device when it
-/// imports decoder surfaces.
+/// imports decoder surfaces. The CPU renderer keeps why no GPU was used when one was allowed.
 pub(crate) enum Drawing {
     Gpu(Box<Renderer>, Option<GpuFrames>),
-    Cpu(Box<CpuRenderer>),
+    Cpu(Box<CpuRenderer>, Option<String>),
 }
 
 impl Drawing {
     pub(crate) fn open(mode: RendererMode, frames: VideoFrameMode) -> Result<Self, Alpha2Error> {
-        let cpu = || {
+        let cpu = |unavailable| {
             let threads = std::thread::available_parallelism().map_or(2, usize::from);
-            Self::Cpu(Box::new(CpuRenderer::new(threads)))
+            Self::Cpu(Box::new(CpuRenderer::new(threads)), unavailable)
         };
         if mode == RendererMode::Cpu {
-            return Ok(cpu());
+            return Ok(cpu(None));
         }
         match pollster::block_on(alpha2_gpu::GpuContext::request_product()) {
             Ok(gpu) => {
                 let (gpu, frames) = crate::zero_copy::open(gpu, frames == VideoFrameMode::Auto);
+                gpu.set_diagnostic_handler(|diagnostic| {
+                    alpha2_os::diagnostic!("alpha2 export: GPU: {diagnostic}");
+                });
                 let mut renderer = Renderer::new(gpu);
                 // The CPU renderer has the built-in effects; the GPU one compiles them here.
                 renderer.register_builtins().map_err(|diagnostics| {
@@ -174,35 +177,46 @@ impl Drawing {
             Err(error) if mode == RendererMode::Gpu => Err(Alpha2Error::GpuInitFailed {
                 reason: error.to_string(),
             }),
-            Err(_) => Ok(cpu()),
+            Err(error) => {
+                alpha2_os::diagnostic!("alpha2 export: no GPU, drawing on the CPU: {error}");
+                Ok(cpu(Some(error.to_string())))
+            }
+        }
+    }
+
+    /// Why no GPU draws, when one was allowed and none could be used.
+    pub(crate) fn gpu_unavailable(&self) -> Option<&str> {
+        match self {
+            Self::Cpu(_, unavailable) => unavailable.as_deref(),
+            Self::Gpu(..) => None,
         }
     }
 
     pub(crate) fn as_export(&self) -> ExportRenderer<'_> {
         match self {
             Self::Gpu(renderer, _) => ExportRenderer::Gpu(renderer),
-            Self::Cpu(renderer) => ExportRenderer::Cpu(renderer),
+            Self::Cpu(renderer, _) => ExportRenderer::Cpu(renderer),
         }
     }
 
     pub(crate) const fn name(&self) -> &'static str {
         match self {
             Self::Gpu(..) => "gpu",
-            Self::Cpu(_) => "cpu",
+            Self::Cpu(..) => "cpu",
         }
     }
 
     pub(crate) const fn gpu_frames(&self) -> Option<&GpuFrames> {
         match self {
             Self::Gpu(_, frames) => frames.as_ref(),
-            Self::Cpu(_) => None,
+            Self::Cpu(..) => None,
         }
     }
 
     fn register_lut3d(&mut self, id: &str, data: &alpha2_render::Lut3dData) -> Result<(), String> {
         match self {
             Self::Gpu(renderer, _) => renderer.register_lut3d(id, data),
-            Self::Cpu(renderer) => renderer.register_lut3d(id, data),
+            Self::Cpu(renderer, _) => renderer.register_lut3d(id, data),
         }
         .map_err(|error| error.to_string())
     }
@@ -452,6 +466,7 @@ fn attempt(
         "audioEncoder": audio_encoder_name,
         "audioBitrate": audio_bitrate,
         "renderer": drawing.name(),
+        "gpuUnavailable": drawing.gpu_unavailable(),
         "surfaceFrames": surface_frames,
         "decodeDiagnostics": decode_diagnostics,
         "frames": frames,
@@ -1114,6 +1129,7 @@ mod tests {
         assert_eq!(report["softwareRetry"], true);
         assert_eq!(report["audioBitrate"], 128_000);
         assert_eq!(report["decodeDiagnostics"], json!([]));
+        assert_eq!(report["gpuUnavailable"], serde_json::Value::Null);
         assert_eq!(report["hardwareEncoder"], false);
         assert_eq!(opened(&encoders), (vec![false, true], 2));
         let _ = std::fs::remove_file(output);
