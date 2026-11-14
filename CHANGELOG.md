@@ -130,6 +130,9 @@ All notable changes to this project are documented in this file.
   or eight in a row, and reads at most what a frame of its size can take.
 - A cancelled export stops copying its staging file into an output folder that cannot seek, and
   publishes nothing.
+- A text raster larger than the largest frame (67,108,864 pixels) or whose planes would take over
+  1 GiB is refused as too large before anything is allocated. Before, only each side was limited,
+  and the browser module aborted on the allocation.
 
 ## [0.6.0] - 2026-11-08
 

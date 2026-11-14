@@ -41,6 +41,41 @@ const MAX_STROKES: usize = 4;
 const MAX_BACKGROUND_PADDING: f32 = 256.0;
 /// In font sizes.
 const LETTER_SPACING_RANGE: std::ops::RangeInclusive<f32> = -0.5..=1.0;
+/// Largest raster side, in pixels.
+const MAX_RASTER_SIDE: u32 = 16_384;
+/// Bytes the planes of one raster may take together.
+const MAX_RASTER_BYTES: u64 = 1 << 30;
+
+/// The pixel count of a `width` x `height` raster whose planes hold `bytes_per_pixel` bytes per
+/// pixel together, or [`TextRasterError::TooLarge`] past the largest frame
+/// ([`alpha2_media::MAX_FRAME_PIXELS`]) or [`MAX_RASTER_BYTES`]. Checked before any plane exists.
+fn raster_pixels(width: u32, height: u32, bytes_per_pixel: u64) -> Result<usize, TextRasterError> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width > MAX_RASTER_SIDE
+        || height > MAX_RASTER_SIDE
+        || pixels > alpha2_media::MAX_FRAME_PIXELS
+        || pixels.saturating_mul(bytes_per_pixel) > MAX_RASTER_BYTES
+    {
+        return Err(TextRasterError::TooLarge);
+    }
+    usize::try_from(pixels).map_err(|_| TextRasterError::TooLarge)
+}
+
+/// Bytes per pixel every raster holds: coverage and the RGBA8 result, the split background plane
+/// when used, color glyph RGBA and the ink plane strokes dilate when color glyphs are placed, and
+/// one band per stroke.
+fn raster_bytes_per_pixel(request: &TextRasterRequest, colors: bool) -> u64 {
+    let split = request.split_background && request.background.is_some();
+    let strokes = request.strokes.len() as u64;
+    1 + 4
+        + if split { 4 } else { 0 }
+        + if colors {
+            4 + u64::from(strokes > 0)
+        } else {
+            0
+        }
+        + strokes
+}
 
 /// One caller-owned font registered in fallback order.
 #[derive(Clone, Debug)]
@@ -1067,17 +1102,10 @@ impl TextRasterizer {
             .checked_mul(2)
             .and_then(|margins| box_height.checked_add(margins))
             .ok_or(TextRasterError::TooLarge)?;
-        if width > 16_384 || height > 16_384 {
-            return Err(TextRasterError::TooLarge);
-        }
-        let pixel_count = usize::try_from(width)
-            .ok()
-            .and_then(|width| {
-                usize::try_from(height)
-                    .ok()
-                    .and_then(|height| width.checked_mul(height))
-            })
-            .ok_or(TextRasterError::TooLarge)?;
+        let colors = placed
+            .iter()
+            .any(|(key, ..)| !matches!(drawings[key], Drawing::Outline(_)));
+        let pixel_count = raster_pixels(width, height, raster_bytes_per_pixel(request, colors))?;
         let mut coverage = vec![0_u8; pixel_count];
         // Allocated only once a color glyph is placed.
         let mut colors: Option<Vec<u8>> = None;

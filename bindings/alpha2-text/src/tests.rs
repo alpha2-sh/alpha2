@@ -3035,3 +3035,51 @@ fn cluster_state(value: &serde_json::Value) -> ClusterState {
         tracking: number("tracking", 0.0),
     }
 }
+
+#[test]
+fn rasters_over_the_frame_area_are_refused_before_they_allocate() {
+    let mut rasterizer = fixture();
+    // About 13,000 by 15,000 pixels: within the side limit, three times the largest frame.
+    let huge = request(&"WWWWWWW\n".repeat(6), 2_048.0);
+    let started = std::time::Instant::now();
+    assert_eq!(
+        rasterizer.rasterize(&huge).map(|_| ()),
+        Err(TextRasterError::TooLarge)
+    );
+    let states = identity_states(&rasterizer, &huge);
+    assert_eq!(
+        rasterizer.rasterize_animated(&huge, &states).map(|_| ()),
+        Err(TextRasterError::TooLarge)
+    );
+    println!("refused in {:?}", started.elapsed());
+    // A wide paragraph with two strokes and a background, about 3800 by 1700.
+    let paragraph = TextRasterRequest {
+        max_width: 3_800.0,
+        strokes: vec![
+            TextStroke {
+                color: [0, 0, 0, 255],
+                width: 3.0,
+            },
+            TextStroke {
+                color: [255, 255, 255, 255],
+                width: 2.0,
+            },
+        ],
+        background: Some(TextBackground {
+            color: [0, 0, 0, 128],
+            padding: 8.0,
+        }),
+        ..request(
+            &"The quick brown fox jumps over the lazy dog. ".repeat(60),
+            96.0,
+        )
+    };
+    let drawn = rasterizer.rasterize(&paragraph).expect("draws");
+    let texture = &drawn.descriptor.texture;
+    println!("paragraph {}x{}", texture.width, texture.height);
+    assert!(texture.width >= 3_700 && texture.height >= 1_200);
+    let states = identity_states(&rasterizer, &paragraph);
+    rasterizer
+        .rasterize_animated(&paragraph, &states)
+        .expect("draws");
+}

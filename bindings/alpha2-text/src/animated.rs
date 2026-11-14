@@ -13,7 +13,8 @@ use super::{
     Drawing, Faces, HashMap, HostTexture, HostTexturePixels, Layout, PixelBox, PixelLook,
     Premultiplication, RasterColorSpace, RequestLook, TextFill, TextRasterError, TextRasterRequest,
     TextRasterResult, TextRasterizer, TextTexture, decoration_extents, dilate, disc_extent,
-    gradient, normalize_mapped, over, point, stroke_radius, validate_request,
+    gradient, normalize_mapped, over, point, raster_bytes_per_pixel, raster_pixels, stroke_radius,
+    validate_request,
 };
 use std::ops::Range;
 use std::sync::Arc;
@@ -632,10 +633,17 @@ impl TextRasterizer {
             .checked_mul(2)
             .and_then(|margins| box_height.checked_add(margins))
             .ok_or(TextRasterError::TooLarge)?;
-        if width > 16_384 || height > 16_384 {
-            return Err(TextRasterError::TooLarge);
-        }
-        let pixel_count = width as usize * height as usize;
+        // Two owner planes of `u32`, and an owner plane per stroke band.
+        let colors = tiles
+            .iter()
+            .flatten()
+            .any(|(drawn, _)| drawn.tile.colors.is_some());
+        let owners = 8 + 4 * request.strokes.len() as u64;
+        let pixel_count = raster_pixels(
+            width,
+            height,
+            raster_bytes_per_pixel(request, colors) + owners,
+        )?;
         let margins = [margin_x, margin_y];
         let mut coverage = vec![0_u8; pixel_count];
         let mut fill_owner = vec![u32::MAX; pixel_count];
