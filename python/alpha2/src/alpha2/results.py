@@ -157,7 +157,9 @@ class ExportResult(TypedDict):
     """What each source read, by source id."""
     memoryPolicy: dict[str, Any]
     performance: dict[str, Any]
-    """Timings and counters; the decoder session keys among them are documented in the protocol."""
+    """Timings and counters, documented in the protocol. Among them ``renderMs`` is split into
+    ``setupMs`` (with ``encoderProbeMs``, ``encoderOpenMs`` and ``loudnessMs`` inside it),
+    ``firstFrameMs`` and ``finishMs``, beside the encode rate ``steadyFps``."""
     providerDiagnostics: list[dict[str, Any]]
     providerDiagnosticsOmitted: int
     decodeDiagnostics: list[Any]

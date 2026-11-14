@@ -234,7 +234,7 @@ pub(crate) struct ExportAudioFeed {
 }
 
 impl ExportAudioFeed {
-    /// Normalization measures the whole range first.
+    /// Normalization measures the whole range first; the third value is how long it took.
     ///
     /// # Errors
     /// Says why the sources or the renderer could not be set up.
@@ -248,12 +248,13 @@ impl ExportAudioFeed {
         cancel: CancelToken,
         audio_window_bytes: crate::memory::ByteBudget,
         decoding: Arc<crate::recovery::ExportDecoding>,
-    ) -> Result<(Self, Option<Value>), String> {
+    ) -> Result<(Self, Option<Value>, Duration), String> {
         let sample_rate = project.settings.sample_rate;
         let window =
             alpha2_engine::export_audio_window(range, sample_rate).map_err(crate::error_message)?;
         let (start_sample, frames) = (window.start_sample, window.frames);
         let mut renderer = AudioRenderer::new(&snapshot, 2, 4_096).map_err(crate::error_message)?;
+        let loudness_started = Instant::now();
         let report = loudness
             .map(|request| {
                 normalize_export_audio(
@@ -270,6 +271,7 @@ impl ExportAudioFeed {
                 )
             })
             .transpose()?;
+        let loudness_time = loudness_started.elapsed();
         Ok((
             Self {
                 snapshot,
@@ -287,6 +289,7 @@ impl ExportAudioFeed {
                 cancel,
             },
             report,
+            loudness_time,
         ))
     }
 }
@@ -403,9 +406,10 @@ impl Host {
         let cancel = crate::termination::export_cancel();
         let encode_reason = export.plan.encode_reason();
         let mut loudness_report = None;
+        let mut phases = crate::metrics::PhaseTimings::default();
         let feed = match encode_reason {
             Some(_) => {
-                let (feed, report) = ExportAudioFeed::new(
+                let (feed, report, loudness_time) = ExportAudioFeed::new(
                     Arc::new(export.snapshot.clone()),
                     export.project,
                     export.assets,
@@ -416,6 +420,7 @@ impl Host {
                     self.failure.decoding(),
                 )?;
                 loudness_report = report;
+                phases.loudness = loudness_time;
                 Some(feed)
             }
             None => None,
@@ -451,6 +456,8 @@ impl Host {
         let output = export.output.clone();
         let container = export.container;
         let worker_cancel = cancel.clone();
+        let started = export.started;
+        phases.setup = started.elapsed();
         let copied = run_watched(
             &Watched {
                 what: "packet copy",
@@ -472,7 +479,11 @@ impl Host {
                 )
             },
             &mut |copied| {
+                if phases.first_frame.is_none() {
+                    phases.first_frame = Some(started.elapsed());
+                }
                 if copied == total {
+                    phases.last_handoff = Some(started.elapsed());
                     phase.set(ExportPhase::Mux);
                     self.failure.enter(ExportPhase::Mux, None);
                 } else {
@@ -488,7 +499,7 @@ impl Host {
         )?;
         let (report, renderer) = copied;
         let loudness = crate::host::finish_loudness(loudness_report, renderer.as_ref());
-        Ok(self.copy_result(export, &report?, audio_strategy, loudness))
+        Ok(self.copy_result(export, &report?, audio_strategy, loudness, &phases))
     }
 
     fn copy_result(
@@ -497,10 +508,11 @@ impl Host {
         report: &alpha2_native::PacketCopyReport,
         audio_strategy: Option<&str>,
         loudness: Value,
+        phases: &crate::metrics::PhaseTimings,
     ) -> Value {
         let encoded = audio_strategy == Some("encode");
-        let started = export.started;
-        let mut result = self.response_metadata(started.elapsed().as_secs_f64() * 1_000.0);
+        let elapsed = export.started.elapsed();
+        let mut result = self.response_metadata(elapsed.as_secs_f64() * 1_000.0);
         result["frames"] = json!(report.video_packets);
         result["audio"] = json!(audio_strategy.is_some());
         result["videoCodec"] = Value::Null;
@@ -543,7 +555,7 @@ impl Host {
         });
         result["fps"] = json!(frames_per_second(
             report.video_packets,
-            started.elapsed().as_secs_f64()
+            elapsed.as_secs_f64()
         ));
         result["performance"] = json!({
             "videoPipeline": VideoPipeline::PacketCopy.as_str(),
@@ -555,6 +567,7 @@ impl Host {
             "outputCpuPackBytes": 0,
             "encoderInputCopyBytes": 0,
         });
+        phases.add_json(&mut result["performance"], elapsed, report.video_packets);
         result
     }
 }

@@ -206,6 +206,7 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
     assert_eq!(whole["frames"], json!(60));
     assert_eq!(whole["audio"], json!(true));
     assert!(whole["performance"]["copiedAudioPackets"].as_u64() > Some(0));
+    super::export_pipeline::assert_phase_timings(&whole, false);
     let times = decoded_frames("whole.mp4");
     assert_eq!(times.len(), 60);
     assert_eq!(times.first(), Some(&0));

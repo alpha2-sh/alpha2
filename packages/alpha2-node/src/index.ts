@@ -476,9 +476,30 @@ export interface GpuSubmissions {
 
 /**
  * Timing and pipeline counters (see the host protocol). Undeclared counters are numbers, flags or
- * names. A copy reports its own few counters and none of the declared ones.
+ * names. A copy reports its own few counters, the timing split, and none of the other declared
+ * ones.
  */
 export interface ExportPerformance {
+  /** Milliseconds from the start of the export to the first turn of its frame loop. */
+  readonly setupMs: number;
+  /** Milliseconds choosing the video encoder, within `setupMs`; `null` on a copy. */
+  readonly encoderProbeMs: number | null;
+  /** Milliseconds opening the video encoder, within `setupMs`; `null` on a copy. */
+  readonly encoderOpenMs: number | null;
+  /** Milliseconds of the loudness pass, within `setupMs`; 0 without one. */
+  readonly loudnessMs: number;
+  /** Milliseconds from the start to frame 0 handed to the encoder, or a copy's first packet. */
+  readonly firstFrameMs: number | null;
+  /**
+   * Milliseconds from the last frame handed to the encoder (a copy's last packet) to the answer:
+   * the encoder's drain, the mux and the publish.
+   */
+  readonly finishMs: number | null;
+  /**
+   * Frames per second encoded between the completions of the 10th and the 95th percentile frames;
+   * `null` below three frames and on a copy. `fps` covers the whole export.
+   */
+  readonly steadyFps: number | null;
   /** Per reason a source left the hardware decode path, how many times it did. */
   readonly hardwareFallbackReasons?: Readonly<Record<string, number>>;
   /** Per reason in `hardwareFallbackReasons` that has one, the first fallback's message. */

@@ -1168,6 +1168,10 @@ pub fn handle_encode_worker_event(
             state.pending_events = state.pending_events.saturating_sub(1);
             if let Some(index) = video_index {
                 metrics.video_encode = metrics.video_encode.saturating_add(duration);
+                metrics
+                    .phases
+                    .steady
+                    .record(index, total, started_at.saturating_add(duration));
                 let expected = state.completed_video.saturating_add(1);
                 if index.saturating_add(1) != expected {
                     return Err(encode_error(format!(

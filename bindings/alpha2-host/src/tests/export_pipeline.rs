@@ -525,3 +525,97 @@ fn a_rendezvous_export_waits_only_for_the_encoder() {
     );
     std::fs::remove_dir_all(&directory).ok();
 }
+
+/// Checks the set-up and finish split of an export result; `encoder` is false for a copy.
+pub(super) fn assert_phase_timings(result: &Value, encoder: bool) {
+    let performance = &result["performance"];
+    let number = |key: &str| {
+        performance[key]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{key} is not a number: {performance}"))
+    };
+    let render = result["renderMs"].as_f64().expect("renderMs");
+    let setup = number("setupMs");
+    let finish = number("finishMs");
+    let first = number("firstFrameMs");
+    assert!(setup + finish <= render, "{setup} + {finish} > {render}");
+    assert!(
+        setup <= first && first <= render,
+        "{setup} {first} {render}"
+    );
+    assert!(number("loudnessMs") >= 0.0);
+    for key in ["encoderProbeMs", "encoderOpenMs"] {
+        if encoder {
+            assert!(number(key) <= setup, "{key}: {performance}");
+        } else {
+            assert_eq!(performance[key], Value::Null, "{key}: {performance}");
+        }
+    }
+    if encoder {
+        assert!(number("steadyFps") > 0.0, "{performance}");
+    } else {
+        assert_eq!(performance["steadyFps"], Value::Null, "{performance}");
+    }
+}
+
+#[test]
+fn the_steady_rate_follows_the_encoder_and_leaves_out_set_up_and_finish() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("steady-rate");
+    let end = 2 * alpha2_time::TICKS_PER_SECOND;
+    let slow = Duration::from_millis(40);
+    crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(Some(slow)));
+    let request = json!({
+        "protocolVersion": 2, "operation": "export", "requestId": "steady-rate",
+        "project": {
+            "schema_version": 1, "id": "steady", "name": "Steady",
+            "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": end},
+                "source_range": {"start": 0, "end": end}
+            }]}]}
+        },
+        "assets": {"video": corpus("h264-long-gop.mp4")},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "inputPolicy": "cpu-readback",
+        "output": directory.join("steady.mp4")
+    });
+    let result = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |_| Ok(()),
+        )
+        .expect("export");
+    std::fs::remove_dir_all(&directory).ok();
+    assert_eq!(result["frames"], json!(60), "{result}");
+    assert_phase_timings(&result, true);
+    let expected = 1.0 / slow.as_secs_f64();
+    let steady = result["performance"]["steadyFps"]
+        .as_f64()
+        .expect("steadyFps");
+    assert!(
+        (steady - expected).abs() <= expected * 0.2,
+        "steady {steady:.1} fps against {expected:.1} fps"
+    );
+}
+
+#[test]
+fn the_steady_rate_window_matches_the_harness_percentiles() {
+    use crate::metrics::SteadyRate;
+    assert_eq!(SteadyRate::window(2), None);
+    assert_eq!(SteadyRate::window(3), Some((0, 1)));
+    assert_eq!(SteadyRate::window(15), Some((1, 13)));
+    assert_eq!(SteadyRate::window(60), Some((6, 56)));
+    let mut rate = SteadyRate::default();
+    for index in 0..60 {
+        rate.record(index, 60, Duration::from_millis(500 + 20 * index));
+    }
+    let fps = rate.fps(60).expect("rate");
+    assert!((fps - 50.0).abs() < 1e-9, "{fps}");
+}

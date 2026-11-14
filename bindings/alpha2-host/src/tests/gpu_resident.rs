@@ -391,6 +391,7 @@ fn a_software_decoded_export_still_encodes_on_the_gpu() {
     let _ = std::fs::remove_dir_all(directory);
     assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
     assert_eq!(result["hardwareDecodeReady"], json!(false), "{result}");
+    super::export_pipeline::assert_phase_timings(&result, true);
     assert_eq!(result.get("renderCache"), Some(&Value::Null), "{result}");
     let performance = &result["performance"];
     assert_eq!(

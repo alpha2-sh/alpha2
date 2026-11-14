@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- An export result's `performance` splits `renderMs` into `setupMs` (with `encoderProbeMs`,
+  `encoderOpenMs` and `loudnessMs`), `firstFrameMs` and `finishMs`, and reports `steadyFps`, the
+  encode rate without start-up and finish.
+
 ### Changed
 
 - Editor: the browser bridge's `resourceLimit` counts only imported media files. Titles and

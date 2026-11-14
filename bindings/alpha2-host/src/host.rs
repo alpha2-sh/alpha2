@@ -1997,6 +1997,7 @@ impl Host {
         // On Linux the hardware encoder is not in `codec_capabilities` (the software sinks cannot
         // feed it), so the GPU path is decided here.
         let input_policy = self.input_policy;
+        let probe_started = Instant::now();
         #[cfg(feature = "hwencode")]
         let candidate = self.gpu_output_candidate(video_codec, requested_video_encoder);
         #[cfg(not(feature = "hwencode"))]
@@ -2019,6 +2020,7 @@ impl Host {
         } else {
             candidate
         };
+        let gpu_probe = probe_started.elapsed();
         #[cfg_attr(not(feature = "hwencode"), allow(unused_mut))]
         let mut gpu_output_path_fallback = Value::Null;
         // A readback path that opens nothing reports this too.
@@ -2058,7 +2060,7 @@ impl Host {
                             audio_rate,
                             loudness,
                             output,
-                            started,
+                            (started, gpu_probe),
                             (&device, &capability),
                             &transcode,
                             pipeline_failure,
@@ -2225,7 +2227,9 @@ impl Host {
         let mut cache_reads = CacheReads::default();
         // Only now, and only this codec's: an encoder that must be opened to prove it runs (NVENC)
         // is opened only for an export that can use it.
+        let inventory_started = Instant::now();
         let inventory = alpha2_native::video_encoder_inventory(video_codec);
+        let encoder_probe = gpu_probe.saturating_add(inventory_started.elapsed());
         let video_encoder = inventory
             .usable
             .into_iter()
@@ -2355,6 +2359,7 @@ impl Host {
             }
             error_message(error)
         };
+        let open_started = Instant::now();
         let sink = if has_audio {
             NativeExportSink::AudioVideo(
                 NativeAvEncodeSink::create_with_video_encoder_threads(
@@ -2382,6 +2387,7 @@ impl Host {
                 .map_err(sink_refused)?,
             )
         };
+        let encoder_open = open_started.elapsed();
         let video_encoder_hardware = sink.video_selection().hardware_accelerated;
         let split = if video_encoder_hardware {
             self.export_codec_split(&project, assets, range, pipeline_enabled, (false, None))
@@ -2463,6 +2469,7 @@ impl Host {
         let mut audio_renderer = has_audio
             .then(|| AudioRenderer::new(&snapshot, 2, 4_096).map_err(error_message))
             .transpose()?;
+        let loudness_started = Instant::now();
         let loudness_report = match (loudness, audio_renderer.as_mut()) {
             (Some(request), Some(renderer)) => Some(normalize_export_audio(
                 renderer,
@@ -2479,6 +2486,7 @@ impl Host {
             (Some(_), None) => return Err(loudness_without_audio()),
             (None, _) => None,
         };
+        let loudness_time = loudness_started.elapsed();
         let mut audio_produced = 0_usize;
         let mut encode_state = EncodeProgressState::default();
         let cancel_at_frame = configured_cancel_at_frame();
@@ -2507,12 +2515,19 @@ impl Host {
             source_frame_pixels: plan.source_frame_pixels,
             source_probe: plan.source_probe,
             trace: ExportTrace::from_env(started),
+            phases: crate::metrics::PhaseTimings {
+                encoder_probe: Some(encoder_probe),
+                encoder_open: Some(encoder_open),
+                loudness: loudness_time,
+                ..crate::metrics::PhaseTimings::default()
+            },
             ..ExportMetrics::default()
         };
         self.prepare_project_pipelines(&snapshot, &mut metrics);
         if let Some(worker) = decode_worker.as_ref() {
             decode_scheduler.refill(&exporter, &snapshot, worker, &mut metrics)?;
         }
+        metrics.phases.setup = started.elapsed();
 
         while exporter.pending_time().is_some()
             || audio_produced < audio_frames
@@ -3096,6 +3111,9 @@ impl Host {
             metrics.encode_queue = metrics
                 .encode_queue
                 .saturating_add(encode_started.elapsed());
+            if let Some(index) = video_index {
+                metrics.phases.record_handoff(index, started.elapsed());
+            }
             metrics.encode_backpressure = metrics
                 .encode_backpressure
                 .saturating_add(u64::from(backpressured));
@@ -3203,7 +3221,8 @@ impl Host {
         metrics.retired_leases_at_exit =
             self.clean_up_after_output(&output.path, || parked_leases.release());
         metrics.encoder_frames_allocated = frame_pool.allocated();
-        let mut result = self.response_metadata(started.elapsed().as_secs_f64() * 1_000.0);
+        let elapsed = started.elapsed();
+        let mut result = self.response_metadata(elapsed.as_secs_f64() * 1_000.0);
         result["frames"] = json!(encode_state.completed_video);
         result["audio"] = json!(has_audio);
         result["videoCodec"] = json!(video_codec.as_str());
@@ -3253,7 +3272,7 @@ impl Host {
         result["audioEncoder"] = json!(audio_encoder_name);
         result["fps"] = json!(frames_per_second(
             encode_state.completed_video,
-            started.elapsed().as_secs_f64()
+            elapsed.as_secs_f64()
         ));
         let graph_after = self.renderer.gpu().map(Renderer::diagnostics);
         metrics.peak_provider_source_bytes = plan.providers.peak_bytes();
@@ -3265,6 +3284,11 @@ impl Host {
             &metrics,
             graph_before.as_ref().zip(graph_after.as_ref()),
             &pipeline_limits,
+        );
+        metrics.phases.add_json(
+            &mut result["performance"],
+            elapsed,
+            encode_state.completed_video,
         );
         crate::metrics::add_gpu_time_metrics(&mut result["performance"], self.renderer.gpu());
         // A hardware encoder fed CPU frames copies each to its device inside the driver, where

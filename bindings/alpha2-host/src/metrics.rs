@@ -144,6 +144,7 @@ pub struct ExportMetrics {
     /// Surfaces the renderer could not import (`sourceDownloadBytes`, `sourceDownloadMs`).
     pub source_download_bytes: u64,
     pub source_download: Duration,
+    pub phases: PhaseTimings,
 }
 
 impl ExportMetrics {
@@ -207,6 +208,86 @@ impl ExportMetrics {
         self.peak_decode_queue_bytes = self.peak_decode_queue_bytes.max(worker.peak_bytes());
         self.decode_budget_wait = worker.waits.budget();
         self.decode_handoff_wait = worker.waits.handoff();
+    }
+}
+
+/// Where an export's time went outside its steady frame loop. Times are from the export's start.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PhaseTimings {
+    /// To the first turn of the frame loop.
+    pub setup: Duration,
+    /// `None` where no video encoder is chosen or opened (a copy).
+    pub encoder_probe: Option<Duration>,
+    pub encoder_open: Option<Duration>,
+    pub loudness: Duration,
+    /// Frame 0 handed to the encoder, or a copy's first packet written.
+    pub first_frame: Option<Duration>,
+    /// The last frame handed to the encoder, or a copy's last packet written.
+    pub last_handoff: Option<Duration>,
+    pub steady: SteadyRate,
+}
+
+impl PhaseTimings {
+    pub fn record_handoff(&mut self, index: u64, at: Duration) {
+        if index == 0 {
+            self.first_frame = Some(at);
+        }
+        self.last_handoff = Some(at);
+    }
+
+    /// `elapsed` is the export's `renderMs`; `finishMs` is the part after the last hand-off.
+    pub fn add_json(&self, value: &mut Value, elapsed: Duration, frames: u64) {
+        let optional = |duration: Option<Duration>| duration.map_or(Value::Null, milliseconds);
+        value["setupMs"] = milliseconds(self.setup);
+        value["encoderProbeMs"] = optional(self.encoder_probe);
+        value["encoderOpenMs"] = optional(self.encoder_open);
+        value["loudnessMs"] = milliseconds(self.loudness);
+        value["firstFrameMs"] = optional(self.first_frame);
+        value["finishMs"] = optional(
+            self.last_handoff
+                .map(|handoff| elapsed.saturating_sub(handoff)),
+        );
+        value["steadyFps"] = json!(self.steady.fps(frames));
+    }
+}
+
+/// The encode rate between the completions of the 10th and the 95th percentile frames, which
+/// leaves out start-up and the drain at the end. Two timestamps, whatever the length.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SteadyRate {
+    low: Option<Duration>,
+    high: Option<Duration>,
+}
+
+impl SteadyRate {
+    /// The two frame indices of an export of `frames` frames; `None` below three frames.
+    #[must_use]
+    pub const fn window(frames: u64) -> Option<(u64, u64)> {
+        if frames < 3 {
+            return None;
+        }
+        let low = frames / 10;
+        let high = (frames.saturating_mul(95) / 100).saturating_sub(1);
+        if high > low { Some((low, high)) } else { None }
+    }
+
+    pub fn record(&mut self, index: u64, frames: u64, finished: Duration) {
+        if let Some((low, high)) = Self::window(frames) {
+            if index == low {
+                self.low = Some(finished);
+            }
+            if index == high {
+                self.high = Some(finished);
+            }
+        }
+    }
+
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn fps(&self, frames: u64) -> Option<f64> {
+        let (low, high) = Self::window(frames)?;
+        let span = self.high?.checked_sub(self.low?)?.as_secs_f64();
+        (span > 0.0).then(|| (high - low) as f64 / span)
     }
 }
 

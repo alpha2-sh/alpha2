@@ -109,6 +109,20 @@ function assertDeclaredPerformance(performance, path) {
   }
   for (const key of Object.keys(declared))
     assert.equal(key in performance, path !== "packet-copy", key);
+  const number = (value) => typeof value === "number";
+  const encoderTime = (value) =>
+    path === "packet-copy" ? value === null : number(value);
+  const timing = {
+    setupMs: number,
+    encoderProbeMs: encoderTime,
+    encoderOpenMs: encoderTime,
+    loudnessMs: number,
+    firstFrameMs: number,
+    finishMs: number,
+    steadyFps: (value) => value === null || number(value),
+  };
+  for (const [key, check] of Object.entries(timing))
+    assert.ok(check(performance[key]), `${key}: ${performance[key]}`);
   if (path === "readback") assert.equal(performance.gpuEncodeBudget, null);
   if (path === "gpu-resident")
     assert.notEqual(performance.gpuEncodeBudget, null);
