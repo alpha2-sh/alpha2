@@ -3,8 +3,8 @@ use alpha2_model::Rgba;
 use std::io::Write as _;
 
 use super::hostile::{
-    j2k_codestream, jbig2_page, pdf_coded_image, pdf_content_bomb, pdf_forms, pdf_image_draws,
-    pdf_one_page, pdf_self_invoking_form, pdf_stream as stream, pdf_type3_glyphs,
+    j2k_codestream, jbig2_page, pdf_coded_image, pdf_content_bomb, pdf_far_path, pdf_forms,
+    pdf_image_draws, pdf_one_page, pdf_self_invoking_form, pdf_stream as stream, pdf_type3_glyphs,
 };
 use super::*;
 
@@ -273,6 +273,19 @@ fn an_image_whose_codestream_does_not_parse_is_reported_unreadable() {
         "{:?}",
         source.report().diagnostics
     );
+}
+
+#[test]
+fn a_probe_refuses_a_first_page_that_opening_refuses() {
+    let file = pdf_far_path();
+    let probed = Registry::with_defaults().probe(&file).expect("claimed");
+    let opened = open(file.into(), &pdf_source(1, WHITE));
+    match (probed, opened) {
+        (Err(ExtensionError::Budget(probed)), Err(ExtensionError::Budget(opened))) => {
+            assert_eq!(probed, opened);
+        }
+        (probed, opened) => panic!("probe {:?}, open {:?}", probed.err(), opened.err()),
+    }
 }
 
 #[test]

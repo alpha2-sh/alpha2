@@ -187,6 +187,7 @@ All notable changes to this project are documented in this file.
 - A PDF image is sized from its own data as its decoder sizes it: JPEG 2000 from the codestream,
   JBIG2 from the embedded page, CCITT from `/Columns`, so a small dictionary size no longer hides a
   multi-gigabyte decode. A CCITT image without a row count is refused.
+- A PDF is probed by opening its first page, so import refuses a page that opening would refuse.
 - An OpenEXR file of B44 blocks whose deltas wrap below zero no longer panics the release build:
   the exr decoder is built with the wrapping arithmetic of the reference implementation.
 

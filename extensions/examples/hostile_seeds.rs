@@ -83,8 +83,8 @@ fn svg_seeds() -> Seeds {
 #[cfg(feature = "pdf")]
 fn pdf_seeds() -> Seeds {
     use hostile::{
-        j2k_codestream, jbig2_page, pdf_coded_image, pdf_content_bomb, pdf_forms, pdf_image_draws,
-        pdf_self_invoking_form, pdf_type3_glyphs,
+        j2k_codestream, jbig2_page, pdf_coded_image, pdf_content_bomb, pdf_far_path, pdf_forms,
+        pdf_image_draws, pdf_self_invoking_form, pdf_type3_glyphs,
     };
     vec![
         ("forms-1000.pdf", pdf_forms(1000, 3)),
@@ -93,6 +93,7 @@ fn pdf_seeds() -> Seeds {
         ("image-draws.pdf", pdf_image_draws(1000, false, true, 1000)),
         ("type3-glyphs.pdf", pdf_type3_glyphs(1000, 10_000)),
         ("content-bomb.pdf", pdf_content_bomb(250 << 20)),
+        ("far-path.pdf", pdf_far_path()),
         (
             "jpx-60000.pdf",
             pdf_coded_image(
