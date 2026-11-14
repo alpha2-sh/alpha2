@@ -501,6 +501,10 @@ All notable changes to this project are documented in this file.
   shared (the adapter report says why), and an encode family without a lock, or a device without
   `videoMaintenance1`, shares without hardware encode. `FFmpeg` is told timeline semaphores are on
   only when the device enabled them, and the device is not shared otherwise.
+- A GPU request on Linux tries every hardware adapter of the Vulkan and GL backends before any
+  software one, and moves on to GL when a listed Vulkan adapter cannot open a device; before,
+  the first backend that listed any adapter was the only one tried. When every adapter fails, the
+  error names each attempt.
 
 ## [0.6.0] - 2026-11-08
 
