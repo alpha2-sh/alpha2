@@ -467,7 +467,10 @@ mod tests {
 
     #[test]
     fn a_deadline_ends_a_busy_process_once_whatever_runs() {
-        let terminations = leaked();
+        // Its own idle hook: the shared one is asserted on by tests that run beside it.
+        fn ignore_idle(_: Termination) {}
+        let terminations: &'static Terminations =
+            Box::leak(Box::new(Terminations::new(ignore_idle, record_deadline)));
         let _request = terminations.begin_request("stuck");
         assert!(!terminations.request(sigterm()));
         terminations.start_deadline(sigterm(), Duration::from_millis(50));
