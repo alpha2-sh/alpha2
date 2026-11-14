@@ -1434,6 +1434,167 @@ test("webcodecs decoder falls back to software once", async () => {
   assert.equal(decoder.softwareFallback, "EncodingError: Decoding error.");
 });
 
+function failingDecoderClass(fails, configured) {
+  return class extends EventTarget {
+    decodeQueueSize = 0;
+    state = "configured";
+    #output;
+    #error;
+    #software = false;
+    #pending = [];
+    constructor({ output, error }) {
+      super();
+      this.#output = output;
+      this.#error = error;
+    }
+    configure(config) {
+      configured.push(config.hardwareAcceleration);
+      this.#software = config.hardwareAcceleration === "prefer-software";
+    }
+    decode(chunk) {
+      if (this.#software ? fails.software : fails.hardware) {
+        this.state = "closed";
+        queueMicrotask(() =>
+          this.#error(new DOMException("Decoding error.", "EncodingError")),
+        );
+        return;
+      }
+      this.decodeQueueSize += 1;
+      this.#pending.push(
+        Promise.resolve().then(() => {
+          this.decodeQueueSize -= 1;
+          this.#output(new FakeVideoFrame(chunk.timestamp));
+          this.dispatchEvent(new Event("dequeue"));
+        }),
+      );
+    }
+    async flush() {
+      await Promise.all(this.#pending.splice(0));
+    }
+    close() {
+      this.state = "closed";
+    }
+  };
+}
+
+const keyframeSource = {
+  config: { codec: "fake" },
+  chunksFrom: (ticks) => {
+    const first = Number((ticks * 30n) / 120_000n);
+    return (async function* chunks() {
+      for (let index = first; index < 30; index += 1)
+        yield { timestamp: index * 33_333, type: "key" };
+    })();
+  },
+};
+
+async function decodedAt(decoder, index, reason = "prefetch") {
+  const answer = await decoder.refill({
+    sourceId: "source",
+    mediaTimeTicks: BigInt(index) * 4_000n,
+    reason,
+    generation: 1,
+  });
+  answer.frame.close();
+}
+
+test("a webcodecs decoder that failed in software too starts from the browser's choice again", async () => {
+  const original = globalThis.VideoDecoder;
+  const fails = { hardware: true, software: true };
+  const configured = [];
+  globalThis.VideoDecoder = failingDecoderClass(fails, configured);
+  const decoder = new WebCodecsVideoDecoder("source", keyframeSource);
+  try {
+    await assert.rejects(decodedAt(decoder, 3), { code: "DECODE_UNAVAILABLE" });
+    assert.deepEqual(configured, [undefined, "prefer-software"]);
+    fails.hardware = false;
+    configured.length = 0;
+    await decodedAt(decoder, 4);
+    assert.deepEqual(configured, [undefined]);
+    assert.equal(decoder.softwareFallback, undefined);
+  } finally {
+    decoder.close();
+    globalThis.VideoDecoder = original;
+  }
+});
+
+test("a webcodecs decoder that fell back to software returns to hardware on a device recovery", async () => {
+  const original = globalThis.VideoDecoder;
+  const fails = { hardware: true, software: false };
+  const configured = [];
+  globalThis.VideoDecoder = failingDecoderClass(fails, configured);
+  const decoder = new WebCodecsVideoDecoder("source", keyframeSource);
+  try {
+    await decodedAt(decoder, 3);
+    fails.hardware = false;
+    await decodedAt(decoder, 4);
+    assert.deepEqual(configured, [undefined, "prefer-software"]);
+    await decodedAt(decoder, 5, "device-recovery");
+    assert.deepEqual(configured, [undefined, "prefer-software", undefined]);
+    assert.equal(decoder.softwareFallback, undefined);
+  } finally {
+    decoder.close();
+    globalThis.VideoDecoder = original;
+  }
+});
+
+test("a cursor whose refill fails in its decoder is closed and the next refill opens a new one", async () => {
+  const opened = [];
+  const failures = [
+    new DOMException("Decoding error.", "EncodingError"),
+    new DOMException("Aborted", "AbortError"),
+  ];
+  const open = () => {
+    const decoder = {
+      closed: false,
+      failure: failures.shift(),
+      async refill(request) {
+        if (decoder.failure !== undefined) {
+          const failure = decoder.failure;
+          decoder.failure = undefined;
+          throw failure;
+        }
+        return {
+          sourceId: request.sourceId,
+          requestedTimeTicks: request.mediaTimeTicks,
+          decodedTimeTicks: request.mediaTimeTicks,
+          generation: request.generation,
+          frame: new FakeVideoFrame(0),
+        };
+      },
+      async flush() {},
+      close() {
+        decoder.closed = true;
+      },
+    };
+    opened.push(decoder);
+    return decoder;
+  };
+  const coordinator = new DecoderRefillCoordinator(open, async (frame) =>
+    frame.frame.close(),
+  );
+  const request = {
+    sourceId: "source",
+    mediaTimeTicks: 0n,
+    reason: "prefetch",
+    generation: 0,
+  };
+  try {
+    await assert.rejects(coordinator.refill(request), {
+      name: "EncodingError",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(opened[0].closed, true);
+    await assert.rejects(coordinator.refill(request), { name: "AbortError" });
+    assert.equal(opened.length, 2, "a decoder failure reopens the cursor");
+    await coordinator.refill(request);
+    assert.equal(opened.length, 2, "an abort keeps the cursor");
+    assert.equal(opened[1].closed, false);
+  } finally {
+    coordinator.close();
+  }
+});
+
 test("a stream no decoder gives a frame of is refused as one this browser cannot decode", async () => {
   const original = globalThis.VideoDecoder;
   const configured = [];

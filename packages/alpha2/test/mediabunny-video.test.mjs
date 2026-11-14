@@ -470,6 +470,56 @@ test("a decoder that fails in software too rejects the request", async () => {
   }
 });
 
+test("a decoder that failed in software too starts from the browser's choice again", async () => {
+  hardware.fails = true;
+  hardware.software = true;
+  hardware.configs = [];
+  const video = await open();
+  try {
+    await assert.rejects(presented(video, 40), { code: "DECODE_UNAVAILABLE" });
+    hardware.fails = false;
+    hardware.software = false;
+    hardware.configs = [];
+    assert.equal(await presented(video, 40), 40);
+    assert.equal(hardware.configs[0], "no-preference");
+    assert.equal(video.softwareFallback, undefined);
+  } finally {
+    video.close();
+    hardware.fails = false;
+    hardware.software = false;
+  }
+  assert.equal(decoder.surfacesHeld, 0);
+});
+
+test("a decoder that fell back to software returns to hardware on a device recovery", async () => {
+  hardware.fails = true;
+  hardware.configs = [];
+  const video = await open();
+  try {
+    assert.equal(await presented(video, 40), 40);
+    hardware.fails = false;
+    hardware.configs = [];
+    assert.equal(await presented(video, 41), 41);
+    assert.ok(hardware.configs.every((c) => c === "prefer-software"));
+    hardware.configs = [];
+    const recovered = await video.refill({
+      sourceId: "clip",
+      mediaTimeTicks: 42n * TICKS_PER_FRAME,
+      reason: "device-recovery",
+      generation: 0,
+    });
+    assert.equal(recovered.frame.index, 42);
+    recovered.frame.close();
+    // The software decoder may still take the packet it had read ahead.
+    assert.equal(hardware.configs.at(-1), "no-preference");
+    assert.equal(video.softwareFallback, undefined);
+  } finally {
+    video.close();
+    hardware.fails = false;
+  }
+  assert.equal(decoder.surfacesHeld, 0);
+});
+
 async function presentedAtTicks(video, ticks) {
   const decoded = await video.refill({
     sourceId: "clip",

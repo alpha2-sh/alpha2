@@ -261,6 +261,11 @@ All notable changes to this project are documented in this file.
   `ENCODE_STALLED` (stage `finalize-stalled`) when no packet or write arrives for the stall time,
   and refuses to commit once `abort` was called. A cancel that lands after `finish` resolved no
   longer fails a finished export or offline audio render.
+- Browser video decoders no longer stay in software for good: after the software retry fails
+  too, the next request starts from the browser's own choice again, a `device-recovery` request
+  returns a decoder that fell back to its original acceleration, and `DecoderRefillCoordinator`
+  closes a cursor whose refill failed in its decoder and opens a new one on the next request. One
+  damaged packet no longer fails every later read of that clip.
 
 ## [0.6.0] - 2026-11-08
 

@@ -130,6 +130,7 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
   readonly #input: Input;
   readonly #track: InputVideoTrack;
   #sink: VideoSampleSink;
+  readonly #openedAcceleration: HardwareAcceleration;
   #hardwareAcceleration: HardwareAcceleration;
   #softwareFallback?: string;
   #decodedAny = false;
@@ -173,6 +174,7 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
     this.#sourceId = sourceId;
     this.#input = input;
     this.#track = track;
+    this.#openedAcceleration = hardwareAcceleration;
     this.#hardwareAcceleration = hardwareAcceleration;
     this.#sink = new VideoSampleSink(track, { hardwareAcceleration });
     this.#packets = packets;
@@ -296,12 +298,20 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
   /**
    * The frame presented at the request's time. A decoder failure (Chromium's VA-API decoders report
    * `EncodingError`) retries once with a software decoder; if that fails, rejects with
-   * {@link DecodeUnavailableError} when no frame was ever decoded, else with the failure.
+   * {@link DecodeUnavailableError} when no frame was ever decoded, else with the failure, and the
+   * next request decodes with the acceleration the decoder was opened with. A `device-recovery`
+   * request also returns a decoder that fell back to that acceleration.
    */
   async refill(
     request: DecoderRefillRequest,
     signal?: AbortSignal,
   ): Promise<BrowserDecodedFrame> {
+    if (
+      request.reason === "device-recovery" &&
+      !this.#closed &&
+      this.#hardwareAcceleration !== this.#openedAcceleration
+    )
+      await this.#useAcceleration(this.#openedAcceleration);
     try {
       const frame = await withSoftwareFallback(
         () => this.#refill(request, signal),
@@ -310,16 +320,10 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
           signal?.aborted === true
           ? undefined
           : async (cause) => {
-              await this.#resetIterator();
-              this.#cache.clear();
-              this.#reverse.clear();
-              this.#backwardSteps = 0;
-              this.#hardwareAcceleration = "prefer-software";
+              await this.#useAcceleration("prefer-software");
               this.#softwareFallback = `${cause.name}: ${cause.message}`;
-              this.#sink = new VideoSampleSink(this.#track, {
-                hardwareAcceleration: "prefer-software",
-              });
             },
+        () => this.#useAcceleration(this.#openedAcceleration),
       );
       this.#decodedAny = true;
       return frame;
@@ -333,6 +337,19 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
         false,
       );
     }
+  }
+
+  async #useAcceleration(acceleration: HardwareAcceleration): Promise<void> {
+    await this.#resetIterator();
+    this.#cache.clear();
+    this.#reverse.clear();
+    this.#backwardSteps = 0;
+    this.#hardwareAcceleration = acceleration;
+    if (acceleration === this.#openedAcceleration)
+      this.#softwareFallback = undefined;
+    this.#sink = new VideoSampleSink(this.#track, {
+      hardwareAcceleration: acceleration,
+    });
   }
 
   async #refill(

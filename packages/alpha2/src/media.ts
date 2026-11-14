@@ -744,6 +744,7 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
   #readyBytes = 0;
   #activeTargetTicks?: bigint;
   #reverseCacheHits = 0;
+  readonly #openedSoftware: boolean;
   #software: boolean;
   #softwareFallback?: string;
   #decodedAny = false;
@@ -786,7 +787,9 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
       source.config.description,
     );
     this.#sitingFromKeyChunk = source.config.description === undefined;
-    this.#software = source.config.hardwareAcceleration === "prefer-software";
+    this.#openedSoftware =
+      source.config.hardwareAcceleration === "prefer-software";
+    this.#software = this.#openedSoftware;
   }
 
   /** Why decoding moved to software after the browser's first pick failed, if it did. */
@@ -818,7 +821,9 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
 
   /**
    * A decoder failure retries once from the keyframe with `"prefer-software"`. If that fails too,
-   * rejects with `DecodeUnavailableError` when no frame was ever decoded, else with the failure.
+   * rejects with `DecodeUnavailableError` when no frame was ever decoded, else with the failure,
+   * and the next request decodes with the configured acceleration. A `device-recovery` request
+   * also returns a decoder that fell back to that acceleration.
    */
   async refill(
     request: DecoderRefillRequest,
@@ -827,18 +832,25 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
     if (request.sourceId !== this.#sourceId) {
       throw new Error(`decoder source mismatch: ${request.sourceId}`);
     }
+    if (
+      request.reason === "device-recovery" &&
+      this.#software !== this.#openedSoftware
+    )
+      this.#useSoftware(this.#openedSoftware);
     try {
       const frame = await withSoftwareFallback(
         () => this.#refillOnce(request, signal),
         this.#software || signal.aborted
           ? undefined
           : (cause) => {
-              this.#software = true;
+              this.#useSoftware(true);
               this.#softwareFallback = `${cause.name}: ${cause.message}`;
-              this.#resetCursor();
-              this.#cache.clear();
               return Promise.resolve();
             },
+        () => {
+          this.#useSoftware(this.#openedSoftware);
+          return Promise.resolve();
+        },
       );
       this.#decodedAny = true;
       return frame;
@@ -851,6 +863,13 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
         false,
       );
     }
+  }
+
+  #useSoftware(software: boolean): void {
+    this.#software = software;
+    if (software === this.#openedSoftware) this.#softwareFallback = undefined;
+    this.#resetCursor();
+    this.#cache.clear();
   }
 
   async #refillOnce(
@@ -1294,7 +1313,18 @@ export class DecoderRefillCoordinator {
         request.consumerId ?? "",
         software ? "software" : "default",
       );
-      const frame = await decoder.refill(request, this.#controller.signal);
+      let frame: BrowserDecodedFrame;
+      try {
+        frame = await decoder.refill(request, this.#controller.signal);
+      } catch (error) {
+        // A failed decoder is not kept, as a failed open is not; aborts and stalls keep it.
+        if (isDecoderFailure(error) || error instanceof DecodeUnavailableError)
+          this.#forget(
+            request.sourceId,
+            cursorKey(request.consumerId ?? "", software),
+          );
+        throw error;
+      }
       if (frame.generation !== this.#generation) {
         frame.frame.close();
         return;
@@ -1316,8 +1346,7 @@ export class DecoderRefillCoordinator {
       cursors = new Map();
       this.#cursors.set(sourceId, cursors);
     }
-    const consumerId =
-      decode === "software" ? `${consumer}\u0000software` : consumer;
+    const consumerId = cursorKey(consumer, decode === "software");
     let decoder = cursors.get(consumerId);
     if (decoder === undefined) {
       decoder = Promise.resolve()
@@ -1343,6 +1372,17 @@ export class DecoderRefillCoordinator {
       );
     }
     return decoder;
+  }
+
+  #forget(sourceId: string, consumerId: string): void {
+    const cursors = this.#cursors.get(sourceId);
+    const decoder = cursors?.get(consumerId);
+    if (decoder === undefined) return;
+    cursors?.delete(consumerId);
+    decoder.then(
+      (closed) => closed.close(),
+      () => {},
+    );
   }
 
   async #acquire(): Promise<void> {
@@ -1371,6 +1411,10 @@ export class DecoderRefillCoordinator {
         );
     this.#cursors.clear();
   }
+}
+
+function cursorKey(consumer: string, software: boolean): string {
+  return software ? `${consumer}\u0000software` : consumer;
 }
 
 function softwareRefusal(sourceId: string, error: unknown): unknown {
@@ -1548,7 +1592,12 @@ import { activeTimeout } from "./active-clock.js";
 import { decoderStalled } from "./decoder-stall.js";
 import { type ChromaSiting, chromaSitingForStream } from "./chroma-siting.js";
 import {
+  DecodeUnavailableError,
   decodeRefusalMessage,
   PlanarDecodeUnavailableError,
 } from "./hdr-frames.js";
-import { decodeFailureOf, withSoftwareFallback } from "./decoder-fallback.js";
+import {
+  decodeFailureOf,
+  isDecoderFailure,
+  withSoftwareFallback,
+} from "./decoder-fallback.js";
