@@ -113,6 +113,13 @@ pedantic = { level = "warn", priority = -1 }
 [profile.release]
 overflow-checks = true
 
+# exr's B44 decoder is a port of C code that relies on wrapping arithmetic on crafted blocks.
+[profile.release.package.exr]
+overflow-checks = false
+
+[profile.dev.package.exr]
+overflow-checks = false
+
 # Every host process hashes its own binary at start; unoptimized, that takes seconds.
 [profile.dev.package.sha2]
 opt-level = 3

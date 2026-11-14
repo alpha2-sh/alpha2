@@ -206,3 +206,10 @@ path = "fuzz_targets/edit_apply.rs"
 test = false
 doc = false
 bench = false
+
+# exr's B44 decoder is a port of C code that relies on wrapping arithmetic on crafted blocks.
+[profile.release.package.exr]
+overflow-checks = false
+
+[profile.dev.package.exr]
+overflow-checks = false

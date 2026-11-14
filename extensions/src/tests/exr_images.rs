@@ -738,3 +738,25 @@ fn exr_scan_lines_with_many_extra_channels_open_with_the_same_pixels() {
     );
     assert_eq!(exr_frame(file, None), reference);
 }
+
+#[test]
+fn a_b44_block_whose_deltas_wrap_decodes_without_a_panic() {
+    use crate::VisualProvider as _;
+    let bytes: Arc<[u8]> = super::hostile::exr_wrapping_b44().into();
+    let probed = crate::ExrProvider.probe(&bytes).expect("claimed");
+    assert!(
+        matches!(&probed, Ok(_) | Err(ExtensionError::Malformed(_))),
+        "{:?}",
+        probed.err()
+    );
+    let opened = crate::ExrProvider.open(
+        Arc::clone(&bytes),
+        &ProviderSource::Exr { primaries: None },
+        &NoResources,
+    );
+    assert!(
+        matches!(&opened, Ok(_) | Err(ExtensionError::Malformed(_))),
+        "{:?}",
+        opened.err()
+    );
+}

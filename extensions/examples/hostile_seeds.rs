@@ -127,7 +127,7 @@ fn pdf_seeds() -> Seeds {
 
 #[cfg(feature = "exr")]
 fn exr_seeds() -> Seeds {
-    use hostile::{ExrChunks, ExrPart, exr_file};
+    use hostile::{ExrChunks, ExrPart, exr_file, exr_wrapping_b44};
     let tile = |extra, chunks| ExrPart {
         width: 3840,
         height: 2160,
@@ -151,6 +151,7 @@ fn exr_seeds() -> Seeds {
         ),
         ("lines-40.exr", exr_file(&[lines])),
         ("parts.exr", exr_file(&[lines, tile(400, ExrChunks::Empty)])),
+        ("wrapping-b44.exr", exr_wrapping_b44()),
     ]
 }
 
