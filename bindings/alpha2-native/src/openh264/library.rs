@@ -37,54 +37,59 @@ pub const OPENH264_INSTALL_COMMAND: &str =
 /// and both are the `.8` ABI.
 const COMPATIBLE_API: &[(u32, u32)] = &[(2, 6), (2, 7)];
 
-/// This target's manifest entry: cached library name, SHA-256, and system loader names.
-struct PinnedLibrary {
-    target: &'static str,
-    library: &'static str,
-    sha256: &'static str,
-    system_candidates: &'static [&'static str],
+/// A target's manifest entry: cached library name, SHA-256, and system loader names.
+#[derive(Clone, Copy)]
+pub(super) struct PinnedLibrary {
+    pub(super) target: &'static str,
+    pub(super) library: &'static str,
+    pub(super) sha256: &'static str,
+    pub(super) system_candidates: &'static [&'static str],
 }
 
 /// Where macOS packages put the `.8` library (Homebrew on Apple silicon and Intel,
 /// `MacPorts`). Absolute paths only.
-#[cfg_attr(
-    not(all(target_os = "macos", target_arch = "aarch64")),
-    allow(dead_code)
-)]
 pub(crate) const MACOS_SYSTEM_CANDIDATES: &[&str] = &[
     "/opt/homebrew/lib/libopenh264.8.dylib",
     "/usr/local/lib/libopenh264.8.dylib",
     "/opt/local/lib/libopenh264.8.dylib",
 ];
 
+/// Every target of `release/openh264/manifest.toml`, in its order.
+pub(super) const PINS: [PinnedLibrary; 4] = [
+    PinnedLibrary {
+        target: "linux-x64",
+        library: "libopenh264-2.7.0-linux64.8.so",
+        sha256: "1522f873a482923c5ec018a4415e1866898197528828c50f90fd300c94620df3",
+        system_candidates: &["libopenh264.so.8"],
+    },
+    PinnedLibrary {
+        target: "linux-arm64",
+        library: "libopenh264-2.7.0-linux-arm64.8.so",
+        sha256: "9ac664b0154fd0868491c2a904397b8a05779874c0603b8b1f16ad15de1ffd82",
+        system_candidates: &["libopenh264.so.8"],
+    },
+    PinnedLibrary {
+        target: "macos-arm64",
+        library: "libopenh264-2.7.0-mac-arm64.dylib",
+        sha256: "2e1ae3cd10c08328ca03a1f304fd2a1a2a7e5658c6d5a8582101a963f7995ef0",
+        system_candidates: MACOS_SYSTEM_CANDIDATES,
+    },
+    PinnedLibrary {
+        target: "win-x64",
+        library: "openh264-2.7.0-win64.dll",
+        sha256: "0ef5e7f3b38753b15c13afa0418d4d7805fa228e6adfd3e425bbf758cff1c288",
+        system_candidates: &[],
+    },
+];
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const PINNED: Option<PinnedLibrary> = Some(PinnedLibrary {
-    target: "linux-x64",
-    library: "libopenh264-2.7.0-linux64.8.so",
-    sha256: "1522f873a482923c5ec018a4415e1866898197528828c50f90fd300c94620df3",
-    system_candidates: &["libopenh264.so.8"],
-});
+const PINNED: Option<PinnedLibrary> = Some(PINS[0]);
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-const PINNED: Option<PinnedLibrary> = Some(PinnedLibrary {
-    target: "linux-arm64",
-    library: "libopenh264-2.7.0-linux-arm64.8.so",
-    sha256: "9ac664b0154fd0868491c2a904397b8a05779874c0603b8b1f16ad15de1ffd82",
-    system_candidates: &["libopenh264.so.8"],
-});
+const PINNED: Option<PinnedLibrary> = Some(PINS[1]);
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const PINNED: Option<PinnedLibrary> = Some(PinnedLibrary {
-    target: "macos-arm64",
-    library: "libopenh264-2.7.0-mac-arm64.dylib",
-    sha256: "2e1ae3cd10c08328ca03a1f304fd2a1a2a7e5658c6d5a8582101a963f7995ef0",
-    system_candidates: MACOS_SYSTEM_CANDIDATES,
-});
+const PINNED: Option<PinnedLibrary> = Some(PINS[2]);
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-const PINNED: Option<PinnedLibrary> = Some(PinnedLibrary {
-    target: "win-x64",
-    library: "openh264-2.7.0-win64.dll",
-    sha256: "0ef5e7f3b38753b15c13afa0418d4d7805fa228e6adfd3e425bbf758cff1c288",
-    system_candidates: &[],
-});
+const PINNED: Option<PinnedLibrary> = Some(PINS[3]);
 #[cfg(not(any(
     all(
         target_os = "linux",
