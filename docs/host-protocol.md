@@ -102,7 +102,7 @@ Starting a host costs a process, a GPU device and its probes, so a client keeps 
 - Stop sending to a host when it reports `draining`, in a `state` message or a response's `hostState`, or when it exits. Close its standard input once it runs nothing.
 - Send a request answered `HOST_RETIRING` again, to another host.
 - A host resolves a relative path against the directory it started in, so send every path absolute: resolve a relative one against the client's working directory when the call is made. A plugin manifest given as an `https:` or `file:` URL is sent as it is.
-- A request whose host exits before answering fails with what the exit says (`HOST_EXITED`, `HOST_OOM_KILLED`, ...) and is never sent again: an export writes files, and only its caller knows whether running it again is safe.
+- A request written in full whose host exits before answering fails with what the exit says (`HOST_EXITED`, `HOST_OOM_KILLED`, ...) and is never sent again: an export writes files, and only its caller knows whether running it again is safe. A request whose write had not completed when its host exited was not read, so it never ran: send it to another host, as `HOST_RETIRING` is, within the same bound of three resends, after which it fails with the last exit's error. "Written in full" means the operating system took every byte of the frame; a host can still die before reading bytes the pipe holds, and that request fails as above.
 
 Everything else stays as it is for one process: the start timeout, the classification of an exit, and cancelling. The client has no memory checks, health polls or idle timers of its own.
 

@@ -2448,6 +2448,72 @@ def assert_hosts_ended(pids: Path) -> None:
         wait_until(lambda pid=pid: pid_exited(pid))
 
 
+def ended_unseen(pid: int) -> None:
+    """Waits until ``pid`` has ended; on Linux only until it is a zombie whose threads are gone, so
+    the client's reaper may not have seen the exit when the next request is made."""
+    if sys.platform != "linux":
+        wait_until(lambda: pid_exited(pid))
+        return
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            ended = stat.split(") ")[1][0] == "Z" and len(os.listdir(f"/proc/{pid}/task")) == 1
+        except (OSError, IndexError):
+            return
+        if ended:
+            return
+        assert time.monotonic() < deadline, f"host {pid} did not end"
+        time.sleep(0.002)
+
+
+def run_dead_idle_host(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    for index, end in enumerate(scenario["given"]["ends"]):
+        log = tmp_path / f"log-{index}"
+        exits = end == "exits after answering"
+        answer = 'send(request, ok=True, result={"pid": os.getpid()})'
+        if exits:
+            answer += "\n        time.sleep(0.05)\n        os._exit(0)"
+        client = HostClient(host_path=fake_host(tmp_path / str(index), pooled_host(log, answer)))
+        first = client.export(**export_args("out.mp4"))["pid"]
+        for _ in range(scenario["given"]["requestsAfterEach"]):
+            if not exits:
+                os.kill(first, signal.SIGKILL if sys.platform != "win32" else signal.SIGTERM)
+            if end != "killed":
+                ended_unseen(first)
+            try:
+                following = client.export(**export_args("out.mp4"))["pid"]
+            except Alpha2HostError as error:
+                assert end == "killed" and error.code == "HOST_EXITED", error.message
+                first = client.export(**export_args("out.mp4"))["pid"]
+                continue
+            assert following != first
+            served = [line for line in lines_in(log) if line == f"request {first}"]
+            assert len(served) == scenario["expect"]["firstHostRequests"]
+            first = following
+
+
+def reading_host(log: Path) -> str:
+    """Reports ready, then exits once the first bytes of a request arrive."""
+    return f"""
+    record({str(log)!r}, "start " + str(os.getpid()))
+    begin()
+    state()
+    sys.stdin.buffer.read(8)
+    os._exit(1)
+    """
+
+
+def run_dies_reading(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, reading_host(log), ready=False))
+    project = {**project_document(), "name": "x" * scenario["given"]["projectNameBytes"]}
+    with pytest.raises(Alpha2HostError) as caught:
+        client.export(**export_args("out.mp4", project=project))
+    assert caught.value.code == scenario["expect"]["code"], caught.value.message
+    assert len(starts_in(log)) == scenario["expect"]["hosts"]
+
+
 def run_foreign_host(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
     given, expect = scenario["given"], scenario["expect"]
     pids = tmp_path / "pids"
@@ -2555,6 +2621,8 @@ SCENARIO_DRIVERS: dict[str, Callable[[dict[str, Any], Path, FakeHost], None]] = 
     "abandon": run_abandon,
     "unsendable-emit": run_unsendable_emit,
     "foreign-host": run_foreign_host,
+    "dead-idle-host": run_dead_idle_host,
+    "dies-reading": run_dies_reading,
     "host-version": run_host_version,
     "start-timeout": run_start_timeout,
 }

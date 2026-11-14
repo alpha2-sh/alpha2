@@ -99,8 +99,17 @@ _HOST_SHUTDOWN_TIMEOUT = 5.0
 
 _CANCEL_TIMEOUT = 5.0
 
-# A host draining at each try would otherwise take the request from host to host forever.
+# A host draining or dying at each try would otherwise take the request from host to host forever.
 _MAX_RESENDS = 3
+
+
+class _Unsent(Exception):
+    """The host exited before the request was written in full, so it never ran there."""
+
+    def __init__(self, error: Alpha2HostError) -> None:
+        super().__init__(error.message)
+        self.error = error
+
 
 _POLL_SECONDS = 0.05
 
@@ -1668,6 +1677,10 @@ class _Pool:
                 return self._run(
                     host, fresh, events, framed, request_id, modes, cancel, on_progress, extraction
                 )
+            except _Unsent as unsent:
+                if resends >= _MAX_RESENDS:
+                    raise unsent.error from None
+                resends += 1
             except Alpha2HostError as error:
                 if error.code != "HOST_RETIRING" or resends >= _MAX_RESENDS:
                     raise
@@ -1926,7 +1939,10 @@ class _Pool:
         assert exit_status is not None
         code = exit_status[0]
         tail = host.stderr_since(stderr_mark)
-        raise _exit_error(code, signal_name, tail, oom_kills_before, phase_now())
+        error = _exit_error(code, signal_name, tail, oom_kills_before, phase_now())
+        if sent and not host.wrote(sent):
+            raise _Unsent(error)
+        raise error
 
     def _cancel(
         self,

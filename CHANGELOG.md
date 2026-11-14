@@ -39,9 +39,6 @@ All notable changes to this project are documented in this file.
   checks each native archive by running it before anything is published: the feature list, a
   capability report and a CPU-renderer export from the unpacked archive on all four targets, and
   the install journeys against the pinned wheels and Node package.
-
-### Changed
-
 - Both clients run only an `alpha2-host` of their own release. A 0.5.x host (its protocol 1 ready
   line) or a host whose `ready` state names another release in the new `details.hostVersion`, or
   none, is ended at once and the request fails with `HOST_VERSION_MISMATCH` (not retried), instead
@@ -145,6 +142,9 @@ All notable changes to this project are documented in this file.
 - A text raster larger than the largest frame (67,108,864 pixels) or whose planes would take over
   1 GiB is refused as too large before anything is allocated. Before, only each side was limited,
   and the browser module aborted on the allocation.
+- Both clients send a request to another host when the host they wrote it to exited before taking
+  all of it (a host that ended while idle), instead of failing it with `HOST_EXITED`; such resends
+  share the bound of three that `HOST_RETIRING` resends have.
 - The `alpha2` Python wheels carry `THIRD_PARTY_NOTICES.md` and the license texts of the Rust
   crates compiled into them; the `alpha2-host` wheels list every license file of their archive and
   state `License-Expression`. The Android library and the Swift package carry both notice files.

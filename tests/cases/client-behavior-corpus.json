@@ -204,5 +204,24 @@
       "code": "HOST_START_TIMEOUT",
       "stderrContains": ["a library's diagnostic line", "held before ready"]
     }
+  },
+  {
+    "id": "idle-host-killed-then-request",
+    "kind": "dead-idle-host",
+    "given": {
+      "ends": ["exits after answering", "killed, then gone", "killed"],
+      "requestsAfterEach": 3
+    },
+    "expect": {
+      "afterGone": "ok on another host",
+      "afterKill": "ok, or HOST_EXITED",
+      "firstHostRequests": 1
+    }
+  },
+  {
+    "id": "host-dies-reading-every-frame",
+    "kind": "dies-reading",
+    "given": { "projectNameBytes": 1048576 },
+    "expect": { "code": "HOST_EXITED", "hosts": 4 }
   }
 ]

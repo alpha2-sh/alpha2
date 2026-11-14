@@ -2492,8 +2492,11 @@ function environmentKey(environment: NodeJS.ProcessEnv): string {
   return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 }
 
-/** Times a request answered `HOST_RETIRING` is sent to another host before it fails. */
-const MAX_RETIRING_RESENDS = 3;
+/**
+ * Times a request answered `HOST_RETIRING`, or whose host exited before it was written in full, is
+ * sent to another host before it fails.
+ */
+const MAX_RESENDS = 3;
 
 /** The release a host must name in its `ready` state; undefined if package.json is unreadable. */
 const CLIENT_VERSION = packageVersion();
@@ -2516,9 +2519,13 @@ interface HostAnswer {
   readonly attachments: readonly Attachment[];
 }
 
+/**
+ * `unsent` with an `error`: the host exited before the request was written in full, so it never
+ * ran; the error is what the exit says, for when the resends run out.
+ */
 type RunOutcome =
   | { readonly kind: "result"; readonly answer: HostAnswer }
-  | { readonly kind: "unsent" }
+  | { readonly kind: "unsent"; readonly error?: Error }
   | { readonly kind: "retiring"; readonly error: Alpha2HostError };
 
 /** Builds a request's error once the host's stderr for it is complete. */
@@ -2580,8 +2587,8 @@ class HostPool {
         host.run(frame, requestId, signal, onProgress, extraction),
       );
       if (outcome.kind === "result") return outcome.answer;
-      if (outcome.kind === "retiring") {
-        if (resends === MAX_RETIRING_RESENDS) throw outcome.error;
+      if (outcome.error !== undefined) {
+        if (resends === MAX_RESENDS) throw outcome.error;
         resends += 1;
       }
     }
@@ -2974,7 +2981,14 @@ class Host {
             if (answer !== undefined) return fromAnswer(answer);
             const tail = stderrTail();
             if (failure !== undefined) return failure(tail, phase());
-            return exitError(code, exitSignal, tail, oomKillsBefore, phase());
+            const error = exitError(
+              code,
+              exitSignal,
+              tail,
+              oomKillsBefore,
+              phase(),
+            );
+            return written ? error : { kind: "unsent", error };
           }),
       };
       signal?.addEventListener("abort", abort, { once: true });

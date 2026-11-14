@@ -10,6 +10,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -2733,8 +2734,6 @@ test("a host that exits while idle is replaced by a new one", async () => {
   });
   const first = await exported(client);
   await waitUntil(() => !alive(first.pid), "the host to exit");
-  // Windows reports the process gone before Node delivers its exit event to the client.
-  await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
   const second = await exported(client);
   assert.notEqual(second.pid, first.pid);
 });
@@ -3083,7 +3082,108 @@ async function assertHostsEnded(pids) {
     await waitUntil(() => !alive(pid), `host ${pid} ended`);
 }
 
+/** Records its pid and each request; exits 50 ms after an answer when `exits` is set. */
+const MORTAL_HOST = (log, exits) =>
+  POOLED_HOST(log, exits ? "setTimeout(() => process.exit(0), 50);" : "");
+
+/** Reports ready, then exits when the first bytes of a request arrive. */
+const READING_HOST = (log) => `import { appendFileSync } from "node:fs";
+import { ready } from ${IO};
+appendFileSync(${JSON.stringify(log)}, "start " + process.pid + "\\n");
+ready();
+process.stdin.once("data", () => process.exit(1));
+`;
+
+/**
+ * Waits until `pid` has ended. On Linux it blocks the event loop until the process is a zombie, so
+ * the client has not yet seen the exit when the next request is made, as on Windows.
+ */
+async function endedUnseen(pid) {
+  if (process.platform !== "linux")
+    return waitUntil(() => !alive(pid), "the host to end");
+  const until = Date.now() + 5_000;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    // The leader of a threaded process is a zombie before its other threads release the pipes.
+    let ended;
+    try {
+      ended =
+        readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.[0] === "Z" &&
+        readdirSync(`/proc/${pid}/task`).length === 1;
+    } catch {
+      return;
+    }
+    if (ended) return;
+    if (Date.now() > until) assert.fail(`waited 5 s for host ${pid} to end`);
+    Atomics.wait(pause, 0, 0, 5);
+  }
+}
+
+function requestsOf(lines, pid) {
+  return lines.filter((line) => line === `request ${pid}`).length;
+}
+
 const SCENARIO_DRIVERS = {
+  async "dead-idle-host"(scenario) {
+    for (const end of scenario.given.ends) {
+      const root = await scratch("alpha2-node-dead-idle-host-");
+      const log = join(root, "log");
+      const client = new Alpha2NodeClient({
+        hostPath: await fakeHost(
+          root,
+          MORTAL_HOST(log, end === "exits after answering"),
+        ),
+      });
+      let first = await exported(client);
+      for (
+        let index = 0;
+        index < scenario.given.requestsAfterEach;
+        index += 1
+      ) {
+        if (end !== "exits after answering") process.kill(first.pid, "SIGKILL");
+        if (end !== "killed") await endedUnseen(first.pid);
+        const next = await exported(client).then(
+          (result) => result,
+          (error) => error,
+        );
+        if (end === "killed" && next instanceof Error) {
+          assert.equal(next.code, "HOST_EXITED", next.message);
+          first = await exported(client);
+          continue;
+        }
+        assert.ok(!(next instanceof Error), String(next));
+        assert.notEqual(next.pid, first.pid);
+        assert.equal(
+          requestsOf(await startsIn(log), first.pid),
+          scenario.expect.firstHostRequests,
+        );
+        first = next;
+      }
+    }
+  },
+  async "dies-reading"(scenario) {
+    const root = await scratch("alpha2-node-dies-reading-");
+    const log = join(root, "log");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(root, READING_HOST(log)),
+    });
+    const { project } = exportRequest("out.mp4");
+    const error = await client
+      .exportProject(
+        exportRequest("out.mp4", {
+          project: {
+            ...project,
+            name: "x".repeat(scenario.given.projectNameBytes),
+          },
+        }),
+      )
+      .then(
+        () => assert.fail("the export resolved"),
+        (cause) => cause,
+      );
+    assert.equal(error.code, scenario.expect.code, error.message);
+    assert.equal((await startsIn(log)).length, scenario.expect.hosts);
+  },
   async "foreign-host"(scenario) {
     const root = await scratch("alpha2-node-foreign-host-");
     const pids = join(root, "pids");
