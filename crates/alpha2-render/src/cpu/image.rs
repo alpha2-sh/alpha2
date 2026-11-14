@@ -293,10 +293,12 @@ impl CpuImage {
     /// level 0.
     #[inline]
     pub(crate) fn sample(&self, u: f32, v: f32) -> [f32; 4] {
+        // Every position outside [-1, size] reads the edge texel, so clamping changes no sample
+        // and keeps the integer neighbours below in range.
         #[allow(clippy::cast_precision_loss)]
-        let x = u * self.size.width as f32 - 0.5;
+        let x = (u * self.size.width as f32 - 0.5).clamp(-1.0, self.size.width as f32);
         #[allow(clippy::cast_precision_loss)]
-        let y = v * self.size.height as f32 - 0.5;
+        let y = (v * self.size.height as f32 - 0.5).clamp(-1.0, self.size.height as f32);
         let x0 = x.floor();
         let y0 = y.floor();
         let fx = x - x0;

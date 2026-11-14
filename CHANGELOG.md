@@ -98,6 +98,9 @@ All notable changes to this project are documented in this file.
   allocates it: a PNG, JPEG or WebP whose header states such a size fails `probe` and open with
   `Unsupported`, stream probing and the decoders take FFmpeg's `max_pixels`, and decoded YCbCr
   frames are checked like converted ones.
+- The CPU renderer no longer panics drawing a composition-graph transition whose kernel divides by
+  a tiny authored progress (`fold`, `cube`, `slides`); its sampler clamps a coordinate before
+  turning it into a texel index.
 
 ## [0.6.0] - 2026-11-08
 
