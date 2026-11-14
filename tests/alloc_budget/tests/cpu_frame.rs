@@ -8,9 +8,12 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::sync::Arc;
 
-use alpha2_media::{ChromaLocation, ColorMetadata, YuvEncoding, YuvFormat};
+use alpha2_media::{
+    BitDepth, Chroma, ChromaLocation, ColorMetadata, PixelLayout, PlaneLayout, VideoCodec,
+    YuvEncoding, YuvFormat,
+};
 use alpha2_render::{
-    BlendMode, Color, ColorPolicy, CpuRenderer, EffectId, EffectParams, EffectRuntime,
+    BlendMode, Color, ColorPolicy, CpuImage, CpuRenderer, EffectId, EffectParams, EffectRuntime,
     GAUSSIAN_BLUR_ID, GraphLayer, LayerTransform, ParamValue, PlaneTarget, RenderGraph,
     RenderNodeId, RenderSize, SourcePlane, SourcePresentation, SourceView, Yuv420pTargets,
     YuvFrame, YuvPlanes,
@@ -231,4 +234,54 @@ fn cpu_frames_report_what_they_allocate() {
             assert!(allocations <= YUVA_FRAME, "{allocations} allocations");
         }
     }
+}
+
+/// Per band of a 10-bit 4:2:2 pack: its plane rows, two decoded lines and their bookkeeping.
+const PACK_PER_BAND: u64 = 16;
+
+#[test]
+fn a_cpu_pack_allocates_per_band_not_per_sample() {
+    let (width, height) = (1_920_usize, 1_080_usize);
+    let size = RenderSize::new(1_920, 1_080).expect("size");
+    #[allow(clippy::cast_possible_truncation)]
+    let rgba = (0..width * height * 4)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<u8>>();
+    let picture = CpuImage::from_premultiplied_rgba8(size, &rgba).expect("picture");
+    let renderer = CpuRenderer::new(1);
+    let layout = PixelLayout {
+        chroma: Chroma::Yuv422,
+        bit_depth: BitDepth::Ten,
+        alpha: false,
+        planes: PlaneLayout::Planar,
+    };
+    let mut planes = [
+        vec![0_u8; width * height * 2],
+        vec![0_u8; width * height],
+        vec![0_u8; width * height],
+    ];
+    let mut pack = || {
+        let [y, u, v] = &mut planes;
+        renderer
+            .pack_image(
+                &picture,
+                YuvEncoding::export(VideoCodec::ProRes),
+                layout,
+                &mut [
+                    PlaneTarget::new(y, width * 2),
+                    PlaneTarget::new(u, width),
+                    PlaneTarget::new(v, width),
+                ],
+            )
+            .expect("pack");
+    };
+    pack();
+    let (allocations, bytes) = counted(pack);
+    // Bands of about 16,384 pixels: eight rows of 1920.
+    let bands = (height / (16_384 / width)) as u64;
+    println!("cpu pack 1920x1080 10-bit 4:2:2: allocations={allocations} bytes={bytes}");
+    assert!(
+        allocations <= PACK_PER_BAND * bands,
+        "{allocations} allocations for {bands} bands"
+    );
 }

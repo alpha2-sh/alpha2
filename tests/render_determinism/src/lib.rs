@@ -24,7 +24,7 @@ use alpha2_render::{
     EffectParams, EffectRuntime, GAUSSIAN_BLUR_ID, GraphLayer, LayerTransform, Lut3dData,
     ParamValue, PlaneTarget, RenderControls, RenderGraph, RenderNodeId, RenderSize, SourceAlpha,
     SourcePlane, SourcePresentation, SourceView, Yuv420pTargets, YuvFrame, YuvPlanes,
-    hdr::HdrToneMap, pack_cpu_image,
+    hdr::HdrToneMap,
 };
 use alpha2_time::MediaTime;
 
@@ -399,7 +399,12 @@ fn identity(source: RenderNodeId) -> GraphLayer {
 }
 
 /// `picture` packed into `layout`'s planes.
-fn packed(picture: &CpuImage, layout: PixelLayout, encoding: YuvEncoding) -> Vec<u8> {
+fn packed(
+    renderer: &CpuRenderer,
+    picture: &CpuImage,
+    layout: PixelLayout,
+    encoding: YuvEncoding,
+) -> Vec<u8> {
     let size = picture.size();
     let planes = layout.planes(size.width, size.height);
     let mut bytes = planes
@@ -411,7 +416,9 @@ fn packed(picture: &CpuImage, layout: PixelLayout, encoding: YuvEncoding) -> Vec
         .zip(&planes)
         .map(|(plane, &(width, _, sample))| PlaneTarget::new(plane, (width * sample) as usize))
         .collect::<Vec<_>>();
-    pack_cpu_image(picture, encoding, layout, &mut targets).expect("pack");
+    renderer
+        .pack_image(picture, encoding, layout, &mut targets)
+        .expect("pack");
     bytes.concat()
 }
 
@@ -604,7 +611,7 @@ pub fn sources_hash() -> u64 {
             .expect("composite");
         graph.set_output(output).expect("output");
         let picture = renderer.execute_graph(&graph).expect("render");
-        hash = fnv(hash, &packed(&picture, alpha444, encoding));
+        hash = fnv(hash, &packed(&renderer, &picture, alpha444, encoding));
         pictures.push(CpuSource::image(picture));
     }
     let mut graph = RenderGraph::new(canvas);
@@ -644,7 +651,7 @@ pub fn sources_hash() -> u64 {
             planes: PlaneLayout::Planar,
         },
     ] {
-        hash = fnv(hash, &packed(&picture, layout, encoding));
+        hash = fnv(hash, &packed(&renderer, &picture, layout, encoding));
     }
     let mut planes = i420(canvas);
     renderer

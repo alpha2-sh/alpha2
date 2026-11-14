@@ -82,10 +82,7 @@ pub use color::{
     convert_yuv_to_linear_rgba, encode_linear_rgb, is_hdr,
 };
 pub use composite::{CompositeLayer, LayerTransform};
-pub use cpu::{
-    CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, decoded,
-    pack_cpu_image,
-};
+pub use cpu::{CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, decoded};
 pub use diagnostics::{
     AdapterDiagnostics, BenchmarkMetadata, GpuSubmissionStats, PassTiming, PipelineCreation,
     PipelineCreationStats, RenderDiagnostics, TimingSource,

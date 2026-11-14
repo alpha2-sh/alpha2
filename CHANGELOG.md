@@ -32,6 +32,9 @@ All notable changes to this project are documented in this file.
 - The CPU renderer converts HLG, PQ, non-BT.709 and alpha-plane sources through tabled transfer
   curves instead of per-pixel `pow` and `exp`. Their pictures move by under 0.01 of a half-float
   step of the brightest channel; SDR BT.709 sources without alpha are unchanged.
+- The CPU renderer packs 10-bit, 4:2:2, 4:4:4 and alpha layouts on its own threads
+  (`ALPHA2_RENDER_THREADS`) instead of starting up to eight more per frame. In `alpha2-render`,
+  `pack_cpu_image` is now the method `CpuRenderer::pack_image`.
 
 ### Fixed
 

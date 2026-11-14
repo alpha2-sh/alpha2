@@ -38,6 +38,5 @@ mod workers;
 pub(crate) use vector::over as premultiplied_over;
 
 pub use image::CpuImage;
-pub use pack::pack_cpu_image;
 pub use renderer::{CpuRenderStats, CpuRenderer};
 pub use source::{CpuSource, RgbaPixels, YuvPlanes};

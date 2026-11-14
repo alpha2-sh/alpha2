@@ -464,7 +464,7 @@ impl FrameRenderer for CpuRenderer {
         }
         let render = self.render_frame(size, frame, frames)?;
         if let Some(image) = render.texture {
-            alpha2_render::pack_cpu_image(&image, encoding, layout, targets)?;
+            self.pack_image(&image, encoding, layout, targets)?;
         }
         Ok(render.report)
     }

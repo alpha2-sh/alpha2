@@ -63,7 +63,7 @@ fn drawn(
     renderer.execute_graph(&graph).expect("draws")
 }
 
-fn packed(picture: &CpuImage, layout: PixelLayout) -> Vec<u8> {
+fn packed(renderer: &CpuRenderer, picture: &CpuImage, layout: PixelLayout) -> Vec<u8> {
     let size = picture.size();
     let planes = layout.planes(size.width, size.height);
     let mut bytes = planes
@@ -75,13 +75,14 @@ fn packed(picture: &CpuImage, layout: PixelLayout) -> Vec<u8> {
         .zip(&planes)
         .map(|(plane, &(width, _, sample))| PlaneTarget::new(plane, (width * sample) as usize))
         .collect::<Vec<_>>();
-    crate::pack_cpu_image(
-        picture,
-        YuvEncoding::new(ColorMetadata::EXPORT, ChromaLocation::TopLeft),
-        layout,
-        &mut targets,
-    )
-    .expect("pack");
+    renderer
+        .pack_image(
+            picture,
+            YuvEncoding::new(ColorMetadata::EXPORT, ChromaLocation::TopLeft),
+            layout,
+            &mut targets,
+        )
+        .expect("pack");
     bytes.concat()
 }
 
@@ -263,7 +264,7 @@ fn pictures(renderer: &CpuRenderer) -> Vec<(&'static str, Vec<u8>)> {
             },
         ),
     ] {
-        out.push((name, packed(&composite, layout)));
+        out.push((name, packed(renderer, &composite, layout)));
     }
     let (width, height) = (size.width as usize, size.height as usize);
     let mut planes = vec![0_u8; width * height * 3 / 2];

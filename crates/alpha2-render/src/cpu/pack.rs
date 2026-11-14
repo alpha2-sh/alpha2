@@ -171,67 +171,80 @@ pub(crate) fn pack_yuv420p(
             vec![[0.0_f32; 4]; width],
         )
     };
-    workers.bands_with(&mut rows, 1, scratch, |(lines, decoded), first, band| {
-        // Picture rows around this chroma row, edge-clamped like the shader's loads.
-        for line in lines.iter_mut() {
-            line.fill([0.0; 3]);
-        }
-        decoded.fill([0.0; 4]);
-        for (index, (top, bottom, u, v)) in band.iter_mut().enumerate() {
-            let row = first + index;
-            // Rows 2j - 1 (co-sited only), 2j and 2j + 1, edge repeated.
-            let first_line = usize::from(!coding.cosited[1]);
-            for (offset, line) in lines.iter_mut().enumerate().skip(first_line) {
-                let y = (row * 2 + offset).saturating_sub(1).min(height - 1);
-                #[allow(clippy::cast_possible_truncation)]
-                picture.decode_row(y as u32, 0, decoded);
-                for (rgb, texel) in line.iter_mut().zip(decoded.iter()) {
-                    *rgb = [
-                        texel[0].clamp(0.0, 1.0),
-                        texel[1].clamp(0.0, 1.0),
-                        texel[2].clamp(0.0, 1.0),
-                    ];
-                }
+    // A chroma row covers two picture rows.
+    workers.items_with(
+        &mut rows,
+        2 * width,
+        scratch,
+        |(lines, decoded), first, band| {
+            // Picture rows around this chroma row, edge-clamped like the shader's loads.
+            for line in lines.iter_mut() {
+                line.fill([0.0; 3]);
             }
-            for (luma_row, line) in [(&mut **top, &lines[1]), (&mut **bottom, &lines[2])] {
-                for (out, rgb) in luma_row[..width].iter_mut().zip(line) {
-                    *out = half::unorm8(coding.luma_black + coding.luma_span * coding.luma(*rgb));
+            decoded.fill([0.0; 4]);
+            for (index, (top, bottom, u, v)) in band.iter_mut().enumerate() {
+                let row = first + index;
+                // Rows 2j - 1 (co-sited only), 2j and 2j + 1, edge repeated.
+                let first_line = usize::from(!coding.cosited[1]);
+                for (offset, line) in lines.iter_mut().enumerate().skip(first_line) {
+                    let y = (row * 2 + offset).saturating_sub(1).min(height - 1);
+                    #[allow(clippy::cast_possible_truncation)]
+                    picture.decode_row(y as u32, 0, decoded);
+                    for (rgb, texel) in line.iter_mut().zip(decoded.iter()) {
+                        *rgb = [
+                            texel[0].clamp(0.0, 1.0),
+                            texel[1].clamp(0.0, 1.0),
+                            texel[2].clamp(0.0, 1.0),
+                        ];
+                    }
                 }
+                for (luma_row, line) in [(&mut **top, &lines[1]), (&mut **bottom, &lines[2])] {
+                    for (out, rgb) in luma_row[..width].iter_mut().zip(line) {
+                        *out =
+                            half::unorm8(coding.luma_black + coding.luma_span * coding.luma(*rgb));
+                    }
+                }
+                chroma_row(
+                    lines,
+                    coding,
+                    &taps,
+                    &mut u[..chroma_width],
+                    &mut v[..chroma_width],
+                );
             }
-            chroma_row(
-                lines,
-                coding,
-                &taps,
-                &mut u[..chroma_width],
-                &mut v[..chroma_width],
-            );
-        }
-    });
+        },
+    );
     Ok(())
 }
 
-/// Packs `picture` into `layout`, one target per plane in storage order
-/// ([`alpha2_media::PixelLayout::planes`]), as the GPU texel readback does
-/// ([`crate::Yuv420pReadback::finish_into_planes`]).
-///
-/// # Errors
-/// [`RenderError::TextureReadback`] for a size the chroma cannot subsample, a wrong target
-/// count, or a target too small.
-pub fn pack_cpu_image(
-    picture: &CpuImage,
-    encoding: YuvEncoding,
-    layout: alpha2_media::PixelLayout,
-    targets: &mut [crate::PlaneTarget<'_>],
-) -> Result<(), RenderError> {
-    let size = picture.size();
-    let row = |y: usize, out: &mut [[f32; 4]]| {
-        #[allow(clippy::cast_possible_truncation)]
-        picture.decode_row(y as u32, 0, out);
-    };
-    let rows = crate::layout_pack::Picture {
-        width: size.width as usize,
-        height: size.height as usize,
-        row: &row,
-    };
-    crate::layout_pack::pack(&rows, encoding, layout, targets)
+impl super::CpuRenderer {
+    /// Packs `picture` into `layout`, one target per plane in storage order
+    /// ([`alpha2_media::PixelLayout::planes`]), as the GPU texel readback does
+    /// ([`crate::Yuv420pReadback::finish_into_planes`]), on this renderer's threads.
+    ///
+    /// # Errors
+    /// [`RenderError::TextureReadback`] for a size the chroma cannot subsample, a wrong target
+    /// count, or a target too small.
+    pub fn pack_image(
+        &self,
+        picture: &CpuImage,
+        encoding: YuvEncoding,
+        layout: alpha2_media::PixelLayout,
+        targets: &mut [crate::PlaneTarget<'_>],
+    ) -> Result<(), RenderError> {
+        let started = web_time::Instant::now();
+        let size = picture.size();
+        let row = |y: usize, out: &mut [[f32; 4]]| {
+            #[allow(clippy::cast_possible_truncation)]
+            picture.decode_row(y as u32, 0, out);
+        };
+        let rows = crate::layout_pack::Picture {
+            width: size.width as usize,
+            height: size.height as usize,
+            row: &row,
+        };
+        let packed = crate::layout_pack::pack_with(&rows, encoding, layout, targets, &self.workers);
+        super::renderer::add_elapsed(&self.stats.pack_micros, started);
+        packed
+    }
 }

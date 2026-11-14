@@ -244,3 +244,87 @@ fn a_size_the_chroma_cannot_halve_is_refused() {
         .is_err()
     );
 }
+
+/// Rows `pack_with` decodes for a 1920x1080 10-bit picture of `chroma` on `renderer`'s threads,
+/// and whether every row was decoded on the calling thread.
+fn decoded_rows(
+    chroma: Chroma,
+    siting: ChromaLocation,
+    renderer: &crate::CpuRenderer,
+) -> (usize, bool) {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let (width, height) = (1920_usize, 1080_usize);
+    let rows = AtomicUsize::new(0);
+    let elsewhere = AtomicBool::new(false);
+    let caller = std::thread::current().id();
+    let row = |y: usize, out: &mut [[f32; 4]]| {
+        rows.fetch_add(1, Ordering::Relaxed);
+        if std::thread::current().id() != caller {
+            elsewhere.store(true, Ordering::Relaxed);
+        }
+        #[allow(clippy::cast_precision_loss)]
+        out.fill([y as f32 / 1080.0, 0.5, 0.25, 1.0]);
+    };
+    let picture = Picture {
+        width,
+        height,
+        row: &row,
+    };
+    let layout = layout(chroma, BitDepth::Ten, false);
+    let planes = layout.planes(1920, 1080);
+    let mut memory: Vec<Vec<u8>> = planes
+        .iter()
+        .map(|&(plane_width, rows, bytes)| vec![0; (plane_width * rows * bytes) as usize])
+        .collect();
+    let mut targets: Vec<PlaneTarget<'_>> = memory
+        .iter_mut()
+        .zip(&planes)
+        .map(|(bytes, &(plane_width, _, size))| {
+            PlaneTarget::new(bytes, (plane_width * size) as usize)
+        })
+        .collect();
+    super::pack_with(
+        &picture,
+        YuvEncoding::new(ColorMetadata::EXPORT, siting),
+        layout,
+        &mut targets,
+        &renderer.workers,
+    )
+    .expect("packs");
+    (rows.into_inner(), elsewhere.into_inner())
+}
+
+#[test]
+fn the_pack_decodes_each_row_once_on_the_renderers_threads() {
+    let one = crate::CpuRenderer::new(1);
+    let four = crate::CpuRenderer::new(4);
+    for chroma in [Chroma::Yuv420, Chroma::Yuv422, Chroma::Yuv444] {
+        for siting in [ChromaLocation::Center, ChromaLocation::TopLeft] {
+            let (rows, elsewhere) = decoded_rows(chroma, siting, &one);
+            assert!(
+                !elsewhere,
+                "{chroma:?} {siting:?}: a renderer of one thread made another"
+            );
+            // Co-sited 4:2:0 reads the row above each band's first chroma row once more.
+            let bands = 1080
+                / chroma.subsampling().1 as usize
+                / one
+                    .workers
+                    .band_rows(1920 * chroma.subsampling().1 as usize);
+            let extra = if chroma == Chroma::Yuv420 && siting == ChromaLocation::TopLeft {
+                bands + 1
+            } else {
+                0
+            };
+            assert!(
+                rows <= 1080 + extra,
+                "{chroma:?} {siting:?}: {rows} rows decoded"
+            );
+            assert_eq!(
+                decoded_rows(chroma, siting, &four).0,
+                rows,
+                "{chroma:?} {siting:?}"
+            );
+        }
+    }
+}

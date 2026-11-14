@@ -540,7 +540,6 @@ fn run(name: &str, threads: usize) {
         planes: PlaneLayout::Planar,
     };
     let renderer = CpuRenderer::new(threads);
-    let pack_micros = std::cell::Cell::new(0_u64);
     let mut frame = |index: u32| {
         let mut presented = case
             .yuv
@@ -582,23 +581,19 @@ fn run(name: &str, threads: usize) {
         graph.set_output(node).expect("output");
         if case.pack422 {
             let picture = renderer.execute_graph(&graph).expect("render");
-            let started = Instant::now();
             let [y, u, v] = &mut wide;
-            alpha2_render::pack_cpu_image(
-                &picture,
-                YuvEncoding::export(VideoCodec::ProRes),
-                layout,
-                &mut [
-                    PlaneTarget::new(y, width * 2),
-                    PlaneTarget::new(u, width),
-                    PlaneTarget::new(v, width),
-                ],
-            )
-            .expect("pack");
-            pack_micros.set(
-                pack_micros.get()
-                    + u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
-            );
+            renderer
+                .pack_image(
+                    &picture,
+                    YuvEncoding::export(VideoCodec::ProRes),
+                    layout,
+                    &mut [
+                        PlaneTarget::new(y, width * 2),
+                        PlaneTarget::new(u, width),
+                        PlaneTarget::new(v, width),
+                    ],
+                )
+                .expect("pack");
             return;
         }
         renderer
@@ -616,7 +611,6 @@ fn run(name: &str, threads: usize) {
     frame(0);
     let frames = frames();
     let before = renderer.stats();
-    let pack_before = pack_micros.get();
     let cpu_started = alpha2_os::process_cpu_time();
     let started = Instant::now();
     for index in 1..=frames {
@@ -630,8 +624,7 @@ fn run(name: &str, threads: usize) {
         ),
         _ => "n/a".to_owned(),
     };
-    let mut after = renderer.stats();
-    after.pack_micros += pack_micros.get() - pack_before;
+    let after = renderer.stats();
     println!(
         "cpu_frame case={name} size={}x{} threads={threads} wall_ms={wall:.1} cpu_ms={cpu} {}",
         output.width,
