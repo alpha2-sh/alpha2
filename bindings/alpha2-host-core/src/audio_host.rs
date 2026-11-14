@@ -532,6 +532,15 @@ mod realtime {
                 .play()
                 .map_err(|error| CpalHostError::Device(error.to_string()))
         }
+        /// Stops callback delivery until [`Self::play`].
+        ///
+        /// # Errors
+        /// Returns the device error reported by cpal.
+        pub fn pause(&self) -> Result<(), CpalHostError> {
+            self.stream
+                .pause()
+                .map_err(|error| CpalHostError::Device(error.to_string()))
+        }
         /// Errors the stream reported, plus device buffers that were not whole
         /// frames and played silent.
         #[must_use]

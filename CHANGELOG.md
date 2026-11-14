@@ -289,9 +289,10 @@ All notable changes to this project are documented in this file.
   that releases its layer right after attaching it no longer leaves the preview a freed layer.
 - Mobile: a preview skips seeks and resizes that later ones replaced before it reached them, a new
   seek stops the frame an older one is drawing, and `end()` stops the frame or audio decode in
-  progress and skips queued commands instead of carrying them out first. A preview whose audio
-  needs more than a quarter of the free memory (at most 256 MiB) decoded plays silent and says so
-  in `lastError`.
+  progress and skips queued commands instead of carrying them out first. A preview decodes its
+  audio in windows as the mix reaches them (at most a quarter of the free memory and 64 MiB)
+  instead of every audible source whole on the first play, so a long recording sounds at once and
+  without that memory; playing, pausing and seeking keep one audio output stream.
 - Mobile: a source whose video starts after the time a clip reads from (an MP4 with an empty edit,
   a Matroska file whose first video frame is not at 0) shows its first frame until that frame is
   due, instead of every later frame early.

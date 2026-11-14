@@ -950,11 +950,11 @@ fn write_silence(path: &std::path::Path, rate: u32, seconds: u32) {
 }
 
 /// A preview reads 5 s of a 60 minute recording, which decodes whole to about 690 MB at 48 kHz:
-/// ending it 100 ms into its first play returns within 500 ms, and left alone it plays silent and
-/// says why.
+/// ending it 100 ms into its first play returns within 500 ms, and left alone it plays from
+/// windows (sounding where the process has an output) without that memory.
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[test]
-fn a_preview_of_a_long_recording_ends_at_once_and_plays_silent_past_the_audio_limit() {
+fn a_preview_of_a_long_recording_ends_at_once_and_plays_from_windows() {
     use std::time::{Duration, Instant};
 
     use crate::{Player, PlayerRequest};
@@ -1004,21 +1004,31 @@ fn a_preview_of_a_long_recording_ends_at_once_and_plays_silent_past_the_audio_li
     eprintln!("end() during the audio decode took {took:?}");
     assert!(took < Duration::from_millis(500), "{took:?}");
 
+    let resident = || alpha2_os::process_memory().resident_bytes;
+    let before = resident();
     let player = Player::new(engine, request).expect("player");
+    let started = Instant::now();
     player.play();
-    let until = Instant::now() + Duration::from_secs(300);
-    while player.last_error().is_none() && Instant::now() < until {
-        std::thread::sleep(Duration::from_millis(50));
+    let until = started + Duration::from_secs(3);
+    while !player.is_sounding() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(1));
     }
-    let error = player.last_error();
-    eprintln!("{error:?}");
-    assert!(
-        error
-            .as_deref()
-            .is_some_and(|error| error.contains("MiB decoded; the preview is silent")),
-        "{error:?}"
+    let sounding = player.is_sounding().then(|| started.elapsed());
+    std::thread::sleep(Duration::from_secs(2));
+    let after = resident();
+    eprintln!(
+        "sounding {sounding:?} after play(); resident {:?} MiB before, {:?} MiB after",
+        before.map(|bytes| bytes >> 20),
+        after.map(|bytes| bytes >> 20)
     );
-    assert!(!player.is_sounding());
+    assert_eq!(player.last_error(), None);
+    if let (Some(before), Some(after)) = (before, after) {
+        assert!(
+            after.saturating_sub(before) < 128 << 20,
+            "{} MiB more resident",
+            after.saturating_sub(before) >> 20
+        );
+    }
     player.end();
     let _ = std::fs::remove_file(wav);
 }

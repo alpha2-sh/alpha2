@@ -1,7 +1,7 @@
 //! Rendering a project into a file with a platform's decoders and encoders: the container layer
 //! reads sources and writes the output, and the platform's codecs do the rest.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -19,10 +19,10 @@ use alpha2_host_core::partial::{OutputTarget, PartialOutput, SeekNeed};
 use alpha2_host_core::providers::{ProviderFiles, ProviderMedia};
 use alpha2_host_core::stills::{decode_still, still_format};
 use alpha2_host_core::video_stream::{DecodePreference, StreamOptions, VideoBackends, VideoStream};
-use alpha2_host_core::{DecodePolicy, DecodedAudioSources, ProjectAudioRequest};
+use alpha2_host_core::{DecodePolicy, ProjectAudioRequest};
 use alpha2_media::{
-    AudioBlock, AudioBlockSink, CancelToken, ColorMetadata, Container, DecodeError, DecodeEvent,
-    Decoder, EncodeError, OutputPixels, QualityLevel, SourceId, SpeakerLayout,
+    AudioBlock, AudioBlockSink, CancelToken, ColorMetadata, Container, EncodeError, OutputPixels,
+    QualityLevel, SourceId, SpeakerLayout,
 };
 use alpha2_model::{MediaKind, MediaSource, Project};
 use alpha2_render::{CpuRenderer, Renderer};
@@ -274,7 +274,7 @@ fn attempt(
             &project,
             &assets,
             Arc::clone(&media.audio_decoders),
-            settings.sample_rate,
+            (settings.sample_rate, AUDIO_WINDOW_BYTES),
         )?)
     } else {
         None
@@ -675,26 +675,16 @@ pub(crate) fn probe_source(path: &Path, media: &MediaBackends) -> Result<(), Str
 /// Most bytes of decoded audio an export's mix holds at once, as the desktop host's default.
 const AUDIO_WINDOW_BYTES: u64 = 256 << 20;
 
-/// Bytes of decoded audio work may hold: a quarter of the memory free now, at most
-/// [`AUDIO_WINDOW_BYTES`].
-pub(crate) fn audio_bytes_limit() -> u64 {
-    alpha2_os::memory_capacity()
-        .headroom()
-        .map_or(AUDIO_WINDOW_BYTES, |free| {
-            (free / 4).min(AUDIO_WINDOW_BYTES)
-        })
-}
-
 /// Windows over the audio of every audible source the timeline uses, decoded at the project rate
-/// as the mix reaches it, within a quarter of the memory free now (at most [`AUDIO_WINDOW_BYTES`]).
+/// as the mix reaches it, within a quarter of the memory free now and at most `ceiling` bytes.
 ///
 /// # Errors
 /// `MISSING_INPUT` for a used audible source without an asset.
-fn audio_windows(
+pub(crate) fn audio_windows(
     project: &Project,
     assets: &HashMap<String, PathBuf>,
     decoders: Arc<dyn AudioBackends>,
-    project_rate: u32,
+    (project_rate, ceiling): (u32, u64),
 ) -> Result<WindowedAudioSources<AudioStream>, Alpha2Error> {
     let mut paths = HashMap::new();
     for source in project
@@ -710,7 +700,9 @@ fn audio_windows(
         })?;
         paths.insert(source.id.clone(), path.clone());
     }
-    let bytes = audio_bytes_limit();
+    let bytes = alpha2_os::memory_capacity()
+        .headroom()
+        .map_or(ceiling, |free| (free / 4).min(ceiling));
     let open: OpenAudio<AudioStream> = Box::new(move |source, stream| {
         let path = paths.get(source).ok_or_else(|| {
             AudioWindowError::MissingInput(format!("audio source {source} has no asset path"))
@@ -725,105 +717,6 @@ fn audio_windows(
         .map_err(AudioWindowError::Decode)
     });
     Ok(WindowedAudioSources::new(project_rate, bytes, open))
-}
-
-/// The audio of every audible source the timeline uses, decoded whole at the project rate, for
-/// each stream its clips play: what a preview's real-time mix reads. At most `limit` bytes of
-/// samples, at 4 bytes per sample per channel, are decoded.
-///
-/// # Errors
-/// `MISSING_INPUT` for a used audible source without an asset, `RESOURCE_LIMIT` past `limit`,
-/// else what decoding met.
-pub(crate) fn decode_audio(
-    project: &Project,
-    assets: &HashMap<String, PathBuf>,
-    decoders: &dyn AudioBackends,
-    (project_rate, limit): (u32, u64),
-    cancel: &CancelToken,
-) -> Result<DecodedAudioSources, Alpha2Error> {
-    let mut streams: HashMap<&SourceId, BTreeSet<Option<u32>>> = HashMap::new();
-    for track in &project.timeline.tracks {
-        for clip in &track.clips {
-            streams
-                .entry(&clip.source_id)
-                .or_default()
-                .insert(clip.audio.stream);
-        }
-    }
-    let mut decoded = DecodedAudioSources::new();
-    let mut left = limit;
-    for source in project
-        .used_sources()
-        .into_iter()
-        .filter(|source| source.is_audible())
-    {
-        let path = assets.get(source.id.as_str()).ok_or_else(|| {
-            failed(
-                "MISSING_INPUT",
-                format!("audio source {} has no asset path", source.id),
-            )
-        })?;
-        let wanted = streams
-            .get(&source.id)
-            .cloned()
-            .unwrap_or_else(|| BTreeSet::from([None]));
-        for stream in wanted {
-            let mut stream_audio = AudioStream::open_file(
-                path,
-                decoders,
-                project_rate,
-                stream,
-                DecodePolicy::default(),
-            )?;
-            if let Some(block) =
-                whole(&mut stream_audio, cancel, &mut left).map_err(|error| match error {
-                    Whole::Limit => failed(
-                        "RESOURCE_LIMIT",
-                        format!("the project's audio needs more than {limit} bytes decoded"),
-                    ),
-                    Whole::Decode(error) => error.into(),
-                })?
-            {
-                decoded.insert_stream(source.id.clone(), stream, block);
-            }
-        }
-    }
-    Ok(decoded)
-}
-
-/// Why [`whole`] stopped.
-enum Whole {
-    /// The samples would pass the bytes left.
-    Limit,
-    Decode(DecodeError),
-}
-
-/// All of a stream's audio as one block, taking its bytes from `left`; `None` for a stream without
-/// samples.
-fn whole(
-    decoder: &mut AudioStream,
-    cancel: &CancelToken,
-    left: &mut u64,
-) -> Result<Option<AudioBlock>, Whole> {
-    let mut all: Option<AudioBlock> = None;
-    loop {
-        match decoder.decode_next(cancel).map_err(Whole::Decode)? {
-            DecodeEvent::Audio(block) => {
-                let samples = block.channels.iter().map(Vec::len).sum::<usize>() as u64;
-                *left = left.checked_sub(samples * 4).ok_or(Whole::Limit)?;
-                match all.as_mut() {
-                    None => all = Some(block),
-                    Some(all) => {
-                        for (into, from) in all.channels.iter_mut().zip(block.channels) {
-                            into.extend(from);
-                        }
-                    }
-                }
-            }
-            DecodeEvent::EndOfStream => return Ok(all),
-            DecodeEvent::Retry | DecodeEvent::Video(_) => {}
-        }
-    }
 }
 
 #[cfg(test)]
@@ -865,43 +758,6 @@ mod tests {
         wav.extend(bytes.to_le_bytes());
         wav.resize(wav.len() + bytes as usize, 0);
         std::fs::write(path, wav).expect("wav");
-    }
-
-    #[test]
-    fn a_preview_audio_decode_stops_at_its_byte_limit() {
-        // A device runs the tests with a copy of the repository's `tests/` at `ALPHA2_TESTS_DIR`.
-        let tests = std::env::var_os("ALPHA2_TESTS_DIR").map_or_else(
-            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests"),
-            PathBuf::from,
-        );
-        let project = Project::from_json(
-            &std::fs::read_to_string(tests.join("cases/host-audio-export-project.json"))
-                .expect("project"),
-        )
-        .expect("loads");
-        let wav = std::env::temp_dir().join(format!("alpha2-mobile-{}.wav", std::process::id()));
-        silence(&wav);
-        let assets = HashMap::from([("audio-source".to_owned(), wav.clone())]);
-        let decoders = alpha2_host_core::audio_stream::WithPcm(NoDecoders);
-        let decode = |limit| {
-            decode_audio(
-                &project,
-                &assets,
-                &decoders,
-                (48_000, limit),
-                &CancelToken::default(),
-            )
-        };
-        let code = |result: Result<DecodedAudioSources, Alpha2Error>| {
-            result.err().map(|error| error.code().to_owned())
-        };
-        assert_eq!(code(decode(1 << 20)), Some("RESOURCE_LIMIT".to_owned()));
-        assert_eq!(code(decode(4 << 20)), None);
-        let cancel = CancelToken::default();
-        cancel.cancel();
-        let cancelled = decode_audio(&project, &assets, &decoders, (48_000, 4 << 20), &cancel);
-        assert_eq!(code(cancelled), Some("ABORTED".to_owned()));
-        let _ = std::fs::remove_file(wav);
     }
 
     /// Video encoders whose hardware sessions fail at a frame, and an audio encoder that fails

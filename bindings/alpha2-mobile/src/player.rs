@@ -18,7 +18,6 @@ use std::time::{Duration, Instant};
 use alpha2_engine::{
     EngineProject, FramesWithText, Player as FramePlayer, QualityProfile, TextTextures,
 };
-use alpha2_host_core::DecodedAudioSources;
 use alpha2_host_core::audio_stream::AudioBackends;
 use alpha2_host_core::export::{
     ExportRenderer, FrameBudget, SourceFrameCache, SourceStream, StreamSources,
@@ -46,6 +45,9 @@ const PAUSED_POLL: Duration = Duration::from_millis(50);
 /// How long the heard audio may stand still, with samples waiting for the device, before the
 /// preview takes the output for stopped and keeps time by the wall clock.
 const AUDIO_STALL: Duration = Duration::from_millis(500);
+
+/// Most bytes of decoded audio a preview's mix holds at once.
+const PREVIEW_AUDIO_BYTES: u64 = 64 << 20;
 
 /// Most bytes of decoded source frames a preview keeps.
 const PREVIEW_FRAME_BYTES: u64 = 256 << 20;
@@ -572,16 +574,6 @@ fn frame_length(session: &Session) -> MediaTime {
     )
 }
 
-/// A preview's audio sources.
-enum Sound {
-    /// Not decoded yet: the preview has not played.
-    Unread,
-    /// The project has none that decode.
-    Silent,
-    /// Every audible source, decoded whole.
-    Decoded(Arc<DecodedAudioSources>),
-}
-
 /// Opens a source's stream for the preview.
 type OpenSource = Box<dyn FnMut(&SourceId) -> Result<SourceStream, String> + Send>;
 
@@ -603,9 +595,8 @@ struct State {
     /// ones it skipped.
     played_frame: Option<i64>,
     index: u64,
-    /// The project's audio, decoded when it first plays.
-    sound: Sound,
-    /// Audio playing with the picture, whose heard position is the clock.
+    /// The project's audio on the output, opened on the first play and kept while it plays: its
+    /// heard position is the clock while playing.
     audio: Option<PreviewAudio>,
     /// What the session's pause held back, done when it resumes.
     deferred: Option<Deferred>,
@@ -681,7 +672,6 @@ impl State {
             started: None,
             played_frame: None,
             index: 0,
-            sound: Sound::Unread,
             audio: None,
             deferred: None,
             held: false,
@@ -697,8 +687,18 @@ impl State {
         self.position = self.clock_time().min(self.end);
         self.started = None;
         self.played_frame = None;
-        self.audio = None;
+        self.silence(shared);
         self.held = true;
+    }
+
+    /// Pauses the audio output, keeping its stream for the next play.
+    fn silence(&mut self, shared: &Shared) {
+        if let Some(audio) = self.audio.as_mut()
+            && let Err(error) = audio.pause()
+        {
+            alpha2_os::diagnostic!("alpha2 preview: the audio output did not pause: {error}");
+            self.audio = None;
+        }
         shared.sounding.store(false, Ordering::Release);
     }
 
@@ -709,17 +709,24 @@ impl State {
             return;
         };
         let heard = audio.heard_sample();
-        let reason = audio.stream_error().or_else(|| {
-            self.heard
-                .stalled(heard, at.elapsed(), audio.buffered())
-                .then(|| format!("it took no sample for {} ms", AUDIO_STALL.as_millis()))
-        });
-        let Some(reason) = reason else {
-            return;
-        };
-        alpha2_os::diagnostic!(
-            "alpha2 preview: the audio output stopped ({reason}); playing on silent"
-        );
+        if let Some(failure) = audio.last_error().filter(|failure| failure.stopped) {
+            record(
+                shared,
+                format!("the project's audio stopped mixing: {}", failure.message),
+            );
+        } else {
+            let reason = audio.stream_error().or_else(|| {
+                self.heard
+                    .stalled(heard, at.elapsed(), audio.buffered())
+                    .then(|| format!("it took no sample for {} ms", AUDIO_STALL.as_millis()))
+            });
+            let Some(reason) = reason else {
+                return;
+            };
+            alpha2_os::diagnostic!(
+                "alpha2 preview: the audio output stopped ({reason}); playing on silent"
+            );
+        }
         let from = self.clock_time();
         self.audio = None;
         shared.sounding.store(false, Ordering::Release);
@@ -832,8 +839,7 @@ impl State {
         self.held = false;
         self.started = None;
         self.played_frame = None;
-        self.audio = None;
-        shared.sounding.store(false, Ordering::Release);
+        self.silence(shared);
         shared.playing.store(false, Ordering::Release);
     }
 
@@ -862,8 +868,7 @@ impl State {
                     self.started = None;
                 }
                 self.held = false;
-                self.audio = None;
-                shared.sounding.store(false, Ordering::Release);
+                self.silence(shared);
                 shared.playing.store(false, Ordering::Release);
             }
             Command::Resize { width, height } => match self.defer(session) {
@@ -915,27 +920,25 @@ impl State {
         // Frames from `from` on count: one the clock passes before the first draw (audio that
         // starts a little in) is dropped like any other.
         self.played_frame = Some(from.ticks() / frame_length(session).ticks().max(1) - 1);
-        self.audio = None;
         self.heard = HeardClock::default();
         shared.sounding.store(false, Ordering::Release);
-        if matches!(self.sound, Sound::Unread) {
-            self.sound = decode_preview_audio(session, shared);
-        }
-        if let Sound::Decoded(sources) = &self.sound {
-            let sources = Arc::clone(sources);
-            let sample = i128::from(from.ticks()) * i128::from(self.rate)
-                / i128::from(alpha2_time::TICKS_PER_SECOND);
-            match PreviewAudio::start(
-                session.snapshot.clone(),
-                sources,
-                i64::try_from(sample).unwrap_or(0),
-            ) {
-                Ok(audio) => {
-                    self.audio = Some(audio);
-                    shared.sounding.store(true, Ordering::Release);
-                }
-                // Without an output the picture keeps time by the wall clock.
-                Err(error) => alpha2_os::diagnostic!("alpha2 preview: no audio: {error}"),
+        let sample = i128::from(from.ticks()) * i128::from(self.rate)
+            / i128::from(alpha2_time::TICKS_PER_SECOND);
+        let sample = i64::try_from(sample).unwrap_or(0);
+        let sounding = match self.audio.as_mut() {
+            Some(audio) => audio.reposition(sample).map_err(|error| error.to_string()),
+            None => open_audio(session, sample).map(|audio| {
+                self.audio = audio;
+            }),
+        };
+        match sounding {
+            Ok(()) => shared
+                .sounding
+                .store(self.audio.is_some(), Ordering::Release),
+            // Without an output the picture keeps time by the wall clock.
+            Err(error) => {
+                alpha2_os::diagnostic!("alpha2 preview: no audio: {error}");
+                self.audio = None;
             }
         }
         self.started = Some((Instant::now(), from));
@@ -1055,12 +1058,15 @@ fn sources(
     }
 }
 
-/// The project's audible sources, decoded for the preview within a quarter of the free memory
-/// (at most 256 MiB). Silent for a project without audio or whose audio does not decode or does
-/// not fit (recorded); unread when the player ended during the decode.
-fn decode_preview_audio(session: &Session, shared: &Shared) -> Sound {
+/// The project's audio on the default output from project sample `sample`, its sources read in
+/// windows of at most [`PREVIEW_AUDIO_BYTES`] as the mix reaches them; `None` for a project
+/// without audible sources or a build without audio decoders.
+///
+/// # Errors
+/// A source without an asset, or no output to open.
+fn open_audio(session: &Session, sample: i64) -> Result<Option<PreviewAudio>, String> {
     let Some(decoders) = session.audio.as_ref() else {
-        return Sound::Silent;
+        return Ok(None);
     };
     if !session
         .project
@@ -1068,7 +1074,7 @@ fn decode_preview_audio(session: &Session, shared: &Shared) -> Sound {
         .iter()
         .any(alpha2_model::MediaSource::is_audible)
     {
-        return Sound::Silent;
+        return Ok(None);
     }
     let assets = session
         .request
@@ -1076,34 +1082,16 @@ fn decode_preview_audio(session: &Session, shared: &Shared) -> Sound {
         .iter()
         .map(|(id, path)| (id.clone(), PathBuf::from(path)))
         .collect();
-    let limit = crate::export::audio_bytes_limit();
-    match crate::export::decode_audio(
+    let sources = crate::export::audio_windows(
         &session.project,
         &assets,
-        decoders.as_ref(),
-        (session.project.settings.sample_rate, limit),
-        &shared.stop,
-    ) {
-        Ok(sources) => Sound::Decoded(Arc::new(sources)),
-        Err(_) if shared.stop.is_cancelled() => Sound::Unread,
-        Err(error) if error.code() == "RESOURCE_LIMIT" => {
-            record(
-                shared,
-                format!(
-                    "the project's audio needs more than {} MiB decoded; the preview is silent",
-                    limit >> 20
-                ),
-            );
-            Sound::Silent
-        }
-        Err(error) => {
-            record(
-                shared,
-                format!("the project's audio does not decode: {error:?}"),
-            );
-            Sound::Silent
-        }
-    }
+        Arc::clone(decoders),
+        (session.project.settings.sample_rate, PREVIEW_AUDIO_BYTES),
+    )
+    .map_err(|error| error.to_string())?;
+    PreviewAudio::start(session.snapshot.clone(), Box::new(sources), sample)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 fn record(shared: &Shared, error: String) {
