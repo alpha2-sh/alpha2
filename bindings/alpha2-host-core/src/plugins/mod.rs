@@ -256,12 +256,20 @@ pub trait Fetch {
     /// `PLUGIN_FETCH_FAILED`, or `PLUGIN_HASH_MISMATCH` when the fetcher checks too.
     fn fetch(&mut self, url: &str, sha256: &str, bytes: u64) -> Result<Fetched, PluginError>;
 
-    /// The file to load for the native artifact at `verified`, whose bytes the loader has checked;
-    /// macOS hosts sign a copy here.
+    /// The file to load for the native artifact read from `verified`, whose checked `bytes` have
+    /// the pinned `sha256`. Called only when this process has not loaded that artifact yet; the
+    /// library then stays loaded until the process exits. A host loads its own copy of the bytes
+    /// here, so the file it checked cannot be replaced before the load.
     ///
     /// # Errors
     /// `PLUGIN_LOAD_FAILED` when it cannot be prepared.
-    fn prepare_native(&mut self, verified: &Path) -> Result<PathBuf, PluginError> {
+    fn prepare_native(
+        &mut self,
+        verified: &Path,
+        bytes: &[u8],
+        sha256: &str,
+    ) -> Result<PathBuf, PluginError> {
+        let _ = (bytes, sha256);
         Ok(verified.to_path_buf())
     }
 }
@@ -466,7 +474,8 @@ pub fn load(
             policy,
         )?),
         ArtifactKind::Cdylib => Box::new(native::NativeTransport::new(
-            &fetch.prepare_native(&path)?,
+            &artifact.sha256,
+            || fetch.prepare_native(&path, &bytes, &artifact.sha256),
             resources,
             caps,
         )?),

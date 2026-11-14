@@ -6,7 +6,8 @@
 //! makes that delivery fail, panic, never return, allocate without bound, or end the process; and
 //! `resource` names a resource whose UTF-8 text `end` emits as a word of `words`. As wasm,
 //! `flood` (`calls`, 0 for no end, and `ignore_refusal`) makes the second delivery call the host's
-//! `emit` that many times with one interval of `quiet`.
+//! `emit` that many times with one interval of `quiet`. As a native library, `park_thread: true`
+//! starts a thread at `begin` that runs the library's code until the process exits.
 
 use alpha2_plugin_sdk::{Context, Emitter, Error, Extractor, Frame, Host};
 use serde_json::Value;
@@ -63,6 +64,25 @@ fn flood(_calls: u64, _ignore_refusal: bool) -> Result<(), Error> {
     Err("flood runs only as wasm".into())
 }
 
+/// A thread that wakes every millisecond in this library's code, after `destroy` too.
+#[cfg(not(target_arch = "wasm32"))]
+fn park_thread() -> Result<(), Error> {
+    std::thread::Builder::new()
+        .spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                std::hint::black_box(());
+            }
+        })
+        .map(drop)
+        .map_err(|error| error.to_string().into())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn park_thread() -> Result<(), Error> {
+    Err("park_thread runs only as a native library".into())
+}
+
 fn list(context: &Context, key: &str) -> Result<Vec<Value>, Error> {
     match context.params.get(key) {
         None => Ok(Vec::new()),
@@ -104,6 +124,9 @@ impl Extractor for Scripted {
 
     fn begin(context: &Context, host: &Host) -> Result<Self, Error> {
         let index = |key: &str| context.params.get(key).and_then(Value::as_u64);
+        if context.params.get("park_thread") == Some(&Value::Bool(true)) {
+            park_thread()?;
+        }
         let resource = match context.params.get("resource").and_then(Value::as_str) {
             None => None,
             Some(name) => {

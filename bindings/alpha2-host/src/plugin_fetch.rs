@@ -608,30 +608,88 @@ impl Fetch for Fetcher {
         })
     }
 
-    #[cfg(target_os = "macos")]
-    fn prepare_native(&mut self, verified: &Path) -> Result<PathBuf, PluginError> {
-        // A downloaded library is signed ad hoc before it loads; the copy keeps the original's
-        // bytes, which the manifest pins, untouched.
+    /// Loads from `<cache>/native/<sha256>.<extension>`, written from the checked bytes, so the
+    /// file the loader read cannot be swapped before the load. An existing copy is never opened
+    /// for writing: Windows refuses that while another host has it loaded, and a mapped file must
+    /// not change.
+    fn prepare_native(
+        &mut self,
+        verified: &Path,
+        bytes: &[u8],
+        sha256: &str,
+    ) -> Result<PathBuf, PluginError> {
         let failed = |why: String| PluginError::new(codes::LOAD_FAILED, why);
-        let name = verified
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("plugin.dylib");
-        let cache = self.private_cache()?;
-        let signed = cache.join("signed").join(name);
-        std::fs::create_dir_all(signed.parent().unwrap_or(cache))
-            .and_then(|()| std::fs::copy(verified, &signed))
-            .map_err(|error| failed(format!("{}: {error}", signed.display())))?;
+        let directory = self
+            .private_cache()
+            .map_err(|error| failed(error.message))?
+            .join("native");
+        alpha2_os::create_private_directory(&directory)
+            .map_err(|error| failed(format!("{}: {error}", directory.display())))?;
+        let extension = verified
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .filter(|extension| extension.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+            .unwrap_or(std::env::consts::DLL_EXTENSION);
+        let file = directory.join(format!("{sha256}.{extension}"));
+        let size = bytes.len() as u64;
+        if usable_native_copy(&file, sha256, size) {
+            return Ok(file);
+        }
+        let partial = directory.join(format!(
+            "{sha256}.{}.{}.partial",
+            std::process::id(),
+            PARTIALS.fetch_add(1, Ordering::Relaxed)
+        ));
+        let placed = write_native_copy(&partial, bytes).and_then(|()| {
+            match std::fs::rename(&partial, &file) {
+                Ok(()) => Ok(()),
+                Err(_) if usable_native_copy(&file, sha256, size) => Ok(()),
+                Err(error) => Err(format!("{}: {error}", file.display())),
+            }
+        });
+        if placed.is_err() {
+            let _ = std::fs::remove_file(&partial);
+        }
+        placed.map_err(failed)?;
+        Ok(file)
+    }
+}
+
+/// Whether the copy at `file` may load: it holds the pinned bytes, or on macOS, where signing
+/// changes them, its ad hoc signature verifies.
+fn usable_native_copy(file: &Path, sha256: &str, size: u64) -> bool {
+    if cfg!(target_os = "macos") {
+        file.is_file()
+            && std::process::Command::new("/usr/bin/codesign")
+                .arg("--verify")
+                .arg(file)
+                .status()
+                .is_ok_and(|status| status.success())
+    } else {
+        holds(file, sha256, size)
+    }
+}
+
+/// Writes `bytes` to the new file `partial` and syncs it; on macOS also signs it ad hoc, which
+/// the loader requires of a library that is not notarized.
+fn write_native_copy(partial: &Path, bytes: &[u8]) -> Result<(), String> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(partial)
+        .and_then(|mut out| out.write_all(bytes).and_then(|()| out.sync_all()))
+        .map_err(|error| format!("{}: {error}", partial.display()))?;
+    if cfg!(target_os = "macos") {
         let status = std::process::Command::new("/usr/bin/codesign")
             .args(["--force", "--sign", "-"])
-            .arg(&signed)
+            .arg(partial)
             .status()
-            .map_err(|error| failed(format!("codesign: {error}")))?;
+            .map_err(|error| format!("codesign: {error}"))?;
         if !status.success() {
-            return Err(failed(format!("codesign failed for {}", signed.display())));
+            return Err(format!("codesign failed for {}", partial.display()));
         }
-        Ok(signed)
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1097,6 +1155,48 @@ mod tests {
         let no_local = policy(&[("--plugin-root", "none")]);
         let error = read(&inside.join("manifest.json"), no_local).expect_err("refused");
         assert_eq!(error.code, codes::REFUSED);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn a_native_library_loads_from_a_private_copy_of_the_checked_bytes() {
+        let cache = Scratch::new("native");
+        let plugin = Scratch::new("native-plugin");
+        std::fs::create_dir_all(&plugin.0).expect("dir");
+        let source = plugin.0.join("libplugin.so");
+        let checked = b"checked library bytes";
+        let pinned = sha256_hex(checked);
+        // The file is replaced after the loader read and checked it.
+        std::fs::write(&source, b"swapped library bytes").expect("swap");
+        let mut fetcher = Fetcher::new(
+            Base::Directory(plugin.0.clone()),
+            Some(cache.0.clone()),
+            Arc::new(Scripted::default()),
+            &DEFAULT_POLICY,
+        );
+        let copy = fetcher
+            .prepare_native(&source, checked, &pinned)
+            .expect("prepared");
+        assert_eq!(copy, cache.0.join("native").join(format!("{pinned}.so")));
+        assert_eq!(std::fs::read(&copy).expect("copy"), checked);
+        // A copy with other bytes under the pinned name is replaced, not used.
+        std::fs::write(&copy, b"stale").expect("stale");
+        let again = fetcher
+            .prepare_native(&source, checked, &pinned)
+            .expect("prepared");
+        assert_eq!(std::fs::read(&again).expect("copy"), checked);
+        assert_eq!(names(&cache.0.join("native")), [format!("{pinned}.so")]);
+        let mut homeless = Fetcher::new(
+            Base::Directory(plugin.0.clone()),
+            None,
+            Arc::new(Scripted::default()),
+            &DEFAULT_POLICY,
+        );
+        let error = homeless
+            .prepare_native(&source, checked, &pinned)
+            .expect_err("no cache");
+        assert_eq!(error.code, codes::LOAD_FAILED);
+        assert!(error.message.contains("ALPHA2_PLUGIN_CACHE"), "{error}");
     }
 
     #[test]

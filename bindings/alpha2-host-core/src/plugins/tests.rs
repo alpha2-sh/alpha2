@@ -884,3 +884,131 @@ fn a_native_table_shorter_than_its_abi_or_with_a_null_entry_is_refused() {
     assert_eq!(refused.code, codes::LOAD_FAILED, "{refused}");
     assert!(refused.message.contains("null entry"), "{refused}");
 }
+
+/// Fetches from `built().dir` and counts the native libraries it is asked to prepare.
+#[derive(Default)]
+struct Counting {
+    prepared: usize,
+}
+
+impl Fetch for Counting {
+    fn fetch(&mut self, url: &str, sha256: &str, bytes: u64) -> Result<Fetched, PluginError> {
+        Local.fetch(url, sha256, bytes)
+    }
+
+    fn prepare_native(
+        &mut self,
+        verified: &Path,
+        _bytes: &[u8],
+        _sha256: &str,
+    ) -> Result<PathBuf, PluginError> {
+        self.prepared += 1;
+        Ok(verified.to_path_buf())
+    }
+}
+
+#[test]
+fn a_native_library_is_prepared_once_and_outlives_threads_it_left_running() {
+    let manifest = parse_manifest(&manifest(1, false, true).to_string()).expect("manifest");
+    let mut fetch = Counting::default();
+    let params = json!({ "park_thread": true }).as_object().cloned();
+    let mut first = load(
+        &manifest,
+        params.clone().unwrap_or_default(),
+        &native_allowed(),
+        &mut fetch,
+    )
+    .expect("first load");
+    run(&mut first, &json!({ "park_thread": true })).expect("first run");
+    drop(first);
+    let after_first = fetch.prepared;
+    // Another test of this process may have loaded the library first.
+    assert!(after_first <= 1, "{after_first}");
+    let mut second = load(
+        &manifest,
+        params.unwrap_or_default(),
+        &native_allowed(),
+        &mut fetch,
+    )
+    .expect("second load");
+    run(&mut second, &json!({})).expect("second run");
+    drop(second);
+    assert_eq!(fetch.prepared, after_first);
+    // The parked thread keeps running the library's code.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+}
+
+/// Fetches every file from one path.
+struct Bare(PathBuf);
+impl Fetch for Bare {
+    fn fetch(&mut self, _: &str, _: &str, _: u64) -> Result<Fetched, PluginError> {
+        Ok(Fetched {
+            path: self.0.clone(),
+            local: true,
+        })
+    }
+}
+
+/// Loads the native digest fixture named by its bare file name, from the working directory, as a
+/// child process started by the test below.
+#[test]
+#[ignore = "run as a child of a_native_library_named_without_a_directory_loads_the_checked_file"]
+fn load_a_native_library_by_bare_name() {
+    let Some(file) = std::env::var_os("ALPHA2_TEST_BARE_LIBRARY") else {
+        return;
+    };
+    let mut entry = json!({ "target": TARGET, "type": "cdylib", "url": "lib" });
+    let bytes = std::fs::read(&file).expect("library");
+    entry["sha256"] = json!(sha256_hex(&bytes));
+    entry["bytes"] = json!(bytes.len());
+    let descriptor = descriptor_of(0);
+    let manifest = json!({ "id": descriptor["id"], "version": "1.2.3", "abi": "alpha2-plugin/1",
+                           "kind": "extractor", "artifacts": [entry], "descriptor": descriptor });
+    let manifest = parse_manifest(&manifest.to_string()).expect("manifest");
+    let mut plugin = load(
+        &manifest,
+        serde_json::Map::new(),
+        &native_allowed(),
+        &mut Bare(PathBuf::from(file)),
+    )
+    .expect("the checked library loads");
+    run(&mut plugin, &json!({})).expect("run");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_native_library_named_without_a_directory_loads_the_checked_file() {
+    let dir = scratch("bare-native");
+    let decoys = scratch("bare-native-decoy");
+    let name = built().native[0].file_name().expect("name").to_owned();
+    std::fs::copy(&built().native[0], dir.join(&name)).expect("library");
+    // A library of the same name on the search path, which a bare name would reach first.
+    std::fs::copy(&built().native[1], decoys.join(&name)).expect("decoy");
+    let search = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
+    let mut paths = vec![decoys.clone()];
+    paths.extend(std::env::split_paths(&search));
+    let output = Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "plugins::tests::load_a_native_library_by_bare_name",
+            "--ignored",
+            "--nocapture",
+        ])
+        .current_dir(&dir)
+        .env("ALPHA2_TEST_BARE_LIBRARY", &name)
+        .env(
+            "LD_LIBRARY_PATH",
+            std::env::join_paths(paths).expect("paths"),
+        )
+        .output()
+        .expect("child");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "{}\n{stdout}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(&dir).expect("cleanup");
+    std::fs::remove_dir_all(&decoys).expect("cleanup");
+}

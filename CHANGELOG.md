@@ -147,6 +147,11 @@ All notable changes to this project are documented in this file.
 - GPU renderer: a layer whose pixels are transparent leaves the picture below it unchanged. Before,
   each such layer re-stored the colors under it, so a stack of transparent overlays darkened the
   picture by up to a few code values and the GPU differed from the CPU renderer.
+- Host: a native plugin is loaded from the host's own copy of the bytes it checked, under
+  `native/` in the private plugin cache, so the file cannot be swapped between the check and the
+  load and a bare file name no longer goes through the system loader's search path. Each library is
+  loaded once per host process and never unloaded, so a thread it started cannot outlive its code;
+  macOS signs the private copy once instead of a shared copy on every load.
 - Host: plugin downloads stream into a private cache. The cache directory is never the shared
   temp directory: without a home directory set `ALPHA2_PLUGIN_CACHE`; on Unix it is created with
   mode 0700 and refused when others can write it. A file is stored under its pinned name only after

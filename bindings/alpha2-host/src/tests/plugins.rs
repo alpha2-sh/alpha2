@@ -323,7 +323,18 @@ fn digest_request(id: &str, manifest: &Path, sha256: &str, plugin: &Value) -> St
 
 /// Answers `requests` in order on a host started with `flags`.
 fn run_with_flags(flags: &str, requests: &[(&str, String)]) -> Vec<Value> {
-    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SERVE_ARGS", flags)]);
+    run_with_flags_in(flags, &[], requests)
+}
+
+/// [`run_with_flags`] with more environment.
+fn run_with_flags_in(
+    flags: &str,
+    environment: &[(&str, &str)],
+    requests: &[(&str, String)],
+) -> Vec<Value> {
+    let mut environment = environment.to_vec();
+    environment.push(("ALPHA2_TEST_SERVE_ARGS", flags));
+    let mut serving = ServeChild::start(SERVE_CHILD, &environment);
     let answers = requests
         .iter()
         .map(|(id, request)| {
@@ -378,8 +389,12 @@ fn the_plugins_flag_decides_whether_plugins_and_native_code_run() {
     );
     assert_eq!(ran_artifact(&default[1]), artifact_sha(&manifest, "wasm"));
 
-    let allowed = run_with_flags(
+    let allowed = run_with_flags_in(
         "--plugins native",
+        &[(
+            "ALPHA2_PLUGIN_CACHE",
+            both.join("cache").to_str().expect("utf-8"),
+        )],
         &[(
             "native",
             digest_request("native", &manifest, &sha256, &native),
