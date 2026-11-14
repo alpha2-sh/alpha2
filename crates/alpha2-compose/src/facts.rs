@@ -41,9 +41,9 @@ pub struct MediaFacts {
     /// Where it ends on its own timeline, in ticks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ticks: Option<i64>,
-    /// Whether it has an audio stream.
-    #[serde(default)]
-    pub has_audio: bool,
+    /// Whether it has an audio stream. Required for a video that plays unmuted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_audio: Option<bool>,
 }
 
 impl MediaFacts {
@@ -57,7 +57,7 @@ impl MediaFacts {
             height: video.map(|video| video.height),
             frame_rate: video.and_then(|video| video.frame_rate),
             duration_ticks: fingerprint.duration_ticks,
-            has_audio: streams.is_some_and(|streams| streams.audio.is_some()),
+            has_audio: Some(streams.is_some_and(|streams| streams.audio.is_some())),
         }
     }
 }
@@ -115,12 +115,20 @@ pub fn requirements(spec: &VideoSpec) -> Requirements {
     found
 }
 
+/// Lists `path` once. A file first named as sound and later as a picture is listed as the
+/// picture, whose facts serve both uses; any other second kind keeps the first.
 fn add_media(found: &mut Requirements, path: &str, kind: Option<FileKind>) {
-    if !found.media.iter().any(|media| media.path == path) {
-        found.media.push(RequiredMedia {
+    let kind = kind.unwrap_or_else(|| kind_of_path(path));
+    match found.media.iter_mut().find(|media| media.path == path) {
+        Some(listed) => {
+            if listed.kind == FileKind::Audio && kind != FileKind::Audio {
+                listed.kind = kind;
+            }
+        }
+        None => found.media.push(RequiredMedia {
             path: path.to_owned(),
-            kind: kind.unwrap_or_else(|| kind_of_path(path)),
-        });
+            kind,
+        }),
     }
 }
 

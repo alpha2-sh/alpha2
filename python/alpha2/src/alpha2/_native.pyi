@@ -57,6 +57,9 @@ def compose_requirements(spec: str) -> str:
     Raises ValueError(message, path, problem) for a spec that does not parse.
     """
 
+def compose_media_facts(fingerprint: str) -> str:
+    """A file's compose facts (JSON text) from a host's fingerprint of it (JSON text)."""
+
 def compose(spec: str, facts: str, fonts: list[bytes]) -> str:
     """A compose spec compiled with facts about its files and the export's font files, as JSON
     text: ``{"project", "assets", "loudness", "warnings"}``.

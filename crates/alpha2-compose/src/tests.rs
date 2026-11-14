@@ -24,7 +24,7 @@ fn facts() -> Value {
     for index in 1..=4 {
         media.insert(
             format!("grid{index}.mp4"),
-            json!({"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "duration_ticks": (30 + index) * SECOND}),
+            json!({"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "duration_ticks": (30 + index) * SECOND, "has_audio": false}),
         );
     }
     media.insert(
@@ -2073,4 +2073,61 @@ fn a_spec_duration_is_the_project_length() {
         {"type": "text", "text": "Hi", "duration": 3}]}}));
     assert_eq!(latest_end(&own), 3 * SECOND);
     assert_eq!(tracks(&own).len(), 1);
+}
+
+#[test]
+fn a_video_needs_facts_that_say_whether_it_has_sound() {
+    let mut facts = facts();
+    facts["media"]["wide.mp4"]
+        .as_object_mut()
+        .expect("facts")
+        .remove("has_audio");
+    let run = |media: Value| {
+        compile_json(&json!({"body": media}).to_string(), &facts.to_string(), &[])
+            .map_err(|error| error.to_string())
+    };
+    let error = run(json!({"type": "media", "path": "wide.mp4"})).expect_err("refused");
+    assert_eq!(
+        error,
+        "spec.body.path: no has_audio for \"wide.mp4\" in the facts; gather them for every file \
+         `requirements` lists"
+    );
+    run(json!({"type": "media", "path": "wide.mp4", "muted": true})).expect("a muted video");
+
+    let fingerprint = json!({"byte_length": 10, "duration_ticks": 5,
+        "streams": {"video": {"width": 640, "height": 360}, "audio": {"channels": 2, "sample_rate": 48000}}});
+    let made: Value = serde_json::from_str(
+        &crate::media_facts_json(&fingerprint.to_string()).expect("a fingerprint"),
+    )
+    .expect("JSON");
+    assert_eq!(
+        made,
+        json!({"width": 640, "height": 360, "duration_ticks": 5, "has_audio": true})
+    );
+}
+
+#[test]
+fn a_file_named_as_sound_and_then_as_a_picture_is_listed_once_as_the_picture() {
+    let text = requirements_json(
+        &json!({"body": {"type": "media", "path": "clip.mp4"},
+            "audio": [{"type": "audio", "path": "clip.mp4"}, {"type": "audio", "path": "song.mp4"}]})
+        .to_string(),
+    )
+    .expect("parses");
+    let found: Value = serde_json::from_str(&text).expect("JSON");
+    assert_eq!(
+        found["media"],
+        json!([{"path": "clip.mp4", "kind": "video"}, {"path": "song.mp4", "kind": "audio"}])
+    );
+    let text = requirements_json(
+        &json!({"body": {"type": "sequence", "children": [
+            {"type": "audio", "path": "clip.mp4"}, {"type": "media", "path": "clip.mp4"}]}})
+        .to_string(),
+    )
+    .expect("parses");
+    let found: Value = serde_json::from_str(&text).expect("JSON");
+    assert_eq!(
+        found["media"],
+        json!([{"path": "clip.mp4", "kind": "video"}])
+    );
 }

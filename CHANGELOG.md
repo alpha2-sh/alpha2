@@ -232,6 +232,9 @@ All notable changes to this project are documented in this file.
   limit.
 - A compose spec's `duration` is the project's length: when the content ends earlier, a
   transparent clip fills the rest, so the export lasts as long as asked.
+- Compose facts must say whether a video has sound (`has_audio`) when a spec plays it unmuted;
+  facts without it compiled the video silently. `requirements` lists a file named first by an
+  `audio` node and then by a `media` node once, as the picture.
 
 ## [0.6.0] - 2026-11-08
 

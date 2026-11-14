@@ -1734,7 +1734,11 @@ impl Context<'_> {
                         .volume
                         .map_or(Ok(1.0), |volume| Self::gain(path, "volume", volume))?,
                     muted: media.muted,
-                    has_audio: facts.has_audio,
+                    has_audio: match facts.has_audio {
+                        Some(has_audio) => has_audio,
+                        None if media.muted => false,
+                        None => return Err(missing("has_audio")),
+                    },
                     blur,
                     frame_ticks,
                 })

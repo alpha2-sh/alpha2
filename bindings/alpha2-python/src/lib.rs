@@ -129,6 +129,13 @@ fn compose_requirements(py: Python<'_>, spec: &str) -> PyResult<String> {
         .map_err(|error| compose_error(&error))
 }
 
+/// A file's compose facts from a host's fingerprint of it, both JSON. Raises
+/// `ValueError(message, path, problem)` for a fingerprint that does not parse.
+#[pyfunction]
+fn compose_media_facts(fingerprint: &str) -> PyResult<String> {
+    alpha2_compose::media_facts_json(fingerprint).map_err(|error| compose_error(&error))
+}
+
 /// Compiles a compose spec with its file facts and export fonts to JSON
 /// `{"project", "assets", "loudness", "warnings"}`. Raises `ValueError(message, path, problem)`.
 #[pyfunction]
@@ -262,6 +269,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("COMPOSE_THEMES", alpha2_compose::THEMES.to_vec())?;
     module.add_function(wrap_pyfunction!(apply_edit, module)?)?;
     module.add_function(wrap_pyfunction!(compose_requirements, module)?)?;
+    module.add_function(wrap_pyfunction!(compose_media_facts, module)?)?;
     module.add_function(wrap_pyfunction!(compose, module)?)?;
     module.add_function(wrap_pyfunction!(compose_bind, module)?)?;
     module.add_function(wrap_pyfunction!(compose_data_schema, module)?)?;

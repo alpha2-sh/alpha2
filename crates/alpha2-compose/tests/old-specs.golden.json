@@ -1322,6 +1322,7 @@
           "den": 1,
           "num": 30
         },
+        "has_audio": false,
         "height": 1080,
         "width": 1920
       },
@@ -1331,6 +1332,7 @@
           "den": 1,
           "num": 30
         },
+        "has_audio": false,
         "height": 1080,
         "width": 1920
       },
@@ -1340,6 +1342,7 @@
           "den": 1,
           "num": 30
         },
+        "has_audio": false,
         "height": 1080,
         "width": 1920
       },
@@ -1349,6 +1352,7 @@
           "den": 1,
           "num": 30
         },
+        "has_audio": false,
         "height": 1080,
         "width": 1920
       },

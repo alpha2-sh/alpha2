@@ -178,6 +178,22 @@ fn part<T: Serialize>(value: &T) -> String {
     serde_json::to_string(value).expect("assets, loudness and warnings serialize")
 }
 
+/// [`MediaFacts::from_fingerprint`] across a JSON boundary: a host's fingerprint of a file in,
+/// its facts out.
+///
+/// # Errors
+/// Returns where the fingerprint does not parse.
+///
+/// # Panics
+/// Never; facts always serialize.
+pub fn media_facts_json(fingerprint: &str) -> Result<String, ComposeError> {
+    let fingerprint: alpha2_model::MediaFingerprint = parse(fingerprint, "fingerprint")?;
+    Ok(
+        serde_json::to_string(&MediaFacts::from_fingerprint(&fingerprint))
+            .expect("facts serialize"),
+    )
+}
+
 /// [`requirements`] across a JSON boundary.
 ///
 /// # Errors

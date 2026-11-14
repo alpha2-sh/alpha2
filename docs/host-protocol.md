@@ -213,7 +213,7 @@ Compiles compose specs and binds templates, without a GPU and without reading me
 | `requirements` | `spec` | `{media, texts}`: the files to gather `facts` about with `conform` |
 | `templates` | none | `{templates}`: the built-in `alpha2/` templates |
 
-`facts` describes the files a spec names (`{"media": {path: {width, height, frame_rate, duration_ticks, has_audio}}, "texts": {path: text}}`). A spec or data that does not compile or bind fails with `INVALID_INPUT`, its `details` `{path, problem}` naming where in the spec, template or data (`spec.body.children[2].path`, `data.title`).
+`facts` describes the files a spec names (`{"media": {path: {width, height, frame_rate, duration_ticks, has_audio}}, "texts": {path: text}}`; a video a spec plays unmuted needs `has_audio`). A spec or data that does not compile or bind fails with `INVALID_INPUT`, its `details` `{path, problem}` naming where in the spec, template or data (`spec.body.children[2].path`, `data.title`).
 
 ## `edit`
 

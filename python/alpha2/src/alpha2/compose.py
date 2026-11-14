@@ -1168,15 +1168,11 @@ def _spec_json(spec: Mapping[str, Any] | Video) -> str:
 
 
 def _media_facts(fingerprint: Mapping[str, Any]) -> dict[str, Any]:
-    streams = fingerprint.get("streams") or {}
-    video = streams.get("video") or {}
-    facts: dict[str, Any] = {"has_audio": streams.get("audio") is not None}
-    for key in ("width", "height", "frame_rate"):
-        if key in video:
-            facts[key] = video[key]
-    if "duration_ticks" in fingerprint:
-        facts["duration_ticks"] = fingerprint["duration_ticks"]
-    return facts
+    try:
+        facts = _native.compose_media_facts(json.dumps(_plain(fingerprint)))
+    except ValueError as error:
+        raise _compose_error(error) from None
+    return cast("dict[str, Any]", json.loads(facts))
 
 
 def gather_facts(
