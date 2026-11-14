@@ -253,7 +253,10 @@ edited = alpha2.edit.apply(
 )
 ```
 
-Every kept moment renders as before, and `project_json` is the same bytes on every surface.
+Kept moments render as before for clip picture and sound, clip keyframes, captions, hold data
+and linear automation; a matte or a binding read through another clip follows the part beside it
+or the edit is refused (`matte_source`, `read_through`). The host protocol lists what is not exact
+in this release. `project_json` is the same bytes on every surface.
 A refusal raises `alpha2.Alpha2EditError`, whose `refusal` names why (`unknown_data`,
 `empty_target`, ...). [The host protocol](../../docs/host-protocol.md#edit) lists the fields.
 

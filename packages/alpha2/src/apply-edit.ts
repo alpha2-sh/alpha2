@@ -2,8 +2,11 @@
  * Edit operations that apply data to a project once, run by the engine's wasm.
  *
  * The operations are named for primitives: `remove_ranges` (drop silences, keep highlights),
- * `split_at` (cut on beats) and `bake` (data bindings to keyframes, words to cues). Every kept
- * moment renders as before, and the result is the same canonical document on every surface.
+ * `split_at` (cut on beats) and `bake` (data bindings to keyframes, words to cues). Kept moments
+ * render as before for clip picture and sound, clip keyframes, captions, hold data and linear
+ * automation; a matte or a `via` binding follows the part beside it or the edit is refused
+ * (`matte_source`, `read_through`); track automation with hold or eased keys across a removed range
+ * and a fade under a cut are not exact yet. The result is the same canonical document everywhere.
  *
  * ```ts
  * const { project: tight } = applyEdit(wasm, project, {

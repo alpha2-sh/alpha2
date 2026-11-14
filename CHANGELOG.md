@@ -6,14 +6,20 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
-- Native mobile targets: a uniffi API for iOS and Android apps, shipped as an Android AAR with
-  Kotlin bindings and a Swift package over a static XCFramework.
-- Mobile export and preview over platform codecs (MediaCodec, VideoToolbox, AudioToolbox), with
-  hardware-decoded frames kept on the GPU.
+- Native mobile targets, as a preview: the `alpha2-mobile` crate with a uniffi API for iOS and
+  Android apps, and the scripts that build an Android library with Kotlin bindings and a Swift
+  package over a static XCFramework. No Android library or Swift package is published with 0.6.0.
+- Mobile export and preview over platform codecs (MediaCodec, VideoToolbox, AudioToolbox).
+  Hardware-decoded frames stay on the GPU on Android; iOS copies decoded and encoded frames through
+  memory. Known limits: the player always draws on a GPU device that presents to its window
+  (`RendererMode` governs exports and stills), `conform` reports only whether each source's file
+  opens and ignores `purpose`, and Android codecs are opened by MIME type or a fixed component name,
+  without `MediaCodecList` discovery.
 - `alpha2-container`: MP4/MOV, Matroska/WebM, WAV, MP3, ADTS, FLAC and Ogg demuxers, and MP4 and
   Matroska/WebM muxers, with FFmpeg packet parity.
-- `alpha2-host-core`: decoding, export and audio shared by the desktop and mobile hosts, including
-  PNG, JPEG and WebP stills with Exif orientation.
+- `alpha2-host-core`: the policies, audio timelines, cursor rules, providers, plugin runtime and
+  protocol frames every native host shares, and the FFmpeg-free decode, export and still pipeline
+  (PNG, JPEG and WebP with Exif orientation) the mobile hosts run.
 - Compose templates that bind typed parameters into plain specs, with a data schema and lint.
   Titles, cards, lower thirds, logos, reframes, reveals and comparison grids ship as first-party
   templates.
@@ -22,7 +28,7 @@ All notable changes to this project are documented in this file.
 - Text fits its font size to its box and clamps lines with an ellipsis.
 - Compose everywhere: `alpha2/compose-wasm` in the browser, a `compose` operation in `serve`, and
   compose on mobile behind a default `compose` feature.
-- `alpha2 mcp`: an MCP server in the Python package that lists, binds, checks and renders templates
+- `python -m alpha2 mcp`: an MCP server in the Python package that lists, binds, checks and renders templates
   and specs.
 - The compose schema lists every built-in effect with its parameter types and ranges. Schemas carry
   their alpha2.sh ids, and a core compose schema leaves out engine nodes.
@@ -53,7 +59,11 @@ All notable changes to this project are documented in this file.
   release contains a plugin.
 - Edit operations `remove_ranges`, `split_at` and `bake`, with a report of what moved: an `edit`
   host operation (`client.edit` in Node), `alpha2.edit.apply` in Python, `applyEdit` in
-  `alpha2/apply-edit` and `applyEdit` on mobile.
+  `alpha2/apply-edit` and `applyEdit` on mobile. Known limits: track and master automation with hold
+  or eased keys across a removed range, a linear timeline-anchored sample set just before a cut,
+  keyed parameters of a transition a ripple moves, parts of a reversed clip whose edges are off the
+  frame grid, and a fade under a cut are not exact; `split_at` inside a transition, more than 4,096
+  parts or cues on a track, and a bake of data outside a property's range still end as `INTERNAL`.
 - Conform reports data sets made from an original that has since changed.
 - `@alpha2-sh/editor` edits data: `data.put` and `data.remove` commands (removal refused while
   anything reads the set), `dataValue` and `isDataBound`, `editProject` and `applyEdit` to commit an
@@ -78,6 +88,8 @@ All notable changes to this project are documented in this file.
 - Built-in effects and transitions are validated against their published definitions.
 - Mattes and masks spread over transitions that commute with coverage, such as wipes.
 - Builds link the pinned FFmpeg ahead of system library directories.
+- A bundled archive's FFmpeg libraries may be replaced only by a build of the same 8.1.x series and
+  configuration; another series can lay out the same structures differently.
 
 ### Fixed
 
@@ -174,6 +186,9 @@ All notable changes to this project are documented in this file.
 - In the editor, a kept proxy that cannot be staged or has no room in the runtime no longer makes
   every preview load, `conform()` and `nativeAssets()` reject; it is reported once to `onError`
   (`proxy_unavailable`) and its source reads the original.
+- The GPU composite draws a layer shown 1:1 on a canvas wider than 1920 pixels exactly, as the CPU
+  renderer does; up to a few hundred columns of a 3840-wide clip were softened, differently on each
+  GPU.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

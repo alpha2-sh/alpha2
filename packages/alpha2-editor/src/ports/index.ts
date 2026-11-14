@@ -7,7 +7,7 @@ import type {
 } from "alpha2/export-retry";
 import type { Project } from "alpha2/project";
 import type { EditorDocument, AssetDescriptor } from "../core/document.js";
-/** Shows a project in a preview surface. Implemented by the browser bridge and native previews. */
+/** Shows a project in a preview surface. */
 export interface PreviewBridge {
   /** Replaces the shown project. `revision` increases with every call. */
   replaceProject(project: Project, revision: number): Promise<void>;

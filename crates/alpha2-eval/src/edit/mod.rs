@@ -1,10 +1,13 @@
 //! The edit operations `remove_ranges`, `split_at` and `bake`, which apply data to a project once.
 //!
 //! Operations are named for primitives, never for features, and are pure: a project and a
-//! request in, a project and a report out, with no I/O. Every kept moment renders as before:
-//! clips are split so each part continues its source and time map, clip-attached keyframes move
-//! with their clip, timeline-anchored data and caption cues are cut and shifted, and transitions
-//! whose cut point is removed are removed. The result validates and is canonical.
+//! request in, a project and a report out, with no I/O. Clips are split so each part continues its
+//! source and time map, clip-attached keyframes move with their clip, timeline-anchored data and
+//! caption cues are cut and shifted, transitions whose cut point is removed are removed, and mattes
+//! and `via` bindings follow the part beside them or the edit is refused. Kept moments render as
+//! before except for track automation with hold or eased keys across a removed range, a linear
+//! sample set just before a cut, keyed transition parameters a ripple moves, reversed parts off the
+//! frame grid and a fade under a cut. The result validates and is canonical.
 
 mod bake;
 #[cfg(test)]

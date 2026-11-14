@@ -160,7 +160,7 @@ export interface NativeClientOptions {
   readonly fetch?: typeof fetch;
 }
 /**
- * A client for the native export service (`@alpha2-sh/node`'s HTTP host). Exports run with the
+ * A client for an HTTP export service the application runs. Exports run with the
  * editor's retry policy; each job uploads its assets once and reuses them across attempts.
  */
 export function createNativeClient(options: NativeClientOptions) {

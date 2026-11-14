@@ -246,8 +246,8 @@ export class EditorSession {
   }
   /**
    * Runs `command` on the committed document and commits the result as one undo step, cancelling an
-   * active gesture first. A refusal is returned, not thrown, and leaves the session unchanged. A
-   * command that changes nothing also leaves it unchanged and keeps the redo history.
+   * active gesture first. A refusal is returned, not thrown, and leaves the session unchanged. An
+   * empty transaction leaves it unchanged too.
    */
   dispatch(command: Command): Result<EditorDocument> {
     this.#active();
