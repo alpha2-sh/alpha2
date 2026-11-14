@@ -446,6 +446,9 @@ All notable changes to this project are documented in this file.
   a clip's decoder closes, and while a preview waits for a command, instead of at the next import;
   a paused or finished timeline no longer holds up to three decoder images and their plane
   textures.
+- Android: the AAR ships consumer shrinker rules, so an app built with R8 (minified release)
+  keeps what JNA and the generated bindings reach by name; before, such an app failed at its first
+  call with an `UnsatisfiedLinkError` from JNA.
 - A browser export cancelled while its sink is finishing rejects at once with `cancelled` and
   commits nothing, also when `finish` never settles; before, the export waited for `finish` and
   then reported a committed file as cancelled. `MediabunnySink.finish` rejects with

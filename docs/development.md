@@ -159,6 +159,15 @@ adb shell am instrument -w sh.alpha2.test/androidx.test.runner.AndroidJUnitRunne
 
 An app calls `Alpha2Android.init(context)` once, before anything else. An app that takes the AAR file itself also adds its dependencies: `net.java.dev.jna:jna:5.17.0@aar` and `org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2`.
 
+The AAR ships consumer shrinker rules (`lib/consumer-rules.pro`): JNA and the generated bindings reach native code by class, field and method names, so an app's R8 build keeps `com.sun.jna`, the classes that implement or extend JNA types, and `sh.alpha2`. The `consumer` module is an app built that way (release, R8 with only those rules); its instrumentation test runs capabilities and an export against it:
+
+```sh
+scripts/build-android.sh :consumer:assembleRelease :consumer:assembleReleaseAndroidTest
+adb install -r packages/alpha2-android/consumer/build/outputs/apk/release/consumer-release.apk
+adb install -r -t packages/alpha2-android/consumer/build/outputs/apk/androidTest/release/consumer-release-androidTest.apk
+adb shell am instrument -w sh.alpha2.consumer.test/androidx.test.runner.AndroidJUnitRunner
+```
+
 Both mobile build scripts ship the Rust crates' license notices when `ALPHA2_NOTICES` names them (`node scripts/crate-licenses.mjs --target <triple> --out <file> alpha2-mobile`): the AAR in `META-INF/alpha2/`, each XCFramework slice beside its privacy manifest. The release workflow builds both packages that way and checks their sizes and the AAR's 16 KB alignment.
 
 #### The Swift package

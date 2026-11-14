@@ -12,6 +12,7 @@
 /packages/alpha2-android/.gradle/
 /packages/alpha2-android/build/
 /packages/alpha2-android/lib/build/
+/packages/alpha2-android/consumer/build/
 /packages/alpha2-android/local.properties
 /packages/alpha2-swift/.build/
 /packages/alpha2-swift/.build-native/

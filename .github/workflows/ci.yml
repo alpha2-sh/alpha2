@@ -974,8 +974,10 @@ jobs:
         if: matrix.instrumentation
         run: |
           export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:?}" JAVA_HOME="${JAVA_HOME_17_X64:?}"
-          ALPHA2_ANDROID_ABIS=x86_64 scripts/build-android.sh :lib:assembleDebugAndroidTest
+          ALPHA2_ANDROID_ABIS=x86_64 scripts/build-android.sh :lib:assembleDebugAndroidTest \
+            :consumer:assembleRelease :consumer:assembleReleaseAndroidTest
           echo "ALPHA2_TEST_APK=$PWD/packages/alpha2-android/lib/build/outputs/apk/androidTest/debug/lib-debug-androidTest.apk" >> "$GITHUB_ENV"
+          echo "ALPHA2_CONSUMER_APKS=$PWD/packages/alpha2-android/consumer/build/outputs/apk" >> "$GITHUB_ENV"
       - name: Let the emulator use KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
@@ -995,6 +997,7 @@ jobs:
             adb push target/mobile-tests/. /data/local/tmp/alpha2-test/ > /dev/null
             for binary in target/mobile-tests/*; do name=$(basename "$binary"); adb shell "cd /data/local/tmp/alpha2-test && chmod 755 $name && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test ALPHA2_SKIP_LOG=/data/local/tmp/alpha2-test/skip-log.jsonl ${{ matrix.test-env }} ./$name --test-threads 1" || status=1; done; adb pull /data/local/tmp/alpha2-test/skip-log.jsonl "$ALPHA2_SKIP_LOG" > /dev/null 2>&1; node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"; [ -z "${status:-}" ]
             if [ -n "${ALPHA2_TEST_APK:-}" ]; then adb install -r -t "$ALPHA2_TEST_APK" && adb shell am instrument -w sh.alpha2.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/instrumentation.txt" && grep -q '^OK (' "$RUNNER_TEMP/instrumentation.txt"; fi
+            if [ -n "${ALPHA2_CONSUMER_APKS:-}" ]; then adb install -r "$ALPHA2_CONSUMER_APKS/release/consumer-release.apk" && adb install -r -t "$ALPHA2_CONSUMER_APKS/androidTest/release/consumer-release-androidTest.apk" && adb shell am instrument -w sh.alpha2.consumer.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/shrunk.txt" && grep -q '^OK (' "$RUNNER_TEMP/shrunk.txt"; fi
 
   mobile-test-ios:
     if: >-
