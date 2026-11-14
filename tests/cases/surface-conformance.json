@@ -2151,6 +2151,59 @@
         "version": 1
       },
       "sha256": "bea8d2d6c069635167433a3fe8457a6b15e23fe4c62738523c60ff134485d5e2"
+    },
+    {
+      "assets": {
+        "v": "tests/corpus/h264-bt709-copy.mp4"
+      },
+      "extractor": {
+        "client": {
+          "id": "alpha2.test.digest",
+          "input": {
+            "format": "rgba8",
+            "from": [
+              "source",
+              "timeline"
+            ],
+            "max_size": 960,
+            "media": "video"
+          },
+          "outputs": [
+            {
+              "channels": [
+                "hi",
+                "lo"
+              ],
+              "interpolation": "hold",
+              "kind": "scalars",
+              "name": "digest"
+            }
+          ],
+          "params_schema": {
+            "type": "object"
+          },
+          "version": 1
+        }
+      },
+      "name": "range-past-source",
+      "project": "fingerprinted",
+      "refused": "ends past the source's duration",
+      "request": {
+        "extractor": "alpha2.test.digest",
+        "input": {
+          "from": "source",
+          "range": {
+            "end": 40001,
+            "start": 0
+          },
+          "size": 96,
+          "source_id": "v"
+        },
+        "outputs": {
+          "digest": "frames"
+        },
+        "version": 1
+      }
     }
   ],
   "projects": {
@@ -2459,6 +2512,33 @@
             "name": "F"
           }
         ]
+      }
+    },
+    "fingerprinted": {
+      "id": "p",
+      "name": "P",
+      "schema_version": 1,
+      "settings": {
+        "frame_rate": {
+          "den": 1,
+          "num": 30
+        },
+        "height": 180,
+        "sample_rate": 48000,
+        "width": 320
+      },
+      "sources": [
+        {
+          "fingerprint": {
+            "duration_ticks": 40000
+          },
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": []
       }
     },
     "generated": {

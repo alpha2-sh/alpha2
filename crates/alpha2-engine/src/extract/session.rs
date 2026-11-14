@@ -209,6 +209,8 @@ pub enum RequestError {
     InvalidInput(String),
     /// The range is empty or negative, or a pass starts outside it.
     InvalidRange,
+    /// The range ends past the source's fingerprinted duration, in ticks.
+    RangePastSource(i64),
     /// `size` is zero or above the descriptor's `max_size`.
     InvalidSize,
     /// The audio rate or channels conflict with the descriptor's fixed ones, or are invalid.
@@ -228,6 +230,10 @@ impl fmt::Display for RequestError {
             Self::InvalidRange => {
                 formatter.write_str("the range is empty or negative, or a pass starts outside it")
             }
+            Self::RangePastSource(duration) => write!(
+                formatter,
+                "the range ends past the source's duration of {duration} ticks"
+            ),
             Self::InvalidSize => {
                 formatter.write_str("size is zero or above the descriptor's max_size")
             }
@@ -388,6 +394,8 @@ pub struct ExtractSession {
     request: ExtractRequest,
     input: Input,
     anchor: DataAnchor,
+    /// The source's fingerprinted duration in ticks, which the data must lie within.
+    duration: Option<i64>,
     passes: Vec<Pass>,
     phase: Phase,
     progress: Vec<PassProgress>,
@@ -480,7 +488,7 @@ impl ExtractSession {
         {
             return Err(RequestError::InvalidRange);
         }
-        let source = match read.from {
+        let (source, duration) = match read.from {
             InputFrom::Source => {
                 let id = read.source_id.as_ref().ok_or_else(|| {
                     RequestError::InvalidInput("source input needs source_id".to_owned())
@@ -501,7 +509,16 @@ impl ExtractSession {
                         "source {id} cannot feed this input"
                     )));
                 }
-                Some(id.clone())
+                let duration = source
+                    .fingerprint
+                    .as_ref()
+                    .and_then(|fingerprint| fingerprint.duration_ticks);
+                if let Some(duration) = duration
+                    && range.end().ticks() > duration
+                {
+                    return Err(RequestError::RangePastSource(duration));
+                }
+                (Some(id.clone()), duration)
             }
             InputFrom::Timeline => {
                 if read.source_id.is_some() {
@@ -509,7 +526,7 @@ impl ExtractSession {
                         "timeline input takes no source_id".to_owned(),
                     ));
                 }
-                None
+                (None, None)
             }
         };
         let input = match (&descriptor.input, source.clone()) {
@@ -632,6 +649,7 @@ impl ExtractSession {
             request,
             input,
             anchor,
+            duration,
             progress: Vec::new(),
             passes,
             phase: Phase::BeforePass(0),
@@ -1292,7 +1310,7 @@ impl ExtractSession {
                 made_by: Some(made_by.clone()),
                 made_from: None,
             };
-            set.validate(None).map_err(|problem| {
+            set.validate(self.duration).map_err(|problem| {
                 SessionError::InvalidResult(format!("data set {id} {problem}"))
             })?;
             sets.push(set);

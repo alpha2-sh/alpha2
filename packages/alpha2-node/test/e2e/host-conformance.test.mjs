@@ -107,6 +107,14 @@ test("each extract case hashes as pinned", async () => {
       ),
       request: fixture.request,
     };
+    if (fixture.refused !== undefined) {
+      await assert.rejects(
+        client.extract(request, { describe: () => fixture.extractor.client }),
+        (error) => error.message.includes(fixture.refused),
+        fixture.name,
+      );
+      continue;
+    }
     const result =
       fixture.extractor.plugin === undefined
         ? await client.extract(request, {

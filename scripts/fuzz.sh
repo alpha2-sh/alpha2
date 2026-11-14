@@ -159,6 +159,15 @@ seed() {
           [{ output: "i", start: 8000, end: 12000 }],
         ]));
         fs.writeFileSync(`${dir}/lost.json`, JSON.stringify([[{ output: "s", time: 0, values: [null, 1] }]]));
+        const batches = [[{ output: "i", start: 0, end: 4000 }], [{ output: "s", time: 4000, values: [0, 1] }]];
+        fs.writeFileSync(`${dir}/source-video.json`, JSON.stringify({
+          input: { from: "source", source_id: "v", range: { start: 0, end: 12000 }, size: 16 }, batches }));
+        fs.writeFileSync(`${dir}/range-past-source.json`, JSON.stringify({
+          input: { from: "source", source_id: "v", range: { start: 0, end: 12001 }, size: 16 }, batches }));
+        fs.writeFileSync(`${dir}/source-audio-backward.json`, JSON.stringify({
+          audio: true, batches,
+          input: { from: "source", source_id: "v", range: { start: 0, end: 12000 }, sample_rate: 96000,
+                   passes: [{ start: 11999, direction: "backward" }] } }));
       ' "$dir"
       ;;
     composition_plan) projects "$dir" compositions ;;

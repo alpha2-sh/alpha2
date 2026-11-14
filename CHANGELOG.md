@@ -27,6 +27,10 @@ All notable changes to this project are documented in this file.
 - `alpha2-gpu`: `Capabilities::half_float_blendable` is removed; a half-float
   `intermediate_format` now implies blending. `Renderer::render_quad` is removed (it had no use
   outside the renderer's tests).
+- Extraction: a source range that ends past the source's fingerprinted duration is refused
+  before anything is decoded (`INVALID_REQUEST` on the host, `INVALID_INPUT` in the browser),
+  instead of returning data that made the project invalid once added; the whole source is
+  `0..fingerprint.duration_ticks`.
 - Host: whoever starts `serve` decides what plugins may do. `--plugins off|wasm|native` (default
   `wasm`: a request's `allow_native` takes effect only under `native`), `--plugin-origins
   none|<https origins>` (default: a manifest from any `https:` origin, its files and redirects only

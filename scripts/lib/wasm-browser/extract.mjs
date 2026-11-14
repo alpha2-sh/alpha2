@@ -277,9 +277,17 @@ for (const fixture of table.extract) {
       request: fixture.request,
     }, extractor);
   } catch (error) {
+    if (fixture.refused !== undefined) {
+      if (!String(error?.message).includes(fixture.refused)) failed.push(fixture.name);
+      continue;
+    }
     if (error?.code !== "DECODE_UNAVAILABLE") throw error;
     undecodable[fixture.name] = error.message;
     h264Unavailable ??= fixture.name.includes("h264") ? error : undefined;
+    continue;
+  }
+  if (fixture.refused !== undefined) {
+    failed.push(fixture.name);
     continue;
   }
   found[fixture.name] = await dataHash(result.dataSets);

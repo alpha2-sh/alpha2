@@ -225,6 +225,15 @@ fn every_extract_case_hashes_as_pinned_on_every_path() {
             serving.write(&line.to_string());
         }
         let answer = digest_client(&mut serving, &name);
+        if let Some(refused) = case["refused"].as_str() {
+            assert_eq!(
+                answer["error"]["code"], "INVALID_REQUEST",
+                "{name}: {answer}"
+            );
+            let message = answer["error"]["message"].as_str().unwrap_or_default();
+            assert!(message.contains(refused), "{name}: {answer}");
+            continue;
+        }
         assert_eq!(answer["ok"], true, "{name}: {answer}");
         let found = data_hash(&answer["result"]["dataSets"]);
         if case["request"]["input"]["from"] == "source" && case["extractor"]["client"].is_object() {

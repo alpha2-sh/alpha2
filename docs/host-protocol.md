@@ -246,7 +246,7 @@ Runs an extractor over a source or the timeline and answers with the data sets i
 
 Any other field is refused with `INVALID_REQUEST`. This host does not supply timeline audio: an audio extractor over the timeline fails with `INVALID_INPUT`; extract from the source instead.
 
-The host answers a request the session refuses (an unknown output, an empty range or one that starts before 0, a pass that starts outside the range, a source the descriptor cannot read) with `INVALID_REQUEST` before anything is decoded. A range that reaches past the end of the source is not refused. Then it sends steps, one at a time, and waits for the acknowledgement of each before the next:
+The host answers a request the session refuses (an unknown output, an empty range or one that starts before 0, a pass that starts outside the range, a source the descriptor cannot read, a source range that ends past the source's fingerprinted duration `fingerprint.duration_ticks`) with `INVALID_REQUEST` before anything is decoded; a range is never clamped. For a source without a fingerprinted duration a range past the end of the stream is read as silence and no frames. Then it sends steps, one at a time, and waits for the acknowledgement of each before the next:
 
 ```json
 {"protocolVersion":2,"type":"extract.step","requestId":"7","seq":3,"step":"video","time":8000,"width":96,"height":54,"format":"luma8","attachments":[{"type":"application/octet-stream","bytes":5184}]}
