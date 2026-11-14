@@ -292,7 +292,25 @@ export class Alpha2Player {
     }
   }
 
-  async #presentOne({
+  async #presentOne(
+    presentation: WaitingPresentation,
+  ): Promise<PresentedFrame | undefined> {
+    try {
+      return await this.#presentOnce(presentation);
+    } catch (error) {
+      // A device lost during the presentation is refused by the renderer; recover and retry once.
+      if (
+        (error as { code?: unknown } | null)?.code !== "GPU_DEVICE_LOST" ||
+        error === this.#terminal ||
+        this.#disposed ||
+        !this.#backend.isDeviceLost()
+      )
+        throw error;
+      return this.#presentOnce(presentation);
+    }
+  }
+
+  async #presentOnce({
     timeTicks,
     request,
     seeks,

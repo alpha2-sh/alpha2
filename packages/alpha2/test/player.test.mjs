@@ -737,3 +737,28 @@ test("a caller presenting faster than frames arrive still sees refilled frames d
   assert.ok(drawnWhilePresenting >= 2, `${drawnWhilePresenting} drawn`);
   assert.equal(drawn.at(-1), 19n * 4_000n);
 });
+
+test("a presentation the renderer refuses because the device was just lost recovers and presents", async () => {
+  const backend = new FakeBackend();
+  const present = backend.present.bind(backend);
+  let refusals = 0;
+  backend.present = async (timeTicks) => {
+    if (refusals === 0) {
+      refusals += 1;
+      backend.deviceLost = true;
+      throw Object.assign(new Error("the GPU device was lost"), {
+        code: "GPU_DEVICE_LOST",
+        fatal: true,
+      });
+    }
+    return present(timeTicks);
+  };
+  const player = new Alpha2Player(backend, { recovery: ladder() });
+  await player.initialize({});
+  const result = await player.present(4_000n);
+  assert.equal(result?.presentedTimeTicks, 4_000n);
+  assert.deepEqual(
+    backend.calls.map(([name]) => name),
+    ["initialize", "recover", "present"],
+  );
+});

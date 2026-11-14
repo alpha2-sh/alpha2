@@ -289,6 +289,11 @@ All notable changes to this project are documented in this file.
   frame. `BrowserRobustnessCoordinator` and `BrowserResourceBudget` are removed (nothing used
   them), with the diagnostics only they reported; `detectBrowserCapabilities` now reports
   `audioDecoder` and `audioEncoder`.
+- The browser GPU renderer refuses every call that would make or use a GPU object once its
+  device or WebGL context is lost, with a fatal `GPU_DEVICE_LOST`, also right after a WebGL
+  context loss whose event has not arrived yet; before, such a call could reach the WebGL
+  backend's unchecked object creation, or on WebGPU draw nothing without an error.
+  `Alpha2Player` recovers and presents again when the renderer refuses a presentation this way.
 
 ## [0.6.0] - 2026-11-08
 

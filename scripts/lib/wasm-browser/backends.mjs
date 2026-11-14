@@ -587,15 +587,31 @@ const prepare = (engine) => {
   engine.loadProject(JSON.stringify(project));
   engine.uploadRgbaImage("image-source", 64, 48, new Uint8Array(64 * 48 * 4).fill(255));
 };
+const panics = [];
+const consoleError = console.error;
+console.error = (...args) => {
+  if (args.some((arg) => /Alpha2Panic|panicked/.test(String(arg?.name ?? "") + String(arg?.message ?? arg)))) panics.push(String(args[0]));
+  consoleError.apply(console, args);
+};
+let rejection = null;
 const exportFrame = async (engine) => {
   try {
     const ticket = engine.beginExportAt(0n, "h264");
     if (ticket.kind === "rendered") await ticket.readback;
     return ticket.kind;
   } catch (error) {
+    rejection = { name: error?.name ?? null, code: error?.code ?? null, fatal: error?.fatal ?? null };
     return "rejected: " + String(error?.message ?? error);
   }
 };
+// Which WebGL calls return null on a lost context, per browser; wgpu's GL backend unwraps them.
+const nullProbe = (gl) => ({
+  createTexture: gl.createTexture() === null,
+  createShader: gl.createShader(gl.VERTEX_SHADER) === null,
+  createProgram: gl.createProgram() === null,
+  createRenderbuffer: gl.createRenderbuffer() === null,
+  createSampler: gl.createSampler() === null,
+});
 const settle = (promise, ms) => Promise.race([
   promise.then((value) => ({ value }), (error) => ({ error })),
   new Promise((resolve) => setTimeout(() => resolve({ unsettled: true }), ms)),
@@ -609,6 +625,7 @@ if (!lose) throw new Error("this browser offers no WEBGL_lose_context");
 lose.loseContext();
 await new Promise((resolve) => setTimeout(resolve, 50));
 const after = engine.deviceLost;
+const nulls = nullProbe(gl);
 const exported = await exportFrame(engine);
 engine.free();
 // The browser restores a context only when its loss was cancelled.
@@ -633,12 +650,16 @@ if (again.value) {
 }
 report({
   ok: before === false && after === true && exported.startsWith("rejected") &&
+    rejection?.code === "GPU_DEVICE_LOST" && rejection.fatal === true &&
     recreated === "resolved" && reexported === "rendered" && lostAgain === false &&
     unrestored?.settled === true && unrestored.code === "GPU_DEVICE_LOST" && !unrestored.resolved &&
-    pageErrors.length === 0,
+    pageErrors.length === 0 && panics.length === 0,
   before,
   after,
   exported,
+  rejection,
+  nulls,
+  panics,
   recreated,
   reexported,
   lostAgain,
@@ -731,7 +752,8 @@ await new Promise((resolve, reject) => {
   worker.postMessage({ type: "test-lose" });
 });
 await new Promise((resolve) => setTimeout(resolve, 50));
-const duringLoss = await settle(backend.present(0n), 10000);
+// Another time than the last, so the lost renderer must draw rather than answer "unchanged".
+const duringLoss = await settle(backend.present(24000n), 10000);
 const lostBeforeRecover = backend.isDeviceLost();
 const recovered = await settle(backend.recover({ renderer: "gpu", surface: "same", reason: "restored" }), 15000);
 const lostAfterRecover = backend.isDeviceLost();
@@ -1115,6 +1137,75 @@ report({
     && uncaptured.length === 0 && !engine.deviceLost,
   luma,
   ...(uncaptured.length ? { uncaptured } : {}),
+});
+`;
+}
+
+// Calls made right after a WebGL context is lost, before its event is dispatched, are refused
+// with a coded fatal loss: an upload of a new size, a new effect and a draw of another time.
+export function webglWorkerLostCalls() {
+  return `
+const origin = location.origin;
+const source = \`
+Object.defineProperty(WorkerNavigator.prototype, "gpu", { get: () => undefined });
+const wasm = await import("\${origin}/packages/alpha2/wasm/alpha2_wasm.js");
+await wasm.default();
+const project = await fetch("\${origin}/tests/cases/host-parity-project.json").then((response) => response.text());
+const outcome = (work) => {
+  try {
+    const value = work();
+    return { ok: true, value: value instanceof Promise ? "promise" : typeof value };
+  } catch (error) {
+    return { name: error?.name ?? null, code: error?.code ?? null, fatal: error?.fatal ?? null, message: String(error?.message ?? error) };
+  }
+};
+let result;
+try {
+  const canvas = new OffscreenCanvas(64, 48);
+  const engine = await wasm.WebEffectRegistry.createForCanvas(canvas);
+  if (engine.backend !== "webgl2") result = { skipped: "the worker renderer is " + engine.backend };
+  else {
+    engine.loadProject(project);
+    engine.uploadRgbaImage("image-source", 64, 48, new Uint8Array(64 * 48 * 4).fill(255));
+    const before = outcome(() => engine.renderAt(0n));
+    const compiled = await engine.compileEffect(JSON.stringify({ id: "test.lost", version: 1, kind: "effect", params: [],
+      wgslBody: "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src; }" }));
+    canvas.getContext("webgl2").getExtension("WEBGL_lose_context").loseContext();
+    // Synchronously after the loss: the context-lost event has not been dispatched yet.
+    const lostFlag = engine.deviceLost;
+    const upload = outcome(() => engine.uploadRgbaImage("image-source", 96, 72, new Uint8Array(96 * 72 * 4).fill(128)));
+    const register = outcome(() => engine.registerCompiledEffect(compiled));
+    const compile = outcome(() => engine.compileEffect(JSON.stringify({ id: "test.other", version: 1, kind: "effect", params: [],
+      wgslBody: "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src.bgra; }" })));
+    const render = outcome(() => engine.renderAt(24000n));
+    const resize = outcome(() => engine.resizeSurface(96, 72));
+    const exported = outcome(() => engine.beginExportAt(0n, "h264"));
+    result = { before, lostFlag, upload, register, compile, render, resize, exported, deviceLost: engine.deviceLost };
+  }
+} catch (error) {
+  result = { thrown: { name: error?.name ?? null, code: error?.code ?? null, message: String(error?.message ?? error) } };
+}
+self.postMessage({ type: "test-result", result });
+\`;
+const worker = new Worker(URL.createObjectURL(new Blob([source], { type: "text/javascript" })), { type: "module" });
+const workerErrors = [];
+const result = await new Promise((resolve) => {
+  worker.addEventListener("message", (event) => {
+    if (event.data?.type === "test-result") resolve(event.data.result);
+  });
+  worker.addEventListener("error", (event) => {
+    workerErrors.push(String(event.message));
+    resolve({ thrown: { message: String(event.message) } });
+  });
+});
+worker.terminate();
+if (result.skipped) skip("webgl2", result.skipped);
+const refused = (entry) => entry?.code === "GPU_DEVICE_LOST" && entry.fatal === true;
+const calls = ["upload", "register", "compile", "render", "resize", "exported"];
+report({
+  ok: result.before?.ok === true && calls.every((name) => refused(result[name])) && result.deviceLost === true
+    && workerErrors.length === 0,
+  ...result, workerErrors,
 });
 `;
 }
