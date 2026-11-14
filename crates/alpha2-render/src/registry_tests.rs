@@ -241,6 +241,40 @@ fn each_arm_of_an_else_if_chain_nests_one_level() {
 }
 
 #[test]
+fn array_sizes_are_literal_and_bounded() {
+    let body = |declaration: &str| {
+        format!(
+            "{declaration}\nfn effect(uv: vec2f, src: vec4f) -> vec4f {{ \
+             let i = u32(uv.x * 4.0) % 4u; return src + vec4f(f32(i)); }}"
+        )
+    };
+    for refused in [
+        "var<private> big: array<vec4f, 16777216>;",
+        "var<private> big: array<array<vec4f, 16>, 16>;",
+        "var<private> big: array<mat4x4f, 64>;",
+        "const n = 4u;\nvar<private> big: array<vec4f, n>;",
+        "var<private> big: array<vec4f, 2 * 2>;",
+        "var<private> big: array<vec4f>;",
+        "struct S { a: vec4f, }\nvar<private> big: array<S, 4>;",
+        "const big = array(1.0, 2.0, 3.0);",
+        &"var<private> a: array<f32, 2>;".repeat(33),
+    ] {
+        assert!(
+            validate_wgsl_body(&body(refused)).is_err(),
+            "accepted {refused}"
+        );
+    }
+    for accepted in [
+        "var<private> big: array<vec4f, 128>;",
+        "var<private> big: array<array<vec4f, 8>, 16u>;",
+        "var<private> big: array<mat4x4<f32>, 32>;",
+        "const taps = array<vec2f, 3>(vec2f(0.0), vec2f(1.0), vec2f(2.0));",
+    ] {
+        assert_eq!(validate_wgsl_body(&body(accepted)), Ok(()), "{accepted}");
+    }
+}
+
+#[test]
 fn delimiters_in_comments_are_not_counted() {
     // Balance is checked on code only; a comment may contain a half-open range.
     assert_eq!(

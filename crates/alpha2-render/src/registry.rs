@@ -19,6 +19,12 @@ use crate::{
 const MAX_REGISTERED_EFFECTS: usize = 256;
 const MAX_WGSL_BODY_BYTES: usize = 32 * 1024;
 const MAX_WGSL_NESTING: usize = 64;
+/// Most `vec4f`-sized elements one array may hold, counts multiplied through nested arrays.
+/// Software adapters compile a dynamically indexed array in time that grows faster than its size,
+/// and this one compiles and draws in under a second there.
+const MAX_ARRAY_SLOTS: u64 = 128;
+/// Most array types a body may write.
+const MAX_ARRAY_TYPES: usize = 32;
 /// Operator characters one statement may hold.
 ///
 /// naga recurses once per operand of a flat chain like `x+x+...+x`; about 2,500 operands
@@ -1051,6 +1057,7 @@ fn validate_wgsl_body(body: &str) -> Result<(), ShaderDiagnostics> {
         )));
     }
     check_nesting(&code)?;
+    check_arrays(&code)?;
 
     let forbidden = [
         "@binding",
@@ -1077,6 +1084,39 @@ fn validate_wgsl_body(body: &str) -> Result<(), ShaderDiagnostics> {
     bound_for_loops(body)?;
     crate::call_budget::check_invocation_calls(&code)?;
     crate::effect_cost::check_invocation_cost(&code).map(drop)
+}
+
+/// Refuses an array without a literal count, of elements other than scalars, vectors, matrices
+/// and arrays, past [`MAX_ARRAY_SLOTS`] elements, or one array type too many.
+fn check_arrays(code: &str) -> Result<(), ShaderDiagnostics> {
+    let arrays = crate::effect_cost::array_types(code);
+    if arrays.len() > MAX_ARRAY_TYPES {
+        return Err(ShaderDiagnostics::error(format!(
+            "a runtime effect writes at most {MAX_ARRAY_TYPES} array types"
+        )));
+    }
+    for array in arrays {
+        let text = &code[array.span.clone()];
+        if !array.templated {
+            return Err(ShaderDiagnostics::error(
+                "write a runtime effect's arrays with their element type and count, as \
+                 `array<T, N>(...)`",
+            ));
+        }
+        let Some(slots) = array.slots else {
+            return Err(ShaderDiagnostics::error(format!(
+                "`{text}` needs an integer literal count and elements that are scalars, \
+                 vectors, matrices or arrays"
+            )));
+        };
+        if slots > MAX_ARRAY_SLOTS {
+            return Err(ShaderDiagnostics::error(format!(
+                "`{text}` holds more than {MAX_ARRAY_SLOTS} vectors; put a large table in a \
+                 resource texture"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Refuses unbalanced delimiters and nesting past [`MAX_WGSL_NESTING`], where each arm of an

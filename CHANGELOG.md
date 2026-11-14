@@ -668,6 +668,12 @@ All notable changes to this project are documented in this file.
   64, as the shader compiler nests it, so a long chain is refused with a diagnostic suggesting
   `switch`. Native hosts compile effect shaders on a thread with an 8 MiB stack on every backend,
   so registering from a thread with a small stack no longer overflows it.
+- A runtime effect's arrays are written `array<T, N>` with an integer literal count, of
+  scalars, vectors, matrices or arrays, at most 128 vectors each (counts multiplied through nested
+  arrays), and at most 32 array types per body; a larger table belongs in a resource texture.
+  Before, a body of a few hundred bytes could declare a 256 MiB array that held registration for
+  seconds and stalled a software adapter's first draw for minutes. Declaring, building or copying
+  a whole array now counts its elements in the effect's cost.
 
 ## [0.6.0] - 2026-11-08
 

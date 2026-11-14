@@ -149,6 +149,20 @@ fn a_counted_loop_stops_at_its_literal_count_however_its_counter_is_written() {
 }
 
 #[test]
+fn an_array_at_the_size_limit_registers_and_draws() {
+    let _lock = gpu_test_lock();
+    let pixel = render_runtime_effect_pixel(
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f {
+            var table: array<vec4f, 128>;
+            let i = u32(uv.x * 128.0) % 128u;
+            table[i] = vec4f(0.5);
+            return vec4f(table[(i * 7u + 1u) % 128u].rgb + table[i].rgb, 1.0);
+        }",
+    );
+    assert_counted(pixel, 0.5);
+}
+
+#[test]
 fn nested_loops_and_loops_in_called_functions_share_one_budget() {
     // A per-loop bound would run 1024 x 1024 iterations (white); the shared budget stops after one
     // outer and 1023 inner iterations.
