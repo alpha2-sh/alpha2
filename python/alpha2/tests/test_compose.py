@@ -276,6 +276,17 @@ def test_a_caption_file_in_a_legacy_code_page_is_a_compose_error(tmp_path: Path)
     assert f"{srt} is not UTF-8 text (invalid byte at offset 32)" in str(caught.value)
 
 
+def test_a_caption_file_longer_than_a_project_may_be_is_a_compose_error(tmp_path: Path) -> None:
+    srt = tmp_path / "talk.srt"
+    with srt.open("wb") as file:
+        file.truncate(c._native.MAX_PROJECT_JSON_BYTES + 1)
+    video = c.Video(c.CaptionedVideo("talk.mp4", c.Captions(srt)))
+    with pytest.raises(Alpha2ComposeError) as caught:
+        c.gather_facts(video, known={"media": FACTS["media"]})
+    assert caught.value.path == "facts.texts"
+    assert f"larger than {c._native.MAX_PROJECT_JSON_BYTES} bytes" in str(caught.value)
+
+
 def test_motion_presets_compile_to_keyframes_timed_from_each_nodes_span() -> None:
     video = c.Video(
         c.Stack(

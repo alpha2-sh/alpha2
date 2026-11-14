@@ -1,9 +1,12 @@
 """An MCP server over standard input and output, run as ``python -m alpha2 mcp``.
 
 Specs and templates compile in this process and ``alpha2-host`` renders. Relative paths are read
-from the server's working directory. Every request with an ``id`` gets one reply: a failure inside a
-tool is a tool error, any other a JSON-RPC error, and only the end of input, ``KeyboardInterrupt``
-or ``SystemExit`` ends the server.
+from the server's working directory. Every file a tool reads or writes (a spec, template or project
+file, the media and caption files a spec names, an output) must lie under one of the server's roots
+once links are resolved; the template directories and fonts given at start are read without one.
+A file argument must be a regular file of at most ``MAX_PROJECT_JSON_BYTES``. Every request with an
+``id`` gets one reply: a failure inside a tool is a tool error, any other a JSON-RPC error, and only
+the end of input, ``KeyboardInterrupt`` or ``SystemExit`` ends the server.
 """
 
 from __future__ import annotations
@@ -12,6 +15,8 @@ import base64
 import functools
 import json
 import math
+import os
+import stat
 import sys
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -22,7 +27,7 @@ from typing import IO, Any, cast
 from . import _native
 from . import compose as _compose
 from .builder import TICKS_PER_SECOND, seconds_to_ticks, ticks
-from .client import HostClient
+from .client import HostClient, _absolute
 from .errors import Alpha2ComposeError, Alpha2HostError, Alpha2InternalError
 
 PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
@@ -187,6 +192,12 @@ def _summary(project: Mapping[str, Any]) -> dict[str, Any]:
 
 _MAX_SECONDS = (2**53 - 1) // TICKS_PER_SECOND
 
+DEFAULT_MAX_SECONDS = 3600.0
+"""The longest ``render_video`` range, in seconds, unless ``--max-seconds`` says otherwise."""
+
+DEFAULT_MAX_PIXELS = 7680 * 4320
+"""The largest canvas a render tool draws, in pixels, unless ``--max-pixels`` says otherwise."""
+
 
 def _ticks(arguments: Mapping[str, Any], name: str) -> int | None:
     """The argument ``name``, in seconds, as ticks; ``None`` when it is absent."""
@@ -203,13 +214,35 @@ def _ticks(arguments: Mapping[str, Any], name: str) -> int | None:
     return seconds_to_ticks(value)
 
 
-def _read_json(path: str, what: str) -> Any:
+def _read_json(path: str, what: str, shown: str | None = None) -> Any:
+    """The JSON document in the regular file at ``path``, which messages call ``shown``."""
+    shown = path if shown is None else shown
+    limit = _native.MAX_PROJECT_JSON_BYTES
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
+        # A FIFO opened without O_NONBLOCK waits for a writer.
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+        with os.fdopen(os.open(path, flags), "rb") as file:
+            info = os.fstat(file.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise ToolError(f"the {what} {shown} is not a regular file")
+            data = file.read(limit + 1)
     except OSError as error:
-        raise ToolError(f"cannot read the {what} {path}: {error.strerror}") from None
-    except json.JSONDecodeError as error:
-        raise ToolError(f"the {what} {path} is not JSON: {error}") from None
+        raise ToolError(f"cannot read the {what} {shown}: {error.strerror}") from None
+    if len(data) > limit:
+        raise ToolError(f"the {what} {shown} is larger than {limit} bytes")
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ToolError(f"the {what} {shown} is not JSON: {error}") from None
+
+
+def _under(path: str, root: str) -> bool:
+    path, root = os.path.normcase(path), os.path.normcase(root)
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        # Another drive on Windows.
+        return False
 
 
 @dataclass
@@ -221,8 +254,20 @@ class Server:
     fonts: list[str] = field(default_factory=list)
     """Font files text is measured and drawn with."""
     host_path: str | None = None
+    roots: list[str] = field(default_factory=lambda: [os.getcwd()])
+    """Directories the tools may read and write under."""
+    read_only: bool = False
+    """Leave out the tools that write files."""
+    max_seconds: float = DEFAULT_MAX_SECONDS
+    """The longest range ``render_video`` renders."""
+    max_pixels: int = DEFAULT_MAX_PIXELS
+    """The largest canvas a render tool draws."""
     _client: HostClient | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    _real_roots: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self._real_roots = [os.path.realpath(_absolute(os.fspath(root))) for root in self.roots]
 
     def close(self) -> None:
         if self._client is not None:
@@ -234,6 +279,37 @@ class Server:
             if self._client is None:
                 self._client = HostClient(host_path=self.host_path)
             return self._client
+
+    def confined(self, path: str, real: str) -> str:
+        if not any(_under(real, root) for root in self._real_roots):
+            raise ToolError(
+                f"{path} is outside the directories this server may use "
+                f"({', '.join(self._real_roots)}); start it with --root to add one",
+                {"path": path},
+            )
+        return real
+
+    def readable(self, path: str) -> str:
+        """``path`` with its links resolved, refused unless it lies under a root and is a regular
+        file or nothing."""
+        real = self.confined(path, os.path.realpath(_absolute(path)))
+        if os.path.exists(real) and not os.path.isfile(real):
+            raise ToolError(f"{path} is not a regular file", {"path": path})
+        return real
+
+    def writable(self, path: str) -> str:
+        """``path`` in its parent's real directory, refused unless it lies under a root and names
+        a regular file or nothing (never a link)."""
+        parent, name = os.path.split(_absolute(path))
+        if name in ("", ".", ".."):
+            raise ToolError(f"{path} names no file", {"path": path})
+        real = self.confined(path, os.path.join(os.path.realpath(parent), name))
+        if os.path.islink(real) or (os.path.lexists(real) and not os.path.isfile(real)):
+            raise ToolError(f"{path} is a link or not a regular file", {"path": path})
+        return real
+
+    def read_json(self, path: str, what: str) -> Any:
+        return _read_json(self.readable(path), what, path)
 
     def all_templates(self) -> list[dict[str, Any]]:
         return [*self.templates, *_compose.TEMPLATES]
@@ -247,7 +323,7 @@ class Server:
             if template["template"]["id"] == value:
                 return template
         if value.endswith(".json"):
-            document = _read_json(value, "template")
+            document = self.read_json(value, "template")
             if isinstance(document, dict):
                 return document
         raise ToolError(f'no template "{value}"; `templates` lists them')
@@ -256,7 +332,7 @@ class Server:
         """The spec ``arguments`` names, as ``spec`` or as ``template`` bound to ``data``."""
         if "spec" in arguments:
             value = arguments["spec"]
-            spec = _read_json(value, "spec") if isinstance(value, str) else value
+            spec = self.read_json(value, "spec") if isinstance(value, str) else value
             if not isinstance(spec, dict):
                 raise ToolError("spec is an object or the path of a JSON file holding one")
             return spec
@@ -273,12 +349,36 @@ class Server:
         return _compose.bind(template, data, templates=self.templates)
 
     def compiled(self, arguments: Mapping[str, Any]) -> _compose.Compiled:
-        return _compose.compile(
-            self.spec(arguments),
-            fonts=self.fonts,
-            client=self.client(),
-            templates=self.templates,
-        )
+        spec = self.spec(arguments)
+        if self.templates:
+            spec = _compose.bind(spec, templates=self.templates)
+        needed = _compose.requirements(spec)
+        for path in [entry["path"] for entry in needed["media"]] + list(needed["texts"]):
+            self.readable(path)
+        return _compose.compile(spec, fonts=self.fonts, client=self.client())
+
+    def renderable(self, arguments: Mapping[str, Any]) -> _compose.Compiled:
+        """The compiled spec, refused when a file it reads lies outside the roots or its canvas
+        is larger than ``max_pixels``."""
+        compiled = self.compiled(arguments)
+        project = compiled.project
+        read = [
+            item
+            for item in [*project.get("sources", []), *project.get("effect_resources", [])]
+            if item.get("kind") not in ("generated", "composition")
+            and item.get("id") not in compiled.assets
+        ]
+        for path in [*compiled.assets.values(), *(item.get("locator") for item in read)]:
+            if isinstance(path, str):
+                self.readable(path)
+        settings = project.get("settings", {})
+        pixels = int(settings.get("width", 0)) * int(settings.get("height", 0))
+        if pixels > self.max_pixels:
+            raise ToolError(
+                f"the canvas has {pixels} pixels, more than --max-pixels {self.max_pixels}",
+                {"limit": "max-pixels"},
+            )
+        return compiled
 
     def rendered(self, render: Callable[[], Any]) -> Any:
         try:
@@ -373,15 +473,19 @@ class Server:
 
     def describe_project(self, arguments: dict[str, Any]) -> Any:
         value = arguments["project"]
-        project = _read_json(value, "project") if isinstance(value, str) else value
+        project = self.read_json(value, "project") if isinstance(value, str) else value
         if not isinstance(project, dict):
             raise ToolError("project is an object or the path of a JSON file holding one")
         problems = _native.validate_project_json(json.dumps(project))
         return {"summary": _summary(project), "problems": problems}
 
     def render_frame(self, arguments: dict[str, Any]) -> Any:
-        compiled = self.compiled(arguments)
         output = arguments.get("output")
+        if output is not None:
+            if not isinstance(output, str) or not output.lower().endswith(".png"):
+                raise ToolError("output is the path of a .png file")
+            output = self.writable(output)
+        compiled = self.renderable(arguments)
         at = ticks(_ticks(arguments, "seconds") or 0)
         result = self.rendered(
             lambda: self.client().still(
@@ -404,15 +508,26 @@ class Server:
         )
 
     def render_video(self, arguments: dict[str, Any]) -> Any:
-        compiled = self.compiled(arguments)
+        if not isinstance(arguments["output"], str):
+            raise ToolError("output is the path of a video file")
+        output = self.writable(arguments["output"])
+        compiled = self.renderable(arguments)
         options: dict[str, Any] = {"overwrite": bool(arguments.get("overwrite", False))}
         for name, option in (("start", "start_ticks"), ("end", "end_ticks")):
             value = _ticks(arguments, name)
             if value is not None:
                 options[option] = value
-        result = self.rendered(
-            lambda: self.client().export(compiled, arguments["output"], **options)
-        )
+        start = options.get("start_ticks", 0)
+        end = options.get("end_ticks")
+        if end is None:
+            end = _native.project_end_ticks(json.dumps(compiled.project)) or 0
+        if (end - start) / TICKS_PER_SECOND > self.max_seconds:
+            raise ToolError(
+                f"the range is {(end - start) / TICKS_PER_SECOND:g} s, more than --max-seconds "
+                f"{self.max_seconds:g}",
+                {"limit": "max-seconds"},
+            )
+        result = self.rendered(lambda: self.client().export(compiled, output, **options))
         return {
             "output": result.get("output"),
             "summary": _summary(compiled.project),
@@ -421,6 +536,9 @@ class Server:
         }
 
     def tools(self) -> list[Tool]:
+        return [tool for tool in self._tools() if tool.read_only or not self.read_only]
+
+    def _tools(self) -> list[Tool]:
         return [
             Tool(
                 "templates",

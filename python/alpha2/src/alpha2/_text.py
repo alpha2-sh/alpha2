@@ -12,14 +12,17 @@ class UserTextError(ValueError):
     """A file that is not text by the rule; the message names the file and what to do."""
 
 
-def read_user_text(path: str | os.PathLike[str], what: str) -> str:
+def read_user_text(path: str | os.PathLike[str], what: str, limit: int | None = None) -> str:
     """The text of the file at ``path``, which a message calls ``what``.
 
     Raises :class:`OSError` when the file cannot be read and :class:`UserTextError` naming the
-    first offending byte when it is not text by the rule.
+    first offending byte when it is not text by the rule, or when it is longer than ``limit``
+    bytes.
     """
     with open(path, "rb") as file:
-        data = file.read()
+        data = file.read() if limit is None else file.read(limit + 1)
+    if limit is not None and len(data) > limit:
+        raise UserTextError(f"{what} {os.fspath(path)} is larger than {limit} bytes")
     try:
         return decode_user_text(data)
     except UnicodeDecodeError as error:

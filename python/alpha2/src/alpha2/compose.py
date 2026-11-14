@@ -1182,9 +1182,10 @@ def gather_facts(
     client: _client.HostClient | None = None,
 ) -> dict[str, Any]:
     """Facts about ``spec``'s files not already in ``known``: media via the host's ``conform`` (no
-    GPU), caption files read as UTF-8.
+    GPU), caption files read as UTF-8, at most ``MAX_PROJECT_JSON_BYTES`` each.
 
-    Raises :class:`~alpha2.Alpha2ComposeError` for a file the host cannot read.
+    Raises :class:`~alpha2.Alpha2ComposeError` for a file the host cannot read or a caption file
+    that is not text or is too long.
     """
     facts: dict[str, Any] = {
         "media": dict((known or {}).get("media", {})),
@@ -1243,7 +1244,7 @@ def gather_facts(
         if path not in facts["texts"]:
             try:
                 # Normalize line ends so CRLF files compile the same.
-                text = read_user_text(path, "text file")
+                text = read_user_text(path, "text file", _native.MAX_PROJECT_JSON_BYTES)
                 facts["texts"][path] = text.replace("\r\n", "\n").replace("\r", "\n")
             except UserTextError as error:
                 raise Alpha2ComposeError(

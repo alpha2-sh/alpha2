@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import warnings
 from collections.abc import Sequence
@@ -196,6 +197,10 @@ def _mcp(arguments: argparse.Namespace) -> int:
             templates=load_templates(arguments.templates),
             fonts=list(arguments.font),
             host_path=arguments.host,
+            roots=arguments.root or [os.getcwd()],
+            read_only=arguments.read_only,
+            max_seconds=arguments.max_seconds,
+            max_pixels=arguments.max_pixels,
         )
     )
     return 0
@@ -266,6 +271,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     still.add_argument("--host", help="the alpha2-host binary to run")
     still.set_defaults(run=_still)
 
+    from .mcp import DEFAULT_MAX_PIXELS, DEFAULT_MAX_SECONDS
+
     mcp = commands.add_parser(
         "mcp", help="serve compose, templates and rendering as MCP tools on standard I/O"
     )
@@ -278,6 +285,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     mcp.add_argument("--font", action="append", default=[], metavar="PATH")
     mcp.add_argument("--host", help="the alpha2-host binary to run")
+    mcp.add_argument(
+        "--root",
+        action="append",
+        metavar="DIR",
+        help="a directory the tools may read and write under (repeatable; default: the working "
+        "directory)",
+    )
+    mcp.add_argument(
+        "--read-only", action="store_true", help="leave out the tools that write files"
+    )
+    mcp.add_argument(
+        "--max-seconds",
+        type=float,
+        default=DEFAULT_MAX_SECONDS,
+        metavar="S",
+        help=f"the longest range render_video renders (default {DEFAULT_MAX_SECONDS:g})",
+    )
+    mcp.add_argument(
+        "--max-pixels",
+        type=int,
+        default=DEFAULT_MAX_PIXELS,
+        metavar="N",
+        help=f"the largest canvas a render tool draws (default {DEFAULT_MAX_PIXELS})",
+    )
     mcp.set_defaults(run=_mcp)
 
     report = commands.add_parser("capabilities", help="print what the host can decode and encode")

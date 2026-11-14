@@ -357,9 +357,18 @@ claude mcp add alpha2 -- python -m alpha2 mcp --font Inter.ttf --templates ./tem
 
 `--font` gives the fonts text is drawn with (text needs one), `--templates` a directory of template
 JSON files beside the built-in ones, and `--host` the `alpha2-host` binary. Relative paths in specs
-are read from the server's working directory. `render_frame` (given an `output`) and `render_video`
-write files, replacing one only with `overwrite`, and are marked destructive; the other tools only
-read. A call that fails, however malformed, is answered with an error and the server keeps serving.
+are read from the server's working directory. `render_frame` (given an `output`, which must be a
+`.png` file) and `render_video` write files, replacing one only with `overwrite`, and are marked
+destructive; the other tools only read. A call that fails, however malformed, is answered with an
+error and the server keeps serving.
+
+The tools read and write only under the server's roots: the working directory, or each `--root DIR`
+given instead. That covers spec, template and project files, the media and caption files a spec
+names, and outputs, with links resolved; a link as an output is refused. The `--templates`
+directories and `--font` files are read at start without a root. A file argument must be a regular
+file no larger than a project document may be. `--read-only` leaves out the two writing tools.
+`--max-seconds` (default 3600) bounds the range `render_video` renders and `--max-pixels` (default
+7680 x 4320) the canvas of either render tool.
 
 ## Finding `alpha2-host`
 

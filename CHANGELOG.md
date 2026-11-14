@@ -54,6 +54,12 @@ All notable changes to this project are documented in this file.
   code.
 - `decideRetry` (`alpha2/export-retry`): the default backoff stops doubling after 17 failed
   attempts (at 65,536 s), as the native retry policy does.
+- The MCP server (`python -m alpha2 mcp`) reads and writes only under its roots: the working
+  directory, or each `--root DIR`. Spec, template and project files, the media and caption files a
+  spec names and outputs are checked with links resolved; a link as an output is refused. A file
+  argument must be a regular file no larger than a project document, `render_frame` writes only a
+  `.png` file, `--read-only` leaves out the writing tools, and `--max-seconds` and `--max-pixels`
+  bound what one call renders. Caption files compose reads are bounded the same way.
 
 ### Fixed
 
