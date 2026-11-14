@@ -37,27 +37,41 @@ manifests.forEach((manifest, index) => {
   console.log(`${manifest.name}@${version}`);
 });
 
-const cargoPath = join(root, "Cargo.toml");
-const cargoVersions = {
-  "workspace.package": /^(version = )"[^"]*"$/,
-  "workspace.dependencies":
-    /^(alpha2[\w-]* = \{ version = )"[^"]*"(?=, path = )/,
+// The plugin SDK depends on `alpha2-plugin-abi` by path, so plugins take the engine version.
+const setCargoVersions = (manifest, patterns, minimum) => {
+  const path = join(root, manifest);
+  let section = "";
+  let lines = 0;
+  const text = readFileSync(path, "utf8")
+    .split("\n")
+    .map((line) => {
+      section = line.match(/^\[([^\]]+)\]$/)?.[1] ?? section;
+      const pattern = patterns[section];
+      if (!pattern?.test(line)) return line;
+      lines += 1;
+      return line.replace(pattern, `$1"${version}"`);
+    })
+    .join("\n");
+  if (lines < minimum)
+    throw new Error(`${manifest}: no workspace version to set`);
+  writeFileSync(path, text);
+  console.log(`${manifest} workspace@${version} (${lines} lines)`);
 };
-let section = "";
-let cargoLines = 0;
-const cargo = readFileSync(cargoPath, "utf8")
-  .split("\n")
-  .map((line) => {
-    section = line.match(/^\[([^\]]+)\]$/)?.[1] ?? section;
-    const pattern = cargoVersions[section];
-    if (!pattern?.test(line)) return line;
-    cargoLines += 1;
-    return line.replace(pattern, `$1"${version}"`);
-  })
-  .join("\n");
-if (cargoLines < 2) throw new Error("Cargo.toml: no workspace version to set");
-writeFileSync(cargoPath, cargo);
-console.log(`Cargo workspace and its crates@${version} (${cargoLines} lines)`);
+const workspaceVersion = /^(version = )"[^"]*"$/;
+setCargoVersions(
+  "Cargo.toml",
+  {
+    "workspace.package": workspaceVersion,
+    "workspace.dependencies":
+      /^(alpha2[\w-]* = \{ version = )"[^"]*"(?=, path = )/,
+  },
+  2,
+);
+setCargoVersions(
+  "plugins/Cargo.toml",
+  { "workspace.package": workspaceVersion },
+  1,
+);
 
 // The Python package's own version comes from Cargo; only its `alpha2-host` pin is written here.
 const pyprojectPath = join(root, "python", "alpha2", "pyproject.toml");
@@ -71,7 +85,7 @@ if (pinned === pyproject && !pyproject.includes(`"alpha2-host==${version};`))
 writeFileSync(pyprojectPath, pinned);
 console.log(`alpha2 (Python) depends on alpha2-host==${version}`);
 
-for (const manifest of ["Cargo.toml", "fuzz/Cargo.toml"])
+for (const manifest of ["Cargo.toml", "fuzz/Cargo.toml", "plugins/Cargo.toml"])
   execFileSync(
     "cargo",
     [

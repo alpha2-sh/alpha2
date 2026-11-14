@@ -34,18 +34,20 @@ jobs:
         run: |
           shopt -s inherit_errexit
           section_values() {
-            awk -v section="$1" -v pattern="$2" '
+            awk -v section="$2" -v pattern="$3" '
               /^\[/ { in_section = ($0 == "[" section "]"); next }
               in_section && match($0, pattern) {
                 value = substr($0, RSTART, RLENGTH); sub(/^[^"]*"/, "", value); sub(/".*$/, "", value)
                 print $1 " " value
-              }' Cargo.toml
+              }' "$1"
           }
-          version="$(section_values workspace.package '^version = "[^"]*"' | awk '{ print $2 }')"
+          version="$(section_values Cargo.toml workspace.package '^version = "[^"]*"' | awk '{ print $2 }')"
           test -n "$version"
           mismatches="$(
-            section_values workspace.dependencies 'version = "[^"]*", path = ' |
+            section_values Cargo.toml workspace.dependencies 'version = "[^"]*", path = ' |
               awk -v want="$version" '$2 != want { print "Cargo.toml workspace.dependencies " $1 " " $2 }'
+            section_values plugins/Cargo.toml workspace.package '^version = "[^"]*"' |
+              awk -v want="$version" '$2 != want { print "plugins/Cargo.toml workspace.package " $2 }'
             names="$(jq -r '.workspaces[] + "/package.json"' package.json | xargs jq -s '[.[].name]')"
             for manifest in $(jq -r '.workspaces[] + "/package.json"' package.json); do
               jq -r --arg want "$version" --argjson names "$names" --arg manifest "$manifest" '
