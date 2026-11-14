@@ -55,6 +55,7 @@ cpal = { version = "0.17.3", optional = true }
 
 [dev-dependencies]
 alpha2-engine = { workspace = true, features = ["extract-fixtures"] }
+alpha2-test-support.workspace = true
 
 # The workspace's lints, with unsafe code denied rather than forbidden, because the plugin loader
 # calls into native plugins and allows it there alone.

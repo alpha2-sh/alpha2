@@ -158,6 +158,252 @@ fn check(path: &std::path::Path, report: &Value, audio: bool) {
     assert_eq!(Some(packets), report["frames"].as_u64(), "frames");
 }
 
+/// Packed I420 planes, `width` x `height` luma samples.
+type Frame = Vec<Vec<u8>>;
+
+/// Below this the decoded export differs visibly from what was rendered; the device encoders at
+/// their default rate stay above it on the parity project's 64x48 frames.
+const EXPORT_PSNR_FLOOR_DB: f64 = 30.0;
+
+/// The frames at output indices `wanted` of the export at `path`, decoded by this device's
+/// decoders.
+fn decoded_frames(
+    path: &std::path::Path,
+    wanted: &[u64],
+    (width, height): (u32, u32),
+) -> Vec<Frame> {
+    use alpha2_host_core::video_stream::{StreamOptions, VideoStream};
+    use alpha2_media::{PixelFormat, YuvFormat};
+    let decoders = crate::platform::current()
+        .video_decoders()
+        .expect("this platform has video decoders");
+    let mut stream = VideoStream::open_file(path, decoders, StreamOptions::default())
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let cancel = alpha2_media::CancelToken::default();
+    let (width, height) = (width as usize, height as usize);
+    let mut frames = Vec::new();
+    for index in 0..=*wanted.iter().max().expect("a frame") {
+        let frame = stream.next(&cancel).expect("decodes").expect("a frame");
+        if !wanted.contains(&index) {
+            continue;
+        }
+        let frame = frame.to_cpu().expect("decoded into memory");
+        let (left, top) = (frame.visible_rect.x as usize, frame.visible_rect.y as usize);
+        let rows = |plane: &alpha2_media::Plane, x: usize, y: usize, w: usize, h: usize| {
+            (y..y + h)
+                .flat_map(|row| {
+                    let start = row * plane.stride as usize + x;
+                    plane.bytes[start..start + w].to_vec()
+                })
+                .collect::<Vec<u8>>()
+        };
+        let luma = rows(&frame.planes[0], left, top, width, height);
+        let (cw, ch, cx, cy) = (width / 2, height / 2, left / 2, top / 2);
+        let chroma = match frame.pixel_format {
+            PixelFormat::Yuv(YuvFormat::I420) => vec![
+                rows(&frame.planes[1], cx, cy, cw, ch),
+                rows(&frame.planes[2], cx, cy, cw, ch),
+            ],
+            PixelFormat::Yuv(YuvFormat::NV12) => {
+                let pairs = rows(&frame.planes[1], cx * 2, cy, cw * 2, ch);
+                vec![
+                    pairs.iter().step_by(2).copied().collect(),
+                    pairs.iter().skip(1).step_by(2).copied().collect(),
+                ]
+            }
+            other => panic!("decoded as {other:?}"),
+        };
+        frames.push([vec![luma], chroma].concat());
+    }
+    frames
+}
+
+/// The planes the CPU renderer hands the encoder at output indices `wanted` for `project` (a
+/// `tests/cases` file) with `assets`, its sources decoded by this device's decoders.
+fn rendered_frames(project: &str, assets: &[(&str, &str)], wanted: &[u64]) -> Vec<Frame> {
+    use alpha2_engine::{EngineProject, Exporter, QualityProfile, TextTextures};
+    use alpha2_host_core::encode::PlaneBuffer;
+    use alpha2_host_core::export::{ExportRenderer, FrameBudget, StreamSources, VideoSink};
+    use alpha2_host_core::video_stream::DecodePreference;
+
+    struct Collect<'a>(&'a [u64], Vec<Frame>);
+    impl VideoSink for Collect<'_> {
+        fn write_video(
+            &mut self,
+            index: u64,
+            _time: alpha2_time::MediaTime,
+            _layout: alpha2_media::PixelLayout,
+            planes: &[PlaneBuffer],
+        ) -> Result<(), alpha2_media::EncodeError> {
+            if self.0.contains(&index) {
+                self.1.push(
+                    planes
+                        .iter()
+                        .map(|plane| {
+                            plane
+                                .bytes
+                                .chunks(plane.stride)
+                                .take(plane.height as usize)
+                                .flat_map(|row| row[..plane.width as usize].to_vec())
+                                .collect()
+                        })
+                        .collect(),
+                );
+            }
+            Ok(())
+        }
+    }
+    let tests = tests_dir();
+    let project = alpha2_model::Project::from_json(
+        &std::fs::read_to_string(tests.join("cases").join(project)).expect("project"),
+    )
+    .expect("project");
+    let snapshot = EngineProject::new(project.clone()).expect("snapshot");
+    let mut exporter = Exporter::for_project(
+        &snapshot,
+        QualityProfile::export(),
+        alpha2_media::VideoCodec::H264,
+    )
+    .expect("exporter");
+    let assets = assets
+        .iter()
+        .map(|(id, name)| ((*id).to_owned(), tests.join("corpus").join(name)))
+        .collect();
+    let mut sources = StreamSources::new(crate::export::source_opener(
+        &project,
+        assets,
+        crate::platform::current().video_decoders(),
+        DecodePreference::Auto,
+    ));
+    let renderer = alpha2_render::CpuRenderer::new(2);
+    let mut sink = Collect(wanted, Vec::new());
+    alpha2_host_core::export::export_video(
+        &snapshot,
+        &mut exporter,
+        ExportRenderer::Cpu(&renderer),
+        &mut TextTextures::new(),
+        &mut sources,
+        &mut sink,
+        (
+            &FrameBudget::new(1 << 30),
+            &alpha2_media::CancelToken::default(),
+        ),
+        &mut |_, _| {},
+    )
+    .expect("renders");
+    sink.1
+}
+
+/// The first and the middle frame of the export at `path` against the CPU renderer's frames of
+/// the same project.
+fn check_pictures(path: &std::path::Path, report: &Value, project: &str, assets: &[(&str, &str)]) {
+    let frames = report["frames"].as_u64().expect("frames");
+    let size = (
+        u32::try_from(report["width"].as_u64().expect("width")).expect("width"),
+        u32::try_from(report["height"].as_u64().expect("height")).expect("height"),
+    );
+    let mut wanted = vec![0, frames / 2];
+    wanted.dedup();
+    let decoded = decoded_frames(path, &wanted, size);
+    let rendered = rendered_frames(project, assets, &wanted);
+    for (index, (frame, source)) in decoded.iter().zip(&rendered).enumerate() {
+        let psnr = (0..3)
+            .map(|plane| {
+                format!(
+                    "{:.1}",
+                    alpha2_test_support::media::plane_psnr(&frame[plane], &source[plane])
+                )
+            })
+            .collect::<Vec<_>>();
+        eprintln!(
+            "{project}: frame {} of {} by {}: Y U V {} dB",
+            wanted[index],
+            report["videoEncoder"],
+            path.display(),
+            psnr.join(" ")
+        );
+    }
+    alpha2_test_support::media::plane_check(&decoded, &rendered, size.0, EXPORT_PSNR_FLOOR_DB)
+        .unwrap_or_else(|problem| panic!("{project} ({}): {problem}", report["videoEncoder"]));
+}
+
+/// The RMS of each channel of the default audio track of `path` over `[from, to)` seconds,
+/// decoded by this device's decoders at 48 kHz.
+fn channel_rms(path: &std::path::Path, (from, to): (f64, f64)) -> Vec<f64> {
+    let decoders = crate::platform::current()
+        .audio_decoders()
+        .expect("this platform has audio decoders");
+    let mut stream = alpha2_host_core::audio_stream::AudioStream::open_file(
+        path,
+        decoders.as_ref(),
+        48_000,
+        None,
+        alpha2_host_core::DecodePolicy::default(),
+    )
+    .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let cancel = alpha2_media::CancelToken::default();
+    #[allow(clippy::cast_possible_truncation)]
+    let span = ((from * 48_000.0) as i64, (to * 48_000.0) as i64);
+    let mut sums: Vec<(f64, usize)> = Vec::new();
+    while let Some(block) = stream.next_block(&cancel).expect("decodes") {
+        sums.resize(block.channels.len(), (0.0, 0));
+        for (sum, channel) in sums.iter_mut().zip(&block.channels) {
+            for (at, sample) in (block.start_sample..).zip(channel) {
+                if (span.0..span.1).contains(&at) {
+                    sum.0 += f64::from(*sample) * f64::from(*sample);
+                    sum.1 += 1;
+                }
+            }
+        }
+    }
+    #[allow(clippy::cast_precision_loss)]
+    sums.iter()
+        .map(|(sum, count)| (sum / (*count).max(1) as f64).sqrt())
+        .collect()
+}
+
+/// The audio of an export of `host-audio-export-project.json` carries the source's 0.4 s tone at
+/// its level on every channel, and silence after it.
+fn check_sound(path: &std::path::Path) {
+    let tone = (0.05, 0.35);
+    let source = channel_rms(&tests_dir().join("corpus/audio-only-aac-priming.m4a"), tone)[0];
+    let exported = channel_rms(path, tone);
+    let after = channel_rms(path, (0.6, 0.95));
+    eprintln!(
+        "{}: tone RMS {source:.4} in the source, {exported:.4?} exported, {after:.4?} after it",
+        path.display()
+    );
+    assert!(source > 0.01, "the source tone decodes: {source}");
+    assert_eq!(exported.len(), 2, "stereo");
+    for (rms, quiet) in exported.iter().zip(&after) {
+        let decibels = 20.0 * (rms / source).log10();
+        assert!(
+            decibels.abs() < 3.0,
+            "{}: the tone is {decibels:.1} dB from the source's level",
+            path.display()
+        );
+        assert!(
+            *quiet < source / 30.0,
+            "{}: {quiet} RMS where the project is silent",
+            path.display()
+        );
+    }
+}
+
+/// In a Matroska or `WebM` export the two tracks stay within 1.5 s of each other in file order:
+/// audio leads the video by at most a second, plus a packet.
+fn check_interleaving(path: &std::path::Path) {
+    let bytes = std::fs::read(path).expect("the output");
+    let (blocks, _) = alpha2_test_support::media::matroska_blocks(&bytes);
+    let widest = alpha2_test_support::media::widest_track_distance(&blocks);
+    eprintln!("{}: tracks at most {widest} ms apart", path.display());
+    assert!(
+        widest < 1_500,
+        "{}: the tracks are {widest} ms apart",
+        path.display()
+    );
+}
+
 /// A project file, its assets by source ID, its fonts, and whether its output has audio.
 type Case = (
     &'static str,
@@ -213,6 +459,12 @@ fn reference_projects_export_to_mp4() {
         let output = project.replace("-project.json", ".mp4");
         let (path, report) = export(project, assets, fonts, &output);
         check(&path, &report, audio);
+        if ["host-parity-project.json", "host-video-export-project.json"].contains(&project) {
+            check_pictures(&path, &report, project, assets);
+        }
+        if audio {
+            check_sound(&path);
+        }
         let _ = std::fs::remove_file(path);
     }
 }
@@ -333,14 +585,25 @@ fn a_project_with_audio_exports_to_mkv_and_webm() {
         ("image-source", "cross_topology_parity.png"),
         ("audio-source", "audio-only-aac-priming.m4a"),
     ];
-    let (path, report) = export(
-        "host-audio-export-project.json",
-        &assets,
-        &[],
-        "audio-export.mkv",
-    );
+    // Twelve seconds of picture, so audio written far ahead of the video shows in the file order.
+    let mut project: Value = serde_json::from_str(
+        &std::fs::read_to_string(tests_dir().join("cases/host-audio-export-project.json"))
+            .expect("project"),
+    )
+    .expect("JSON");
+    let picture = &mut project["timeline"]["tracks"][0]["clips"][0];
+    for range in ["timeline_range", "source_range"] {
+        picture[range]["end"] = Value::from(12 * alpha2_time::TICKS_PER_SECOND);
+    }
+    let long = std::env::temp_dir().join("audio-export-long-project.json");
+    std::fs::write(&long, project.to_string()).expect("project file");
+    // An absolute path replaces the cases directory the helper joins it to.
+    let long = long.to_string_lossy().into_owned();
+    let (path, report) = export(&long, &assets, &[], "audio-export.mkv");
     check(&path, &report, true);
     assert_eq!(report["container"], "mkv");
+    check_sound(&path);
+    check_interleaving(&path);
     let _ = std::fs::remove_file(path);
     // `WebM` takes VP9 or AV1, which not every device encodes.
     let capabilities: Value =
@@ -356,17 +619,16 @@ fn a_project_with_audio_exports_to_mkv_and_webm() {
             alpha2_test_support::Capability::WebmEncode,
             "the device encodes {encoders}"
         );
+        let _ = std::fs::remove_file(&long);
         return;
     }
-    let (path, report) = export(
-        "host-audio-export-project.json",
-        &assets,
-        &[],
-        "audio-export.webm",
-    );
+    let (path, report) = export(&long, &assets, &[], "audio-export.webm");
     check(&path, &report, true);
     assert_eq!(report["container"], "webm");
+    check_sound(&path);
+    check_interleaving(&path);
     let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(&long);
 }
 
 /// Counts the frames an export reports.

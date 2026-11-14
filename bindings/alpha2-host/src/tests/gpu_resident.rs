@@ -1,4 +1,5 @@
 use super::*;
+use alpha2_test_support::media::{PLANE_PSNR_FLOOR_DB, plane_check, plane_psnr};
 
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
@@ -644,7 +645,7 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
         if std::env::var_os("ALPHA2_PLANE_PSNR_REPORT").is_some() {
             report_plane_psnr(name, &exported, &original, 128);
         }
-        if let Err(problem) = plane_check(&exported, &original, 256, 144) {
+        if let Err(problem) = plane_check(&exported, &original, 256, PLANE_PSNR_FLOOR_DB) {
             panic!("{name}: {problem}");
         }
     }

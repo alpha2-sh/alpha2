@@ -5,6 +5,8 @@
 //! it, the skip fails instead. Other skips are printed and, if `ALPHA2_SKIP_LOG` is an absolute
 //! path, appended there as JSON lines. Tests that never apply to an OS stay `#[cfg]`-gated.
 
+pub mod media;
+
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;

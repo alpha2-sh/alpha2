@@ -442,6 +442,7 @@ dependencies = [
  "alpha2-os",
  "alpha2-plugin-abi",
  "alpha2-render",
+ "alpha2-test-support",
  "alpha2-time",
  "bytemuck",
  "bytes",

@@ -468,56 +468,6 @@ fn audio_encoded_before_the_video_reaches_the_writer_at_most_a_second_ahead_of_i
     }
 }
 
-/// The blocks of a Matroska file in file order, as (track number, milliseconds), and its cluster
-/// timestamps.
-fn matroska_blocks(bytes: &[u8]) -> (Vec<(u64, i64)>, Vec<i64>) {
-    fn vint(bytes: &[u8], at: &mut usize, keep_marker: bool) -> u64 {
-        let first = bytes[*at];
-        let length = first.leading_zeros() as usize + 1;
-        let mut value = if keep_marker {
-            u64::from(first)
-        } else {
-            u64::from(first) & ((1 << (8 - length)) - 1)
-        };
-        for index in 1..length {
-            value = (value << 8) | u64::from(bytes[*at + index]);
-        }
-        *at += length;
-        value
-    }
-    fn walk(bytes: &[u8], blocks: &mut Vec<(u64, i64)>, clusters: &mut Vec<i64>) {
-        let mut at = 0;
-        while at < bytes.len() {
-            let id = vint(bytes, &mut at, true);
-            let size = usize::try_from(vint(bytes, &mut at, false)).expect("size");
-            let body = &bytes[at..at + size];
-            match id {
-                // Segment, Cluster and BlockGroup hold the elements read here.
-                0x1853_8067 | 0x1F43_B675 | 0xA0 => walk(body, blocks, clusters),
-                0xE7 => {
-                    let time = body
-                        .iter()
-                        .fold(0_i64, |time, byte| time << 8 | i64::from(*byte));
-                    clusters.push(time);
-                }
-                // SimpleBlock and Block: track number, then a 16-bit time relative to the cluster.
-                0xA3 | 0xA1 => {
-                    let mut offset = 0;
-                    let track = vint(body, &mut offset, false);
-                    let relative = i16::from_be_bytes([body[offset], body[offset + 1]]);
-                    let cluster = *clusters.last().expect("a block inside a cluster");
-                    blocks.push((track, cluster + i64::from(relative)));
-                }
-                _ => {}
-            }
-            at += size;
-        }
-    }
-    let (mut blocks, mut clusters) = (Vec::new(), Vec::new());
-    walk(bytes, &mut blocks, &mut clusters);
-    (blocks, clusters)
-}
-
 fn opus_head() -> Bytes {
     let mut head = b"OpusHead".to_vec();
     head.extend([1, 2]);
@@ -566,17 +516,9 @@ fn a_matroska_export_with_its_audio_encoded_first_keeps_the_tracks_together_in_t
             alpha2_media::VideoCodec::Vp9,
             (opus, Some(opus_head())),
         );
-        let (blocks, clusters) = matroska_blocks(&bytes);
+        let (blocks, clusters) = alpha2_test_support::media::matroska_blocks(&bytes);
         assert!(blocks.len() > 2_000, "{flavor:?}: {} blocks", blocks.len());
-        let mut last = [None, None];
-        let mut widest = 0;
-        for (track, time) in blocks {
-            let index = usize::try_from(track - 1).expect("track");
-            last[index] = Some(time);
-            if let [Some(video), Some(audio)] = last {
-                widest = widest.max((video - audio).abs());
-            }
-        }
+        let widest = alpha2_test_support::media::widest_track_distance(&blocks);
         assert!(
             widest < 2_000,
             "{flavor:?}: the tracks are {widest} ms apart"
