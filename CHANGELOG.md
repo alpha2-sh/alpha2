@@ -89,6 +89,9 @@ All notable changes to this project are documented in this file.
   gradients or patterns name one another by `href` in a ring, is refused as malformed instead of
   overflowing the stack or never finishing. Each such reference counts four levels against the
   nesting limit, and a mask, clip path or filter counts once per element that names it.
+- A position keyframed along a curved path (spatial tangents) moves the distance its timing asks
+  for in every frame. Before, the arc length was inverted to a tolerance fixed in normalized
+  units, so a slow move crept and then jumped by up to two pixels at 2160 lines.
 - Both renderers keep no result in the result cache when the cache was cleared while that frame was
   drawn (by another request on the same host, a resource registration or a quality change), and a
   player draws such a frame again next time. Before, a picture drawn from the old inputs could be
