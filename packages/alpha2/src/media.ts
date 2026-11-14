@@ -236,6 +236,8 @@ export const UPRIGHT: VideoOrientation = Object.freeze({
 export type ContainerBytes = Blob | ArrayBuffer | ArrayBufferView;
 
 const MAX_HEADER_SCAN_BYTES = 64 * 1024 * 1024;
+/** Boxes one level of an MP4 walk visits; each costs one 16-byte read, wherever it starts. */
+const MAX_BOXES_PER_LEVEL = 4096;
 
 /**
  * Reads track `trackId`'s orientation, mirror included, from MP4/QuickTime `tkhd`/`mvhd` matrices
@@ -302,7 +304,11 @@ async function* isobmffBoxes(
   end: number,
 ): AsyncGenerator<Box> {
   let at = start;
-  while (at + 8 <= end && at < MAX_HEADER_SCAN_BYTES + start) {
+  for (
+    let visited = 0;
+    at + 8 <= end && visited < MAX_BOXES_PER_LEVEL;
+    visited++
+  ) {
     const header = await reader.read(at, 16);
     if (header.length < 8) return;
     let size = readU32(header, 0);
@@ -461,14 +467,18 @@ function vint(
   };
 }
 
+// EBML integers are at most 8 bytes and floats 0, 4 or 8, so longer sizes are refused unread.
 async function ebmlUnsigned(reader: ByteReader, element: Element) {
-  const bytes = await reader.read(element.start, element.end - element.start);
+  const length = element.end - element.start;
+  if (length > 8) return Number.NaN;
+  const bytes = await reader.read(element.start, length);
   return bytes.reduce((value, byte) => value * 256 + byte, 0);
 }
 
 async function ebmlFloat(reader: ByteReader, element: Element) {
   const length = element.end - element.start;
   if (length === 0) return 0;
+  if (length !== 4 && length !== 8) return Number.NaN;
   const bytes = await reader.read(element.start, length);
   const view = new DataView(bytes.buffer, bytes.byteOffset);
   if (length === 4) return view.getFloat32(0);
@@ -563,7 +573,8 @@ async function matroskaOrientation(
 
 /**
  * The `CodecDelay` a Matroska or WebM file declares for track `trackId` (mediabunny's
- * `InputTrack.id`), in nanoseconds; 0 when none. Readers should subtract it; mediabunny does not.
+ * `InputTrack.id`), in nanoseconds; 0 when none or malformed. Readers should subtract it; mediabunny
+ * does not.
  */
 export async function readMatroskaCodecDelay(
   container: ContainerBytes,
@@ -575,7 +586,8 @@ export async function readMatroskaCodecDelay(
   for await (const { number, entry } of matroskaTrackEntries(reader)) {
     if (number !== trackId) continue;
     for await (const field of ebmlElements(reader, entry.start, entry.end))
-      if (field.id === EBML.codecDelay) return ebmlUnsigned(reader, field);
+      if (field.id === EBML.codecDelay)
+        return (await ebmlUnsigned(reader, field)) || 0;
     return 0;
   }
   return 0;

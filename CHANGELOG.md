@@ -275,6 +275,10 @@ All notable changes to this project are documented in this file.
   presentation superseded by a later `present` still shows the frames it refilled, so the picture
   advances when frames arrive slower than presentations. `seek` recovers a lost device first, as
   `present` does, and after `dispose()` calls in flight resolve `undefined` instead of rejecting.
+- The browser's container side readers resist damaged and crafted files: a Matroska integer or
+  float field of an impossible size is refused without reading it, an MP4 whose `moov` follows an
+  `mdat` larger than 64 MiB has its rotation and mirror read (it was shown unmirrored), and a
+  truncated `stsd` entry or `tkhd` no longer makes the audio layout reader throw `RangeError`.
 
 ## [0.6.0] - 2026-11-08
 
