@@ -87,6 +87,35 @@ class Alpha2Test {
     }
 
     @Test
+    fun aSurfaceAttachedTwiceInARowKeepsItsWindow() {
+        val reader = ImageReader.newInstance(
+            64,
+            48,
+            PixelFormat.RGBA_8888,
+            4,
+            HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or HardwareBuffer.USAGE_CPU_READ_OFTEN,
+        )
+        engine().use { engine ->
+            val request = PlayerRequest(
+                projectJson = text("host-audio-export-project.json"),
+                assets = audioAssets,
+                frames = emptyMap(),
+                resources = emptyMap(),
+            )
+            Player(engine, request).use { player ->
+                Alpha2Android.attach(player, reader.surface, 64u, 48u)
+                Alpha2Android.attach(player, reader.surface, 64u, 48u)
+            }
+            // Each attach took a reference of its own and the closed player released both, so
+            // the surface's window is still there to attach.
+            Player(engine, request).use { player ->
+                Alpha2Android.attach(player, reader.surface, 64u, 48u)
+            }
+        }
+        reader.close()
+    }
+
+    @Test
     fun aThrowingProgressCallbackFailsTheExportAndLeavesNoFile(): Unit = runBlocking {
         engine().use { engine ->
             val output = File(instrumentation.targetContext.cacheDir, "throwing-progress.mp4")
@@ -142,9 +171,7 @@ class Alpha2Test {
                 resources = emptyMap(),
             )
             Player(engine, request).use { player ->
-                val window = Alpha2Android.windowFromSurface(reader.surface)
-                assertTrue(window != 0L)
-                player.attachWindow(window.toULong(), 64u, 48u)
+                Alpha2Android.attach(player, reader.surface, 64u, 48u)
                 // A GPU that refuses the window (GL-only emulator images) skips, as the Rust
                 // preview tests do; any other failure fails.
                 val until = System.currentTimeMillis() + 10_000

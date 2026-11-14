@@ -16,6 +16,11 @@ All notable changes to this project are documented in this file.
   result's `report.silentAudioSources` lists them either way. `conform` for an export purpose
   decodes a trial of such audio again, so the decision uses facts taken at export time. Before, the
   file silently lacked those sources' sound.
+- Mobile: `ExportProgress.onProgress` may throw (`throws` in Swift). A failure stops the export with
+  nothing published, and the outcome fails with `PROGRESS_CALLBACK_FAILED`.
+- Mobile: apps attach a preview window with `Alpha2Android.attach(player, surface, width, height)`
+  on Android and `Player.attach(layer:width:height:)` in Swift. `Alpha2Android.windowFromSurface`
+  is no longer public, so an app never holds a raw window reference.
 
 ### Fixed
 
@@ -68,6 +73,8 @@ All notable changes to this project are documented in this file.
   The outcome fails with `INTERNAL` and the panic's message, and a preview reports it in
   `lastError`. A timeline extraction whose renderer cannot start (an effect resource without an
   asset) fails with the reason instead of hanging, and `cancel()` stops a timeline extraction.
+- iOS: the player retains the `CAMetalLayer` it is given before `attachWindow` returns, so an app
+  that releases its layer right after attaching it no longer leaves the preview a freed layer.
 - Mobile: a source whose video starts after the time a clip reads from (an MP4 with an empty edit,
   a Matroska file whose first video frame is not at 0) shows its first frame until that frame is
   due, instead of every later frame early.

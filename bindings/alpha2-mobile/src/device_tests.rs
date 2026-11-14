@@ -823,6 +823,52 @@ mod metal_layer {
         assert_eq!(player.last_error(), None);
         player.end();
     }
+
+    #[test]
+    fn a_layer_the_app_releases_right_after_attaching_it_stays_valid_for_the_player() {
+        use crate::{Player, PlayerRequest};
+
+        let tests = tests_dir();
+        let player = Player::new(
+            Alpha2::new(EngineConfig::default()),
+            PlayerRequest {
+                project_json: std::fs::read_to_string(
+                    tests.join("cases/host-video-export-project.json"),
+                )
+                .expect("project"),
+                assets: HashMap::from([(
+                    "video-source".to_owned(),
+                    tests
+                        .join("corpus/h264-bt709-copy.mp4")
+                        .to_string_lossy()
+                        .into_owned(),
+                )]),
+                ..PlayerRequest::default()
+            },
+        )
+        .expect("player");
+        let first = objc2_quartz_core::CAMetalLayer::new();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&first) as u64, 64, 48)
+            .expect("attach");
+        // Seeks on an attached window decode and draw, so the next attach waits behind them.
+        wait_for(10, || {
+            player.frames_presented() >= 1 || player.last_error().is_some()
+        });
+        for seek in 0..8 {
+            player.seek(seek * 20_000);
+        }
+        let second = objc2_quartz_core::CAMetalLayer::new();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&second) as u64, 64, 48)
+            .expect("attach");
+        drop(second);
+        // Time for the seeks and the attach of the released layer to run before the detach.
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        player.detach_window();
+        player.end();
+        drop(first);
+    }
 }
 
 #[cfg(target_os = "android")]

@@ -136,9 +136,10 @@ impl Player {
         }))
     }
 
-    /// Draws into the window `handle` (an `ANativeWindow` from `Alpha2Android.windowFromSurface`,
-    /// whose reference the player takes over, or a `CAMetalLayer` pointer) of `width` x `height`
-    /// pixels, replacing any attached one.
+    /// Draws into the window `handle` of `width` x `height` pixels, replacing any attached one.
+    /// Apps call `Alpha2Android.attach` (Kotlin) or `Player.attach(layer:)` (Swift) instead. The
+    /// handle is an `ANativeWindow` whose reference the player takes over, or a `CAMetalLayer`,
+    /// which the player retains before this returns.
     ///
     /// # Errors
     /// [`Alpha2Error::InvalidInput`] for a null handle or one of another platform.

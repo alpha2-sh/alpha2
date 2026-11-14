@@ -26,7 +26,7 @@ mkdir -p "$build" "$package/Sources/Alpha2"
 cargo run --locked -q -p alpha2-uniffi-bindgen -- generate \
   --library "target/aarch64-apple-ios/$profile/libalpha2_mobile.a" --language swift --no-format \
   --out-dir "$build/swift"
-cp "$build/swift/Alpha2.swift" "$package/Sources/Alpha2/"
+cp "$build/swift/Alpha2.swift" "$package/Extensions/"*.swift "$package/Sources/Alpha2/"
 
 # Every required-reason API the library imports must have a reason in the manifest.
 declared=$(sed -n 's/.*<string>\(NSPrivacyAccessedAPICategory[A-Za-z]*\)<\/string>.*/\1/p' \
