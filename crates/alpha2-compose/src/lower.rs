@@ -663,6 +663,21 @@ impl Context<'_> {
         }
     }
 
+    /// Refuses `text` longer than one text holds, at `path`.
+    fn text_length(text: &str, path: &str) -> Result<(), ComposeError> {
+        if text.len() > alpha2_model::MAX_TEXT_CONTENT_BYTES {
+            return Err(Self::error(
+                path,
+                format!(
+                    "the text is {} bytes, and a text holds at most {}",
+                    text.len(),
+                    alpha2_model::MAX_TEXT_CONTENT_BYTES
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     /// The theme size `fraction` in pixels.
     pub(crate) fn theme_px(&self, fraction: f32) -> f32 {
         fraction * self.short_side()
@@ -688,6 +703,23 @@ impl Context<'_> {
             Some(TransitionChoice::Given(transition)) => Some(transition.clone()),
         };
         if let Some(transition) = &transition {
+            let effect = alpha2_model::ClipEffect {
+                id: crate::compile::transition_effect_id(&transition.kind),
+                version: transition.version.unwrap_or(1),
+                params: transition.params.clone(),
+                resources: BTreeMap::new(),
+            };
+            alpha2_model::check_builtin_effect(&effect, alpha2_model::EffectKind::Transition)
+                .map_err(|problem| {
+                    Self::error(
+                        &format!("{path}.transition"),
+                        format!(
+                            "the transition \"{}\" ({}) {problem}; schema/effects.v1.json lists \
+                             the transitions",
+                            transition.kind, effect.id
+                        ),
+                    )
+                })?;
             let ticks = Self::time(
                 &format!("{path}.transition"),
                 "duration",
@@ -997,17 +1029,26 @@ impl Context<'_> {
                 ),
             }))),
             Node::Captions(captions) => self.lower_captions(captions, path),
-            Node::Layout(layout) => Ok(Prim::Visual(Box::new(Visual {
-                head: Self::head(path, layout.id.as_ref(), layout.at, layout.duration)?,
-                inset: inset_sides(layout.inset),
-                fit: Fit::Contain,
-                align: layout.align.unwrap_or_default(),
-                opacity: 1.0,
-                fade_in: 0,
-                fade_out: 0,
-                zoom: None,
-                content: Content::Layout(layout.root.clone()),
-            }))),
+            Node::Layout(layout) => {
+                let (width, height) = self.canvas();
+                let tree = alpha2_model::Generator::Layout {
+                    root: layout.root.clone(),
+                };
+                tree.validate_on(width, height).map_err(|issue| {
+                    Self::error(&format!("{path}.root"), crate::compile::issue_text(&issue))
+                })?;
+                Ok(Prim::Visual(Box::new(Visual {
+                    head: Self::head(path, layout.id.as_ref(), layout.at, layout.duration)?,
+                    inset: inset_sides(layout.inset),
+                    fit: Fit::Contain,
+                    align: layout.align.unwrap_or_default(),
+                    opacity: 1.0,
+                    fade_in: 0,
+                    fade_out: 0,
+                    zoom: None,
+                    content: Content::Layout(layout.root.clone()),
+                })))
+            }
             Node::Audio(audio) => self.lower_audio(audio, path),
             Node::Raw(raw) => Ok(Prim::Raw(
                 Head {
@@ -1846,6 +1887,7 @@ impl Context<'_> {
         if text.text.is_empty() {
             return Err(Self::error(&format!("{path}.text"), "text is not empty"));
         }
+        Self::text_length(&text.text, &format!("{path}.text"))?;
         let font_px = match &text.font_size {
             Some(size) => self.size_px(&format!("{path}.font_size"), size)?,
             None => self.role_size(text.style),
@@ -2138,6 +2180,7 @@ impl Context<'_> {
             if cue.text.trim().is_empty() {
                 return Err(Self::error(&format!("{at}.text"), "a cue has text"));
             }
+            Self::text_length(&cue.text, &format!("{at}.text"))?;
             let mut caption = crate::compile::cue(start, end, cue.text.clone());
             caption.speaker.clone_from(&cue.speaker);
             out.push(caption);

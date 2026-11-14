@@ -78,6 +78,7 @@ pub use effect::{ClipBlendMode, ClipEffect, EffectValue};
 pub use effect_spec::{
     BUILTIN_EFFECT_PREFIX, EffectKind, EffectParamSpec, EffectParamType, EffectParamUnit,
     EffectProblem, EffectSpec, builtin_effect, builtin_effects, builtin_effects_json,
+    check_builtin_effect,
 };
 pub use error::{
     DataOwner, EffectOwner, ErrorSubject, ModelError, ProjectLoadError, ProjectWriteError,

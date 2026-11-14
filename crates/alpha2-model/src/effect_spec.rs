@@ -229,6 +229,16 @@ pub enum EffectProblem {
     Resources,
 }
 
+/// Checks `effect` against its built-in definition, used as `kind`, as project validation does
+/// for a timeline transition or a node without named inputs. Ids outside
+/// [`BUILTIN_EFFECT_PREFIX`] belong to the host and pass.
+///
+/// # Errors
+/// What is wrong with the effect.
+pub fn check_builtin_effect(effect: &ClipEffect, kind: EffectKind) -> Result<(), EffectProblem> {
+    check_builtin(effect, kind, None)
+}
+
 /// Checks `effect` against its built-in definition, used as `kind`; `inputs` are an effect
 /// node's named inputs. Ids outside [`BUILTIN_EFFECT_PREFIX`] belong to the host and pass.
 pub(crate) fn check_builtin(

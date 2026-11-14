@@ -1,5 +1,8 @@
 //! Placing primitives on the timeline: lengths, areas, lanes, and the
 //! project they become.
+//!
+//! A project limit the compiler can count is checked where the node is in hand, with its path;
+//! anything else the model refuses is reported at the node that made the refused object.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -420,6 +423,10 @@ impl<'a> Context<'a> {
         (self.width as f32, self.height as f32)
     }
 
+    pub(crate) const fn canvas(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
     pub(crate) fn short_side(&self) -> f32 {
         let (width, height) = self.canvas_px();
         width.min(height)
@@ -661,10 +668,7 @@ impl<'a> Context<'a> {
             Prim::Coverage(coverage) => self.emit_coverage(coverage, slot, out),
             Prim::Box(node) => self.emit_box(node, slot, out),
             Prim::Visual(visual) => self.emit_visual(visual, slot, out),
-            Prim::Captions(captions) => {
-                self.emit_captions(captions, slot, out);
-                Ok(())
-            }
+            Prim::Captions(captions) => self.emit_captions(captions, slot, out),
             Prim::Audio(audio) => {
                 self.emit_audio(audio, slot, out);
                 Ok(())
@@ -854,6 +858,7 @@ impl<'a> Context<'a> {
             } else {
                 lanes.share(fresh)
             };
+            check_lanes(&lanes, &sequence.head.path, index)?;
             outgoing = match (single, placed.first()) {
                 (true, Some(&lane)) => lanes.visual[lane].clips.last().map(|clip| Outgoing {
                     lane,
@@ -1015,6 +1020,17 @@ impl<'a> Context<'a> {
             input: Some(node),
             transform: self.group_transform(group, rect, len),
         });
+        if graph.nodes.len() > alpha2_model::MAX_COMPOSITION_NODES {
+            return Err(ComposeError::new(
+                &path,
+                format!(
+                    "it draws its children, effects and masks with {} composition nodes, and a \
+                     composition holds at most {}",
+                    graph.nodes.len(),
+                    alpha2_model::MAX_COMPOSITION_NODES
+                ),
+            ));
+        }
         let id = self.composition_id("group");
         let mut composition = Composition::new(id.clone());
         composition.nodes = graph.nodes;
@@ -1193,6 +1209,7 @@ impl<'a> Context<'a> {
         let root: LayoutNode = serde_json::from_value(root).map_err(|error| {
             ComposeError::new(&path, format!("a box field is invalid: {error}"))
         })?;
+        self.layout_fits(&root, &path, false)?;
         if build.places.is_empty() {
             self.box_clip(root, rect, slot, out);
             return Ok(());
@@ -1224,6 +1241,7 @@ impl<'a> Context<'a> {
             if painted[low.min(high)..high].iter().any(|paints| *paints) {
                 let mut layer = root.clone();
                 hide_outside(&mut layer, &mut 0, low..high);
+                self.layout_fits(&layer, &path, true)?;
                 self.box_clip(layer, rect, slot, out);
             }
             if let Some(place) = build.places.get(segment) {
@@ -1231,6 +1249,38 @@ impl<'a> Context<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Refuses a box's layout tree the model would refuse, at the box's `path`; `segment` is a
+    /// tree drawn between pictures, whose hidden leaves are isolated.
+    fn layout_fits(
+        &self,
+        root: &LayoutNode,
+        path: &str,
+        segment: bool,
+    ) -> Result<(), ComposeError> {
+        let tree = Generator::Layout {
+            root: Box::new(root.clone()),
+        };
+        tree.validate_on(self.width, self.height)
+            .map_err(|issue| match issue {
+                alpha2_model::GeneratorIssue::Layout(issue)
+                    if segment && issue.problem == alpha2_model::LayoutProblem::TooManyIsolated =>
+                {
+                    ComposeError::new(
+                        path,
+                        format!(
+                            "a box with a picture hides the leaves on the other side of it, and \
+                         holds at most {} of them",
+                            alpha2_model::MAX_LAYOUT_ISOLATED - 1
+                        ),
+                    )
+                }
+                issue => ComposeError::new(
+                    path,
+                    format!("its layout is invalid: {}", issue_text(&issue)),
+                ),
+            })
     }
 
     /// One layout generator over the whole canvas, with the box's opacity and motion.
@@ -1808,6 +1858,16 @@ impl<'a> Context<'a> {
                 blend_mode: clip.blend_mode,
                 opacity: constant(1.0),
             });
+        }
+        if layers.len() > alpha2_model::MAX_MERGE_LAYERS {
+            return Err(ComposeError::new(
+                path,
+                format!(
+                    "it draws {} pictures as layers, and a group merges at most {}",
+                    layers.len(),
+                    alpha2_model::MAX_MERGE_LAYERS
+                ),
+            ));
         }
         Ok(graph.add(NodeOp::Merge { layers }))
     }
@@ -2653,7 +2713,12 @@ impl<'a> Context<'a> {
         }]
     }
 
-    fn emit_captions(&mut self, captions: &CaptionsPrim, slot: &Slot, out: &mut Lanes) {
+    fn emit_captions(
+        &mut self,
+        captions: &CaptionsPrim,
+        slot: &Slot,
+        out: &mut Lanes,
+    ) -> Result<(), ComposeError> {
         let end = slot.start + slot.len;
         let cues = captions
             .cues
@@ -2699,7 +2764,9 @@ impl<'a> Context<'a> {
             out.visual.push(lane);
         }
         // Overlapping cues take a track each, as a caption track shows one at a time.
-        let rows = alpha2_model::caption_rows(&cues).unwrap_or_else(|_| vec![cues]);
+        // A row holds as many cues as a track does; past that the cues take another row.
+        let rows = alpha2_model::caption_rows(&cues)
+            .map_err(|error| ComposeError::new(&captions.head.path, error.to_string()))?;
         for row in rows {
             let mut lane = Lane::new(TrackKind::Caption, &slot.owners, self.here());
             lane.captions = Some(Captions {
@@ -2710,6 +2777,7 @@ impl<'a> Context<'a> {
             });
             out.visual.push(lane);
         }
+        Ok(())
     }
 
     fn emit_audio(&mut self, audio: &AudioPrim, slot: &Slot, out: &mut Lanes) {
@@ -2749,6 +2817,37 @@ impl<'a> Context<'a> {
             .map(|target| (target, audio.duck_depth_db, audio.head.path.clone()));
         out.audio.push(lane);
     }
+}
+
+/// Refuses a lane of `lanes` that holds more clips, transitions or cues than a track does, at the
+/// sequence's `path`, once child `index` is placed.
+fn check_lanes(lanes: &Lanes, path: &str, index: usize) -> Result<(), ComposeError> {
+    for lane in lanes.visual.iter().chain(&lanes.audio) {
+        let cues = lane
+            .captions
+            .as_ref()
+            .map_or(0, |captions| captions.cues.len());
+        for (count, what, most) in [
+            (lane.clips.len(), "clips", alpha2_model::MAX_CLIPS_PER_TRACK),
+            (
+                lane.transitions.len(),
+                "transitions",
+                alpha2_model::MAX_TRANSITIONS_PER_TRACK,
+            ),
+            (cues, "caption cues", alpha2_model::MAX_CLIPS_PER_TRACK),
+        ] {
+            if count > most {
+                return Err(ComposeError::new(
+                    path,
+                    format!(
+                        "with child {index} one of its tracks holds {count} {what}, and a track \
+                         holds at most {most}"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The last clip of a sequence child that is one picture, which a transition out of it starts on.
@@ -2861,7 +2960,7 @@ fn coverage_commutes(effect: &ClipEffect) -> bool {
     alpha2_model::builtin_effect(&effect.id).is_some_and(|spec| spec.coverage_commutes)
 }
 
-fn transition_effect_id(kind: &str) -> String {
+pub(crate) fn transition_effect_id(kind: &str) -> String {
     match kind {
         "crossfade" | "fade" => "alpha2.transition.fade".to_owned(),
         kind if kind.contains('.') => kind.to_owned(),
@@ -3912,6 +4011,15 @@ impl Opacity {
     }
 }
 
+/// A generator's problem as text: where in its tree, and what.
+pub(crate) fn issue_text(issue: &alpha2_model::GeneratorIssue) -> String {
+    match issue {
+        alpha2_model::GeneratorIssue::Layout(issue) => format!("{} {}", issue.at, issue.problem),
+        alpha2_model::GeneratorIssue::Shape(issue) => format!("{} {}", issue.at, issue.problem),
+        alpha2_model::GeneratorIssue::Invalid => "a field is out of range".to_owned(),
+    }
+}
+
 /// A model refusal of the compiled project, reported at the node that made the refused object.
 pub(crate) fn model_refusal(error: &ModelError, made_by: &HashMap<String, String>) -> ComposeError {
     let path_of = |id: &str| made_by.get(id).map_or("spec", String::as_str);
@@ -4104,6 +4212,17 @@ fn assemble(
         .into_iter()
         .chain(lanes.audio)
         .collect::<Vec<_>>();
+    if let Some(lane) = ordered.get(alpha2_model::MAX_TRACKS) {
+        return Err(ComposeError::new(
+            &lane.path,
+            format!(
+                "the video needs {} tracks, and a project holds at most {}; each stacked child, \
+                 grid cell and overlay takes its own",
+                ordered.len(),
+                alpha2_model::MAX_TRACKS
+            ),
+        ));
+    }
     let ids = ordered
         .iter()
         .map(|lane| match &lane.raw {

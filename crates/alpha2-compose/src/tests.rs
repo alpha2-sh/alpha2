@@ -1924,16 +1924,120 @@ fn a_model_refusal_names_the_node_that_made_the_refused_object() {
     );
     assert_eq!(unknown.path, "spec");
 
-    // A layout tree past the model's node limit is reported at its layout node.
-    let leaves = vec![json!({"text": {"mode": "constant", "value": "x"}}); 300];
+    // A raw fragment's clip that names no source is reported at its overlay.
+    let error = compile_error(&json!({"duration": 1, "body": {"type": "color"},
+        "overlays": [{"type": "color", "duration": 1}, {"type": "raw", "tracks": [
+            {"id": "raw-track", "name": "raw", "kind": "video", "clips": [{"id": "raw-clip",
+                "source_id": "src-missing", "timeline_range": {"start": 0, "end": SECOND},
+                "source_range": {"start": 0, "end": SECOND}}]}]}]}));
+    assert!(
+        error.starts_with("spec.overlays[1]: the compiled project is not valid"),
+        "{error}"
+    );
+}
+
+#[test]
+fn limits_the_compiler_can_count_are_named_where_the_node_is() {
+    let overlays = (0..300)
+        .map(|index| json!({"type": "color", "at": index % 2, "duration": 1}))
+        .collect::<Vec<_>>();
+    let error =
+        compile_error(&json!({"duration": 2, "body": {"type": "color"}, "overlays": overlays}));
+    // The body takes the first track.
+    assert!(
+        error.starts_with(
+            "spec.overlays[255]: the video needs 301 tracks, and a project holds at most 256"
+        ),
+        "{error}"
+    );
+
+    let colors = vec![json!({"type": "color"}); 40];
+    let error =
+        compile_error(&json!({"duration": 1, "body": {"type": "group", "children": colors}}));
+    assert!(
+        error.starts_with(
+            "spec.body: it draws 40 pictures as layers, and a group merges at most 32"
+        ),
+        "{error}"
+    );
+
+    let stills = vec![json!("slides/01.jpg"); 5000];
+    let error = compile_error(&json!({"body": {"type": "slideshow", "items": stills,
+        "seconds": 1, "transition": "cut"}}));
+    assert!(
+        error.starts_with("spec.body: with child 4096 one of its tracks holds 4097 clips"),
+        "{error}"
+    );
+
+    // Cues one after another fill a caption track and go on in the next.
+    let cues = (0..5000)
+        .map(|index| json!({"text": "x", "start": index, "end": index + 1}))
+        .collect::<Vec<_>>();
+    let compiled = compile(&json!({"body": {"type": "captions", "cues": cues}}));
+    assert_eq!(tracks(&compiled).len(), 2);
+    let together = vec![json!({"text": "x", "start": 0, "end": 1}); 300];
+    let error = compile_error(&json!({"body": {"type": "captions", "cues": together}}));
+    assert!(error.starts_with("spec.body: "), "{error}");
+
+    let long = "x".repeat(5000);
+    let error = compile_error(&json!({"duration": 1, "body": {"type": "text", "text": long}}));
+    assert!(
+        error.starts_with("spec.body.text: the text is 5000 bytes"),
+        "{error}"
+    );
+    let error = compile_error(&json!({"body": {"type": "captions",
+        "cues": [{"text": long, "start": 0, "end": 1}]}}));
+    assert!(
+        error.starts_with("spec.body.cues[0].text: the text is 5000 bytes"),
+        "{error}"
+    );
+
     let error = compile_error(
-        &json!({"duration": 1, "body": {"type": "stack", "children": [
-            {"type": "color"},
-            {"type": "layout", "root": {"children": leaves}},
-        ]}}),
+        &json!({"body": {"type": "sequence", "transition": "wipe-lft",
+        "children": [{"type": "color", "duration": 2}, {"type": "color", "duration": 2}]}}),
     );
     assert!(
-        error.starts_with("spec.body.children[1]: the compiled project is not valid"),
+        error.starts_with("spec.body.transition: the transition \"wipe-lft\" (alpha2.transition.wipe-lft) is not a built-in"),
         "{error}"
+    );
+
+    let leaves = vec![json!({"text": {"mode": "constant", "value": "x"}}); 300];
+    let error = compile_error(&json!({"duration": 1, "body": {"type": "layout",
+        "root": {"children": leaves}}}));
+    assert!(error.starts_with("spec.body.root: "), "{error}");
+
+    let boxed = |count: usize| {
+        json!({"canvas": {"width": 1000, "height": 500}, "duration": 2,
+            "body": {"type": "box", "background": "#202020", "children": vec![
+                json!({"box": {"width": "20px", "height": "20px"},
+                    "node": {"type": "color", "color": "#ff0000"}}); count]}})
+    };
+    let error = compile_error(&boxed(300));
+    assert!(
+        error.starts_with("spec.body: its layout is invalid: "),
+        "{error}"
+    );
+}
+
+fn box_with_leaves_after_a_picture(leaves: usize) -> Value {
+    let mut children = vec![json!({"box": {"width": "200px"},
+        "node": {"type": "media", "path": "wide.mp4", "muted": true}})];
+    children.extend(std::iter::repeat_n(
+        json!({"box": {"width": "20px", "height": "20px"},
+                "node": {"type": "color", "color": "#ff0000"}}),
+        leaves,
+    ));
+    json!({"canvas": {"width": 1000, "height": 500}, "duration": 2,
+        "body": {"type": "box", "background": "#202020", "children": children}})
+}
+
+#[test]
+fn a_box_with_a_picture_names_how_many_leaves_it_can_hide() {
+    compile(&box_with_leaves_after_a_picture(15));
+    let error = compile_error(&box_with_leaves_after_a_picture(16));
+    assert_eq!(
+        error,
+        "spec.body: a box with a picture hides the leaves on the other side of it, and holds at \
+         most 15 of them"
     );
 }

@@ -225,6 +225,11 @@ All notable changes to this project are documented in this file.
   outgoing one stopped without a fade.
 - A compiled compose project the model refuses is reported at the node that made the refused clip,
   source, track or composition instead of at `spec`.
+- Compose checks the project limits it can count where the node is: tracks (named at the first
+  node that does not fit), clips, transitions and cues per track in a sequence, layers and nodes of
+  a group, a box's or `layout` node's layout tree (a box with a picture hides at most 15 leaves),
+  text length, overlapping caption rows and transition names, each with the node's path and the
+  limit.
 
 ## [0.6.0] - 2026-11-08
 
