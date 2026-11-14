@@ -581,6 +581,29 @@ fn latex_and_pdf_sources_export_to_mp4() {
 }
 
 #[test]
+fn a_source_with_alpha_is_reported_as_drawn_opaque() {
+    let (path, report) = try_export(
+        EngineConfig::default(),
+        "host-video-export-project.json",
+        (&[("video-source", "hevc-alpha.mov")], &[]),
+        &[],
+        "alpha-dropped.mp4",
+    );
+    match report {
+        Ok(report) => {
+            let entries = report["decodeDiagnostics"].as_array().expect("diagnostics");
+            assert_eq!(entries.len(), 1, "{report}");
+            assert_eq!(entries[0]["type"], "layerDropped");
+            assert_eq!(entries[0]["code"], "alpha-dropped");
+            assert_eq!(entries[0]["source"], "video-source");
+        }
+        // A device without an HEVC decoder refuses the source by name instead.
+        Err(error) => assert!(format!("{error:?}").contains("HEVC"), "{error:?}"),
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn a_project_with_audio_exports_to_mkv_and_webm() {
     let assets = [
         ("image-source", "cross_topology_parity.png"),

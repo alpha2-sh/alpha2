@@ -1,7 +1,7 @@
 //! The export loop: frame needs in, decoded and prepared frames into the store, rendered planes
 //! out to the encoder.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Weak};
 
 use alpha2_engine::{
@@ -16,7 +16,7 @@ use super::budget::FrameBudget;
 use super::prepare::{GpuSource, SurfaceImport, prepare_cpu, prepare_gpu};
 use crate::cursor::{CursorReads, DecodeCursorKey, decode_cursor_key};
 use crate::encode::PlaneBuffer;
-use crate::video_stream::{BackendImage, FrameFacts, StreamFrame, SurfaceLease};
+use crate::video_stream::{BackendImage, DroppedLayer, FrameFacts, StreamFrame, SurfaceLease};
 use alpha2_engine::frame_store::FrameStore;
 
 /// Steps an export may wait on the same frame, refilling between them, before it fails: a frame
@@ -450,6 +450,8 @@ pub struct StreamSources<F> {
     stills: HashMap<SourceId, Weak<DecodedVideoFrame>>,
     /// Sources that opened as something other than a video stream.
     not_video: HashSet<SourceId>,
+    /// What each source's pictures go without, noted when it first opens.
+    dropped: BTreeMap<SourceId, DroppedLayer>,
     /// Prepares the decoder surfaces the streams produce.
     surfaces: Option<Arc<dyn SurfaceImport>>,
     /// Supplies the extension sources.
@@ -488,6 +490,7 @@ where
             session_limit: None,
             stills: HashMap::new(),
             not_video: HashSet::new(),
+            dropped: BTreeMap::new(),
             surfaces: None,
             #[cfg(feature = "providers")]
             providers: None,
@@ -565,9 +568,21 @@ where
             SourceStream::AudioOnly => {
                 self.not_video.insert(source.clone());
             }
-            SourceStream::Video(_) => {}
+            SourceStream::Video(video) => {
+                if let Some(dropped) = video.dropped_layer() {
+                    self.dropped
+                        .entry(source.clone())
+                        .or_insert_with(|| dropped.clone());
+                }
+            }
         }
         Ok(stream)
+    }
+
+    /// What the pictures of each source opened so far go without, one entry per source.
+    #[must_use]
+    pub const fn dropped_layers(&self) -> &BTreeMap<SourceId, DroppedLayer> {
+        &self.dropped
     }
 
     /// Prepares the decoder surfaces the streams produce with `import`; without it a surface

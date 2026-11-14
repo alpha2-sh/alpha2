@@ -642,6 +642,10 @@ All notable changes to this project are documented in this file.
 - iOS: an AAC export of a project at 24 kHz or below encodes at the highest bitrate the system's
   encoder lists at or below the one asked for, instead of failing; the export report states it in
   `audioBitrate` (on Android too).
+- Mobile: a source whose track declares alpha (HEVC with an alpha layer, VP9 alpha in WebM), which
+  the platform decoders draw opaque, is reported: the export report's `decodeDiagnostics` holds the
+  desktop's `layerDropped` entry with code `alpha-dropped`, and a preview writes one diagnostic
+  line per source.
 
 ## [0.6.0] - 2026-11-08
 

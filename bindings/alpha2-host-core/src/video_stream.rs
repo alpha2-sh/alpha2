@@ -13,7 +13,7 @@ use alpha2_container::{ContainerReader, Packet, TrackInfo, TrackKind, VideoCodec
 use alpha2_media::{
     CancelToken, ChromaLocation, ColorMetadata, DecodeError, DecodeEvent, DecodeRequest,
     DecodeResult, DecodedVideoFrame, Decoder, Orientation, PixelFormat, Plane, Rect,
-    SampleAspectRatio, StreamInfo, StreamKind, YuvFormat,
+    SampleAspectRatio, SourceAlpha, StreamInfo, StreamKind, YuvFormat,
 };
 use alpha2_time::{MediaTime, TICKS_PER_SECOND};
 
@@ -388,6 +388,41 @@ impl From<alpha2_container::DemuxError> for Interrupt {
     }
 }
 
+/// Something a stream's pictures go without (they still decode), for reports.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DroppedLayer {
+    /// `alpha-dropped`, the code the desktop host reports too.
+    pub code: &'static str,
+    /// Why, for people.
+    pub reason: String,
+}
+
+/// The alpha a track declares, which the platform sessions decode opaque.
+fn dropped_alpha(video: &alpha2_container::VideoTrack) -> Option<(SourceAlpha, DroppedLayer)> {
+    if !video.alpha {
+        return None;
+    }
+    let (alpha, reason) = match video.codec {
+        VideoCodec::Vp9 => (
+            SourceAlpha::Vp9SideData,
+            "VP9 alpha in block additions is not decoded on this platform",
+        ),
+        VideoCodec::Hevc => (
+            SourceAlpha::HevcAuxiliaryLayer,
+            "alpha in an HEVC auxiliary layer is not decoded",
+        ),
+        _ => (
+            SourceAlpha::Planar,
+            "the alpha plane is not decoded on this platform",
+        ),
+    };
+    let dropped = DroppedLayer {
+        code: "alpha-dropped",
+        reason: reason.into(),
+    };
+    Some((alpha, dropped))
+}
+
 /// A video track decoded frame-exactly.
 pub struct VideoStream {
     reader: Box<dyn ContainerReader>,
@@ -412,6 +447,7 @@ pub struct VideoStream {
     crop: Option<CropWindow>,
     bitstream: Bitstream,
     info: Vec<StreamInfo>,
+    dropped: Option<DroppedLayer>,
 }
 
 impl std::fmt::Debug for VideoStream {
@@ -487,6 +523,7 @@ impl VideoStream {
                 (rect.width, rect.height)
             });
         let reorder = ReorderBuffer::new(reorder_depth(backend.as_ref(), &track));
+        let (alpha, dropped) = dropped_alpha(&video).unzip();
         let info = vec![StreamInfo {
             index,
             kind: StreamKind::Video,
@@ -508,7 +545,7 @@ impl VideoStream {
                 .or(video.color)
                 .or(bitstream.vui.color),
             frame_bytes: None,
-            alpha: None,
+            alpha,
             language: track.language.clone(),
             title: track.title.clone(),
         }];
@@ -531,6 +568,7 @@ impl VideoStream {
             crop,
             bitstream,
             info,
+            dropped,
             track,
         })
     }
@@ -555,6 +593,12 @@ impl VideoStream {
     #[must_use]
     pub const fn track(&self) -> &TrackInfo {
         &self.track
+    }
+
+    /// What the track declares that its pictures go without: the alpha of a track that has one.
+    #[must_use]
+    pub const fn dropped_layer(&self) -> Option<&DroppedLayer> {
+        self.dropped.as_ref()
     }
 
     /// Bytes of the frame decoded ahead and kept for the next [`Self::next`].

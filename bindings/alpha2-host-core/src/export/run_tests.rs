@@ -190,7 +190,11 @@ fn reader() -> Box<dyn ContainerReader> {
 
 /// Frames at `first..end` on a clock of `timescale` units per second, one frame per unit.
 fn late_reader(timescale: u32, first: i64, end: i64) -> Box<dyn ContainerReader> {
-    Box::new(Frames {
+    Box::new(frames(timescale, first, end))
+}
+
+fn frames(timescale: u32, first: i64, end: i64) -> Frames {
+    Frames {
         tracks: vec![TrackInfo {
             id: TrackId(1),
             kind: TrackKind::Video,
@@ -219,7 +223,7 @@ fn late_reader(timescale: u32, first: i64, end: i64) -> Box<dyn ContainerReader>
         next: first,
         first,
         end,
-    })
+    }
 }
 
 /// A 16x16 project at 30 fps showing source `v` from `offset` frames in, for `frames` frames.
@@ -1014,4 +1018,70 @@ fn the_frames_a_cursor_holds_count_against_the_budget() {
         .expect("frame");
     // The frame answered and the one decoded after it, 16x16 I420 each.
     assert_eq!(sources.held_bytes(), 2 * (16 * 16 + 2 * 8 * 8));
+}
+
+#[test]
+fn a_track_that_declares_alpha_is_reported_as_dropped_once_per_source() {
+    use alpha2_media::{Decoder as _, SourceAlpha};
+    let open = |_: &SourceId| {
+        let mut alpha = frames(30, 0, 60);
+        if let Some(video) = alpha.tracks[0].video.as_mut() {
+            video.alpha = true;
+        }
+        VideoStream::open(
+            Box::new(alpha),
+            0,
+            Arc::new(Counted::default()),
+            StreamOptions::default(),
+        )
+        .map_err(|error| error.to_string())
+    };
+    let stream = open(&SourceId::new("v").expect("id")).expect("stream");
+    assert_eq!(stream.streams()[0].alpha, Some(SourceAlpha::Vp9SideData));
+    assert_eq!(
+        stream.dropped_layer().map(|dropped| dropped.code),
+        Some("alpha-dropped")
+    );
+    // Three cursors over one stream slot: every cursor reopens the source many times.
+    let snapshot = clips_project(&[(0, 10, 0), (5, 10, 20), (15, 10, 5)]);
+    let mut exporter = Exporter::for_project(
+        &snapshot,
+        QualityProfile::export(),
+        alpha2_media::VideoCodec::H264,
+    )
+    .expect("exporter");
+    let mut sources = StreamSources::new(move |source: &SourceId| {
+        open(source).map(|stream| SourceStream::Video(Box::new(stream)))
+    })
+    .with_session_limit(1);
+    export_video(
+        &snapshot,
+        &mut exporter,
+        ExportRenderer::Cpu(&CpuRenderer::new(2)),
+        &mut TextTextures::new(),
+        &mut sources,
+        &mut Collect::default(),
+        (&FrameBudget::new(1 << 30), &CancelToken::default()),
+        &mut |_| Ok(()),
+        &mut |_, _| {},
+    )
+    .expect("export");
+    let dropped = sources.dropped_layers();
+    assert_eq!(dropped.len(), 1, "{dropped:?}");
+    assert_eq!(
+        dropped[&SourceId::new("v").expect("id")].code,
+        "alpha-dropped"
+    );
+}
+
+#[test]
+fn an_opaque_track_drops_nothing() {
+    let stream = VideoStream::open(
+        reader(),
+        0,
+        Arc::new(Counted::default()),
+        StreamOptions::default(),
+    )
+    .expect("stream");
+    assert_eq!(stream.dropped_layer(), None);
 }

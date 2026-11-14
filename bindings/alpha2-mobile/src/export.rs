@@ -437,6 +437,7 @@ fn attempt(
         )),
         error => Failure::Other(failed("RENDER_FAILED", error.to_string())),
     })?;
+    let decode_diagnostics = layer_diagnostics(sources.dropped_layers());
     drop(sources);
     let surface_frames = drawing.gpu_frames().map_or(0, GpuFrames::imported);
     sink.finish().map_err(encode)?;
@@ -452,6 +453,7 @@ fn attempt(
         "audioBitrate": audio_bitrate,
         "renderer": drawing.name(),
         "surfaceFrames": surface_frames,
+        "decodeDiagnostics": decode_diagnostics,
         "frames": frames,
         "width": size.width,
         "height": size.height,
@@ -492,6 +494,23 @@ impl AudioBlockSink for Held<'_> {
     fn abort_audio(&mut self) -> Result<(), EncodeError> {
         self.sink.abort_audio()
     }
+}
+
+/// The desktop export report's `layerDropped` entries for `dropped`.
+fn layer_diagnostics(
+    dropped: &std::collections::BTreeMap<SourceId, alpha2_host_core::video_stream::DroppedLayer>,
+) -> serde_json::Value {
+    dropped
+        .iter()
+        .map(|(source, dropped)| {
+            json!({
+                "type": "layerDropped",
+                "code": dropped.code,
+                "source": source.as_str(),
+                "reason": dropped.reason,
+            })
+        })
+        .collect()
 }
 
 /// The files the request names for the extension sources.
@@ -1028,6 +1047,24 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_alpha_reads_as_the_desktop_reports_it() {
+        let dropped = alpha2_host_core::video_stream::DroppedLayer {
+            code: "alpha-dropped",
+            reason: "alpha in an HEVC auxiliary layer is not decoded".into(),
+        };
+        let source = SourceId::new("overlay").expect("id");
+        assert_eq!(
+            layer_diagnostics(&std::collections::BTreeMap::from([(source, dropped)])),
+            json!([{
+                "type": "layerDropped",
+                "code": "alpha-dropped",
+                "source": "overlay",
+                "reason": "alpha in an HEVC auxiliary layer is not decoded",
+            }])
+        );
+    }
+
+    #[test]
     fn only_a_failed_hardware_video_encoder_is_retried_in_software() {
         let wav =
             std::env::temp_dir().join(format!("alpha2-mobile-retry-{}.wav", std::process::id()));
@@ -1042,6 +1079,7 @@ mod tests {
             serde_json::from_str(&outcome.expect("exported").report_json).expect("report");
         assert_eq!(report["softwareRetry"], true);
         assert_eq!(report["audioBitrate"], 128_000);
+        assert_eq!(report["decodeDiagnostics"], json!([]));
         assert_eq!(report["hardwareEncoder"], false);
         assert_eq!(opened(&encoders), (vec![false, true], 2));
         let _ = std::fs::remove_file(output);

@@ -8,7 +8,7 @@
 //! background. A window attached, a resize or a seek while paused takes effect, with one frame
 //! drawn, when the session resumes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -613,6 +613,8 @@ struct State {
     held: bool,
     /// When the heard audio last moved.
     heard: HeardClock,
+    /// Sources whose dropped layer a diagnostic line already named.
+    dropped_named: HashSet<SourceId>,
 }
 
 /// Tells an audio output that stopped taking samples from one that is playing.
@@ -685,6 +687,7 @@ impl State {
             deferred: None,
             held: false,
             heard: HeardClock::default(),
+            dropped_named: HashSet::new(),
         }
     }
 
@@ -968,6 +971,15 @@ impl State {
                 }
             }
             Err(error) => record(shared, error),
+        }
+        for (source, dropped) in self.sources.dropped_layers() {
+            if self.dropped_named.insert(source.clone()) {
+                alpha2_os::diagnostic!(
+                    "alpha2 preview: source {source} draws opaque ({}): {}",
+                    dropped.code,
+                    dropped.reason
+                );
+            }
         }
     }
 
