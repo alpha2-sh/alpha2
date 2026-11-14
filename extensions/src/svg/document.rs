@@ -129,7 +129,10 @@ pub(super) fn conversion(
     count.match_styles(doc)?;
     count.index(doc);
     let root = count.subtree(doc.root(), 0, 0)?;
-    let steps = root.cost().saturating_add(count.resolving);
+    let steps = root
+        .cost()
+        .saturating_add(count.resolving)
+        .saturating_add(count.matching);
     if steps > count.budget {
         return Err(too_costly(count.budget));
     }
@@ -216,6 +219,8 @@ struct Count<'a> {
     shared: HashSet<NodeId>,
     /// Steps spent resolving the paints contexts name, one per candidate element.
     resolving: u64,
+    /// Steps the metered pass over the style rules spent.
+    matching: u64,
     /// Elements under and including each `<use>` target, which usvg checks per copy.
     descendants: HashMap<NodeId, u64>,
     paths: HashMap<NodeId, PathData>,
@@ -237,6 +242,7 @@ impl<'a> Count<'a> {
             references: 0,
             shared: HashSet::new(),
             resolving: 0,
+            matching: 0,
             descendants: HashMap::new(),
             paths: HashMap::new(),
         }
@@ -267,8 +273,9 @@ impl<'a> Count<'a> {
         if sheet.rules.is_empty() {
             return Ok(());
         }
+        // usvg matches the rules again, so this pass may spend half the budget and counts too.
         let meter = Meter {
-            left: std::cell::Cell::new(self.budget),
+            left: std::cell::Cell::new(self.budget / 2),
             deep: std::cell::Cell::new(false),
         };
         for node in doc.descendants().filter(Node::is_element) {
@@ -313,7 +320,8 @@ impl<'a> Count<'a> {
             }
             self.styles.insert(node.id(), before - meter.left.get());
         }
-        // Matching cost is added per converted copy in the subtree walk.
+        // usvg's matching is added per converted copy in the subtree walk.
+        self.matching = self.budget / 2 - meter.left.get();
         Ok(())
     }
 
@@ -471,7 +479,11 @@ impl<'a> Count<'a> {
 
     /// Refuses a subtree being counted as soon as it is past the step or element budget.
     fn within_budget(&self, subtree: &Subtree) -> Result<(), ExtensionError> {
-        if subtree.cost() > self.budget {
+        let spent = subtree
+            .cost()
+            .saturating_add(self.matching)
+            .saturating_add(self.resolving);
+        if spent > self.budget {
             return Err(too_costly(self.budget));
         }
         if subtree.elements > MAX_ELEMENTS {

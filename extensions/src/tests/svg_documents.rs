@@ -923,6 +923,26 @@ fn the_svg_images_an_svg_draws_are_read_within_its_text_budget() {
 
 #[cfg(feature = "svg")]
 #[test]
+fn an_svg_whose_style_rules_cost_more_than_half_the_reading_budget_to_match_is_refused() {
+    // usvg matches the rules again after the metered pass, so each pass gets half the budget.
+    let document = svg_document(
+        1920,
+        1080,
+        &format!(
+            "<style>x g g g rect{{fill:red}}</style>{}{}{}",
+            "<g>".repeat(100),
+            r#"<rect width="1" height="1"/>"#.repeat(10),
+            "</g>".repeat(100)
+        ),
+    );
+    refused_as(
+        svg_drawn(&document, (0, 0)),
+        "reading the SVG takes more than",
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
 fn an_svg_text_is_charged_for_its_layout_with_or_without_a_font() {
     let text = |chars: usize| {
         let words: String = (0..chars)
