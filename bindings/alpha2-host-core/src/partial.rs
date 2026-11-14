@@ -543,8 +543,9 @@ impl PartialOutput {
     /// while beating the encode watch), and syncs the folder.
     ///
     /// # Errors
-    /// [`EncodeError::Cancelled`] when `cancel` stopped the retries (the partial is removed). Any
-    /// other failure keeps the finished file beside the target ([`EncodeError::Publish`]).
+    /// [`EncodeError::Cancelled`] when `cancel` stopped the staging copy or the retries (the
+    /// partial and any staging file are removed). Any other failure keeps the finished file
+    /// beside the target ([`EncodeError::Publish`]).
     pub fn finish(&mut self, cancel: &CancelToken) -> Result<PublishReport, EncodeError> {
         if self.state != PartialState::Writing {
             return Err(EncodeError::Adapter(
@@ -553,10 +554,16 @@ impl PartialOutput {
         }
         self.state = PartialState::Finished;
         let staged_locally = self.staging.is_some();
-        if let Some(staging) = self.staging.clone()
-            && let Err(error) = self.copy_staging(&staging)
-        {
-            return Err(self.keep_staging(staging, &error));
+        if let Some(staging) = self.staging.clone() {
+            match self.copy_staging(&staging, cancel) {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.state = PartialState::Writing;
+                    self.discard()?;
+                    return Err(EncodeError::Cancelled);
+                }
+                Err(error) => return Err(self.keep_staging(staging, &error)),
+            }
         }
         let beat_unless_cancelled = || {
             crate::encode_watch::beat_encode_call();
@@ -594,8 +601,9 @@ impl PartialOutput {
     }
 
     /// Copies the staging file into the partial through the lock handle: an in-order FUSE server
-    /// may upload on every write-handle close, so a second handle would race.
-    fn copy_staging(&self, staging: &Path) -> Result<(), String> {
+    /// may upload on every write-handle close, so a second handle would race. Returns `false`
+    /// when `cancel` stopped it.
+    fn copy_staging(&self, staging: &Path, cancel: &CancelToken) -> Result<bool, String> {
         let mut source = File::open(staging).map_err(|error| error.to_string())?;
         let mut lock = self
             .lock
@@ -606,11 +614,14 @@ impl PartialOutput {
         let mut chunk = vec![0_u8; STAGING_COPY_CHUNK];
         loop {
             crate::encode_watch::beat_encode_call();
+            if cancel.is_cancelled() {
+                return Ok(false);
+            }
             let read = source
                 .read(&mut chunk)
                 .map_err(|error| format!("reading {}: {error}", staging.display()))?;
             if read == 0 {
-                return Ok(());
+                return Ok(true);
             }
             lock.write_all(&chunk[..read])
                 .map_err(|error| format!("writing {}: {error}", self.path.display()))?;
@@ -1069,6 +1080,39 @@ mod tests {
     use std::io::{Read, Write};
 
     use super::*;
+
+    #[test]
+    fn a_cancel_during_the_staging_copy_publishes_nothing_and_removes_both_files() {
+        let path = final_path("staged-cancel");
+        hooks::NOT_SEEKABLE.set(true);
+        let claimed = PartialOutput::claim(&OutputTarget::from(&path), SeekNeed::Required);
+        hooks::NOT_SEEKABLE.set(false);
+        let mut partial = claimed.expect("claim");
+        let staging = partial.write_path().to_owned();
+        assert_ne!(staging, partial.path, "the output was not staged");
+        let mut writer = partial.open_file().expect("the staging file opens");
+        writer
+            .write_all(&vec![7_u8; 3 * STAGING_COPY_CHUNK])
+            .expect("three chunks");
+        drop(writer);
+        let cancel = CancelToken::default();
+        let beats = std::cell::Cell::new(0);
+        let watched = cancel.clone();
+        // The copy beats once before each chunk: cancel after the first chunk is copied.
+        let _watch = crate::encode_watch::watch_encode_calls(move || {
+            beats.set(beats.get() + 1);
+            if beats.get() == 2 {
+                watched.cancel();
+            }
+        });
+        assert!(matches!(
+            partial.finish(&cancel),
+            Err(EncodeError::Cancelled)
+        ));
+        assert!(!path.exists(), "the cancelled copy was published");
+        assert!(!partial.path.exists(), "the partial was left");
+        assert!(!staging.exists(), "the staging file was left");
+    }
 
     /// A unique final path in the temporary directory, with neither it nor its partial present.
     fn final_path(label: &str) -> PathBuf {

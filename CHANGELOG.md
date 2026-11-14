@@ -120,6 +120,8 @@ All notable changes to this project are documented in this file.
   `hardware-required` check runs before the output is finished, on both render paths.
 - The render cache keeps baking after a write that fails once, stops only on failures that repeat
   or eight in a row, and reads at most what a frame of its size can take.
+- A cancelled export stops copying its staging file into an output folder that cannot seek, and
+  publishes nothing.
 
 ## [0.6.0] - 2026-11-08
 
