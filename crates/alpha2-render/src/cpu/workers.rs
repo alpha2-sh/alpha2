@@ -94,12 +94,12 @@ impl Workers {
                 pixels
                     .par_chunks_mut(rows.saturating_mul(width))
                     .enumerate()
-                    .for_each(|(band, chunk)| wide(|| draw(band * rows, chunk)));
+                    .for_each(|(band, chunk)| draw(band * rows, chunk));
             });
             return;
         }
         for (band, chunk) in pixels.chunks_mut(rows.saturating_mul(width)).enumerate() {
-            wide(|| draw(band * rows, chunk));
+            draw(band * rows, chunk);
         }
     }
 
@@ -138,11 +138,11 @@ impl Workers {
                         match slots[slot].try_lock() {
                             Ok(mut held) => {
                                 let scratch = held.get_or_insert_with(&init);
-                                wide(|| draw(scratch, band * rows, chunk));
+                                draw(scratch, band * rows, chunk);
                             }
                             // A thread that re-entered the pool while drawing: a scratch of its own.
                             Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => {
-                                wide(|| draw(&mut init(), band * rows, chunk));
+                                draw(&mut init(), band * rows, chunk);
                             }
                         }
                     });
@@ -151,7 +151,7 @@ impl Workers {
         }
         let mut scratch = init();
         for (band, chunk) in pixels.chunks_mut(rows.saturating_mul(width)).enumerate() {
-            wide(|| draw(&mut scratch, band * rows, chunk));
+            draw(&mut scratch, band * rows, chunk);
         }
     }
 
@@ -174,38 +174,4 @@ impl Workers {
 /// Rows per band for an image `width` pixels wide.
 fn band_rows(width: usize) -> usize {
     (BAND_PIXELS / width).clamp(1, 64)
-}
-
-/// Runs `work` compiled for AVX2 on x86-64 where present. The IEEE operations and their order
-/// are unchanged (Rust never contracts mul-add, FMA is not enabled), so the bits are identical;
-/// only the lane count differs.
-#[inline]
-fn wide<R>(work: impl FnOnce() -> R) -> R {
-    #[cfg(target_arch = "x86_64")]
-    if avx2::available() {
-        // SAFETY: the processor reports AVX2 and F16C, the only features `run` enables.
-        #[allow(unsafe_code)]
-        return unsafe { avx2::run(work) };
-    }
-    work()
-}
-
-#[cfg(target_arch = "x86_64")]
-mod avx2 {
-    use std::sync::OnceLock;
-
-    pub(super) fn available() -> bool {
-        static AVAILABLE: OnceLock<bool> = OnceLock::new();
-        *AVAILABLE.get_or_init(|| {
-            std::arch::is_x86_feature_detected!("avx2")
-                && std::arch::is_x86_feature_detected!("f16c")
-        })
-    }
-
-    /// `work`, inlined into a function compiled with AVX2.
-    #[allow(unsafe_code)]
-    #[target_feature(enable = "avx2,f16c")]
-    pub(super) unsafe fn run<R>(work: impl FnOnce() -> R) -> R {
-        work()
-    }
 }

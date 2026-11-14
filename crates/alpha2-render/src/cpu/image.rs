@@ -247,16 +247,29 @@ impl CpuImage {
     }
 
     /// Pixel at `(x, y)` inside the picture; transparent outside the content.
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
     pub(crate) fn texel(&self, x: u32, y: u32) -> [f32; 4] {
-        let bounds = self.bounds;
-        if !bounds.contains(x, y) {
-            return [0.0; 4];
-        }
-        let index = (y - bounds.y) as usize * bounds.width as usize + (x - bounds.x) as usize;
-        match &self.pixels {
-            Pixels::Half(pixels) => half::load4(pixels[index]),
-            Pixels::Unorm8(pixels) => pixels[index].map(half::unorm8_value),
+        self.texels().texel(x, y)
+    }
+
+    /// The picture's storage resolved for sampling, to make once and sample many times.
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
+    pub(crate) fn texels(&self) -> Texels<'_> {
+        Texels {
+            storage: match &self.pixels {
+                Pixels::Half(pixels) => Storage::Half(pixels, half::table()),
+                Pixels::Unorm8(pixels) => Storage::Unorm8(pixels),
+            },
+            bounds: self.bounds,
+            whole: self.bounds == PixelBox::whole(self.size),
+            last: [
+                i64::from(self.size.width) - 1,
+                i64::from(self.size.height) - 1,
+            ],
+            #[allow(clippy::cast_precision_loss)]
+            size: [self.size.width as f32, self.size.height as f32],
         }
     }
 
@@ -293,24 +306,75 @@ impl CpuImage {
     }
 
     /// Pixel at `(x, y)` with clamp-to-edge addressing.
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
     pub(crate) fn texel_clamped(&self, x: i64, y: i64) -> [f32; 4] {
-        let last_x = i64::from(self.size.width) - 1;
-        let last_y = i64::from(self.size.height) - 1;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        self.texel(x.clamp(0, last_x) as u32, y.clamp(0, last_y) as u32)
+        self.texels().texel_clamped(x, y)
     }
 
     /// Bilinear sample at normalized `(u, v)` with clamp-to-edge, as `textureSampleLevel` reads
     /// level 0.
-    #[inline]
+    #[inline(always)]
+    #[allow(clippy::inline_always)]
+    pub(crate) fn sample(&self, u: f32, v: f32) -> [f32; 4] {
+        self.texels().sample(u, v)
+    }
+}
+
+/// A picture's stored pixels, borrowed.
+#[derive(Clone, Copy)]
+enum Storage<'a> {
+    Half(&'a [[u16; 4]], &'static [f32; 65_536]),
+    Unorm8(&'a [[u8; 4]]),
+}
+
+/// A [`CpuImage`] resolved for sampling: its storage, half-float table and bounds, read once.
+#[derive(Clone, Copy)]
+pub(crate) struct Texels<'a> {
+    storage: Storage<'a>,
+    bounds: PixelBox,
+    /// The content covers the whole picture, so no texel needs the bounds test.
+    whole: bool,
+    last: [i64; 2],
+    size: [f32; 2],
+}
+
+// The per-sample helpers must inline into the kernels' loops, which are generic over closures.
+#[allow(clippy::inline_always)]
+impl Texels<'_> {
+    /// Pixel at `(x, y)` inside the picture; transparent outside the content.
+    #[inline(always)]
+    pub(crate) fn texel(&self, x: u32, y: u32) -> [f32; 4] {
+        let bounds = self.bounds;
+        if !self.whole && !bounds.contains(x, y) {
+            return [0.0; 4];
+        }
+        debug_assert!(bounds.contains(x, y), "({x}, {y}) is inside the picture");
+        let index = (y - bounds.y) as usize * bounds.width as usize + (x - bounds.x) as usize;
+        match self.storage {
+            Storage::Half(pixels, table) => pixels[index].map(|bits| table[usize::from(bits)]),
+            Storage::Unorm8(pixels) => pixels[index].map(half::unorm8_value),
+        }
+    }
+
+    /// Pixel at `(x, y)` with clamp-to-edge addressing.
+    #[inline(always)]
+    pub(crate) fn texel_clamped(&self, x: i64, y: i64) -> [f32; 4] {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        self.texel(
+            x.clamp(0, self.last[0]) as u32,
+            y.clamp(0, self.last[1]) as u32,
+        )
+    }
+
+    /// Bilinear sample at normalized `(u, v)` with clamp-to-edge, as `textureSampleLevel` reads
+    /// level 0.
+    #[inline(always)]
     pub(crate) fn sample(&self, u: f32, v: f32) -> [f32; 4] {
         // Every position outside [-1, size] reads the edge texel, so clamping changes no sample
         // and keeps the integer neighbours below in range.
-        #[allow(clippy::cast_precision_loss)]
-        let x = (u * self.size.width as f32 - 0.5).clamp(-1.0, self.size.width as f32);
-        #[allow(clippy::cast_precision_loss)]
-        let y = (v * self.size.height as f32 - 0.5).clamp(-1.0, self.size.height as f32);
+        let x = (u * self.size[0] - 0.5).clamp(-1.0, self.size[0]);
+        let y = (v * self.size[1] - 0.5).clamp(-1.0, self.size[1]);
         let x0 = x.floor();
         let y0 = y.floor();
         let fx = x - x0;

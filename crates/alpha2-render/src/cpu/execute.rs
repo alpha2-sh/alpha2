@@ -285,6 +285,7 @@ impl CpuRenderer {
             max_filter_samples: self.quality_controls().max_filter_samples,
             source_a,
             source_b,
+            texels: [source_a.texels(), source_b.texels()],
             inputs: &inputs,
             resources: &resources,
         };
