@@ -133,12 +133,12 @@ The crates an iOS or Android app links build for `aarch64-apple-ios`, `aarch64-a
   ```
 
 - Never enable `alpha2-native-gpu`'s `hwdevice` feature for a mobile target: it links FFmpeg, which mobile builds do not use.
-- Test binaries run on a device or emulator with `adb push` and `adb shell`, and in the iOS simulator with `xcrun simctl spawn <device> <binary>`. The media and session suites read the repository's `tests/` from the directory `ALPHA2_TESTS_DIR` names, so push `tests/corpus`, `tests/cases` and `tests/fonts` there first:
+- Test binaries run on a device or emulator with `adb push` and `adb shell`, and in the iOS simulator with `xcrun simctl spawn <device> <binary>`. The media and session suites read the repository's `tests/` from the directory `ALPHA2_TESTS_DIR` names, so push `tests/corpus`, `tests/cases`, `tests/fonts` and `tests/golden` there first:
 
   ```sh
   cargo test --no-run --target x86_64-linux-android -p alpha2-android-media -p alpha2-mobile --lib
   adb shell mkdir -p /data/local/tmp/alpha2-test/tests
-  adb push tests/corpus tests/cases tests/fonts /data/local/tmp/alpha2-test/tests/
+  adb push tests/corpus tests/cases tests/fonts tests/golden /data/local/tmp/alpha2-test/tests/
   adb push <test binary> /data/local/tmp/alpha2-test/
   adb shell "cd /data/local/tmp/alpha2-test && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test ./<test binary> --test-threads 1"
   ```

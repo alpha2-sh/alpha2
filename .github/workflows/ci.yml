@@ -993,7 +993,7 @@ jobs:
           disable-animations: true
           script: |
             adb shell mkdir -p /data/local/tmp/alpha2-test/tests
-            adb push tests/corpus tests/cases tests/fonts /data/local/tmp/alpha2-test/tests/ > /dev/null
+            adb push tests/corpus tests/cases tests/fonts tests/golden /data/local/tmp/alpha2-test/tests/ > /dev/null
             adb push target/mobile-tests/. /data/local/tmp/alpha2-test/ > /dev/null
             for binary in target/mobile-tests/*; do name=$(basename "$binary"); adb shell "cd /data/local/tmp/alpha2-test && chmod 755 $name && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test ALPHA2_SKIP_LOG=/data/local/tmp/alpha2-test/skip-log.jsonl ${{ matrix.test-env }} ./$name --test-threads 1" || status=1; done; adb pull /data/local/tmp/alpha2-test/skip-log.jsonl "$ALPHA2_SKIP_LOG" > /dev/null 2>&1; node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"; [ -z "${status:-}" ]
             if [ -n "${ALPHA2_TEST_APK:-}" ]; then adb install -r -t "$ALPHA2_TEST_APK" && adb shell am instrument -w sh.alpha2.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/instrumentation.txt" && grep -q '^OK (' "$RUNNER_TEMP/instrumentation.txt"; fi
