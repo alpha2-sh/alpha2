@@ -16,6 +16,8 @@ mod bake;
 mod bake_tests;
 #[cfg(test)]
 mod clip_reference_tests;
+#[cfg(test)]
+mod corpus_tests;
 mod json;
 mod plan;
 #[cfg(test)]
