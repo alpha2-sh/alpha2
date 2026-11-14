@@ -12332,6 +12332,71 @@
         67,
         100
       ]
+    },
+    {
+      "quantum": 0,
+      "slackTicks": 2,
+      "timeBase": {
+        "den": 90000,
+        "num": 1
+      },
+      "timestamps": [
+        0,
+        270000,
+        540000,
+        810000,
+        1170000,
+        1530000,
+        1890000
+      ]
+    },
+    {
+      "quantum": 0,
+      "slackTicks": 61,
+      "timeBase": {
+        "den": 1000,
+        "num": 1
+      },
+      "timestamps": [
+        0,
+        3000,
+        6000,
+        9000,
+        13000,
+        17000,
+        21000
+      ]
+    },
+    {
+      "quantum": 0,
+      "slackTicks": 2,
+      "timeBase": {
+        "den": 90000,
+        "num": 1
+      },
+      "timestamps": [
+        0,
+        3003,
+        6757,
+        9760,
+        13514,
+        16517
+      ]
+    },
+    {
+      "quantum": 90000,
+      "slackTicks": 60001,
+      "timeBase": {
+        "den": 90000,
+        "num": 1
+      },
+      "timestamps": [
+        0,
+        270000,
+        630000,
+        900000,
+        1260000
+      ]
     }
   ],
   "samplesToTicks": [

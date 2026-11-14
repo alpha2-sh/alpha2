@@ -425,7 +425,7 @@ fn write_raw_grey_video(path: &Path, width: i32, height: i32, time_base: i32, ti
 }
 
 /// The presentation slack scan stops at 64 packets or 16 MiB. Eight exact 2 MiB frames come first,
-/// then millisecond-rounded 30 fps frames, so the slack reflects only the time base.
+/// then frames of the same period rounded to 16 units, so the slack reflects only the time base.
 #[test]
 fn the_presentation_slack_reads_no_more_than_16_mib_of_first_packets() {
     let path = output_path("rounding-scan-bytes").with_extension("mov");
@@ -437,7 +437,7 @@ fn the_presentation_slack_reads_no_more_than_16_mib_of_first_packets() {
         .map(|index| i64::try_from(index).expect("index") * 640)
         .collect::<Vec<_>>();
     let mut last = timestamps[exact - 1];
-    for step in [528, 544, 528, 544] {
+    for step in [624, 656, 624, 656] {
         last += step;
         timestamps.push(last);
     }

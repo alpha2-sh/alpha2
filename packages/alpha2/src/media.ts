@@ -13,8 +13,10 @@ export const ROUNDING_SCAN_BYTES = 16 * 1024 * 1024;
 /**
  * The unit a stream's timestamps are rounded to, in units of its time resolution, or 0 when none
  * shows. A frame interval that is not a whole number of units rounds to two lengths a unit apart
- * (29.97 fps in ms gives 33 and 34), so the unit is the GCD of the interval differences. Returns 0
- * for uniform or variable frame rates and for fewer than three distinct timestamps.
+ * (29.97 fps in ms gives 33 and 34), so the unit is the GCD of the interval differences. The unit
+ * counts only when every timestamp lies on the first's grid of units and one constant period,
+ * frames skipped allowed, places each within a unit of it. Returns 0 for uniform or variable frame
+ * rates, for gaps the unit does not explain and for fewer than three distinct timestamps.
  * Throws `RangeError` for a timestamp that is not a safe integer.
  */
 export function roundingQuantum(timestamps: readonly number[]): number {
@@ -37,7 +39,51 @@ export function roundingQuantum(timestamps: readonly number[]): number {
     quantum = a;
   }
   if (quantum === 0n || quantum * 2n >= shortest) return 0;
+  if (!fitsOnePeriod(sorted.map(BigInt), intervals, shortest, quantum))
+    return 0;
   return Number(quantum);
+}
+
+/** Mirrors `fits_one_period` of the engine's `rounding_quantum`. */
+function fitsOnePeriod(
+  sorted: readonly bigint[],
+  intervals: readonly bigint[],
+  shortest: bigint,
+  unit: bigint,
+): boolean {
+  const first = sorted[0];
+  if (sorted.some((time) => (((time - first) % unit) + unit) % unit !== 0n))
+    return false;
+  let sum = 0n;
+  let count = 0n;
+  for (const interval of intervals) {
+    if (interval - shortest <= unit) {
+      sum += interval;
+      count += 1n;
+    }
+  }
+  const frames = [0n];
+  for (const interval of intervals) {
+    frames.push(
+      frames[frames.length - 1] + (interval * 2n * count + sum) / (2n * sum),
+    );
+  }
+  let low: [bigint, bigint] | undefined;
+  let high: [bigint, bigint] | undefined;
+  const below = (a: [bigint, bigint], b: [bigint, bigint]) =>
+    a[0] * b[1] < b[0] * a[1];
+  for (let j = 0; j < sorted.length; j++) {
+    for (let k = j + 1; k < sorted.length; k++) {
+      const span = sorted[k] - sorted[j];
+      const frameCount = frames[k] - frames[j];
+      if (frameCount <= 0n) return false;
+      const from: [bigint, bigint] = [span - unit, frameCount];
+      const to: [bigint, bigint] = [span + unit, frameCount];
+      if (low === undefined || below(low, from)) low = from;
+      if (high === undefined || below(to, high)) high = to;
+    }
+  }
+  return low !== undefined && high !== undefined && !below(high, low);
 }
 
 /**

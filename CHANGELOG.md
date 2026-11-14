@@ -130,6 +130,10 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Video: timestamps on a coarse grid count as rounded only when one constant period explains them.
+  A video of stills held for unequal times (or exact frames of two rates mixed) no longer gets half
+  a grid unit of slack, so each picture changes on its timestamp instead of up to half a unit early
+  (0.5 s for whole-second holds), in preview and export.
 - An SVG whose patterns, masks, clip paths or filters refer to one another in a ring, or whose
   gradients or patterns name one another by `href` in a ring, is refused as malformed instead of
   overflowing the stack or never finishing. Each such reference counts four levels against the
