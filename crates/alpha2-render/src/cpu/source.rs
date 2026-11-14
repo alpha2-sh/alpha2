@@ -749,14 +749,15 @@ impl YuvConversion {
             let rgb = self.linear_rgb(planes, luma, chroma);
             return [rgb[0], rgb[1], rgb[2], 1.0];
         }
-        let texels: Vec<[f32; 4]> = corners
-            .iter()
-            .zip(alphas)
-            .map(|((luma, chroma), alpha)| {
-                let rgb = self.linear_rgb(planes, *luma, *chroma);
-                [rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha]
-            })
-            .collect();
+        // Four clear texels mix to zero whatever their color, and zero alpha stores as zero.
+        if alphas.iter().all(|alpha| *alpha <= 0.0) {
+            return [0.0; 4];
+        }
+        let texels: [[f32; 4]; 4] = std::array::from_fn(|index| {
+            let ((luma, chroma), alpha) = (corners[index], alphas[index]);
+            let rgb = self.linear_rgb(planes, luma, chroma);
+            [rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha]
+        });
         let mix = |a: [f32; 4], b: [f32; 4], t: f32| {
             [0, 1, 2, 3].map(|channel| a[channel] * (1.0 - t) + b[channel] * t)
         };
@@ -819,6 +820,49 @@ struct Planes<'a> {
     alpha: Option<Plane<'a>>,
 }
 
+impl<'a> Planes<'a> {
+    /// The planes of `frame`, stored as `format` says.
+    fn of(frame: &YuvFrame<'a>, format: YuvFormat) -> Self {
+        fn plane<'a>(
+            source: &SourcePlane<'a>,
+            (width, height): (u32, u32),
+            wide: bool,
+            components: usize,
+        ) -> Plane<'a> {
+            Plane {
+                bytes: source.bytes,
+                stride: source.stride as usize,
+                width,
+                height,
+                wide,
+                components,
+            }
+        }
+        let wide = format.bytes_per_sample() == 2;
+        let (chroma_width, chroma_height) = format.chroma_size(frame.size.width, frame.size.height);
+        Self {
+            y: plane(
+                &frame.planes[0],
+                (frame.size.width, frame.size.height),
+                wide,
+                1,
+            ),
+            u: plane(
+                &frame.planes[1],
+                (chroma_width, chroma_height),
+                wide,
+                if format.interleaved_chroma { 2 } else { 1 },
+            ),
+            v: (!format.interleaved_chroma)
+                .then(|| plane(&frame.planes[2], (chroma_width, chroma_height), wide, 1)),
+            alpha: frame
+                .alpha_plane
+                .as_ref()
+                .map(|alpha| plane(alpha, (frame.size.width, frame.size.height), wide, 1)),
+        }
+    }
+}
+
 /// How `present_yuv` converts: the fastest path that applies, the table path alone, or the
 /// per-pixel shader port the table path must match bit for bit.
 #[derive(Clone, Copy, PartialEq)]
@@ -847,21 +891,6 @@ fn present_yuv(
     conversion: &YuvConversion,
     path: Path,
 ) -> CpuImage {
-    fn plane<'a>(
-        source: &SourcePlane<'a>,
-        (width, height): (u32, u32),
-        wide: bool,
-        components: usize,
-    ) -> Plane<'a> {
-        Plane {
-            bytes: source.bytes,
-            stride: source.stride as usize,
-            width,
-            height,
-            wide,
-            components,
-        }
-    }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let output = RenderSize {
         width: conversion.geometry.output[0] as u32,
@@ -870,29 +899,7 @@ fn present_yuv(
     if conversion.skipped {
         return CpuImage::transparent(output);
     }
-    let format = conversion.format;
-    let wide = format.bytes_per_sample() == 2;
-    let (chroma_width, chroma_height) = format.chroma_size(frame.size.width, frame.size.height);
-    let planes = Planes {
-        y: plane(
-            &frame.planes[0],
-            (frame.size.width, frame.size.height),
-            wide,
-            1,
-        ),
-        u: plane(
-            &frame.planes[1],
-            (chroma_width, chroma_height),
-            wide,
-            if format.interleaved_chroma { 2 } else { 1 },
-        ),
-        v: (!format.interleaved_chroma)
-            .then(|| plane(&frame.planes[2], (chroma_width, chroma_height), wide, 1)),
-        alpha: frame
-            .alpha_plane
-            .as_ref()
-            .map(|alpha| plane(alpha, (frame.size.width, frame.size.height), wide, 1)),
-    };
+    let planes = Planes::of(frame, conversion.format);
     if path == Path::Fastest
         && let Some(image) = present_separable(renderer, output, &planes, conversion)
     {
@@ -1886,10 +1893,10 @@ mod tests {
         YuvFormat,
     };
 
-    use super::{Exact, Tabled, Transfer, YuvConversion, half};
+    use super::{Exact, Planes, Tabled, Transfer, YuvConversion, half};
     use crate::hdr::HdrToneMap;
     use crate::yuv::{PlaneStorage, uniform_bytes};
-    use crate::{RenderSize, SourcePresentation};
+    use crate::{RenderSize, SourcePlane, SourcePresentation, YuvFrame};
 
     fn conversion(
         primaries: ColorPrimaries,
@@ -1982,5 +1989,119 @@ mod tests {
             );
             assert!(worst < 0.05, "{transfer:?} {primaries:?} {peak}: {worst}");
         }
+    }
+
+    /// `premultiplied_linear` before transparent neighbourhoods returned early.
+    fn premultiplied_linear_reference(
+        conversion: &YuvConversion,
+        planes: &Planes<'_>,
+        source_pixel: [f32; 2],
+    ) -> [f32; 4] {
+        let (luma, chroma) = conversion.coordinates(source_pixel);
+        let geometry = &conversion.geometry;
+        let texel = [
+            luma[0] * geometry.source[0] - 0.5,
+            luma[1] * geometry.source[1] - 0.5,
+        ];
+        let origin = [texel[0].floor(), texel[1].floor()];
+        let weight = [texel[0] - origin[0], texel[1] - origin[1]];
+        let first = [geometry.visible[0], geometry.visible[1]];
+        let last = [
+            first[0] + geometry.visible[2] - 1.0,
+            first[1] + geometry.visible[3] - 1.0,
+        ];
+        let corner = |dx: f32, dy: f32| {
+            conversion.coordinates([
+                (origin[0] + dx).clamp(first[0], last[0]) + 0.5,
+                (origin[1] + dy).clamp(first[1], last[1]) + 0.5,
+            ])
+        };
+        let corners = [
+            corner(0.0, 0.0),
+            corner(1.0, 0.0),
+            corner(0.0, 1.0),
+            corner(1.0, 1.0),
+        ];
+        let alphas = corners.map(|(luma, _)| conversion.alpha_at(planes, luma));
+        if alphas.iter().all(|alpha| *alpha >= 1.0) {
+            let rgb = conversion.linear_rgb(planes, luma, chroma);
+            return [rgb[0], rgb[1], rgb[2], 1.0];
+        }
+        let texels: Vec<[f32; 4]> = corners
+            .iter()
+            .zip(alphas)
+            .map(|((luma, chroma), alpha)| {
+                let rgb = conversion.linear_rgb(planes, *luma, *chroma);
+                [rgb[0] * alpha, rgb[1] * alpha, rgb[2] * alpha, alpha]
+            })
+            .collect();
+        let mix = |a: [f32; 4], b: [f32; 4], t: f32| {
+            [0, 1, 2, 3].map(|channel| a[channel] * (1.0 - t) + b[channel] * t)
+        };
+        mix(
+            mix(texels[0], texels[1], weight[0]),
+            mix(texels[2], texels[3], weight[0]),
+            weight[1],
+        )
+    }
+
+    #[test]
+    fn alpha_plane_samples_keep_their_bits_without_the_clear_ones() {
+        let (width, height) = (48_u32, 32_u32);
+        let format = YuvFormat::I420.with_alpha();
+        #[allow(clippy::cast_possible_truncation)]
+        let ramp = |count: u32, step: u32| (0..count).map(|index| (index * step) as u8).collect();
+        let luma: Vec<u8> = ramp(width * height, 7);
+        let u: Vec<u8> = ramp(width * height / 4, 3);
+        let v: Vec<u8> = ramp(width * height / 4, 5);
+        // Clear, then a soft edge, then opaque, across the frame.
+        #[allow(clippy::cast_possible_truncation)]
+        let alpha = (0..width * height)
+            .map(|index| ((index % width).saturating_sub(16) * 16).min(255) as u8)
+            .collect::<Vec<u8>>();
+        let plane = |bytes, stride| SourcePlane { bytes, stride };
+        let size = RenderSize::new(width, height).expect("size");
+        let frame = YuvFrame {
+            format,
+            planes: [
+                plane(&luma, width),
+                plane(&u, width / 2),
+                plane(&v, width / 2),
+            ],
+            alpha_plane: Some(plane(&alpha, width)),
+            size,
+            alpha: 1.0,
+            color: Some(ColorMetadata::EXPORT),
+        };
+        let bytes = uniform_bytes(
+            ColorMetadata::EXPORT,
+            None,
+            1.0,
+            size,
+            SourcePresentation::identity(size),
+            format,
+            PlaneStorage::Unorm8.code_scale(format),
+            64.0,
+        );
+        let conversion = YuvConversion::from_uniform(&bytes, format);
+        let planes = Planes::of(&frame, format);
+        let (mut clear, mut soft) = (0, 0);
+        #[allow(clippy::cast_precision_loss)]
+        for step in 0..(width * 3) * (height * 3) {
+            let source_pixel = [
+                (step % (width * 3)) as f32 / 3.0 + 0.17,
+                (step / (width * 3)) as f32 / 3.0 + 0.11,
+            ];
+            let new = conversion.premultiplied_linear(&planes, source_pixel);
+            let old = premultiplied_linear_reference(&conversion, &planes, source_pixel);
+            assert_eq!(
+                new.map(f32::to_bits),
+                old.map(f32::to_bits),
+                "{source_pixel:?}"
+            );
+            clear += usize::from(new[3] == 0.0);
+            soft += usize::from(new[3] > 0.0 && new[3] < 1.0);
+        }
+        assert!(clear > 0 && soft > 0, "{clear} clear, {soft} soft samples");
     }
 }

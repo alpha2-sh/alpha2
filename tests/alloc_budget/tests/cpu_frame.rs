@@ -218,10 +218,17 @@ fn frame(case: &str) -> (u64, u64) {
     counted(draw)
 }
 
+/// Bands, scratch and node lists: a few hundred per frame, none per pixel (a 640x360 frame has
+/// 230,400 pixels).
+const YUVA_FRAME: u64 = 400;
+
 #[test]
 fn cpu_frames_report_what_they_allocate() {
     for case in ["clip", "blur", "yuva"] {
         let (allocations, bytes) = frame(case);
         println!("cpu frame {case} 640x360: allocations={allocations} bytes={bytes}");
+        if case == "yuva" {
+            assert!(allocations <= YUVA_FRAME, "{allocations} allocations");
+        }
     }
 }
