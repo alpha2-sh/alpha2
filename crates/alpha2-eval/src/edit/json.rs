@@ -1,6 +1,6 @@
 //! The operations over JSON text, which every binding calls, so each answers the same bytes.
 
-use alpha2_model::Project;
+use alpha2_model::{Project, ProjectWriteError};
 
 use super::{EditError, EditRequest, apply};
 
@@ -18,7 +18,8 @@ pub struct EditedJson {
 pub struct EditFailure {
     /// `INVALID_INPUT`, or `INTERNAL` for an edited project that fails validation.
     pub code: &'static str,
-    /// The reason in snake case, `invalid_project`, `invalid_request` or an [`EditError::kind`].
+    /// The reason in snake case, `invalid_project`, `invalid_request`, `result_too_large` or an
+    /// [`EditError::kind`].
     pub refusal: &'static str,
     /// What went wrong.
     pub message: String,
@@ -49,7 +50,8 @@ impl From<EditError> for EditFailure {
 /// Applies the request `request_json` to the project `project_json`.
 ///
 /// # Errors
-/// [`EditFailure`] for an invalid project or request, and for every [`EditError`].
+/// [`EditFailure`] for an invalid project or request, for every [`EditError`], and for an edited
+/// project longer than a project document may be (`result_too_large`).
 pub fn apply_json(project_json: &str, request_json: &str) -> Result<EditedJson, EditFailure> {
     let project = Project::from_json(project_json).map_err(|error| EditFailure {
         code: "INVALID_INPUT",
@@ -69,8 +71,20 @@ pub fn apply_json(project_json: &str, request_json: &str) -> Result<EditedJson, 
             message: error.to_string(),
         })
     };
+    let project = edited.to_json().map_err(|error| match error {
+        ProjectWriteError::TooLarge { .. } => EditFailure {
+            code: "INVALID_INPUT",
+            refusal: "result_too_large",
+            message: format!("the edit is refused: {error}"),
+        },
+        error => EditFailure {
+            code: "INTERNAL",
+            refusal: "invalid_result",
+            message: error.to_string(),
+        },
+    })?;
     Ok(EditedJson {
-        project: text(serde_json::to_string(&edited))?,
+        project,
         report: text(serde_json::to_string(&report))?,
     })
 }

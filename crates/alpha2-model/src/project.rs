@@ -1,6 +1,6 @@
 use crate::{
     Composition, EffectResource, EffectResourceId, Generator, MasterAudio, MediaKind, MediaSource,
-    ModelError, ProjectId, ProjectLoadError, Timeline, TrackKind,
+    ModelError, ProjectId, ProjectLoadError, ProjectWriteError, Timeline, TrackKind,
 };
 use alpha2_time::{FrameRate, MediaTime};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
@@ -164,6 +164,43 @@ impl Project {
         }
         let wire = serde_json::from_str::<ProjectWire>(json).map_err(ProjectLoadError::Json)?;
         Self::try_from(wire).map_err(ProjectLoadError::InvalidProject)
+    }
+
+    /// The document as compact JSON, refused once it passes [`MAX_PROJECT_JSON_BYTES`], so a
+    /// writer never hands out text [`Project::from_json`] would refuse. Writing stops at the cap.
+    ///
+    /// # Errors
+    /// [`ProjectWriteError::TooLarge`] past the cap.
+    ///
+    /// # Panics
+    /// Never; `serde_json` writes UTF-8.
+    pub fn to_json(&self) -> Result<String, ProjectWriteError> {
+        struct Capped(Vec<u8>);
+
+        impl std::io::Write for Capped {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.0.len() + bytes.len() > MAX_PROJECT_JSON_BYTES {
+                    return Err(std::io::Error::from(std::io::ErrorKind::FileTooLarge));
+                }
+                self.0.extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut out = Capped(Vec::with_capacity(4096));
+        match serde_json::to_writer(&mut out, self) {
+            Ok(()) => Ok(String::from_utf8(out.0).expect("serde_json writes UTF-8")),
+            Err(error) if error.io_error_kind() == Some(std::io::ErrorKind::FileTooLarge) => {
+                Err(ProjectWriteError::TooLarge {
+                    maximum: MAX_PROJECT_JSON_BYTES,
+                })
+            }
+            Err(error) => Err(ProjectWriteError::Json(error)),
+        }
     }
 
     /// The sources a render of this project can read, in source order: each clip's own, and

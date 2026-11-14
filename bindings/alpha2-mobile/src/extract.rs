@@ -250,7 +250,8 @@ impl TimelineFrames {
         resized.settings.width = width;
         resized.settings.height = height;
         let request = StillsRequest {
-            project_json: serde_json::to_string(&resized)
+            project_json: resized
+                .to_json()
                 .map_err(|error| Alpha2Error::invalid(error.to_string()))?,
             assets,
             frames: HashMap::new(),

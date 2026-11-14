@@ -206,6 +206,9 @@ All notable changes to this project are documented in this file.
 - Compose refuses a time past the latest a project holds, and a sum of times that runs past it,
   at the field or node that holds it, and refuses an invalid canvas before lowering anything. Such
   specs panicked the compiler or compiled to a project no host loads.
+- An edit whose result would be longer than the 64 MiB a project document may be (a `bake` of long
+  data on a large project) is refused with `INVALID_INPUT`, refusal `result_too_large`, instead
+  of returning a project no host loads; compose refuses such a compiled project at `spec`.
 
 ## [0.6.0] - 2026-11-08
 

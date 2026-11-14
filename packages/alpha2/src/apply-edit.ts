@@ -104,6 +104,7 @@ export type EditRefusal =
   | "correction_not_bakeable"
   | "matte_source"
   | "read_through"
+  | "result_too_large"
   | "invalid_result";
 
 /** The generated wasm function this wrapper calls. */

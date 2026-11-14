@@ -79,7 +79,9 @@ pub use effect_spec::{
     BUILTIN_EFFECT_PREFIX, EffectKind, EffectParamSpec, EffectParamType, EffectParamUnit,
     EffectProblem, EffectSpec, builtin_effect, builtin_effects, builtin_effects_json,
 };
-pub use error::{DataOwner, EffectOwner, ModelError, ProjectLoadError, ShapeOwner};
+pub use error::{
+    DataOwner, EffectOwner, ModelError, ProjectLoadError, ProjectWriteError, ShapeOwner,
+};
 pub use fingerprint::{AudioStreamShape, MediaFingerprint, StreamTopology, VideoStreamShape};
 pub use generator::{Generator, GradientStop, MAX_GRADIENT_STOPS, Paint, Rgba, Spread};
 pub use ids::{ClipId, CompositionId, DataSetId, EffectResourceId, NodeId, ProjectId, TrackId};

@@ -567,3 +567,66 @@ fn the_color_pipeline_defaults_to_tone_mapping_from_1000_nits_and_bounds_its_pea
     project.settings.color.hdr_peak_nits = 4_000;
     project.validate().expect("a 4000-nit peak");
 }
+
+/// A timeline `points` data set of `samples` samples of 64 pseudo-random coordinates.
+fn full_points(samples: usize) -> String {
+    use std::fmt::Write as _;
+    let mut json = String::from(
+        r#"{"id":"a","anchor":{"type":"timeline"},"kind":"points","interpolation":"hold","channels":["#,
+    );
+    for channel in 0..64 {
+        write!(json, "{}\"k{channel}\"", if channel > 0 { "," } else { "" }).expect("writes");
+    }
+    json.push_str(r#"],"times":["#);
+    for sample in 0..samples {
+        write!(
+            json,
+            "{}{}",
+            if sample > 0 { "," } else { "" },
+            sample * 4004
+        )
+        .expect("writes");
+    }
+    json.push_str(r#"],"values":["#);
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    for value in 0..samples * 128 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        #[allow(clippy::cast_precision_loss)]
+        let coordinate = (state >> 40) as f32 / (1_u64 << 24) as f32;
+        write!(json, "{}{coordinate}", if value > 0 { "," } else { "" }).expect("writes");
+    }
+    json.push_str("]}");
+    json
+}
+
+#[test]
+fn a_valid_project_past_the_document_cap_is_not_written() {
+    let mut document = serde_json::to_value(project()).expect("serializes");
+    // 31,250 samples of 128 values are the 4,000,000 values one set may hold.
+    let set: serde_json::Value = serde_json::from_str(&full_points(31_250)).expect("JSON");
+    let mut second = set.clone();
+    second["id"] = serde_json::json!("b");
+    document["data"] = serde_json::json!([set]);
+    let one = Project::from_json(&document.to_string()).expect("one full set loads");
+    assert!(one.to_json().is_ok());
+    document["data"].as_array_mut().expect("data").push(second);
+    let two: Project = serde_json::from_value(document).expect("two full sets parse");
+    two.validate().expect("two full sets are valid in memory");
+    assert!(matches!(
+        two.to_json(),
+        Err(crate::ProjectWriteError::TooLarge {
+            maximum: crate::MAX_PROJECT_JSON_BYTES
+        })
+    ));
+}
+
+#[test]
+fn a_written_project_is_its_serialization() {
+    let project = project();
+    assert_eq!(
+        project.to_json().expect("writes"),
+        serde_json::to_string(&project).expect("serializes")
+    );
+}

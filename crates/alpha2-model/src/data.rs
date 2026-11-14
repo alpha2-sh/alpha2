@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Most data sets in one project.
+///
+/// The per-set limits below bound one set; together they admit far more than a document holds.
+/// The byte cap ([`crate::MAX_PROJECT_JSON_BYTES`]) binds first: about 6 million values of full
+/// precision fill it, and every writer refuses a project past it.
 pub const MAX_DATA_SETS: usize = 256;
 /// Most channels of one `points` or `scalars` data set.
 pub const MAX_DATA_CHANNELS: usize = 64;

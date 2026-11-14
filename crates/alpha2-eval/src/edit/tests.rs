@@ -689,3 +689,72 @@ fn an_empty_sample_set_survives_a_timeline_ripple() {
     };
     assert!(samples.times.is_empty() && samples.values.is_empty());
 }
+
+/// A timeline `points` data set of `samples` samples of `channels` pseudo-random coordinates.
+fn points_set(json: &mut String, id: &str, channels: usize, samples: usize, state: &mut u64) {
+    use std::fmt::Write as _;
+    write!(json, r#"{{"id":"{id}","anchor":{{"type":"timeline"}},"kind":"points","interpolation":"hold","channels":["#).expect("writes");
+    for channel in 0..channels {
+        write!(json, "{}\"k{channel}\"", if channel > 0 { "," } else { "" }).expect("writes");
+    }
+    json.push_str(r#"],"times":["#);
+    for sample in 0..samples {
+        write!(
+            json,
+            "{}{}",
+            if sample > 0 { "," } else { "" },
+            sample * 4004
+        )
+        .expect("writes");
+    }
+    json.push_str(r#"],"values":["#);
+    for value in 0..samples * channels * 2 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        #[allow(clippy::cast_precision_loss)]
+        let coordinate = 0.25 + (*state >> 40) as f32 / (1_u64 << 25) as f32;
+        write!(json, "{}{coordinate}", if value > 0 { "," } else { "" }).expect("writes");
+    }
+    json.push_str("]}");
+}
+
+/// A project just under the document cap with a clip that follows a 20,000-sample data set,
+/// which `bake` turns into keyframes.
+pub(super) fn project_near_the_cap() -> String {
+    let cap = alpha2_model::MAX_PROJECT_JSON_BYTES;
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    let tracked = 20_000_usize;
+    let mut json = String::with_capacity(cap);
+    json.push_str(r#"{"schema_version":1,"id":"p","name":"p","settings":{"width":1920,"height":1080,"frame_rate":{"num":30,"den":1},"sample_rate":48000,"background":{"red":0.0,"green":0.0,"blue":0.0}},"sources":[{"id":"v","locator":"asset://v","kind":"video"}],"data":["#);
+    points_set(&mut json, "track", 1, tracked, &mut state);
+    json.push(',');
+    points_set(&mut json, "full", 64, 31_250, &mut state);
+    json.push(',');
+    let follow = r#"{"mode":"data","data":"track","channel":"k0"}"#;
+    let tail = format!(
+        r#"],"timeline":{{"tracks":[{{"id":"t","name":"V","kind":"video","clips":[{{"id":"c0","source_id":"v","timeline_range":{{"start":0,"end":{end}}},"source_range":{{"start":0,"end":{end}}},"visual":{{"position":{follow},"scale":{follow}}}}}]}}]}}}}"#,
+        end = tracked * 4004
+    );
+    let room = cap - json.len() - tail.len() - 200_000;
+    // About 11 bytes a value, 128 values a sample.
+    points_set(&mut json, "rest", 64, room / (128 * 11), &mut state);
+    json.push_str(&tail);
+    assert!(json.len() <= cap, "{} bytes", json.len());
+    json
+}
+
+#[test]
+fn an_edit_that_grows_a_project_past_the_document_cap_is_refused() {
+    let json = project_near_the_cap();
+    Project::from_json(&json).expect("the input loads");
+    let request = r#"{"op":"bake","targets":[{"clip":"c0","property":"visual.position"},{"clip":"c0","property":"visual.scale"}]}"#;
+    let Err(failure) = apply_json(&json, request) else {
+        panic!("the edit applied");
+    };
+    assert_eq!(
+        (failure.code, failure.refusal),
+        ("INVALID_INPUT", "result_too_large"),
+        "{failure}"
+    );
+}

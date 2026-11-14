@@ -152,15 +152,30 @@ fn parse<T: serde::de::DeserializeOwned>(json: &str, root: &str) -> Result<T, Co
 /// [`compile`] across a JSON boundary. The result is `{project, assets, loudness, warnings}`.
 ///
 /// # Errors
-/// Returns where in the spec or facts, and why, they do not parse or compile.
+/// Returns where in the spec or facts, and why, they do not parse or compile, and refuses a
+/// project longer than a project document may be at `spec`.
 ///
 /// # Panics
-/// Never; a compiled project always serializes.
+/// Never; the parts besides the project always serialize.
 pub fn compile_json(spec: &str, facts: &str, fonts: &[Arc<[u8]>]) -> Result<String, ComposeError> {
     let spec = parse_spec(&expand_builtins(spec)?)?;
     let facts = parse_facts(facts)?;
     let compiled = compile(&spec, &facts, fonts)?;
-    Ok(serde_json::to_string(&compiled).expect("a compiled project serializes"))
+    let project = compiled
+        .project
+        .to_json()
+        .map_err(|error| ComposeError::new("spec", error.to_string()))?;
+    // The same bytes as serializing `Compiled` whole, with the project written through its cap.
+    Ok(format!(
+        "{{\"project\":{project},\"assets\":{},\"loudness\":{},\"warnings\":{}}}",
+        part(&compiled.assets),
+        part(&compiled.loudness),
+        part(&compiled.warnings),
+    ))
+}
+
+fn part<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value).expect("assets, loudness and warnings serialize")
 }
 
 /// [`requirements`] across a JSON boundary.

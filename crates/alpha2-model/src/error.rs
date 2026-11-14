@@ -1008,3 +1008,37 @@ impl std::error::Error for ProjectLoadError {
         }
     }
 }
+
+/// Why [`crate::Project::to_json`] wrote no document.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ProjectWriteError {
+    /// The document would be longer than any loader accepts.
+    TooLarge {
+        /// Largest accepted byte length, which the document passes.
+        maximum: usize,
+    },
+    /// Serialization failed.
+    Json(serde_json::Error),
+}
+
+impl fmt::Display for ProjectWriteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooLarge { maximum } => write!(
+                formatter,
+                "the project JSON would be longer than {maximum} bytes, the maximum a project loads with"
+            ),
+            Self::Json(error) => write!(formatter, "the project does not serialize: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ProjectWriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge { .. } => None,
+            Self::Json(error) => Some(error),
+        }
+    }
+}
