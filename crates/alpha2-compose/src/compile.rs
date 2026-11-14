@@ -1251,6 +1251,41 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
+    /// Makes the project last `total`: when its content ends earlier, a transparent picture on a
+    /// lane under everything lasts from that end to `total`.
+    fn fill_to(&mut self, lanes: &mut Lanes, total: i64) {
+        let latest = lanes
+            .visual
+            .iter()
+            .chain(&lanes.audio)
+            .flat_map(|lane| {
+                let raw = lane.raw.iter().flat_map(|track| &track.clips);
+                let ends = raw.map(|clip| clip.timeline_range.end().ticks());
+                lane.extent().map(|(_, end)| end).into_iter().chain(ends)
+            })
+            .max()
+            .unwrap_or(0);
+        if latest >= total {
+            return;
+        }
+        self.here.push("spec.duration".to_owned());
+        let source = self.generated_source(Generator::Fill {
+            paint: Paint::Solid {
+                color: Rgba::new(0.0, 0.0, 0.0, 0.0),
+            },
+        });
+        let clip = Clip::new(
+            self.clip_id(),
+            source,
+            range(latest, total),
+            range(0, total - latest),
+        );
+        let mut lane = Lane::new(TrackKind::Video, &BTreeSet::new(), self.here());
+        lane.clips.push(clip);
+        self.here.pop();
+        lanes.visual.insert(0, lane);
+    }
+
     /// Refuses a box's layout tree the model would refuse, at the box's `path`; `segment` is a
     /// tree drawn between pictures, whose hidden leaves are isolated.
     fn layout_fits(
@@ -4181,6 +4216,9 @@ pub(crate) fn compile(
         let mut placed = Lanes::default();
         context.emit(prim, &slot, &mut placed)?;
         lanes.stack(placed);
+    }
+    if spec.duration.is_some() {
+        context.fill_to(&mut lanes, total);
     }
     assemble(
         spec,

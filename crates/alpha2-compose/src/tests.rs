@@ -2041,3 +2041,36 @@ fn a_box_with_a_picture_names_how_many_leaves_it_can_hide() {
          most 15 of them"
     );
 }
+
+fn latest_end(compiled: &Value) -> i64 {
+    tracks(compiled)
+        .iter()
+        .flat_map(|track| track["clips"].as_array().into_iter().flatten())
+        .map(|clip| clip["timeline_range"]["end"].as_i64().expect("ticks"))
+        .max()
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_spec_duration_is_the_project_length() {
+    for body in [
+        json!({"type": "sequence", "children": [{"type": "text", "text": "Hi", "duration": 3}]}),
+        json!({"type": "stack", "children": [{"type": "media", "path": "logo.png", "duration": 3}]}),
+    ] {
+        let compiled = compile(&json!({"duration": 10, "body": body}));
+        assert_eq!(latest_end(&compiled), 10 * SECOND, "{body}");
+        let filler = &tracks(&compiled)[0]["clips"][0];
+        assert_eq!(
+            filler["timeline_range"],
+            json!({"start": 3 * SECOND, "end": 10 * SECOND})
+        );
+    }
+    // Content that already lasts the duration gets no extra track.
+    let filled = compile(&json!({"duration": 10, "body": {"type": "color"}}));
+    assert_eq!(tracks(&filled).len(), 1);
+    // Without a duration the content's own length stands.
+    let own = compile(&json!({"body": {"type": "sequence", "children": [
+        {"type": "text", "text": "Hi", "duration": 3}]}}));
+    assert_eq!(latest_end(&own), 3 * SECOND);
+    assert_eq!(tracks(&own).len(), 1);
+}

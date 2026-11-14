@@ -230,6 +230,8 @@ All notable changes to this project are documented in this file.
   a group, a box's or `layout` node's layout tree (a box with a picture hides at most 15 leaves),
   text length, overlapping caption rows and transition names, each with the node's path and the
   limit.
+- A compose spec's `duration` is the project's length: when the content ends earlier, a
+  transparent clip fills the rest, so the export lasts as long as asked.
 
 ## [0.6.0] - 2026-11-08
 
