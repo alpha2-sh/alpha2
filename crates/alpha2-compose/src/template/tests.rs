@@ -256,10 +256,15 @@ fn holds_template_node(value: &Value) -> bool {
 #[test]
 fn a_spec_without_template_nodes_binds_to_itself() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/old-specs.golden.json");
-    let cases: Vec<Value> =
+    let golden: Value =
         serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
     let mut plain = 0;
-    for spec in cases.iter().map(|case| &case["spec"]) {
+    for spec in golden["cases"]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .map(|case| &case["spec"])
+    {
         if !holds_template_node(spec) {
             assert_eq!(
                 &bind(spec, &Value::Null, &BindOptions::default()).expect("binds"),

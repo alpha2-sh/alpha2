@@ -104,3 +104,28 @@ test("compose errors name where the spec or data fails", { skip }, async () => {
     (error) => error.path === "spec.body.type",
   );
 });
+
+test(
+  "the browser module compiles every pinned spec to the bytes native compiles",
+  { skip },
+  async () => {
+    const wasm = await binding();
+    const golden = JSON.parse(
+      readFileSync(
+        new URL(
+          "../../../crates/alpha2-compose/tests/old-specs.golden.json",
+          import.meta.url,
+        ),
+        "utf8",
+      ),
+    );
+    const facts = JSON.stringify(golden.facts);
+    for (const { spec, compiled } of golden.cases) {
+      assert.equal(
+        wasm.composeCompile(JSON.stringify(spec), facts, []),
+        compiled,
+        JSON.stringify(spec),
+      );
+    }
+  },
+);

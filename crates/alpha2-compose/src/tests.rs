@@ -611,18 +611,24 @@ fn a_faster_video_keeps_its_pitch_unless_told_not_to() {
     );
 }
 
-/// Specs that use no motion field compile to pinned bytes. Set `ALPHA2_UPDATE_GOLDENS=1` to
-/// re-pin after an intended change.
+const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/old-specs.golden.json");
+
+/// The pinned specs, `{facts, cases: [{spec, compiled}]}`.
+fn golden() -> Value {
+    serde_json::from_str(&std::fs::read_to_string(GOLDEN).expect("golden")).expect("JSON")
+}
+
+/// Specs of every node kind compile to pinned bytes. Set `ALPHA2_UPDATE_GOLDENS=1` to re-pin
+/// after an intended change.
 #[test]
 fn old_specs_compile_to_the_same_bytes() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/old-specs.golden.json");
-    let mut cases: Vec<Value> =
-        serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
+    let mut golden = golden();
     let update =
         std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"));
-    let facts = facts().to_string();
-    for case in &mut cases {
-        let compiled = compile_json(&case["spec"].to_string(), &facts, &[]).expect("compiles");
+    let facts = golden["facts"].to_string();
+    for case in golden["cases"].as_array_mut().expect("cases") {
+        let compiled = compile_json(&case["spec"].to_string(), &facts, &[])
+            .unwrap_or_else(|error| panic!("{error}: {}", case["spec"]));
         if update {
             case["compiled"] = Value::String(compiled);
             continue;
@@ -635,9 +641,9 @@ fn old_specs_compile_to_the_same_bytes() {
         );
     }
     if update {
-        let mut text = serde_json::to_string_pretty(&cases).expect("serializes");
+        let mut text = serde_json::to_string_pretty(&golden).expect("serializes");
         text.push('\n');
-        std::fs::write(path, text).expect("writes the golden");
+        std::fs::write(GOLDEN, text).expect("writes the golden");
     }
 }
 
@@ -1647,12 +1653,11 @@ fn a_zero_canvas_is_refused_before_anything_is_lowered() {
 
 #[test]
 fn old_specs_compile_to_projects_that_load() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/old-specs.golden.json");
-    let cases: Vec<Value> =
-        serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
-    for case in &cases {
+    let golden = golden();
+    let facts = golden["facts"].to_string();
+    for case in golden["cases"].as_array().expect("cases") {
         let compiled: Value = serde_json::from_str(
-            &compile_json(&case["spec"].to_string(), &facts().to_string(), &[]).expect("compiles"),
+            &compile_json(&case["spec"].to_string(), &facts, &[]).expect("compiles"),
         )
         .expect("JSON");
         alpha2_model::Project::from_json(&compiled["project"].to_string())
