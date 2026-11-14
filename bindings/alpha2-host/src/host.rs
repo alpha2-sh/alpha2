@@ -1593,6 +1593,7 @@ impl Host {
         let refusals = device.registrations.hold(
             crate::registrations::Kind::Effect,
             &wanted,
+            &mut self.held,
             &mut |key| {
                 let crate::registrations::Key::Effect(id, version) = key else {
                     return None;
@@ -1623,11 +1624,10 @@ impl Host {
             },
         );
         for ((key, _), rejected) in wanted.into_iter().zip(refusals) {
-            if let crate::registrations::Key::Effect(id, version) = &key {
+            if let crate::registrations::Key::Effect(id, version) = key {
                 self.runtime_effects
-                    .insert((id.clone(), *version), RuntimeEffect { rejected });
+                    .insert((id, version), RuntimeEffect { rejected });
             }
-            self.held.push(key);
         }
         Ok(())
     }
@@ -1654,6 +1654,7 @@ impl Host {
         let refusals = device.registrations.hold(
             crate::registrations::Kind::Resource,
             &wanted,
+            &mut self.held,
             &mut |key| {
                 let crate::registrations::Key::Resource(id) = key else {
                     return None;
@@ -1671,7 +1672,6 @@ impl Host {
                 }
             },
         );
-        self.held.extend(wanted.into_iter().map(|(key, _)| key));
         refusals.into_iter().flatten().next().map_or(Ok(()), Err)
     }
 

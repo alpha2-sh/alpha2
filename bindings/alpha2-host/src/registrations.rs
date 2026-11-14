@@ -51,12 +51,15 @@ impl Registrations {
     /// registration was refused, if it was.
     ///
     /// Waits while another request holds a wanted key under another identity. `register` runs for
-    /// a key not registered under its identity; `unregister` for each registration of `kind`
-    /// nobody holds that `wanted` does not name as it is.
+    /// a key not registered under its identity, or registered by nobody's hold with a refusal;
+    /// `unregister` for each registration of `kind` nobody holds that `wanted` does not name as it
+    /// is. Each key goes into `held` as soon as its count is taken, so a caller that releases
+    /// `held` on unwind releases every count a panicking `register` left.
     pub(crate) fn hold(
         &self,
         kind: Kind,
         wanted: &[(Key, String)],
+        held: &mut Vec<Key>,
         register: &mut dyn FnMut(&Key) -> Option<String>,
         unregister: &mut dyn FnMut(&Key),
     ) -> Vec<Option<String>> {
@@ -73,13 +76,14 @@ impl Registrations {
         }
         let stale = live
             .iter()
-            .filter(|(key, held)| {
-                held.users == 0
+            .filter(|(key, live)| {
+                live.users == 0
                     && key.kind() == kind
-                    && wanted
-                        .iter()
-                        .find(|(wanted, _)| wanted == *key)
-                        .is_none_or(|(_, identity)| *identity != held.identity)
+                    && (live.refused.is_some()
+                        || wanted
+                            .iter()
+                            .find(|(wanted, _)| wanted == *key)
+                            .is_none_or(|(_, identity)| *identity != live.identity))
             })
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
@@ -91,19 +95,22 @@ impl Registrations {
         wanted
             .iter()
             .map(|(key, identity)| {
-                if let Some(held) = live.get_mut(key) {
-                    held.users += 1;
-                    return held.refused.clone();
-                }
-                let refused = register(key);
-                live.insert(
-                    key.clone(),
-                    Live {
-                        identity: identity.clone(),
-                        users: 1,
-                        refused: refused.clone(),
-                    },
-                );
+                let refused = if let Some(shared) = live.get_mut(key) {
+                    shared.users += 1;
+                    shared.refused.clone()
+                } else {
+                    let refused = register(key);
+                    live.insert(
+                        key.clone(),
+                        Live {
+                            identity: identity.clone(),
+                            users: 1,
+                            refused: refused.clone(),
+                        },
+                    );
+                    refused
+                };
+                held.push(key.clone());
                 refused
             })
             .collect()
@@ -141,6 +148,7 @@ mod tests {
         let first = registrations.hold(
             Kind::Effect,
             &[(effect("tint"), "red".to_owned())],
+            &mut Vec::new(),
             &mut |key| {
                 registered.push(key.clone());
                 None
@@ -151,6 +159,7 @@ mod tests {
         let shared = registrations.hold(
             Kind::Effect,
             &[(effect("tint"), "red".to_owned())],
+            &mut Vec::new(),
             &mut |_| panic!("registered once"),
             &mut |_| panic!("held"),
         );
@@ -163,6 +172,7 @@ mod tests {
                 registrations.hold(
                     Kind::Effect,
                     &[(effect("tint"), "blue".to_owned())],
+                    &mut Vec::new(),
                     &mut |_| {
                         sender.send("registered").expect("send");
                         Some("refused".to_owned())
@@ -188,20 +198,96 @@ mod tests {
         registrations.hold(
             Kind::Effect,
             &[(effect("old"), "a".to_owned())],
+            &mut Vec::new(),
             &mut |_| None,
             &mut |_| {},
         );
         registrations.hold(
             Kind::Resource,
             &[(Key::Resource("lut".to_owned()), "bytes".to_owned())],
+            &mut Vec::new(),
             &mut |_| None,
             &mut |_| {},
         );
         registrations.release(&[effect("old"), Key::Resource("lut".to_owned())]);
         let mut unregistered = Vec::new();
-        registrations.hold(Kind::Effect, &[], &mut |_| None, &mut |key| {
-            unregistered.push(key.clone());
-        });
+        registrations.hold(
+            Kind::Effect,
+            &[],
+            &mut Vec::new(),
+            &mut |_| None,
+            &mut |key| {
+                unregistered.push(key.clone());
+            },
+        );
         assert_eq!(unregistered, [effect("old")]);
+    }
+
+    #[test]
+    fn a_registration_that_panics_leaves_no_count_its_holder_cannot_release() {
+        let registrations = Arc::new(Registrations::default());
+        let mut held = Vec::new();
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            registrations.hold(
+                Kind::Effect,
+                &[
+                    (effect("first"), "a".to_owned()),
+                    (effect("second"), "a".to_owned()),
+                ],
+                &mut held,
+                &mut |key| {
+                    assert_ne!(*key, effect("second"), "injected registration panic");
+                    None
+                },
+                &mut |_| {},
+            )
+        }));
+        assert!(unwound.is_err());
+        registrations.release(&held);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let other = Arc::clone(&registrations);
+        std::thread::spawn(move || {
+            let held = other.hold(
+                Kind::Effect,
+                &[(effect("first"), "b".to_owned())],
+                &mut Vec::new(),
+                &mut |_| None,
+                &mut |_| {},
+            );
+            let _ = sender.send(held);
+        });
+        assert_eq!(
+            receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("not left waiting"),
+            [None]
+        );
+    }
+
+    #[test]
+    fn a_refusal_nobody_holds_is_registered_again() {
+        let registrations = Registrations::default();
+        let mut held = Vec::new();
+        let refused = registrations.hold(
+            Kind::Resource,
+            &[(Key::Resource("lut".to_owned()), "bytes".to_owned())],
+            &mut held,
+            &mut |_| Some("device busy".to_owned()),
+            &mut |_| panic!("a refusal is not registered"),
+        );
+        assert_eq!(refused, [Some("device busy".to_owned())]);
+        registrations.release(&held);
+        let mut registered = 0;
+        let again = registrations.hold(
+            Kind::Resource,
+            &[(Key::Resource("lut".to_owned()), "bytes".to_owned())],
+            &mut Vec::new(),
+            &mut |_| {
+                registered += 1;
+                None
+            },
+            &mut |_| panic!("a refusal is not registered"),
+        );
+        assert_eq!((again, registered), (vec![None], 1));
     }
 }

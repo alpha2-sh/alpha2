@@ -391,6 +391,9 @@ All notable changes to this project are documented in this file.
   (an export leaves no output), and exits within the stall limit plus 5 s. Before, a running request
   got no answer and kept its partial file when it needed more than 60 s, and the queue waited as
   long. A drain that a request causes while the dispatcher looks at the host is no longer missed.
+- A runtime effect or effect resource whose registration panicked no longer stays held for the
+  life of the host, and one the renderer refused is registered again by the next request that
+  wants it instead of handing every later request the same refusal.
 
 ## [0.6.0] - 2026-11-08
 
