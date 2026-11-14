@@ -4,6 +4,8 @@
 #include <stdint.h>
 
 #define ALPHA2_MAX_VULKAN_PLANES 8
+/* Queue families the FFmpeg shim keeps a lock for; a shared device uses none above. */
+#define ALPHA2_MAX_QUEUE_FAMILIES 8
 
 /* Fixed-width ABI shared only by alpha2-ffmpeg-bridge and alpha2-native-gpu. */
 typedef struct Alpha2VulkanFrameInfo {
@@ -56,6 +58,7 @@ typedef struct Alpha2VulkanDeviceInfo {
     uint32_t shader_int64;
     uint32_t vertex_pipeline_stores_and_atomics;
     /* Features FFmpeg uses that the application enabled on the device. */
+    uint32_t timeline_semaphore;
     uint32_t synchronization2;
     uint32_t sampler_ycbcr_conversion;
     uint32_t video_maintenance1;

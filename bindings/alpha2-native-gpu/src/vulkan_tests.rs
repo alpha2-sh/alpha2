@@ -961,3 +961,90 @@ fn an_encode_copy_one_row_too_tall_fails_before_it_is_recorded() {
     drop(access);
     copier.finish().expect("finished");
 }
+
+#[test]
+fn a_video_family_above_the_queue_lock_table_is_not_shared() {
+    use ash::vk::QueueFlags;
+    let graphics = QueueFlags::GRAPHICS | QueueFlags::COMPUTE | QueueFlags::TRANSFER;
+    let every = |_: &std::ffi::CStr| true;
+    let table = usize::try_from(crate::interop::ALPHA2_MAX_QUEUE_FAMILIES).expect("count");
+    // Graphics at 0, transfer-only fillers, then `flags` at `index`.
+    let with_family_at = |index: usize, flags: QueueFlags| {
+        let mut families = vec![family(graphics)];
+        families.resize(index, family(QueueFlags::TRANSFER));
+        families.push(family(flags));
+        families
+    };
+    let plan = super::video_plan(
+        &with_family_at(table - 1, QueueFlags::VIDEO_DECODE_KHR),
+        every,
+        true,
+    )
+    .expect("the last lockable family shares");
+    assert_eq!(plan.decode_family as usize, table - 1);
+    let refused = super::video_plan(
+        &with_family_at(table, QueueFlags::VIDEO_DECODE_KHR),
+        every,
+        true,
+    )
+    .expect_err("a decode family without a lock");
+    assert!(refused.contains("queue lock table"), "{refused}");
+
+    let mut families = with_family_at(table, QueueFlags::VIDEO_ENCODE_KHR);
+    families[1] = family(QueueFlags::VIDEO_DECODE_KHR);
+    let plan = super::video_plan(&families, every, true).expect("decodes");
+    assert_eq!((plan.decode_family, plan.encode_family), (1, None));
+    assert_eq!(plan.encode_codecs, [] as [&str; 0]);
+}
+
+#[test]
+fn a_device_without_video_maintenance1_or_the_vp9_feature_drops_encode_or_vp9() {
+    use ash::vk::QueueFlags;
+    let graphics = QueueFlags::GRAPHICS | QueueFlags::COMPUTE | QueueFlags::TRANSFER;
+    let every = |_: &std::ffi::CStr| true;
+    let full = super::video_plan(
+        &[
+            family(graphics),
+            family(QueueFlags::VIDEO_DECODE_KHR),
+            family(QueueFlags::VIDEO_ENCODE_KHR),
+        ],
+        every,
+        true,
+    )
+    .expect("shares");
+    assert!(full.encode_family.is_some() && full.decode_codecs.contains(&"vp9"));
+    let all = super::FfmpegDeviceFeatures {
+        synchronization2: true,
+        sampler_ycbcr_conversion: true,
+        video_maintenance1: true,
+        video_decode_vp9: true,
+    };
+    let mut plan = full.clone();
+    plan.restrict_to(all);
+    assert_eq!(plan, full);
+
+    let mut plan = full.clone();
+    plan.restrict_to(super::FfmpegDeviceFeatures {
+        video_maintenance1: false,
+        ..all
+    });
+    assert_eq!(plan.encode_family, None);
+    assert_eq!(plan.encode_codecs, [] as [&str; 0]);
+    assert!(
+        !plan.video_extensions.iter().any(|extension| extension
+            .to_bytes()
+            .starts_with(b"VK_KHR_video_encode")
+            || *extension == ash::khr::video_maintenance1::NAME),
+        "{:?}",
+        plan.video_extensions
+    );
+    assert_eq!(plan.decode_codecs, full.decode_codecs);
+
+    let mut plan = full.clone();
+    plan.restrict_to(super::FfmpegDeviceFeatures {
+        video_decode_vp9: false,
+        ..all
+    });
+    assert!(!plan.decode_codecs.contains(&"vp9"));
+    assert_eq!(plan.encode_family, full.encode_family);
+}

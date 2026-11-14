@@ -1520,6 +1520,24 @@ fn ffmpeg_device_features(
     }
 }
 
+/// Whether the device `features` would create enables `timelineSemaphore`.
+fn enables_timeline_semaphores(features: &mut wgpu_hal::vulkan::PhysicalDeviceFeatures) -> bool {
+    let info = features.add_to_device_create(vk::DeviceCreateInfo::default());
+    let mut next = info.p_next.cast::<vk::BaseInStructure<'_>>();
+    // SAFETY: every structure of the chain lives in `features`, which outlives this walk, and
+    // each begins with `sType` and `pNext`.
+    while let Some(structure) = unsafe { next.as_ref() } {
+        if structure.s_type == vk::StructureType::PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES {
+            // SAFETY: the structure type names this layout.
+            let timeline =
+                unsafe { &*next.cast::<vk::PhysicalDeviceTimelineSemaphoreFeatures<'_>>() };
+            return timeline.timeline_semaphore == vk::TRUE;
+        }
+        next = structure.p_next;
+    }
+    false
+}
+
 /// `VK_KHR_video_decode_vp9`, which ash 0.38 (Vulkan 1.3.281) predates. Values from
 /// `vulkan_core.h` 1.4.330.
 const VIDEO_DECODE_VP9_NAME: &CStr = c"VK_KHR_video_decode_vp9";
@@ -1651,15 +1669,24 @@ impl SharedVulkanContext {
         let shared_instance = exposed.adapter.shared_instance();
         let raw_instance = shared_instance.raw_instance().handle();
         let validation_layer = activated_validation_layer(shared_instance.raw_instance(), physical);
+        let mut plan = adapter_video_plan(shared_instance.raw_instance(), &exposed)
+            .map_err(SharedVulkanError)?;
+        let ffmpeg_features = ffmpeg_device_features(
+            shared_instance.raw_instance(),
+            physical,
+            plan.video_extensions
+                .contains(&ash::khr::video_maintenance1::NAME),
+            plan.video_extensions.contains(&VIDEO_DECODE_VP9_NAME),
+        );
+        plan.restrict_to(ffmpeg_features);
         let VideoPlan {
             decode_family,
             encode_family,
-            mut video_extensions,
-            mut decode_caps,
-            mut decode_codecs,
+            video_extensions,
+            decode_caps,
+            decode_codecs,
             encode_codecs,
-        } = adapter_video_plan(shared_instance.raw_instance(), &exposed)
-            .map_err(SharedVulkanError)?;
+        } = plan;
         let graphics_family = 0;
         // Queried only once the device is known to expose the video queue and codec encode
         // extensions (otherwise the loader trampoline has no function behind it), and before
@@ -1686,21 +1713,16 @@ impl SharedVulkanContext {
         let enabled_extensions = exposed
             .adapter
             .required_device_extensions(required_features);
-        let core = exposed
+        let mut device_features = exposed
             .adapter
-            .physical_device_features(&enabled_extensions, required_features)
-            .get_core();
-        let ffmpeg_features = ffmpeg_device_features(
-            shared_instance.raw_instance(),
-            physical,
-            video_extensions.contains(&ash::khr::video_maintenance1::NAME),
-            video_extensions.contains(&VIDEO_DECODE_VP9_NAME),
-        );
-        // A VP9 session also needs the extension's feature; without it VP9 decodes in software.
-        if !ffmpeg_features.video_decode_vp9 {
-            video_extensions.retain(|extension| *extension != VIDEO_DECODE_VP9_NAME);
-            decode_caps &= !DECODE_VP9;
-            decode_codecs.retain(|codec| *codec != "vp9");
+            .physical_device_features(&enabled_extensions, required_features);
+        let core = device_features.get_core();
+        // `FFmpeg` waits on and signals timeline semaphores; wgpu-hal enables them only where
+        // the adapter has them.
+        if !enables_timeline_semaphores(&mut device_features) {
+            return Err(SharedVulkanError(
+                "the device does not enable timeline semaphores, which FFmpeg needs".to_owned(),
+            ));
         }
         let extra_family = decode_family;
         let extra_encode_family =
@@ -1771,6 +1793,7 @@ impl SharedVulkanContext {
                     core.shader_int64,
                     core.vertex_pipeline_stores_and_atomics,
                 ],
+                timeline_semaphore: 1,
                 synchronization2: u32::from(ffmpeg_features.synchronization2),
                 sampler_ycbcr_conversion: u32::from(ffmpeg_features.sampler_ycbcr_conversion),
                 video_maintenance1: u32::from(ffmpeg_features.video_maintenance1),
@@ -2171,6 +2194,11 @@ fn video_plan(
             "shared Vulkan device requires a decode queue separate from wgpu graphics".to_owned(),
         );
     }
+    if decode_family >= crate::interop::ALPHA2_MAX_QUEUE_FAMILIES {
+        return Err(format!(
+            "the video-decode queue family {decode_family} is above the FFmpeg queue lock table"
+        ));
+    }
     let base = [
         ash::khr::video_queue::NAME,
         ash::khr::video_decode_queue::NAME,
@@ -2201,7 +2229,9 @@ fn video_plan(
         .filter(|(_, extension, _)| supports(extension))
         .map(|(codec, extension, _)| (*codec, *extension))
         .collect();
+    // An encode family above the lock table could not be serialized with wgpu, so it is not used.
     let encode_family = family(vk::QueueFlags::VIDEO_ENCODE_KHR)
+        .filter(|family| *family < crate::interop::ALPHA2_MAX_QUEUE_FAMILIES)
         .filter(|_| encode_base.iter().all(|extension| supports(extension)) && !encoded.is_empty());
     let encode_codecs = if encode_family.is_some() {
         video_extensions.extend_from_slice(&encode_base);
@@ -2218,6 +2248,32 @@ fn video_plan(
         decode_codecs,
         encode_codecs,
     })
+}
+
+impl VideoPlan {
+    /// Drops what the device cannot enable: VP9 decode without `videoDecodeVP9`, and encode without
+    /// `videoMaintenance1`, which `FFmpeg`'s encoders need.
+    fn restrict_to(&mut self, features: FfmpegDeviceFeatures) {
+        if !features.video_decode_vp9 {
+            self.video_extensions
+                .retain(|extension| *extension != VIDEO_DECODE_VP9_NAME);
+            self.decode_caps &= !DECODE_VP9;
+            self.decode_codecs.retain(|codec| *codec != "vp9");
+        }
+        if !features.video_maintenance1 && self.encode_family.is_some() {
+            let encode_extensions: Vec<&CStr> = [
+                ash::khr::video_encode_queue::NAME,
+                ash::khr::video_maintenance1::NAME,
+            ]
+            .into_iter()
+            .chain(ENCODE_EXTENSIONS.iter().map(|(_, extension, _)| *extension))
+            .collect();
+            self.video_extensions
+                .retain(|extension| !encode_extensions.contains(extension));
+            self.encode_family = None;
+            self.encode_codecs.clear();
+        }
+    }
 }
 
 /// [`video_plan`] for `exposed`, read from its instance.

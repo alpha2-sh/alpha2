@@ -43,8 +43,6 @@ static int alpha2_copy_extension_list(
  * Recursive because a completion callback can release a decoder surface while a submission holds
  * the lock.
  */
-#define ALPHA2_MAX_QUEUE_FAMILIES 8
-
 typedef struct Alpha2VulkanDeviceState {
     VkPhysicalDeviceTimelineSemaphoreFeatures timeline;
     VkPhysicalDeviceSynchronization2Features synchronization2;
@@ -140,7 +138,8 @@ static void alpha2_free_vulkan_device(AVHWDeviceContext *context) {
 
 /*
  * Fills a Vulkan device context from the renderer's device and installs this shim's queue locks.
- * Returns AVERROR(EINVAL) for a missing handle or queue, AVERROR(ENOSYS) without a Vulkan loader,
+ * Returns AVERROR(EINVAL) for a missing handle or queue, a family without a lock or no timeline
+ * semaphores, AVERROR(ENOSYS) without a Vulkan loader,
  * AVERROR(ENOMEM) when allocation fails.
  */
 int alpha2_vulkan_device_init(AVHWDeviceContext *context,
@@ -148,6 +147,11 @@ int alpha2_vulkan_device_init(AVHWDeviceContext *context,
     if (context == NULL || context->hwctx == NULL || info == NULL ||
         info->instance == 0 || info->physical_device == 0 || info->device == 0 ||
         info->graphics_queue_count == 0 || info->decode_queue_count == 0) return AVERROR(EINVAL);
+    /* A family without a lock here would leave FFmpeg and wgpu submissions to it unserialized. */
+    if (info->graphics_queue_family >= ALPHA2_MAX_QUEUE_FAMILIES ||
+        info->decode_queue_family >= ALPHA2_MAX_QUEUE_FAMILIES ||
+        (info->encode_queue_count > 0 && info->encode_queue_family >= ALPHA2_MAX_QUEUE_FAMILIES) ||
+        info->timeline_semaphore == 0) return AVERROR(EINVAL);
     AVVulkanDeviceContext *vulkan = context->hwctx;
     /* FFmpeg needs the resolver of the loader the renderer's instance came from. */
     PFN_vkGetInstanceProcAddr resolver =
@@ -182,7 +186,7 @@ int alpha2_vulkan_device_init(AVHWDeviceContext *context,
     state->timeline = (VkPhysicalDeviceTimelineSemaphoreFeatures){
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES,
         .pNext = &state->synchronization2,
-        .timelineSemaphore = VK_TRUE,
+        .timelineSemaphore = info->timeline_semaphore != 0,
     };
     pthread_mutexattr_t attributes;
     if (pthread_mutexattr_init(&attributes) != 0) { av_free(state); return AVERROR(ENOMEM); }

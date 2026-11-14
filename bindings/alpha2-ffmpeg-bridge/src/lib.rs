@@ -622,6 +622,8 @@ pub struct VulkanDeviceInfo {
     pub encode_video_caps: u32,
     /// Enabled core feature bits required by `FFmpeg`'s context contract.
     pub core_features: [u32; 4],
+    /// Whether `timelineSemaphore` is enabled on the device; the context is refused without it.
+    pub timeline_semaphore: u32,
     /// Whether `synchronization2` is enabled on the device.
     pub synchronization2: u32,
     /// Whether `samplerYcbcrConversion` is enabled on the device.
@@ -812,6 +814,7 @@ pub unsafe fn create_vulkan_device_context(
         fragment_stores_and_atomics: info.core_features[1],
         shader_int64: info.core_features[2],
         vertex_pipeline_stores_and_atomics: info.core_features[3],
+        timeline_semaphore: info.timeline_semaphore,
         synchronization2: info.synchronization2,
         sampler_ycbcr_conversion: info.sampler_ycbcr_conversion,
         video_maintenance1: info.video_maintenance1,

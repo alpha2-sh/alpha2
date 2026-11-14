@@ -497,6 +497,10 @@ All notable changes to this project are documented in this file.
   libavutil 60): the host says so at start and decodes and encodes through the software and
   CPU-frame paths instead of reading the structures at wrong offsets. Building against headers
   older than libavutil 60.13.100 stops with a message.
+- A shared Vulkan device whose video-decode queue family has no lock in the `FFmpeg` shim is not
+  shared (the adapter report says why), and an encode family without a lock, or a device without
+  `videoMaintenance1`, shares without hardware encode. `FFmpeg` is told timeline semaphores are on
+  only when the device enabled them, and the device is not shared otherwise.
 
 ## [0.6.0] - 2026-11-08
 
