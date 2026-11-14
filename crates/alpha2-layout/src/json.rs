@@ -97,8 +97,9 @@ pub fn measure_text_json(
 /// fractions of the picture. `lineCount` and `fontSize` (the size drawn, a fraction of the
 /// picture's shorter side) are `null` for non-text nodes, and `baselines` (`{ first, last }`,
 /// fractions of the picture height) also for empty text. `truncated` says `line_clamp` cut the
-/// node's lines. `canvas` is the project canvas the generator's pixel lengths refer to, the
-/// picture's size when `None`.
+/// node's lines; `overflow` is also true for a text the text host refuses to draw, such as a box
+/// over 16,384 pixels a side. `canvas` is the project canvas the generator's pixel lengths refer
+/// to, the picture's size when `None`.
 ///
 /// # Errors
 /// Returns [`MeasureError::Input`] for an invalid layout generator on that canvas or an empty

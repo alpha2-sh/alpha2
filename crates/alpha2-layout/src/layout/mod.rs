@@ -27,9 +27,17 @@ pub use resolve::resolve;
 /// than this.
 pub const LAYOUT_WRAP_SLACK: f32 = 1.0 / 64.0;
 
-/// The width a text node with content `width` pixels wide breaks its lines at.
+/// The width a text node with content `width` pixels wide breaks its lines at. The slack never
+/// takes a width the text host accepts past its limit.
+#[allow(clippy::cast_precision_loss)]
 pub(crate) fn wrap(width: f32) -> f32 {
-    (width + LAYOUT_WRAP_SLACK).max(1.0)
+    let limit = alpha2_text::MAX_TEXT_BOX as f32;
+    let wrapped = (width + LAYOUT_WRAP_SLACK).max(1.0);
+    if width <= limit {
+        wrapped.min(limit)
+    } else {
+        wrapped
+    }
 }
 
 /// One node's boxes in render pixels, `[left, top, right, bottom]`, whole pixels from the
@@ -86,7 +94,8 @@ pub struct NodeBounds {
     /// The content box, as fractions of the picture.
     pub content: CanvasRect,
     /// Whether its text, at its fitted size once clamped, is taller than its content box or
-    /// splits a word, or an in-flow child reaches past its padding box.
+    /// splits a word, or an in-flow child reaches past its padding box. Also set for a text the
+    /// text host refuses to draw, such as a box over 16,384 pixels a side; frames fail on it.
     pub overflow: bool,
     /// A text node's line count; `None` for other nodes.
     pub line_count: Option<u32>,
@@ -308,6 +317,38 @@ pub fn layout_texts(
     (keys, requests)
 }
 
+/// Marks as overflowing each text node whose raster request (as [`layout_texts`] builds it) the
+/// text host refuses, since frames cannot draw it.
+fn mark_refused_texts(
+    rasterizer: &TextRasterizer,
+    layout: &EvaluatedLayout,
+    resolved: &mut ResolvedLayout,
+    size: PictureSize,
+) -> Result<(), TextRasterError> {
+    let (keys, requests) = layout_texts(layout, resolved, size);
+    let mut refused = Vec::new();
+    for (key, draw) in &requests {
+        match rasterizer.measure(&draw.request) {
+            Ok(_) => {}
+            Err(TextRasterError::InvalidRequest | TextRasterError::TooLarge) => refused.push(*key),
+            Err(error) => return Err(error),
+        }
+    }
+    if refused.is_empty() {
+        return Ok(());
+    }
+    let mut found = Vec::new();
+    text_nodes(&layout.root, &mut 0, &mut found);
+    for ((node, _), key) in found.into_iter().zip(keys) {
+        if key.is_some_and(|key| refused.contains(&key))
+            && let Some(rects) = resolved.nodes.get_mut(node)
+        {
+            rects.overflow = true;
+        }
+    }
+    Ok(())
+}
+
 /// Where each node of a valid layout tree lies on a picture of `size` at picture time
 /// `time`, laid out with `rasterizer`'s fonts exactly as a frame is.
 ///
@@ -333,6 +374,7 @@ pub fn measure_layout(
     fit_texts(&evaluated, &mut resolved, size, |request| {
         rasterizer.shape(request).map(Arc::new)
     })?;
+    mark_refused_texts(rasterizer, &evaluated, &mut resolved, size)?;
     let (width, height) = (size.width() as f32, size.height() as f32);
     let rect = |[left, top, right, bottom]: [f32; 4]| CanvasRect {
         left: left / width,

@@ -815,3 +815,48 @@ fn layout_fit_and_clamp_values_out_of_range_are_refused() {
         );
     }
 }
+
+#[test]
+fn a_text_box_the_text_host_refuses_is_measured_as_overflowing() {
+    let rasterizer = fixture();
+    // A ticker: one line that must not shrink, inside a clipping row; 700 characters at 54 px
+    // are wider than the text host draws.
+    for (characters, refused) in [(300, false), (700, true)] {
+        let content = "Breaking news ".repeat(characters / 14 + 1);
+        let root = node(json!({
+            "flex_direction": "row",
+            "overflow": "hidden",
+            "children": [{
+                "flex_shrink": constant(json!(0.0)),
+                "text": constant(json!(&content[..characters])),
+                "font_size": constant(json!(0.05)),
+            }],
+        }));
+        let picture = size(1920, 1080);
+        let bounds = measure_layout(&rasterizer, &root, MediaTime::ZERO, picture, (1920, 1080))
+            .expect("measures");
+        assert_eq!(bounds.nodes[1].overflow, refused, "{characters} characters");
+        let evaluated = LayoutPlan::new(&root, (1920, 1080)).evaluate(MediaTime::ZERO);
+        let (_, requests) =
+            layout_texts(&evaluated, &resolved(&rasterizer, &root, picture), picture);
+        assert_eq!(rasterizer.measure(&requests[0].1.request).is_err(), refused);
+    }
+}
+
+#[test]
+fn a_full_width_text_box_on_the_widest_picture_rasterizes() {
+    let mut rasterizer = fixture();
+    let root = node(json!({ "children": [{
+        "width": constant(json!("100%")),
+        "text": constant(json!("Wide")),
+        "font_size": constant(json!(0.05)),
+    }] }));
+    let picture = size(16_384, 1080);
+    let bounds = measure_layout(&rasterizer, &root, MediaTime::ZERO, picture, (16_384, 1080))
+        .expect("measures");
+    assert!(!bounds.nodes[1].overflow);
+    let evaluated = LayoutPlan::new(&root, (16_384, 1080)).evaluate(MediaTime::ZERO);
+    let (_, requests) = layout_texts(&evaluated, &resolved(&rasterizer, &root, picture), picture);
+    assert_eq!(requests[0].1.request.max_width, 16_384.0);
+    assert!(rasterizer.rasterize(&requests[0].1.request).is_ok());
+}

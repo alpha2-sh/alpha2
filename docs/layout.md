@@ -146,13 +146,15 @@ Paints of a box's background and border are normalized to its border box: a line
 
 A layout tree holds at most 256 boxes, the root included, nested at most 16 deep (the root is depth 1). Of them, at most 64 have text and at most 16 are drawn as one group (a box with `opacity`, `translate`, `scale`, `rotation_degrees` or hidden overflow). Its shape boxes hold at most 1,024 shape items together. A tree past a limit is refused.
 
+A text box is drawn at most 16,384 pixels wide and tall at the size the picture is drawn at. A frame with a wider or taller text box fails; measuring reports that box as overflowing.
+
 ## Animation
 
 Numeric values are keyframed in the picture's time, as shapes are: a clip's source time, a generator node's composition time, a media node's composition time plus its `start`. Keywords, track lists, grid lines and booleans do not animate. A layout without keyframes is laid out once and every later frame reuses it.
 
 ## Measuring
 
-`measureLayout` (from `alpha2/layout`, on `alpha2/wasm`'s `WasmTextMeasurer`) lays a layout out with the given fonts, at the given picture size and time, as a frame lays it out, and answers each node's border and content box as fractions of the picture, its text's line count and first and last baselines (`baselines: { first, last }`, fractions of the picture's height; `null` without text), its text's font size as drawn (`fontSize`, fitted by `font_size_fit`; `null` without text), whether `line_clamp` cut its text (`truncated`), and whether it overflows: its text, at that size and once clamped, is taller than its box or splits a word, or an in-flow child reaches past its padding box. A text with a fit that still overflows did not fit at its `min`. Rendering draws overflowing boxes anyway; measure at the size the picture is drawn at, and fix the document. Its `"<n>px"` lengths are pixels of the project canvas: pass the project's size as `canvas` when measuring at another size.
+`measureLayout` (from `alpha2/layout`, on `alpha2/wasm`'s `WasmTextMeasurer`) lays a layout out with the given fonts, at the given picture size and time, as a frame lays it out, and answers each node's border and content box as fractions of the picture, its text's line count and first and last baselines (`baselines: { first, last }`, fractions of the picture's height; `null` without text), its text's font size as drawn (`fontSize`, fitted by `font_size_fit`; `null` without text), whether `line_clamp` cut its text (`truncated`), and whether it overflows: its text, at that size and once clamped, is taller than its box or splits a word, or an in-flow child reaches past its padding box, or its text box is larger than a frame can draw (see Limits). A text with a fit that still overflows did not fit at its `min`. Rendering draws overflowing boxes anyway; measure at the size the picture is drawn at, and fix the document. Its `"<n>px"` lengths are pixels of the project canvas: pass the project's size as `canvas` when measuring at another size.
 
 ```ts
 import init, { WasmTextMeasurer } from "alpha2/wasm";

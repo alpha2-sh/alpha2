@@ -39,10 +39,12 @@ const MAX_LINE_HEIGHT: f32 = 10.0;
 const MAX_STROKE_EXTENT: f32 = 64.0;
 const MAX_STROKES: usize = 4;
 const MAX_BACKGROUND_PADDING: f32 = 256.0;
+/// The widest wrapping width and the largest raster side in pixels.
+pub const MAX_TEXT_BOX: u32 = 16_384;
+#[allow(clippy::cast_precision_loss)]
+const MAX_TEXT_BOX_PIXELS: f32 = MAX_TEXT_BOX as f32;
 /// In font sizes.
 const LETTER_SPACING_RANGE: std::ops::RangeInclusive<f32> = -0.5..=1.0;
-/// Largest raster side, in pixels.
-const MAX_RASTER_SIDE: u32 = 16_384;
 /// Bytes the planes of one raster may take together.
 const MAX_RASTER_BYTES: u64 = 1 << 30;
 
@@ -51,8 +53,8 @@ const MAX_RASTER_BYTES: u64 = 1 << 30;
 /// ([`alpha2_media::MAX_FRAME_PIXELS`]) or [`MAX_RASTER_BYTES`]. Checked before any plane exists.
 fn raster_pixels(width: u32, height: u32, bytes_per_pixel: u64) -> Result<usize, TextRasterError> {
     let pixels = u64::from(width) * u64::from(height);
-    if width > MAX_RASTER_SIDE
-        || height > MAX_RASTER_SIDE
+    if width > MAX_TEXT_BOX
+        || height > MAX_TEXT_BOX
         || pixels > alpha2_media::MAX_FRAME_PIXELS
         || pixels.saturating_mul(bytes_per_pixel) > MAX_RASTER_BYTES
     {
@@ -2314,7 +2316,7 @@ fn validate_request(request: &TextRasterRequest) -> Result<(), TextRasterError> 
         && request.font_size <= MAX_FONT_SIZE
         && request.text.len() <= MAX_TEXT_BYTES
         && request.max_width.is_finite()
-        && request.max_width <= 16_384.0
+        && request.max_width <= MAX_TEXT_BOX_PIXELS
         && request.line_height.is_finite()
         && request.line_height > 0.0
         && request.line_height <= MAX_LINE_HEIGHT
@@ -2350,7 +2352,7 @@ fn validate_request(request: &TextRasterRequest) -> Result<(), TextRasterError> 
 }
 
 fn checked_dimension(value: f32) -> Result<u32, TextRasterError> {
-    if value.is_finite() && value > 0.0 && value.ceil() <= 16_384.0 {
+    if value.is_finite() && value > 0.0 && value.ceil() <= MAX_TEXT_BOX_PIXELS {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         Ok(value.ceil() as u32)
     } else {
