@@ -163,6 +163,10 @@ All notable changes to this project are documented in this file.
   extractors accept any value with `__float__` and any time with `__index__` (such as NumPy scalars).
 - In the browser, a frame split into several GPU submissions fails with the reported error when one
   of them was rejected, instead of delivering wrong pixels into the export.
+- `remove_ranges` and `split_at` keep a track matte, and a binding that reads through another clip
+  (`via`), on the part of a cut clip beside it; a cut that no single part can follow is refused with
+  the new refusals `matte_source` or `read_through`, instead of drawing the matte, misplacing a
+  follower or failing with `INTERNAL`.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

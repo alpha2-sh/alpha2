@@ -1009,6 +1009,130 @@
     },
     {
       "expected": {
+        "project_sha256": "e8c2d1b1fb406109fb795d7ebb474e1bb68a6968921de8e1a9d59d2a45b7e52c",
+        "report": {
+          "created": [
+            {
+              "from": "ms",
+              "id": "ms.1"
+            },
+            {
+              "from": "mm",
+              "id": "mm.1"
+            },
+            {
+              "from": "a",
+              "id": "a.1"
+            },
+            {
+              "from": "b",
+              "id": "b.1"
+            }
+          ],
+          "moved": [
+            {
+              "from": {
+                "end": 120000,
+                "start": 80000
+              },
+              "to": {
+                "end": 80000,
+                "start": 40000
+              }
+            }
+          ],
+          "removed": [
+            {
+              "end": 80000,
+              "start": 40000
+            }
+          ]
+        }
+      },
+      "name": "remove-through-a-matte-pair",
+      "project": "bound",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 80000,
+              "start": 40000
+            }
+          ]
+        },
+        "target": {
+          "track": "t-matted"
+        }
+      }
+    },
+    {
+      "expected": {
+        "project_sha256": "bc846052f38afd86b55275154bfa068894682bbbd1e21486b4a6f785135ff8a7",
+        "report": {
+          "created": [
+            {
+              "from": "ms",
+              "id": "ms.1"
+            },
+            {
+              "from": "mm",
+              "id": "mm.1"
+            },
+            {
+              "from": "a",
+              "id": "a.1"
+            },
+            {
+              "from": "b",
+              "id": "b.1"
+            }
+          ],
+          "moved": [
+            {
+              "from": {
+                "end": 120000,
+                "start": 32000
+              },
+              "to": {
+                "end": 104000,
+                "start": 16000
+              }
+            }
+          ],
+          "removed": [
+            {
+              "end": 32000,
+              "start": 16000
+            }
+          ]
+        }
+      },
+      "name": "remove-through-a-follower",
+      "project": "bound",
+      "request": {
+        "op": "remove_ranges",
+        "ranges": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            {
+              "end": 32000,
+              "start": 16000
+            }
+          ]
+        },
+        "target": {
+          "track": "t-label"
+        }
+      }
+    },
+    {
+      "expected": {
         "project_sha256": "3c1b52f09d6b729d12a407b3f2c8143cd04ce4b033e921e8cb692876d4e9202f",
         "report": {
           "created": [
@@ -1353,6 +1477,54 @@
             "property": "visual.correction"
           }
         ]
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "matte_source"
+      },
+      "name": "refuse-matte-source",
+      "project": "bound",
+      "request": {
+        "op": "split_at",
+        "target": {
+          "clips": [
+            "ms"
+          ]
+        },
+        "times": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            60000
+          ]
+        }
+      }
+    },
+    {
+      "expected": {
+        "code": "INVALID_INPUT",
+        "refusal": "read_through"
+      },
+      "name": "refuse-read-through",
+      "project": "bound",
+      "request": {
+        "op": "split_at",
+        "target": {
+          "clips": [
+            "a"
+          ]
+        },
+        "times": {
+          "anchor": {
+            "type": "timeline"
+          },
+          "list": [
+            60000
+          ]
+        }
       }
     },
     {
@@ -1772,6 +1944,202 @@
     }
   ],
   "projects": {
+    "bound": {
+      "data": [
+        {
+          "anchor": {
+            "source_id": "v",
+            "type": "source"
+          },
+          "channels": [
+            "nose"
+          ],
+          "id": "face",
+          "interpolation": "hold",
+          "kind": "points",
+          "times": [
+            0,
+            8000,
+            16000,
+            24000,
+            32000,
+            40000,
+            48000,
+            56000,
+            64000,
+            72000,
+            80000,
+            88000,
+            96000,
+            104000,
+            112000
+          ],
+          "values": [
+            0.125,
+            0.5,
+            0.15625,
+            0.5,
+            0.1875,
+            0.5,
+            0.21875,
+            0.5,
+            0.25,
+            0.5,
+            0.28125,
+            0.5,
+            0.3125,
+            0.5,
+            0.34375,
+            0.5,
+            0.375,
+            0.5,
+            0.40625,
+            0.5,
+            0.4375,
+            0.5,
+            0.46875,
+            0.5,
+            0.5,
+            0.5,
+            0.53125,
+            0.5,
+            0.5625,
+            0.5
+          ]
+        }
+      ],
+      "id": "p",
+      "name": "P",
+      "schema_version": 1,
+      "settings": {
+        "frame_rate": {
+          "den": 1,
+          "num": 30
+        },
+        "height": 360,
+        "sample_rate": 48000,
+        "width": 640
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "w",
+          "kind": "video",
+          "locator": "w.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "clips": [
+              {
+                "id": "ms",
+                "source_id": "v",
+                "source_range": {
+                  "end": 120000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 120000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-matte",
+            "kind": "video",
+            "name": "MS"
+          },
+          {
+            "clips": [
+              {
+                "id": "mm",
+                "matte": {
+                  "mode": "luma",
+                  "source": "ms"
+                },
+                "source_id": "w",
+                "source_range": {
+                  "end": 120000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 120000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-matted",
+            "kind": "video",
+            "name": "MM"
+          },
+          {
+            "clips": [
+              {
+                "id": "a",
+                "source_id": "v",
+                "source_range": {
+                  "end": 120000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 120000,
+                  "start": 0
+                }
+              }
+            ],
+            "id": "t-reader",
+            "kind": "video",
+            "name": "A"
+          },
+          {
+            "clips": [
+              {
+                "id": "b",
+                "source_id": "w",
+                "source_range": {
+                  "end": 120000,
+                  "start": 0
+                },
+                "time_map": {
+                  "type": "forward"
+                },
+                "timeline_range": {
+                  "end": 120000,
+                  "start": 0
+                },
+                "visual": {
+                  "position": {
+                    "channel": "nose",
+                    "data": "face",
+                    "mode": "data",
+                    "space": "canvas",
+                    "via": {
+                      "clip": "a"
+                    }
+                  }
+                }
+              }
+            ],
+            "id": "t-label",
+            "kind": "video",
+            "name": "B"
+          }
+        ]
+      }
+    },
     "generated": {
       "id": "p",
       "name": "P",

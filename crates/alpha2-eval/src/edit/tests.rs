@@ -4,9 +4,9 @@ use alpha2_model::Project;
 use alpha2_time::MediaTime;
 use serde_json::{Value, json};
 
-const FRAME: i64 = 4_000;
+pub(super) const FRAME: i64 = 4_000;
 
-fn clip(
+pub(super) fn clip(
     id: &str,
     source: &str,
     timeline: (i64, i64),
@@ -25,7 +25,7 @@ fn keyed(times: &[(i64, f64)], curve: &Value) -> Value {
 
 /// One clip of each time map on its own track, with keyframes, a mask, a transition, captions,
 /// an audio clip and a timeline-anchored binding.
-fn corpus() -> Value {
+pub(super) fn corpus() -> Value {
     let linear = json!({ "type": "linear" });
     let eased = json!({ "type": "cubic_bezier", "x1": 0.42, "y1": 0.0, "x2": 0.58, "y2": 1.0 });
     let mut forward = clip("fwd", "v", (0, 60), (10, 70), &json!({ "type": "forward" }));
@@ -111,12 +111,12 @@ fn corpus() -> Value {
     })
 }
 
-fn load(document: &Value) -> Project {
+pub(super) fn load(document: &Value) -> Project {
     Project::from_json(&document.to_string()).expect("valid project")
 }
 
 /// What a frame shows at `time`, without clip ids (split parts have new ones).
-fn state(project: &Project, time: i64) -> Vec<String> {
+pub(super) fn state(project: &Project, time: i64) -> Vec<String> {
     let index = ActiveIndex::build(project).expect("index");
     let frame = evaluate(project, &index, MediaTime(time)).expect("frame");
     let context = index.sample_context(project);
@@ -134,14 +134,38 @@ fn state(project: &Project, time: i64) -> Vec<String> {
                 )
             })
             .collect::<Vec<_>>();
+        let matte = clip.matte.map(|matte| {
+            frame
+                .visual
+                .iter()
+                .find(|other| other.clip_id == &matte.source)
+                .map_or_else(
+                    || "inactive".to_owned(),
+                    |source| format!("{} {}", source.source_id, source.source_time.ticks()),
+                )
+        });
         out.push(format!(
-            "{} {} {:?} {:?}",
+            "{} {} {:?} {:?} layer={} matte={:?}",
             clip.source_id,
             clip.source_time.ticks(),
             clip.visual,
-            masks
+            masks,
+            !clip.is_matte,
+            matte
         ));
     }
+    for track in &project.timeline.tracks {
+        out.push(format!(
+            "track {} gain {} pan {}",
+            track.id,
+            crate::sample_scalar(&track.audio.gain, MediaTime(time), &context),
+            crate::sample_scalar(&track.audio.pan, MediaTime(time), &context)
+        ));
+    }
+    out.push(format!(
+        "master gain {}",
+        crate::sample_scalar(&project.audio.gain, MediaTime(time), &context)
+    ));
     for clip in &frame.audio {
         let original = project
             .timeline
@@ -180,7 +204,12 @@ fn state(project: &Project, time: i64) -> Vec<String> {
     out
 }
 
-fn kept_moments_hold(original: &Project, edited: &Project, report: &EditReport, ripple: bool) {
+pub(super) fn kept_moments_hold(
+    original: &Project,
+    edited: &Project,
+    report: &EditReport,
+    ripple: bool,
+) {
     let removed = report
         .removed
         .iter()
@@ -234,7 +263,7 @@ fn kept_moments_hold(original: &Project, edited: &Project, report: &EditReport, 
     }
 }
 
-fn remove(
+pub(super) fn remove(
     project: &Project,
     ranges: Ranges,
     target: Target,
@@ -254,7 +283,7 @@ fn remove(
     .expect("edit")
 }
 
-fn timeline_list(ranges: &[(i64, i64)]) -> Ranges {
+pub(super) fn timeline_list(ranges: &[(i64, i64)]) -> Ranges {
     Ranges::List(RangeList {
         list: ranges
             .iter()

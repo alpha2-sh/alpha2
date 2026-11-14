@@ -65,7 +65,7 @@ fn the_edit_cases_cover_every_refusal() {
         .iter()
         .filter_map(|case| case["expected"]["refusal"].as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(refusals.len(), 9, "{refusals:?}");
+    assert_eq!(refusals.len(), 11, "{refusals:?}");
     for case in cases {
         let name = case["name"].as_str().expect("name");
         assert_eq!(

@@ -99,6 +99,8 @@ export type EditRefusal =
   | "invalid_range"
   | "nothing_to_bake"
   | "correction_not_bakeable"
+  | "matte_source"
+  | "read_through"
   | "invalid_result";
 
 /** The generated wasm function this wrapper calls. */
