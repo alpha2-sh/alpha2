@@ -488,11 +488,9 @@ export function createBrowserBridge(options) {
       let staged;
       try {
         // Proxies are keyed by their original's hash, so skip hashing their own bytes.
-        staged = await mediaAdapter.stage(
-          found.file,
-          new AbortController().signal,
-          { fingerprint: false },
-        );
+        staged = await mediaAdapter.stage(found.file, lifetime.signal, {
+          fingerprint: false,
+        });
       } catch (error) {
         void hold.release();
         throw error;

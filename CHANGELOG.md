@@ -35,6 +35,11 @@ All notable changes to this project are documented in this file.
   `RENDER_WORKER_FAILED` (also on a `messageerror`), and the editor gives the preview worker up and
   draws on the main thread; before, one unanswered request froze the preview or player with no
   error.
+- Editor: waits on a media element are bounded by 10 s of active time and by the import's signal.
+  A video whose element never loads imports through the decoder (or is refused), a thumbnail
+  whose element never loads is left out, a cancelled import rejects at once, a fallback element
+  that fails to load is made anew on the next frame instead of costing every frame a timeout, and
+  a proxy staging stops when the bridge is disposed.
 
 ## [0.6.0] - 2026-11-08
 

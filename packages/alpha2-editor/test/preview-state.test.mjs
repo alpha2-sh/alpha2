@@ -122,7 +122,7 @@ async function session({
       async stage(file, signal, options) {
         if (options?.fingerprint === false) {
           counts.proxyStages += 1;
-          if (stageProxy) return stageProxy(file);
+          if (stageProxy) return stageProxy(file, signal);
         }
         return {
           runtime: {
@@ -418,6 +418,39 @@ test(
     assert.equal(counts.released, counts.holds);
     assert.equal(bridge.proxyStatus("clip").available, false);
     await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "a kept proxy whose staging never settles does not hold up disposal",
+  { skip },
+  async () => {
+    const { editor, bridge } = await session({
+      kept: { [hash("e")]: keptProxy(hash("e")) },
+      stageProxy: (file, signal) =>
+        new Promise((resolve, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          }),
+        ),
+    });
+    addColor(editor);
+    await importClip(bridge, "clip", "e");
+    ok(
+      editor.dispatch({
+        type: "asset.put",
+        asset: { ...editor.document.assets.clip, missing: true },
+      }),
+    );
+    const binding = bridge.bindPreview(new FakeCanvas(64, 36));
+    binding.catch(() => {});
+    await settle(20);
+    const disposed = await Promise.race([
+      bridge.dispose().then(() => "disposed"),
+      settle(2000).then(() => "pending"),
+    ]);
+    assert.equal(disposed, "disposed");
     editor.dispose();
   },
 );

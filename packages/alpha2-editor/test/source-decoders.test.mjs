@@ -315,3 +315,51 @@ test("videoDecode software opens every source for software, and one the browser 
   ]);
   assert.equal(pixels.diagnostics.decodeFallbackFrames, 0);
 });
+
+test("a fallback element that fails to load is dropped, so the next frame makes a new one", async (t) => {
+  const open = MediabunnyVideoDecoder.open;
+  MediabunnyVideoDecoder.open = async () => {
+    throw Object.assign(new Error("no decoder for this codec"), {
+      code: "unsupported_codec",
+    });
+  };
+  t.after(() => {
+    MediabunnyVideoDecoder.open = open;
+  });
+  const clones = [];
+  const asset = {
+    id: "s",
+    kind: "video",
+    file: { name: "s.mp4" },
+    duration: 1,
+    video: {
+      cloneNode() {
+        const clone = new EventTarget();
+        Object.assign(clone, {
+          error: { code: 4, message: "refused" },
+          unloaded: false,
+          load() {
+            if (clone.unloaded) return;
+            setTimeout(() => clone.dispatchEvent(new Event("error")), 0);
+          },
+          removeAttribute() {
+            clone.unloaded = true;
+          },
+        });
+        clones.push(clone);
+        return clone;
+      },
+    },
+  };
+  const pixels = new SourcePixels(null);
+  for (const expected of [1, 2]) {
+    await assert.rejects(
+      frame(pixels, asset, 0, { sourceId: "s" }),
+      (error) => error.code === 4,
+    );
+    assert.equal(clones.length, expected);
+    assert.equal(clones.at(-1).unloaded, true);
+    assert.equal(pixels.diagnostics.fallbackVideos, 0);
+  }
+  await pixels.dispose();
+});
