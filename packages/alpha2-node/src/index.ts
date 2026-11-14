@@ -339,6 +339,11 @@ export interface NativeExportResult {
   /** How the finished file was moved to `output`. */
   readonly publish: PublishReport;
   /**
+   * What failed after the file was in place (an encoder teardown that stalled or panicked), which
+   * does not fail the export; `null` when nothing did.
+   */
+  readonly encoderTeardownFailure: string | null;
+  /**
    * External library behind the video encoder (`openh264`), with the notice its licence requires.
    * `null` for built-in FFmpeg encoders and when no video was encoded.
    */

@@ -61,7 +61,7 @@ fn progress_never_goes_back_when_the_export_finishes() {
 }
 
 #[test]
-fn a_failed_copy_reports_its_step_and_its_output_path() {
+fn a_failed_copy_reports_its_step_and_a_finished_one_its_file() {
     let _gpu = gpu_test_lock();
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("copy-failure");
@@ -106,7 +106,9 @@ fn a_failed_copy_reports_its_step_and_its_output_path() {
         "{failure}"
     );
     assert_eq!(failure["diagnostics"]["audioStrategy"], json!("copy"));
-    let finishing = host
+    // After the last packet the publish follows, and a progress message that fails no longer
+    // stops it.
+    let finished = host
         .handle(request(&directory.join("b.mp4")), &mut |event| {
             if event.completed == event.total {
                 Err(stop())
@@ -114,10 +116,9 @@ fn a_failed_copy_reports_its_step_and_its_output_path() {
                 Ok(())
             }
         })
-        .expect_err("stopped while finishing");
-    let failure = finishing.failure.as_ref().expect("failure report");
-    assert_eq!(failure["phase"], json!("mux"), "{failure}");
-    assert_eq!(failure["frameIndex"], Value::Null, "{failure}");
+        .expect("a copy whose last progress message failed");
+    assert_eq!(finished["frames"], json!(60), "{finished}");
+    assert!(directory.join("b.mp4").is_file());
     std::fs::remove_dir_all(&directory).ok();
 }
 

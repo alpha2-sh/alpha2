@@ -1655,13 +1655,8 @@ impl RequestWork {
             extract,
         } = self;
         #[cfg(test)]
-        if matches!(envelope, Ok(crate::protocol::Request::Export(_)))
-            && let Some(slow) = crate::encode::SERVE_SLOW_ENCODE
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take()
-        {
-            crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(Some(slow)));
+        if matches!(envelope, Ok(crate::protocol::Request::Export(_))) {
+            arm_serve_encode_hooks();
         }
         // Until the answer is written, a termination waits for this request instead of ending the
         // process.
@@ -1742,6 +1737,25 @@ impl RequestWork {
         // A termination ends the process here, once the last answer is out.
         drop(guard);
         Ok(())
+    }
+}
+
+/// Hands the first export `serve` runs the encode hooks a test set for it.
+#[cfg(test)]
+fn arm_serve_encode_hooks() {
+    if let Some(slow) = crate::encode::SERVE_SLOW_ENCODE
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+    {
+        crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(Some(slow)));
+    }
+    if let Some(stall) = crate::encode::SERVE_ENCODE_STALL
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+    {
+        crate::encode::INJECT_ENCODE_STALL.with(|injected| injected.set(Some(stall)));
     }
 }
 

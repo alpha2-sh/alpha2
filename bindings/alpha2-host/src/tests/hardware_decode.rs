@@ -1208,3 +1208,75 @@ fn extraction_reads_the_same_bytes_from_hardware_and_software_decode() {
         }
     }
 }
+
+#[test]
+fn a_strict_export_with_a_software_frame_fails_before_its_output_exists() {
+    let _gpu = gpu_test_lock();
+    let mut host = match create_gpu_media_host(VideoDecodePolicy::HardwareRequired) {
+        Ok(host) => host,
+        Err(error) => {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::HardwareDecodeImport,
+                "the hardware-required host was refused: {}",
+                error.message
+            );
+            return;
+        }
+    };
+    let directory = scratch_directory("strict-software-frame");
+    let end = alpha2_time::TICKS_PER_SECOND / 2;
+    let request = |input_policy: &str, codec: &str| {
+        json!({
+            "protocolVersion": 2, "operation": "export", "requestId": "strict",
+            "project": {
+                "schema_version": 1, "id": "strict", "name": "Strict",
+                "settings": {"width": 640, "height": 360, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+                "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+                "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                    "id": "clip", "source_id": "video",
+                    "timeline_range": {"start": 0, "end": end},
+                    "source_range": {"start": 0, "end": end}
+                }]}]}
+            },
+            "assets": {"video": corpus("h264-long-gop.mp4")},
+            "startTicks": 0, "endTicks": end,
+            "frameRate": {"num": 30, "den": 1},
+            "includeAudio": false,
+            "videoCodec": codec,
+            "inputPolicy": input_policy,
+            "output": directory.join("strict.mp4")
+        })
+        .to_string()
+    };
+    #[allow(unused_mut)]
+    let mut paths = vec![("cpu-readback", "mpeg4-part2")];
+    #[cfg(all(
+        any(target_os = "linux", target_os = "macos", target_os = "windows"),
+        feature = "hwencode"
+    ))]
+    if h264_gpu_output(&host).is_ok() {
+        paths.push(("gpu-required", "h264"));
+    }
+    for (input_policy, codec) in paths {
+        crate::host::INJECT_SOFTWARE_FRAMES.with(|frames| frames.set(1));
+        let error = host
+            .handle(
+                parse_request(&request(input_policy, codec)).expect("request"),
+                &mut |_| Ok(()),
+            )
+            .expect_err("a software frame under hardware-required");
+        assert!(
+            error
+                .message
+                .contains("hardware decode is required but 1 of"),
+            "{input_policy}: {}",
+            error.message
+        );
+        let left: Vec<_> = std::fs::read_dir(&directory)
+            .expect("directory")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert!(left.is_empty(), "{input_policy}: {left:?}");
+    }
+    std::fs::remove_dir_all(&directory).ok();
+}

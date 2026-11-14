@@ -826,6 +826,11 @@ thread_local! {
 #[cfg(test)]
 pub static SERVE_SLOW_ENCODE: std::sync::Mutex<Option<Duration>> = std::sync::Mutex::new(None);
 
+/// [`INJECT_ENCODE_STALL`] for the first export `serve` runs.
+#[cfg(test)]
+pub static SERVE_ENCODE_STALL: std::sync::Mutex<Option<(InjectedStall, Duration)>> =
+    std::sync::Mutex::new(None);
+
 #[cfg(test)]
 pub const INJECTED_WRITE_FAILURE: &str =
     "native encode failed while writing media: packet write failed: No space left on device";
@@ -892,8 +897,7 @@ impl EncodeWorker {
                 slow_video,
             };
             run_encode_worker(&mut state);
-            // Dropping a hardware session waits on the GPU inside FFmpeg, so it is watched too.
-            let _work = worker_heartbeat.begin_work();
+            let _work = worker_heartbeat.begin_teardown();
             drop(state);
         };
         let builder = thread::Builder::new().name("alpha2-encode".to_owned());

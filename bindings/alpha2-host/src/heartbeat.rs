@@ -44,6 +44,8 @@ pub struct WorkerHeartbeat {
 pub enum InjectedStall {
     AfterOperations(usize),
     OnClose,
+    /// Where a worker drops what it held, after its last result.
+    OnTeardown,
     PanicAfterOperations(usize),
     /// A long call that keeps going outlasts the stall limit on any build.
     // A provider open is the slow call it stands in for.
@@ -221,6 +223,16 @@ impl WorkerHeartbeat {
         let work = self.begin_work();
         #[cfg(test)]
         if matches!(self.stall, Some(InjectedStall::OnClose)) {
+            self.stall_forever();
+        }
+        work
+    }
+
+    /// Dropping what a worker holds can wait on the GPU inside `FFmpeg`, so it is watched too.
+    pub fn begin_teardown(self: &Arc<Self>) -> HeartbeatWork {
+        let work = self.begin_work();
+        #[cfg(test)]
+        if matches!(self.stall, Some(InjectedStall::OnTeardown)) {
             self.stall_forever();
         }
         work

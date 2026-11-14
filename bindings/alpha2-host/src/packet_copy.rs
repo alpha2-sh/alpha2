@@ -486,10 +486,13 @@ impl Host {
                     phases.last_handoff = Some(started.elapsed());
                     phase.set(ExportPhase::Mux);
                     self.failure.enter(ExportPhase::Mux, None);
-                } else {
-                    self.failure.enter(ExportPhase::Encode, Some(copied));
+                    // The last packet is written and the publish follows; a progress message
+                    // that cannot be written must not stop it.
+                    let _ = progress(crate::protocol::Progress::frames(copied, total));
+                    return Ok(());
                 }
-                if copied.is_multiple_of(30) || copied == total {
+                self.failure.enter(ExportPhase::Encode, Some(copied));
+                if copied.is_multiple_of(30) {
                     progress(crate::protocol::Progress::frames(copied, total))
                         .map_err(|error| error.message)?;
                 }
@@ -526,6 +529,7 @@ impl Host {
         result["gpuOutputPathUnavailable"] = Value::Null;
         result["gpuOutputPathFallback"] = Value::Null;
         result["publish"] = crate::host::publish_json(report.publish);
+        result["encoderTeardownFailure"] = Value::Null;
         result["videoTranscode"] = Value::Null;
         result["yuvTranscodeIneligible"] = Value::Null;
         result["strategy"] = json!("copy");

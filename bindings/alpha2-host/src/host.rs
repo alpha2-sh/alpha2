@@ -3165,6 +3165,7 @@ impl Host {
             metrics.record_decode_pool(worker);
             worker.finish()?;
         }
+        self.refuse_software_frames(&metrics)?;
         if let Some(capture) = frame_capture.take() {
             capture.finish()?;
         }
@@ -3189,7 +3190,7 @@ impl Host {
                 break;
             }
         }
-        encode_worker.join_success()?;
+        let teardown_failure = encoder_teardown(&mut encode_worker, &output.path);
         metrics.encode_worker_idle = encode_worker.idle.total();
         metrics.encode_channel_depth_samples = encode_worker.depth.samples();
         metrics.mux_finish = finish_started.elapsed();
@@ -3201,22 +3202,6 @@ impl Host {
                 }
                 Err(error) => alpha2_os::diagnostic!("alpha2 native export trace failed: {error}"),
             }
-        }
-        // Strict mode must not pass a run that silently decoded in software; an open hardware
-        // session is no evidence any frame came from it.
-        #[cfg(all(
-            any(target_os = "linux", target_os = "macos", target_os = "windows"),
-            feature = "hwdecode"
-        ))]
-        if self.decode_policy.requires_hardware() && metrics.software_decoded_frames > 0 {
-            return Err(format!(
-                "hardware decode is required but {} of {} video frames decoded in software ({})",
-                metrics.software_decoded_frames,
-                metrics
-                    .software_decoded_frames
-                    .saturating_add(metrics.hardware_decoded_frames),
-                fallback_summary(&metrics)
-            ));
         }
         metrics.retired_leases_at_exit =
             self.clean_up_after_output(&output.path, || parked_leases.release());
@@ -3238,6 +3223,7 @@ impl Host {
         result["gpuOutputPathUnavailable"] = json!(gpu_output_unavailable);
         result["gpuOutputPathFallback"] = gpu_output_path_fallback;
         result["publish"] = publish_json(metrics.publish);
+        result["encoderTeardownFailure"] = json!(teardown_failure);
         result["videoTranscode"] = Value::Null;
         result["yuvTranscodeIneligible"] = json!("only the GPU-resident path transcodes");
         result["inputPolicy"] = json!(input_policy.as_str());
@@ -3682,6 +3668,21 @@ thread_local! {
     /// Makes the next cleanup after a published output on this thread fail like a GPU wait timeout.
     pub static INJECT_CLEANUP_FAILURE: std::cell::Cell<bool> =
         const { std::cell::Cell::new(false) };
+    /// Counts this many more software-decoded frames in the next export's strict-mode check.
+    pub static INJECT_SOFTWARE_FRAMES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Joins the encode worker after it reported `Finished`, when the output is in place. A failure
+/// now (a teardown that stalls or panics) is reported and does not fail the export; a worker left
+/// running still retires the host.
+pub(crate) fn encoder_teardown(worker: &mut EncodeWorker, output: &Path) -> Option<String> {
+    let error = worker.join_success().err()?;
+    let message = crate::protocol::HostError::classify(error).message;
+    alpha2_os::diagnostic!(
+        "alpha2 native export: {} is written; the encoder's teardown failed: {message}",
+        output.display()
+    );
+    Some(message)
 }
 
 impl Host {
@@ -3691,6 +3692,37 @@ impl Host {
     /// The file is already in place, so a failure is reported but does not fail the export: a
     /// retry would be refused by the existing output. A device that stopped is retired after the
     /// answer ([`Renderer::gpu_lost`]); a slow one fails the next export's bounded wait.
+    /// Strict mode must not pass a run that silently decoded in software; an open hardware
+    /// session is no evidence any frame came from it. Checked before the output is finished.
+    #[cfg_attr(
+        not(all(
+            any(target_os = "linux", target_os = "macos", target_os = "windows"),
+            feature = "hwdecode"
+        )),
+        allow(clippy::unused_self, clippy::unnecessary_wraps)
+    )]
+    pub(crate) fn refuse_software_frames(&self, metrics: &ExportMetrics) -> Result<(), String> {
+        #[cfg(test)]
+        let software = metrics
+            .software_decoded_frames
+            .saturating_add(INJECT_SOFTWARE_FRAMES.with(std::cell::Cell::take));
+        #[cfg(not(test))]
+        let software = metrics.software_decoded_frames;
+        #[cfg(all(
+            any(target_os = "linux", target_os = "macos", target_os = "windows"),
+            feature = "hwdecode"
+        ))]
+        if self.decode_policy.requires_hardware() && software > 0 {
+            return Err(format!(
+                "hardware decode is required but {software} of {} video frames decoded in software ({})",
+                software.saturating_add(metrics.hardware_decoded_frames),
+                fallback_summary(metrics)
+            ));
+        }
+        let _ = software;
+        Ok(())
+    }
+
     pub(crate) fn clean_up_after_output(
         &self,
         output: &Path,

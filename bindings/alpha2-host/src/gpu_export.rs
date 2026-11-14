@@ -817,6 +817,8 @@ impl Host {
 
         metrics.record_decode_pool(&decode_worker);
         decode_worker.finish().map_err(GpuEncodeOutcome::failed)?;
+        self.refuse_software_frames(&metrics)
+            .map_err(GpuEncodeOutcome::failed)?;
         let finish_started = Instant::now();
         self.failure.enter(ExportPhase::Mux, None);
         let mut finish = || -> Result<(), String> {
@@ -843,9 +845,7 @@ impl Host {
         };
         finish().map_err(GpuEncodeOutcome::failed)?;
         let mut encode_worker = encode_worker;
-        encode_worker
-            .join_success()
-            .map_err(GpuEncodeOutcome::failed)?;
+        let teardown_failure = crate::host::encoder_teardown(&mut encode_worker, &output.path);
         metrics.encode_worker_idle = encode_worker.idle.total();
         metrics.encode_channel_depth_samples = encode_worker.depth.samples();
         metrics.mux_finish = finish_started.elapsed();
@@ -888,6 +888,7 @@ impl Host {
         result["gpuOutputPathUnavailable"] = Value::Null;
         result["gpuOutputPathFallback"] = Value::Null;
         result["publish"] = crate::host::publish_json(metrics.publish);
+        result["encoderTeardownFailure"] = json!(teardown_failure);
         result["videoTranscode"] = json!(transcode_plan.map(|_| "yuv-repack"));
         result["yuvTranscodeIneligible"] = json!(transcode.as_ref().err());
         result["effectiveRange"] = effective_range_json(effective_range);

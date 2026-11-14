@@ -115,6 +115,9 @@ All notable changes to this project are documented in this file.
   running export no longer drains the host and a first `compose` no longer counts the device as
   growth.
 - A readback whose mapping result never arrives fails with `GPU_TIMEOUT` instead of waiting forever.
+- An export whose file is in place answers `ok`: an encoder teardown that fails afterwards is
+  reported in `encoderTeardownFailure` (and retires the host if it leaves a thread stuck), and the
+  `hardware-required` check runs before the output is finished, on both render paths.
 
 ## [0.6.0] - 2026-11-08
 

@@ -1642,7 +1642,8 @@ impl ServeChild {
     }
 }
 
-/// `ALPHA2_TEST_SLOW_ENCODE_MS` makes the first export's encoder take that long over each frame.
+/// `ALPHA2_TEST_SLOW_ENCODE_MS` makes the first export's encoder take that long over each frame;
+/// `ALPHA2_TEST_TEARDOWN_STALL` makes it stall in its teardown, after the output is in place.
 #[test]
 #[ignore = "run by the tests that start a ServeChild"]
 fn serve_standard_input() {
@@ -1668,6 +1669,14 @@ fn serve_standard_input() {
     if std::env::var_os("ALPHA2_TEST_REQUEST_PANIC").is_some() {
         crate::compose_request::INJECT_REQUEST_PANIC
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    if std::env::var_os("ALPHA2_TEST_TEARDOWN_STALL").is_some() {
+        *crate::encode::SERVE_ENCODE_STALL
+            .lock()
+            .expect("encode stall") = Some((
+            crate::heartbeat::InjectedStall::OnTeardown,
+            Duration::from_millis(500),
+        ));
     }
     if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_SLOW_ENCODE_MS") {
         let milliseconds = milliseconds.parse().expect("milliseconds");
@@ -1840,6 +1849,38 @@ fn soft_limits_on_the_whole_process_wait_until_nothing_runs() {
     assert_eq!(states.len(), 1, "{states:?}");
     assert_eq!(states[0]["reason"], "handles", "{states:?}");
     assert_eq!(serving.finish(), Some(0));
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn an_encoder_teardown_that_stalls_after_the_publish_answers_ok_and_retires_the_host() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("teardown-stall");
+    let output = directory.join("out.mp4");
+    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_TEARDOWN_STALL", "1")]);
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    serving.write(&slow_export("export", &output, 1));
+    let (answer, states) = answer_and_states(&serving, "export");
+    assert_eq!(answer["ok"], true, "{answer}");
+    let failure = answer["result"]["encoderTeardownFailure"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no teardown failure: {answer}"));
+    assert!(failure.contains("past the 500 ms limit"), "{failure}");
+    assert_eq!(answer["hostState"], "draining", "{answer}");
+    assert_eq!(states.len(), 1, "{states:?}");
+    assert_eq!(states[0]["reason"], "threads-abandoned", "{states:?}");
+    let mut decoder = alpha2_native::NativeDecoder::open(&output).expect("the output opens");
+    let cancel = CancelToken::default();
+    let mut frames = 0;
+    loop {
+        match decoder.decode_next(&cancel).expect("the output decodes") {
+            alpha2_media::DecodeEvent::Video(_) => frames += 1,
+            alpha2_media::DecodeEvent::EndOfStream => break,
+            _ => {}
+        }
+    }
+    assert_eq!(frames, 30);
+    assert!(serving.finish().is_some(), "the retired host did not exit");
     std::fs::remove_dir_all(&directory).ok();
 }
 
