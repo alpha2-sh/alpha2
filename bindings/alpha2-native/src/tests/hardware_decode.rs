@@ -38,10 +38,8 @@ fn a_hardware_session_that_fails_before_its_first_frame_is_reported_as_unsupport
             }
         };
         match decoder.decode_video_next(&cancel) {
-            Ok(Some(frame)) => {
-                assert!(frame.is_hardware());
-                eprintln!("skipped {name}: this device decodes it");
-            }
+            // Either outcome is the device's to choose; this one leaves the failure path unchecked.
+            Ok(Some(frame)) => assert!(frame.is_hardware(), "{name}"),
             Err(DecodeError::Unsupported(message)) => {
                 assert!(
                     message.contains("before its first frame"),

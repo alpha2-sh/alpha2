@@ -127,7 +127,10 @@ fn premultiplied_over_stays_within_sixteen_half_ulps_of_the_cpu_model() {
     let _lock = gpu_test_lock();
     let gpu = adapter_gpu();
     if !gpu.capabilities().half_float_blendable {
-        eprintln!("skipped: the adapter does not blend half floats");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::HalfFloatBlend,
+            "the adapter does not blend half floats"
+        );
         return;
     }
     let probe = Probe::new(gpu);

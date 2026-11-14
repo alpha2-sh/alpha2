@@ -29,6 +29,8 @@ pub enum Capability {
     VulkanValidation,
     /// A Khronos validation layer older than 1.4.
     OldVulkanValidationLayer,
+    /// `FFmpeg` moves Vulkan frames with a queue transfer, which advances their timeline semaphores.
+    VulkanQueueTransfer,
     /// D3D12VA decode on the renderer's D3D12 device.
     D3d12Video,
     /// D3D12VA H.264 encode on an accepted adapter.
@@ -69,6 +71,8 @@ pub enum Capability {
     MultiAdapter,
     /// 16-bit normalized textures on the test device.
     Unorm16,
+    /// Blending into 16-bit float targets on the test device.
+    HalfFloatBlend,
     /// GPU timestamp queries on the test device.
     TimestampQuery,
     /// A GPU stall the render stall calibration can measure.
@@ -139,6 +143,7 @@ impl Capability {
         Self::VulkanVideoEncodeHevc,
         Self::VulkanValidation,
         Self::OldVulkanValidationLayer,
+        Self::VulkanQueueTransfer,
         Self::D3d12Video,
         Self::D3d12Encode,
         Self::D3d12DebugLayer,
@@ -159,6 +164,7 @@ impl Capability {
         Self::CCompiler,
         Self::MultiAdapter,
         Self::Unorm16,
+        Self::HalfFloatBlend,
         Self::TimestampQuery,
         Self::MeasurableGpuStall,
         Self::Wasm,
@@ -201,6 +207,7 @@ impl Capability {
             Self::VulkanVideoEncodeHevc => "vulkan-video-encode-hevc",
             Self::VulkanValidation => "vulkan-validation",
             Self::OldVulkanValidationLayer => "old-vulkan-validation-layer",
+            Self::VulkanQueueTransfer => "vulkan-queue-transfer",
             Self::D3d12Video => "d3d12-video",
             Self::D3d12Encode => "d3d12-encode",
             Self::D3d12DebugLayer => "d3d12-debug-layer",
@@ -221,6 +228,7 @@ impl Capability {
             Self::CCompiler => "c-compiler",
             Self::MultiAdapter => "multi-adapter",
             Self::Unorm16 => "unorm16",
+            Self::HalfFloatBlend => "half-float-blend",
             Self::TimestampQuery => "timestamp-query",
             Self::MeasurableGpuStall => "measurable-gpu-stall",
             Self::Wasm => "wasm",

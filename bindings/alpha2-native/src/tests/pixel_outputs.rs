@@ -248,7 +248,16 @@ fn ten_bit_outputs_keep_more_luma_codes_than_eight_bits_have() {
         (NativeVideoCodec::Hevc, Container::Mp4, "hevc-ten"),
     ] {
         if !crate::encodes_pixels(&capabilities, codec, pixels) {
-            eprintln!("skipped {label}: this runtime lists no encoder of 10-bit pictures");
+            // Only NVENC encodes 10-bit HEVC here; VP9 and AV1 have software encoders.
+            let capability = if codec == NativeVideoCodec::Hevc {
+                alpha2_test_support::Capability::Nvenc
+            } else {
+                alpha2_test_support::Capability::WebmEncode
+            };
+            alpha2_test_support::skip!(
+                capability,
+                "{label}: this runtime lists no encoder of 10-bit pictures"
+            );
             continue;
         }
         let path = output_path(label).with_extension(container.extensions()[0]);

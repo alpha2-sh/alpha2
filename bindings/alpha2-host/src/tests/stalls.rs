@@ -729,7 +729,11 @@ fn the_synchronous_comparison_switch_is_not_ignored_on_the_gpu() {
         child.status
     );
     if !stdout.contains("checked: the GPU-resident path refused") {
-        eprintln!("skipped: {}", stderr.lines().last().unwrap_or_default());
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::GpuResident,
+            "{}",
+            stderr.lines().last().unwrap_or_default()
+        );
     }
 }
 
