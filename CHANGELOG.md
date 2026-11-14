@@ -637,6 +637,8 @@ All notable changes to this project are documented in this file.
 - iOS: VP9 in WebM and Matroska, which carries no `vpcC` record, opens on a device with a VP9
   decoder: the session opens at the first key frame, from the format it declares. Before, every
   such track was refused as "an unreadable VP9 configuration".
+- iOS: an H.264 source whose sequence parameter set declares an impossible bit depth is refused as
+  unreadable. Before, opening it panicked the thread that opened it.
 
 ## [0.6.0] - 2026-11-08
 

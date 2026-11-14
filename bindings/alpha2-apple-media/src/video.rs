@@ -42,7 +42,7 @@ use objc2_video_toolbox::{
     kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder,
 };
 
-use crate::config::{avc_parameter_sets, avc_sps_format, es_descriptor, hevc_parameter_sets};
+use crate::config::{avc_parameter_sets, es_descriptor, hevc_parameter_sets};
 use crate::sys::{self, code, dictionary, fourcc};
 
 /// The sample format a stream decodes to.
@@ -121,16 +121,15 @@ fn picture(video: &VideoTrack) -> Result<Picture, BackendError> {
     };
     Ok(match video.codec {
         VideoCodec::H264 => {
-            let (sets, _) = avc_parameter_sets(record).ok_or_else(unreadable)?;
-            let sps = sets
-                .iter()
-                .find(|set| set.first().is_some_and(|byte| byte & 0x1f == 7))
-                .ok_or_else(unreadable)?;
-            let (depth, chroma) = avc_sps_format(sps).ok_or_else(unreadable)?;
+            let facts = sequence_facts(ParameterSetCodec::H264, record).ok_or_else(unreadable)?;
+            // A crafted SPS saturates the depth, which no `u8` holds.
             Picture {
-                depth,
-                chroma,
-                full_range: vui_full_range(ParameterSetCodec::H264, record),
+                depth: u8::try_from(facts.bit_depth_luma).map_err(|_| unreadable())?,
+                chroma: u8::try_from(facts.chroma_format).map_err(|_| unreadable())?,
+                full_range: facts
+                    .vui
+                    .color
+                    .is_some_and(|color| color.range == ColorRange::Full),
             }
         }
         VideoCodec::Hevc => Picture {
@@ -1004,7 +1003,62 @@ impl VideoBackends for AppleVideo {
 
 #[cfg(test)]
 mod tests {
-    use super::{Extended, Rect, Region, Window, region};
+    use std::sync::Arc;
+
+    use alpha2_backend_conformance::corpus;
+    use alpha2_container::{TrackKind, VideoTrack};
+    use alpha2_host_core::video_stream::{BackendError, StreamOptions, VideoStream};
+    use alpha2_media::DecodeError;
+    use bytes::Bytes;
+
+    use super::{AppleVideo, Extended, Rect, Region, Window, picture, region};
+
+    fn corpus_video(name: &str) -> VideoTrack {
+        let reader = alpha2_container::open(&corpus(name)).expect(name);
+        let index = alpha2_container::default_track(reader.tracks(), TrackKind::Video).expect(name);
+        reader.tracks()[index].video.clone().expect(name)
+    }
+
+    #[test]
+    fn h264_depth_and_chroma_come_from_the_sps() {
+        for (name, depth, chroma) in [
+            ("h264-bt709-copy.mp4", 8, 1),
+            ("h264-high10.mp4", 10, 1),
+            ("hdr-pq.mp4", 10, 1),
+        ] {
+            let picture = picture(&corpus_video(name)).expect(name);
+            assert_eq!((picture.depth, picture.chroma), (depth, chroma), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_sps_whose_depth_overflows_is_refused_as_unreadable() {
+        // `bit_depth_luma_minus8` is the largest Exp-Golomb value 32 bits hold.
+        let sps = [
+            0x67, 0x64, 0x00, 0x0a, 0xa0, 0x00, 0x00, 0x00, 0x1f, 0xff, 0xff, 0xff, 0xe0,
+        ];
+        let mut record = vec![1, 0x64, 0x00, 0x0a, 0xff, 0xe1, 0, 13];
+        record.extend_from_slice(&sps);
+        record.extend_from_slice(&[1, 0, 4, 0x68, 0xce, 0x3c, 0x80]);
+        let mut video = corpus_video("h264-bt709-copy.mp4");
+        video.codec_private = Bytes::from(record);
+        assert_eq!(
+            picture(&video),
+            Err(BackendError::Unsupported(
+                "an unreadable H.264 configuration".into()
+            ))
+        );
+        // The corpus stream with that SPS field, through a whole stream open.
+        let opened = VideoStream::open_file(
+            &corpus("hostile/container_mp4/avc-sps-depth-overflow"),
+            Arc::new(AppleVideo),
+            StreamOptions::default(),
+        );
+        assert!(
+            matches!(opened, Err(DecodeError::Unsupported(_))),
+            "{opened:?}"
+        );
+    }
 
     const fn rect(x: u32, y: u32, width: u32, height: u32) -> Rect {
         Rect {

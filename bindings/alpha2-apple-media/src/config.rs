@@ -43,79 +43,6 @@ fn length_prefixed(record: &[u8], at: usize) -> Option<(&[u8], usize)> {
     Some((record.get(at + 2..at + 2 + length)?, at + 2 + length))
 }
 
-/// Bits per sample and `chroma_format_idc` (1 for 4:2:0) of an H.264 SPS.
-pub(crate) fn avc_sps_format(sps: &[u8]) -> Option<(u8, u8)> {
-    let mut bits = Bits::new(sps.get(1..)?);
-    let profile = bits.read(8)?;
-    bits.read(16)?; // constraint flags, level_idc
-    bits.ue()?; // seq_parameter_set_id
-    if !matches!(
-        profile,
-        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
-    ) {
-        return Some((8, 1));
-    }
-    let chroma = bits.ue()?;
-    if chroma == 3 {
-        bits.read(1)?; // separate_colour_plane_flag
-    }
-    let depth = bits.ue()? + 8;
-    Some((u8::try_from(depth).ok()?, u8::try_from(chroma).ok()?))
-}
-
-/// Reads an RBSP, skipping emulation prevention bytes.
-struct Bits<'a> {
-    data: &'a [u8],
-    at: usize,
-    bit: u8,
-    zeros: u8,
-}
-
-impl<'a> Bits<'a> {
-    const fn new(data: &'a [u8]) -> Self {
-        Self {
-            data,
-            at: 0,
-            bit: 0,
-            zeros: 0,
-        }
-    }
-
-    fn flag(&mut self) -> Option<bool> {
-        if self.bit == 0 {
-            let byte = *self.data.get(self.at)?;
-            if self.zeros >= 2 && byte == 3 {
-                self.at += 1;
-                self.zeros = 0;
-                return self.flag();
-            }
-            self.zeros = if byte == 0 { self.zeros + 1 } else { 0 };
-        }
-        let value = self.data.get(self.at)? >> (7 - self.bit) & 1;
-        self.bit += 1;
-        if self.bit == 8 {
-            self.bit = 0;
-            self.at += 1;
-        }
-        Some(value == 1)
-    }
-
-    fn read(&mut self, count: u32) -> Option<u32> {
-        (0..count).try_fold(0, |value, _| Some(value << 1 | u32::from(self.flag()?)))
-    }
-
-    fn ue(&mut self) -> Option<u32> {
-        let mut zeros = 0;
-        while !self.flag()? {
-            zeros += 1;
-            if zeros > 31 {
-                return None;
-            }
-        }
-        Some((1 << zeros) - 1 + self.read(zeros)?)
-    }
-}
-
 /// The decoder-specific info (`DecoderSpecificInfo`, tag 5) inside an `ES_Descriptor`, which may
 /// follow an `esds` box's version and flags.
 pub(crate) fn es_specific_info(descriptor: &[u8]) -> Option<&[u8]> {
@@ -226,20 +153,6 @@ pub(crate) fn es_descriptor(object_type: u8, stream_type: u8, specific: &[u8]) -
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn high_profile_sps_reports_its_depth_and_chroma() {
-        // High 10 4:2:0: profile 110, level 30, sps_id 0, chroma_format_idc 1, depth minus 8 = 2.
-        let sps = [0x67, 110, 0, 30, 0b1010_0110, 0b1000_0000];
-        assert_eq!(avc_sps_format(&sps), Some((10, 1)));
-        assert_eq!(avc_sps_format(&[0x67, 66, 0, 30, 0x80]), Some((8, 1)));
-    }
-
-    #[test]
-    fn emulation_prevention_bytes_are_skipped() {
-        let mut bits = Bits::new(&[0, 0, 3, 1]);
-        assert_eq!(bits.read(24), Some(1));
-    }
 
     #[test]
     fn packet_frame_counts_come_from_their_headers() {
