@@ -41,6 +41,7 @@ uniffi = "=0.32.2"
 
 [dev-dependencies]
 alpha2-test-support.workspace = true
+bytes.workspace = true
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 alpha2-apple-media.workspace = true

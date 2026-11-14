@@ -401,10 +401,13 @@ fn attempt(
         (&job.budget, &job.cancel),
         &mut |done, total| {
             frames = done;
-            job.progress.on_progress(ExportProgressEvent {
-                frames_done: done,
-                frames_total: total,
-            });
+            job.progress.report(
+                ExportProgressEvent {
+                    frames_done: done,
+                    frames_total: total,
+                },
+                &job.cancel,
+            );
             job.paused.wait_while_paused(&job.cancel, &job.held);
         },
     )

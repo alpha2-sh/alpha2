@@ -169,14 +169,10 @@ fn contained<T>(
     decode: impl FnOnce() -> Result<T, DecodeError>,
 ) -> Result<T, DecodeError> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode)).unwrap_or_else(|payload| {
-        let message = payload
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-            .unwrap_or("no message");
         Err(DecodeError::Adapter(format!(
-            "{}: the decoder panicked: {message}",
-            format.as_str()
+            "{}: the decoder panicked: {}",
+            format.as_str(),
+            crate::panic_text(&*payload)
         )))
     })
 }

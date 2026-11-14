@@ -29,6 +29,40 @@ final class Alpha2Tests: XCTestCase {
         }
     }
 
+    private final class ThrowingProgress: ExportProgress {
+        func onProgress(event: ExportProgressEvent) throws {
+            throw ProgressFailure.Failed(reason: "the app broke")
+        }
+    }
+
+    func testAThrowingProgressCallbackFailsTheExportAndLeavesNoFile() async throws {
+        let project = try String(contentsOf: fixture("host-parity-project.json"), encoding: .utf8)
+        let output = NSTemporaryDirectory() + "alpha2-throwing-progress.mp4"
+        try? FileManager.default.removeItem(atPath: output)
+        let handle = try engine().export(request: ExportRequest(
+            projectJson: project,
+            assets: ["image-source": try fixture("cross_topology_parity.png").path],
+            frames: [:], resources: [:], outputPath: output, overwrite: true,
+            container: nil, videoCodec: nil, audioCodec: nil, includeAudio: false,
+            startTicks: nil, endTicks: nil
+        ), progress: ThrowingProgress())
+        let settled = expectation(description: "the outcome settles")
+        Task {
+            do {
+                _ = try await handle.outcome()
+                XCTFail("the export finished")
+            } catch Alpha2Error.Failed(let code, let reason) {
+                XCTAssertEqual(code, "PROGRESS_CALLBACK_FAILED")
+                XCTAssertTrue(reason.contains("the app broke"), reason)
+            } catch {
+                XCTFail("\(error)")
+            }
+            settled.fulfill()
+        }
+        await fulfillment(of: [settled], timeout: 60)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: output))
+    }
+
     func testStillsArePngFiles() throws {
         let project = try String(contentsOf: fixture("host-parity-project.json"), encoding: .utf8)
         let output = NSTemporaryDirectory() + "alpha2-still.png"

@@ -9,7 +9,9 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeFalse
@@ -81,6 +83,41 @@ class Alpha2Test {
             val report = JSONObject(outcome.reportJson)
             assertEquals("aac", report.getString("audioCodec"))
             assertTrue(output.length() > 0)
+        }
+    }
+
+    @Test
+    fun aThrowingProgressCallbackFailsTheExportAndLeavesNoFile(): Unit = runBlocking {
+        engine().use { engine ->
+            val output = File(instrumentation.targetContext.cacheDir, "throwing-progress.mp4")
+            output.delete()
+            val request = ExportRequest(
+                projectJson = text("host-audio-export-project.json"),
+                assets = audioAssets,
+                frames = emptyMap(),
+                resources = emptyMap(),
+                outputPath = output.absolutePath,
+                overwrite = true,
+                container = null,
+                videoCodec = null,
+                audioCodec = null,
+                includeAudio = false,
+                startTicks = null,
+                endTicks = null,
+            )
+            val progress = object : ExportProgress {
+                override fun onProgress(event: ExportProgressEvent) {
+                    throw IllegalStateException("the app broke")
+                }
+            }
+            val failure = withTimeout(60_000) {
+                engine.export(request, progress).use { runCatching { it.outcome() }.exceptionOrNull() }
+            }
+            assertTrue("$failure", failure is Alpha2Exception.Failed)
+            val failed = failure as Alpha2Exception.Failed
+            assertEquals("PROGRESS_CALLBACK_FAILED", failed.code)
+            assertTrue(failed.reason, failed.reason.contains("the app broke"))
+            assertFalse(output.exists())
         }
     }
 

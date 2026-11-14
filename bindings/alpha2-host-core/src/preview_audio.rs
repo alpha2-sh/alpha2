@@ -145,15 +145,28 @@ impl PreviewAudio {
         let mixer = std::thread::Builder::new()
             .name("alpha2-preview-audio".into())
             .spawn(move || {
-                mix(
-                    &snapshot,
-                    &sources,
-                    &mut renderer,
-                    &mixer_ring,
-                    &mixer_stop,
-                    &mixer_failure,
-                    start_sample,
-                );
+                let mixed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    mix(
+                        &snapshot,
+                        &sources,
+                        &mut renderer,
+                        &mixer_ring,
+                        &mixer_stop,
+                        &mixer_failure,
+                        start_sample,
+                    );
+                }));
+                if let Err(payload) = mixed {
+                    *mixer_failure.lock().unwrap_or_else(PoisonError::into_inner) =
+                        Some(MixFailure {
+                            message: format!(
+                                "the mix thread panicked: {}",
+                                crate::panic_text(&*payload)
+                            ),
+                            consecutive: 0,
+                            stopped: true,
+                        });
+                }
             })
             .map_err(|error| CpalHostError::Device(error.to_string()))?;
         // Begin once the first blocks are in, so playback does not open on silence.
@@ -214,13 +227,9 @@ fn open_output(source: RingSource, rate: u32) -> Result<CpalOutputHost, CpalHost
         CpalOutputHost::open(source, rate, MIX_BLOCK)
     }))
     .unwrap_or_else(|payload| {
-        let message = payload
-            .downcast_ref::<&str>()
-            .map(|message| (*message).to_owned())
-            .or_else(|| payload.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "a panic without a message".into());
         Err(CpalHostError::Device(format!(
-            "this process has no audio output: {message}"
+            "this process has no audio output: {}",
+            crate::panic_text(&*payload)
         )))
     })
 }

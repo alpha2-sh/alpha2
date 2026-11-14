@@ -32,6 +32,7 @@ mod error;
 )]
 mod export;
 mod extract;
+mod job;
 mod platform;
 mod player;
 #[cfg(feature = "plugins")]
@@ -58,8 +59,8 @@ pub use player::{Player, PlayerRequest};
 pub use plugin::Plugin;
 pub use session::{
     Alpha2, ConformRequest, EngineConfig, ExportHandle, ExportOutcome, ExportProgress,
-    ExportProgressEvent, ExportRequest, FontFile, RendererMode, StillEntry, StillsRequest,
-    VideoDecodeMode, VideoFrameMode,
+    ExportProgressEvent, ExportRequest, FontFile, ProgressFailure, RendererMode, StillEntry,
+    StillsRequest, VideoDecodeMode, VideoFrameMode,
 };
 
 /// The library's version.

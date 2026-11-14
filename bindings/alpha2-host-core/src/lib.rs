@@ -64,6 +64,7 @@ pub use recovery::{
     Recovery, VideoRecoveryGap, watch_decode_progress,
 };
 pub use stills::{DecodedStill, StillFormat, StillInfo, decode_still, probe_still, still_format};
+pub use threads::panic_text;
 pub use tools::{
     FrameScore, THUMBNAIL_LUMA_RANGE, choose_thumbnail, downscale_frame, resize_rgba, score_frame,
 };

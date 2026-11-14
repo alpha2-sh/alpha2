@@ -62,6 +62,12 @@ All notable changes to this project are documented in this file.
 - The audio worklet processor stays stopped after its DSP module traps or fails: later quanta no
   longer enter the module (a node with a connected input was called again and posted an error
   each quantum), and later configuration requests are answered with the stored failure.
+- Mobile: `ExportProgress.onProgress` may throw (`throws` in Swift). A failure stops the export with
+  nothing published, and the outcome fails with `PROGRESS_CALLBACK_FAILED`.
+- Mobile: an export, extraction or preview thread that panics no longer leaves its outcome pending.
+  The outcome fails with `INTERNAL` and the panic's message, and a preview reports it in
+  `lastError`. A timeline extraction whose renderer cannot start (an effect resource without an
+  asset) fails with the reason instead of hanging, and `cancel()` stops a timeline extraction.
 
 ## [0.6.0] - 2026-11-08
 

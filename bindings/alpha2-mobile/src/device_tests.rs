@@ -8,12 +8,17 @@ use std::sync::Arc;
 use alpha2_container::TrackKind;
 use serde_json::Value;
 
-use crate::{Alpha2, EngineConfig, ExportProgress, ExportProgressEvent, ExportRequest, FontFile};
+use crate::{
+    Alpha2, EngineConfig, ExportProgress, ExportProgressEvent, ExportRequest, FontFile,
+    ProgressFailure,
+};
 
 struct Quiet;
 
 impl ExportProgress for Quiet {
-    fn on_progress(&self, _event: ExportProgressEvent) {}
+    fn on_progress(&self, _event: ExportProgressEvent) -> Result<(), ProgressFailure> {
+        Ok(())
+    }
 }
 
 fn tests_dir() -> PathBuf {
@@ -368,9 +373,10 @@ fn a_project_with_audio_exports_to_mkv_and_webm() {
 struct Counting(std::sync::atomic::AtomicU64);
 
 impl ExportProgress for Counting {
-    fn on_progress(&self, event: ExportProgressEvent) {
+    fn on_progress(&self, event: ExportProgressEvent) -> Result<(), ProgressFailure> {
         self.0
             .store(event.frames_done, std::sync::atomic::Ordering::Release);
+        Ok(())
     }
 }
 

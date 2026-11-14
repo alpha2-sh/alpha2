@@ -124,7 +124,7 @@ impl Player {
         let thread_shared = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
             .name("alpha2-preview".into())
-            .spawn(move || run(session, &receive, &thread_shared))
+            .spawn(move || contained(&thread_shared, || run(session, &receive, &thread_shared)))
             .map_err(|error| Alpha2Error::Failed {
                 code: "RESOURCE_LIMIT".into(),
                 reason: format!("cannot start the preview thread: {error}"),
@@ -462,6 +462,21 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
         std::thread::sleep(Duration::from_nanos(ahead.saturating_mul(
             1_000_000_000 / alpha2_time::TICKS_PER_SECOND.unsigned_abs(),
         )));
+    }
+}
+
+/// Runs the preview thread's `body`; a panic in it is recorded and leaves the preview stopped.
+fn contained(shared: &Shared, body: impl FnOnce()) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        record(
+            shared,
+            format!(
+                "the preview thread stopped: {}",
+                alpha2_host_core::panic_text(&*payload)
+            ),
+        );
+        shared.playing.store(false, Ordering::Release);
+        shared.sounding.store(false, Ordering::Release);
     }
 }
 
@@ -833,4 +848,24 @@ fn decode_preview_audio(session: &Session, shared: &Shared) -> Option<Arc<Decode
 fn record(shared: &Shared, error: String) {
     alpha2_os::diagnostic!("alpha2 preview: {error}");
     *shared.error.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panic_on_the_preview_thread_is_recorded_and_stops_the_preview() {
+        let shared = Shared::default();
+        shared.playing.store(true, Ordering::Release);
+        shared.sounding.store(true, Ordering::Release);
+        contained(&shared, || panic!("the frame broke"));
+        let error = shared.error.lock().expect("lock").clone();
+        assert_eq!(
+            error.as_deref(),
+            Some("the preview thread stopped: the frame broke")
+        );
+        assert!(!shared.playing.load(Ordering::Acquire));
+        assert!(!shared.sounding.load(Ordering::Acquire));
+    }
 }
