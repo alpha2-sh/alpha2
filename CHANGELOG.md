@@ -513,6 +513,12 @@ All notable changes to this project are documented in this file.
   read, a packet accepted, or a frame), not from the start of the call, so one read that stalls
   for longer and then succeeds no longer fails a healthy export. A decode that never returns is
   still ended by the host's stall limit, and 65,536 packets without a frame still fail.
+- Hardware encoder probes keep one rule for transient answers: a busy device, a probe that did not
+  start or was lost is asked again; success and device refusals are kept; a timeout turns that
+  path off for the process; an unclassified failure is kept after three in a row. On Windows the
+  host no longer keeps a busy or lost D3D12VA test encode for the process, and on macOS a
+  VideoToolbox probe that times out is not repeated (at most one stuck probe thread). An export's
+  `videoEncoderFallbacks` also lists the encoders a probe passed over when another one opened.
 
 ## [0.6.0] - 2026-11-08
 

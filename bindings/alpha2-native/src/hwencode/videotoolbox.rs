@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use alpha2_host_core::probe_cache::{Keep, KeptAnswers, bounded_kept_probe};
 use alpha2_media::{ColorMetadata, EncodeError};
 use alpha2_native_gpu::{MetalEncoderPlanes, SharedMetalContext};
 use alpha2_time::MediaTime;
@@ -120,42 +121,17 @@ pub fn probe_videotoolbox_encode(
 /// What `h264_videotoolbox` accepts here.
 ///
 /// Registration does not imply a usable encoder (headless macOS registers it), so the first call
-/// encodes a frame. The answer is cached when it cannot change (opened, or no encoder); a busy
-/// encoder, a timeout or an unclassified failure is asked again next call.
+/// encodes a frame on its own thread, bounded by the GPU wait timeout. The answer is kept as
+/// [`Keep`] says; a timeout turns the session path off for the process.
 pub(super) fn capability(metal: &SharedMetalContext) -> Result<HardwareEncodeCapability, String> {
-    static PROBE: Mutex<Option<Result<Vec<&'static str>, String>>> = Mutex::new(None);
-    // Held across the probe so concurrent exports open one probe session.
-    let mut kept = PROBE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(answer) = kept.as_ref() {
-        return answer.clone().map(capability_with);
-    }
-    let (answer, kind) = bounded_probe(metal);
-    if matches!(
-        kind,
-        None | Some(
-            alpha2_media::OpenFailureKind::Absent | alpha2_media::OpenFailureKind::Unsuitable
-        )
-    ) {
-        *kept = Some(answer.clone());
-    }
-    answer.map(capability_with)
-}
-
-/// [`probe_rate_control_modes`] on its own thread, bounded by `ALPHA2_GPU_TIMEOUT_MS`, and what a
-/// failure is evidence of; `None` on success.
-fn bounded_probe(
-    metal: &SharedMetalContext,
-) -> (
-    Result<Vec<&'static str>, String>,
-    Option<alpha2_media::OpenFailureKind>,
-) {
-    let (sender, receiver) = std::sync::mpsc::channel();
+    static PROBE: Mutex<KeptAnswers<(), Result<Vec<&'static str>, String>>> =
+        Mutex::new(KeptAnswers::new());
     let worker = metal.clone();
-    let spawned = std::thread::Builder::new()
-        .name(format!("alpha2 {ENCODER} probe"))
-        .spawn(move || {
+    bounded_kept_probe(
+        &PROBE,
+        ENCODER,
+        alpha2_native_gpu::metal_wait_timeout(),
+        move || {
             let mark = alpha2_ffmpeg_bridge::log_mark();
             let answer = probe_rate_control_modes(&worker);
             let lines = alpha2_ffmpeg_bridge::log_since(mark, &[ENCODER]);
@@ -165,28 +141,10 @@ fn bounded_probe(
                 .map(|error| crate::capabilities::classify_open_failure(ENCODER, error, &lines));
             let answer = answer
                 .map_err(|error| format!("{error}{}", alpha2_ffmpeg_bridge::log_detail(&lines)));
-            let _ = sender.send((answer, kind));
-        });
-    if let Err(error) = spawned {
-        return (
-            Err(format!("{ENCODER}: the probe did not start: {error}")),
-            Some(alpha2_media::OpenFailureKind::Unknown),
-        );
-    }
-    let timeout = alpha2_native_gpu::metal_wait_timeout();
-    match receiver.recv_timeout(timeout) {
-        Ok(answer) => answer,
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (
-            Err(format!(
-                "{ENCODER}'s probe session did not finish within {timeout:?}"
-            )),
-            Some(alpha2_media::OpenFailureKind::Unknown),
-        ),
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => (
-            Err(format!("{ENCODER}'s probe ended without an answer")),
-            Some(alpha2_media::OpenFailureKind::Unknown),
-        ),
-    }
+            (answer, Keep::of_failure(kind))
+        },
+    )
+    .map(capability_with)
 }
 
 /// The rate-control modes a hardware session opens with here.

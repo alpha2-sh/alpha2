@@ -475,12 +475,18 @@ fn timed_out_on(adapter: ProbedAdapter) -> Option<String> {
         .cloned()
 }
 
+/// Whether a D3D12VA test encode refusal says the device was busy (`E_OUTOFMEMORY`).
+#[must_use]
+pub fn d3d12va_busy(reason: &str) -> bool {
+    reason.contains(BUSY_HRESULT)
+}
+
 fn keep_answer(
     probed: &mut Vec<TestEncode>,
     key: (ProbedAdapter, D3D12EncodeCodec),
     answer: &Result<D3D12EncodeProbe, String>,
 ) {
-    if !matches!(answer, Err(reason) if reason.contains(BUSY_HRESULT)) {
+    if !matches!(answer, Err(reason) if d3d12va_busy(reason)) {
         probed.push((key, answer.clone()));
     }
 }

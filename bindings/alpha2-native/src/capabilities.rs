@@ -1213,17 +1213,37 @@ pub(crate) fn open_video_encoder(
 > {
     let (candidates, refused) =
         video_encoder_candidates_and_refusals(request.config.codec, request.requested_name)?;
-    open_first_video_encoder(request, candidates).map_err(|error| match error {
+    match open_first_video_encoder(request, candidates) {
+        Ok((backend, selection)) => Ok((backend, with_probe_refusals(selection, refused))),
         // Probe refusals come first; a busy one among them decides the class.
-        EncodeError::EncodersRefused {
+        Err(EncodeError::EncodersRefused {
             message,
             refusals: opened,
-        } if !refused.is_empty() => EncodeError::EncodersRefused {
+        }) if !refused.is_empty() => Err(EncodeError::EncodersRefused {
             message: format!("{}; {message}", refusal_list(&refused)),
             refusals: refused.into_iter().chain(opened).collect(),
-        },
-        error => error,
-    })
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+/// `selection` with the encoders its probes passed over listed first among the rejected ones.
+pub(crate) fn with_probe_refusals(
+    mut selection: NativeVideoEncoderSelection,
+    refused: Vec<EncoderRefusal>,
+) -> NativeVideoEncoderSelection {
+    selection.rejected = refused
+        .into_iter()
+        .map(|refusal| NativeVideoEncoderFallback {
+            encoder_name: refusal.encoder,
+            hardware_accelerated: refusal.hardware_accelerated,
+            reason: NativeEncoderRejection::OpenFailed,
+            kind: refusal.kind,
+            detail: refusal.reason,
+        })
+        .chain(selection.rejected)
+        .collect();
+    selection
 }
 
 /// An opened encoder, how it runs the rate control, and its CPU workers.

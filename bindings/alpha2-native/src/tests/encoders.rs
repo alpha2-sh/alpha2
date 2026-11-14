@@ -1634,3 +1634,33 @@ fn an_nvenc_device_with_fewer_b_frames_opens_without_them() {
         let _ = fs::remove_file(&path);
     }
 }
+
+#[test]
+fn an_encoder_a_probe_passed_over_is_listed_beside_the_one_that_opened() {
+    let opened = crate::NativeVideoEncoderSelection {
+        encoder_name: "libx264".to_owned(),
+        class: NativeEncoderClass::Software,
+        hardware_accelerated: false,
+        rejected: Vec::new(),
+        rate_control: crate::AppliedRateControl::Bitrate,
+        quantizer_refused: None,
+        software_threads: Some(4),
+        pixels: alpha2_media::PixelLayout::YUV420P,
+    };
+    let selection = crate::capabilities::with_probe_refusals(
+        opened,
+        vec![alpha2_media::EncoderRefusal {
+            encoder: "h264_nvenc".to_owned(),
+            hardware_accelerated: true,
+            kind: OpenFailureKind::Absent,
+            reason: "No capable devices found".to_owned(),
+        }],
+    );
+    assert_eq!(selection.encoder_name, "libx264");
+    assert_eq!(selection.rejected.len(), 1);
+    let passed_over = &selection.rejected[0];
+    assert_eq!(passed_over.encoder_name, "h264_nvenc");
+    assert!(passed_over.hardware_accelerated);
+    assert_eq!(passed_over.kind, OpenFailureKind::Absent);
+    assert_eq!(passed_over.detail, "No capable devices found");
+}
