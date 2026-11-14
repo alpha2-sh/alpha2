@@ -22,6 +22,8 @@ import { MediabunnyAudioDecoder } from "alpha2/mediabunny";
 import * as engineBinding from "alpha2/wasm";
 
 const TICKS_PER_SECOND = 120_000n;
+/** Most planes an audio upload carries (the engine's limit). */
+const MAX_PLANES = 24;
 const PREFETCH_TICKS = 2n * TICKS_PER_SECOND;
 /** How much of a source is kept behind the earliest tick a mix reads (backward prefetch). */
 const KEEP_BEHIND_TICKS = PREFETCH_TICKS;
@@ -244,12 +246,14 @@ export class AudioWindowSupplier {
       missingStream
     ) {
       // Undecodable here (`RuntimeAsset.audioDecodable`): silent, though the document keeps it.
+      // As many planes as the stream has, so a clip's channel selection still finds its planes.
+      const planes = missingStream ? 1 : streamPlanes(asset, stream);
       engine.uploadAudioBlock(
         sourceId,
         BigInt(requiredStart),
         this.#sampleRate,
-        1,
-        new Float32Array(Math.max(1, requiredEnd - requiredStart)),
+        planes,
+        new Float32Array(planes * Math.max(1, requiredEnd - requiredStart)),
         false,
         stream,
       );
@@ -636,7 +640,7 @@ function blockFromAudioBuffer(
   const first = Math.max(0, ticksToSampleFloor(startTicks, sampleRate) - 2);
   const last = Math.max(first + 1, ticksToSampleCeil(endTicks, sampleRate) + 2);
   const channels = Array.from(
-    { length: Math.min(2, buffer.numberOfChannels) },
+    { length: Math.min(MAX_PLANES, buffer.numberOfChannels) },
     (_, channel) => {
       const output = new Float32Array(last - first);
       const sourceStart = Math.min(buffer.length, first);
@@ -657,6 +661,22 @@ function blockFromAudioBuffer(
     sampleRate,
     channels,
   };
+}
+
+/**
+ * Planes stream `stream` of `asset` decodes to (the default stream when undefined), from its
+ * recorded facts; 1 when they are unknown.
+ */
+function streamPlanes(asset, stream) {
+  const streams = asset.audioStreams ?? [];
+  const facts =
+    stream === undefined
+      ? (streams.find((each) => each.default) ?? streams[0])
+      : streams[stream];
+  const channels = facts?.channels;
+  return Number.isInteger(channels) && channels > 0
+    ? Math.min(MAX_PLANES, channels)
+    : 1;
 }
 
 function flattenPlanes(channels) {

@@ -40,6 +40,9 @@ All notable changes to this project are documented in this file.
   whose element never loads is left out, a cancelled import rejects at once, a fallback element
   that fails to load is made anew on the next frame instead of costing every frame a timeout, and
   a proxy staging stops when the bridge is disposed.
+- Editor: a source this browser cannot decode is supplied as silence with as many channels as its
+  stream, and page-made audio keeps every channel up to 24, so a clip that selects channels of it
+  no longer makes the mix report the source missing (silent preview, failed export).
 
 ## [0.6.0] - 2026-11-08
 

@@ -22,6 +22,7 @@ import {
   audioStoreCapacity,
   audioStreamSelection,
   audioWindowPreroll,
+  silentChannelSelection,
   fixedAudioMix,
   loudnessUnderLimiter,
 } from "./audio.mjs";
@@ -158,6 +159,7 @@ export const cases = {
   "audio-matroska-codec-delay": audioMatroskaCodecDelay,
   "audio-speaker-layout": audioSpeakerLayout,
   "audio-stream-selection": audioStreamSelection,
+  "audio-silent-channel-selection": silentChannelSelection,
   "aac-layout-refusal": aacLayoutRefusal,
   "fixed-audio-mix": fixedAudioMix,
   "export-every-project-rate": exportEveryProjectRate,

@@ -1117,6 +1117,7 @@ export function createBrowserBridge(options) {
               "duration",
               "hasAudio",
               "audioDecodable",
+              "audioStreams",
               "text",
               "fit",
               "provider",
