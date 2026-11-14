@@ -9,13 +9,13 @@
 //! code plus the budget spent on the costliest iterations. A nested loop body is its own
 //! iteration; calls are inlined; both branch sides count.
 //!
-//! A loop is assumed to use the whole remaining budget unless its header counts a variable
-//! between integer literals (`for (var i = 0u; i < 64u; i++)`), the body never writes it, and
-//! the loop runs at most once per call (not nested, function not called from a loop).
+//! A loop is assumed to use the whole remaining budget unless it has a
+//! [`crate::loop_bound::proven_count`] (`for (var i = 0u; i < 64u; i++)`), which the rewrite
+//! enforces, and runs at most once per call (not nested, function not called from a loop).
 
 use crate::ShaderDiagnostics;
 use crate::call_budget::{declarations, declared_names, loops};
-use crate::loop_bound::{MAX_LOOP_ITERATIONS, is_identifier_byte};
+use crate::loop_bound::{MAX_LOOP_ITERATIONS, header_parts, is_identifier_byte, proven_count};
 
 // Timed on discrete and integrated GPUs from three vendors, predictions moved by under 10% when
 // these weights changed up to 8x; tap and iteration counts dominate. Arithmetic keeps a nonzero
@@ -406,86 +406,13 @@ fn walk(
     walked
 }
 
-/// Iteration count of the loop at `span` if its header counts a variable by one between integer
-/// literals and the body never writes it.
+/// The [`proven_count`] of the loop at `span`.
 fn literal_count(code: &str, span: std::ops::Range<usize>) -> Option<u64> {
     let open = span.start + code[span.clone()].find('(')?;
     let close = crate::loop_bound::matching(code, open).ok()?;
-    let header = &code[open + 1..close];
-    let [init, condition, update] = header.split(';').collect::<Vec<_>>()[..] else {
-        return None;
-    };
-    let mut init = init.split_whitespace();
-    if !matches!(init.next(), Some("var" | "let")) {
-        return None;
-    }
-    let rest = init.collect::<String>();
-    let (name, start) = rest.split_once('=')?;
-    let name = name.split(':').next()?.trim();
-    let start = integer_literal(start)?;
-    let condition = condition.split_whitespace().collect::<String>();
-    let (inclusive, end) = if let Some(end) = condition.strip_prefix(&format!("{name}<=")) {
-        (true, end)
-    } else {
-        (false, condition.strip_prefix(&format!("{name}<"))?)
-    };
-    let end = integer_literal(end)?;
-    let update = update.split_whitespace().collect::<String>();
-    if ![
-        format!("{name}++"),
-        format!("++{name}"),
-        format!("{name}+=1"),
-        format!("{name}+=1u"),
-    ]
-    .contains(&update)
-    {
-        return None;
-    }
-    if writes(&code[close + 1..span.end], name) {
-        return None;
-    }
-    Some(
-        end.saturating_sub(start)
-            .saturating_add(u64::from(inclusive)),
-    )
-}
-
-/// An integer literal such as `64`, `64u` or `64i`.
-fn integer_literal(text: &str) -> Option<u64> {
-    let text = text.trim();
-    text.strip_suffix(['u', 'i'])
-        .unwrap_or(text)
-        .parse::<u64>()
-        .ok()
-}
-
-/// Whether `code` may write `name`: assignment, increment, address-of, or a shadowing
-/// declaration.
-fn writes(code: &str, name: &str) -> bool {
-    let mut from = 0;
-    while let Some(start) = crate::loop_bound::find_keyword(code, from, name) {
-        let end = start + name.len();
-        from = end;
-        let after = code[end..].trim_start();
-        let before = code[..start].trim_end();
-        let assigned = after.starts_with('=') && !after.starts_with("==");
-        let compound = [
-            "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "++", "--",
-        ]
-        .iter()
-        .any(|operator| after.starts_with(operator));
-        let declared = before.ends_with("var") || before.ends_with("let");
-        if assigned
-            || compound
-            || declared
-            || before.ends_with("++")
-            || before.ends_with("--")
-            || before.ends_with('&')
-        {
-            return true;
-        }
-    }
-    false
+    let [init, condition, update] = header_parts(&code[open + 1..close])?;
+    let body = &code[close + 1..span.end];
+    proven_count(init, condition, update, body.trim_start())
 }
 
 /// Cost of a call to an undeclared `name` (wrapper helper or WGSL built-in).
@@ -597,6 +524,25 @@ mod tests {
                      for (var i = 0u; i <= 9u; i++) { a = sample_src(uv); } return a; }\n\
                      fn effect(uv: vec2f, src: vec4f) -> vec4f { return taps(uv) + taps(uv); }";
         assert_eq!(cost(twice).fetches, 20);
+    }
+
+    #[test]
+    fn a_counted_loop_is_priced_at_its_literal_count_however_its_counter_is_written() {
+        for (header, write, count) in [
+            ("var i = 0u; i < 8u; i++", "(i)--;", 8),
+            ("var i = 0u; i < 8u; i++", "(i) -= 1u;", 8),
+            ("var i = 0u; i < 2u; i++", "(i) = 0u;", 2),
+            ("var i = 0u; i < 2u; i++", "*(&(i)) = 0u;", 2),
+            ("var i = 0u; i < 2u; i++", "let p = &(i); *p = 0u;", 2),
+            ("var i = 4294967295u; i <= 4294967295u; i++", "", 1),
+            ("var i = 2147483647; i <= 2147483647; i++", "", 1),
+        ] {
+            let body = format!(
+                "fn effect(uv: vec2f, src: vec4f) -> vec4f {{ var a = src; \
+                 for ({header}) {{ {write} a = a * sample_src(uv); }} return a; }}"
+            );
+            assert_eq!(cost(&body).fetches, count, "{body}");
+        }
     }
 
     #[test]

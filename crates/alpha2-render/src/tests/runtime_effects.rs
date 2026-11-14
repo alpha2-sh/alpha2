@@ -126,6 +126,29 @@ fn a_runtime_for_loop_that_never_ends_is_bounded() {
 }
 
 #[test]
+fn a_counted_loop_stops_at_its_literal_count_however_its_counter_is_written() {
+    let _lock = gpu_test_lock();
+    for (header, write, iterations) in [
+        ("var i = 0u; i < 8u; i++", "(i)--;", 8.0),
+        ("var i = 0u; i < 8u; i++", "(i) -= 1u;", 8.0),
+        ("var i = 0u; i < 8u; i++", "(i) = 0u;", 8.0),
+        ("var i = 0u; i < 8u; i++", "*(&(i)) = 0u;", 8.0),
+        ("var i = 0u; i < 8u; i++", "let p = &(i); *p = 0u;", 8.0),
+        ("var i = 4294967295u; i <= 4294967295u; i++", "", 1.0),
+        ("var i = 2147483647; i <= 2147483647; i++", "", 1.0),
+    ] {
+        let pixel = render_runtime_effect_pixel(&format!(
+            "fn effect(_uv: vec2f, src: vec4f) -> vec4f {{
+                var count = 0.0;
+                for ({header}) {{ {write} count += 1.0 / 16.0; }}
+                return vec4f(count, count, count, 1.0);
+            }}"
+        ));
+        assert_counted(pixel, iterations / 16.0);
+    }
+}
+
+#[test]
 fn nested_loops_and_loops_in_called_functions_share_one_budget() {
     // A per-loop bound would run 1024 x 1024 iterations (white); the shared budget stops after one
     // outer and 1023 inner iterations.

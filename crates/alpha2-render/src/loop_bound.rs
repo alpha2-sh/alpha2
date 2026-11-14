@@ -21,6 +21,9 @@ pub(crate) const MAX_LOOP_ITERATIONS: u32 = 1024;
 /// The wrapper's per-invocation loop budget.
 pub(crate) const BUDGET: &str = "alpha2_budget";
 
+/// Prefix of the counter the rewrite gives each loop with a [`proven_count`].
+const COUNTER: &str = "alpha2_n";
+
 /// Returns `body` with comments blanked and every `for` loop spending the invocation budget.
 ///
 /// Inserted tokens stay on their loop's line so diagnostics keep the author's line numbers.
@@ -28,10 +31,10 @@ pub(crate) const BUDGET: &str = "alpha2_budget";
 /// # Errors
 /// Returns diagnostics for a `for` whose header or body cannot be delimited.
 pub(crate) fn bound_for_loops(body: &str) -> Result<String, ShaderDiagnostics> {
-    bound(&blank_comments(body))
+    bound(&blank_comments(body), &mut 0)
 }
 
-fn bound(code: &str) -> Result<String, ShaderDiagnostics> {
+fn bound(code: &str, counters: &mut usize) -> Result<String, ShaderDiagnostics> {
     let mut output = String::with_capacity(code.len());
     let mut cursor = 0;
     while let Some(start) = find_keyword(code, cursor, "for") {
@@ -41,8 +44,7 @@ fn bound(code: &str) -> Result<String, ShaderDiagnostics> {
             return Err(malformed());
         }
         let close = matching(code, open)?;
-        let header = split_top_level(&code[open + 1..close]);
-        let [init, condition, update] = header.as_slice() else {
+        let Some([init, condition, update]) = header_parts(&code[open + 1..close]) else {
             return Err(malformed());
         };
         let body_open = skip_whitespace(code, close + 1);
@@ -50,23 +52,117 @@ fn bound(code: &str) -> Result<String, ShaderDiagnostics> {
             return Err(malformed());
         }
         let body_close = matching(code, body_open)?;
-        let inner = bound(&code[body_open + 1..body_close])?;
-        let limit = format!("{BUDGET} > 0u");
+        let count = proven_count(init, condition, update, &code[body_open..=body_close]);
+        let inner = bound(&code[body_open + 1..body_close], counters)?;
+        let mut limit = format!("{BUDGET} > 0u");
+        let mut spend = format!("{BUDGET} -= 1u;");
+        let counter = count.map(|count| {
+            let name = format!("{COUNTER}{counters}");
+            *counters += 1;
+            write!(limit, " && {name} > 0u").expect("writing to a String cannot fail");
+            write!(spend, " {name} -= 1u;").expect("writing to a String cannot fail");
+            (name, count)
+        });
         let condition = condition.trim();
         let condition = if condition.is_empty() {
             limit
         } else {
             format!("({condition}) && {limit}")
         };
+        if let Some((name, count)) = &counter {
+            write!(output, "{{ var {name} = {count}u; ").expect("writing to a String cannot fail");
+        }
         write!(
             output,
-            "for ({init}; {condition}; {update}) {{ {BUDGET} -= 1u;{inner}}}"
+            "for ({init}; {condition}; {update}) {{ {spend}{inner}}}"
         )
         .expect("writing to a String cannot fail");
+        if counter.is_some() {
+            output.push_str(" }");
+        }
         cursor = body_close + 1;
     }
     output.push_str(&code[cursor..]);
     Ok(output)
+}
+
+/// Iterations of a loop whose header steps a variable by one between non-negative integer
+/// literals, if at most [`MAX_LOOP_ITERATIONS`] and `body` does not visibly write the variable.
+///
+/// The rewrite stops such a loop after this many iterations with a counter of its own, so the
+/// count holds even where `writes` misses a write. `writes` only keeps honest loops uncut.
+pub(crate) fn proven_count(init: &str, condition: &str, update: &str, body: &str) -> Option<u64> {
+    let mut init = init.split_whitespace();
+    if !matches!(init.next(), Some("var" | "let")) {
+        return None;
+    }
+    let rest = init.collect::<String>();
+    let (name, start) = rest.split_once('=')?;
+    let name = name.split(':').next()?.trim();
+    let start = integer_literal(start)?;
+    let condition = condition.split_whitespace().collect::<String>();
+    let (inclusive, end) = if let Some(end) = condition.strip_prefix(&format!("{name}<=")) {
+        (true, end)
+    } else {
+        (false, condition.strip_prefix(&format!("{name}<"))?)
+    };
+    let end = integer_literal(end)?;
+    let update = update.split_whitespace().collect::<String>();
+    if ![
+        format!("{name}++"),
+        format!("++{name}"),
+        format!("{name}+=1"),
+        format!("{name}+=1u"),
+    ]
+    .contains(&update)
+    {
+        return None;
+    }
+    if writes(body, name) {
+        return None;
+    }
+    let count = end
+        .saturating_sub(start)
+        .saturating_add(u64::from(inclusive));
+    (count <= u64::from(MAX_LOOP_ITERATIONS)).then_some(count)
+}
+
+/// An integer literal such as `64`, `64u` or `64i`.
+fn integer_literal(text: &str) -> Option<u64> {
+    let text = text.trim();
+    text.strip_suffix(['u', 'i'])
+        .unwrap_or(text)
+        .parse::<u64>()
+        .ok()
+}
+
+/// Whether `code` may write `name`: assignment, increment, address-of, or a shadowing
+/// declaration.
+fn writes(code: &str, name: &str) -> bool {
+    let mut from = 0;
+    while let Some(start) = find_keyword(code, from, name) {
+        let end = start + name.len();
+        from = end;
+        let after = code[end..].trim_start();
+        let before = code[..start].trim_end();
+        let assigned = after.starts_with('=') && !after.starts_with("==");
+        let compound = [
+            "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "++", "--",
+        ]
+        .iter()
+        .any(|operator| after.starts_with(operator));
+        let declared = before.ends_with("var") || before.ends_with("let");
+        if assigned
+            || compound
+            || declared
+            || before.ends_with("++")
+            || before.ends_with("--")
+            || before.ends_with('&')
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn malformed() -> ShaderDiagnostics {
@@ -117,8 +213,9 @@ pub(crate) fn matching(code: &str, open: usize) -> Result<usize, ShaderDiagnosti
     Err(malformed())
 }
 
-/// Splits a `for` header at the semicolons outside any nested delimiter.
-fn split_top_level(header: &str) -> Vec<&str> {
+/// The init, condition and update of a `for` header, split at the semicolons outside any nested
+/// delimiter.
+pub(crate) fn header_parts(header: &str) -> Option<[&str; 3]> {
     let mut parts = Vec::new();
     let mut depth = 0_usize;
     let mut start = 0;
@@ -134,7 +231,7 @@ fn split_top_level(header: &str) -> Vec<&str> {
         }
     }
     parts.push(&header[start..]);
-    parts
+    parts.try_into().ok()
 }
 
 /// Replaces `//` and (nested) `/* */` comments with spaces, keeping newlines.
@@ -193,6 +290,49 @@ mod tests {
              alpha2_budget -= 1u; for (; alpha2_budget > 0u; ) { alpha2_budget -= 1u; \
              x += 1.0; } } }"
         );
+    }
+
+    #[test]
+    fn a_counted_loop_gets_its_own_counter_whatever_its_body_hides() {
+        for (header, write, count) in [
+            ("var i = 0u; i < 8u; i++", "(i)--;", 8),
+            ("var i = 0u; i < 8u; i++", "(i) -= 1u;", 8),
+            ("var i = 0u; i < 2u; i++", "(i) = 0u;", 2),
+            ("var i = 0u; i < 2u; i++", "*(&(i)) = 0u;", 2),
+            ("var i = 0u; i < 2u; i++", "let p = &(i); *p = 0u;", 2),
+            ("var i = 4294967295u; i <= 4294967295u; i++", "", 1),
+            ("var i = 2147483647; i <= 2147483647; i++", "", 1),
+        ] {
+            let bounded =
+                bound_for_loops(&format!("for ({header}) {{ {write} }}")).expect("a loop");
+            assert!(
+                bounded.starts_with(&format!("{{ var alpha2_n0 = {count}u; for (")),
+                "{bounded}"
+            );
+            assert!(bounded.contains("&& alpha2_n0 > 0u;"), "{bounded}");
+            assert!(bounded.contains("alpha2_n0 -= 1u;"), "{bounded}");
+        }
+        for body in [
+            "for (var i = 0u; i < 8u; i++) { i = 0u; }",
+            "for (var i = 0u; i < n; i++) { }",
+            "for (var i = 0u; i < 2000u; i++) { }",
+        ] {
+            assert!(
+                !bound_for_loops(body).expect("a loop").contains("alpha2_n"),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_counted_loops_get_distinct_counters_on_one_line() {
+        let body = "fn f() {\nfor (var i = 0u; i < 4u; i++) {\nfor (var j = 0u; j < 4u; j++) { }\n}\n\
+                    for (var k = 0u; k < 4u; k++) { } }";
+        let bounded = bound_for_loops(body).expect("well-formed loops");
+        assert_eq!(bounded.lines().count(), body.lines().count());
+        for counter in ["alpha2_n0", "alpha2_n1", "alpha2_n2"] {
+            assert_eq!(bounded.matches(&format!("var {counter} = 4u;")).count(), 1);
+        }
     }
 
     #[test]

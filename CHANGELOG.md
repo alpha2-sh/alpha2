@@ -660,6 +660,10 @@ All notable changes to this project are documented in this file.
   is drawn on the CPU renderer and delivered to extractors. Before, its frames were refused as
   "RGBA byte length does not match the image size": the copy of each plane lacked the last row's
   padding.
+- A runtime effect loop that counts between integer literals stops after that many iterations,
+  as its cost was priced, even when its body writes the counter in a form the cost check does not
+  see or the counter wraps at its type's maximum. Before, such a loop ran the whole shared budget of
+  1024 iterations at a fraction of its priced cost.
 
 ## [0.6.0] - 2026-11-08
 
