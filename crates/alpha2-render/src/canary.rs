@@ -369,20 +369,25 @@ impl Canary {
         expected
     }
 
-    /// Checks the canary in a mapped staging buffer.
+    /// Checks the canary in a mapped staging buffer. A report counts even when the bytes are
+    /// there: a frame split into several submissions can have one rejected and still run its last.
+    /// Only the browser reports errors this way (it opens no error scopes), so native frames see
+    /// the bytes alone.
     ///
     /// # Errors
-    /// [`RenderError::Gpu`] when an error was reported since encoding (the submission was rejected
+    /// [`RenderError::Gpu`] when an error was reported since encoding (a submission was rejected
     /// and the device is fine); otherwise [`RenderError::GpuWorkDropped`] if the bytes are missing,
     /// marking the device as dropping work.
     pub(crate) fn check(&self, found: &[u8]) -> Result<(), RenderError> {
+        if self.reports.count() > self.reported_before {
+            let kind = self
+                .reports
+                .last_kind()
+                .unwrap_or(alpha2_gpu::GpuErrorKind::Internal);
+            return Err(RenderError::Gpu { kind });
+        }
         if found == self.expected() {
             return Ok(());
-        }
-        if self.reports.count() > self.reported_before
-            && let Some(kind) = self.reports.last_kind()
-        {
-            return Err(RenderError::Gpu { kind });
         }
         self.lost.mark(LOST_WORK_DROPPED);
         Err(self.lost.error().unwrap_or(RenderError::GpuWorkDropped))
@@ -490,6 +495,23 @@ impl SubmissionCanaries {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_report_since_issue_fails_the_canary_even_with_its_bytes_present() {
+        let reports = GpuErrorReports::default();
+        let canaries = Canaries::new(reports.clone(), &Shared::default(), Arc::default());
+        let canary = canaries.issue();
+        reports.report(alpha2_gpu::GpuErrorKind::OutOfMemory);
+        assert_eq!(
+            canary.check(&canary.expected()),
+            Err(RenderError::Gpu {
+                kind: alpha2_gpu::GpuErrorKind::OutOfMemory
+            })
+        );
+        assert_eq!(canaries.lost(), None, "a rejected submission leaves the device usable");
+        let later = canaries.issue();
+        assert_eq!(later.check(&later.expected()), Ok(()), "only reports since issue count");
+    }
 
     #[test]
     fn a_canary_passes_only_its_own_bytes() {

@@ -161,6 +161,8 @@ All notable changes to this project are documented in this file.
   `bigint` time) fails the request with `EXTRACTOR_FAILED` naming the emit; a `bigint` ended the Node
   process, a NaN from JavaScript became a lost channel, and Python left the request running. Python
   extractors accept any value with `__float__` and any time with `__index__` (such as NumPy scalars).
+- In the browser, a frame split into several GPU submissions fails with the reported error when one
+  of them was rejected, instead of delivering wrong pixels into the export.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

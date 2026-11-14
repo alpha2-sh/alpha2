@@ -106,7 +106,7 @@ import {
   videoColorContract,
   yuvAnamorphic,
 } from "./video.mjs";
-import { heavyEffectSplit } from "./watchdog.mjs";
+import { heavyEffectSplit, splitFrameRejectedSubmission } from "./watchdog.mjs";
 
 // \`check\` (function source) can require that the result shows the simulated branch ran.
 const underSimulation = (names, body, check) =>
@@ -129,6 +129,7 @@ export const cases = {
   "webgpu-dropped-work": webgpuDroppedWork,
   "webgpu-rejected-frame": webgpuRejectedFrame,
   "heavy-effect-split": heavyEffectSplit,
+  "split-frame-rejected-submission": splitFrameRejectedSubmission,
   "video-color-contract": videoColorContract,
   "browser-video-conversion": browserVideoConversion,
   "decoder-software-fallback": decoderSoftwareFallback,

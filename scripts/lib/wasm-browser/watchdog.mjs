@@ -41,3 +41,63 @@ report({
 });
 `;
 }
+
+// A frame cut into several submissions, one of them rejected and the last one run, fails with the
+// rejection instead of delivering wrong pixels; the binding renders on.
+export function splitFrameRejectedSubmission() {
+  return `
+if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
+const requestDevice = GPUAdapter.prototype.requestDevice;
+let device = null;
+GPUAdapter.prototype.requestDevice = async function (...args) {
+  device = await requestDevice.apply(this, args);
+  return device;
+};
+const { default: init, WebEffectRegistry, setGpuWatchdogMs } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+GPUAdapter.prototype.requestDevice = requestDevice;
+if (device === null) throw new Error("the binding's device was not seen");
+const adapter = webgpuAdapter(engine);
+const described = JSON.parse(engine.diagnostics()).adapter ?? {};
+if (described.isFallbackAdapter || described.architecture === "swiftshader")
+  skip("hardware-webgpu", "a software WebGPU adapter draws a 4K heavy frame in minutes", { adapter });
+// Every planned pass becomes its own submission.
+setGpuWatchdogMs(1);
+const [heavy] = await fetch("/tests/cases/gpu-watchdog/heavy-effects.json").then((response) => response.json());
+engine.registerCompiledEffect(await engine.compileEffect(JSON.stringify(heavy)));
+const project = await fetch("/tests/cases/gpu-watchdog/heavy-3840x2160.json").then((response) => response.json());
+project.sources = [{ id: "still", locator: "fixture://still", kind: "image" }];
+project.timeline.tracks[0].clips[0].source_id = "still";
+engine.loadProject(JSON.stringify(project));
+engine.uploadRgbaImage("still", 64, 48, new Uint8Array(64 * 48 * 4).map((_, index) => (index % 4 === 3 ? 255 : (index * 37) & 0xff)));
+const exportFrame = async () => {
+  try {
+    const ticket = engine.beginExportAt(0n, "h264");
+    if (ticket.kind === "rendered") await ticket.readback;
+    return { kind: ticket.kind };
+  } catch (error) {
+    return { rejected: String(error?.message ?? error), fatal: error?.fatal ?? null, failure: error?.failure ? { code: error.failure.code, stage: error.failure.stage } : null };
+  }
+};
+const first = await exportFrame();
+const spent = device.createCommandEncoder().finish();
+device.queue.submit([spent]);
+const submit = GPUQueue.prototype.submit;
+let submissions = 0;
+GPUQueue.prototype.submit = function (buffers) {
+  submissions += 1;
+  return submit.call(this, submissions === 1 ? [spent, ...buffers] : buffers);
+};
+const rejected = await exportFrame();
+GPUQueue.prototype.submit = submit;
+const lost = engine.deviceLost;
+const later = await exportFrame();
+engine.free();
+report({
+  ok: first.kind === "rendered" && submissions > 1 && rejected.failure?.code === "VALIDATION_FAILED" &&
+    rejected.failure?.stage === "rejected" && rejected.fatal === false && lost === false && later.kind === "rendered",
+  adapter, first, submissions, rejected, lost, later,
+});
+`;
+}
