@@ -28,6 +28,10 @@ pub const DEFAULT_FRAME_BUDGET: usize = 256 * 1024 * 1024;
 /// image draw per render (an image reused through `<use>` counts twice); Lottie counts its assets
 /// once at open.
 pub const MAX_SOURCE_IMAGE_PIXELS: u64 = 4 * MAX_CANVAS_PIXELS;
+/// Most encoded raster bytes the images of one SVG source may hold, counting each copy usvg
+/// makes; shared bytes count once.
+#[cfg(feature = "svg")]
+pub(crate) const MAX_SOURCE_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Most canvases of blended fill one SVG render or Lottie frame may draw. A 1080p canvas of
 /// blended fill costs about 4 to 10 ms natively, so this is about 2 s. Opaque fills are not

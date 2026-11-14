@@ -182,7 +182,8 @@ fn open_page(
     drop(settings);
     drop(pdf);
     check_svg(&svg)?;
-    let mut source = open_document_within(svg.as_bytes(), &NoResources, svg.len())?
+    let images = u64::try_from(MAX_IMAGE_DATA_BYTES).unwrap_or(u64::MAX);
+    let mut source = open_document_within(svg.as_bytes(), &NoResources, svg.len(), images)?
         .scaled(PIXELS_PER_POINT)?
         .with_background(background);
     let report = source.report_mut();

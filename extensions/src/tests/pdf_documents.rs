@@ -181,6 +181,35 @@ fn text_in_a_font_the_pdf_does_not_embed_is_drawn_with_a_standard_font_and_repor
 }
 
 #[test]
+fn a_page_reports_the_images_it_holds() {
+    // An incompressible 256 x 256 RGB image stays about 196 kB as PNG.
+    let mut state = 0x2545_f491_u32;
+    let noise: Vec<u8> = (0..256 * 256 * 3)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state.to_le_bytes()[0]
+        })
+        .collect();
+    let image = stream(
+        "/Type /XObject /Subtype /Image /Width 256 /Height 256 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+        &noise,
+    );
+    let file = one_page(
+        "<< /XObject << /Im1 5 0 R >> >>",
+        b"q 60 0 0 30 0 0 cm /Im1 Do Q",
+        &[image],
+    );
+    let source = open(file, &pdf_source(1, WHITE)).expect("open");
+    assert!(
+        source.resident_bytes() > 190_000,
+        "{}",
+        source.resident_bytes()
+    );
+}
+
+#[test]
 fn a_page_whose_images_or_streams_decode_too_large_is_refused_before_it_is_drawn() {
     let image = stream(
         "/Type /XObject /Subtype /Image /Width 30000 /Height 30000 /ColorSpace /DeviceGray /BitsPerComponent 8",

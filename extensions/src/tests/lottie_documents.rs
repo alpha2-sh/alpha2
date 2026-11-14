@@ -44,6 +44,26 @@ fn lottie_animations_are_evaluated_at_their_own_frames() {
 
 #[cfg(feature = "lottie")]
 #[test]
+fn a_lottie_source_reports_its_composition_as_held() {
+    let file = bytes("moving.json");
+    let source = Registry::with_defaults()
+        .open(
+            &ProviderSource::Lottie { animation: None },
+            Some(Arc::clone(&file)),
+            Arc::new(NoResources),
+        )
+        .expect("open");
+    // The normalized text velato parsed, before any frame is drawn.
+    assert!(
+        source.resident_bytes() > file.len() / 2,
+        "{} for a {}-byte file",
+        source.resident_bytes(),
+        file.len()
+    );
+}
+
+#[cfg(feature = "lottie")]
+#[test]
 fn lottie_features_the_backend_leaves_out_are_reported_and_what_stops_it_refused() {
     let registry = Registry::with_defaults();
     let (_, report) = registry

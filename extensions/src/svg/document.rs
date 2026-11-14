@@ -44,6 +44,10 @@ const SHAPE_VERTICES: u64 = 16;
 /// 1.4 us a character natively.
 const TEXT_CHAR_STEPS: u64 = 190;
 
+/// Bytes of a `data:` URL per step. usvg decodes the URL again for every element that draws it,
+/// about 1 ns a byte natively.
+const DATA_URL_BYTES_PER_STEP: u64 = 8;
+
 /// Character pairs of one `<text>` element per step. usvg's horizontal layout walks a chunk from
 /// its start for every cluster, about 0.5 ns per pair of characters natively.
 const TEXT_PAIRS_PER_STEP: u64 = 15;
@@ -400,6 +404,15 @@ impl<'a> Count<'a> {
                 subtree.add(child);
                 self.within_budget(&subtree)?;
             }
+        }
+        if matches!(name, "image" | "feImage")
+            && let Some(href) = node
+                .attribute((XLINK_NS, "href"))
+                .or_else(|| node.attribute("href"))
+                .filter(|href| href.trim_start().starts_with("data:"))
+        {
+            let bytes = u64::try_from(href.len()).unwrap_or(u64::MAX);
+            subtree.work = subtree.work.saturating_add(bytes / DATA_URL_BYTES_PER_STEP);
         }
         if name == "text" {
             // Every glyph becomes an outline, whether or not a font is registered here.

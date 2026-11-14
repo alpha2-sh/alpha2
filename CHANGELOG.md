@@ -175,6 +175,10 @@ All notable changes to this project are documented in this file.
 - Reading an SVG counts the layout of its text, so one `<text>` of more than about 60,000
   characters is refused, with or without a registered font. The count stops as soon as a budget is
   passed: many `use` copies of a large group, or a shape with many markers, are refused at once.
+- An SVG source counts the raster images it holds: each copy usvg makes of an embedded image counts
+  toward 256 MiB of image bytes and four canvases of declared pixels, and a registered image is
+  read once however often it is drawn. The provider budget sees the images an SVG or PDF source
+  holds and the composition a Lottie source holds, so it can close them when they are off screen.
 
 ## [0.6.0] - 2026-11-08
 

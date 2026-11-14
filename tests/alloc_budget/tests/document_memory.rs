@@ -426,6 +426,59 @@ fn an_svg_whose_entities_expand_past_its_text_budget_is_refused_holding_little()
     }
 }
 
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_image_drawn_by_many_use_copies_is_refused_holding_its_byte_budget() {
+    // A 4 x 4 PNG padded to 1 MiB: usvg decodes the `data:` URL again for every copy.
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x04\0\0\0\x04\x08\x06\0\0\0".to_vec();
+    png.extend_from_slice(&[0xa9, 0xf1, 0x9e, 0x7e]);
+    png.extend_from_slice(&u32::to_be_bytes(1 << 20));
+    png.extend_from_slice(b"tEXt");
+    png.resize(png.len() + (1 << 20), b'x');
+    png.extend_from_slice(&[0; 4]);
+    png.extend_from_slice(b"\0\0\0\0IEND\xaeB`\x82");
+    let bytes: Arc<[u8]> = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><defs><image id="i" width="4" height="4" href="data:image/png;base64,{}"/></defs>{}</svg>"#,
+        base64(&png),
+        r##"<use href="#i"/>"##.repeat(300)
+    )
+    .into_bytes()
+    .into();
+    let (opened, held) = peak_ratio(&bytes, || {
+        SvgProvider
+            .open(Arc::clone(&bytes), &ProviderSource::Svg, &NoResources)
+            .map(drop)
+    });
+    assert!(
+        matches!(opened, Err(ExtensionError::Budget(_))),
+        "{opened:?}"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let held = held * bytes.len() as f64;
+    eprintln!("held {held:.0} bytes");
+    // The 256 MiB image byte budget and the copy being decoded when it runs out.
+    assert!(held < 300.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
+}
+
+#[cfg(feature = "svg")]
+fn base64(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let word = u32::from(chunk[0]) << 16
+            | u32::from(*chunk.get(1).unwrap_or(&0)) << 8
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        for (at, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            out.push(if at <= chunk.len() {
+                char::from(DIGITS[(word >> shift & 63) as usize])
+            } else {
+                '='
+            });
+        }
+    }
+    out
+}
+
 /// A ZIP-compressed EXR file of one 3840 by 2160 tile with B, G, R and `extra` float channels, whose only
 /// chunk holds a 9-byte zlib stream.
 #[cfg(feature = "exr")]

@@ -118,6 +118,7 @@ impl LottieSource {
         drop(sanitized);
         let composition = Composition::from_slice(&text)
             .map_err(|error| ExtensionError::Malformed(format!("{error:?}")))?;
+        let composition_bytes = text.len();
         drop(text);
         // Check decoded asset size from headers first; oversized assets are reported missing.
         let assets = composition
@@ -150,6 +151,7 @@ impl LottieSource {
         }
         Ok(Self {
             composition,
+            composition_bytes,
             renderer: Renderer::new(),
             images,
             report,
@@ -580,6 +582,8 @@ fn short(name: &str) -> String {
 /// An open Lottie animation; PNG assets are decoded once at open.
 struct LottieSource {
     composition: Composition,
+    /// The normalized text velato parsed, standing for the size of the composition.
+    composition_bytes: usize,
     renderer: Renderer,
     images: HashMap<String, Pixmap>,
     report: ProbeReport,
@@ -628,6 +632,7 @@ impl VisualSource for LottieSource {
             .values()
             .map(|image| image.data().len())
             .sum::<usize>()
+            + self.composition_bytes
             + self.last.as_ref().map_or(0, |last| last.pixels.byte_len())
     }
 }
