@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs fuzz targets in parallel with nightly cargo-fuzz, each for SECONDS (default 1800); all
-# targets by default. Seeds come from test files at run time; ALPHA2_FUZZ_SEEDS=<dir> adds
-# <dir>/<target>/*. ALPHA2_FUZZ_TIMEOUT (s) and ALPHA2_FUZZ_RSS_MB limits count as findings.
+# targets by default. Seeds come from test files at run time and tests/corpus/hostile/<target>/*;
+# ALPHA2_FUZZ_SEEDS=<dir> adds <dir>/<target>/*. ALPHA2_FUZZ_TIMEOUT (s) and ALPHA2_FUZZ_RSS_MB
+# limits count as findings.
 #
 #   scripts/fuzz.sh [SECONDS] [TARGET...]
 set -euo pipefail
@@ -191,9 +192,30 @@ seed() {
         [...strings].forEach((text, index) => fs.writeFileSync(`${dir}/value-${index}`, text));
       ' tests/golden/layout_measure.json "$dir"
       ;;
+    host_frames)
+      # Frames as docs/host-protocol.md lays them out: one plain, one with an attachment, both.
+      node -e '
+        const dir = process.argv[1];
+        const fs = require("fs");
+        const frame = (header, attachments = Buffer.alloc(0)) => {
+          const json = Buffer.from(JSON.stringify(header));
+          const lengths = Buffer.alloc(8);
+          lengths.writeUInt32LE(json.length, 0);
+          lengths.writeUInt32LE(attachments.length, 4);
+          return Buffer.concat([lengths, json, attachments]);
+        };
+        const plain = frame({ id: 1, op: "probe" });
+        const attached = frame({ id: 2, attachments: [{ type: "image/png", bytes: 3 }] }, Buffer.from("png"));
+        for (const [name, bytes] of Object.entries({ plain, attached, both: Buffer.concat([plain, attached]) }))
+          fs.writeFileSync(`${dir}/${name}`, bytes);
+      ' "$dir"
+      ;;
     evaluate | audio_render | vector_raster) ;;
     *) echo "unknown target $target" >&2; exit 2 ;;
   esac
+  if [ -d "tests/corpus/hostile/$target" ]; then
+    cp "tests/corpus/hostile/$target"/* "$dir"/
+  fi
   if [ -n "${ALPHA2_FUZZ_SEEDS:-}" ] && [ -d "$ALPHA2_FUZZ_SEEDS/$target" ]; then
     cp "$ALPHA2_FUZZ_SEEDS/$target"/* "$dir"/
   fi

@@ -112,6 +112,10 @@ bench = false
 [workspace]
 members = ["."]
 
+# Matches the product's release profile, so arithmetic that panics there panics here.
+[profile.release]
+overflow-checks = true
+
 [[bin]]
 name = "vector_raster"
 path = "fuzz_targets/vector_raster.rs"
