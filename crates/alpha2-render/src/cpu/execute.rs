@@ -12,6 +12,7 @@ use super::composite::{CompositeSettings, LayerInput, composite};
 use super::half;
 use super::image::{CpuImage, PixelBox};
 use super::kernels::{CpuLut, KernelContext};
+use super::renderer::add_elapsed;
 use crate::graph::{RenderGraph, RenderNode, RenderNodeId};
 use crate::graph_cache::renderer_node_key;
 use crate::{
@@ -61,6 +62,7 @@ impl CpuRenderer {
                 release_inputs(graph, &plan.last_use, &mut outputs, node, position);
                 continue;
             }
+            let node_started = Instant::now();
             let image = match &graph.nodes[node.index] {
                 RenderNode::Source(view) => {
                     let source = view.cpu_source().ok_or(RenderError::InvalidSource)?;
@@ -157,7 +159,16 @@ impl CpuRenderer {
                     )?)
                 }
             };
-            if !matches!(graph.nodes[node.index], RenderNode::Source(_)) {
+            let stage = match &graph.nodes[node.index] {
+                RenderNode::Source(_) => None,
+                RenderNode::Effect { .. }
+                | RenderNode::Transition { .. }
+                | RenderNode::Generator { .. } => Some(&self.stats.kernel_micros),
+                RenderNode::Vector { .. } => Some(&self.stats.vector_micros),
+                RenderNode::Composite { .. } => Some(&self.stats.composite_micros),
+            };
+            if let Some(counter) = stage {
+                add_elapsed(counter, node_started);
                 drawn += 1;
             }
             if let Some((key, pinned)) = cached.store[node.index] {
@@ -184,10 +195,7 @@ impl CpuRenderer {
         }
         self.stats.graphs.fetch_add(1, Ordering::Relaxed);
         self.stats.nodes.fetch_add(drawn, Ordering::Relaxed);
-        self.stats.render_micros.fetch_add(
-            u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
+        add_elapsed(&self.stats.render_micros, started);
         self.stats
             .image_high_water_bytes
             .fetch_max(high_water, Ordering::Relaxed);
@@ -211,10 +219,8 @@ impl CpuRenderer {
             .map_err(GraphError::into_render_error)?;
         let started = Instant::now();
         super::pack::pack_yuv420p(&self.workers, &image, encoding, targets)?;
-        self.stats.render_micros.fetch_add(
-            u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
+        add_elapsed(&self.stats.render_micros, started);
+        add_elapsed(&self.stats.pack_micros, started);
         Ok(())
     }
 

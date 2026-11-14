@@ -13,6 +13,7 @@ use super::CpuRenderer;
 use super::curves::{exact_srgb_to_linear, extended_linear_to_srgb, linear_to_srgb};
 use super::half;
 use super::image::{CpuImage, PixelBox};
+use super::renderer::add_elapsed;
 use crate::hdr::HdrToneMap;
 use crate::yuv::{
     HdrHandling, PlaneStorage, PresentedEncoding, hdr_handling, presentation_uniform_bytes,
@@ -123,6 +124,7 @@ impl CpuSource {
         if let Some(image) = self.inner.presented.get() {
             return Arc::clone(image);
         }
+        let started = web_time::Instant::now();
         let image = Arc::new(match &self.inner.content {
             Content::Image(_) => unreachable!("handled above"),
             Content::Yuv { planes, conversion } => {
@@ -145,6 +147,7 @@ impl CpuSource {
                 geometry,
             ),
         });
+        add_elapsed(&renderer.stats.present_micros, started);
         renderer
             .stats
             .presented_sources

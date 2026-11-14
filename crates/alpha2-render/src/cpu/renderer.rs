@@ -36,6 +36,16 @@ pub struct CpuRenderStats {
     pub nodes: u64,
     /// Time spent drawing graphs, in microseconds.
     pub render_micros: u64,
+    /// Part of `render_micros` spent converting decoded frames to source pictures.
+    pub present_micros: u64,
+    /// Part of `render_micros` spent in effect, transition and generator passes.
+    pub kernel_micros: u64,
+    /// Part of `render_micros` spent compositing layers.
+    pub composite_micros: u64,
+    /// Part of `render_micros` spent drawing vector scenes.
+    pub vector_micros: u64,
+    /// Part of `render_micros` spent packing pictures into encoder planes.
+    pub pack_micros: u64,
     /// Sources presented: decoded frames converted to pictures.
     pub presented_sources: u64,
     /// Bytes of the largest picture set one graph held at once.
@@ -49,8 +59,21 @@ pub(crate) struct StatCounters {
     pub(crate) graphs: AtomicU64,
     pub(crate) nodes: AtomicU64,
     pub(crate) render_micros: AtomicU64,
+    pub(crate) present_micros: AtomicU64,
+    pub(crate) kernel_micros: AtomicU64,
+    pub(crate) composite_micros: AtomicU64,
+    pub(crate) vector_micros: AtomicU64,
+    pub(crate) pack_micros: AtomicU64,
     pub(crate) presented_sources: AtomicU64,
     pub(crate) image_high_water_bytes: AtomicU64,
+}
+
+/// Adds the microseconds since `started` to `counter`.
+pub(crate) fn add_elapsed(counter: &AtomicU64, started: web_time::Instant) {
+    counter.fetch_add(
+        u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+        Ordering::Relaxed,
+    );
 }
 
 /// A renderer that draws [`RenderGraph`]s on the CPU with no GPU or driver.
@@ -189,6 +212,11 @@ impl CpuRenderer {
             graphs: self.stats.graphs.load(Ordering::Relaxed),
             nodes: self.stats.nodes.load(Ordering::Relaxed),
             render_micros: self.stats.render_micros.load(Ordering::Relaxed),
+            present_micros: self.stats.present_micros.load(Ordering::Relaxed),
+            kernel_micros: self.stats.kernel_micros.load(Ordering::Relaxed),
+            composite_micros: self.stats.composite_micros.load(Ordering::Relaxed),
+            vector_micros: self.stats.vector_micros.load(Ordering::Relaxed),
+            pack_micros: self.stats.pack_micros.load(Ordering::Relaxed),
             presented_sources: self.stats.presented_sources.load(Ordering::Relaxed),
             image_high_water_bytes: self.stats.image_high_water_bytes.load(Ordering::Relaxed),
             reused_frame_buffers: self.frame_pool.reused(),
