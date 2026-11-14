@@ -1,8 +1,9 @@
 //! Host logic shared by every native alpha2 host, with no `FFmpeg` and no platform media API.
 //!
-//! The desktop host drives it through `FFmpeg`; the iOS and Android hosts through
-//! `VideoToolbox` and `MediaCodec`. Project audio rendering needs the `engine` feature, on by
-//! default.
+//! The desktop host uses its policies, audio windows, cursor rules, providers, partial outputs,
+//! plugin runtime and protocol frames, and decodes and encodes through `FFmpeg` itself. The iOS
+//! and Android hosts also run its decode, export and still pipeline over `VideoToolbox` and
+//! `MediaCodec`. Project audio rendering needs the `engine` feature, on by default.
 
 // Its thread locals are `const`; clippy misreads the emulated-TLS expansion used on Android.
 #![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]

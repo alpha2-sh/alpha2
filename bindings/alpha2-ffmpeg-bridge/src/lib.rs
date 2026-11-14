@@ -1,7 +1,5 @@
-//! The `unsafe` boundary between the native binding and `FFmpeg`.
-//!
-//! It holds what rsmpeg's safe surface lacks (frame and packet copies, codec and side-data helpers,
-//! container I/O, hardware-frame shims) so the rest of the binding can forbid `unsafe`.
+//! The `FFmpeg` calls rsmpeg's safe surface lacks, for the native binding: frame and packet
+//! copies, codec and side-data helpers, container I/O and hardware-frame shims.
 
 use std::{error::Error, ffi::CStr, fmt, ptr, slice};
 

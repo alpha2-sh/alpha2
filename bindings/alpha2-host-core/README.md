@@ -1,7 +1,8 @@
 # alpha2-host-core
 
-The native host logic shared by the desktop and mobile hosts, without FFmpeg: audio timelines and
-output, decode policy, stills, thumbnails, export and extraction, and the backend contracts each
-host implements over its platform's decoders and encoders.
+Native host logic without FFmpeg. Every native host shares its policies, audio timelines and
+output, cursor rules, providers, extraction, plugin runtime and protocol frames. The mobile hosts
+also run its decode, export and still pipeline over their platform's decoders and encoders; the
+desktop host decodes and encodes through FFmpeg instead.
 
 Part of [alpha2](https://github.com/alpha2-sh/alpha2), a media engine that renders timeline projects on the GPU.

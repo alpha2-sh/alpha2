@@ -50,7 +50,8 @@ pub enum VideoFrameMode {
 /// How a session is set up.
 #[derive(Clone, Debug, Default, PartialEq, Eq, uniffi::Record)]
 pub struct EngineConfig {
-    /// Which renderer draws frames.
+    /// Which renderer draws exports and stills. A [`crate::Player`] always draws on a GPU
+    /// device that presents to its window.
     pub renderer: RendererMode,
     /// Which video decoders are used.
     pub video_decode: VideoDecodeMode,
@@ -111,7 +112,7 @@ pub struct ConformRequest {
     pub project_json: String,
     /// Media file paths in the app's sandbox, by source ID.
     pub assets: HashMap<String, String>,
-    /// `export_original` (the default) or `preview`.
+    /// Not read. Every conform reports whether each source's file opens.
     pub purpose: Option<String>,
 }
 
@@ -232,7 +233,7 @@ impl Alpha2 {
     }
 }
 
-/// An app's alpha2 session: its renderer, fonts and media backend.
+/// An app's alpha2 session: its settings, fonts and media backend.
 #[derive(uniffi::Object)]
 pub struct Alpha2 {
     config: EngineConfig,
@@ -293,8 +294,7 @@ impl Alpha2 {
         Ok(families)
     }
 
-    /// Which media each source would read for the request's purpose, and what blocks it, as the
-    /// conform result JSON.
+    /// Whether each source's file opens, as `{"sources": [{"id", "path", "readable", "reason"}]}`.
     ///
     /// # Errors
     /// [`Alpha2Error::InvalidInput`] for an invalid project or request.

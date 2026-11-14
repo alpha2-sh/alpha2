@@ -1,6 +1,6 @@
 # α2
 
-alpha2 is a portable, general-purpose media engine for WebAssembly and native. It renders a timeline project (sources, video, audio and caption tracks, clips, effects and transitions) on the GPU, for preview and for export.
+alpha2 is a portable, general-purpose media engine for WebAssembly and native. It renders a timeline project (sources, video, audio and caption tracks, clips, effects and transitions) on the GPU, or on the CPU where there is none, for preview and for export.
 
 Every target runs the same rendering code, so a project renders the same in a browser preview, in a server export and in a Rust program.
 
@@ -13,7 +13,9 @@ Every target runs the same rendering code, so a project renders the same in a br
 | A React canvas over the `alpha2` browser player | [`@alpha2-sh/react`](packages/alpha2-react/README.md) (npm) |
 | MP4, MOV, MKV or WebM export from Node.js or Electron | [`@alpha2-sh/node`](packages/alpha2-node/README.md) (npm) and `alpha2-host` |
 | MP4, MOV, MKV or WebM export from any other language | `alpha2-host serve` and its [stdio protocol](docs/host-protocol.md) |
+| Building, validating and exporting projects from Python | [`alpha2`](python/alpha2/README.md) (PyPI) and `alpha2-host` |
 | A Rust program | [`alpha2`](crates/alpha2/README.md) (crate) |
+| An iOS or Android app (preview) | the mobile library, built from source: [mobile targets](docs/development.md#mobile-targets); no package is published |
 
 ## Quick start
 
@@ -69,7 +71,7 @@ engine.renderAt(0n); // draws the frame at time 0
 
 ### Native
 
-Native export runs `alpha2-host`, which renders on the GPU and decodes and encodes with FFmpeg 8: MP4 with H.264 video and AAC audio by default, and MOV, Matroska or WebM (VP9 or AV1 with Opus) when the output's extension or `container` says so. Get it one of four ways:
+Native export runs `alpha2-host`, which renders on the GPU, or on the CPU where there is none, and decodes and encodes with FFmpeg 8: MP4 with H.264 video and AAC audio by default, and MOV, Matroska or WebM (VP9 or AV1 with Opus) when the output's extension or `container` says so. Get it one of four ways:
 
 - **Fetch** it for Node.js with `npx @alpha2-sh/node install`, which unpacks the release archive of the package's version into a cache where `@alpha2-sh/node` finds it. It checks the archive against the SHA-256 the published package pins for it, so a mirror cannot substitute one.
 - **Download** an archive from the [Releases page](https://github.com/alpha2-sh/alpha2/releases). `alpha2-<version>-<target>-bundled` carries its FFmpeg. Each archive has a build provenance attestation: `gh attestation verify <archive> --repo alpha2-sh/alpha2` checks it. On macOS a browser download is quarantined and the clients refuse it: run `xattr -dr com.apple.quarantine <unpacked dir>`, or download with `curl -LO`. To use a system FFmpeg 8 instead, build the host from source (`cargo install alpha2-host`).
@@ -124,12 +126,14 @@ Each `--asset` gives the file of the project source with that id. [`docs/native.
 | macOS (Apple silicon; x64 under Rosetta uses the arm64 host) | Metal | VideoToolbox | `macos-arm64` |
 | Windows x64 | Direct3D 12 | D3D12VA | `win-x64` |
 | Windows on ARM | not supported | | none |
+| iOS 17 or later (preview) | Metal | VideoToolbox | none; built from source |
+| Android API 29 or later (preview) | Vulkan | MediaCodec | none; built from source |
 
-Native exports encode on the GPU wherever the device and codec allow it. Hardware decoding is on by default on Linux and opt-in on macOS and Windows (`--video-decode auto` on `alpha2-host export`, `videoDecode: "auto"` in `@alpha2-sh/node`).
+Native exports encode on the GPU wherever the device and codec allow it. Hardware decoding is on by default on Linux and macOS and opt-in on Windows (`--video-decode auto` on `alpha2-host export`, `videoDecode: "auto"` in `@alpha2-sh/node`).
 
 - **Browsers**: Chrome 96, Firefox 89 or Safari 26, or later. Audio preview needs a cross-origin isolated page (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`). Serve `.wasm` files as `application/wasm`.
 - **Windows N/KN** without the Media Feature Pack and **Windows Server** without Media Foundation have no default software H.264: install OpenH264 (`install --openh264`) or use a D3D12/NVENC GPU.
-- **Node.js**: 22.21 or later (24.5 or later on Node 24).
+- **Node.js**: 22.21 or a later 22, or 24.5 or later.
 - **Python**: 3.11.4 or later.
 - **React**: `@alpha2-sh/react` needs React 18 or later, `@alpha2-sh/editor/react` React 19.3 or a later 19.
 - **Rust**: 1.99 or later.

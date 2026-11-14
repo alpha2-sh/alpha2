@@ -1,6 +1,6 @@
 # Plugin ABI
 
-A plugin is a package an alpha2 host loads at run time: a manifest, one or more code artifacts and the resources they read. This page is `alpha2-plugin/1`, the ABI every artifact implements, as a core wasm module or as a C-ABI library. Plugins written in Rust use `plugins/sdk`, which builds both from one `Extractor` implementation. In C, C++, Zig or Go, implement [`plugins/sdk/include/alpha2_plugin.h`](../plugins/sdk/include/alpha2_plugin.h) directly.
+A plugin is a package an alpha2 host loads at run time: a manifest, one or more code artifacts and the resources they read. This page is `alpha2-plugin/1`, the ABI every artifact implements, as a core wasm module or as a C-ABI library. Plugins written in Rust use `plugins/sdk`, which builds both from one `Extractor` implementation. The SDK is not published to crates.io, so a Rust plugin crate lives in a checkout of this repository, as a member of the `plugins` workspace or with a path dependency on `plugins/sdk`. In C, C++, Zig or Go, implement [`plugins/sdk/include/alpha2_plugin.h`](../plugins/sdk/include/alpha2_plugin.h) directly.
 
 A plugin of kind `extractor` provides one extractor: the host runs the extraction session, decodes the input and calls the plugin step by step, exactly as it drives an extractor written in the host's own language. `alpha2-host` runs one named in an `extract` request's `plugin` (see [`host-protocol.md`](host-protocol.md#plugins)), and Rust programs load one with `alpha2_host_core::plugins` (feature `plugins`). Every value the plugin emits is validated by the session, so a plugin cannot write invalid project data.
 
@@ -74,7 +74,7 @@ The context `begin` receives:
 }
 ```
 
-`video` (`size`, the delivered frame's longer side; `format`) is set for a video extractor, `audio` (`rate`, `channels` as `mono` or `source`, `block_frames`) for an audio one, and `frame_rate` (`num`, `den`) for timeline video. `params` is the request's, checked against the descriptor's `params_schema` by the caller.
+`video` (`size`, the delivered frame's longer side; `format`) is set for a video extractor, `audio` (`rate`, `channels` as `mono` or `source`, `block_frames`) for an audio one, and `frame_rate` (`num`, `den`) for timeline video. `params` is the request's. The browser's `runExtractor` and the Node and Python clients check a request's `params` against the descriptor's `params_schema` before an extractor in the caller's own process runs, but no surface checks the params a plugin receives (in the browser, those given to `plugin.extractor(params)`), so a plugin must check what it reads.
 
 The host gives the plugin these functions:
 
@@ -91,7 +91,7 @@ Within a pass, a value is emitted no further along the pass than what the pass h
 
 A native artifact exports one symbol, `alpha2_plugin_v1`, a C function without arguments that returns a pointer to a static `Alpha2PluginV1` table (the header has the exact types). The table and the descriptor's bytes stay valid while the library is loaded. Both tables start with `abi` and `size`, the bytes of the table as the side that filled it knows it. A host refuses a plugin table that is shorter than its own or has a null entry with `PLUGIN_LOAD_FAILED`; every entry is required.
 
-- `create(host)` returns a new instance, or null. The host's `Alpha2HostV1` table stays valid until `destroy`, and every host function takes the table's `context` first. One run uses one instance; the host calls it from one thread at a time.
+- `create(host)` returns a new instance, or null. The host's `Alpha2HostV1` table stays valid until `destroy`, and every host function takes the table's `context` first. One run uses one instance; the host calls it from one thread at a time. A plugin calls the host functions only during a call the host made, on that call's thread.
 - Every other call takes the instance first. Pixels, samples, the context and the strings passed to the plugin are borrowed for the call. Records passed to `emit` are borrowed for that call alone.
 - `resource(context, name, name_len, &len)` returns the resource's bytes, or null for a name the manifest does not declare. They stay valid until `destroy`.
 - A panic must not cross the boundary: catch it and return `2`. The SDK does.

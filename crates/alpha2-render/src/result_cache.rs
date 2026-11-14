@@ -40,7 +40,7 @@ pub enum CacheEligibility {
 /// Why cached results were dropped all at once.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum CacheInvalidation {
-    /// An effect was registered or removed.
+    /// An effect was removed.
     Effects,
     /// An effect resource was uploaded, replaced, or removed.
     EffectResources,

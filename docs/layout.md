@@ -24,7 +24,7 @@ Every node of the tree is one kind of box. A box is a container when it has `chi
 | Item | `width`, `height`, `min_width`, `min_height`, `max_width`, `max_height`, `aspect_ratio`, `margin`, `align_self`, `position` (`relative`, `absolute`), `inset` | Not on the root. Absent sizes are `auto`; `min_*` auto is the CSS automatic minimum size. No `auto` margins. |
 | Flex item | `flex_grow`, `flex_shrink`, `flex_basis` | In a flex container only. |
 | Grid item | `grid_column`, `grid_row`, `justify_self` | In a grid only. |
-| Text style | `font_family`, `font_size`, `fill`, `line_height`, `text_align`, `strokes`, `shadows` | On any box; inherited. See [Text](#text). |
+| Text style | `font_family`, `font_size`, `font_weight`, `fill`, `line_height`, `letter_spacing`, `text_align`, `strokes`, `shadows` | On any box; inherited. See [Text](#text). |
 | Own text | `font_size_fit`, `line_clamp`, `text_animators` | The box's own text only; not inherited. See [Fitting and clamping](#fitting-and-clamping). |
 | Drawn after layout | `opacity`, `translate`, `scale`, `rotation_degrees` | About the border box's centre; they never move other boxes. A box with any of them, or with hidden overflow, is drawn as one group: its opacity is group opacity. |
 
@@ -44,7 +44,7 @@ A length is written three ways:
 
 Every layout length takes the first two: sizes, padding, margin, gap, inset, `border_radius`, border width, `font_size`, `translate`. Percent is refused where CSS and the layout give it no meaning (`gap: "5%"` is `percent is not allowed here`). Pixels are converted once, against the project canvas: a preview at half size draws `"12px"` as 6 preview pixels, keeping the picture's proportions. Within one keyframe sequence, pixels and numbers mix freely; a percent does not mix with either.
 
-`padding`, `margin` and `inset` take the CSS shorthand: one length for every side, or a string of one to four (`"8px 16px"`: top and bottom 8, left and right 16; `"1px 2px 3px 4px"`: top, right, bottom, left), or the sides object (missing sides 0). `translate` takes one or two lengths as CSS writes them (`"10px 20px"`, y 0 when missing) or `{ "x", "y" }`.
+`padding` and `margin` take the CSS shorthand: one length for every side, or a string of one to four (`"8px 16px"`: top and bottom 8, left and right 16; `"1px 2px 3px 4px"`: top, right, bottom, left), or the sides object (missing sides 0). `inset` takes no shorthand: it is an object of up to four sides, `{ "left", "top", "right", "bottom" }`, each its own animated length, and a missing side is `auto`. `translate` takes one or two lengths as CSS writes them (`"10px 20px"`, y 0 when missing) or `{ "x", "y" }`.
 
 Colors, here and everywhere in a project, may be CSS hex (`"#1e2230"`, `"#fff"`, `"#000000c0"`) or the `{ red, green, blue, alpha }` object. Where a paint is read (`background`, a border's `paint`, a shape's fill), a color is a solid paint of it: `"background": { "mode": "constant", "value": "#1e2230" }`. A gradient stays tagged. The engine writes colors back as objects and paints tagged. Code that reads a document (an editor, a converter) can take it in that one form: `canonicalProject` from `alpha2/project` returns the document with every color the object, every paint tagged, every padding and margin the four sides and every `translate` `{ x, y }`, typed `CanonicalProject`; `canonicalRgba` and `canonicalPaint` do the same for one value.
 
@@ -105,7 +105,7 @@ The box is laid out at `font_size` first; the fit never changes the box's size. 
 
 `"display": "grid"` lays a box's children out in a CSS grid.
 
-- `grid_template_columns` and `grid_template_rows` are track lists as CSS writes them: lengths (a bare number is a fraction), percents, `<n>fr`, `auto`, `min-content`, `max-content`, `minmax(min, max)`, `fit-content(length)`, and `repeat(count, tracks)` with a count of 1 to 64, `auto-fill` or `auto-fit`. At most 64 tracks on an axis, counts expanded. `auto-fill` and `auto-fit` repeat tracks of a fixed size only, as CSS requires, once per list, beside fixed-size tracks.
+- `grid_template_columns` and `grid_template_rows` are track lists as CSS writes them: lengths (a bare number is a fraction), percents, `<n>fr`, `auto`, `min-content`, `max-content`, `minmax(min, max)`, `fit-content(length)`, and `repeat(count, tracks)` with a count of 1 to 64, `auto-fill` or `auto-fit`. At most 64 tracks are written on an axis, `repeat()` counts expanded; an `auto-fill` or `auto-fit` repeat counts its tracks once, and lays out as many as fit the container. `auto-fill` and `auto-fit` repeat tracks of a fixed size only, as CSS requires, once per list, beside fixed-size tracks.
 - `grid_auto_columns` and `grid_auto_rows` size the implicit tracks (no `repeat()`); `grid_auto_flow` (`row`, `column`, `row_dense`, `column_dense`) places the items without a placement.
 - An item's `grid_column` and `grid_row` are lines as CSS writes them: `2`, `"1 / 3"`, `"span 2"`, `"2 / span 3"`, `"1 / -1"`, `"auto"`. Lines count from 1, or from -1 at the end, up to 65 either way; spans are 1 to 64.
 - `justify_items` and `align_items` place the items in their areas; `justify_self` and `align_self` place one. `justify_content` and `align_content` place the tracks in the grid.
@@ -141,6 +141,10 @@ Named lines and `grid_template_areas` are not supported. A grid cell's text is m
 A shape box draws a shapes content tree (the `items` a shapes generator takes) on a picture the size of its content box: positions normalized to that box, lengths fractions of its shorter side, like an SVG viewBox. It has no size of its own: give it `width` and `height`, an `aspect_ratio`, or `flex_grow`.
 
 Paints of a box's background and border are normalized to its border box: a linear gradient from `x` 0 to 1 spans the box, and a radial radius is a fraction of the box's shorter side.
+
+## Limits
+
+A layout tree holds at most 256 boxes, the root included, nested at most 16 deep (the root is depth 1). Of them, at most 64 have text and at most 16 are drawn as one group (a box with `opacity`, `translate`, `scale`, `rotation_degrees` or hidden overflow). Its shape boxes hold at most 1,024 shape items together. A tree past a limit is refused.
 
 ## Animation
 
@@ -228,7 +232,7 @@ const titleCard = layout(
 
 ### Lower third
 
-A card that sizes to its text up to 60% of the picture's content width, where the subtitle wraps. The accent bar stretches to the card's inner height; `flex_shrink: 0` keeps it from giving up its width when the text is long. The card fades and rises in as one group over 0.3 s, without laying out again.
+A card that sizes to its text up to 60% of the picture's content width, where the subtitle wraps. The accent bar stretches to the card's inner height; `flex_shrink: 0` keeps it from giving up its width when the text is long. The card fades and rises in as one group over 0.3 s, without moving any other box.
 
 ```json
 {

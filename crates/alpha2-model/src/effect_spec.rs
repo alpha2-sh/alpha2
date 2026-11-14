@@ -46,7 +46,7 @@ pub enum EffectParamType {
 #[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectParamUnit {
-    /// A plain or normalized number.
+    /// A plain or normalized number: a fraction, count, rate, seed or size.
     Normalized,
     /// An angle in degrees.
     Degrees,

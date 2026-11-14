@@ -53,11 +53,12 @@ gh attestation verify alpha2-<version>-<target>-bundled.tar.gz --repo alpha2-sh/
   Each `--asset <source-id>=<path>` gives the file of one source of the project. The output must not exist yet: the export writes `<stem>.a2partial.<ext>` beside it and moves that into place, without replacing a file, when it is finished; a finished file that cannot be moved there is kept beside it as `<stem>.a2kept.<ext>`. `--start-ticks` and `--end-ticks` choose the range (the whole timeline by default), `--frame-rate <num>/<den>` the output rate (the project's by default), the output's extension (`.mp4`, `.mov`, `.mkv`, `.webm`) or `--container` the container, `--video-codec` and `--audio-codec` the codecs (the container's by default: H.264 and AAC, or VP9 and Opus for WebM), `--video-quality` a level (`very-low`, `low`, `medium`, `high`, `very-high`) or a bitrate in bits per second, and `--no-audio` leaves the audio out.
 - `alpha2-host conform` checks a project's media without rendering: it prints what each source would read and what is missing or unusable, and exits with status 1 when something blocks the export.
 - The project (`--project`), effects (`--effects`) and `.cube` LUT files are read as UTF-8, with or without a byte order mark, or as UTF-16 when they start with its byte order mark (what Windows PowerShell 5.1's `Out-File` writes). A file in a legacy code page fails with `INVALID_INPUT` naming the file and the first byte that is not UTF-8; a project file that cannot be read fails with `IO_ERROR` naming it. `python -m alpha2` and the editor read project and caption files by the same rule.
+- `alpha2-host probe-gpu-encode [<width> [<height>]]` reports whether the GPU-resident encode path opens and encodes a test frame at that size (1920x1080 by default; on Windows, on every adapter). It is a diagnostic for support cases.
 - `alpha2-host serve` reads requests on standard input and answers on standard output in length-prefixed frames, each a JSON header and binary attachments: the [host protocol](host-protocol.md). On Linux with glibc it caps the C allocator at two arenas unless `MALLOC_ARENA_MAX` is set, since glibc's per-thread arenas grow a long-lived process that starts threads for every request. The CPU renderer keeps frame buffers between the frames of a request and frees them when the request ends.
 
 ### GPU or CPU rendering
 
-`alpha2-host` chooses its renderer when it starts, from `--renderer <mode>` (`export`) or `ALPHA2_RENDERER` (`serve`, and the Node and Python clients' `renderer` option):
+`alpha2-host` chooses its renderer once: `export` when it starts, from `--renderer <mode>`, and `serve` at the first request that needs a device, from `ALPHA2_RENDERER` (the Node and Python clients' `renderer` option):
 
 - `auto` (the default) renders on a hardware GPU when the machine has one, and otherwise on the CPU. It never takes a software GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader), which draws the same pictures many times slower.
 - `cpu` renders on the CPU and opens no graphics driver at all: a CPU-only server, a container or a serverless function needs nothing but the host archive.
@@ -69,7 +70,7 @@ Every result says which renderer drew it: `renderer` (`gpu` or `cpu`), `renderer
 
 ### Which GPU adapter
 
-On a machine with several GPUs, `alpha2-host` chooses the adapter it renders on once, when it starts, by `ALPHA2_GPU_ADAPTER`:
+On a machine with several GPUs, `alpha2-host` chooses the adapter it renders on once, with its renderer (when `export` starts, at the first request of `serve` that needs a device), by `ALPHA2_GPU_ADAPTER`:
 
 - `auto` (the default on Linux and macOS) ranks the hardware adapters that render by how many codecs each encodes on the GPU (H.264, HEVC, AV1), then by whether it decodes on the GPU when the decode mode allows it, then by the high-performance order (a discrete GPU before an integrated one). On a laptop whose discrete GPU has no video encoder, the integrated GPU renders, so H.264 and HEVC exports stay on the GPU. The rule is the same on every OS and does not change with the decode mode.
 - `performance` (the default on Windows) takes the first hardware adapter in the high-performance order, whatever it encodes or decodes. Windows does not default to `auto` because, with the wgpu version this release builds on, some Intel integrated GPUs draw leftover memory into DX12 textures that should start cleared, and `auto` would put a hybrid laptop's renderer on such a GPU; set `ALPHA2_GPU_ADAPTER=auto` there to render on the GPU that encodes, accepting that risk.
@@ -95,7 +96,7 @@ The pinned FFmpeg runtime encodes on the CPU with `libvpx-vp9` (VP9), `libsvtav1
 
 The runtime is LGPL and has no software H.264 encoder of its own. H.264 (the default codec of MP4, MOV and Matroska) and HEVC come from:
 
-- Linux: Vulkan Video (`h264_vulkan`), on the GPU-resident path only, and NVENC (`h264_nvenc`, `hevc_nvenc`, `av1_nvenc`) on NVIDIA GPUs that have an encoder, with driver 530.41.03 or newer. NVENC is offered only after it has encoded a test frame on the machine, so an NVIDIA GPU without an encoder (A100, H100) or a container without the driver's `video` capability gets a clear refusal instead of a failed export.
+- Linux: Vulkan Video (`h264_vulkan`, `hevc_vulkan`), on the GPU-resident path only, and NVENC (`h264_nvenc`, `hevc_nvenc`, `av1_nvenc`) on NVIDIA GPUs that have an encoder, with driver 530.41.03 or newer. NVENC is offered only after it has encoded a test frame on the machine, so an NVIDIA GPU without an encoder (A100, H100) or a container without the driver's `video` capability gets a clear refusal instead of a failed export.
 - macOS: VideoToolbox, the Mac's hardware encoder.
 - Windows: Media Foundation's `h264_mf`, which is a software transform unless `ALPHA2_VIDEO_ENCODER_HYBRID=hardware` asks for the hardware one, D3D12 Video on the GPU-resident path, and NVENC (driver 531.61 or newer).
 - Everywhere: OpenH264, when it is installed (below).
@@ -132,12 +133,17 @@ Cisco's binary is under Cisco's own licence, reproduced in `THIRD_PARTY_NOTICES.
 | Command | What it does |
 | --- | --- |
 | `alpha2 probe <media>` | Prints the container, its duration and its streams (codec, size, frame rate, color). |
-| `alpha2 thumbnail <media> <out.png> [--at <seconds>]` | Writes one frame as PNG: the frame at a time on the source's own timeline, or by default the sharpest of nine frames spread over the video that is neither black nor white. |
+| `alpha2 decode <media>` | Decodes every video frame and prints each one's time, size and pixel format. |
+| `alpha2 decode-audio <media>` | Decodes the audio at 48 kHz and prints how many sample frames it holds. |
+| `alpha2 render <media> <out.png>` | Writes the first video frame as PNG. |
+| `alpha2 thumbnail <media> <out.png> [--auto \| --at <seconds>]` | Writes one frame as PNG: the frame at a time on the source's own timeline, or by default (`--auto`) the sharpest of nine frames spread over the video that is neither black nor white. |
 | `alpha2 transcode <media> <out.mp4\|.mov\|.mkv\|.webm> [--proxy half\|quarter] [--video-codec <id>]` | Encodes the video again at its own size, or at half or a quarter of it for a proxy, into the container the output's extension names. Without `--video-codec` it uses the container's default codec (H.264, or VP9 for WebM) when the runtime has an encoder for it that takes frames from memory, and otherwise another codec the runtime encodes that the container offers; it prints which. |
 | `alpha2 export-audio <media> <out.wav>` | Decodes the audio, resampled to 48 kHz, into a WAV file that starts at the source's time zero. |
 | `alpha2 waveform <media> [bucket-ms] [levels]` | Prints a waveform summary as JSON: the minimum, maximum and RMS of each bucket of samples (10 ms by default), at that size and at coarser levels each four times the last (6 levels by default). |
 
-The commands that decode take `--decode-policy strict|tolerant`: `strict` (the default) fails at the first damaged input, `tolerant` skips damaged input and reports what it skipped when it ends.
+The commands that decode take `--decode-policy strict|tolerant`: `strict` fails at the first damaged input, `tolerant` skips damaged input and reports what it skipped when it ends. Without the flag the policy is `ALPHA2_DECODE_POLICY`, else `strict`.
+
+Two more commands are diagnostics for support cases: `alpha2 probe-encoders [width] [height]` reports what every video encoder of the runtime declares and whether it opens and encodes a frame at that size (1920x1080 by default), and on Linux `alpha2 probe-hwdecode <media> [frame-limit]` decodes up to that many frames (120 by default) with Vulkan Video and reports what it did.
 
 ## Installing from crates.io
 
@@ -151,7 +157,7 @@ The archives are the way to get the programs with the FFmpeg runtime alpha2 is r
 
 ## FFmpeg and the LGPL
 
-The FFmpeg in the archives is FFmpeg 8 built as shared libraries under the LGPL 2.1 or later, with its GPL and nonfree components disabled. alpha2 links it dynamically, and the libraries of a `bundled` archive can be replaced with an ABI-compatible FFmpeg 8 build.
+The FFmpeg in the archives is FFmpeg 8 built as shared libraries under the LGPL 2.1 or later, with its GPL and nonfree components disabled. alpha2 links it dynamically, and the libraries of a `bundled` archive can be replaced with a build of the same FFmpeg release series (8.1.x) and the same configuration. Another series, FFmpeg 8.0 among them, can change the layout of structures the hardware paths read while keeping the same library names.
 
 Each archive's `compliance/` directory holds:
 

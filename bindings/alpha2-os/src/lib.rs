@@ -2,9 +2,6 @@
 //! does not offer at the minimum Rust version: file locks, no-replace publishing, termination
 //! handling, parent and child lifetime, clocks, memory, and the OS version.
 //!
-//! The rest of the workspace forbids `unsafe`; this crate and `alpha2-ffmpeg-bridge` hold the few
-//! calls that need it.
-//!
 //! In iOS and Android apps the system owns the process, so the termination, parent-exit and
 //! child-lifetime calls have no use there; files, clocks, memory and the version do.
 

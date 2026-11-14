@@ -150,7 +150,7 @@ pub enum ParamType {
 /// Semantic unit exposed to authoring hosts.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ParamUnit {
-    /// Resolution-independent fraction.
+    /// A plain or normalized number: a fraction, count, rate, seed or size.
     Normalized,
     /// Angle measured in degrees.
     Degrees,

@@ -1,7 +1,7 @@
 [package]
 name = "alpha2-host-core"
 version.workspace = true
-description = "FFmpeg-free native host logic for alpha2: audio timelines and output, decode policy, thumbnails, and the backend contracts the desktop and mobile hosts implement."
+description = "FFmpeg-free native host logic for alpha2: the policies, audio timelines, cursor rules, providers, plugin runtime and protocol frames every native host shares, and the decode, export and still pipeline the mobile hosts run."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
