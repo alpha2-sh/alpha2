@@ -1738,8 +1738,8 @@ class NodeCounter(TypedDict):
     color: NotRequired[SolidColor | None]
     """Color. Default: the theme's text color."""
     count_duration: NotRequired[float | None]
-    """Seconds the count takes from the node's start; it then holds `end`. Default: the node's
-    whole length.
+    """Seconds the count takes from the node's start, at most 100,000 frames; it then holds
+    `end`. Default: the node's whole length.
     """
     duration: NotRequired[float | None]
     """Length in seconds. Default: the node's own length, else what its parent gives it."""

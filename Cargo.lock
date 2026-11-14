@@ -197,6 +197,7 @@ dependencies = [
  "alpha2-media",
  "alpha2-model",
  "alpha2-render",
+ "alpha2-scaling-support",
  "alpha2-text",
  "alpha2-time",
  "libm",

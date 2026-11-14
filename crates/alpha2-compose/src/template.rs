@@ -4,7 +4,8 @@
 //! the data, then replaces `{"$param": name}` values, `{{name}}` in strings, and the `$if`,
 //! `$switch` and `$each` directives, and expands `owner/name` template nodes, leaving a spec
 //! with no `$` left in it. Binding is logic-less and works on the JSON before it is parsed, so
-//! every compose field can be a parameter.
+//! every compose field can be a parameter. One binding makes at most [`MAX_BOUND_VALUES`] values
+//! in template bodies.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -15,6 +16,13 @@ use crate::ComposeError;
 
 /// Template nodes nest at most this deep.
 const MAX_DEPTH: usize = 16;
+
+/// Values one binding may make in template bodies, a string counting one per
+/// [`STRING_BYTES_PER_VALUE`] bytes.
+pub const MAX_BOUND_VALUES: usize = 100_000;
+
+/// Bytes of a string that count as one bound value.
+const STRING_BYTES_PER_VALUE: usize = 64;
 
 /// Keys whose string values are names, not text, so `{{...}}` in them is left alone.
 const NAME_KEYS: [&str; 2] = ["type", "id"];
@@ -271,9 +279,17 @@ fn param(entry: &Value, path: &str) -> Result<Param, ComposeError> {
 fn param_kind(object: &Map<String, Value>, path: &str) -> Result<ParamKind, ComposeError> {
     let u64_field = |field: &str| object.get(field).and_then(Value::as_u64);
     let f64_field = |field: &str| object.get(field).and_then(Value::as_f64);
+    // A minimum no binding can meet is refused here, before sample data is made for it.
+    let minimum = |field: &str| match u64_field(field) {
+        Some(least) if least > MAX_BOUND_VALUES as u64 => Err(error(
+            &format!("{path}.{field}"),
+            format!("{least} is more than a binding makes ({MAX_BOUND_VALUES} values)"),
+        )),
+        least => Ok(least),
+    };
     Ok(match object.get("type").and_then(Value::as_str) {
         Some("text") => ParamKind::Text {
-            min_chars: u64_field("min_chars"),
+            min_chars: minimum("min_chars")?,
             max_chars: u64_field("max_chars"),
             multiline: object
                 .get("multiline")
@@ -340,7 +356,7 @@ fn param_kind(object: &Map<String, Value>, path: &str) -> Result<ParamKind, Comp
         Some("font") => ParamKind::Font,
         Some("node") => ParamKind::Node,
         Some("list") => ParamKind::List {
-            min_items: u64_field("min_items"),
+            min_items: minimum("min_items")?,
             max_items: u64_field("max_items"),
             item: params(object.get("item"), &format!("{path}.item"))?,
         },
@@ -538,39 +554,108 @@ enum Eval {
     Splice(Vec<Value>),
 }
 
-/// The values in scope: parameters, and `$each` aliases over them.
-#[derive(Clone, Default)]
-struct Scope {
+/// The values in scope: parameters at the root, and one `$each` item in each frame over it.
+#[derive(Default)]
+struct Scope<'a> {
     values: Map<String, Value>,
+    /// An `$each` item: its alias, the item, and its index as `{alias}.$index` reads it.
+    item: Option<(&'a str, &'a Value, Value)>,
+    parent: Option<&'a Scope<'a>>,
     /// Set inside a template body, the only place directives and `{{name}}` are evaluated.
     template: bool,
 }
 
-impl Scope {
+impl Scope<'_> {
     /// The value at `name`, a dotted path from a parameter or alias.
     fn lookup(&self, name: &str) -> Option<&Value> {
-        let mut parts = name.split('.');
-        let mut value = self.values.get(parts.next()?)?;
-        for part in parts {
+        let (first, rest) = name
+            .split_once('.')
+            .map_or((name, None), |(first, rest)| (first, Some(rest)));
+        let mut scope = self;
+        let mut value = loop {
+            if let Some((alias, item, index)) = &scope.item
+                && *alias == first
+            {
+                if rest == Some("$index") && item.is_object() {
+                    return Some(index);
+                }
+                break *item;
+            }
+            match scope.parent {
+                Some(parent) => scope = parent,
+                None => break scope.values.get(first)?,
+            }
+        };
+        for part in rest.into_iter().flat_map(|rest| rest.split('.')) {
             value = value.get(part)?;
         }
         Some(value)
     }
 }
 
+/// What `value` counts against [`MAX_BOUND_VALUES`], counted no further than `limit`.
+fn cost(value: &Value, limit: usize) -> usize {
+    match value {
+        Value::String(text) => string_cost(text),
+        Value::Array(items) => items.iter().fold(1, |total, item| {
+            if total > limit {
+                total
+            } else {
+                total + cost(item, limit - total)
+            }
+        }),
+        Value::Object(object) => object.values().fold(1, |total, item| {
+            if total > limit {
+                total
+            } else {
+                total + cost(item, limit - total)
+            }
+        }),
+        _ => 1,
+    }
+}
+
+const fn string_cost(text: &str) -> usize {
+    1 + text.len() / STRING_BYTES_PER_VALUE
+}
+
 struct Binder<'a> {
     templates: BTreeMap<String, &'a Value>,
     stack: Vec<String>,
+    /// Values made in template bodies so far.
+    made: usize,
 }
 
 impl Binder<'_> {
+    /// Counts `count` more values made at `path`, refused past [`MAX_BOUND_VALUES`].
+    fn make(&mut self, count: usize, path: &str) -> Result<(), ComposeError> {
+        self.made = self.made.saturating_add(count);
+        if self.made > MAX_BOUND_VALUES {
+            return Err(error(
+                path,
+                format!(
+                    "binding makes more than {MAX_BOUND_VALUES} values here (a string counts one \
+                     per {STRING_BYTES_PER_VALUE} bytes)"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn room(&self) -> usize {
+        MAX_BOUND_VALUES.saturating_sub(self.made)
+    }
+
     fn eval(
         &mut self,
         value: &Value,
-        scope: &Scope,
+        scope: &Scope<'_>,
         key: Option<&str>,
         path: &str,
     ) -> Result<Eval, ComposeError> {
+        if scope.template && !matches!(value, Value::String(_)) {
+            self.make(1, path)?;
+        }
         match value {
             Value::Object(object) => self.eval_object(object, scope, path),
             Value::Array(items) => {
@@ -584,10 +669,14 @@ impl Binder<'_> {
                 }
                 Ok(Eval::Value(Value::Array(out)))
             }
-            Value::String(text)
-                if scope.template && !key.is_some_and(|key| NAME_KEYS.contains(&key)) =>
-            {
-                Ok(Eval::Value(Value::String(interpolate(text, scope, path)?)))
+            Value::String(text) if scope.template => {
+                let text = if key.is_some_and(|key| NAME_KEYS.contains(&key)) {
+                    text.clone()
+                } else {
+                    interpolate(text, scope, path)?
+                };
+                self.make(string_cost(&text), path)?;
+                Ok(Eval::Value(Value::String(text)))
             }
             other => Ok(Eval::Value(other.clone())),
         }
@@ -597,7 +686,7 @@ impl Binder<'_> {
     fn directive(
         &mut self,
         object: &Map<String, Value>,
-        scope: &Scope,
+        scope: &Scope<'_>,
         path: &str,
     ) -> Result<Option<Eval>, ComposeError> {
         if let Some(name) = object.get("$param") {
@@ -607,11 +696,14 @@ impl Binder<'_> {
             if object.len() != 1 {
                 return Err(error(path, "a `$param` object has no other fields"));
             }
-            return Ok(Some(
-                scope
-                    .lookup(name)
-                    .map_or(Eval::Absent, |value| Eval::Value(value.clone())),
-            ));
+            return match scope.lookup(name) {
+                None => Ok(Some(Eval::Absent)),
+                Some(value) => {
+                    // The directive object itself was counted as one value.
+                    self.make(cost(value, self.room()).saturating_sub(1), path)?;
+                    Ok(Some(Eval::Value(value.clone())))
+                }
+            };
         }
         if let Some(name) = object.get("$if") {
             let name = name
@@ -665,16 +757,15 @@ impl Binder<'_> {
             let items = scope
                 .lookup(name)
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+                .map_or(&[][..], Vec::as_slice);
             let mut out = Vec::with_capacity(items.len());
-            for (index, item) in items.into_iter().enumerate() {
-                let mut inner = scope.clone();
-                let mut entry = item;
-                if let Some(fields) = entry.as_object_mut() {
-                    fields.insert("$index".to_owned(), json!(index));
-                }
-                inner.values.insert(alias.to_owned(), entry);
+            for (index, item) in items.iter().enumerate() {
+                let inner = Scope {
+                    values: Map::new(),
+                    item: Some((alias, item, json!(index))),
+                    parent: Some(scope),
+                    template: scope.template,
+                };
                 match self.eval(node, &inner, None, &format!("{path}.node"))? {
                     Eval::Value(value) => out.push(value),
                     Eval::Absent => {}
@@ -689,7 +780,7 @@ impl Binder<'_> {
     fn eval_object(
         &mut self,
         object: &Map<String, Value>,
-        scope: &Scope,
+        scope: &Scope<'_>,
         path: &str,
     ) -> Result<Eval, ComposeError> {
         if scope.template
@@ -725,7 +816,7 @@ impl Binder<'_> {
         &mut self,
         id: &str,
         object: &Map<String, Value>,
-        scope: &Scope,
+        scope: &Scope<'_>,
         path: &str,
     ) -> Result<Value, ComposeError> {
         self.reference(id, object, scope, &format!("{path}.with"), path)
@@ -736,7 +827,7 @@ impl Binder<'_> {
         &mut self,
         id: &str,
         object: &Map<String, Value>,
-        scope: &Scope,
+        scope: &Scope<'_>,
         path: &str,
     ) -> Result<Value, ComposeError> {
         let (mut reference, data): (Map<_, _>, Map<_, _>) = object
@@ -754,7 +845,7 @@ impl Binder<'_> {
         &mut self,
         id: &str,
         object: &Map<String, Value>,
-        scope: &Scope,
+        scope: &Scope<'_>,
         data_path: &str,
         path: &str,
     ) -> Result<Value, ComposeError> {
@@ -841,6 +932,7 @@ impl Binder<'_> {
         let scope = Scope {
             values,
             template: true,
+            ..Scope::default()
         };
         match header.kind {
             Kind::Node => {
@@ -870,7 +962,7 @@ impl Binder<'_> {
 
 /// `text` with each `{{name}}` replaced by its parameter's text, number or choice; `{{{{` is a
 /// literal `{{`.
-fn interpolate(text: &str, scope: &Scope, path: &str) -> Result<String, ComposeError> {
+fn interpolate(text: &str, scope: &Scope<'_>, path: &str) -> Result<String, ComposeError> {
     if !text.contains("{{") {
         return Ok(text.to_owned());
     }
@@ -950,6 +1042,7 @@ pub fn bind(document: &Value, data: &Value, options: &BindOptions) -> Result<Val
     let mut binder = Binder {
         templates: index(&options.templates)?,
         stack: Vec::new(),
+        made: 0,
     };
     let header = header(document)?;
     let mut bound = match &header {
@@ -1283,7 +1376,13 @@ pub fn lint(template: &Value, data: Option<&Value>, templates: &[Value]) -> Vec<
         }
     }
     content(&body, None, "template", &mut issues);
-    let sample = data.cloned().unwrap_or_else(|| sample_data(&declared));
+    let sample = match data.cloned().map_or_else(|| least_data(&declared), Ok) {
+        Ok(sample) => sample,
+        Err(problem) => {
+            fail(&mut issues, "bind", problem);
+            return issues;
+        }
+    };
     let options = BindOptions {
         theme: None,
         templates: templates.to_vec(),
@@ -1498,24 +1597,36 @@ fn literal_copy(text: &str) -> bool {
     plain.chars().any(char::is_alphanumeric)
 }
 
-/// Data that satisfies `params`, for checking a template without data of its own.
-fn sample_data(params: &[Param]) -> Value {
+/// [`sample_data`] for `params`, or why the least data they take is more than a binding makes.
+fn least_data(params: &[Param]) -> Result<Value, ComposeError> {
+    sample_data(params, &mut { MAX_BOUND_VALUES }).ok_or_else(|| {
+        error(
+            "template.params",
+            format!("the least data the parameters take makes more than {MAX_BOUND_VALUES} values"),
+        )
+    })
+}
+
+/// Data that satisfies `params`, for checking a template without data of its own, made only
+/// while it stays within [`MAX_BOUND_VALUES`] (`room` is what is left).
+fn sample_data(params: &[Param], room: &mut usize) -> Option<Value> {
     let mut data = Map::new();
     for param in params {
         if param.default.is_some() || !param.required {
             continue;
         }
+        *room = room.checked_sub(1)?;
         let value = match &param.kind {
             ParamKind::Text {
                 min_chars,
                 max_chars,
                 ..
             } => {
-                let length = min_chars
-                    .unwrap_or(4)
-                    .max(1)
-                    .min(max_chars.unwrap_or(4).max(1));
-                json!("x".repeat(usize::try_from(length).unwrap_or(4)))
+                let least = min_chars.unwrap_or(1).max(1);
+                let length = 4.clamp(least, max_chars.unwrap_or(u64::MAX).max(least));
+                let length = usize::try_from(length).unwrap_or(4);
+                *room = room.checked_sub(length / STRING_BYTES_PER_VALUE)?;
+                json!("x".repeat(length))
             }
             ParamKind::Media { accept, .. } => {
                 json!(if accept.iter().any(|kind| kind == "video") {
@@ -1535,12 +1646,17 @@ fn sample_data(params: &[Param]) -> Value {
                 min_items, item, ..
             } => {
                 let count = usize::try_from(min_items.unwrap_or(1).max(1)).unwrap_or(1);
-                Value::Array(vec![sample_data(item); count])
+                let mut items = Vec::with_capacity(count.min(*room));
+                for _ in 0..count {
+                    *room = room.checked_sub(1)?;
+                    items.push(sample_data(item, room)?);
+                }
+                Value::Array(items)
             }
         };
         data.insert(param.name.clone(), value);
     }
-    Value::Object(data)
+    Some(Value::Object(data))
 }
 
 #[cfg(test)]

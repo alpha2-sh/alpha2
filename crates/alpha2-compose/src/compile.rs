@@ -265,6 +265,9 @@ pub(crate) struct Context<'a> {
     warnings: Vec<String>,
 }
 
+/// Frames a counter may count over, each a keyframe at most.
+const MAX_COUNTER_FRAMES: i64 = 100_000;
+
 /// A canvas preset: width, height.
 fn preset(name: &str) -> Option<(u32, u32)> {
     Some(match name {
@@ -2286,6 +2289,30 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// The frame a count from `start` over `count` ticks begins in, refused at `path` when it
+    /// spans more than [`MAX_COUNTER_FRAMES`].
+    fn counter_frames(&self, start: i64, count: i64, path: &str) -> Result<i64, ComposeError> {
+        let first = self
+            .rate
+            .frame_at_or_before(MediaTime::from_ticks(start))
+            .unwrap_or(0);
+        let frames = self
+            .rate
+            .frame_at_or_before(MediaTime::from_ticks(start + count))
+            .unwrap_or(i64::MAX)
+            .saturating_sub(first);
+        if frames > MAX_COUNTER_FRAMES {
+            return Err(ComposeError::new(
+                path,
+                format!(
+                    "the count spans {frames} frames, and a counter counts over at most \
+                     {MAX_COUNTER_FRAMES}"
+                ),
+            ));
+        }
+        Ok(first)
+    }
+
     /// A counter's layout tree: its text, keyed on the frame grid, placed in `rect` by padding the
     /// canvas-sized root.
     fn counter_root(
@@ -2311,6 +2338,7 @@ impl<'a> Context<'a> {
                 counter,
             )
         };
+        let first = self.counter_frames(start, count, &visual.head.path)?;
         // Frame starts on the timeline grid, as picture times from the clip's start.
         let mut keyframes: Vec<Keyframe<String>> = Vec::new();
         let mut push = |picture: i64, value: String| {
@@ -2323,10 +2351,6 @@ impl<'a> Context<'a> {
             }
         };
         push(0, value_at(0));
-        let first = self
-            .rate
-            .frame_at_or_before(MediaTime::from_ticks(start))
-            .unwrap_or(0);
         for index in first.. {
             let Some(time) = self.rate.frame_start(index) else {
                 break;

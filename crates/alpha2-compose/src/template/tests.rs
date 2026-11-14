@@ -270,3 +270,106 @@ fn a_spec_without_template_nodes_binds_to_itself() {
     }
     assert!(plain > 0);
 }
+
+fn rows_template() -> Value {
+    json!({
+        "compose_version": 1,
+        "template": {"id": "acme/rows", "version": 1, "kind": "video"},
+        "params": [{"name": "rows", "type": "list", "item": [{"name": "label", "type": "text"}]}],
+        "duration": 1,
+        "body": {"type": "stack", "children": [
+            {"$each": "rows", "as": "row", "node": {"type": "text", "text": "{{row.$index}} {{row.label}}"}},
+        ]},
+    })
+}
+
+fn rows(count: usize) -> Value {
+    json!({"rows": (0..count).map(|index| json!({"label": format!("row {index}")})).collect::<Vec<_>>()})
+}
+
+#[test]
+fn binding_stops_at_its_value_budget() {
+    let template = json!({
+        "compose_version": 1,
+        "template": {"id": "acme/cube", "version": 1, "kind": "video"},
+        "params": [{"name": "items", "type": "list", "item": [{"name": "label", "type": "text"}]}],
+        "duration": 1,
+        "body": {"type": "stack", "children": [
+            {"$each": "items", "as": "a", "node": {"type": "stack", "children": [
+                {"$each": "items", "as": "b", "node": {"type": "stack", "children": [
+                    {"$each": "items", "as": "c", "node": {"type": "color"}},
+                ]}},
+            ]}},
+        ]},
+    });
+    let data = json!({"items": vec![json!({"label": "x"}); 200]});
+    let error = bind(&template, &data, &BindOptions::default()).expect_err("over the budget");
+    assert!(error.message.contains("more than 100000 values"), "{error}");
+    assert!(
+        error.path.starts_with("template.body.children[0].node"),
+        "{error}"
+    );
+
+    // A long string counts one value per 64 bytes, so the budget bounds bytes too.
+    let long = json!({"rows": [{"label": "x".repeat(64 * MAX_BOUND_VALUES)}]});
+    let error = bind(&rows_template(), &long, &BindOptions::default()).expect_err("too long");
+    assert!(error.message.contains("more than 100000 values"), "{error}");
+
+    let bound = bind(&rows_template(), &rows(3), &BindOptions::default()).expect("binds");
+    assert_eq!(bound["body"]["children"][2]["text"], "2 row 2");
+}
+
+#[test]
+fn binding_grows_with_its_rows() {
+    alpha2_scaling_support::assert_linear("binding rows", 1_000, rows, |data| {
+        bind(&rows_template(), data, &BindOptions::default()).expect("binds");
+    });
+}
+
+#[test]
+fn lint_answers_at_once_for_minimums_no_binding_meets() {
+    let template = |item: Value| {
+        json!({
+            "compose_version": 1,
+            "template": {"id": "acme/many", "version": 1, "kind": "video"},
+            "params": [{"name": "items", "type": "list", "min_items": 1_000, "item": [item]}],
+            "duration": 1,
+            "body": {"type": "stack", "children": [
+                {"$each": "items", "as": "item", "node": {"type": "color"}},
+            ]},
+        })
+    };
+    let huge = json!({
+        "compose_version": 1,
+        "template": {"id": "acme/huge", "version": 1, "kind": "video"},
+        "params": [{"name": "items", "type": "list", "min_items": 1_000_000_000_u64,
+                    "item": [{"name": "label", "type": "text"}]}],
+        "duration": 1,
+        "body": {"type": "color"},
+    });
+    let issues = lint(&huge, None, &[]);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.path == "template.params[0].min_items"),
+        "{issues:?}"
+    );
+    // Each level is allowed alone; nested they ask for 10^9 values.
+    let nested = template(json!({"name": "inner", "type": "list", "min_items": 1_000,
+        "item": [{"name": "deepest", "type": "list", "min_items": 1_000,
+                  "item": [{"name": "label", "type": "text"}]}]}));
+    let issues = lint(&nested, None, &[]);
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.code == "bind" && issue.message.contains("100000 values")),
+        "{issues:?}"
+    );
+    // A minimum within the budget is sampled as declared.
+    let text = template(json!({"name": "label", "type": "text", "min_chars": 100}));
+    let issues = lint(&text, None, &[]);
+    assert!(
+        issues.iter().all(|issue| issue.severity != Severity::Error),
+        "{issues:?}"
+    );
+}

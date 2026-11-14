@@ -209,6 +209,10 @@ All notable changes to this project are documented in this file.
 - An edit whose result would be longer than the 64 MiB a project document may be (a `bake` of long
   data on a large project) is refused with `INVALID_INPUT`, refusal `result_too_large`, instead
   of returning a project no host loads; compose refuses such a compiled project at `spec`.
+- Template binding makes at most 100,000 values (a string counts one per 64 bytes) and fails at the
+  path where the budget runs out, `$each` no longer copies its scope per item, and a counter counts
+  over at most 100,000 frames. Nested `$each`, large declared minimums in lint and long counters
+  hung or exhausted memory. Lint's sample data now meets a `min_chars` above 4.
 
 ## [0.6.0] - 2026-11-08
 

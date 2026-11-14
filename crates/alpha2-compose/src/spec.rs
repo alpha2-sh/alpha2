@@ -1891,8 +1891,8 @@ pub struct Counter {
     pub start: f64,
     /// The value it counts to.
     pub end: f64,
-    /// Seconds the count takes from the node's start; it then holds `end`. Default: the node's
-    /// whole length.
+    /// Seconds the count takes from the node's start, at most 100,000 frames; it then holds
+    /// `end`. Default: the node's whole length.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub count_duration: Option<f64>,
     /// The timing curve of the count. Default linear.

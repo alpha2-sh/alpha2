@@ -1659,3 +1659,18 @@ fn old_specs_compile_to_projects_that_load() {
             .unwrap_or_else(|error| panic!("{error}: {}", case["spec"]));
     }
 }
+
+#[test]
+fn a_counter_counts_over_at_most_its_frame_budget() {
+    let counter = |duration: f64, rate: u32| {
+        json!({"canvas": {"preset": "youtube-1080p", "frame_rate": rate},
+            "body": {"type": "counter", "start": 0, "end": 1_000_000, "duration": duration}})
+    };
+    let started = std::time::Instant::now();
+    let error = compile_error(&counter(1e9, 30));
+    assert!(error.starts_with("spec.body: the count spans"), "{error}");
+    let error = compile_error(&counter(7200.0, 60));
+    assert!(error.contains("431999 frames"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    compile(&counter(60.0, 60));
+}

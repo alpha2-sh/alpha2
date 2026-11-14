@@ -8396,7 +8396,7 @@
               "description": "Color. Default: the theme's text color."
             },
             "count_duration": {
-              "description": "Seconds the count takes from the node's start; it then holds `end`. Default: the node's\nwhole length.",
+              "description": "Seconds the count takes from the node's start, at most 100,000 frames; it then holds\n`end`. Default: the node's whole length.",
               "format": "double",
               "type": [
                 "number",
