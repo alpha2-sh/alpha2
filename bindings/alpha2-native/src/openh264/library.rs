@@ -264,41 +264,10 @@ impl Lookup {
             enabled: set("ALPHA2_OPENH264").map(|value| value.to_string_lossy().into_owned()),
             library: set("ALPHA2_OPENH264_LIBRARY").map(PathBuf::from),
             unverified: set("ALPHA2_OPENH264_UNVERIFIED").is_some_and(|value| value == "1"),
-            cache: host_cache_directory(),
+            cache: alpha2_os::host_cache_directory(),
             system: system_candidates(),
         }
     }
-}
-
-/// The host archive and `OpenH264` install directory, as the Node and Python clients name it:
-/// `ALPHA2_HOST_CACHE_DIR`, else `alpha2` under `$XDG_CACHE_HOME` (when absolute) or `~/.cache` on
-/// Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows.
-pub(crate) fn host_cache_directory() -> Option<PathBuf> {
-    let variable = |name: &str| {
-        std::env::var_os(name)
-            .filter(|value| !value.to_string_lossy().trim().is_empty())
-            .map(PathBuf::from)
-    };
-    if let Some(cache) = variable("ALPHA2_HOST_CACHE_DIR") {
-        return Some(if cache.is_absolute() {
-            cache
-        } else {
-            std::env::current_dir().ok()?.join(cache)
-        });
-    }
-    if cfg!(target_os = "windows") {
-        let base = variable("LOCALAPPDATA")
-            .or_else(|| variable("USERPROFILE").map(|home| home.join("AppData").join("Local")))?;
-        return Some(base.join("alpha2"));
-    }
-    let home = variable("HOME");
-    if cfg!(target_os = "macos") {
-        return Some(home?.join("Library").join("Caches").join("alpha2"));
-    }
-    let base = variable("XDG_CACHE_HOME")
-        .filter(|path| path.is_absolute())
-        .or_else(|| home.map(|home| home.join(".cache")))?;
-    Some(base.join("alpha2"))
 }
 
 /// Where the install puts this target's library under `cache`.

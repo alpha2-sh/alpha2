@@ -140,6 +140,13 @@ All notable changes to this project are documented in this file.
 - GPU renderer: a layer whose pixels are transparent leaves the picture below it unchanged. Before,
   each such layer re-stored the colors under it, so a stack of transparent overlays darkened the
   picture by up to a few code values and the GPU differed from the CPU renderer.
+- Host: plugin downloads stream into a private cache. The cache directory is never the shared
+  temp directory: without a home directory set `ALPHA2_PLUGIN_CACHE`; on Unix it is created with
+  mode 0700 and refused when others can write it. A file is stored under its pinned name only after
+  its length and SHA-256 match, two requests fetching one file no longer fail each other, and the
+  cache is pruned past `ALPHA2_PLUGIN_CACHE_QUOTA` (4 GiB by default). A plugin manifest pins an
+  artifact of at most 256 MiB and resources of at most 2 GiB each and 4 GiB together, and a local
+  manifest must be a regular file. Fetch messages show URLs without user info or query.
 - Editor: an import, relink or caption import that finishes after another project was opened is
   refused with `stale_import` and changes nothing; before, a relink waiting for the engine module
   could add its asset and an undo step to the new project.

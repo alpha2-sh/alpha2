@@ -268,10 +268,25 @@ fn read_verified(
     sha256: &str,
     size: u64,
 ) -> Result<(PathBuf, Vec<u8>), PluginError> {
+    use std::io::Read;
     let Fetched { path, local } = fetch.fetch(url, sha256, size)?;
-    let bytes = std::fs::read(&path).map_err(|error| {
+    let failed = |error: std::io::Error| {
         PluginError::new(codes::FETCH_FAILED, format!("{}: {error}", path.display()))
-    })?;
+    };
+    let file = std::fs::File::open(&path).map_err(failed)?;
+    let length = file.metadata().map_err(failed)?.len();
+    let mut bytes = Vec::with_capacity(usize::try_from(length.min(size)).unwrap_or(0));
+    file.take(size.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(failed)?;
+    if bytes.len() as u64 > size {
+        let message = if local {
+            format!("{url} is longer than the {size} bytes the manifest pins")
+        } else {
+            format!("{url} does not match the length and SHA-256 the manifest pins")
+        };
+        return Err(PluginError::new(codes::HASH_MISMATCH, message));
+    }
     verify(&bytes, sha256, size, url, local)?;
     Ok((path, bytes))
 }

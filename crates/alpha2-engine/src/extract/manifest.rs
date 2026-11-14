@@ -13,6 +13,12 @@ pub const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 pub const MAX_PLUGIN_ARTIFACTS: usize = 64;
 /// Most resources one manifest lists.
 pub const MAX_PLUGIN_RESOURCES: usize = 64;
+/// The longest artifact a manifest may pin, in bytes.
+pub const MAX_PLUGIN_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+/// The longest resource a manifest may pin, in bytes: what a wasm module's memory can address.
+pub const MAX_PLUGIN_RESOURCE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// The most bytes a manifest's resources may pin together.
+pub const MAX_PLUGIN_RESOURCES_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// A plugin's manifest.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -63,6 +69,7 @@ pub struct PluginArtifact {
     #[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9a-f]{64}$")))]
     pub sha256: String,
     /// Its length in bytes.
+    #[cfg_attr(feature = "schema", schemars(range(max = MAX_PLUGIN_ARTIFACT_BYTES)))]
     pub bytes: u64,
 }
 
@@ -92,6 +99,7 @@ pub struct PluginResource {
     #[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9a-f]{64}$")))]
     pub sha256: String,
     /// Its length in bytes.
+    #[cfg_attr(feature = "schema", schemars(range(max = MAX_PLUGIN_RESOURCE_BYTES)))]
     pub bytes: u64,
 }
 
@@ -181,6 +189,12 @@ impl PluginManifest {
                 ));
             }
             check_file(&artifact.url, &artifact.sha256)?;
+            if artifact.bytes > MAX_PLUGIN_ARTIFACT_BYTES {
+                return Err(format!(
+                    "artifact {} is longer than {MAX_PLUGIN_ARTIFACT_BYTES} bytes",
+                    artifact.url
+                ));
+            }
         }
         let mut names = HashSet::new();
         for resource in &self.resources {
@@ -191,6 +205,20 @@ impl PluginManifest {
                 ));
             }
             check_file(&resource.url, &resource.sha256)?;
+            if resource.bytes > MAX_PLUGIN_RESOURCE_BYTES {
+                return Err(format!(
+                    "resource {} is longer than {MAX_PLUGIN_RESOURCE_BYTES} bytes",
+                    resource.name
+                ));
+            }
+        }
+        let total = self.resources.iter().fold(0_u64, |total, resource| {
+            total.saturating_add(resource.bytes)
+        });
+        if total > MAX_PLUGIN_RESOURCES_TOTAL_BYTES {
+            return Err(format!(
+                "the resources are longer than {MAX_PLUGIN_RESOURCES_TOTAL_BYTES} bytes together"
+            ));
         }
         Ok(())
     }

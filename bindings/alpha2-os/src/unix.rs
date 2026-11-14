@@ -123,6 +123,32 @@ pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
     })
 }
 
+/// Creates `path` and its missing parents with mode 0700, then refuses a directory that another
+/// user owns or that group or others can write.
+pub(crate) fn create_private_directory(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+    let metadata = fs::metadata(path)?;
+    // SAFETY: `geteuid` takes no arguments and cannot fail.
+    let user = unsafe { libc::geteuid() };
+    if metadata.uid() != user {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the directory belongs to another user",
+        ));
+    }
+    if metadata.permissions().mode() & 0o022 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "group or others can write the directory",
+        ));
+    }
+    Ok(())
+}
+
 /// From `<linux/fs.h>`; the same on every architecture.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const RENAME_NOREPLACE: libc::c_uint = 1;

@@ -95,7 +95,9 @@
 //! - A delivered frame's long edge when the descriptor names none: [`DEFAULT_MAX_SIZE`].
 //! - Frames per audio block: [`BLOCK_FRAMES_RANGE`], [`DEFAULT_BLOCK_FRAMES`] when unnamed.
 //! - Plugin manifest size: [`MAX_MANIFEST_BYTES`]; artifacts and resources per manifest:
-//!   [`MAX_PLUGIN_ARTIFACTS`], [`MAX_PLUGIN_RESOURCES`].
+//!   [`MAX_PLUGIN_ARTIFACTS`], [`MAX_PLUGIN_RESOURCES`]; file lengths:
+//!   [`MAX_PLUGIN_ARTIFACT_BYTES`], [`MAX_PLUGIN_RESOURCE_BYTES`],
+//!   [`MAX_PLUGIN_RESOURCES_TOTAL_BYTES`].
 //! - Data sets per project: [`alpha2_model::MAX_DATA_SETS`]; channels per output:
 //!   [`alpha2_model::MAX_DATA_CHANNELS`].
 //! - Values, words and intervals per data set: [`alpha2_model::MAX_DATA_VALUES`],
@@ -126,9 +128,10 @@ pub use drive::{DriveError, Emitter, Extractor, ExtractorError, PassInfo, Suppli
 #[cfg(feature = "schema")]
 pub use manifest::plugin_manifest_json_schema;
 pub use manifest::{
-    ArtifactKind, MAX_MANIFEST_BYTES, MAX_PLUGIN_ARTIFACTS, MAX_PLUGIN_RESOURCES, ManifestError,
-    PLUGIN_MANIFEST_SCHEMA_ID, PluginArtifact, PluginKind, PluginManifest, PluginResource,
-    Reference, WASM_TARGET, reference,
+    ArtifactKind, MAX_MANIFEST_BYTES, MAX_PLUGIN_ARTIFACT_BYTES, MAX_PLUGIN_ARTIFACTS,
+    MAX_PLUGIN_RESOURCE_BYTES, MAX_PLUGIN_RESOURCES, MAX_PLUGIN_RESOURCES_TOTAL_BYTES,
+    ManifestError, PLUGIN_MANIFEST_SCHEMA_ID, PluginArtifact, PluginKind, PluginManifest,
+    PluginResource, Reference, WASM_TARGET, reference,
 };
 pub use pixels::{
     delivered_size, displayed_size, luma8_from_rgba8, mono_downmix, present_for_extraction,

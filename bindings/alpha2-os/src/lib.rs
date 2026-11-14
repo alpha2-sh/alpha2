@@ -7,7 +7,7 @@
 
 use std::fs::File;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod lifetime;
@@ -582,6 +582,64 @@ pub fn process_cpu_time() -> Option<std::time::Duration> {
     #[cfg(not(any(unix, windows)))]
     {
         None
+    }
+}
+
+/// The host's cache directory, as the Node and Python clients name it: `ALPHA2_HOST_CACHE_DIR`
+/// (relative to the working directory), else `alpha2` under `$XDG_CACHE_HOME` (when absolute) or
+/// `~/.cache` on Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows. `None` without
+/// a home directory.
+#[must_use]
+pub fn host_cache_directory() -> Option<PathBuf> {
+    host_cache_directory_from(|name| std::env::var_os(name))
+}
+
+/// [`host_cache_directory`] with the environment read through `variable`.
+#[must_use]
+pub fn host_cache_directory_from(
+    variable: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let variable = |name: &str| {
+        variable(name)
+            .filter(|value| !value.to_string_lossy().trim().is_empty())
+            .map(PathBuf::from)
+    };
+    if let Some(cache) = variable("ALPHA2_HOST_CACHE_DIR") {
+        return Some(if cache.is_absolute() {
+            cache
+        } else {
+            std::env::current_dir().ok()?.join(cache)
+        });
+    }
+    if cfg!(target_os = "windows") {
+        let base = variable("LOCALAPPDATA")
+            .or_else(|| variable("USERPROFILE").map(|home| home.join("AppData").join("Local")))?;
+        return Some(base.join("alpha2"));
+    }
+    let home = variable("HOME");
+    if cfg!(target_os = "macos") {
+        return Some(home?.join("Library").join("Caches").join("alpha2"));
+    }
+    let base = variable("XDG_CACHE_HOME")
+        .filter(|path| path.is_absolute())
+        .or_else(|| home.map(|home| home.join(".cache")))?;
+    Some(base.join("alpha2"))
+}
+
+/// Creates `path` and its missing parents for files only this user may change. On Unix new
+/// directories get mode 0700, and a directory that another user owns or that group or others can
+/// write is refused.
+///
+/// # Errors
+/// When a directory cannot be created, or the existing one is refused (`PermissionDenied`).
+pub fn create_private_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        platform::create_private_directory(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(path)
     }
 }
 

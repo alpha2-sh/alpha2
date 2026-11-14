@@ -1,17 +1,55 @@
-//! Fetches plugin files into a cache keyed by SHA-256. A manifest is named by `https:` URL,
-//! `file:` URL or path, and names its artifacts and resources by paths under itself or `https:`
-//! URLs.
+//! Fetches plugin files into a private cache keyed by SHA-256. A manifest is named by `https:`
+//! URL, `file:` URL or path, and names its artifacts and resources by paths under itself or
+//! `https:` URLs.
 
-use std::io::Write;
+use std::ffi::OsString;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, SystemTime};
 
 use alpha2_engine::extract::{MAX_MANIFEST_BYTES, Reference, reference};
 use alpha2_host_core::plugins::{Fetch, Fetched, PluginError, codes, sha256_hex};
+use sha2::{Digest, Sha256};
 
 /// How long one download may take, connecting included.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
+/// The cache size past which least recently used files are removed, when
+/// `ALPHA2_PLUGIN_CACHE_QUOTA` names none.
+const DEFAULT_CACHE_QUOTA: u64 = 4 * 1024 * 1024 * 1024;
+/// Files used this recently are never evicted, so a host sharing the cache keeps a file between
+/// its check and its read.
+const EVICTION_GRACE: Duration = Duration::from_secs(3600);
+/// Numbers partial files, so request threads of one host never write the same one.
+static PARTIALS: AtomicU64 = AtomicU64::new(0);
+/// Bytes read from a body or a file at a time.
+const CHUNK_BYTES: usize = 64 * 1024;
+
+/// Starts HTTPS downloads; production uses ureq, tests script the bodies.
+pub trait Download: Send + Sync {
+    /// The body of a GET of `url`.
+    ///
+    /// # Errors
+    /// Why the request failed, without the URL.
+    fn get(&self, url: &str) -> Result<Box<dyn Read + Send>, String>;
+}
+
+struct Https;
+
+impl Download for Https {
+    fn get(&self, url: &str) -> Result<Box<dyn Read + Send>, String> {
+        let response = agent().get(url).call().map_err(|error| error.to_string())?;
+        Ok(Box::new(response.into_body().into_reader()))
+    }
+}
+
+/// Downloads over HTTPS through the platform's certificate verifier.
+#[must_use]
+pub fn https() -> Arc<dyn Download> {
+    Arc::new(Https)
+}
 
 /// Where a manifest came from, which its relative URLs resolve against.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,34 +71,30 @@ fn fetch_failed(message: impl Into<String>) -> PluginError {
     PluginError::new(codes::FETCH_FAILED, message)
 }
 
-/// `url` as a message shows it: scheme, host, port and path. User info, query and fragment are
-/// left out, since they may carry credentials (a signed URL's token). A path is shown whole.
-fn shown_url(url: &str) -> String {
-    if has_scheme(url).is_none() {
-        return url.to_owned();
-    }
+/// `url` without user info, query or fragment, which can carry credentials.
+fn shown(url: &str) -> String {
     let url = url.split(['?', '#']).next().unwrap_or_default();
-    let Some((scheme, rest)) = url.split_once("://") else {
+    let Some(after_scheme) = url.find("://").map(|at| at + 3) else {
         return url.to_owned();
     };
-    let (authority, path) = rest.find('/').map_or((rest, ""), |at| rest.split_at(at));
-    let host = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    format!("{scheme}://{host}{path}")
+    let authority_end = url[after_scheme..]
+        .find('/')
+        .map_or(url.len(), |at| after_scheme + at);
+    match url[after_scheme..authority_end].rfind('@') {
+        Some(at) => format!("{}{}", &url[..after_scheme], &url[after_scheme + at + 1..]),
+        None => url.to_owned(),
+    }
 }
 
 /// A `file:` URL's path, percent-decoded, without the slash before a Windows drive letter.
 fn file_url_path(url: &str) -> Result<PathBuf, PluginError> {
-    let shown = || shown_url(url);
     let rest = url
         .strip_prefix("file://")
-        .ok_or_else(|| fetch_failed(format!("{}: not a file URL", shown())))?;
+        .ok_or_else(|| fetch_failed(format!("{url}: not a file URL")))?;
     let path = rest.strip_prefix("localhost").unwrap_or(rest);
     if !path.starts_with('/') {
         return Err(fetch_failed(format!(
-            "{}: a file URL names a local absolute path",
-            shown()
+            "{url}: a file URL names a local absolute path"
         )));
     }
     let mut bytes = Vec::with_capacity(path.len());
@@ -71,19 +105,13 @@ fn file_url_path(url: &str) -> Result<PathBuf, PluginError> {
             let digit = |b: Option<u8>| b.and_then(|b| char::from(b).to_digit(16));
             match (digit(hex[0]), digit(hex[1])) {
                 (Some(high), Some(low)) => bytes.push(u8::try_from(high * 16 + low).unwrap_or(0)),
-                _ => {
-                    return Err(fetch_failed(format!(
-                        "{}: a malformed percent escape",
-                        shown()
-                    )));
-                }
+                _ => return Err(fetch_failed(format!("{url}: a malformed percent escape"))),
             }
         } else {
             bytes.push(byte);
         }
     }
-    let path =
-        String::from_utf8(bytes).map_err(|_| fetch_failed(format!("{}: not UTF-8", shown())))?;
+    let path = String::from_utf8(bytes).map_err(|_| fetch_failed(format!("{url}: not UTF-8")))?;
     let windows_drive = path.len() > 2 && path.as_bytes()[2] == b':' && cfg!(windows);
     Ok(PathBuf::from(if windows_drive {
         &path[1..]
@@ -147,8 +175,7 @@ fn manifest_location(location: &str) -> Result<Location, PluginError> {
         Some("file") => file_url_path(location).map(Location::Path),
         // A drive letter, `C:\...`, is a path.
         Some(scheme) if scheme.len() > 1 => Err(fetch_failed(format!(
-            "{}: only https: and file: URLs are fetched",
-            shown_url(location)
+            "{location}: only https: and file: URLs are fetched"
         ))),
         _ => Ok(Location::Path(PathBuf::from(location))),
     }
@@ -183,31 +210,50 @@ fn agent() -> &'static ureq::Agent {
     })
 }
 
-fn download(url: &str, limit: u64) -> Result<Vec<u8>, PluginError> {
-    let mut response = agent()
-        .get(url)
-        .call()
-        .map_err(|error| fetch_failed(format!("{}: {error}", shown_url(url))))?;
-    response
-        .body_mut()
-        .with_config()
-        .limit(limit)
-        .read_to_vec()
-        .map_err(|error| fetch_failed(format!("{}: {error}", shown_url(url))))
+/// Reads at most `limit` bytes of `reader`; `None` when there are more.
+fn read_bounded(reader: impl Read, limit: u64) -> std::io::Result<Option<Vec<u8>>> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    Ok((bytes.len() as u64 <= limit).then_some(bytes))
 }
 
 /// The manifest at `location` (an `https:` URL, a `file:` URL or a path), checked against
 /// `sha256`, and the base its relative URLs resolve against.
 ///
 /// # Errors
-/// `PLUGIN_FETCH_FAILED` when it cannot be read, `PLUGIN_HASH_MISMATCH` when its hash differs.
-pub fn manifest(location: &str, sha256: &str) -> Result<(String, Base), PluginError> {
+/// `PLUGIN_FETCH_FAILED` when it cannot be read, is not a regular file or is longer than
+/// `MAX_MANIFEST_BYTES`; `PLUGIN_HASH_MISMATCH` when its hash differs.
+pub fn manifest(
+    location: &str,
+    sha256: &str,
+    download: &dyn Download,
+) -> Result<(String, Base), PluginError> {
     let limit = MAX_MANIFEST_BYTES as u64;
+    let too_long = |what: &str| fetch_failed(format!("{what}: longer than {limit} bytes"));
     let (bytes, base) = match manifest_location(location)? {
-        Location::Url(url) => (download(&url, limit)?, Base::Url(url)),
+        Location::Url(url) => {
+            let failed = |error: String| fetch_failed(format!("{}: {error}", shown(&url)));
+            let body = download.get(&url).map_err(failed)?;
+            let bytes = read_bounded(body, limit)
+                .map_err(|error| failed(error.to_string()))?
+                .ok_or_else(|| too_long(&shown(&url)))?;
+            (bytes, Base::Url(url))
+        }
         Location::Path(path) => {
-            let bytes = std::fs::read(&path)
-                .map_err(|error| fetch_failed(format!("{}: {error}", path.display())))?;
+            let failed =
+                |error: std::io::Error| fetch_failed(format!("{}: {error}", path.display()));
+            let file = File::open(&path).map_err(failed)?;
+            if !file.metadata().map_err(failed)?.is_file() {
+                return Err(fetch_failed(format!(
+                    "{}: not a regular file",
+                    path.display()
+                )));
+            }
+            let bytes = read_bounded(file, limit)
+                .map_err(failed)?
+                .ok_or_else(|| too_long(&path.display().to_string()))?;
             let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
             (bytes, Base::Directory(directory))
         }
@@ -220,7 +266,7 @@ pub fn manifest(location: &str, sha256: &str) -> Result<(String, Base), PluginEr
             }
             Base::Url(_) => format!(
                 "the manifest at {} does not match the SHA-256 the request pins",
-                shown_url(location)
+                shown(location)
             ),
         };
         return Err(PluginError::new(codes::HASH_MISMATCH, message));
@@ -229,70 +275,233 @@ pub fn manifest(location: &str, sha256: &str) -> Result<(String, Base), PluginEr
     Ok((text, base))
 }
 
-/// Where fetched plugin files are kept, `ALPHA2_PLUGIN_CACHE` or else the platform's cache.
+/// Where downloaded plugin files are kept: `ALPHA2_PLUGIN_CACHE` (relative to the working
+/// directory), else `plugins` under the host's cache directory; `None` without either.
 #[must_use]
-pub fn cache_directory() -> PathBuf {
-    if let Some(directory) =
-        std::env::var_os("ALPHA2_PLUGIN_CACHE").filter(|value| !value.is_empty())
-    {
-        return PathBuf::from(directory);
+pub fn cache_directory() -> Option<PathBuf> {
+    cache_directory_from(|name| std::env::var_os(name))
+}
+
+fn cache_directory_from(variable: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    match variable("ALPHA2_PLUGIN_CACHE").filter(|value| !value.is_empty()) {
+        Some(directory) => std::path::absolute(PathBuf::from(directory)).ok(),
+        None => alpha2_os::host_cache_directory_from(variable).map(|cache| cache.join("plugins")),
     }
-    let home = || std::env::var_os("HOME").map_or_else(std::env::temp_dir, PathBuf::from);
-    let root = if cfg!(windows) {
-        std::env::var_os("LOCALAPPDATA").map_or_else(std::env::temp_dir, PathBuf::from)
-    } else if cfg!(target_os = "macos") {
-        home().join("Library/Caches")
-    } else {
-        std::env::var_os("XDG_CACHE_HOME")
-            .filter(|value| !value.is_empty())
-            .map_or_else(|| home().join(".cache"), PathBuf::from)
+}
+
+/// The cache size past which files are evicted: `ALPHA2_PLUGIN_CACHE_QUOTA` in bytes, 4 GiB when
+/// unset or unreadable.
+fn cache_quota() -> u64 {
+    std::env::var("ALPHA2_PLUGIN_CACHE_QUOTA")
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(DEFAULT_CACHE_QUOTA)
+}
+
+/// Whether `file` holds the `size` bytes with the pinned `sha256`.
+fn holds(file: &Path, sha256: &str, size: u64) -> bool {
+    let Ok(file) = File::open(file) else {
+        return false;
     };
-    root.join("alpha2").join("plugins")
+    if file
+        .metadata()
+        .map_or(true, |metadata| metadata.len() != size)
+    {
+        return false;
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0; CHUNK_BYTES];
+    let mut reader = file.take(size.saturating_add(1));
+    let mut read = 0_u64;
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => {
+                read += n as u64;
+                hasher.update(&buffer[..n]);
+            }
+            Err(_) => return false,
+        }
+    }
+    read == size && hex(&hasher.finalize()) == sha256
+}
+
+fn hex(digest: &[u8]) -> String {
+    digest.iter().fold(String::new(), |mut hex, byte| {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    })
+}
+
+/// Marks `file` as used now, which eviction reads; a failure only makes it older.
+fn touch(file: &Path) {
+    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(file) {
+        let _ = file.set_modified(SystemTime::now());
+    }
+}
+
+/// Removes the least recently used files of `directory` until it holds at most `quota` bytes,
+/// keeping files used within [`EVICTION_GRACE`] of `now`.
+fn evict(directory: &Path, quota: u64, now: SystemTime) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let mut files: Vec<(SystemTime, u64, PathBuf)> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            Some((metadata.modified().ok()?, metadata.len(), entry.path()))
+        })
+        .collect();
+    let mut total = files
+        .iter()
+        .fold(0_u64, |total, file| total.saturating_add(file.1));
+    if total <= quota {
+        return;
+    }
+    files.sort();
+    for (modified, length, path) in files {
+        if total <= quota {
+            break;
+        }
+        let recent = now
+            .duration_since(modified)
+            .map_or(true, |age| age < EVICTION_GRACE);
+        if !recent && std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(length);
+        }
+    }
 }
 
 /// Fetches a manifest's files: local ones are read in place, `https:` ones downloaded once into
 /// the cache under their hash.
 pub struct Fetcher {
     base: Base,
-    cache: PathBuf,
+    cache: Option<PathBuf>,
+    quota: u64,
+    download: Arc<dyn Download>,
 }
 
 impl Fetcher {
-    /// Resolves relative URLs against `base` and keeps downloads in `cache`.
+    /// Resolves relative URLs against `base` and keeps downloads in `cache`, made private.
     #[must_use]
-    pub fn new(base: Base, cache: PathBuf) -> Self {
-        Self { base, cache }
+    pub fn new(base: Base, cache: Option<PathBuf>, download: Arc<dyn Download>) -> Self {
+        Self {
+            base,
+            cache,
+            quota: cache_quota(),
+            download,
+        }
+    }
+
+    /// The cache directory, created or checked private.
+    fn private_cache(&self) -> Result<&Path, PluginError> {
+        let cache = self.cache.as_deref().ok_or_else(|| {
+            fetch_failed(
+                "no cache directory for downloaded plugin files: set ALPHA2_PLUGIN_CACHE to a \
+                 directory only this user can write",
+            )
+        })?;
+        alpha2_os::create_private_directory(cache).map_err(|error| {
+            fetch_failed(format!(
+                "{}: {error}; set ALPHA2_PLUGIN_CACHE to a directory only this user can write",
+                cache.display()
+            ))
+        })?;
+        Ok(cache)
     }
 
     fn cached(&self, url: &str, sha256: &str, size: u64) -> Result<PathBuf, PluginError> {
+        let cache = self.private_cache()?;
         // The extension stays: Windows appends `.dll` to a library name without one.
         let name = url.rsplit('/').next().unwrap_or_default();
         let extension = Path::new(name.split(['?', '#']).next().unwrap_or_default())
             .extension()
             .and_then(|extension| extension.to_str())
             .filter(|extension| extension.bytes().all(|byte| byte.is_ascii_alphanumeric()));
-        let file = self.cache.join(extension.map_or_else(
+        let file = cache.join(extension.map_or_else(
             || sha256.to_owned(),
             |extension| format!("{sha256}.{extension}"),
         ));
-        if std::fs::read(&file).is_ok_and(|bytes| sha256_hex(&bytes) == sha256) {
+        if holds(&file, sha256, size) {
+            touch(&file);
             return Ok(file);
         }
-        let bytes = download(url, size)?;
-        std::fs::create_dir_all(&self.cache)
-            .map_err(|error| fetch_failed(format!("{}: {error}", self.cache.display())))?;
-        // Written beside the target and renamed, so a reader never sees half a file.
-        let partial = self
-            .cache
-            .join(format!("{sha256}.{}.partial", std::process::id()));
-        let written = std::fs::File::create(&partial)
-            .and_then(|mut out| out.write_all(&bytes).and_then(|()| out.sync_all()))
-            .and_then(|()| std::fs::rename(&partial, &file));
-        if let Err(error) = written {
+        let partial = cache.join(format!(
+            "{sha256}.{}.{}.partial",
+            std::process::id(),
+            PARTIALS.fetch_add(1, Ordering::Relaxed)
+        ));
+        let written = self.download_into(url, &partial, sha256, size, &|| false);
+        let published = written.and_then(|()| match std::fs::rename(&partial, &file) {
+            Ok(()) => Ok(()),
+            Err(_) if holds(&file, sha256, size) => Ok(()),
+            Err(error) => Err(fetch_failed(format!("{}: {error}", file.display()))),
+        });
+        if published.is_err() {
             let _ = std::fs::remove_file(&partial);
-            return Err(fetch_failed(format!("{}: {error}", file.display())));
         }
+        published?;
+        evict(cache, self.quota, SystemTime::now());
         Ok(file)
+    }
+
+    /// Streams `url` into a new file at `partial`, which holds the pinned bytes when this returns
+    /// `Ok`. Stops once more than `size` bytes arrive, or when `should_stop` says so.
+    fn download_into(
+        &self,
+        url: &str,
+        partial: &Path,
+        sha256: &str,
+        size: u64,
+        should_stop: &dyn Fn() -> bool,
+    ) -> Result<(), PluginError> {
+        let failed = |error: String| fetch_failed(format!("{}: {error}", shown(url)));
+        let mismatch = || {
+            PluginError::new(
+                codes::HASH_MISMATCH,
+                format!(
+                    "{} does not match the length and SHA-256 the manifest pins",
+                    shown(url)
+                ),
+            )
+        };
+        let mut out = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(partial)
+            .map_err(|error| fetch_failed(format!("{}: {error}", partial.display())))?;
+        let mut body = self.download.get(url).map_err(failed)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0; CHUNK_BYTES];
+        let mut received = 0_u64;
+        loop {
+            if should_stop() {
+                return Err(PluginError::new("CANCELLED", "the download was stopped"));
+            }
+            let n = match body.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(failed(error.to_string())),
+            };
+            received += n as u64;
+            if received > size {
+                return Err(mismatch());
+            }
+            hasher.update(&buffer[..n]);
+            out.write_all(&buffer[..n])
+                .map_err(|error| fetch_failed(format!("{}: {error}", partial.display())))?;
+        }
+        if received != size || hex(&hasher.finalize()) != sha256 {
+            return Err(mismatch());
+        }
+        out.sync_all()
+            .map_err(|error| fetch_failed(format!("{}: {error}", partial.display())))
     }
 }
 
@@ -316,8 +525,9 @@ impl Fetch for Fetcher {
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("plugin.dylib");
-        let signed = self.cache.join("signed").join(name);
-        std::fs::create_dir_all(signed.parent().unwrap_or(&self.cache))
+        let cache = self.private_cache()?;
+        let signed = cache.join("signed").join(name);
+        std::fs::create_dir_all(signed.parent().unwrap_or(cache))
             .and_then(|()| std::fs::copy(verified, &signed))
             .map_err(|error| failed(format!("{}: {error}", signed.display())))?;
         let status = std::process::Command::new("/usr/bin/codesign")
@@ -335,6 +545,271 @@ impl Fetch for Fetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    /// A directory removed when the test ends.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "alpha2-plugin-fetch-{name}-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Answers each URL with fixed bytes.
+    struct Scripted(HashMap<String, Vec<u8>>);
+
+    impl Download for Scripted {
+        fn get(&self, url: &str) -> Result<Box<dyn Read + Send>, String> {
+            let body = self.0.get(url).ok_or("404 Not Found")?.clone();
+            Ok(Box::new(std::io::Cursor::new(body)))
+        }
+    }
+
+    const URL: &str = "https://example.com/p/a.wasm";
+
+    fn fetcher(cache: &Path, body: &[u8]) -> Fetcher {
+        let download = Scripted(HashMap::from([(URL.to_owned(), body.to_vec())]));
+        Fetcher::new(
+            Base::Url("https://example.com/p/manifest.json".to_owned()),
+            Some(cache.to_path_buf()),
+            Arc::new(download),
+        )
+    }
+
+    fn names(directory: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(directory)
+            .map(|entries| {
+                entries
+                    .filter_map(|entry| Some(entry.ok()?.file_name().to_str()?.to_owned()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_download_is_cached_under_its_hash_once_its_bytes_match() {
+        let cache = Scratch::new("hit");
+        let body = b"module bytes";
+        let pinned = sha256_hex(body);
+        let fetched = fetcher(&cache.0, body)
+            .fetch("a.wasm", &pinned, body.len() as u64)
+            .expect("fetched");
+        assert_eq!(fetched.path, cache.0.join(format!("{pinned}.wasm")));
+        assert!(!fetched.local);
+        assert_eq!(names(&cache.0), [format!("{pinned}.wasm")]);
+        // A hit needs no download.
+        let again = fetcher(&cache.0, b"")
+            .fetch("a.wasm", &pinned, body.len() as u64)
+            .expect("hit");
+        assert_eq!(again.path, fetched.path);
+    }
+
+    #[test]
+    fn a_body_longer_than_pinned_or_with_another_digest_leaves_nothing() {
+        let body = b"module bytes";
+        let pinned = sha256_hex(body);
+        for (served, size) in [
+            (b"module bytes and more".as_slice(), body.len() as u64),
+            (b"module_bytes".as_slice(), body.len() as u64),
+            (b"module".as_slice(), body.len() as u64),
+        ] {
+            let cache = Scratch::new("mismatch");
+            let error = fetcher(&cache.0, served)
+                .fetch("a.wasm", &pinned, size)
+                .expect_err("mismatch");
+            assert_eq!(error.code, codes::HASH_MISMATCH);
+            assert_eq!(
+                error.message,
+                format!("{URL} does not match the length and SHA-256 the manifest pins")
+            );
+            assert_eq!(names(&cache.0), Vec::<String>::new());
+        }
+    }
+
+    #[test]
+    fn a_body_that_never_ends_stops_past_the_pinned_length() {
+        struct Endless;
+        impl Download for Endless {
+            fn get(&self, _: &str) -> Result<Box<dyn Read + Send>, String> {
+                Ok(Box::new(std::io::repeat(7)))
+            }
+        }
+        let cache = Scratch::new("endless");
+        let mut fetcher = Fetcher::new(
+            Base::Url("https://example.com/p/manifest.json".to_owned()),
+            Some(cache.0.clone()),
+            Arc::new(Endless),
+        );
+        let error = fetcher
+            .fetch("a.wasm", &"0".repeat(64), 1 << 20)
+            .expect_err("mismatch");
+        assert_eq!(error.code, codes::HASH_MISMATCH);
+        assert_eq!(names(&cache.0), Vec::<String>::new());
+    }
+
+    #[test]
+    fn two_threads_fetching_one_pin_both_succeed_and_leave_one_file() {
+        let cache = Scratch::new("race");
+        let body = vec![3_u8; 3 * CHUNK_BYTES + 5];
+        let pinned = sha256_hex(&body);
+        std::thread::scope(|scope| {
+            let runs: Vec<_> = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        fetcher(&cache.0, &body).fetch("a.wasm", &pinned, body.len() as u64)
+                    })
+                })
+                .collect();
+            for run in runs {
+                run.join().expect("thread").expect("fetched");
+            }
+        });
+        assert_eq!(names(&cache.0), [format!("{pinned}.wasm")]);
+    }
+
+    #[test]
+    fn the_cache_lives_under_the_named_or_home_cache_and_never_in_temp() {
+        let environment = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(value))
+            }
+        };
+        assert_eq!(cache_directory_from(environment(&[])), None);
+        assert_eq!(
+            cache_directory_from(environment(&[("ALPHA2_PLUGIN_CACHE", "/srv/plugins")])),
+            Some(PathBuf::from("/srv/plugins"))
+        );
+        assert_eq!(
+            cache_directory_from(environment(&[("ALPHA2_HOST_CACHE_DIR", "/srv/alpha2")])),
+            Some(PathBuf::from("/srv/alpha2/plugins"))
+        );
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                cache_directory_from(environment(&[("XDG_CACHE_HOME", "relative")])),
+                None
+            );
+            assert_eq!(
+                cache_directory_from(environment(&[("HOME", "/home/a")])),
+                Some(PathBuf::from("/home/a/.cache/alpha2/plugins"))
+            );
+        }
+    }
+
+    #[test]
+    fn a_download_without_a_cache_directory_names_the_variable() {
+        let mut fetcher = Fetcher::new(
+            Base::Url("https://example.com/p/manifest.json".to_owned()),
+            None,
+            Arc::new(Scripted(HashMap::new())),
+        );
+        let error = fetcher
+            .fetch("a.wasm", &"0".repeat(64), 1)
+            .expect_err("no cache");
+        assert_eq!(error.code, codes::FETCH_FAILED);
+        assert!(error.message.contains("ALPHA2_PLUGIN_CACHE"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_cache_others_can_write_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let cache = Scratch::new("shared");
+        std::fs::create_dir_all(&cache.0).expect("dir");
+        std::fs::set_permissions(&cache.0, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+        let error = fetcher(&cache.0, b"x")
+            .fetch("a.wasm", &sha256_hex(b"x"), 1)
+            .expect_err("refused");
+        assert_eq!(error.code, codes::FETCH_FAILED);
+        assert!(error.message.contains("ALPHA2_PLUGIN_CACHE"), "{error}");
+        assert_eq!(names(&cache.0), Vec::<String>::new());
+        let fresh = Scratch::new("fresh");
+        fetcher(&fresh.0, b"x")
+            .fetch("a.wasm", &sha256_hex(b"x"), 1)
+            .expect("fetched");
+        let mode = std::fs::metadata(&fresh.0)
+            .expect("dir")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_manifest_that_is_not_a_regular_file_is_refused_at_once() {
+        let error = manifest("/dev/zero", &"0".repeat(64), &*https()).expect_err("refused");
+        assert_eq!(error.code, codes::FETCH_FAILED);
+        assert!(error.message.contains("not a regular file"), "{error}");
+    }
+
+    #[test]
+    fn a_manifest_longer_than_the_bound_is_refused() {
+        let url = "https://example.com/p/manifest.json";
+        let download = Scripted(HashMap::from([(
+            url.to_owned(),
+            vec![b' '; MAX_MANIFEST_BYTES + 1],
+        )]));
+        let error = manifest(url, &"0".repeat(64), &download).expect_err("refused");
+        assert_eq!(error.code, codes::FETCH_FAILED);
+        assert!(error.message.contains("longer than"), "{error}");
+    }
+
+    #[test]
+    fn eviction_removes_the_oldest_files_and_keeps_recent_ones() {
+        let cache = Scratch::new("evict");
+        std::fs::create_dir_all(&cache.0).expect("dir");
+        let now = SystemTime::now();
+        let hours = |count: u64| now - Duration::from_secs(count * 3600);
+        for (name, modified) in [
+            ("oldest", hours(5)),
+            ("old", hours(3)),
+            ("newer", hours(2)),
+            ("recent", now - Duration::from_secs(60)),
+        ] {
+            let path = cache.0.join(name);
+            std::fs::write(&path, [0_u8; 100]).expect("file");
+            File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|file| file.set_modified(modified))
+                .expect("mtime");
+        }
+        evict(&cache.0, 250, now);
+        assert_eq!(names(&cache.0), ["newer", "recent"]);
+        // Only recent files are left over the quota: they stay.
+        evict(&cache.0, 50, now);
+        assert_eq!(names(&cache.0), ["recent"]);
+    }
+
+    #[test]
+    fn messages_show_urls_without_credentials_or_query() {
+        assert_eq!(
+            shown("https://user:secret@example.com/p/a.wasm?token=x#y"),
+            "https://example.com/p/a.wasm"
+        );
+        assert_eq!(
+            shown("https://example.com/a@b.wasm"),
+            "https://example.com/a@b.wasm"
+        );
+    }
 
     #[test]
     fn relative_urls_resolve_against_the_manifest() {
@@ -426,44 +901,6 @@ mod tests {
     }
 
     #[test]
-    fn a_url_in_a_message_has_no_user_info_query_or_fragment() {
-        for (url, shown) in [
-            (
-                "https://user:secret@cdn.example.com:8443/p/manifest.json?token=abc#part",
-                "https://cdn.example.com:8443/p/manifest.json",
-            ),
-            (
-                "https://example.com/m.json?X-Amz-Signature=abc",
-                "https://example.com/m.json",
-            ),
-            ("https://token@example.com", "https://example.com"),
-            (
-                "file:///tmp/a%20b/manifest.json#x",
-                "file:///tmp/a%20b/manifest.json",
-            ),
-            ("ftp://user:pw@example.com/m", "ftp://example.com/m"),
-            ("/plugins/p?/manifest.json", "/plugins/p?/manifest.json"),
-            (r"C:\plugins\manifest.json", r"C:\plugins\manifest.json"),
-        ] {
-            assert_eq!(shown_url(url), shown, "{url}");
-        }
-        let refused = manifest_location("ftp://user:pw@example.com/m?token=abc").expect_err("ftp");
-        assert!(!refused.message.contains("pw") && !refused.message.contains("abc"));
-        // Port 1 refuses the connection; the failure must not repeat the credentials.
-        let failed = manifest(
-            "https://user:pw@127.0.0.1:1/m.json?token=abc",
-            &"0".repeat(64),
-        )
-        .expect_err("nothing listens");
-        assert_eq!(failed.code, codes::FETCH_FAILED);
-        assert!(
-            !failed.message.contains("pw") && !failed.message.contains("abc"),
-            "{}",
-            failed.message
-        );
-    }
-
-    #[test]
     fn a_manifest_is_checked_against_its_pinned_hash() {
         let dir =
             std::env::temp_dir().join(format!("alpha2-plugin-manifest-{}", std::process::id()));
@@ -471,12 +908,18 @@ mod tests {
         let path = dir.join("manifest.json");
         std::fs::write(&path, b"{}").expect("manifest");
         let pinned = sha256_hex(b"{}");
-        let (text, base) = manifest(path.to_str().expect("utf-8"), &pinned).expect("read");
+        let (text, base) =
+            manifest(path.to_str().expect("utf-8"), &pinned, &*https()).expect("read");
         assert_eq!((text.as_str(), base), ("{}", Base::Directory(dir.clone())));
-        let wrong = manifest(path.to_str().expect("utf-8"), &"0".repeat(64)).expect_err("refused");
+        let wrong = manifest(path.to_str().expect("utf-8"), &"0".repeat(64), &*https())
+            .expect_err("refused");
         assert_eq!(wrong.code, codes::HASH_MISMATCH);
-        let missing =
-            manifest(dir.join("none.json").to_str().expect("utf-8"), &pinned).expect_err("refused");
+        let missing = manifest(
+            dir.join("none.json").to_str().expect("utf-8"),
+            &pinned,
+            &*https(),
+        )
+        .expect_err("refused");
         assert_eq!(missing.code, codes::FETCH_FAILED);
         std::fs::remove_dir_all(&dir).expect("cleanup");
     }

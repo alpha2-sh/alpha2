@@ -365,11 +365,13 @@ fn a_file_that_is_not_the_pinned_one_is_refused() {
     );
     let mut short = manifest(0, true, false);
     short["artifacts"][0]["bytes"] = json!(3);
-    assert_eq!(
-        loaded(&short, &json!({}), &Policy::default())
-            .expect_err("refused")
-            .code,
-        codes::HASH_MISMATCH
+    let longer = loaded(&short, &json!({}), &Policy::default()).expect_err("refused");
+    assert_eq!(longer.code, codes::HASH_MISMATCH);
+    assert!(
+        longer
+            .message
+            .ends_with("is longer than the 3 bytes the manifest pins"),
+        "{longer}"
     );
     let mut resourced = manifest(1, true, false);
     let mut resource = entry(&built().wasm[0]);

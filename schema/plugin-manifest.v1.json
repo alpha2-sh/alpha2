@@ -295,6 +295,7 @@
         "bytes": {
           "description": "Its length in bytes.",
           "format": "uint64",
+          "maximum": 268435456,
           "minimum": 0,
           "type": "integer"
         },
@@ -342,6 +343,7 @@
         "bytes": {
           "description": "Its length in bytes.",
           "format": "uint64",
+          "maximum": 2147483648,
           "minimum": 0,
           "type": "integer"
         },

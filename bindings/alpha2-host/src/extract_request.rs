@@ -669,8 +669,9 @@ fn load_plugin(
     options: ExtractOptions,
 ) -> Result<alpha2_host_core::plugins::PluginExtractor, HostError> {
     use alpha2_host_core::plugins;
-    let (text, base) =
-        crate::plugin_fetch::manifest(&plugin.manifest, &plugin.sha256).map_err(plugin_error)?;
+    let download = crate::plugin_fetch::https();
+    let (text, base) = crate::plugin_fetch::manifest(&plugin.manifest, &plugin.sha256, &*download)
+        .map_err(plugin_error)?;
     let manifest = plugins::parse_manifest(&text).map_err(plugin_error)?;
     let policy = plugins::Policy {
         allow_native: plugin.allow_native,
@@ -679,7 +680,7 @@ fn load_plugin(
         call_deadline: options.plugin_call_deadline,
     };
     let mut fetcher =
-        crate::plugin_fetch::Fetcher::new(base, crate::plugin_fetch::cache_directory());
+        crate::plugin_fetch::Fetcher::new(base, crate::plugin_fetch::cache_directory(), download);
     plugins::load(&manifest, request.params.clone(), &policy, &mut fetcher).map_err(plugin_error)
 }
 
