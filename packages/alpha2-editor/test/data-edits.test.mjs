@@ -256,6 +256,135 @@ test(
 );
 
 test(
+  "an editor ripple trim of a clip's start edits data and sync tracks as remove_ranges of the head",
+  { skip },
+  async () => {
+    const wasm = await engine();
+    const session = editor();
+    const before = session.document.project;
+    const result = session.dispatch({
+      type: "clip.trim",
+      id: "c",
+      edge: "start",
+      at: at(80),
+      ripple: true,
+    });
+    assert.ok(result.ok, result.error?.message);
+    const engineResult = applyEdit(wasm, plain(before), {
+      op: "remove_ranges",
+      ranges: {
+        list: [{ start: at(72), end: at(80) }],
+        anchor: { type: "timeline" },
+      },
+      target: { clips: ["c"] },
+      ripple: "timeline",
+    });
+    assert.deepEqual(
+      canonical(wasm, result.value.project),
+      engineResult.project,
+    );
+  },
+);
+
+test("an editor ripple trim that extends a clip's start opens time at its start", () => {
+  const session = editor();
+  assert.ok(
+    session.dispatch({
+      type: "marker.add",
+      marker: { id: "m", name: "m", time: at(100) },
+    }).ok,
+  );
+  const result = session.dispatch({
+    type: "clip.trim",
+    id: "c",
+    edge: "start",
+    at: at(66),
+    ripple: true,
+  });
+  assert.ok(result.ok, result.error?.message);
+  const { project, metadata } = session.document;
+  const frames = (ranges) =>
+    ranges.map((r) => [r.start / FRAME, r.end / FRAME]);
+  const clips = project.timeline.tracks.map((t) =>
+    frames((t.clips ?? []).map((c) => c.timeline_range)),
+  );
+  assert.deepEqual(clips[0], [
+    [0, 60],
+    [60, 72],
+    [72, 156],
+  ]);
+  assert.deepEqual(clips[1], [
+    [0, 30],
+    [96, 126],
+  ]);
+  assert.deepEqual(
+    frames(
+      project.timeline.tracks[2].captions.cues.map((c) => c.timeline_range),
+    ),
+    [
+      [5, 20],
+      [86, 101],
+    ],
+  );
+  const data = new Map(project.data.map((set) => [set.id, set]));
+  assert.deepEqual(frames(data.get("said").words), [
+    [40, 65],
+    [62, 70],
+    [106, 116],
+  ]);
+  assert.deepEqual(frames(data.get("quiet").intervals), [
+    [30, 96],
+    [61, 70],
+    [81, 81],
+    [126, 131],
+  ]);
+  assert.deepEqual(
+    metadata.markers.map((m) => m.time),
+    [at(106)],
+  );
+});
+
+test("markers on picture a start trim keeps move with it, and one in the trimmed head refuses", () => {
+  const withMarkers = (times) => {
+    const session = editor();
+    for (const [id, time] of times)
+      assert.ok(
+        session.dispatch({
+          type: "marker.add",
+          marker: { id, name: id, time: at(time) },
+        }).ok,
+      );
+    return session;
+  };
+  const trim = (session) =>
+    session.dispatch({
+      type: "clip.trim",
+      id: "c",
+      edge: "start",
+      at: at(80),
+      ripple: true,
+    });
+  const kept = withMarkers([
+    ["before", 50],
+    ["middle", 100],
+    ["tail", 145],
+  ]);
+  const result = trim(kept);
+  assert.ok(result.ok, result.error?.message);
+  assert.deepEqual(
+    kept.document.metadata.markers.map((m) => [m.id, m.time / FRAME]),
+    [
+      ["before", 50],
+      ["middle", 92],
+      ["tail", 137],
+    ],
+  );
+  const refused = trim(withMarkers([["head", 76]]));
+  assert.equal(refused.ok, false);
+  assert.equal(refused.error.code, "sync_conflict");
+});
+
+test(
   "an editor split points the right part's bindings at it, as split_at does",
   { skip },
   async () => {

@@ -1142,11 +1142,14 @@ function reduce(
       if (syncTracks.length && found) {
         const before = found.clip.timeline_range;
         if (command.type === "clip.trim") {
-          const delta =
-            command.edge === "end"
-              ? command.at - before.end
-              : before.start - command.at;
-          next = shiftMarkers(next, before.end, delta);
+          if (command.edge === "end")
+            next = shiftMarkers(next, before.end, command.at - before.end);
+          else
+            next = shiftMarkers(
+              next,
+              Math.max(before.start, command.at),
+              before.start - command.at,
+            );
         } else if (command.type === "clip.delete") {
           const gap = edit.rippleDeleteSpan(project, command.id)!;
           next = shiftMarkers(next, gap.end, gap.start - gap.end);

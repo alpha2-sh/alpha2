@@ -167,6 +167,10 @@ All notable changes to this project are documented in this file.
   (`via`), on the part of a cut clip beside it; a cut that no single part can follow is refused with
   the new refusals `matte_source` or `read_through`, instead of drawing the matte, misplacing a
   follower or failing with `INTERNAL`.
+- `rippleTrim` at a clip's start, and the editor's start-edge ripple trim, close or open time at the
+  clip's start on sync tracks, in timeline-anchored data and for timeline markers; they edited at the
+  clip's old end. A start trim that would close time where a sync track has content is refused
+  (`sync_conflict`).
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

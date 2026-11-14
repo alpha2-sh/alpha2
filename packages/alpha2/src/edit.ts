@@ -213,7 +213,8 @@ export function trim(
 
 /**
  * Trims like {@link trim} and shifts later clips on the track by the same amount. A start trim
- * keeps the clip's start in place, so `to` may be before the timeline start.
+ * keeps the clip's start in place, so `to` may be before the timeline start. Sync tracks and
+ * timeline data close or open time at the trimmed edge, which for a start trim is the clip's start.
  */
 export function rippleTrim(
   project: Project,
@@ -230,14 +231,23 @@ export function rippleTrim(
   const before = trimmed.original.timeline_range;
   let edited = clip;
   let delta: number;
+  let pivot = before.end;
   if (edge === "end") {
     delta = to - before.end;
   } else {
     // Trim the head, then slide the clip back to its original start.
     delta = before.start - to;
     edited = shift(clip, delta);
+    pivot = before.start;
   }
   if (pullsOnto(track, before.end, delta, clipId)) return pulledOnto(track);
+  if (edge === "start" && delta < 0)
+    for (const other of syncTracksOf(project, options.syncTracks, track.id))
+      if (occupies(other, { start: before.start, end: to }))
+        return failure(
+          "sync_conflict",
+          `track ${other.id} has content in the time the trim closes`,
+        );
   const shifted = (track.clips ?? []).map((candidate) => {
     if (candidate.id === clipId) return edited;
     return candidate.timeline_range.start >= before.end
@@ -248,7 +258,7 @@ export function rippleTrim(
     project,
     options.syncTracks,
     track.id,
-    before.end,
+    pivot,
     delta,
   );
   if (!synced.ok) return synced;
@@ -261,7 +271,7 @@ export function rippleTrim(
       }),
       track.id,
       options.syncTracks,
-      before.end,
+      edge === "start" && delta < 0 ? to : pivot,
       delta,
     ),
   );
