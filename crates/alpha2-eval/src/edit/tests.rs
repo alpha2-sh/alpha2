@@ -23,8 +23,8 @@ fn keyed(times: &[(i64, f64)], curve: &Value) -> Value {
     json!({ "mode": "keyframes", "keyframes": times.iter().map(|(time, value)| json!({ "time": time * FRAME, "value": value, "interpolation": curve })).collect::<Vec<_>>() })
 }
 
-/// One clip of each time map on its own track, with keyframes, a mask, a transition, captions,
-/// an audio clip and a timeline-anchored binding.
+/// One clip of each time map on its own track, with keyframes, a mask, a keyed transition,
+/// captions, an audio clip and a timeline-anchored binding.
 pub(super) fn corpus() -> Value {
     let linear = json!({ "type": "linear" });
     let eased = json!({ "type": "cubic_bezier", "x1": 0.42, "y1": 0.0, "x2": 0.58, "y2": 1.0 });
@@ -75,6 +75,9 @@ pub(super) fn corpus() -> Value {
     let mut a = clip("ta", "v", (0, 40), (0, 40), &json!({ "type": "forward" }));
     a["visual"] = json!({ "opacity": { "mode": "data", "data": "beat", "channel": "level" } });
     let b = clip("tb", "w", (30, 80), (0, 50), &json!({ "type": "forward" }));
+    let angle = json!({ "mode": "keyframes", "keyframes": [
+        { "time": 30 * FRAME, "value": { "type": "float", "value": 0.0 }, "interpolation": linear },
+        { "time": 40 * FRAME, "value": { "type": "float", "value": 90.0 }, "interpolation": linear } ] });
     let mut audio = clip("au", "a", (0, 90), (0, 90), &json!({ "type": "forward" }));
     audio["audio"] = json!({ "gain": keyed(&[(0, 0.5), (90, 1.0)], &linear) });
     json!({
@@ -94,7 +97,8 @@ pub(super) fn corpus() -> Value {
             { "id": "t-frz", "name": "Z", "kind": "video", "clips": [freeze] },
             { "id": "t-mix", "name": "M", "kind": "video", "clips": [a, b], "transitions": [
                 { "from_clip": "ta", "to_clip": "tb", "timeline_range": { "start": 30 * FRAME, "end": 40 * FRAME },
-                  "easing": { "type": "linear" }, "effect": { "id": "alpha2.transition.fade", "version": 1 } } ] },
+                  "easing": { "type": "linear" }, "effect": { "id": "alpha2.transition.angular", "version": 1,
+                  "params": { "starting_angle": angle } } } ] },
             { "id": "t-audio", "name": "A", "kind": "audio", "clips": [audio] },
             { "id": "t-subs", "name": "C", "kind": "caption", "captions": { "cues": [
                 { "timeline_range": { "start": 2 * FRAME, "end": 22 * FRAME }, "text": [
@@ -182,7 +186,12 @@ pub(super) fn state(project: &Project, time: i64) -> Vec<String> {
         ));
     }
     for transition in &frame.transitions {
-        out.push(format!("transition {}", transition.progress));
+        let params = transition
+            .effect
+            .params()
+            .map(|(name, value)| format!("{name}={value:?}"))
+            .collect::<Vec<_>>();
+        out.push(format!("transition {} {params:?}", transition.progress));
     }
     for caption in &frame.captions {
         let spoken = match caption.text {
@@ -757,4 +766,86 @@ fn an_edit_that_grows_a_project_past_the_document_cap_is_refused() {
         ("INVALID_INPUT", "result_too_large"),
         "{failure}"
     );
+}
+
+#[test]
+fn a_rippled_transition_takes_its_keyed_parameters_along() {
+    let project = load(&corpus());
+    let (edited, _) = remove(
+        &project,
+        timeline_list(&[(10, 20)]),
+        Target::Track(alpha2_model::TrackId::new("t-fwd").expect("id")),
+        Ripple::Timeline,
+    );
+    let angle = |project: &Project, frame: i64| {
+        let index = ActiveIndex::build(project).expect("index");
+        let frame = evaluate(project, &index, MediaTime(frame * FRAME)).expect("frame");
+        frame
+            .transitions
+            .first()
+            .and_then(|transition| transition.effect.param("starting_angle"))
+            .map(|value| format!("{value:?}"))
+    };
+    for frame in 30..40 {
+        assert!(angle(&project, frame).is_some(), "frame {frame}");
+        assert_eq!(
+            angle(&project, frame),
+            angle(&edited, frame - 10),
+            "frame {frame}"
+        );
+    }
+}
+
+#[test]
+fn a_ripple_keeps_every_key_of_a_clip_it_only_moves() {
+    let opacity = |frames: &[i64]| {
+        let keys = frames
+            .iter()
+            .map(|frame| {
+                (
+                    *frame,
+                    0.5 + 0.001 * f64::from(i32::try_from(*frame).expect("frame")),
+                )
+            })
+            .collect::<Vec<_>>();
+        json!({ "opacity": keyed(&keys, &json!({ "type": "linear" })) })
+    };
+    let forward = json!({ "type": "forward" });
+    let mut early = clip("early", "v", (0, 1), (0, 1), &forward);
+    early["visual"] = opacity(&[0, 50, 60, 70]);
+    let cut = clip("cut", "v", (1, 10), (1, 10), &forward);
+    let mut moved = clip("moved", "v", (20, 40), (20, 40), &forward);
+    moved["visual"] = opacity(&[0, 10, 25, 50, 60, 70]);
+    let project = load(&json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": { "width": 640, "height": 360, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+        "sources": [{ "id": "v", "kind": "video", "locator": "v.mp4" }],
+        "timeline": { "tracks": [{ "id": "t", "name": "T", "kind": "video", "clips": [early, cut, moved] }] }
+    }));
+    let keys = |project: &Project, id: &str| {
+        let clip = project.timeline.tracks[0]
+            .clips
+            .iter()
+            .find(|clip| clip.id.as_str() == id)
+            .expect("clip");
+        match &clip.visual.opacity {
+            alpha2_model::Animated::Keyframes { keyframes } => keyframes
+                .iter()
+                .map(|key| key.time.ticks() / FRAME)
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        }
+    };
+    let target = Target::Track(alpha2_model::TrackId::new("t").expect("id"));
+    for ripple in [Ripple::Track, Ripple::Timeline, Ripple::None] {
+        let (edited, report) = remove(&project, timeline_list(&[(2, 4)]), target.clone(), ripple);
+        assert_eq!(keys(&edited, "early"), [0, 50, 60, 70], "{ripple:?}");
+        let shift = if ripple == Ripple::None { 0 } else { 2 };
+        assert_eq!(
+            keys(&edited, "moved"),
+            [0, 10, 25, 50, 60, 70].map(|frame| frame - shift),
+            "{ripple:?}"
+        );
+        kept_moments_hold(&project, &edited, &report, ripple != Ripple::None);
+    }
 }

@@ -2,12 +2,13 @@
 //!
 //! Operations are named for primitives, never for features, and are pure: a project and a
 //! request in, a project and a report out, with no I/O. Clips are split so each part continues its
-//! source and time map, clip-attached keyframes move with their clip, timeline-anchored data and
+//! source and time map, keyframes move with their clip or transition, timeline-anchored data and
 //! caption cues are cut and shifted, transitions whose cut point is removed are removed, and mattes
-//! and `via` bindings follow the part beside them or the edit is refused. Kept moments render as
-//! before except for track automation with hold or eased keys across a removed range, a linear
-//! sample set just before a cut, keyed transition parameters a ripple moves, reversed parts off the
-//! frame grid and a fade under a cut. The result validates and is canonical.
+//! and `via` bindings follow the part beside them or the edit is refused. Every value keyed in
+//! timeline time is reached through the model's walkers. Kept moments render as before except for
+//! track automation with hold or eased keys across a removed range, a linear sample set just
+//! before a cut, reversed parts off the frame grid and a fade under a cut. The result validates
+//! and is canonical.
 
 mod bake;
 #[cfg(test)]
@@ -26,7 +27,9 @@ pub use request::{
     RawRange, Ripple, Target, TimeList, Times,
 };
 
-use alpha2_model::{Animated, AnimatedPoint, Clip, ClipId, DataAnchor, DataValues, Project, Track};
+use alpha2_model::{
+    Animated, Clip, ClipId, ClipReference, DataAnchor, DataValues, Project, TimelineOwner,
+};
 use alpha2_time::{FrameRate, MediaTime, TimeRange};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -318,24 +321,34 @@ fn remove_ranges(
             clips.extend(placed.into_iter().map(|(_, part)| part));
         }
         track.clips = clips;
-        if shifts {
-            if let Some(captions) = &mut track.captions {
-                captions.cues = shift_cues(&captions.cues, &removal);
-            }
-            shift_track_keys(track, &removal);
-        }
     }
     let transition_spans =
         retarget_transitions(&mut edited, project, &removal, &shifted_tracks, &renamed);
-    retarget_clip_references(&mut edited, project, &renamed, &transition_spans)?;
+    // Bus keys of every shifted track, and the master's when every track shifts.
+    edited.for_each_bus_value_mut(&mut |owner, _, value| {
+        let shifts = match owner {
+            TimelineOwner::Track { track, .. } => shifted_tracks.contains(&track),
+            _ => ripple == Ripple::Timeline,
+        };
+        if shifts {
+            shift_keys(value, &removal);
+        }
+    });
+    for (position, track) in edited.timeline.tracks.iter_mut().enumerate() {
+        if let Some(captions) = &mut track.captions
+            && shifted_tracks.contains(&position)
+        {
+            captions.cues = shift_cues(&captions.cues, &removal);
+        }
+    }
     if ripple == Ripple::Timeline {
-        shift_master_keys(&mut edited, &removal);
         for set in &mut edited.data {
             if set.anchor == DataAnchor::Timeline {
                 split::cut_data(set, &removal);
             }
         }
     }
+    retarget_clip_references(&mut edited, project, &renamed, &transition_spans)?;
     report.moved = moved_stretches(project, &removal, &shifted_tracks);
     Ok((edited, report))
 }
@@ -530,15 +543,6 @@ fn shift_keys(animation: &mut Animated<f32>, removal: &[(i64, i64)]) {
     *keyframes = keys;
 }
 
-fn shift_track_keys(track: &mut Track, removal: &[(i64, i64)]) {
-    shift_keys(&mut track.audio.gain, removal);
-    shift_keys(&mut track.audio.pan, removal);
-}
-
-fn shift_master_keys(project: &mut Project, removal: &[(i64, i64)]) {
-    shift_keys(&mut project.audio.gain, removal);
-}
-
 /// The parts each processed clip became, as `(old range, new id)`. A clip removed whole has none.
 type Parts = HashMap<ClipId, Vec<(TimeRange, ClipId)>>;
 
@@ -591,6 +595,7 @@ fn retarget_transitions(
             let mut transition = transition.clone();
             transition.from_clip = from;
             transition.to_clip = to;
+            transition.for_each_timeline_value_mut(&mut |_, value| value.shift(-delta));
             transition.timeline_range = TimeRange::new(
                 MediaTime(range.start().ticks() - delta),
                 MediaTime(range.end().ticks() - delta),
@@ -632,6 +637,40 @@ fn part_for(
     }
 }
 
+/// A [`TimelineOwner`] that outlives the walk, for naming it in a refusal.
+enum Owner {
+    Clip(ClipId),
+    Transition(usize, usize),
+    Track(usize),
+    Master,
+}
+
+impl Owner {
+    fn of(owner: TimelineOwner<'_>) -> Self {
+        match owner {
+            TimelineOwner::Clip { id, .. } => Self::Clip(id.clone()),
+            TimelineOwner::Transition { track, index, .. } => Self::Transition(track, index),
+            TimelineOwner::Track { track, .. } => Self::Track(track),
+            TimelineOwner::Master => Self::Master,
+        }
+    }
+
+    fn describe(&self, project: &Project) -> String {
+        match self {
+            Self::Clip(id) => format!("clip {id}"),
+            Self::Transition(track, index) => {
+                let transition = &project.timeline.tracks[*track].transitions[*index];
+                format!(
+                    "transition {} to {}",
+                    transition.from_clip, transition.to_clip
+                )
+            }
+            Self::Track(track) => format!("track {}", project.timeline.tracks[*track].id),
+            Self::Master => "the master bus".to_owned(),
+        }
+    }
+}
+
 /// Points mattes and `via` bindings at the part of a cut clip beside them, and refuses where no
 /// single part fits or where a matte part would be left unnamed, which would draw it.
 fn retarget_clip_references(
@@ -655,52 +694,42 @@ fn retarget_clip_references(
         .flatten()
         .map(|(range, id)| (id, *range))
         .collect::<HashMap<_, _>>();
-    let part = |clip: &ClipId, span: Option<TimeRange>, matte: bool| {
-        part_for(clip, span, matte, renamed, &old_ranges)
-    };
-    for (position, track) in edited.timeline.tracks.iter_mut().enumerate() {
-        for clip in &mut track.clips {
-            let span = Some(
-                part_ranges
-                    .get(&clip.id)
-                    .copied()
-                    .unwrap_or(clip.timeline_range),
-            );
-            if let Some(matte) = &mut clip.matte {
-                matte.source = part(&matte.source, span, true)
-                    .ok_or_else(|| EditError::MatteSource(matte.source.clone()))?;
+    let mut refused: Option<(ClipId, ClipReference, Owner)> = None;
+    edited.for_each_clip_reference_mut(&mut |owner, kind, clip| {
+        if refused.is_some() {
+            return;
+        }
+        let (span, own) = match owner {
+            TimelineOwner::Clip { id, range, .. } => (
+                Some(part_ranges.get(id).copied().unwrap_or(range)),
+                Some(id),
+            ),
+            TimelineOwner::Transition { track, index, .. } => {
+                (transition_spans[track].get(index).copied(), None)
             }
-            let owner = clip.id.clone();
-            let mut refused = Ok(());
-            clip_timeline_values(clip, |value| {
-                if refused.is_ok() {
-                    refused =
-                        retarget_via(value, Some(&owner), span, &part, || format!("clip {owner}"));
-                }
+            TimelineOwner::Track { .. } | TimelineOwner::Master => (None, None),
+        };
+        let matte = match kind {
+            ClipReference::Matte => true,
+            // A binding through its own clip was renamed with the clip's part.
+            ClipReference::Via if own != Some(clip) => false,
+            _ => return,
+        };
+        match part_for(clip, span, matte, renamed, &old_ranges) {
+            Some(part) => *clip = part,
+            None => refused = Some((clip.clone(), kind, Owner::of(owner))),
+        }
+    });
+    match refused {
+        Some((clip, ClipReference::Matte, _)) => return Err(EditError::MatteSource(clip)),
+        Some((clip, _, owner)) => {
+            return Err(EditError::ReadThrough {
+                clip,
+                by: owner.describe(edited),
             });
-            refused?;
         }
-        for (transition, span) in track
-            .transitions
-            .iter_mut()
-            .zip(&transition_spans[position])
-        {
-            for value in transition.effect.params.values_mut() {
-                retarget_via(value, None, Some(*span), &part, || {
-                    format!(
-                        "transition {} to {}",
-                        transition.from_clip, transition.to_clip
-                    )
-                })?;
-            }
-        }
-        let by = || format!("track {}", track.id);
-        retarget_via(&mut track.audio.gain, None, None, &part, by)?;
-        retarget_via(&mut track.audio.pan, None, None, &part, by)?;
+        None => {}
     }
-    retarget_via(&mut edited.audio.gain, None, None, &part, || {
-        "the master bus".to_owned()
-    })?;
     let sources = original_clips()
         .filter_map(|clip| clip.matte.as_ref().map(|matte| &matte.source))
         .collect::<HashSet<_>>();
@@ -720,28 +749,6 @@ fn retarget_clip_references(
             return Err(EditError::MatteSource(clip.id.clone()));
         }
     }
-    Ok(())
-}
-
-/// Points a `via: { clip }` binding at the part [`part_for`] picks, except one through `own`.
-fn retarget_via(
-    value: &mut dyn TimelineValue,
-    own: Option<&ClipId>,
-    span: Option<TimeRange>,
-    part: &impl Fn(&ClipId, Option<TimeRange>, bool) -> Option<ClipId>,
-    by: impl FnOnce() -> String,
-) -> Result<(), EditError> {
-    let Some(clip) = value.via_clip().cloned() else {
-        return Ok(());
-    };
-    if own == Some(&clip) {
-        return Ok(());
-    }
-    let to = part(&clip, span, false).ok_or_else(|| EditError::ReadThrough {
-        clip: clip.clone(),
-        by: by(),
-    })?;
-    value.rename_via(&clip, &to);
     Ok(())
 }
 
@@ -880,108 +887,4 @@ fn split_at(
         retarget_transitions(&mut edited, project, &[], &HashSet::new(), &renamed);
     retarget_clip_references(&mut edited, project, &renamed, &transition_spans)?;
     Ok((edited, report))
-}
-
-/// Each animated value of a clip whose keyframes are in timeline time, for moving them.
-pub(crate) fn clip_timeline_values(clip: &mut Clip, mut visit: impl FnMut(&mut dyn TimelineValue)) {
-    visit(&mut clip.visual.position);
-    visit(&mut clip.visual.scale);
-    visit(&mut clip.visual.rotation_degrees);
-    visit(&mut clip.visual.opacity);
-    for mask in &mut clip.masks {
-        visit(&mut mask.feather);
-        split::visit_geometry(&mut mask.shape, &mut visit);
-    }
-    visit(&mut clip.audio.gain);
-    visit(&mut clip.audio.pan);
-}
-
-/// A value keyed in timeline time whose keyframes can move and be pruned to a window.
-pub(crate) trait TimelineValue {
-    /// Moves every keyframe by `delta` ticks and keeps those that matter in `window`.
-    fn shift_and_prune(&mut self, delta: i64, window: (i64, i64));
-    /// Points `via: { clip: from }` at `to`.
-    fn rename_via(&mut self, from: &ClipId, to: &ClipId);
-    /// The clip a binding reads through, if any.
-    fn via_clip(&self) -> Option<&ClipId>;
-}
-
-/// The keyframes that decide values inside `window`: those inside it and one on each side.
-fn prune_range(times: &[i64], window: (i64, i64)) -> std::ops::Range<usize> {
-    let first = times
-        .partition_point(|time| *time <= window.0)
-        .saturating_sub(1);
-    let last = (times.partition_point(|time| *time < window.1) + 1).min(times.len());
-    first..last.max(first)
-}
-
-fn binding_via(binding: &alpha2_model::DataBinding) -> Option<&ClipId> {
-    match &binding.via {
-        Some(alpha2_model::DataVia::Clip(clip)) => Some(clip),
-        _ => None,
-    }
-}
-
-fn rename_binding(binding: &mut alpha2_model::DataBinding, from: &ClipId, to: &ClipId) {
-    if binding.via == Some(alpha2_model::DataVia::Clip(from.clone())) {
-        binding.via = Some(alpha2_model::DataVia::Clip(to.clone()));
-    }
-}
-
-impl<T: Clone> TimelineValue for Animated<T> {
-    fn shift_and_prune(&mut self, delta: i64, window: (i64, i64)) {
-        if let Self::Keyframes { keyframes } = self {
-            let times = keyframes
-                .iter()
-                .map(|key| key.time.ticks())
-                .collect::<Vec<_>>();
-            let keep = prune_range(&times, window);
-            *keyframes = keyframes[keep]
-                .iter()
-                .map(|key| alpha2_model::Keyframe {
-                    time: MediaTime(key.time.ticks() + delta),
-                    ..key.clone()
-                })
-                .collect();
-        }
-    }
-
-    fn rename_via(&mut self, from: &ClipId, to: &ClipId) {
-        if let Self::Data(binding) = self {
-            rename_binding(binding, from, to);
-        }
-    }
-
-    fn via_clip(&self) -> Option<&ClipId> {
-        self.data().and_then(binding_via)
-    }
-}
-
-impl TimelineValue for AnimatedPoint {
-    fn shift_and_prune(&mut self, delta: i64, window: (i64, i64)) {
-        if let Self::Keyframes { keyframes } = self {
-            let times = keyframes
-                .iter()
-                .map(|key| key.time.ticks())
-                .collect::<Vec<_>>();
-            let keep = prune_range(&times, window);
-            *keyframes = keyframes[keep]
-                .iter()
-                .map(|key| alpha2_model::PointKeyframe {
-                    time: MediaTime(key.time.ticks() + delta),
-                    ..key.clone()
-                })
-                .collect();
-        }
-    }
-
-    fn rename_via(&mut self, from: &ClipId, to: &ClipId) {
-        if let Self::Data(binding) = self {
-            rename_binding(binding, from, to);
-        }
-    }
-
-    fn via_clip(&self) -> Option<&ClipId> {
-        self.data().and_then(binding_via)
-    }
 }

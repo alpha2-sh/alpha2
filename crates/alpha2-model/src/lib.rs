@@ -38,6 +38,7 @@ mod text;
 mod text_animation;
 mod time_map;
 mod timeline;
+mod timeline_values;
 
 pub use animation::{
     Animated, AnimatedPoint, AnimatedValue, Interpolation, Keyframe, PointKeyframe, Vec2,
@@ -137,3 +138,4 @@ pub use text_animation::{
 };
 pub use time_map::{LOOP_FADE_SECONDS, LoopMode, TimeMap};
 pub use timeline::{CacheIntent, Clip, ClipTransition, Timeline, Track, TrackKind};
+pub use timeline_values::{ClipReference, TimelineOwner, TimelineValue, TimelineVisit};

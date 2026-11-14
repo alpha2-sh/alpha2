@@ -1,7 +1,7 @@
 use super::tests::{FRAME, clip, corpus, kept_moments_hold, load, remove, timeline_list};
 use super::*;
 use crate::{ActiveIndex, evaluate};
-use alpha2_model::Project;
+use alpha2_model::{Project, TimelineValue};
 use alpha2_time::MediaTime;
 use serde_json::{Value, json};
 

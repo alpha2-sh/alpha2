@@ -429,6 +429,9 @@ All notable changes to this project are documented in this file.
   the finished file as a partial; each step of the publish (sync, rename, folder sync) beats.
 - On the readback and GPU-resident paths, a progress message that cannot be written while the
   encoder finishes no longer fails an export whose file the encoder then puts in place.
+- Edit operations: a ripple moves the keyed parameters of a transition with the transition, and
+  keeps every keyframe of a clip it only moves; before, the parameters stayed behind and keys
+  outside the moved clip's range were deleted.
 
 ## [0.6.0] - 2026-11-08
 

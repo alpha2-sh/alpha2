@@ -1,7 +1,6 @@
 //! Cutting a clip into parts that each continue its source and time map.
 
-use super::TimelineValue;
-use alpha2_model::{Clip, ClipId, DataSet, DataValues, LoopMode, Project, ShapeGeometry, TimeMap};
+use alpha2_model::{Clip, ClipId, DataSet, DataValues, LoopMode, Project, TimeMap};
 use alpha2_time::{MediaTime, TimeRange};
 use std::collections::HashSet;
 
@@ -157,9 +156,11 @@ pub(super) fn parts(
             }
             fades(&mut part, whole, window);
             let new_id = part.id.clone();
-            super::clip_timeline_values(&mut part, |value| {
-                value.shift_and_prune(0, window);
-                value.rename_via(&clip.id, &new_id);
+            part.for_each_timeline_value_mut(&mut |_, value| {
+                value.keep_window(window);
+                if let Some(via) = value.via_clip_mut().filter(|via| **via == clip.id) {
+                    via.clone_from(&new_id);
+                }
             });
             out.push(part);
         }
@@ -177,7 +178,7 @@ fn fades(part: &mut Clip, whole: (i64, i64), window: (i64, i64)) {
     }
 }
 
-/// `part` moved left by `delta` ticks with its keyframes.
+/// `part` moved left by `delta` ticks with every keyframe.
 pub(super) fn moved(mut part: Clip, delta: i64) -> Clip {
     if delta == 0 {
         return part;
@@ -188,40 +189,8 @@ pub(super) fn moved(mut part: Clip, delta: i64) -> Clip {
     );
     part.timeline_range = TimeRange::new(MediaTime(start - delta), MediaTime(end - delta))
         .unwrap_or(part.timeline_range);
-    super::clip_timeline_values(&mut part, |value| {
-        value.shift_and_prune(-delta, (start, end));
-    });
+    part.for_each_timeline_value_mut(&mut |_, value| value.shift(-delta));
     part
-}
-
-/// Visits each animated value of a mask outline.
-pub(super) fn visit_geometry(
-    geometry: &mut ShapeGeometry,
-    visit: &mut impl FnMut(&mut dyn TimelineValue),
-) {
-    match geometry {
-        ShapeGeometry::Rectangle(rectangle) => {
-            visit(&mut rectangle.center);
-            visit(&mut rectangle.size);
-            visit(&mut rectangle.corner_radius);
-            visit(&mut rectangle.rotation_degrees);
-        }
-        ShapeGeometry::Ellipse(ellipse) => {
-            visit(&mut ellipse.center);
-            visit(&mut ellipse.size);
-            visit(&mut ellipse.rotation_degrees);
-        }
-        ShapeGeometry::Polystar(polystar) => {
-            visit(&mut polystar.center);
-            visit(&mut polystar.points);
-            visit(&mut polystar.outer_radius);
-            visit(&mut polystar.inner_radius);
-            visit(&mut polystar.outer_roundness);
-            visit(&mut polystar.inner_roundness);
-            visit(&mut polystar.rotation_degrees);
-        }
-        ShapeGeometry::Path(path) => visit(&mut path.path),
-    }
 }
 
 /// A timeline-anchored set with the removed ranges cut out and later times moved left. A sample
