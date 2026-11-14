@@ -1606,6 +1606,15 @@ fn times_past_what_a_project_holds_are_refused_with_a_path() {
             json!({"theme": {"text_seconds": 1e11}, "body": {"type": "text", "text": "x"}}),
             "spec.theme: text_seconds is 100000000000 s, past the latest time",
         ),
+        (
+            json!({"body": {"type": "sequence", "transition": {"type": "wipe-left", "duration": 0.5},
+            "children": [
+                {"type": "media", "path": "logo.png", "duration": 4},
+                {"type": "text", "text": "Mid", "duration": 2.333_333_333_333_333_3e38},
+                {"type": "color", "duration": 2},
+            ]}}),
+            "spec.body.children[1].duration: ",
+        ),
     ];
     for (spec, expected) in cases {
         let outcome =

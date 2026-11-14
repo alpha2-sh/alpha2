@@ -206,11 +206,13 @@ seed() {
       ' tests/golden/layout_measure.json "$dir"
       ;;
     compose_compile)
+      # The spec, a NUL, then the facts the golden cases compile with.
       node -e '
         const [golden, dir] = process.argv.slice(1);
         const fs = require("fs");
-        JSON.parse(fs.readFileSync(golden, "utf8")).forEach((test, index) =>
-          fs.writeFileSync(`${dir}/spec-${index}.json`, JSON.stringify(test.spec)));
+        const { cases, facts } = JSON.parse(fs.readFileSync(golden, "utf8"));
+        cases.forEach((test, index) =>
+          fs.writeFileSync(`${dir}/spec-${index}.json`, `${JSON.stringify(test.spec)}\0${JSON.stringify(facts)}`));
       ' crates/alpha2-compose/tests/old-specs.golden.json "$dir"
       ;;
     effect_validate)
