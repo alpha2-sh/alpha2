@@ -632,6 +632,26 @@ function shiftMarkers(
     fail("The edit would move a marker before the timeline start");
   return { ...document, metadata: { ...document.metadata, markers } };
 }
+/**
+ * `document` with its markers moved as `result`'s ripple moved time, which happens only when the
+ * ripple reached every track: markers annotate the timeline clock as timeline-anchored data does.
+ */
+function followTimeline(
+  document: DraftDocument,
+  result: edit.EditResult,
+): DraftDocument {
+  const change = result.ok ? result.timeline : undefined;
+  if (!change?.everyTrack) return document;
+  if (change.removed)
+    return shiftMarkers(
+      document,
+      change.removed.end,
+      change.removed.start - change.removed.end,
+    );
+  return change.opened
+    ? shiftMarkers(document, change.opened.at, change.opened.length)
+    : document;
+}
 /** The metadata right part `newId` of split clip `leftId` inherits. */
 function afterSplit(
   document: DraftDocument,
@@ -1007,12 +1027,7 @@ function reduce(
         );
         if (cut) next = afterSplit(next, command.splitId, cut.id);
       }
-      if (command.mode === "insert" && syncTracks.length)
-        next = shiftMarkers(
-          next,
-          command.at,
-          command.clip.timeline_range.end - command.clip.timeline_range.start,
-        );
+      next = followTimeline(next, result);
       return withCopiedGraphs(next, owned.copies);
     }
     case "clip.slip":
@@ -1036,16 +1051,7 @@ function reduce(
         ...(command.keyframes ? { keyframes: command.keyframes } : {}),
       });
       const made = edited(result, command, command.id);
-      const next = { ...document, project: made };
-      // Timeline markers move with a ripple that reaches other tracks.
-      const before = found.clip.timeline_range;
-      return syncTracks.length
-        ? shiftMarkers(
-            next,
-            before.end,
-            before.start + command.duration - before.end,
-          )
-        : next;
+      return followTimeline({ ...document, project: made }, result);
     }
     case "marker.add":
       if (document.metadata.markers.some((m) => m.id === command.marker.id))
@@ -1137,24 +1143,7 @@ function reduce(
         command.type === "clip.delete" && !command.ripple && result.ok
           ? result.project
           : edited(result, command, command.id);
-      let next = { ...document, project: made };
-      // Timeline markers move with a ripple that reaches other tracks.
-      if (syncTracks.length && found) {
-        const before = found.clip.timeline_range;
-        if (command.type === "clip.trim") {
-          if (command.edge === "end")
-            next = shiftMarkers(next, before.end, command.at - before.end);
-          else
-            next = shiftMarkers(
-              next,
-              Math.max(before.start, command.at),
-              before.start - command.at,
-            );
-        } else if (command.type === "clip.delete") {
-          const gap = edit.rippleDeleteSpan(project, command.id)!;
-          next = shiftMarkers(next, gap.end, gap.start - gap.end);
-        }
-      }
+      let next = followTimeline({ ...document, project: made }, result);
       if (command.type === "clip.split")
         next = afterSplit(next, command.newId, command.id);
       return next;

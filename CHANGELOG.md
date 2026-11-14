@@ -89,6 +89,14 @@ All notable changes to this project are documented in this file.
   `WASM_LINK_ERROR` and `INVALID_STATE` are not retried; `RENDER_WORKER_ERROR`,
   `RENDER_WORKER_FAILED` and `AUDIO_WORKER_ERROR` stay `UNKNOWN`. `alpha2/export-failure` exports
   `BROWSER_ERROR_CODES`.
+- `alpha2/edit`: `rippleTrim`, `rippleDelete`, `retime` with `ripple` and `insert` move the track
+  gain and pan keyframes of every track they reach, and the master gain keyframes when they reach
+  every track, as the engine's `remove_ranges` does (closed time keeps each curve's shape; opened
+  time holds the value at the edit point). A ripple's result reports what it did in `timeline`
+  (`removed` or `opened`, and `everyTrack`).
+- Editor: markers move with a ripple when it reaches every track, the rule timeline data follows;
+  before, they moved when any other track was sync-locked, so a single-track project's markers
+  stayed behind and a partly synced edit moved them.
 
 ### Fixed
 

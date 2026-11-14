@@ -17,10 +17,12 @@
  *
  * Ripple edits move later content on the edited track and on `syncTracks` by the same amount. A
  * sync track with content across the edit point, or where pulled content would land on content
- * that stays, refuses the whole edit (`sync_conflict`). A ripple that reaches every track edits
- * timeline-anchored data sets with the timeline, as the engine's `remove_ranges` with
- * `ripple: "timeline"` does. Time the edit closes is cut out of them and time it opens opens in
- * them. Source-anchored data never changes.
+ * that stays, refuses the whole edit (`sync_conflict`). The track and bus keyframes of every track
+ * a ripple reaches move with it; a ripple that reaches every track also edits the master bus keys
+ * and timeline-anchored data sets, as the engine's `remove_ranges` with `ripple: "timeline"` does.
+ * Time the edit closes is cut out of them and time it opens opens in them. Source-anchored data
+ * never changes. A ripple's result reports the change in `timeline`, so a host can move its own
+ * timeline items (markers) by the same rule.
  *
  * Use {@link deferValidation} for a batch of edits that is valid only as a whole.
  */
@@ -37,6 +39,7 @@ import type {
 import { validateProject } from "./project.js";
 import { dataReferences } from "./project-data.js";
 import { renameVia, rippleTimelineData } from "./edit-data.js";
+import { closeKeys, openKeys } from "./edit-keys.js";
 
 /** Why an edit was refused. */
 export type EditErrorCode =
@@ -80,9 +83,29 @@ export interface EditError {
   readonly problems?: readonly string[];
 }
 
-/** The new project, or why the edit was refused. The input is never modified. */
+/** What a ripple did to timeline time. Ticks are the old timeline's. */
+export interface TimelineChange {
+  /** The time the ripple closed. */
+  readonly removed?: TimeRange;
+  /** The time the ripple opened: `length` ticks at `at`. */
+  readonly opened?: { readonly at: number; readonly length: number };
+  /**
+   * Whether the ripple reached every track, so the master bus keys and timeline data moved and a
+   * host's own timeline items should too.
+   */
+  readonly everyTrack: boolean;
+}
+
+/**
+ * The new project, or why the edit was refused. The input is never modified. A ripple that moved
+ * time reports how in `timeline`.
+ */
 export type EditResult =
-  | { readonly ok: true; readonly project: Project }
+  | {
+      readonly ok: true;
+      readonly project: Project;
+      readonly timeline?: TimelineChange;
+    }
   | { readonly ok: false; readonly error: EditError };
 
 export type ClipEdge = "start" | "end";
@@ -254,26 +277,22 @@ export function rippleTrim(
       ? shift(candidate, delta)
       : candidate;
   });
-  const synced = rippleSyncTracks(
-    project,
-    options.syncTracks,
+  return rippled(
+    replaceTrack(project, {
+      ...track,
+      clips: shifted,
+      transitions: shiftTransitions(track, before.end, delta),
+    }),
     track.id,
-    pivot,
-    delta,
-  );
-  if (!synced.ok) return synced;
-  return finish(
-    withTimeline(
-      replaceTrack(synced.project, {
-        ...track,
-        clips: shifted,
-        transitions: shiftTransitions(track, before.end, delta),
-      }),
-      track.id,
-      options.syncTracks,
-      edge === "start" && delta < 0 ? to : pivot,
-      delta,
-    ),
+    options.syncTracks,
+    delta < 0
+      ? {
+          removed: {
+            start: pivot + (edge === "start" ? 0 : delta),
+            end: edge === "start" ? to : pivot,
+          },
+        }
+      : { opened: { at: pivot, length: delta } },
   );
 }
 
@@ -321,22 +340,11 @@ export function rippleDelete(
         "sync_conflict",
         `track ${other.id} has content in the time the delete closes`,
       );
-  const synced = rippleSyncTracks(
-    project,
-    options.syncTracks,
+  return rippled(
+    replaceTrack(project, { ...track, clips, transitions }),
     track.id,
-    gap.start,
-    delta,
-  );
-  if (!synced.ok) return synced;
-  return finish(
-    withTimeline(
-      replaceTrack(synced.project, { ...track, clips, transitions }),
-      track.id,
-      options.syncTracks,
-      gap.end,
-      delta,
-    ),
+    options.syncTracks,
+    { removed: gap },
   );
 }
 
@@ -657,26 +665,17 @@ export function retime(
         ? shift(candidate, delta)
         : candidate,
   );
-  const synced = rippleSyncTracks(
-    project,
-    options.syncTracks,
+  return rippled(
+    replaceTrack(project, {
+      ...track,
+      clips,
+      transitions: shiftTransitions(track, range.end, delta),
+    }),
     track.id,
-    range.end,
-    delta,
-  );
-  if (!synced.ok) return synced;
-  return finish(
-    withTimeline(
-      replaceTrack(synced.project, {
-        ...track,
-        clips,
-        transitions: shiftTransitions(track, range.end, delta),
-      }),
-      track.id,
-      options.syncTracks,
-      range.end,
-      delta,
-    ),
+    options.syncTracks,
+    delta < 0
+      ? { removed: { start: range.end + delta, end: range.end } }
+      : { opened: { at: range.end, length: delta } },
   );
 }
 
@@ -713,31 +712,20 @@ export function insert(
     track = edited.timeline.tracks.find((t) => t.id === trackId)!;
   }
   const length = placed.clip.timeline_range.end - at;
-  const synced = rippleSyncTracks(
-    edited,
-    options.syncTracks,
+  return rippled(
+    replaceTrack(edited, {
+      ...track,
+      clips: [
+        ...(track.clips ?? []).map((c) =>
+          c.timeline_range.start >= at ? shift(c, length) : c,
+        ),
+        placed.clip,
+      ],
+      transitions: shiftTransitions(track, at, length),
+    }),
     trackId,
-    at,
-    length,
-  );
-  if (!synced.ok) return synced;
-  return finish(
-    withTimeline(
-      replaceTrack(synced.project, {
-        ...track,
-        clips: [
-          ...(track.clips ?? []).map((c) =>
-            c.timeline_range.start >= at ? shift(c, length) : c,
-          ),
-          placed.clip,
-        ],
-        transitions: shiftTransitions(track, at, length),
-      }),
-      trackId,
-      options.syncTracks,
-      at,
-      length,
-    ),
+    options.syncTracks,
+    { opened: { at, length } },
   );
 }
 
@@ -1385,21 +1373,73 @@ export function withClipId(clip: Clip, id: string): Clip {
   return { ...renameVia(clip, clip.id, id), id };
 }
 
+/** A closing or opening of timeline time. */
+type TimeShift =
+  | { readonly removed: TimeRange }
+  | { readonly opened: { readonly at: number; readonly length: number } };
+
 /**
- * `project` with its timeline-anchored data moved by a ripple of `delta` at `pivot`, when the
- * ripple on `trackId` and `syncTracks` reaches every track.
+ * Finishes a ripple whose edited track `trackId` is already in `project`: sync tracks shift (or
+ * refuse), the bus keys of every reached track move, and when the ripple reaches every track the
+ * master bus keys and timeline data move too. The one place a ripple changes time beyond its track.
  */
-function withTimeline(
+function rippled(
   project: Project,
   trackId: string,
   syncTracks: readonly string[] | undefined,
-  pivot: number,
-  delta: number,
-): Project {
-  const reached = new Set([trackId, ...(syncTracks ?? [])]);
-  return project.timeline.tracks.every((track) => reached.has(track.id))
-    ? rippleTimelineData(project, pivot, delta)
-    : project;
+  change: TimeShift,
+): EditResult {
+  const removed = "removed" in change ? change.removed : undefined;
+  const opened = "opened" in change ? change.opened : undefined;
+  const pivot = removed ? removed.end : opened!.at;
+  const delta = removed ? removed.start - removed.end : opened!.length;
+  if (delta === 0) return finish(project);
+  const synced = rippleSyncTracks(project, syncTracks, trackId, pivot, delta);
+  if (!synced.ok) return synced;
+  const reached = new Set([
+    trackId,
+    ...syncTracksOf(project, syncTracks, trackId).map((track) => track.id),
+  ]);
+  const everyTrack = project.timeline.tracks.every((track) =>
+    reached.has(track.id),
+  );
+  const keys = <T>(value: T): T =>
+    (removed
+      ? closeKeys(value as never, [[removed.start, removed.end]])
+      : openKeys(value as never, opened!.at, opened!.length)) as T;
+  let result: Project = {
+    ...synced.project,
+    timeline: {
+      ...synced.project.timeline,
+      tracks: synced.project.timeline.tracks.map((track) =>
+        reached.has(track.id) && track.audio
+          ? {
+              ...track,
+              audio: {
+                ...track.audio,
+                ...(track.audio.gain ? { gain: keys(track.audio.gain) } : {}),
+                ...(track.audio.pan ? { pan: keys(track.audio.pan) } : {}),
+              },
+            }
+          : track,
+      ),
+    },
+  };
+  if (everyTrack) {
+    if (result.audio?.gain)
+      result = {
+        ...result,
+        audio: { ...result.audio, gain: keys(result.audio.gain) },
+      };
+    result = rippleTimelineData(result, pivot, delta);
+  }
+  const finished = finish(result);
+  return finished.ok
+    ? {
+        ...finished,
+        timeline: { ...(removed ? { removed } : { opened }), everyTrack },
+      }
+    : finished;
 }
 
 function replaceTrack(project: Project, track: Track): Project {
