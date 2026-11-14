@@ -1895,6 +1895,109 @@ def test_concurrent_requests_share_at_most_concurrency_hosts(
         assert depth <= 2
 
 
+EXITING_HOST = """
+request, _ = read_request()
+sys.exit(3)
+"""
+
+
+def open_descriptors() -> int | None:
+    try:
+        return len(os.listdir("/proc/self/fd"))
+    except OSError:
+        return None
+
+
+def test_hosts_that_exit_mid_request_leave_no_thread_or_pipe_behind(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    client = HostClient(host_path=fake_host(tmp_path, EXITING_HOST))
+    with pytest.raises(Alpha2HostError):
+        client.export(**export_args("out.mp4"))
+    threads, descriptors = threading.active_count(), open_descriptors()
+    for _ in range(40):
+        with pytest.raises(Alpha2HostError) as caught:
+            client.export(**export_args("out.mp4"))
+        assert caught.value.code == "HOST_EXITED"
+    wait_until(lambda: threading.active_count() <= threads)
+    wait_until(lambda: open_descriptors() == descriptors)
+
+
+EXHAUSTION = r"""
+import os, resource, sys, textwrap
+sys.path.insert(0, sys.argv[1])
+from conftest import HOST_PRELUDE, export_args
+from alpha2 import Alpha2HostError, HostClient
+with open("serve", "w") as file:
+    file.write(HOST_PRELUDE + "begin()\nstate()\n" + textwrap.dedent(sys.argv[2]))
+resource.setrlimit(resource.RLIMIT_NOFILE, (64, resource.getrlimit(resource.RLIMIT_NOFILE)[1]))
+client = HostClient(host_path=sys.executable)
+codes = set()
+for _ in range(80):
+    try:
+        client.export(**export_args("out.mp4"))
+    except Alpha2HostError as error:
+        codes.add(error.code)
+print(" ".join(sorted(codes)))
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="RLIMIT_NOFILE is POSIX")
+def test_eighty_host_deaths_fit_in_sixty_four_descriptors(tmp_path: Path) -> None:
+    script = tmp_path / "exhaust.py"
+    script.write_text(EXHAUSTION, encoding="utf-8")
+    finished = subprocess.run(
+        [sys.executable, str(script), str(Path(__file__).parent), EXITING_HOST],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert finished.returncode == 0, finished.stderr
+    assert finished.stdout.split() == ["HOST_EXITED"], finished.stdout
+
+
+def test_an_interrupt_while_a_new_host_starts_ends_it_and_frees_its_slot(
+    tmp_path: Path, fake_host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from alpha2 import client as client_module
+
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log)))
+    start, spawn = client_module._Host.start, client_module._Pool._spawn
+    armed = {"start": False, "spawn": False}
+
+    def interrupted_start(self: Any) -> None:
+        if armed["start"]:
+            armed["start"] = False
+            raise KeyboardInterrupt
+        start(self)
+
+    def interrupted_spawn(self: Any, *args: Any) -> Any:
+        host = spawn(self, *args)
+        if armed["spawn"]:
+            armed["spawn"] = False
+            raise KeyboardInterrupt
+        return host
+
+    monkeypatch.setattr(client_module._Host, "start", interrupted_start)
+    monkeypatch.setattr(client_module._Pool, "_spawn", interrupted_spawn)
+    for where in ("start", "spawn"):
+        # No idle host, so the request starts one.
+        client.close()
+        armed[where] = True
+        with pytest.raises(KeyboardInterrupt):
+            client.export(**export_args("out.mp4"))
+        assert client._pool._starting == 0
+        client.export(**export_args("out.mp4"))
+    # The hosts the interrupts hit were ended; one host serves both later requests.
+    assert len(client._pool._hosts) == 1
+    started = client._pool._hosts[0].process.pid
+    for host_pid in starts_in(log):
+        if host_pid != started:
+            wait_until(lambda host_pid=host_pid: pid_exited(host_pid))
+
+
 def test_close_ends_the_hosts_and_a_later_request_starts_a_new_one(
     tmp_path: Path, fake_host: FakeHost, started_pids: list[int]
 ) -> None:

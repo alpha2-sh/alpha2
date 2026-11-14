@@ -44,7 +44,6 @@ All notable changes to this project are documented in this file.
   none, is ended at once and the request fails with `HOST_VERSION_MISMATCH` (not retried), instead
   of `HOST_START_TIMEOUT` after 30 seconds. `HOST_START_TIMEOUT` now carries what the host wrote in
   `stderr`.
-
 - `@alpha2-sh/node` serves requests in the order they were made, as the Python client does: only
   the oldest waiting request is considered, so a request of other modes (such as the software
   rerun after `DECODE_STALLED`) no longer waits behind every younger request of the busy host's
@@ -147,6 +146,9 @@ All notable changes to this project are documented in this file.
 - A text raster larger than the largest frame (67,108,864 pixels) or whose planes would take over
   1 GiB is refused as too large before anything is allocated. Before, only each side was limited,
   and the browser module aborted on the allocation.
+- The Python client keeps no thread or pipe of a host that exited during a request (one of each
+  leaked per exit, until host starts failed for want of descriptors), and a Ctrl-C while a host
+  starts ends that host and frees its place in the pool.
 - `@alpha2-sh/node` takes a host whose process ended out of its pool within 5 seconds even while a
   process the host started keeps its output open; until then later requests and `close()` waited
   for that process.

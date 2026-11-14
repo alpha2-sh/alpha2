@@ -12,6 +12,7 @@ Option dicts passed in use snake_case keys; host reports keep the protocol's cam
 from __future__ import annotations
 
 import collections
+import contextlib
 import hashlib
 import itertools
 import json
@@ -25,7 +26,7 @@ import threading
 import time
 import unicodedata
 import weakref
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
@@ -1245,19 +1246,19 @@ class _Host:
     ``running`` belongs to the owner: whether a request it sent may still run there.
     """
 
-    def __init__(self, pool: _Pool, binary: Path, environment: dict[str, str], key: str) -> None:
+    def __init__(
+        self,
+        pool: _Pool,
+        binary: Path,
+        environment: dict[str, str],
+        key: str,
+        holder: list[_Host],
+    ) -> None:
+        """Starts the process last and puts this host in ``holder`` at once, so an interrupt after
+        the spawn still leaves its caller the process to end."""
         self.pool = pool
         self.key = key
         self.oom_kills_at_spawn = _host_start.oom_kill_count()
-        self.process = subprocess.Popen(
-            [str(binary), "serve"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=environment,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        self.started_at = time.monotonic()
         self.owner: queue.Queue[tuple[str, Any]] | None = None
         self.ready = False
         self.available = True
@@ -1276,12 +1277,43 @@ class _Host:
             threading.Thread(target=self._read_stdout, daemon=True),
             threading.Thread(target=self._read_stderr, daemon=True),
         ]
+        self._writer = threading.Thread(target=self._write, daemon=True)
+        self._waiter = threading.Thread(target=self._wait, daemon=True)
+        self.started_at = time.monotonic()
+        self.process = subprocess.Popen(
+            [str(binary), "serve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        holder.append(self)
 
     def start(self) -> None:
-        for thread in self._readers:
+        for thread in (*self._readers, self._writer, self._waiter):
             thread.start()
-        threading.Thread(target=self._write, daemon=True).start()
-        threading.Thread(target=self._wait, daemon=True).start()
+
+    def threads_started(self) -> bool:
+        return all(
+            thread.ident is not None for thread in (*self._readers, self._writer, self._waiter)
+        )
+
+    def abandon(self) -> None:
+        """Ends a host whose threads did not all start, and closes what they would have closed."""
+        self.kill()
+        self.process.wait()
+        self.close_input()
+        for thread in self._readers:
+            if thread.ident is not None:
+                thread.join(_HOST_SHUTDOWN_TIMEOUT)
+        streams = (self.process.stdout, self.process.stderr, self.process.stdin)
+        for thread, stream in zip((*self._readers, self._writer), streams, strict=True):
+            if stream is not None and (thread.ident is None or not thread.is_alive()):
+                try:
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
 
     def keep_stderr(self, data: bytes) -> None:
         with self._stderr_changed:
@@ -1500,6 +1532,10 @@ class _Pool:
         with self._condition:
             host.alive = False
             host.available = False
+            # The writer waits for this to end; nothing more will be written to a host that is gone.
+            if not host.input_closed:
+                host.input_closed = True
+                host.close_input()
             if host in self._hosts:
                 self._hosts.remove(host)
             if host.owner is not None:
@@ -1525,59 +1561,84 @@ class _Pool:
         for host in idle:
             host.exited.wait()
 
-    def _acquire(
+    @contextlib.contextmanager
+    def _lease(
         self,
         modes: _HostModes,
         events: queue.Queue[tuple[str, Any]],
         cancel: threading.Event | None,
-    ) -> tuple[_Host, bool]:
+    ) -> Iterator[tuple[_Host, bool]]:
         """An idle host started with the environment the request would start one with, else a new
         one, ending an idle host of another environment to make room. Requests wait first come,
-        first served. Returns the host and whether it is new (not yet ``ready``)."""
+        first served. Yields the host and whether it is new (not yet ``ready``). Leaving releases
+        the host, or ends it when its threads did not all start, whatever interrupted the lease."""
         environment = modes.environment()
         key = _environment_key(environment)
         ticket = object()
-        with self._condition:
-            self._waiting.append(ticket)
-            try:
-                while True:
-                    if cancel is not None and cancel.is_set():
-                        raise Alpha2AbortError()
-                    if self._waiting[0] is ticket:
-                        idle = [
-                            host
-                            for host in self._hosts
-                            if host.available and host.ready and host.owner is None
-                        ]
-                        match = next((host for host in idle if host.key == key), None)
-                        if match is not None:
-                            match.owner = events
-                            return match, False
-                        alive = sum(1 for host in self._hosts if host.alive)
-                        if alive + self._starting < self.limit:
-                            self._starting += 1
-                            break
-                        if idle:
-                            self._retire(idle[0])
-                    self._condition.wait(_POLL_SECONDS)
-            finally:
-                self._waiting.remove(ticket)
-                self._condition.notify_all()
+        host: _Host | None = None
+        spawned: list[_Host] = []
+        fresh = False
+        starting = False
         try:
-            host = self._spawn(environment, key)
-        except BaseException:
             with self._condition:
-                self._starting -= 1
-                self._condition.notify_all()
-            raise
-        with self._condition:
-            self._starting -= 1
-            host.owner = events
-            self._hosts.append(host)
-        host.start()
-        return host, True
+                self._waiting.append(ticket)
+                try:
+                    while True:
+                        if cancel is not None and cancel.is_set():
+                            raise Alpha2AbortError()
+                        if self._waiting[0] is ticket:
+                            idle = [
+                                host
+                                for host in self._hosts
+                                if host.available and host.ready and host.owner is None
+                            ]
+                            match = next((host for host in idle if host.key == key), None)
+                            if match is not None:
+                                match.owner = events
+                                host = match
+                                break
+                            alive = sum(1 for host in self._hosts if host.alive)
+                            if alive + self._starting < self.limit:
+                                self._starting += 1
+                                starting = True
+                                break
+                            if idle:
+                                self._retire(idle[0])
+                        self._condition.wait(_POLL_SECONDS)
+                finally:
+                    self._waiting.remove(ticket)
+                    self._condition.notify_all()
+            if host is None:
+                fresh = True
+                host = self._spawn(environment, key, spawned)
+                with self._condition:
+                    self._starting -= 1
+                    starting = False
+                    host.owner = events
+                    self._hosts.append(host)
+                host.start()
+            yield host, fresh
+        finally:
+            if starting:
+                with self._condition:
+                    self._starting -= 1
+                    self._condition.notify_all()
+            if host is None and spawned:
+                host = spawned[0]
+            if host is not None:
+                if fresh and not host.threads_started():
+                    host.abandon()
+                    with self._condition:
+                        host.alive = False
+                        host.available = False
+                        host.owner = None
+                        if host in self._hosts:
+                            self._hosts.remove(host)
+                        self._condition.notify_all()
+                else:
+                    self._release(host)
 
-    def _spawn(self, environment: dict[str, str], key: str) -> _Host:
+    def _spawn(self, environment: dict[str, str], key: str, holder: list[_Host]) -> _Host:
         binary = self.binary
         # Windows starts a batch file only through a shell, which this never asks for.
         if sys.platform == "win32" and binary.suffix.lower() in (".bat", ".cmd"):
@@ -1593,7 +1654,7 @@ class _Pool:
             if refusal is not None:
                 raise Alpha2HostError("HOST_QUARANTINED", refusal)
         try:
-            return _Host(self, binary, environment, key)
+            return _Host(self, binary, environment, key, holder)
         except OSError as cause:
             refused = _host_start.spawn_refusal(binary, cause)
             if refused is not None:
@@ -1672,11 +1733,19 @@ class _Pool:
         resends = 0
         while True:
             events: queue.Queue[tuple[str, Any]] = queue.Queue()
-            host, fresh = self._acquire(modes, events, cancel)
             try:
-                return self._run(
-                    host, fresh, events, framed, request_id, modes, cancel, on_progress, extraction
-                )
+                with self._lease(modes, events, cancel) as (host, fresh):
+                    return self._run(
+                        host,
+                        fresh,
+                        events,
+                        framed,
+                        request_id,
+                        modes,
+                        cancel,
+                        on_progress,
+                        extraction,
+                    )
             except _Unsent as unsent:
                 if resends >= _MAX_RESENDS:
                     raise unsent.error from None
@@ -1685,8 +1754,6 @@ class _Pool:
                 if error.code != "HOST_RETIRING" or resends >= _MAX_RESENDS:
                     raise
                 resends += 1
-            finally:
-                self._release(host)
 
     def _run(
         self,
