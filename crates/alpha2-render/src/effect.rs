@@ -350,7 +350,7 @@ pub struct EffectDef {
     pub params: Vec<ParamSpec>,
     /// Ordered external resource schema.
     pub resources: Vec<ResourceSpec>,
-    /// Author function implementing the selected contract.
+    /// Author function implementing the selected contract. Code outside comments is ASCII.
     pub wgsl_body: String,
     /// Minimum required GPU capability tier.
     pub tier_min: CapabilityTier,

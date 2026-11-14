@@ -126,6 +126,8 @@ All notable changes to this project are documented in this file.
   the stall limit plus 5 seconds (5 seconds after its parent's exit) instead of living on with the
   GPU device and the partial file. An extraction waiting for an acknowledgement when the input ends
   is answered `CANCELLED`.
+- Runtime effect code outside comments must be ASCII; non-ASCII identifiers and Unicode
+  blankspace, which slipped past the effect's cost analysis, are refused at registration.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.
