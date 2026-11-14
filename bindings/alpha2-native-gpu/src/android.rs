@@ -688,6 +688,16 @@ impl AhbImporter {
         })
     }
 
+    /// Frees the conversions that completed, releasing their decoder buffers, without waiting for
+    /// any that did not.
+    ///
+    /// # Errors
+    /// A failed Vulkan call.
+    pub fn collect(&self) -> Result<(), AhbImportError> {
+        let mut state = self.lock();
+        self.reclaim(&mut state, usize::MAX)
+    }
+
     /// Frees the conversions that completed, first waiting for the oldest ones until at most
     /// `most` remain.
     fn reclaim(&self, state: &mut State, most: usize) -> Result<(), AhbImportError> {

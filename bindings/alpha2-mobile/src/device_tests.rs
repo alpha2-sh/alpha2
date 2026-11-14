@@ -2009,6 +2009,77 @@ mod gpu_frames {
     }
 
     #[test]
+    fn a_dropped_plane_lease_lets_its_decoder_buffer_go_without_another_import() {
+        let gpu = match pollster::block_on(GpuContext::request_product()) {
+            Ok(gpu) => gpu,
+            Err(error) => {
+                skip!(Capability::AhbImport, "no GPU device: {error}");
+                return;
+            }
+        };
+        let (gpu, Some(frames)) = crate::zero_copy::open(gpu, true) else {
+            skip!(
+                Capability::AhbImport,
+                "the GPU device does not import decoder buffers"
+            );
+            return;
+        };
+        let name = "h264-padded.mp4";
+        if emulated(name) {
+            return;
+        }
+        let mut renderer = Renderer::new(gpu.clone());
+        renderer.register_builtins().expect("built-in effects");
+        let Ok(mut stream) = VideoStream::open_file(
+            &tests_dir().join("corpus").join(name),
+            Arc::clone(&frames.decoders),
+            StreamOptions {
+                preference: DecodePreference::Hardware,
+                ..StreamOptions::default()
+            },
+        ) else {
+            skip!(
+                Capability::HardwareVideoDecode,
+                "{name} has no hardware decoder"
+            );
+            return;
+        };
+        let size = alpha2_render::RenderSize::new(320, 180).expect("size");
+        let cancel = CancelToken::default();
+        let mut surfaces = Vec::new();
+        for index in 0..3 {
+            let frame = stream.next(&cancel).expect("decodes").expect("a frame");
+            let BackendImage::Surface(lease) = &frame.image else {
+                panic!("frame {index} is not a surface");
+            };
+            surfaces.push(Arc::downgrade(lease));
+            let prepared = frames
+                .import
+                .prepare(
+                    &renderer,
+                    size,
+                    alpha2_render::ColorPolicy::RejectHdr,
+                    &frame.facts,
+                    lease,
+                )
+                .unwrap_or_else(|error| panic!("frame {index}: {error}"));
+            gpu.device()
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(10)),
+                })
+                .expect("the renderer's work finishes");
+            drop(prepared);
+        }
+        drop(stream);
+        let alive = surfaces
+            .iter()
+            .filter(|surface| surface.strong_count() > 0)
+            .count();
+        assert_eq!(alive, 0, "decoder buffers still held");
+    }
+
+    #[test]
     fn rendered_frames_match_between_the_memory_and_gpu_paths() {
         let gpu = match pollster::block_on(GpuContext::request_product()) {
             Ok(gpu) => gpu,

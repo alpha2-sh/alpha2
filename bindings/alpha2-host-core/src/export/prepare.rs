@@ -166,4 +166,9 @@ pub trait SurfaceImport: Send + Sync {
         facts: &FrameFacts,
         lease: &Arc<dyn SurfaceLease>,
     ) -> Result<GpuSource, String>;
+
+    /// Lets go of the surfaces whose preparation finished, without waiting; work that stops
+    /// importing calls it so finished frames do not wait for the next import. The default does
+    /// nothing.
+    fn collect(&self) {}
 }

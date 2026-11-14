@@ -74,6 +74,27 @@ impl SurfaceLease for Surface {
 
 struct NoImport;
 
+/// Imports nothing and counts its collections.
+#[derive(Default)]
+struct Collecting(std::sync::atomic::AtomicUsize);
+
+impl SurfaceImport for Collecting {
+    fn prepare(
+        &self,
+        _renderer: &Renderer,
+        _size: RenderSize,
+        _color: ColorPolicy,
+        _facts: &FrameFacts,
+        _lease: &Arc<dyn SurfaceLease>,
+    ) -> Result<GpuSource, String> {
+        Err("not imported".into())
+    }
+
+    fn collect(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl SurfaceImport for NoImport {
     fn prepare(
         &self,
@@ -774,6 +795,15 @@ fn clips_project(clips: &[(i64, i64, i64)]) -> EngineProject {
 /// Exports `snapshot` with sources from [`Counted`] sessions over 60 frames at 30 fps; `managed`
 /// closes finished cursors and limits the open streams as a mobile export does.
 fn export_counted(snapshot: &EngineProject, sessions: &Counted, managed: bool) -> Vec<(u64, u8)> {
+    export_counted_with(snapshot, sessions, managed, None)
+}
+
+fn export_counted_with(
+    snapshot: &EngineProject,
+    sessions: &Counted,
+    managed: bool,
+    import: Option<Arc<dyn SurfaceImport>>,
+) -> Vec<(u64, u8)> {
     let mut exporter = Exporter::for_project(
         snapshot,
         QualityProfile::export(),
@@ -796,6 +826,9 @@ fn export_counted(snapshot: &EngineProject, sessions: &Counted, managed: bool) -
         let range = snapshot.timeline_range().expect("range");
         let (peak, reads) = crate::cursor::visual_decode_reads(snapshot.project(), range);
         sources = sources.with_reads(reads).with_session_limit(peak + 2);
+    }
+    if let Some(import) = import {
+        sources = sources.with_surface_import(import);
     }
     let mut sink = Collect::default();
     export_video(
@@ -828,6 +861,24 @@ fn back_to_back_clips_of_one_source_keep_one_session_open() {
     assert_eq!(
         frames,
         export_counted(&snapshot, &Counted::default(), false)
+    );
+}
+
+#[test]
+fn closing_a_finished_cursor_lets_the_surface_import_collect() {
+    let snapshot = clips_project(&(0..40).map(|clip| (clip, 1, clip)).collect::<Vec<_>>());
+    let import = Arc::new(Collecting::default());
+    let frames = export_counted_with(
+        &snapshot,
+        &Counted::default(),
+        true,
+        Some(Arc::clone(&import) as Arc<dyn SurfaceImport>),
+    );
+    assert_eq!(frames.len(), 40);
+    let collected = import.0.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        collected >= 39,
+        "{collected} collections for 39 closed cursors"
     );
 }
 

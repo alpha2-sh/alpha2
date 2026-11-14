@@ -442,6 +442,10 @@ All notable changes to this project are documented in this file.
 - Mobile: a preview whose audio output stops taking samples for 500 ms or reports an error (a
   headset pulled, Bluetooth off) plays on silent by the wall clock instead of freezing the picture.
   `Alpha2.pause()` silences a playing preview and keeps its position; `resume()` plays on from it.
+- Android: decoder buffers imported to the GPU are let go once the renderer is done with them, when
+  a clip's decoder closes, and while a preview waits for a command, instead of at the next import;
+  a paused or finished timeline no longer holds up to three decoder images and their plane
+  textures.
 - A browser export cancelled while its sink is finishing rejects at once with `cancelled` and
   commits nothing, also when `finish` never settles; before, the export waited for `finish` and
   then reported a committed file as cancelled. `MediabunnySink.finish` rejects with

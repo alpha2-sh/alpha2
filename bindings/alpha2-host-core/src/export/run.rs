@@ -535,6 +535,14 @@ where
                 return;
             };
             self.streams.remove(&oldest);
+            self.collect_surfaces();
+        }
+    }
+
+    /// Lets the surface import free what the closed streams' frames held.
+    fn collect_surfaces(&self) {
+        if let Some(import) = &self.surfaces {
+            import.collect();
         }
     }
 
@@ -640,8 +648,12 @@ where
 
     fn release_finished(&mut self, time: MediaTime) {
         if let Some(reads) = &self.reads {
+            let open = self.streams.len();
             self.streams
                 .retain(|cursor, _| !reads.finished(cursor, time));
+            if self.streams.len() < open {
+                self.collect_surfaces();
+            }
         }
     }
 

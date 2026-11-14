@@ -499,16 +499,25 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
         } else {
             (state.playing() && state.output.is_some()).then_some(Duration::ZERO)
         };
-        let command = match wait {
-            Some(wait) => match commands.recv_timeout(wait) {
+        let command = if let Some(wait) = wait {
+            match commands.recv_timeout(wait) {
                 Ok(command) => Some(command),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => return,
-            },
-            None => match commands.recv() {
-                Ok(command) => Some(command),
-                Err(_) => return,
-            },
+            }
+        } else {
+            // Idle until a command: decoder surfaces whose frames are done go back now.
+            if let Some(frames) = state
+                .output
+                .as_ref()
+                .and_then(|output| output.frames.as_ref())
+            {
+                frames.import.collect();
+            }
+            let Ok(command) = commands.recv() else {
+                return;
+            };
+            Some(command)
         };
         if let Some(command) = command {
             if !apply_queued(command, commands, &mut state, &session, shared) {
