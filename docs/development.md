@@ -184,9 +184,7 @@ Test binaries for an iPhone link a Swift overlay through a dependency, so build 
 
 #### App lifecycle
 
-- `Alpha2.pause()` holds exports, stills, extractions and previews before their next GPU work (a playing preview goes silent and keeps its position), and `resume()` lets them continue. iOS runs no GPU work in the background, so an iOS app pauses when it leaves the foreground and resumes when it returns.
-- `Alpha2.memoryWarning()` halves the decoded frames running work keeps. Call it from `didReceiveMemoryWarning` on iOS, and from `onTrimMemory` on Android at `TRIM_MEMORY_RUNNING_LOW` and above. Work sizes its budget from the memory free when it starts.
-- An Android export that should go on in the background runs in a foreground service of type `dataSync` (API 29 and later) or `mediaProcessing` (API 35 and later). An app targeting API 31 or later cannot start one from the background, so it starts the service and the export while visible. Without the service, the app pauses as on iOS.
+Pausing for the background, memory warnings and Android foreground services are described for app developers in the [Android library](../packages/alpha2-android/README.md#app-lifecycle) and [Swift package](../packages/alpha2-swift/README.md#app-lifecycle) READMEs.
 
 ## Lint and format
 

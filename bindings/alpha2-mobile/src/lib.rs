@@ -2,9 +2,9 @@
 //!
 //! Swift and Kotlin bindings are generated from this crate with uniffi. The shape follows the
 //! Node client: [`Alpha2::capabilities`], [`Alpha2::conform`], [`Alpha2::export`] and typed
-//! [`Alpha2Error`]s carrying the engine's error codes. Projects and results cross as JSON. A
-//! conform result is this library's own shape, whether each source's file opens, not the desktop
-//! host's conform report.
+//! [`Alpha2Error`]s with a code. Projects and results cross as JSON in this library's own shapes:
+//! a conform result says whether each source's file opens, not what the desktop host's conform
+//! report says.
 //!
 //! Long operations run on threads this library owns. uniffi futures cannot be cancelled, so an
 //! export returns an [`ExportHandle`] whose [`ExportHandle::cancel`] stops it and whose

@@ -15,7 +15,7 @@ Every target runs the same rendering code, so a project renders the same in a br
 | MP4, MOV, MKV or WebM export from any other language | `alpha2-host serve` and its [stdio protocol](docs/host-protocol.md) |
 | Building, validating and exporting projects from Python | [`alpha2`](python/alpha2/README.md) (PyPI) and `alpha2-host` |
 | A Rust program | [`alpha2`](crates/alpha2/README.md) (crate) |
-| An iOS or Android app (preview) | the mobile library, built from source: [mobile targets](docs/development.md#mobile-targets); no package is published |
+| An iOS or Android app (preview) | the mobile library, built from source: [Android](packages/alpha2-android/README.md), [Swift](packages/alpha2-swift/README.md); no package is published |
 
 ## Quick start
 

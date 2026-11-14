@@ -26,7 +26,7 @@ impl From<&EncoderRefusal> for EncoderRefusalRecord {
     }
 }
 
-/// Why a call failed. `code()` is the engine's error code, as the desktop host reports it.
+/// Why a call failed, with a code; the package READMEs list the codes.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum Alpha2Error {
     /// The request or project is invalid (`INVALID_INPUT`).
