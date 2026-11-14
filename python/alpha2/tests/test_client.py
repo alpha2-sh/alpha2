@@ -253,11 +253,14 @@ def test_options_written_in_python_reach_the_host_in_the_protocols_names(
     import json
 
     request = json.loads(recorded.read_text())
-    assert request["resources"] == resources
+    # A path without a drive is resolved on Windows; on POSIX it is already absolute.
+    assert request["resources"] == {"label": {"art/badge.png": os.path.abspath("/media/badge.png")}}
     assert request["memory"] == {"inFlightBytes": 1 << 20, "scale": 0.5}
     assert request["loudness"] == {"targetLufs": -14, "truePeakCeilingDbtp": -1}
     assert request["renderCache"] == {"directory": str(tmp_path / "cache"), "quotaBytes": 1 << 30}
-    assert request["proxies"] == {"a": [{"path": "/a.proxy.mov", "colorPipeline": "tone_map"}]}
+    assert request["proxies"] == {
+        "a": [{"path": os.path.abspath("/a.proxy.mov"), "colorPipeline": "tone_map"}]
+    }
     assert request["videoQuality"] == {"bitrate": 8_000_000, "mode": "constant", "quantizer": 23}
     assert request["frameRate"] == {"num": 30, "den": 1}
     assert request["inputPolicy"] == "auto" and request["strategy"] == "render"
@@ -1484,7 +1487,7 @@ def test_conform_sends_the_purpose_as_the_host_spells_it(
 
     request = json.loads(recorded.read_text())
     assert request["purpose"] == "preview-proxy"
-    assert request["assets"] == {"a": "/a.mov"}
+    assert request["assets"] == {"a": os.path.abspath("/a.mov")}
     with pytest.raises(Alpha2ProjectValidationError):
         HostClient(host_path=host_path).conform({**project_document(), "schema_version": 9})
 

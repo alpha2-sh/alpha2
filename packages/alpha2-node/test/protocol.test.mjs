@@ -667,10 +667,10 @@ serve((request) => {
     exportRequest(join(root, "with.mp4"), { resources }),
     options,
   );
-  assert.deepEqual(
-    JSON.parse(await readFile(recorded, "utf8")).resources,
-    resources,
-  );
+  // A path without a drive is resolved on Windows; on POSIX it is already absolute.
+  assert.deepEqual(JSON.parse(await readFile(recorded, "utf8")).resources, {
+    label: { "art/badge.png": resolve("/media/badge.png") },
+  });
   await exportProject(exportRequest(join(root, "without.mp4")), options);
   assert.deepEqual(JSON.parse(await readFile(recorded, "utf8")).resources, {});
 });
