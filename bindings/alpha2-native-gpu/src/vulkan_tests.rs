@@ -912,3 +912,52 @@ fn creation_never_crashes_on_any_installed_driver() {
         );
     }
 }
+
+#[test]
+fn an_encode_copy_larger_than_its_planes_or_frame_is_refused() {
+    let extent = |width, height| wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    let frame = alpha2_ffmpeg_bridge::VulkanFrameDescriptor {
+        coded_width: 64,
+        coded_height: 64,
+        ..Default::default()
+    };
+    let check = |size, luma, chroma| super::check_encode_copy_size(size, luma, chroma, &frame);
+    let (luma, chroma) = (extent(64, 64), extent(32, 32));
+    assert!(check((64, 64), luma, chroma).is_ok());
+    assert!(check((32, 16), luma, chroma).is_ok());
+    for size in [(64, 66), (66, 64), (63, 64), (64, 63), (0, 64)] {
+        assert!(check(size, luma, chroma).is_err(), "{size:?}");
+    }
+    assert!(check((64, 64), luma, extent(32, 31)).is_err());
+    assert!(check((96, 96), extent(96, 96), extent(48, 48)).is_err());
+}
+
+#[test]
+fn an_encode_copy_one_row_too_tall_fails_before_it_is_recorded() {
+    use super::*;
+    let Some(context) = failure_tests::shared_context() else {
+        return;
+    };
+    let gpu = context.gpu();
+    let (luma, chroma) = failure_tests::rendered_planes(&gpu, 64, 64);
+    let mut frames = failure_tests::encode_frames(&context, 1);
+    let mut copier = VulkanEncodeCopier::new(&context).expect("copier");
+    let mut access =
+        alpha2_ffmpeg_bridge::VulkanEncodeFrameAccess::begin(&mut frames[0]).expect("access");
+    let error = copier
+        .submit(&mut access, &luma, &chroma, (64, 66))
+        .expect_err("two rows past the textures");
+    assert!(
+        matches!(error, BridgeError::InvalidInput(_)),
+        "refused before any Vulkan call: {error:?}"
+    );
+    copier
+        .submit(&mut access, &luma, &chroma, (64, 64))
+        .expect("the planes' own size");
+    drop(access);
+    copier.finish().expect("finished");
+}

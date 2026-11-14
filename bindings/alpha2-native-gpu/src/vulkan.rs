@@ -443,6 +443,7 @@ impl VulkanEncodeCopier {
         chroma: &wgpu::Texture,
         size: (u32, u32),
     ) -> Result<(), BridgeError> {
+        check_encode_copy_size(size, luma.size(), chroma.size(), frame.access().frame())?;
         let slot = self.await_slot()?;
         let inputs = EncodeCopyInputs {
             _luma: luma.clone(),
@@ -491,6 +492,36 @@ impl VulkanEncodeCopier {
         *kept = Some(inputs);
         frame.commit();
         Ok(())
+    }
+}
+
+/// Refuses a copy extent that is odd or larger than either plane texture or the encoder image.
+fn check_encode_copy_size(
+    (width, height): (u32, u32),
+    luma: wgpu::Extent3d,
+    chroma: wgpu::Extent3d,
+    frame: &alpha2_ffmpeg_bridge::VulkanFrameDescriptor,
+) -> Result<(), BridgeError> {
+    let coded = (
+        u32::try_from(frame.coded_width).unwrap_or(0),
+        u32::try_from(frame.coded_height).unwrap_or(0),
+    );
+    let fits = width != 0
+        && height != 0
+        && width % 2 == 0
+        && height % 2 == 0
+        && width <= luma.width
+        && height <= luma.height
+        && width / 2 <= chroma.width
+        && height / 2 <= chroma.height
+        && width <= coded.0
+        && height <= coded.1;
+    if fits {
+        Ok(())
+    } else {
+        Err(BridgeError::InvalidInput(
+            "encode copy size does not fit its planes or the encoder frame",
+        ))
     }
 }
 

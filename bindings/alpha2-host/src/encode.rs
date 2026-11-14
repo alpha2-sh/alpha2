@@ -104,6 +104,14 @@ impl FramePool {
             )
             .map_err(|error| encode_error(format!("cannot allocate an encoder frame: {error}")))?
         };
+        debug_assert!(
+            frame.planes().iter().copied().eq(self
+                .pixels
+                .planes(self.width.unsigned_abs(), self.height.unsigned_abs())
+                .into_iter()
+                .map(|(width, rows, bytes)| ((width * bytes) as usize, rows as usize))),
+            "the encoder frame's planes are not the ones the packer writes"
+        );
         Ok(PooledFrame {
             frame: Some(frame),
             pool: Arc::clone(self),

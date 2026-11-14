@@ -546,6 +546,13 @@ impl NativeAvEncodeSink {
                 "encoder input dimensions do not match its configuration".into(),
             ));
         }
+        if crate::convert::pixel_format(self.video_selection.pixels).ok()
+            != Some(frame.frame().format)
+        {
+            return Err(EncodeError::Adapter(
+                "encoder input pixel format does not match its configuration".into(),
+            ));
+        }
         let pts = av_rescale_q(pts.ticks(), tick_base(), self.video_encoder_time_base);
         if self.last_video_pts.is_some_and(|previous| pts <= previous) {
             return Err(EncodeError::InvalidTimestamp);

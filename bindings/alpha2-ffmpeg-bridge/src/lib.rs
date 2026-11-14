@@ -2485,14 +2485,7 @@ fn frame_yuv_planes(frame: &AVFrame, share: bool) -> Result<Option<YuvPlanes>, B
             });
         }
         Ok(FramePlane {
-            bytes: copy_video_plane(
-                frame.data[index],
-                frame.linesize[index],
-                row_bytes,
-                rows,
-                context,
-            )?
-            .into(),
+            bytes: copy_video_plane(frame, index, row_bytes, rows, context)?.into(),
             stride: row_bytes,
             width: samples,
             height: rows,
@@ -2548,19 +2541,7 @@ impl PlaneView {
             return None;
         }
         let len = stride.checked_mul(usize::try_from(rows).ok()?)?;
-        let start = data as usize;
-        let end = start.checked_add(len)?;
-        let inside = inner.buf.iter().any(|buffer| {
-            // SAFETY: a non-null `AVFrame::buf` entry is a live `AVBufferRef` the frame holds.
-            let Some(buffer) = (unsafe { buffer.as_ref() }) else {
-                return false;
-            };
-            let buffer_start = buffer.data as usize;
-            buffer_start
-                .checked_add(buffer.size)
-                .is_some_and(|buffer_end| buffer_start <= start && end <= buffer_end)
-        });
-        inside.then(|| Self {
+        in_frame_buffer(inner, data as usize, len).then(|| Self {
             frame: std::sync::Arc::clone(frame),
             data,
             len,
@@ -2577,7 +2558,56 @@ impl AsRef<[u8]> for PlaneView {
     }
 }
 
+/// Copies plane `index` of `frame`, refusing rows outside the frame's buffers when it has any.
 fn copy_video_plane(
+    frame: &AVFrame,
+    index: usize,
+    width: u32,
+    height: u32,
+    context: &'static str,
+) -> Result<Vec<u8>, BridgeError> {
+    let (data, linesize) = (frame.data[index].cast_const(), frame.linesize[index]);
+    let has_buffers = frame.buf.iter().any(|buffer| !buffer.is_null());
+    if has_buffers && !plane_rows_in_frame_buffer(frame, data, linesize, width, height) {
+        return Err(BridgeError::InvalidInput(context));
+    }
+    // SAFETY: the rows lie in one of the frame's buffers, or a frame without buffers vouches for
+    // its own planes.
+    unsafe { copy_plane_rows(data, linesize, width, height, context) }
+}
+
+/// Whether `height` rows of `width` bytes at the signed `linesize` from `data` lie in one buffer.
+fn plane_rows_in_frame_buffer(
+    frame: &AVFrame,
+    data: *const u8,
+    linesize: i32,
+    width: u32,
+    height: u32,
+) -> bool {
+    let (Ok(row_bytes), Ok(rows)) = (usize::try_from(width), usize::try_from(height)) else {
+        return false;
+    };
+    let Ok(stride) = usize::try_from(linesize.unsigned_abs()) else {
+        return false;
+    };
+    let Some(span) = stride
+        .checked_mul(rows.saturating_sub(1))
+        .and_then(|before| before.checked_add(row_bytes))
+    else {
+        return false;
+    };
+    // A negative linesize walks back from the first row, so the lowest address is the last row.
+    let start = if linesize < 0 {
+        (data as usize).checked_sub(span - row_bytes)
+    } else {
+        Some(data as usize)
+    };
+    !data.is_null() && rows > 0 && start.is_some_and(|start| in_frame_buffer(frame, start, span))
+}
+
+/// # Safety
+/// A non-null `data` must have `height` rows at the signed `linesize`, each `width` bytes long.
+unsafe fn copy_plane_rows(
     data: *const u8,
     linesize: i32,
     width: u32,
@@ -2603,8 +2633,7 @@ fn copy_video_plane(
         let offset = row
             .checked_mul(signed_stride)
             .ok_or(BridgeError::InvalidInput(context))?;
-        // SAFETY: a non-null plane has `height` rows at its signed linesize, whose absolute value
-        // was checked to cover `row_bytes`.
+        // SAFETY: delegated to this function's contract; the linesize covers `row_bytes`.
         let source = unsafe { slice::from_raw_parts(data.offset(offset), row_bytes) };
         output.extend_from_slice(source);
     }
@@ -3142,7 +3171,7 @@ pub struct Yuv420pFrameBuffer {
     frame: AVFrame,
     width: usize,
     height: usize,
-    /// Each plane's visible bytes per row and rows; empty for YUV420P.
+    /// Each plane's visible bytes per row and rows, from the pixel format descriptor.
     planes: Vec<(usize, usize)>,
 }
 
@@ -3166,46 +3195,34 @@ impl Yuv420pFrameBuffer {
     /// # Errors
     /// Returns an error for a non-positive size or a failed allocation.
     pub fn new(width: i32, height: i32) -> Result<Self, BridgeError> {
-        let coded_width =
-            usize::try_from(width).map_err(|_| BridgeError::InvalidInput("negative YUV width"))?;
-        let coded_height = usize::try_from(height)
-            .map_err(|_| BridgeError::InvalidInput("negative YUV height"))?;
-        if coded_width == 0 || coded_height == 0 {
-            return Err(BridgeError::InvalidInput("empty YUV frame"));
-        }
-        Ok(Self {
-            frame: zeroed_frame(width, height, ffi::AV_PIX_FMT_YUV420P)?,
-            width: coded_width,
-            height: coded_height,
-            planes: Vec::new(),
-        })
+        Self::with_format(width, height, ffi::AV_PIX_FMT_YUV420P)
     }
 
-    /// Allocates one reusable frame of `format`; `planes` gives each plane's visible bytes per row
-    /// and rows in `FFmpeg` order.
+    /// Allocates one reusable frame of `format`; each plane's row bytes and rows come from the
+    /// format's descriptor.
     ///
     /// # Errors
-    /// Returns an error for a non-positive size, a failed allocation, or planes the format lacks.
+    /// Returns an error for a non-positive size, a format without planes, or a failed allocation.
     pub fn with_format(
         width: i32,
         height: i32,
         format: ffi::AVPixelFormat,
-        planes: &[(usize, usize)],
     ) -> Result<Self, BridgeError> {
         let coded_width = usize::try_from(width)
             .map_err(|_| BridgeError::InvalidInput("negative frame width"))?;
         let coded_height = usize::try_from(height)
             .map_err(|_| BridgeError::InvalidInput("negative frame height"))?;
-        if coded_width == 0 || coded_height == 0 || planes.is_empty() || planes.len() > 4 {
+        if coded_width == 0 || coded_height == 0 {
             return Err(BridgeError::InvalidInput("empty frame"));
         }
+        let planes = plane_geometry(format, width, height)?;
         let frame = zeroed_frame(width, height, format)?;
         for (index, &(row_bytes, _)) in planes.iter().enumerate() {
             if frame.data[index].is_null()
                 || plane_stride(frame.linesize[index], row_bytes).is_err()
             {
                 return Err(BridgeError::InvalidInput(
-                    "the frame's planes are not the ones described",
+                    "the frame's planes do not match its pixel format",
                 ));
             }
         }
@@ -3213,8 +3230,14 @@ impl Yuv420pFrameBuffer {
             frame,
             width: coded_width,
             height: coded_height,
-            planes: planes.to_vec(),
+            planes,
         })
+    }
+
+    /// Each plane's visible bytes per row and rows, in `FFmpeg`'s plane order.
+    #[must_use]
+    pub fn planes(&self) -> &[(usize, usize)] {
+        &self.planes
     }
 
     /// Each plane's memory and stride after making the frame unshared, for any format.
@@ -3222,22 +3245,13 @@ impl Yuv420pFrameBuffer {
     /// # Errors
     /// As [`Self::begin_write`].
     pub fn begin_write_planes(&mut self) -> Result<Vec<(&mut [u8], usize)>, BridgeError> {
-        if self.planes.is_empty() {
-            let planes = self.begin_write()?;
-            let chroma = planes.chroma_stride;
-            return Ok(vec![
-                (planes.y, planes.y_stride),
-                (planes.u, chroma),
-                (planes.v, chroma),
-            ]);
-        }
         self.make_writable()?;
         let mut written = Vec::with_capacity(self.planes.len());
         for (index, &(row_bytes, rows)) in self.planes.iter().enumerate() {
             let stride = plane_stride(self.frame.linesize[index], row_bytes)?;
-            // SAFETY: `zeroed_frame` allocated `rows` rows of `linesize` bytes per plane, and
-            // `make_writable` left this frame the sole owner.
-            let plane = unsafe { writable_plane(self.frame.data[index], stride, row_bytes, rows)? };
+            // SAFETY: `writable_plane` checks the rows lie in one of the frame's buffers, and
+            // `make_writable` left this frame their sole owner.
+            let plane = unsafe { writable_plane(&self.frame, index, stride, row_bytes, rows)? };
             written.push((plane, stride));
         }
         Ok(written)
@@ -3277,27 +3291,18 @@ impl Yuv420pFrameBuffer {
     /// # Errors
     /// Returns an error when the buffer cannot be made writable or its planes changed layout.
     pub fn begin_write(&mut self) -> Result<Yuv420pFramePlanes<'_>, BridgeError> {
-        if !self.planes.is_empty() {
+        if self.frame.format != ffi::AV_PIX_FMT_YUV420P {
             return Err(BridgeError::InvalidInput("the frame is not YUV420P"));
         }
-        self.make_writable()?;
-        let chroma_width = self.width.div_ceil(2);
-        let chroma_height = self.height.div_ceil(2);
-        let y_stride = plane_stride(self.frame.linesize[0], self.width)?;
-        let u_stride = plane_stride(self.frame.linesize[1], chroma_width)?;
-        let v_stride = plane_stride(self.frame.linesize[2], chroma_width)?;
+        let mut planes = self.begin_write_planes()?.into_iter();
+        let (Some((y, y_stride)), Some((u, u_stride)), Some((v, v_stride))) =
+            (planes.next(), planes.next(), planes.next())
+        else {
+            return Err(BridgeError::InvalidInput("the frame is not YUV420P"));
+        };
         if u_stride != v_stride {
             return Err(BridgeError::InvalidInput("mismatched chroma strides"));
         }
-        // SAFETY: `zeroed_frame` allocated and wrote `height` rows of `linesize` bytes per plane,
-        // and the writability check makes this frame the sole owner.
-        let y = unsafe { writable_plane(self.frame.data[0], y_stride, self.width, self.height)? };
-        // SAFETY: as above, for the two half-resolution chroma planes.
-        let u =
-            unsafe { writable_plane(self.frame.data[1], u_stride, chroma_width, chroma_height)? };
-        // SAFETY: as above.
-        let v =
-            unsafe { writable_plane(self.frame.data[2], v_stride, chroma_width, chroma_height)? };
         Ok(Yuv420pFramePlanes {
             y,
             y_stride,
@@ -3381,23 +3386,83 @@ fn plane_stride(linesize: i32, width: usize) -> Result<usize, BridgeError> {
     Ok(stride)
 }
 
+/// Plane `index` of `frame` as `rows` rows of `stride` bytes, the last one `row_bytes` long.
+///
 /// # Safety
-/// `data` must point at `height` rows of `stride` bytes the caller solely owns.
+/// The caller must solely own the frame's buffers for the slice's lifetime.
 unsafe fn writable_plane<'a>(
-    data: *mut u8,
+    frame: &AVFrame,
+    index: usize,
     stride: usize,
-    width: usize,
-    height: usize,
+    row_bytes: usize,
+    rows: usize,
 ) -> Result<&'a mut [u8], BridgeError> {
+    let data = frame.data[index];
     if data.is_null() {
         return Err(BridgeError::InvalidInput("frame plane is null"));
     }
     let len = stride
-        .checked_mul(height.saturating_sub(1))
-        .and_then(|rows| rows.checked_add(width))
+        .checked_mul(rows.saturating_sub(1))
+        .and_then(|before| before.checked_add(row_bytes))
         .ok_or(BridgeError::InvalidInput("frame plane size overflow"))?;
-    // SAFETY: delegated to this function's contract.
+    if !in_frame_buffer(frame, data as usize, len) {
+        return Err(BridgeError::InvalidInput(
+            "frame plane extends past its buffer",
+        ));
+    }
+    // SAFETY: the range lies in one of the frame's buffers; exclusivity is the caller's.
     Ok(unsafe { slice::from_raw_parts_mut(data, len) })
+}
+
+/// Whether `len` bytes from address `start` lie inside one of `frame`'s reference-counted
+/// buffers.
+fn in_frame_buffer(frame: &AVFrame, start: usize, len: usize) -> bool {
+    let Some(end) = start.checked_add(len) else {
+        return false;
+    };
+    frame.buf.iter().any(|buffer| {
+        // SAFETY: a non-null `AVFrame::buf` entry is a live `AVBufferRef` the frame holds.
+        let Some(buffer) = (unsafe { buffer.as_ref() }) else {
+            return false;
+        };
+        let buffer_start = buffer.data as usize;
+        buffer_start
+            .checked_add(buffer.size)
+            .is_some_and(|buffer_end| buffer_start <= start && end <= buffer_end)
+    })
+}
+
+/// Visible bytes per row and rows of each plane of a `width` by `height` frame of `format`.
+fn plane_geometry(
+    format: ffi::AVPixelFormat,
+    width: i32,
+    height: i32,
+) -> Result<Vec<(usize, usize)>, BridgeError> {
+    // SAFETY: `av_pix_fmt_desc_get` accepts any value and returns null or a static descriptor.
+    let descriptor = unsafe { ffi::av_pix_fmt_desc_get(format).as_ref() }
+        .ok_or(BridgeError::InvalidInput("pixel format has no descriptor"))?;
+    // SAFETY: a pure computation over plain values.
+    let count = unsafe { ffi::av_pix_fmt_count_planes(format) };
+    let count = usize::try_from(count)
+        .ok()
+        .filter(|count| (1..=4).contains(count))
+        .ok_or(BridgeError::InvalidInput("pixel format has no planes"))?;
+    let rows = usize::try_from(height).map_err(|_| BridgeError::InvalidInput("negative height"))?;
+    (0..count)
+        .map(|index| {
+            let plane = i32::try_from(index).unwrap_or(i32::MAX);
+            // SAFETY: a pure computation over plain values.
+            let row_bytes = unsafe { ffi::av_image_get_linesize(format, width, plane) };
+            let row_bytes =
+                usize::try_from(row_bytes).map_err(|_| BridgeError::FfmpegCode(row_bytes))?;
+            let rows = if index == 1 || index == 2 {
+                rows.div_ceil(1 << descriptor.log2_chroma_h)
+            } else {
+                rows
+            };
+            Ok((row_bytes, rows))
+        })
+        .collect()
 }
 
 #[cfg(all(test, target_os = "linux", feature = "hwdevice"))]

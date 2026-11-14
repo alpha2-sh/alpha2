@@ -732,8 +732,15 @@ pub(crate) fn video_decoder_options(threads: i64) -> AVDictionary {
 }
 
 /// The `FFmpeg` pixel format of `layout`.
-pub(crate) fn pixel_format(layout: alpha2_media::PixelLayout) -> ffi::AVPixelFormat {
-    match layout.ffmpeg_name() {
+pub(crate) fn pixel_format(
+    layout: alpha2_media::PixelLayout,
+) -> Result<ffi::AVPixelFormat, EncodeError> {
+    pixel_format_named(layout.ffmpeg_name())
+}
+
+pub(crate) fn pixel_format_named(name: &str) -> Result<ffi::AVPixelFormat, EncodeError> {
+    Ok(match name {
+        "yuv420p" => ffi::AV_PIX_FMT_YUV420P,
         "yuva420p" => ffi::AV_PIX_FMT_YUVA420P,
         "yuv420p10le" => ffi::AV_PIX_FMT_YUV420P10LE,
         "yuva420p10le" => ffi::AV_PIX_FMT_YUVA420P10LE,
@@ -746,22 +753,12 @@ pub(crate) fn pixel_format(layout: alpha2_media::PixelLayout) -> ffi::AVPixelFor
         "yuv444p10le" => ffi::AV_PIX_FMT_YUV444P10LE,
         "yuva444p10le" => ffi::AV_PIX_FMT_YUVA444P10LE,
         "p010le" => ffi::AV_PIX_FMT_P010LE,
-        _ => ffi::AV_PIX_FMT_YUV420P,
-    }
-}
-
-/// Visible bytes per row and rows of each plane of `layout`, in `FFmpeg`'s plane order.
-#[must_use]
-pub(crate) fn frame_planes(
-    layout: alpha2_media::PixelLayout,
-    width: u32,
-    height: u32,
-) -> Vec<(usize, usize)> {
-    layout
-        .planes(width, height)
-        .into_iter()
-        .map(|(plane_width, rows, bytes)| ((plane_width * bytes) as usize, rows as usize))
-        .collect()
+        _ => {
+            return Err(EncodeError::Adapter(format!(
+                "pixel layout {name} has no FFmpeg pixel format"
+            )));
+        }
+    })
 }
 
 /// A reusable encoder frame for `width` x `height` pictures of `layout`, its planes in
@@ -780,15 +777,10 @@ pub fn packed_frame(
         i32::try_from(height)
             .map_err(|_| alpha2_ffmpeg_bridge::BridgeError::InvalidInput("height"))?,
     );
-    if layout.is_yuv420p() {
-        return alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::new(coded_width, coded_height);
-    }
-    alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::with_format(
-        coded_width,
-        coded_height,
-        pixel_format(layout),
-        &frame_planes(layout, width, height),
-    )
+    let format = pixel_format(layout).map_err(|_| {
+        alpha2_ffmpeg_bridge::BridgeError::InvalidInput("pixel layout has no FFmpeg format")
+    })?;
+    alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::with_format(coded_width, coded_height, format)
 }
 
 pub(crate) fn prores_options(layout: alpha2_media::PixelLayout) -> Vec<(&'static CStr, String)> {

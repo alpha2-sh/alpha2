@@ -486,6 +486,12 @@ All notable changes to this project are documented in this file.
 - Transitions that start on the same tick (three clips overlapping on a track) reach the renderer
   in the order their track lists them; before, the order depended on how many transitions the
   project had elsewhere. Audio clips are no longer listed as frame needs.
+- Safe functions of `alpha2-ffmpeg-bridge`, `alpha2-native` and `alpha2-native-gpu` no longer
+  hand `FFmpeg` or the GPU memory whose size the caller described: an encoder frame takes each
+  plane's rows from its pixel format, `write_prepared_video` refuses a frame of another pixel
+  format than the encoder's, plane copies stay inside the frame's buffers, and the Vulkan encode
+  copy refuses a size larger than its planes or the encoder frame. In the bridge,
+  `Yuv420pFrameBuffer::with_format` takes no plane list and `planes()` reports the layout.
 
 ## [0.6.0] - 2026-11-08
 

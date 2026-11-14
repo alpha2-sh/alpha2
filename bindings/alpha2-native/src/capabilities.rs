@@ -675,9 +675,9 @@ pub(crate) fn encoder_layout(
     let Some(formats) = encoder.pix_fmts() else {
         return Some(layout);
     };
-    [layout, layout.as_p010()]
-        .into_iter()
-        .find(|candidate| formats.contains(&crate::convert::pixel_format(*candidate)))
+    [layout, layout.as_p010()].into_iter().find(|candidate| {
+        crate::convert::pixel_format(*candidate).is_ok_and(|format| formats.contains(&format))
+    })
 }
 
 /// Whether the encoder is listed only after an open probe ([`encoder_runs_here`]).
@@ -1437,7 +1437,10 @@ fn open_video_encoder_context(
     let mut encoder = EncoderContext::from(AVCodecContext::new(&candidate.encoder));
     encoder.set_width(request.width);
     encoder.set_height(request.height);
-    encoder.set_pix_fmt(crate::convert::pixel_format(pixels));
+    encoder.set_pix_fmt(
+        crate::convert::pixel_format(pixels)
+            .map_err(|error| (NativeEncoderRejection::PixelFormat, error))?,
+    );
     let rate = request.config.frame_rate;
     let time_base = encoder_time_base(rate, max_time_base_denominator(candidate.encoder.id))
         .map_err(|error| (NativeEncoderRejection::OpenFailed, error))?;
@@ -1828,8 +1831,9 @@ fn probe_software_encode(
     }
     let encoder = &candidate.encoder;
     let base = candidate.codec().base_layout();
-    let format =
-        encoder_layout(encoder, base).map_or(ffi::AV_PIX_FMT_YUV420P, crate::convert::pixel_format);
+    let format = encoder_layout(encoder, base)
+        .and_then(|layout| crate::convert::pixel_format(layout).ok())
+        .unwrap_or(ffi::AV_PIX_FMT_YUV420P);
     let mut context = EncoderContext::from(AVCodecContext::new(encoder));
     context.set_width(coded_width);
     context.set_height(coded_height);
