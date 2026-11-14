@@ -128,7 +128,7 @@ impl CpuSource {
         let image = Arc::new(match &self.inner.content {
             Content::Image(_) => unreachable!("handled above"),
             Content::Yuv { planes, conversion } => {
-                present_yuv(renderer, &planes.frame(), conversion)
+                present_yuv(renderer, &planes.frame(), conversion, Path::Fastest)
             }
             Content::Rgba {
                 pixels,
@@ -153,6 +153,20 @@ impl CpuSource {
             .presented_sources
             .fetch_add(1, Ordering::Relaxed);
         Arc::clone(self.inner.presented.get_or_init(|| image))
+    }
+
+    /// The picture drawn by the table path where it applies (`tables`), or by the per-pixel
+    /// shader port, which the table path must equal.
+    #[cfg(test)]
+    pub(crate) fn presented_by(&self, renderer: &CpuRenderer, tables: bool) -> CpuImage {
+        let path = if tables { Path::Tables } else { Path::PerPixel };
+        match &self.inner.content {
+            Content::Image(image) => (**image).clone(),
+            Content::Yuv { planes, conversion } => {
+                present_yuv(renderer, &planes.frame(), conversion, path)
+            }
+            Content::Rgba { .. } => unimplemented!("RGBA sources have one path"),
+        }
     }
 }
 
@@ -346,6 +360,51 @@ impl Geometry {
         let columns = wanted[0].min(budget);
         let rows = wanted[1].min((budget / columns).floor().max(1.0));
         [columns, rows]
+    }
+
+    /// The source axis that output axis `axis` (0 = x) drives.
+    const fn source_axis(&self, axis: usize) -> usize {
+        if self.orientation & 1 == 0 {
+            axis
+        } else {
+            1 - axis
+        }
+    }
+
+    /// The coordinate along [`Self::source_axis`] that [`Self::source_pixel_at`] gives output
+    /// position `destination` on `axis`, with the same arithmetic.
+    fn source_coordinate(&self, axis: usize, destination: f32) -> f32 {
+        let local = (destination - self.draw[axis]) / self.draw[axis + 2];
+        let reflected = match (self.orientation & 3, axis) {
+            (1, 0) | (2, _) | (3, 1) => 1.0 - local,
+            _ => local,
+        };
+        let source_axis = self.source_axis(axis);
+        let value = if source_axis == 0 && self.orientation & 4 != 0 {
+            1.0 - reflected
+        } else {
+            reflected
+        };
+        let origin = self.visible[source_axis];
+        let extent = self.visible[source_axis + 2];
+        (origin + value * extent).clamp(origin + 0.5, origin + extent - 0.5)
+    }
+
+    /// Whether output position `destination` on `axis` is inside the drawn rectangle.
+    fn inside_axis(&self, axis: usize, destination: f32) -> bool {
+        destination >= self.draw[axis] && destination < self.draw[axis] + self.draw[axis + 2]
+    }
+
+    /// The offsets of `filtered`'s samples from a pixel centre along `axis`, in grid order.
+    fn grid_offsets(grid: [f32; 2], axis: usize) -> Vec<f32> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        (0..grid[axis] as u32)
+            .map(|index| {
+                #[allow(clippy::cast_precision_loss)]
+                let offset = (index as f32 + 0.5) / grid[axis] - 0.5;
+                offset
+            })
+            .collect()
     }
 
     /// `filtered_stored` around `stored_sample`.
@@ -704,10 +763,22 @@ struct Planes<'a> {
     alpha: Option<Plane<'a>>,
 }
 
+/// How `present_yuv` converts: the fastest path that applies, the table path alone, or the
+/// per-pixel shader port the table path must match bit for bit.
+#[derive(Clone, Copy, PartialEq)]
+enum Path {
+    Fastest,
+    #[cfg(test)]
+    Tables,
+    #[cfg(test)]
+    PerPixel,
+}
+
 fn present_yuv(
     renderer: &CpuRenderer,
     frame: &YuvFrame<'_>,
     conversion: &YuvConversion,
+    path: Path,
 ) -> CpuImage {
     fn plane<'a>(
         source: &SourcePlane<'a>,
@@ -755,11 +826,20 @@ fn present_yuv(
             .as_ref()
             .map(|alpha| plane(alpha, (frame.size.width, frame.size.height), wide, 1)),
     };
-    let geometry = conversion.geometry;
-    let alpha = conversion.alpha;
-    if let Some(image) = present_separable(renderer, output, &planes, conversion) {
+    if path == Path::Fastest
+        && let Some(image) = present_separable(renderer, output, &planes, conversion)
+    {
         return image;
     }
+    #[cfg(test)]
+    let tables = path != Path::PerPixel;
+    #[cfg(not(test))]
+    let tables = true;
+    if tables && let Some(image) = present_tables(renderer, output, &planes, conversion) {
+        return image;
+    }
+    let geometry = conversion.geometry;
+    let alpha = conversion.alpha;
     present_rows(renderer, output, &geometry, |destination| {
         geometry
             .filtered(destination, |source_pixel| {
@@ -777,55 +857,55 @@ fn lerp_into(values: &[f32], taps: &[(usize, usize, f32)], out: &mut [f32]) {
     }
 }
 
-/// Where one output column or row of an upright presentation reads: texels either side and the
-/// weight between, for luma and chroma.
+/// A sample's texels either side and the weight between, along one source axis.
+type Tap = (u32, u32, f32);
+
+/// Where one output column or row reads along the source axis it drives: texels either side and
+/// the weight between, for luma and chroma.
 #[derive(Clone, Copy, Default)]
 struct AxisTap {
     inside: bool,
-    luma: (u32, u32, f32),
-    chroma: (u32, u32, f32),
+    luma: Tap,
+    chroma: Tap,
+}
+
+/// The texels a bilinear sample at normalized `position` reads along an axis `size` texels long,
+/// clamped to the edge as `Plane::sample` clamps them.
+fn plane_tap(position: f32, size: u32) -> Tap {
+    #[allow(clippy::cast_precision_loss)]
+    let texel = position * size as f32 - 0.5;
+    let floor = texel.floor();
+    let last = i64::from(size) - 1;
+    #[allow(clippy::cast_possible_truncation)]
+    let first = floor as i64;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    (
+        first.clamp(0, last) as u32,
+        (first + 1).clamp(0, last) as u32,
+        texel - floor,
+    )
 }
 
 impl YuvConversion {
-    /// Taps of output `destination` along `axis` (0 = x), using exactly the arithmetic of
-    /// `source_pixel_at`, `coordinates_at` and a bilinear sample, which are separable for upright
-    /// and half-turned presentations.
-    fn axis_tap(&self, axis: usize, destination: f32, luma_size: u32, chroma_size: u32) -> AxisTap {
+    /// Taps of output `destination` along output `axis` (0 = x), using exactly the arithmetic of
+    /// `source_pixel_at`, `coordinates_at` and a bilinear sample, which are separable: each
+    /// output axis drives one source axis.
+    fn axis_tap(&self, axis: usize, destination: f32, planes: &Planes<'_>) -> AxisTap {
         let geometry = &self.geometry;
-        let inside = destination >= geometry.draw[axis]
-            && destination < geometry.draw[axis] + geometry.draw[axis + 2];
-        let local = (destination - geometry.draw[axis]) / geometry.draw[axis + 2];
-        let mut source = if geometry.orientation & 3 == 2 {
-            1.0 - local
+        let source = geometry.source_axis(axis);
+        let source_pixel = geometry.source_coordinate(axis, destination);
+        let chroma_pixel = ((source_pixel + self.chroma_offset[source])
+            * self.chroma_scale[source])
+            .clamp(self.chroma_window[source], self.chroma_window[source + 2]);
+        let (luma_size, chroma_size) = if source == 0 {
+            (planes.y.width, planes.u.width)
         } else {
-            local
-        };
-        if axis == 0 && geometry.orientation & 4 != 0 {
-            source = 1.0 - source;
-        }
-        let origin = geometry.visible[axis];
-        let extent = geometry.visible[axis + 2];
-        let source_pixel = (origin + source * extent).clamp(origin + 0.5, origin + extent - 0.5);
-        let chroma_pixel = ((source_pixel + self.chroma_offset[axis]) * self.chroma_scale[axis])
-            .clamp(self.chroma_window[axis], self.chroma_window[axis + 2]);
-        let taps = |position: f32, size: u32| {
-            #[allow(clippy::cast_precision_loss)]
-            let texel = position * size as f32 - 0.5;
-            let floor = texel.floor();
-            let last = i64::from(size) - 1;
-            #[allow(clippy::cast_possible_truncation)]
-            let first = floor as i64;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            (
-                first.clamp(0, last) as u32,
-                (first + 1).clamp(0, last) as u32,
-                texel - floor,
-            )
+            (planes.y.height, planes.u.height)
         };
         AxisTap {
-            inside,
-            luma: taps(source_pixel / geometry.source[axis], luma_size),
-            chroma: taps(chroma_pixel / self.chroma_size[axis], chroma_size),
+            inside: geometry.inside_axis(axis, destination),
+            luma: plane_tap(source_pixel / geometry.source[source], luma_size),
+            chroma: plane_tap(chroma_pixel / self.chroma_size[source], chroma_size),
         }
     }
 }
@@ -849,7 +929,7 @@ impl Plane<'_> {
 
     /// `component` of texels from `first` in the rows `row` names, filtered between them, into
     /// `out`.
-    fn vertical(&self, row: (u32, u32, f32), first: u32, component: usize, out: &mut [f32]) {
+    fn vertical(&self, row: Tap, first: u32, component: usize, out: &mut [f32]) {
         if !self.wide {
             let count = out.len();
             let line = |y: u32| {
@@ -909,7 +989,7 @@ fn present_separable(
     }
     #[allow(clippy::cast_precision_loss)]
     let columns = (bounds.x..bounds.right())
-        .map(|x| conversion.axis_tap(0, x as f32 + 0.5, planes.y.width, planes.u.width))
+        .map(|x| conversion.axis_tap(0, x as f32 + 0.5, planes))
         .collect::<Vec<_>>();
     let all_inside = columns.iter().all(|column| column.inside);
     // Column taps relative to the first texel of each plane's row.
@@ -917,7 +997,7 @@ fn present_separable(
         columns.iter().map(|tap| tap.luma.0).min().unwrap_or(0),
         columns.iter().map(|tap| tap.chroma.0).min().unwrap_or(0),
     );
-    let relative = |(first, second, weight): (u32, u32, f32), base: u32| {
+    let relative = |(first, second, weight): Tap, base: u32| {
         ((first - base) as usize, (second - base) as usize, weight)
     };
     let luma_taps = columns
@@ -930,7 +1010,7 @@ fn present_separable(
         .collect::<Vec<_>>();
     let alpha = conversion.alpha;
     let width = bounds.width as usize;
-    let reach = |pick: fn(&AxisTap) -> (u32, u32, f32)| {
+    let reach = |pick: fn(&AxisTap) -> Tap| {
         let first = columns.iter().map(|tap| pick(tap).0).min().unwrap_or(0);
         let last = columns.iter().map(|tap| pick(tap).1).max().unwrap_or(0);
         (first, last)
@@ -962,7 +1042,7 @@ fn present_separable(
             for (index, line) in band.chunks_mut(width).enumerate() {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
                 let y = (bounds.y as usize + first_row + index) as f32 + 0.5;
-                let row = conversion.axis_tap(1, y, planes.y.height, planes.u.height);
+                let row = conversion.axis_tap(1, y, planes);
                 if !row.inside {
                     continue;
                 }
@@ -973,11 +1053,10 @@ fn present_separable(
                 } else if let Some(plane) = planes.v.as_ref() {
                     plane.vertical(row.chroma, chroma_first, 0, v);
                 }
-                let between =
-                    |values: &[f32], (first, second, weight): (u32, u32, f32), base: u32| {
-                        let a = values[(first - base) as usize];
-                        a + (values[(second - base) as usize] - a) * weight
-                    };
+                let between = |values: &[f32], (first, second, weight): Tap, base: u32| {
+                    let a = values[(first - base) as usize];
+                    a + (values[(second - base) as usize] - a) * weight
+                };
                 if conversion.encoded_identity && all_inside {
                     // Inlined conversion, one pass at a time: samples, then range, matrix and
                     // clamp.
@@ -1020,6 +1099,258 @@ fn present_separable(
                 }
             }
         });
+    Some(CpuImage::pooled(
+        output,
+        bounds,
+        pixels,
+        &renderer.frame_pool,
+    ))
+}
+
+/// Taps of every filter sample of every output position along one output axis.
+struct AxisTable {
+    /// Per output position, whether its centre is inside the drawn rectangle.
+    inside: Vec<bool>,
+    /// Per output position, one tap per sample in grid order.
+    taps: Vec<AxisTap>,
+    samples: usize,
+}
+
+impl AxisTable {
+    /// Taps for positions `first..first + count` on output `axis`, with `filtered`'s offsets.
+    fn new(
+        conversion: &YuvConversion,
+        planes: &Planes<'_>,
+        axis: usize,
+        (first, count): (u32, u32),
+        offsets: &[f32],
+    ) -> Self {
+        let mut inside = Vec::with_capacity(count as usize);
+        let mut taps = Vec::with_capacity(count as usize * offsets.len());
+        for position in first..first + count {
+            #[allow(clippy::cast_precision_loss)]
+            let destination = position as f32 + 0.5;
+            inside.push(conversion.geometry.inside_axis(axis, destination));
+            taps.extend(
+                offsets
+                    .iter()
+                    .map(|offset| conversion.axis_tap(axis, destination + offset, planes)),
+            );
+        }
+        Self {
+            inside,
+            taps,
+            samples: offsets.len(),
+        }
+    }
+
+    fn at(&self, position: usize) -> &[AxisTap] {
+        &self.taps[position * self.samples..(position + 1) * self.samples]
+    }
+
+    /// The first and last texel any tap reads, for luma and chroma.
+    fn reach(&self) -> [(u32, u32); 2] {
+        let span = |pick: fn(&AxisTap) -> Tap| {
+            let first = self.taps.iter().map(|tap| pick(tap).0).min().unwrap_or(0);
+            let last = self.taps.iter().map(|tap| pick(tap).1).max().unwrap_or(0);
+            (first, last)
+        };
+        [span(|tap| tap.luma), span(|tap| tap.chroma)]
+    }
+}
+
+/// The line of texels a fixed tap selects across the other source axis, decoded once.
+struct Lines {
+    /// Texels `first..` of the two lines the tap names (rows when upright, columns when turned).
+    near: Vec<f32>,
+    far: Vec<f32>,
+    first: u32,
+}
+
+impl Lines {
+    fn new(first: u32, last: u32) -> Self {
+        let length = (last - first + 1) as usize;
+        Self {
+            near: vec![0.0; length],
+            far: vec![0.0; length],
+            first,
+        }
+    }
+
+    /// Decodes rows `tap.0` and `tap.1` of `component`.
+    fn rows(&mut self, plane: &Plane<'_>, tap: Tap, component: usize) {
+        for (offset, (near, far)) in self.near.iter_mut().zip(self.far.iter_mut()).enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let x = self.first + offset as u32;
+            *near = plane.at(x, tap.0, component);
+            *far = plane.at(x, tap.1, component);
+        }
+    }
+
+    /// Decodes columns `tap.0` and `tap.1` of `component` and lerps between them, as
+    /// `Plane::sample` lerps horizontally before it lerps vertically.
+    fn columns(&mut self, plane: &Plane<'_>, tap: Tap, component: usize) {
+        for (offset, near) in self.near.iter_mut().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let y = self.first + offset as u32;
+            let left = plane.at(tap.0, y, component);
+            *near = left + (plane.at(tap.1, y, component) - left) * tap.2;
+        }
+    }
+
+    /// `Plane::sample` from rows decoded by [`Self::rows`], at column tap `across` and row
+    /// weight `weight`.
+    #[inline]
+    fn between_rows(&self, across: Tap, weight: f32) -> f32 {
+        let (left, right) = (
+            (across.0 - self.first) as usize,
+            (across.1 - self.first) as usize,
+        );
+        let top = self.near[left] + (self.near[right] - self.near[left]) * across.2;
+        let bottom = self.far[left] + (self.far[right] - self.far[left]) * across.2;
+        top + (bottom - top) * weight
+    }
+
+    /// `Plane::sample` from columns lerped by [`Self::columns`], at row tap `across`.
+    #[inline]
+    fn between_columns(&self, across: Tap) -> f32 {
+        let (top, bottom) = (
+            (across.0 - self.first) as usize,
+            (across.1 - self.first) as usize,
+        );
+        let top_value = self.near[top];
+        top_value + (self.near[bottom] - top_value) * across.2
+    }
+}
+
+/// Table path for the presentations `present_separable` declines, except alpha planes:
+/// quarter turns and minification. Each output axis drives one source axis, so one table per
+/// output axis holds every sample's taps; for each output row and filter row the two source
+/// lines it reads are decoded once. Every sample is evaluated in the per-pixel path's order
+/// (horizontal lerp, vertical lerp, conversion, grid sum), so the bits are the same.
+#[allow(clippy::too_many_lines)]
+fn present_tables(
+    renderer: &CpuRenderer,
+    output: RenderSize,
+    planes: &Planes<'_>,
+    conversion: &YuvConversion,
+) -> Option<CpuImage> {
+    if conversion.alpha_plane {
+        return None;
+    }
+    let geometry = &conversion.geometry;
+    let bounds = geometry.bounds(output);
+    if bounds.is_empty() {
+        return Some(CpuImage::transparent(output));
+    }
+    let grid = geometry.filter_grid();
+    #[allow(clippy::float_cmp)]
+    let single = grid == [1.0, 1.0];
+    let count = grid[0] * grid[1];
+    let columns = AxisTable::new(
+        conversion,
+        planes,
+        0,
+        (bounds.x, bounds.width),
+        &Geometry::grid_offsets(grid, 0),
+    );
+    let rows = AxisTable::new(
+        conversion,
+        planes,
+        1,
+        (bounds.y, bounds.height),
+        &Geometry::grid_offsets(grid, 1),
+    );
+    // Upright and half-turned rows fix a source row pair; quarter-turned rows fix a column pair.
+    let turned = geometry.source_axis(1) == 0;
+    let [(luma_first, luma_last), (chroma_first, chroma_last)] = columns.reach();
+    let alpha = conversion.alpha;
+    let width = bounds.width as usize;
+    let scratch = || {
+        (
+            [
+                Lines::new(luma_first, luma_last),
+                Lines::new(chroma_first, chroma_last),
+                Lines::new(chroma_first, chroma_last),
+            ],
+            vec![[0.0_f32; 4]; width],
+        )
+    };
+    let mut pixels = renderer.frame_pool.take(bounds.pixels());
+    renderer.workers.bands_with(
+        &mut pixels,
+        width,
+        scratch,
+        |([luma, u, v], sums), first_row, band| {
+            band.fill([0; 4]);
+            for (index, line) in band.chunks_mut(width).enumerate() {
+                let row = first_row + index;
+                if !rows.inside[row] {
+                    continue;
+                }
+                sums.fill([0.0; 4]);
+                for row_tap in rows.at(row) {
+                    if turned {
+                        luma.columns(&planes.y, row_tap.luma, 0);
+                        u.columns(&planes.u, row_tap.chroma, 0);
+                    } else {
+                        luma.rows(&planes.y, row_tap.luma, 0);
+                        u.rows(&planes.u, row_tap.chroma, 0);
+                    }
+                    let v_plane = if conversion.interleaved {
+                        Some((&planes.u, 1))
+                    } else {
+                        planes.v.as_ref().map(|plane| (plane, 0))
+                    };
+                    if let Some((plane, component)) = v_plane {
+                        if turned {
+                            v.columns(plane, row_tap.chroma, component);
+                        } else {
+                            v.rows(plane, row_tap.chroma, component);
+                        }
+                    }
+                    for (offset, (out, sum)) in line.iter_mut().zip(sums.iter_mut()).enumerate() {
+                        if !columns.inside[offset] {
+                            continue;
+                        }
+                        for column_tap in columns.at(offset) {
+                            let sample = |lines: &Lines, across: Tap, weight: f32| {
+                                if turned {
+                                    lines.between_columns(across)
+                                } else {
+                                    lines.between_rows(across, weight)
+                                }
+                            };
+                            let codes = [
+                                sample(luma, column_tap.luma, row_tap.luma.2),
+                                sample(u, column_tap.chroma, row_tap.chroma.2),
+                                if v_plane.is_some() {
+                                    sample(v, column_tap.chroma, row_tap.chroma.2)
+                                } else {
+                                    0.0
+                                },
+                            ];
+                            let value = conversion.stored_opaque(conversion.encoded_from(codes));
+                            if single {
+                                *out = half::store4(value.map(|channel| channel * alpha));
+                            } else {
+                                for (total, channel) in sum.iter_mut().zip(value) {
+                                    *total += channel;
+                                }
+                            }
+                        }
+                    }
+                }
+                if !single {
+                    for (offset, (out, sum)) in line.iter_mut().zip(sums.iter()).enumerate() {
+                        if columns.inside[offset] {
+                            *out = half::store4(sum.map(|total| total / count * alpha));
+                        }
+                    }
+                }
+            }
+        },
+    );
     Some(CpuImage::pooled(
         output,
         bounds,

@@ -394,3 +394,69 @@ fn rgba_sources_present_alike() {
         );
     }
 }
+
+#[test]
+fn the_table_path_equals_the_per_pixel_path() {
+    use crate::RenderControls;
+
+    let bt709 = sdr(
+        ColorMatrix::Bt709,
+        ColorRange::Limited,
+        ColorPrimaries::Bt709,
+    );
+    let canvas = sized(24, 16);
+    // Grids from 1x1 (upscaled, same size) to 8x8, and uneven ones through the aspect ratio.
+    let sources = [
+        (sized(16, 12), None, (1, 1)),
+        (canvas, None, (1, 1)),
+        (sized(60, 40), None, (1, 1)),
+        (sized(96, 64), Some((5, 3, 80, 52)), (4, 3)),
+        (sized(132, 88), None, (1, 2)),
+        (sized(192, 128), None, (1, 1)),
+    ];
+    let sitings = [
+        ChromaLocation::Left,
+        ChromaLocation::Center,
+        ChromaLocation::TopLeft,
+        ChromaLocation::Unspecified,
+    ];
+    for budget in [64, 12] {
+        // Bands of three rows put seams inside every picture.
+        let renderer = crate::CpuRenderer::with_band_rows(2, 3);
+        renderer.set_quality_controls(budget, 1);
+        for format in [YuvFormat::I420, YuvFormat::NV12, YuvFormat::P010] {
+            for &(size, crop, sample_aspect_ratio) in &sources {
+                for exif in 1..=8 {
+                    let presentation = SourcePresentation {
+                        visible_rect: crop.map_or(
+                            SourcePresentation::identity(size).visible_rect,
+                            |(x, y, width, height)| Rect {
+                                x,
+                                y,
+                                width,
+                                height,
+                            },
+                        ),
+                        orientation: Orientation::from_exif(exif).expect("orientation"),
+                        sample_aspect_ratio,
+                        chroma_siting: sitings[usize::from(exif) % sitings.len()],
+                        ..presentation(size, canvas)
+                    };
+                    let (source, _) = renderer
+                        .present_yuv(
+                            Arc::new(frame(format, size, bt709)),
+                            presentation,
+                            ColorPolicy::RejectHdr,
+                        )
+                        .expect("present");
+                    assert!(
+                        source.presented_by(&renderer, true).stored_bits()
+                            == source.presented_by(&renderer, false).stored_bits(),
+                        "{format:?} {size:?} crop {crop:?} aspect {sample_aspect_ratio:?} exif \
+                         {exif} budget {budget}"
+                    );
+                }
+            }
+        }
+    }
+}
