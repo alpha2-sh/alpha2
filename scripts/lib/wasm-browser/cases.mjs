@@ -98,7 +98,11 @@ import {
   stillResidency,
   wasmMemoryBound,
 } from "./memory.mjs";
-import { previewFullResolution, previewUnchangedFrame } from "./preview.mjs";
+import {
+  previewEveryAnimationFrame,
+  previewFullResolution,
+  previewUnchangedFrame,
+} from "./preview.mjs";
 import {
   browserVideoConversion,
   webcodecsDecodeOrder,
@@ -214,6 +218,7 @@ export const cases = {
   "webgpu-adapter-info": webgpuAdapterInfo,
   "preview-unchanged-frame": previewUnchangedFrame,
   "preview-full-resolution": previewFullResolution,
+  "preview-every-animation-frame": previewEveryAnimationFrame,
   "cpu-worker-host": () => cpuWorkerHost("cpu", 640, 360),
   "cpu-worker-host-1080p": () => cpuWorkerHost("cpu", 1920, 1080),
   "renderer-auto": () => cpuWorkerHost("auto", 640, 360),

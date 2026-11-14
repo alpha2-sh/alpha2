@@ -269,6 +269,12 @@ All notable changes to this project are documented in this file.
 - A frame of a reversed clip that the browser refuses to copy out is read again and, if it still
   fails, decoded on the forward path; before, it was drawn through the browser's own RGB
   conversion and could reach an export with colors that differ from the decoded frame.
+- `Alpha2Player` keeps at most one presentation on the backend and one waiting: a `present` or
+  `seek` that arrives while another waits replaces it (the replaced call resolves `undefined`),
+  so presenting on every animation frame no longer builds a backlog in the render worker. A
+  presentation superseded by a later `present` still shows the frames it refilled, so the picture
+  advances when frames arrive slower than presentations. `seek` recovers a lost device first, as
+  `present` does, and after `dispose()` calls in flight resolve `undefined` instead of rejecting.
 
 ## [0.6.0] - 2026-11-08
 

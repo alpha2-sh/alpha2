@@ -294,7 +294,7 @@ test("a source that never arrives is asked for once and the presentation ends", 
   assert.deepEqual(alone.presents, [0n], "no upload, no second presentation");
 });
 
-test("a presentation superseded while its frames decode is not presented again", async () => {
+test("a presentation superseded while its frames decode shows them once, then the later time", async () => {
   const backend = new ExactFrameBackend(["cam"]);
   let later;
   const player = new Alpha2Player(backend, {
@@ -310,7 +310,7 @@ test("a presentation superseded while its frames decode is not presented again",
   await player.initialize({});
   assert.equal(await player.present(1_000n), undefined);
   assert.equal((await later)?.presentedTimeTicks, 9_000n);
-  assert.deepEqual(backend.presents, [1_000n, 9_000n, 9_000n]);
+  assert.deepEqual(backend.presents, [1_000n, 1_000n, 9_000n, 9_000n]);
 });
 
 test("presentations that overlap a device recovery share it, and the generation moves once", async () => {
@@ -355,7 +355,7 @@ test("presentations that overlap a device recovery share it, and the generation 
   );
 });
 
-test("a failed recovery rejects every presentation that waited for it, and later ones without trying again", async () => {
+test("a failed recovery rejects the presentations that waited for it, and later ones without trying again", async () => {
   const backend = new FakeBackend();
   backend.deviceLost = true;
   let attempts = 0;
@@ -372,7 +372,8 @@ test("a failed recovery rejects every presentation that waited for it, and later
     player.present(8_000n),
   ]);
   assert.equal(attempts, 1);
-  for (const result of results) {
+  assert.deepEqual(results[1], { status: "fulfilled", value: undefined });
+  for (const result of [results[0], results[2]]) {
     assert.equal(result.reason.code, "GPU_DEVICE_LOST");
     assert.equal(result.reason.fatal, true);
     assert.match(result.reason.message, /replaceSurface/);
@@ -625,4 +626,114 @@ test("a frame sent back for a software decode twice fails the refill", async () 
   });
   await player.initialize({});
   await assert.rejects(player.seek(0n), { code: "SOFTWARE_DECODE_REQUIRED" });
+});
+
+test("presenting on every tick keeps one backend presentation in flight and shows the last time", async () => {
+  const backend = new FakeBackend();
+  let inFlight = 0;
+  let mostInFlight = 0;
+  const present = backend.present.bind(backend);
+  backend.present = async (timeTicks) => {
+    inFlight += 1;
+    mostInFlight = Math.max(mostInFlight, inFlight);
+    try {
+      // Three ticks of the caller's.
+      await new Promise((resolve) => setTimeout(resolve, 12));
+      return await present(timeTicks);
+    } finally {
+      inFlight -= 1;
+    }
+  };
+  const player = new Alpha2Player(backend);
+  await player.initialize({});
+  const results = [];
+  for (let tick = 0; tick < 30; tick += 1) {
+    results.push(player.present(BigInt(tick) * 4_000n));
+    await new Promise((resolve) => setTimeout(resolve, 4));
+  }
+  const settled = await Promise.all(results);
+  const posted = backend.calls.filter(([name]) => name === "present");
+  assert.equal(mostInFlight, 1);
+  assert.ok(posted.length <= 16, `${posted.length} presentations posted`);
+  assert.equal(posted.at(-1)[1], 29n * 4_000n);
+  assert.equal(settled.at(-1)?.presentedTimeTicks, 29n * 4_000n);
+  assert.equal(
+    settled.filter((result) => result !== undefined).length >= 1,
+    true,
+  );
+});
+
+test("disposing resolves the presentation in flight and the one waiting with undefined", async () => {
+  const backend = new FakeBackend();
+  const rejectors = [];
+  backend.present = () => new Promise((_, reject) => rejectors.push(reject));
+  backend.dispose = () => {
+    for (const reject of rejectors.splice(0))
+      reject(new Error("render worker disposed"));
+  };
+  const player = new Alpha2Player(backend);
+  await player.initialize({});
+  const running = player.present(0n);
+  const waiting = player.present(4_000n);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  player.dispose();
+  assert.deepEqual(await Promise.all([running, waiting]), [
+    undefined,
+    undefined,
+  ]);
+});
+
+test("a seek recovers a lost device before it resets and presents", async () => {
+  const backend = new FakeBackend();
+  backend.deviceLost = true;
+  backend.missingSources = ["clip-a"];
+  const refills = [];
+  const player = new Alpha2Player(backend, {
+    onRefill: (requests) => {
+      refills.push(...requests);
+    },
+    recovery: ladder(),
+  });
+  await player.initialize({});
+  await player.seek(8_000n);
+  assert.deepEqual(
+    backend.calls.map(([name]) => name),
+    ["initialize", "recover", "reset", "present"],
+  );
+  assert.deepEqual(
+    refills.map(({ reason, generation }) => [reason, generation]),
+    [["seek", 2]],
+  );
+});
+
+test("a caller presenting faster than frames arrive still sees refilled frames drawn", async () => {
+  const backend = new ExactFrameBackend(["cam"]);
+  const drawn = [];
+  const present = backend.present.bind(backend);
+  backend.present = async (timeTicks) => {
+    await new Promise((resolve) => setTimeout(resolve, 4));
+    const result = await present(timeTicks);
+    if (result.missingFrames.length === 0) drawn.push(timeTicks);
+    return result;
+  };
+  const player = new Alpha2Player(backend, {
+    onRefill: async (requests) => {
+      await new Promise((resolve) => setTimeout(resolve, 12));
+      for (const request of requests)
+        await player.uploadVideoFrame({
+          ...frame(request.sourceId, request.generation),
+          requestedTimeTicks: request.mediaTimeTicks,
+        });
+    },
+  });
+  await player.initialize({});
+  const results = [];
+  for (let tick = 0; tick < 20; tick += 1) {
+    results.push(player.present(BigInt(tick) * 4_000n));
+    await new Promise((resolve) => setTimeout(resolve, 4));
+  }
+  const drawnWhilePresenting = drawn.length;
+  await Promise.all(results);
+  assert.ok(drawnWhilePresenting >= 2, `${drawnWhilePresenting} drawn`);
+  assert.equal(drawn.at(-1), 19n * 4_000n);
 });
