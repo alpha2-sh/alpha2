@@ -101,6 +101,41 @@ report({
 `;
 }
 
+// An emit the wire cannot carry (NaN) fails the step that made it, naming the value.
+export function extractUnsendableEmit() {
+  return `${prelude}
+const scripted = {
+  describe: () => ({
+    id: "alpha2.test.scripted", version: 1,
+    input: { media: "video", from: ["source"], format: "luma8" },
+    params_schema: { type: "object" },
+    outputs: [{ name: "track", kind: "points", channels: ["a"] }],
+  }),
+  video(frame, out) {
+    out.sample("track", frame.time, [Number.NaN]);
+  },
+};
+let error;
+try {
+  await runExtractor({
+    binding: wasm, project, media: { v: await media("h264-bt709-copy.mp4") },
+    request: {
+      extractor: "alpha2.test.scripted", version: 1,
+      input: { from: "source", source_id: "v", range: { start: 0, end: 40000 }, size: 64 },
+      outputs: { track: "t" },
+    },
+  }, scripted);
+} catch (caught) {
+  if (caught?.code === "DECODE_UNAVAILABLE") throw caught;
+  error = caught;
+}
+report({
+  ok: error?.code === "EXTRACTOR_FAILED" && /values\\[0\\] must be a finite number/.test(error?.message),
+  code: error?.code, message: error?.message,
+});
+`;
+}
+
 // A timeline input reads frames the CPU renderer draws: a red fill gives red samples.
 export function extractTimeline() {
   return `${prelude}

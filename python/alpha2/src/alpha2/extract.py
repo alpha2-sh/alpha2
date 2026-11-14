@@ -7,6 +7,8 @@ back in acknowledgements and the host validates them as the session does.
 from __future__ import annotations
 
 import json
+import math
+import operator
 import struct
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -47,22 +49,72 @@ class ExtractProgress:
     total: int | None
 
 
+def _text(value: object, what: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{what} must be a string, not {value!r}")
+    return value
+
+
+def _time(value: object, what: str) -> int:
+    try:
+        if isinstance(value, bool):
+            raise TypeError
+        return operator.index(value)  # type: ignore[arg-type]
+    except TypeError:
+        raise ValueError(f"{what} must be an integer tick count, not {value!r}") from None
+
+
+def _number(value: object, what: str) -> float:
+    """A finite number: ``int`` and ``float`` as they are, anything else with ``__float__``
+    (``numpy.float32``) converted."""
+    finite = False
+    number: Any = value
+    if not isinstance(value, (bool, str, bytes)) and hasattr(value, "__float__"):
+        if type(value) not in (int, float):
+            number = float(value)
+        try:
+            finite = math.isfinite(number)
+        except OverflowError:
+            finite = False
+    if not finite:
+        raise ValueError(f"{what} must be a finite number, not {value!r}")
+    return number  # type: ignore[no-any-return]
+
+
 class Emitter:
-    """Where an extractor's values go during one step."""
+    """Where an extractor's values go during one step. An emit the wire cannot carry raises
+    ``ValueError`` naming it, which fails the step."""
 
     def __init__(self) -> None:
         self.emits: list[dict[str, Any]] = []
 
     def sample(self, output: str, time: int, values: list[float | None]) -> None:
-        """A ``points``, ``scalars`` or ``similarity`` sample; ``None`` marks a lost channel."""
-        self.emits.append({"output": output, "time": time, "values": list(values)})
+        """A ``points``, ``scalars`` or ``similarity`` sample: an integer tick ``time`` and finite
+        values, ``None`` marking a lost channel."""
+        what = f"sample {output!r}"
+        emit: dict[str, Any] = {
+            "output": _text(output, "an emit's output"),
+            "time": _time(time, f"{what}: time"),
+            "values": [
+                None if value is None else _number(value, f"{what}: values[{index}]")
+                for index, value in enumerate(values)
+            ],
+        }
+        self.emits.append(emit)
 
     def word(
         self, output: str, start: int, end: int, text: str, speaker: str | None = None
     ) -> None:
-        emit: dict[str, Any] = {"output": output, "start": start, "end": end, "text": text}
+        """A word of a ``words`` output, from ``start`` to ``end`` in ticks."""
+        what = f"word {output!r}"
+        emit: dict[str, Any] = {
+            "output": _text(output, "an emit's output"),
+            "start": _time(start, f"{what}: start"),
+            "end": _time(end, f"{what}: end"),
+            "text": _text(text, f"{what}: text"),
+        }
         if speaker is not None:
-            emit["speaker"] = speaker
+            emit["speaker"] = _text(speaker, f"{what}: speaker")
         self.emits.append(emit)
 
     def interval(
@@ -73,11 +125,17 @@ class Emitter:
         label: str | None = None,
         score: float | None = None,
     ) -> None:
-        emit: dict[str, Any] = {"output": output, "start": start, "end": end}
+        """An interval of an ``intervals`` output, with an optional label and finite score."""
+        what = f"interval {output!r}"
+        emit: dict[str, Any] = {
+            "output": _text(output, "an emit's output"),
+            "start": _time(start, f"{what}: start"),
+            "end": _time(end, f"{what}: end"),
+        }
         if label is not None:
-            emit["label"] = label
+            emit["label"] = _text(label, f"{what}: label")
         if score is not None:
-            emit["score"] = score
+            emit["score"] = _number(score, f"{what}: score")
         self.emits.append(emit)
 
 

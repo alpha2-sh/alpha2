@@ -1232,6 +1232,7 @@ class _Host:
     """One ``alpha2-host serve`` process of a pool.
 
     The pool's lock guards ``owner``, ``ready``, ``available``, ``alive`` and ``input_closed``.
+    ``running`` belongs to the owner: whether a request it sent may still run there.
     """
 
     def __init__(self, pool: _Pool, binary: Path, environment: dict[str, str], key: str) -> None:
@@ -1252,6 +1253,7 @@ class _Host:
         self.available = True
         self.alive = True
         self.input_closed = False
+        self.running = False
         self.exited = threading.Event()
         self.exit_status: tuple[int | None, str | None] = (None, None)
         self._stderr = bytearray()
@@ -1585,6 +1587,10 @@ class _Pool:
             ) from cause
 
     def _release(self, host: _Host) -> None:
+        if host.running:
+            # A host that may still run the request never serves another.
+            self._end(host, kill=True)
+            host.running = False
         with self._condition:
             host.owner = None
             if not host.available:
@@ -1692,6 +1698,7 @@ class _Pool:
             if not fresh:
                 stderr_mark = host.stderr_mark()
             oom_kills_before = _host_start.oom_kill_count()
+            host.running = True
             sent = host.send(framed)
 
         if not fresh:
@@ -1737,6 +1744,7 @@ class _Pool:
                     continue
                 if kind == "exit":
                     exit_status = value
+                    host.running = False
                     break
                 if kind == "write-failed":
                     # The host's fatal message and exit, which arrive later, name the cause.
@@ -1773,20 +1781,19 @@ class _Pool:
                     continue
                 if message.get("type") == "fatal":
                     outcome = (False, (message["error"], phase_now()))
+                    host.running = False
                     break
                 if message.get("type") == "extract.step":
                     if message["requestId"] != request_id or extraction is None:
                         continue
                     ack = take_step(extraction.extractor, message, message.get("attachments", []))
-                    host.send(
-                        _wire.frame(
-                            _wire.encode(
-                                create_request(
-                                    "extract.ack", request_id, {"seq": message["seq"], **ack}
-                                )
-                            )
-                        )
-                    )
+                    seq = {"seq": message["seq"]}
+                    try:
+                        body = _wire.encode(create_request("extract.ack", request_id, seq | ack))
+                    except (TypeError, ValueError) as cause:
+                        failed = {"error": {"message": f"the step's emits cannot be sent: {cause}"}}
+                        body = _wire.encode(create_request("extract.ack", request_id, seq | failed))
+                    host.send(_wire.frame(body))
                     continue
                 if message.get("type") == "progress" and message.get("phase") == "extract":
                     if message["requestId"] != request_id or extraction is None:
@@ -1841,8 +1848,10 @@ class _Pool:
                     if message["ok"]
                     else (False, (message["error"], phase_now()))
                 )
+                host.running = False
             if cancelled:
                 self._cancel(host, events, request_id, sent)
+                host.running = False
         except KeyboardInterrupt:
             # Ctrl-C cancels like an abort, so the partial file is removed; a second one kills.
             if not cancelled:
@@ -1850,9 +1859,22 @@ class _Pool:
                     self._cancel(host, events, request_id, sent)
                 except KeyboardInterrupt:
                     self._end(host, kill=True)
+                    host.running = False
                     raise
+                host.running = False
                 raise
             self._end(host, kill=True)
+            host.running = False
+            raise
+        except BaseException:
+            # Anything else leaving mid-request (a signal handler, a task queue's time limit)
+            # cancels the same way, so nothing is published after the call failed.
+            if host.running:
+                try:
+                    self._cancel(host, events, request_id, sent)
+                except BaseException:  # noqa: BLE001 - the original is re-raised
+                    self._end(host, kill=True)
+                host.running = False
             raise
 
         signal_name = exit_status[1] if exit_status is not None else None

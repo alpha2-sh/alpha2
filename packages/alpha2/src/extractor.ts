@@ -1,5 +1,4 @@
-// The extractor contract every surface shares: what an extractor declares, reads and emits.
-// Types only, so importing it loads no media library.
+// The extractor contract every surface shares and its pure helpers; imports no media library.
 
 import type { DataSet } from "./generated/project-schema.js";
 
@@ -98,7 +97,10 @@ export interface ExtractAudio {
   readonly samples: Float32Array;
 }
 
-/** Where an extractor's values go; the host validates them as the session does. */
+/**
+ * Where an extractor's values go; the host validates them as the session does. Times are integer
+ * tick counts (numbers, not bigints) and values and scores finite; anything else throws.
+ */
 export interface ExtractEmitter {
   /** A sample of a `points`, `scalars` or `similarity` output; `null` marks a lost channel. */
   sample(
@@ -148,4 +150,163 @@ export interface ExtractProgress {
 export interface ExtractResult {
   readonly dataSets: readonly DataSet[];
   readonly timings: Readonly<Record<string, number>>;
+}
+
+function text(value: unknown, what: string): string {
+  if (typeof value !== "string")
+    throw new TypeError(`${what} must be a string, not ${String(value)}`);
+  return value;
+}
+
+function ticks(value: unknown, what: string): number {
+  if (typeof value === "bigint")
+    throw new TypeError(`${what} is a bigint; pass a number of ticks`);
+  if (!Number.isSafeInteger(value))
+    throw new TypeError(
+      `${what} must be an integer tick count, not ${String(value)}`,
+    );
+  return value as number;
+}
+
+function finite(value: unknown, what: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value))
+    throw new TypeError(
+      `${what} must be a finite number, not ${String(value)}`,
+    );
+  return value;
+}
+
+/**
+ * An emitter that keeps the emits, in the host protocol's JSON form. An emit the wire cannot
+ * carry throws a `TypeError` naming it, which fails the step.
+ */
+export function collectEmits(): {
+  emits: Record<string, unknown>[];
+  out: ExtractEmitter;
+} {
+  const emits: Record<string, unknown>[] = [];
+  return {
+    emits,
+    out: {
+      sample(output, time, values) {
+        const what = `sample "${String(output)}"`;
+        emits.push({
+          output: text(output, "an emit's output"),
+          time: ticks(time, `${what}: time`),
+          values: [...values].map((value, index) =>
+            value === null ? null : finite(value, `${what}: values[${index}]`),
+          ),
+        });
+      },
+      word(output, start, end, words, speaker) {
+        const what = `word "${String(output)}"`;
+        emits.push({
+          output: text(output, "an emit's output"),
+          start: ticks(start, `${what}: start`),
+          end: ticks(end, `${what}: end`),
+          text: text(words, `${what}: text`),
+          ...(speaker === undefined
+            ? {}
+            : { speaker: text(speaker, `${what}: speaker`) }),
+        });
+      },
+      interval(output, start, end, label, score) {
+        const what = `interval "${String(output)}"`;
+        emits.push({
+          output: text(output, "an emit's output"),
+          start: ticks(start, `${what}: start`),
+          end: ticks(end, `${what}: end`),
+          ...(label === undefined
+            ? {}
+            : { label: text(label, `${what}: label`) }),
+          ...(score === undefined
+            ? {}
+            : { score: finite(score, `${what}: score`) }),
+        });
+      },
+    },
+  };
+}
+
+/**
+ * Where `value` breaks `schema`, as a path and reason, or `undefined`. Covers the JSON Schema
+ * keywords descriptors use, which are `type`, `enum`, `const`, `properties`, `required`,
+ * `additionalProperties`, `items`, `minItems`, `maxItems`, `minimum`, `maximum`, `minLength` and
+ * `maxLength`.
+ */
+export function schemaProblem(
+  schema: unknown,
+  value: unknown,
+  at = "params",
+): string | undefined {
+  if (typeof schema !== "object" || schema === null) return undefined;
+  const rules = schema as Record<string, unknown>;
+  const kind = (item: unknown): string =>
+    item === null
+      ? "null"
+      : Array.isArray(item)
+        ? "array"
+        : Number.isInteger(item)
+          ? "integer"
+          : typeof item;
+  if (rules.type !== undefined) {
+    const types = Array.isArray(rules.type) ? rules.type : [rules.type];
+    const actual = kind(value);
+    const fits = types.some(
+      (type) => type === actual || (type === "number" && actual === "integer"),
+    );
+    if (!fits) return `${at} must be ${types.join(" or ")}`;
+  }
+  if (
+    Array.isArray(rules.enum) &&
+    !rules.enum.some((item) => JSON.stringify(item) === JSON.stringify(value))
+  )
+    return `${at} must be one of ${JSON.stringify(rules.enum)}`;
+  if ("const" in rules && JSON.stringify(rules.const) !== JSON.stringify(value))
+    return `${at} must be ${JSON.stringify(rules.const)}`;
+  if (typeof value === "number") {
+    if (typeof rules.minimum === "number" && value < rules.minimum)
+      return `${at} must be at least ${rules.minimum}`;
+    if (typeof rules.maximum === "number" && value > rules.maximum)
+      return `${at} must be at most ${rules.maximum}`;
+  }
+  if (typeof value === "string") {
+    if (typeof rules.minLength === "number" && value.length < rules.minLength)
+      return `${at} is too short`;
+    if (typeof rules.maxLength === "number" && value.length > rules.maxLength)
+      return `${at} is too long`;
+  }
+  if (Array.isArray(value)) {
+    if (typeof rules.minItems === "number" && value.length < rules.minItems)
+      return `${at} has too few items`;
+    if (typeof rules.maxItems === "number" && value.length > rules.maxItems)
+      return `${at} has too many items`;
+    for (const [index, item] of value.entries()) {
+      const problem = schemaProblem(rules.items, item, `${at}[${index}]`);
+      if (problem !== undefined) return problem;
+    }
+  }
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const properties = (rules.properties ?? {}) as Record<string, unknown>;
+    for (const name of Array.isArray(rules.required) ? rules.required : []) {
+      if (!(String(name) in record)) return `${at}.${String(name)} is required`;
+    }
+    for (const [name, item] of Object.entries(record)) {
+      if (name in properties) {
+        const problem = schemaProblem(properties[name], item, `${at}.${name}`);
+        if (problem !== undefined) return problem;
+      } else if (rules.additionalProperties === false) {
+        return `${at}.${name} is not allowed`;
+      } else if (typeof rules.additionalProperties === "object") {
+        const problem = schemaProblem(
+          rules.additionalProperties,
+          item,
+          `${at}.${name}`,
+        );
+        if (problem !== undefined) return problem;
+      }
+    }
+  }
+  return undefined;
 }

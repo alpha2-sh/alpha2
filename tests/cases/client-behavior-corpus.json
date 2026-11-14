@@ -130,5 +130,38 @@
       "child": "returned",
       "hosts": [["capabilities", "export", "export"], ["export"]]
     }
+  },
+  {
+    "id": "abandoned-request-is-cancelled-or-its-host-ended",
+    "kind": "abandon",
+    "clients": ["python"],
+    "given": {
+      "abandonedBy": "an exception that is not an Exception, raised by the progress callback",
+      "hosts": [{ "answersCancel": true }, { "answersCancel": false }]
+    },
+    "expect": {
+      "hosts": [
+        { "cancelRead": true, "published": false, "nextRequest": "same host" },
+        { "cancelRead": true, "published": false, "nextRequest": "new host" }
+      ]
+    }
+  },
+  {
+    "id": "unsendable-emit-fails-the-request",
+    "kind": "unsendable-emit",
+    "given": {
+      "emits": [
+        { "call": "sample", "args": ["level", 0, ["NaN"]] },
+        { "call": "sample", "args": ["level", 0, [0.5, "Infinity"]] },
+        { "call": "sample", "args": ["level", 1.5, [0.5]] },
+        { "call": "word", "args": ["words", 0, 4000, 5] },
+        { "call": "interval", "args": ["scenes", 0, 4000, "cut", "-Infinity"] }
+      ]
+    },
+    "expect": {
+      "code": "EXTRACTOR_FAILED",
+      "messageContains": "must be",
+      "nextRequest": "same host"
+    }
   }
 ]

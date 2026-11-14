@@ -152,6 +152,15 @@ All notable changes to this project are documented in this file.
 - The MCP server answers every request and keeps serving after a malformed tool call, an
   out-of-range number, an invalid project document or an internal error, including a panic in the
   native module; `render_frame` and `render_video` are annotated as destructive.
+- `@alpha2-sh/node` no longer fails at import when optional dependencies are not installed
+  (`npm install --omit=optional`); it never loads mediabunny.
+- In the Python client, a request abandoned by an exception other than Ctrl-C (a signal handler, a
+  task queue's time limit) is cancelled, or its host ended, before the exception propagates; the
+  host had gone on running it while the pool handed it to the next caller.
+- A client-side extractor that emits a value the wire cannot carry (NaN, Infinity, a non-integer or
+  `bigint` time) fails the request with `EXTRACTOR_FAILED` naming the emit; a `bigint` ended the Node
+  process, a NaN from JavaScript became a lost channel, and Python left the request running. Python
+  extractors accept any value with `__float__` and any time with `__index__` (such as NumPy scalars).
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

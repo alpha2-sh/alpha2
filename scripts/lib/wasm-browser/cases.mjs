@@ -4,6 +4,7 @@ import {
   extractDigest,
   extractInvalidEmit,
   extractTimeline,
+  extractUnsendableEmit,
   pluginConformance,
   pluginDigest,
 } from "./extract.mjs";
@@ -114,6 +115,7 @@ const underSimulation = (names, body, check) =>
 export const cases = {
   "extract-digest": extractDigest,
   "extract-invalid-emit": extractInvalidEmit,
+  "extract-unsendable-emit": extractUnsendableEmit,
   "extract-timeline": extractTimeline,
   "plugin-digest": pluginDigest,
   "plugin-conformance": pluginConformance,

@@ -2886,18 +2886,35 @@ class Host {
         step: (message, attachments) => {
           if (message.requestId !== requestId || extraction === undefined)
             return;
-          steps = steps.then(async () => {
-            const ack = await extraction.step(message, attachments);
-            if (settled) return;
-            wire.write(
-              encodeMessage(
-                createRequest("extract.ack", requestId, {
-                  seq: message.seq,
-                  ...ack,
-                }),
-              ),
+          const unsendable = (cause: unknown): Alpha2HostError =>
+            new Alpha2HostError(
+              "EXTRACTOR_FAILED",
+              `the step's emits cannot be sent: ${cause instanceof Error ? cause.message : String(cause)}`,
+              { cause, phase: phase() },
             );
-          });
+          steps = steps
+            .then(async () => {
+              const ack = await extraction.step(message, attachments);
+              if (settled) return;
+              const ackOf = (fields: StepAck): Frame =>
+                encodeMessage(
+                  createRequest("extract.ack", requestId, {
+                    seq: message.seq,
+                    ...fields,
+                  }),
+                );
+              let encoded: Frame;
+              try {
+                encoded = ackOf(ack);
+              } catch (cause) {
+                encoded = ackOf({
+                  error: { message: unsendable(cause).message },
+                });
+              }
+              wire.write(encoded);
+            })
+            // The chain never stays rejected: a step that cannot be answered ends the request.
+            .catch((cause: unknown) => cancel(unsendable(cause)));
         },
         answer: (message, attachments) => {
           // One request at a time, so an answer to an unreadable request is this request's answer.

@@ -2883,6 +2883,103 @@ test("a request goes only to a host started with the environment it would start 
   }
 });
 
+/** Asks an extract's extractor for one `video` step and answers as the host would. */
+const EMIT_HOST = (log) => `import { appendFileSync } from "node:fs";
+import { respond, send, serve } from ${IO};
+const record = (line) => appendFileSync(${JSON.stringify(log)}, line + "\\n");
+record("start " + process.pid);
+let extract;
+serve((request) => {
+  if (request.operation === "extract") {
+    extract = request;
+    send({ type: "extract.step", requestId: request.requestId, seq: 0, step: "video", time: 0, width: 1, height: 1, format: "luma8" }, undefined, [{ type: "application/octet-stream", data: Buffer.from([7]) }]);
+    return;
+  }
+  if (request.operation === "extract.ack") {
+    if (request.error) {
+      record("ack error " + request.error.message);
+      respond(extract, { ok: false, error: { code: "EXTRACTOR_FAILED", message: "the extractor failed: " + request.error.message } });
+    } else {
+      record("ack emits " + JSON.stringify(request.emits));
+      respond(extract, { ok: true, result: { dataSets: [], timings: {} } });
+    }
+    return;
+  }
+  respond(request, { ok: true, result: { pid: process.pid } });
+});
+`;
+
+function emittingExtractor(emit) {
+  return {
+    describe: () => ({
+      id: "example.levels",
+      version: 1,
+      input: { media: "video", from: ["source"], format: "luma8" },
+      outputs: [{ name: "level", kind: "scalars", channels: ["a"] }],
+      params_schema: { type: "object" },
+    }),
+    video: (frame, out) => emit(out),
+  };
+}
+
+test("an extractor that emits a bigint time fails the extract, and the process and host go on", async () => {
+  const root = await scratch("alpha2-node-bigint-emit-");
+  const log = join(root, "log");
+  const executable = await fakeHost(root, EMIT_HOST(log));
+  const script = join(root, "client.mjs");
+  // A process without an unhandledRejection handler, as an application's default is.
+  await writeFile(
+    script,
+    `import { Alpha2NodeClient } from ${JSON.stringify(new URL("../dist/index.js", import.meta.url).href)};
+const exportRequest = ${exportRequest.toString()};
+const emitting = ${emittingExtractor.toString()};
+const client = new Alpha2NodeClient({ hostPath: ${JSON.stringify(executable)} });
+const outcome = await client
+  .extract({ project: exportRequest().project, request: { extractor: "example.levels", version: 1 } }, emitting((out) => out.sample("level", 12n, [1])))
+  .then(() => ({ settled: "resolved" }), (error) => ({ settled: "rejected", code: error.code, message: error.message }));
+let next;
+await client.exportProject(exportRequest("out.mp4", { onResult: (value) => (next = value) }));
+process.stdout.write(JSON.stringify({ ...outcome, next: next.pid }) + "\\n");
+await client.close();
+`,
+  );
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, [script], {
+    cwd: root,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => (stdout += chunk));
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  const [code] = await new Promise((resolveClose) =>
+    child.on("close", (...args) => resolveClose(args)),
+  );
+  clearTimeout(timer);
+  assert.equal(code, 0, stderr);
+  const outcome = JSON.parse(stdout);
+  assert.equal(outcome.settled, "rejected");
+  assert.equal(outcome.code, "EXTRACTOR_FAILED");
+  assert.match(outcome.message, /time is a bigint; pass a number of ticks/);
+  const lines = await startsIn(log);
+  assert.equal(lines[0], `start ${outcome.next}`);
+  assert.match(lines[1], /^ack error sample "level": time is a bigint/);
+});
+
+const CORPUS_NUMBERS = {
+  NaN: Number.NaN,
+  Infinity: Infinity,
+  "-Infinity": -Infinity,
+};
+
+const corpusValue = (value) =>
+  Array.isArray(value)
+    ? value.map(corpusValue)
+    : typeof value === "string" && value in CORPUS_NUMBERS
+      ? CORPUS_NUMBERS[value]
+      : value;
+
 const CLIENT_SCENARIOS = JSON.parse(
   await readFile(
     new URL(
@@ -2946,6 +3043,43 @@ const SCENARIO_CALLS = {
 };
 
 const SCENARIO_DRIVERS = {
+  async "unsendable-emit"(scenario) {
+    const root = await scratch("alpha2-node-unsendable-emit-");
+    const log = join(root, "log");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(root, EMIT_HOST(log)),
+    });
+    const servedBy = new Set();
+    for (const { call, args } of scenario.given.emits) {
+      const extractor = emittingExtractor((out) =>
+        out[call](...corpusValue(args)),
+      );
+      const error = await client
+        .extract(
+          {
+            project: exportRequest().project,
+            request: { extractor: "example.levels", version: 1 },
+          },
+          extractor,
+        )
+        .then(
+          () => assert.fail("the extract resolved"),
+          (cause) => cause,
+        );
+      assert.equal(error.code, scenario.expect.code);
+      assert.ok(
+        error.message.includes(scenario.expect.messageContains),
+        error.message,
+      );
+      servedBy.add((await exported(client)).pid);
+    }
+    const errors = (await startsIn(log)).filter((line) =>
+      line.startsWith("ack error"),
+    );
+    assert.equal(errors.length, scenario.given.emits.length);
+    assert.equal(servedBy.size, 1);
+    assert.equal(scenario.expect.nextRequest, "same host");
+  },
   async "request-paths"(scenario) {
     const root = await scratch("alpha2-node-request-paths-");
     const log = join(root, "log");
