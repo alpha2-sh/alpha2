@@ -97,6 +97,7 @@ pub fn evaluate<'a>(
         time,
         background: Some(project.settings.background),
         blend_space: project.settings.blend_space,
+        canvas: Some((project.settings.width, project.settings.height)),
         visual,
         audio,
         transitions,

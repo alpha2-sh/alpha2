@@ -229,6 +229,7 @@ fn registered_effect_executes_with_named_parameters() {
                 time: alpha2_time::MediaTime::ZERO,
                 progress: 0.0,
                 ratio: 1.0,
+                scale: 1.0,
             },
         )
         .expect("registered effect renders");
@@ -317,6 +318,7 @@ fn registered_transition_executes_with_two_inputs() {
                 time: alpha2_time::MediaTime::ZERO,
                 progress: 0.25,
                 ratio: 1.0,
+                scale: 1.0,
             },
         )
         .expect("registered transition renders");
@@ -839,4 +841,75 @@ fn the_built_ins_leave_the_host_its_whole_share_of_the_registry() {
     let error = pollster::block_on(renderer.register_effect(host(256)))
         .expect_err("the host's share is full");
     assert!(format!("{error:?}").contains("full"), "{error:?}");
+}
+
+#[test]
+fn sharpen_and_film_grain_are_sized_in_project_pixels() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    renderer.register_builtins().expect("built-ins register");
+    let run = |id: &str, size: RenderSize, pixels: &[u8], params: &EffectParams, scale| {
+        let source = rgba_image_texture(&renderer, size, pixels);
+        let view = source.create_view(&wgpu::TextureViewDescriptor::default());
+        let target = renderer
+            .render_effect(
+                &crate::EffectId::new(id.to_owned(), 1),
+                &view,
+                None,
+                size,
+                params,
+                EffectRuntime {
+                    scale,
+                    ..EffectRuntime::default()
+                },
+            )
+            .expect("draws");
+        read_rgba8(&renderer, &target)
+    };
+    // The project picture at full and at half scale.
+    let mut sharpened = Vec::new();
+    for (width, height, scale) in [(256_u32, 16_u32, 1.0), (128, 8, 0.5)] {
+        let size = RenderSize::new(width, height).expect("size");
+        let grey = [128, 128, 128, 255].repeat((width * height) as usize);
+        let params = EffectParams::new()
+            .with("amount", ParamValue::Float(1.0))
+            .with("size", ParamValue::Float(4.0));
+        let grain = run("alpha2.effect.film-grain", size, &grey, &params, scale);
+        let row = grain[..(width * 4) as usize].chunks(4).collect::<Vec<_>>();
+        let cells = 1 + row.windows(2).filter(|pair| pair[0] != pair[1]).count();
+        assert_eq!(cells, 64, "{width} wide at scale {scale}");
+        // A vertical edge halfway: the sharpening halo is a fixed share of the width.
+        let edge = (0..height)
+            .flat_map(|_| {
+                (0..width).flat_map(|x| {
+                    if x < width / 2 {
+                        [64, 64, 64, 255]
+                    } else {
+                        [192, 192, 192, 255]
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let amount = |value| EffectParams::new().with("amount", ParamValue::Float(value));
+        let plain = run("alpha2.effect.sharpen", size, &edge, &amount(0.0), scale);
+        let sharp = run("alpha2.effect.sharpen", size, &edge, &amount(2.0), scale);
+        assert_ne!(plain, sharp);
+        sharpened.push(
+            sharp[..(width * 4) as usize]
+                .chunks(4)
+                .map(|pixel| pixel[0])
+                .collect::<Vec<_>>(),
+        );
+    }
+    // Half scale draws the halo the full picture shows, two columns averaged into one.
+    let halved = sharpened[0]
+        .chunks(2)
+        .map(|pair| (u16::from(pair[0]) + u16::from(pair[1])).div_ceil(2))
+        .collect::<Vec<_>>();
+    for (column, (half, halved)) in sharpened[1].iter().zip(&halved).enumerate() {
+        assert!(
+            u16::from(*half).abs_diff(*halved) <= 1,
+            "column {column}: half scale draws {half}, the full picture halved {halved}"
+        );
+    }
 }

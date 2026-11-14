@@ -29,9 +29,11 @@ impl CpuKernel for Sharpen {
     fn row(&self, context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [[f32; 4]]) {
         let amount = context.float("amount");
         let resolution = context.resolution();
-        let texel = [1.0 / resolution[0], 1.0 / resolution[1]];
+        let scale = context.render_scale();
+        let texel = [scale / resolution[0], scale / resolution[1]];
         let image = context.source_a;
-        let exact = image.size() == context.size;
+        // Neighbours are whole texels away only at the project's size.
+        let exact = image.size() == context.size && scale.to_bits() == 1.0_f32.to_bits();
         effect_row(context, y, x0, out, |x, uv, src| {
             if src[3] <= 0.0001 {
                 return src;

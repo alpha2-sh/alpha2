@@ -18,6 +18,9 @@ pub struct FrameDesc<'a> {
     pub background: Option<Rgb>,
     /// The space in which blend modes are evaluated.
     pub blend_space: BlendSpace,
+    /// The project canvas in pixels, which effects sized in project pixels refer to; `None`
+    /// draws them at the render size.
+    pub canvas: Option<(u32, u32)>,
     /// Active visual clips in composition order.
     pub visual: Vec<ActiveClip<'a>>,
     /// Active audio clips in mix order.

@@ -939,12 +939,16 @@ fn box_anchor(anchor: f32, extent: u32, margin: u32) -> f32 {
     (margin as f32 + anchor * inner) / extent as f32
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn frame_runtime(frame: &FrameDesc, size: RenderSize) -> EffectRuntime {
-    #[allow(clippy::cast_precision_loss)]
     let ratio = size.width as f32 / size.height as f32;
+    let scale = frame.canvas.map_or(1.0, |(width, height)| {
+        size.width.min(size.height) as f32 / width.min(height).max(1) as f32
+    });
     EffectRuntime {
         time: frame.time,
         ratio,
+        scale,
         ..EffectRuntime::default()
     }
 }

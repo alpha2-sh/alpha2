@@ -118,6 +118,16 @@ impl KernelContext<'_> {
         self.runtime.ratio
     }
 
+    /// `render_scale()`.
+    pub(crate) const fn render_scale(&self) -> f32 {
+        self.runtime.scale
+    }
+
+    /// `render_scale_fixed()`: the render scale in 16.16 fixed point.
+    pub(crate) fn render_scale_fixed(&self) -> u32 {
+        crate::runtime_effect::render_scale_fixed(self.runtime.scale)
+    }
+
     /// `max_filter_samples()`.
     #[allow(clippy::cast_precision_loss)]
     pub(crate) const fn max_filter_samples(&self) -> f32 {

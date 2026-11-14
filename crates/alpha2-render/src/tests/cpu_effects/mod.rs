@@ -211,17 +211,23 @@ fn vignette_matches() {
 fn sharpen_matches() {
     let parity = Parity::new();
     let card = parity.picture(size(), &test_card(size(), false));
-    check_effect(
-        &parity,
-        &card,
-        &effect("sharpen"),
-        &[
-            (Vec::new(), Tolerance::Close),
-            (vec![("amount", float(0.0))], Tolerance::Close),
-            (vec![("amount", float(3.0))], Tolerance::Close),
-        ],
-        EffectRuntime::default(),
-    );
+    // At half scale the neighbours are half a texel away and sampled.
+    for scale in [1.0, 0.5] {
+        check_effect(
+            &parity,
+            &card,
+            &effect("sharpen"),
+            &[
+                (Vec::new(), Tolerance::Close),
+                (vec![("amount", float(0.0))], Tolerance::Close),
+                (vec![("amount", float(3.0))], Tolerance::Close),
+            ],
+            EffectRuntime {
+                scale,
+                ..EffectRuntime::default()
+            },
+        );
+    }
 }
 
 #[test]
@@ -247,7 +253,13 @@ fn film_grain_matches_at_several_times() {
     let parity = Parity::new();
     let card = parity.picture(size(), &test_card(size(), false));
     let grain = |amount, size| vec![("amount", float(amount)), ("size", float(size))];
-    for ticks in [0, 12_345_678, (1_i64 << 40) + 7] {
+    for (ticks, scale) in [
+        (0, 1.0),
+        (12_345_678, 1.0),
+        ((1_i64 << 40) + 7, 1.0),
+        (0, 0.5),
+        (99, 0.37),
+    ] {
         check_effect(
             &parity,
             &card,
@@ -260,6 +272,7 @@ fn film_grain_matches_at_several_times() {
             ],
             EffectRuntime {
                 time: MediaTime::from_ticks(ticks),
+                scale,
                 ..EffectRuntime::default()
             },
         );

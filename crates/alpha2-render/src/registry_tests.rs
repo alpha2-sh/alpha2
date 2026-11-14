@@ -644,3 +644,24 @@ fn an_effect_without_named_inputs_generates_the_same_module() {
     assert!(declarations.contains("@binding(21) var input_glow"));
     assert!(declarations.contains("@binding(22) var input_map"));
 }
+
+#[test]
+fn the_render_scale_accessors_are_reserved() {
+    for name in ["render_scale", "render_scale_fixed"] {
+        assert!(
+            refusal(&definition(vec![float_param(name)], Vec::new())).is_some(),
+            "a parameter named {name} is accepted"
+        );
+        let body = format!(
+            "fn {name}() -> f32 {{ return 2.0; }} fn effect(uv: vec2f, src: vec4f) -> vec4f {{ return src; }}"
+        );
+        let source = build_shader(&EffectDef {
+            wgsl_body: body,
+            ..definition(Vec::new(), Vec::new())
+        });
+        assert!(
+            wgpu::naga::front::wgsl::parse_str(&source).is_err(),
+            "a body defining {name} compiles"
+        );
+    }
+}

@@ -78,6 +78,7 @@ fn transition_endpoints_preserve_each_clips_visual_and_blend_mode() {
             let reference = FrameDesc {
                 background: Some(alpha2_model::Rgb::BLACK),
                 blend_space: alpha2_model::BlendSpace::LinearLight,
+                canvas: None,
                 time: MediaTime::ZERO,
                 visual: vec![background, *endpoint],
                 audio: vec![],
@@ -126,6 +127,7 @@ fn transition_opacity_is_applied_once_at_the_midpoint() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![
             clip(
@@ -222,6 +224,7 @@ fn chained_transitions_on_two_tracks_with_a_matted_endpoint_show_their_endpoints
     let frame = |visual: Vec<ActiveClip<'static>>, transitions| FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual,
         audio: vec![],
@@ -324,6 +327,7 @@ fn three_overlapping_clips_draw_one_picture_in_any_list_order() {
         let frame = FrameDesc {
             background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::SrgbEncoded,
+            canvas: None,
             time: MediaTime::ZERO,
             visual: vec![b, c, a],
             audio: vec![],
@@ -404,6 +408,7 @@ fn a_cycle_of_transitions_is_refused() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::SrgbEncoded,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![b, c, a],
         audio: vec![],

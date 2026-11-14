@@ -28,6 +28,7 @@ fn availability_pass_deduplicates_missing_sources() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime(0),
         visual: vec![item, item],
         audio: Vec::new(),
@@ -46,6 +47,7 @@ fn evaluated_frame_render_is_atomic_on_missing_inputs() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
             data: alpha2_eval::SampleContext::NONE,

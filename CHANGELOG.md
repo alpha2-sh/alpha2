@@ -16,6 +16,10 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- `alpha2-render`: `EffectRuntime` has a `scale` field (render size over project size, 1 by
+  default) that effect bodies read with `render_scale()` and `render_scale_fixed()`; both names
+  are reserved. `alpha2-eval`: `FrameDesc` has a `canvas` field, the project canvas, set by
+  evaluation.
 - `alpha2-gpu`: `Capabilities::half_float_blendable` is removed; a half-float
   `intermediate_format` now implies blending. `Renderer::render_quad` is removed (it had no use
   outside the renderer's tests).
@@ -92,6 +96,8 @@ All notable changes to this project are documented in this file.
   gradients or patterns name one another by `href` in a ring, is refused as malformed instead of
   overflowing the stack or never finishing. Each such reference counts four levels against the
   nesting limit, and a mask, clip path or filter counts once per element that names it.
+- Sharpen and film grain are sized in project pixels: a half-scale preview shows the grain and the
+  sharpening halo the export draws, at half size. Exports at the project's size are unchanged.
 - 4:2:2 and 4:1:1 sources that declare no chroma siting (ProRes 422, DNxHD, DNxHR, HEVC 4:2:2 as
   FFmpeg reports them) read their chroma co-sited with even luma columns, as BT.601 and BT.709
   site it and as ProRes exports pack it, on both renderers. Before, they read it centred, half a

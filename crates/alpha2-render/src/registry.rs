@@ -819,6 +819,8 @@ fn time() -> f32 {{ return runtime.resolution_time.z; }}
 fn time_ticks() -> vec2u {{ return runtime.ticks.xy; }}
 fn progress() -> f32 {{ return runtime.transition.x; }}
 fn ratio() -> f32 {{ return runtime.transition.y; }}
+fn render_scale() -> f32 {{ return runtime.resolution_time.w; }}
+fn render_scale_fixed() -> u32 {{ return runtime.ticks.z; }}
 fn max_filter_samples() -> f32 {{ return runtime.transition.z; }}
 fn load_params() -> EffectParams {{ return EffectParams({param_values}); }}
 
@@ -1263,6 +1265,8 @@ fn valid_wgsl_identifier(value: &str) -> bool {
                 | "time_ticks"
                 | "progress"
                 | "ratio"
+                | "render_scale"
+                | "render_scale_fixed"
                 | "sample_src"
                 | "from_color"
                 | "to_color"
