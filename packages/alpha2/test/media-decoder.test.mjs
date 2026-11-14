@@ -13,6 +13,7 @@ import {
   presentationSlackTicks,
   roundingQuantum,
 } from "../dist/media.js";
+import { classifyBrowserFailure } from "../dist/export-failure.js";
 import { MediabunnyAudioDecoder } from "../dist/mediabunny.js";
 import {
   missingCapability,
@@ -988,7 +989,14 @@ test("a decoder that stalls with nothing left to release fails instead of hangin
       await decoder.refill(request(0)),
       await decoder.refill(request(1)),
     ];
-    await assert.rejects(decoder.refill(request(2)), /stalled/);
+    await assert.rejects(decoder.refill(request(2)), (error) => {
+      assert.match(error.message, /stalled/);
+      assert.equal(error.code, "DECODE_STALLED");
+      const failure = classifyBrowserFailure(error, { phase: "export" });
+      assert.equal(failure.code, "GPU_TIMEOUT");
+      assert.equal(failure.phase, "decode");
+      return true;
+    });
     for (const frame of held) frame.frame.close();
     decoder.close();
   } finally {

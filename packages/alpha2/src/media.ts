@@ -964,10 +964,11 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
         if (!(await this.#waitForOutput(signal))) {
           // Every surface is held. Closing queued frames would answer with a later frame.
           if (this.#cache.releaseAllButPresentedAt(target) === 0)
-            throw new Error(
+            throw decoderStalled(
               `video decoder ${this.#sourceId} stalled: no output for ` +
                 `${this.#stallTimeoutMs} ms with ${decoder.decodeQueueSize} chunks queued; ` +
                 "its surfaces are held by frames that were never closed",
+              "video-decoder-stalled",
             );
         }
       } else {
@@ -1089,8 +1090,9 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
         signal.addEventListener("abort", abort, { once: true });
         void activeTimeout(this.#stallTimeoutMs, settled.signal).then(() =>
           reject(
-            new Error(
+            decoderStalled(
               `video decoder ${this.#sourceId} stalled during EOF flush after ${this.#stallTimeoutMs} ms`,
+              "video-decoder-flush-stalled",
             ),
           ),
         );
@@ -1543,6 +1545,7 @@ function validatePositiveByteLimit(value: number, name: string): void {
 }
 import { abortError, throwIfAborted } from "./abort.js";
 import { activeTimeout } from "./active-clock.js";
+import { decoderStalled } from "./decoder-stall.js";
 import { type ChromaSiting, chromaSitingForStream } from "./chroma-siting.js";
 import {
   decodeRefusalMessage,

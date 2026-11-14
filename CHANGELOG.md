@@ -48,6 +48,11 @@ All notable changes to this project are documented in this file.
   `audio_unavailable`; a source whose sound does not arrive for a few mixes plays silent until the
   next start instead of holding every lane back; a decoder that failed to open is tried again; and
   an audio start that fails plays the picture silent with one report instead of rejecting `play()`.
+- Audio sample reads in the browser race a stall limit and the abort signal, as video reads do:
+  `MediabunnyAudioDecoder.refill` rejects with `DECODE_STALLED` after 5 s of active time without
+  samples (option `stallTimeoutMs` on `open`) and at once on abort, so an export no longer hangs, or
+  ignores a cancel, in its audio step. Decoder stall errors carry code `DECODE_STALLED` and classify
+  as `GPU_TIMEOUT` in the decode phase (they were unclassified).
 
 ## [0.6.0] - 2026-11-08
 
