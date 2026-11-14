@@ -1,13 +1,15 @@
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use alpha2_container::{Mp4Flavor, Mp4Writer, TrackKind};
 use alpha2_host_core::DecodePolicy;
 use alpha2_host_core::audio_stream::{AudioStream, WithPcm};
 use alpha2_host_core::encode::{
-    AudioEncodeConfig, AudioEncoders, EncodeSink, VideoEncodeConfig, VideoEncoders,
+    AudioEncodeConfig, AudioEncoders, EncodePoll, EncodeSink, VideoEncodeBackend,
+    VideoEncodeConfig, VideoEncoders,
 };
 use alpha2_host_core::export::{PlaneBuffer, VideoSink};
-use alpha2_host_core::video_stream::{StreamOptions, VideoStream};
+use alpha2_host_core::video_stream::{StreamOptions, Submit, VideoStream};
 use alpha2_media::{
     AudioBlock, AudioBlockSink, AudioCodec, BitDepth, BitrateMode, CancelToken, ColorMetadata,
     PixelLayout, SpeakerLayout, VideoCodec, VideoRateControl,
@@ -15,7 +17,7 @@ use alpha2_media::{
 use alpha2_time::{FrameRate, MediaTime};
 
 use crate::tests::tone_offset;
-use crate::video_encode::{codec_type, listed};
+use crate::video_encode::{MAX_IN_FLIGHT, VideoToolboxEncoder, codec_type, hooks, listed};
 use crate::{AppleAudio, AppleAudioEncoders, AppleVideo, AppleVideoEncoders};
 
 const WIDTH: u32 = 320;
@@ -348,4 +350,100 @@ fn every_available_codec_opens_an_encoder() {
             panic!("{codec:?}: {error}");
         }
     }
+}
+
+/// Planes of noise, so every frame costs the encoder real work.
+fn noise(width: u32, height: u32, seed: u32) -> Vec<PlaneBuffer> {
+    let plane = |columns: u32, rows: u32, salt: u32| {
+        let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(salt) | 1;
+        let bytes = (0..columns as usize * rows as usize)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                state.to_le_bytes()[3]
+            })
+            .collect();
+        PlaneBuffer {
+            bytes,
+            stride: columns as usize,
+            width: columns,
+            height: rows,
+        }
+    };
+    vec![
+        plane(width, height, 1),
+        plane(width / 2, height / 2, 2),
+        plane(width / 2, height / 2, 3),
+    ]
+}
+
+fn h264_config(width: u32, height: u32, software: bool) -> VideoEncodeConfig {
+    VideoEncodeConfig {
+        codec: VideoCodec::H264,
+        width,
+        height,
+        frame_rate: FrameRate::new(30, 1).expect("rate"),
+        layout: PixelLayout::YUV420P,
+        rate: BITRATE,
+        color: ColorMetadata::EXPORT,
+        keyframe_interval: KEYFRAME_INTERVAL,
+        software,
+    }
+}
+
+#[test]
+fn an_encoder_dropped_with_frames_in_flight_completes_them_first() {
+    for software in [false, true] {
+        let config = h264_config(640, 360, software);
+        let pictures = (0..4).map(|seed| noise(640, 360, seed)).collect::<Vec<_>>();
+        for round in 0..100 {
+            let mut encoder = VideoToolboxEncoder::open(&config).expect("an encoder opens");
+            let callbacks = encoder.callbacks();
+            let step = i64::from(encoder.timescale()) / 30;
+            let mut accepted = 0;
+            for index in 0..16_i64 {
+                let picture = &pictures[usize::try_from(index % 4).expect("small")];
+                match encoder.submit(index * step, picture, index == 0) {
+                    Ok(Submit::Accepted) => accepted += 1,
+                    Ok(Submit::Busy) => break,
+                    Err(error) => panic!("round {round}, frame {index}: {error}"),
+                }
+            }
+            drop(encoder);
+            assert_eq!(
+                callbacks.load(Ordering::SeqCst),
+                accepted,
+                "software {software}, round {round}: every submitted frame completed before the drop returned"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_encoder_without_a_delay_bound_holds_at_most_the_frames_in_flight_cap() {
+    let (width, height) = (3840, 2160);
+    hooks::REFUSE_DELAY_BOUND.set(true);
+    let opened = VideoToolboxEncoder::open(&h264_config(width, height, true));
+    hooks::REFUSE_DELAY_BOUND.set(false);
+    let mut encoder = opened.expect("a software encoder opens");
+    let pictures = (0..4)
+        .map(|seed| noise(width, height, seed))
+        .collect::<Vec<_>>();
+    let step = i64::from(encoder.timescale()) / 30;
+    let mut most = 0;
+    let mut index = 0_i64;
+    while index < 40 {
+        let picture = &pictures[usize::try_from(index % 4).expect("small")];
+        match encoder.submit(index * step, picture, index == 0) {
+            Ok(Submit::Accepted) => index += 1,
+            Ok(Submit::Busy) => {
+                while let EncodePoll::Packet(_) = encoder.receive(true).expect("a packet") {}
+            }
+            Err(error) => panic!("frame {index}: {error}"),
+        }
+        most = most.max(encoder.in_flight());
+    }
+    assert!(
+        most <= MAX_IN_FLIGHT,
+        "{most} frames in flight, over {MAX_IN_FLIGHT}"
+    );
 }

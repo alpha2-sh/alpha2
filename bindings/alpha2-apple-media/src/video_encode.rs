@@ -68,8 +68,8 @@ const WAIT: Duration = Duration::from_millis(10);
 const MAX_FRAME_DELAY: i64 = 8;
 
 /// Frames in flight before a submit waits for output, above the encoder's delay so a full
-/// encoder always has a frame to emit.
-const MAX_IN_FLIGHT: u64 = 2 * MAX_FRAME_DELAY.unsigned_abs();
+/// encoder always has a frame to emit. It holds when the encoder refused the delay bound too.
+pub(crate) const MAX_IN_FLIGHT: u64 = 2 * MAX_FRAME_DELAY.unsigned_abs();
 
 /// One entry of the system's encoder list.
 #[derive(Clone, Debug)]
@@ -151,6 +151,9 @@ struct Shared {
     /// The configuration record's atom name: `avcC` or `hvcC`.
     record: &'static str,
     strip_sei: bool,
+    /// Output callbacks that ran.
+    #[cfg(test)]
+    callbacks: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// The configuration record in a sample's format description.
@@ -267,11 +270,15 @@ unsafe extern "C-unwind" fn encoded(
         }
     }
     outputs.completed += 1;
+    #[cfg(test)]
+    shared
+        .callbacks
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     drop(outputs);
     shared.ready.notify_all();
 }
 
-/// A compression session, invalidated when dropped.
+/// A compression session, settled and invalidated when dropped.
 struct Session(CFRetained<VTCompressionSession>);
 
 // SAFETY: a `VideoToolbox` session may be called from any thread; the encoder that owns it is
@@ -280,8 +287,22 @@ unsafe impl Send for Session {}
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // Every output callback returns before `complete_frames` does, so none reaches the
+        // callback state after the encoder frees it.
+        // SAFETY: the session is live; an invalid time completes every pending frame.
+        let _ = unsafe { self.0.complete_frames(invalid_time()) };
         // SAFETY: the session is live; nothing uses it after this.
         unsafe { self.0.invalidate() };
+    }
+}
+
+/// The time that asks `complete_frames` for every pending frame.
+const fn invalid_time() -> CMTime {
+    CMTime {
+        value: 0,
+        timescale: 0,
+        flags: CMTimeFlags::empty(),
+        epoch: 0,
     }
 }
 
@@ -334,13 +355,12 @@ fn row(plane: &PlaneBuffer, y: usize, length: usize) -> Option<&[u8]> {
     plane.bytes.get(start..start + length)
 }
 
-/// Sets the session's properties for `config`; returns the rate control it runs and whether the
-/// encoder's frame delay is bounded.
+/// Sets the session's properties for `config`; returns the rate control it runs.
 fn configure(
     session: &Session,
     config: &VideoEncodeConfig,
     input: Input,
-) -> Result<(AppliedRateControl, bool), String> {
+) -> Result<AppliedRateControl, String> {
     let set = |key: &CFString, value: &CFType| -> i32 {
         // SAFETY: the session is live and the value has the property's documented type.
         unsafe { VTSessionSetProperty(&session.0, key, Some(value)) }
@@ -379,10 +399,18 @@ fn configure(
             return Err(format!("{key} was refused ({})", sys::status(status)));
         }
     }
+    // An encoder that refuses the bound still emits by `MAX_IN_FLIGHT`, or the sink's stall
+    // bound fails it.
     // SAFETY: a framework constant.
     let delay = unsafe { kVTCompressionPropertyKey_MaxFrameDelayCount };
-    let bounded = set(delay, &sys::int(MAX_FRAME_DELAY)) == 0;
-    Ok((VideoToolboxEncoder::rate_control(config, &set)?, bounded))
+    #[cfg(test)]
+    let refuse = hooks::REFUSE_DELAY_BOUND.get();
+    #[cfg(not(test))]
+    let refuse = false;
+    if !refuse {
+        let _ = set(delay, &sys::int(MAX_FRAME_DELAY));
+    }
+    VideoToolboxEncoder::rate_control(config, &set)
 }
 
 /// A `VideoToolbox` encoder session.
@@ -397,8 +425,6 @@ pub struct VideoToolboxEncoder {
     frame_duration: i64,
     input: Input,
     applied: AppliedRateControl,
-    /// Whether the encoder's frame delay is bounded, so submits can wait for output.
-    bounded: bool,
     submitted: u64,
     ended: bool,
 }
@@ -550,6 +576,8 @@ impl VideoToolboxEncoder {
                 "hvcC"
             },
             strip_sei: config.codec == VideoCodec::H264,
+            #[cfg(test)]
+            callbacks: std::sync::Arc::default(),
         });
         let mut session: *mut VTCompressionSession = ptr::null_mut();
         // SAFETY: the dictionaries hold the documented value types, the refcon stays valid while
@@ -573,7 +601,7 @@ impl VideoToolboxEncoder {
             .ok_or_else(|| format!("the session did not open ({})", sys::status(status)))?;
         // SAFETY: a successful create returns a +1 reference.
         let session = Session(unsafe { CFRetained::from_raw(session) });
-        let (applied, bounded) = configure(&session, config, input)?;
+        let applied = configure(&session, config, input)?;
         // SAFETY: the session is live.
         let status = unsafe { session.0.prepare_to_encode_frames() };
         if status != 0 {
@@ -594,7 +622,6 @@ impl VideoToolboxEncoder {
             frame_duration: i64::from(time_base_num),
             input,
             applied,
-            bounded,
             submitted: 0,
             ended: false,
         })
@@ -747,6 +774,11 @@ impl VideoToolboxEncoder {
         Ok(())
     }
 
+    /// Frames submitted whose callback has not run.
+    pub(crate) fn in_flight(&self) -> u64 {
+        self.submitted.saturating_sub(self.outputs().completed)
+    }
+
     fn take_error(&self) -> Result<(), EncodeError> {
         let error = self.outputs().error.take();
         error.map_or(Ok(()), |reason| Err(self.failed(&reason)))
@@ -773,7 +805,7 @@ impl VideoEncodeBackend for VideoToolboxEncoder {
         keyframe: bool,
     ) -> Result<Submit, EncodeError> {
         self.take_error()?;
-        if self.bounded && self.submitted - self.outputs().completed >= MAX_IN_FLIGHT {
+        if self.in_flight() >= MAX_IN_FLIGHT {
             return Ok(Submit::Busy);
         }
         let buffer = self.fill(planes)?;
@@ -824,14 +856,8 @@ impl VideoEncodeBackend for VideoToolboxEncoder {
     }
 
     fn finish_input(&mut self) -> Result<(), EncodeError> {
-        let invalid = CMTime {
-            value: 0,
-            timescale: 0,
-            flags: CMTimeFlags::empty(),
-            epoch: 0,
-        };
         // SAFETY: the session is live; completing waits for every pending frame.
-        let status = unsafe { self.session.0.complete_frames(invalid) };
+        let status = unsafe { self.session.0.complete_frames(invalid_time()) };
         if status != 0 {
             return Err(self.failed(&format!(
                 "completing frames failed ({})",
@@ -848,6 +874,25 @@ impl VideoEncodeBackend for VideoToolboxEncoder {
 
     fn applied_rate_control(&self) -> AppliedRateControl {
         self.applied
+    }
+}
+
+#[cfg(test)]
+impl VideoToolboxEncoder {
+    /// The count of output callbacks that ran, which outlives the encoder.
+    pub(crate) fn callbacks(&self) -> std::sync::Arc<std::sync::atomic::AtomicU64> {
+        std::sync::Arc::clone(&self.shared.callbacks)
+    }
+}
+
+/// Test hooks, read on the thread that opens the session.
+#[cfg(test)]
+pub(crate) mod hooks {
+    use std::cell::Cell;
+
+    thread_local! {
+        /// Opens sessions without the frame delay bound, as an encoder that refuses it.
+        pub(crate) static REFUSE_DELAY_BOUND: Cell<bool> = const { Cell::new(false) };
     }
 }
 
