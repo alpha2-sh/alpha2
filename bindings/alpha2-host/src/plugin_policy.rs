@@ -185,8 +185,12 @@ impl PluginPolicy {
     /// # Errors
     /// `PLUGIN_REFUSED` naming `--plugin-origins`.
     pub fn check_manifest_url(&self, url: &str) -> Result<Origin, PluginError> {
-        let origin = Origin::of_url(url)
-            .ok_or_else(|| refused(format!("{url}: not an https: URL with a host")))?;
+        let origin = Origin::of_url(url).ok_or_else(|| {
+            refused(format!(
+                "{}: not an https: URL with a host",
+                crate::plugin_fetch::shown_url(url)
+            ))
+        })?;
         match &self.origins {
             Origins::ManifestOnly => Ok(origin),
             Origins::None => Err(refused(

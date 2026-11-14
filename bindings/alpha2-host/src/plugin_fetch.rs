@@ -55,7 +55,10 @@ struct Https;
 
 impl Download for Https {
     fn get(&self, url: &str) -> Result<Answer, String> {
-        let response = agent().get(url).call().map_err(|error| error.to_string())?;
+        let response = agent()
+            .get(url)
+            .call()
+            .map_err(|error| redacted(url, &error.to_string()))?;
         if response.status().is_redirection() {
             let location = response
                 .headers()
@@ -94,30 +97,39 @@ fn fetch_failed(message: impl Into<String>) -> PluginError {
     PluginError::new(codes::FETCH_FAILED, message)
 }
 
-/// `url` without user info, query or fragment, which can carry credentials.
-fn shown(url: &str) -> String {
+/// `url` as a message shows it: scheme, host, port and path. User info, query and fragment are
+/// left out, since they may carry credentials (a signed URL's token). A path is shown whole.
+pub(crate) fn shown_url(url: &str) -> String {
+    if has_scheme(url).is_none() {
+        return url.to_owned();
+    }
     let url = url.split(['?', '#']).next().unwrap_or_default();
-    let Some(after_scheme) = url.find("://").map(|at| at + 3) else {
+    let Some((scheme, rest)) = url.split_once("://") else {
         return url.to_owned();
     };
-    let authority_end = url[after_scheme..]
-        .find('/')
-        .map_or(url.len(), |at| after_scheme + at);
-    match url[after_scheme..authority_end].rfind('@') {
-        Some(at) => format!("{}{}", &url[..after_scheme], &url[after_scheme + at + 1..]),
-        None => url.to_owned(),
-    }
+    let (authority, path) = rest.find('/').map_or((rest, ""), |at| rest.split_at(at));
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{path}")
+}
+
+/// A message about `url` from a library that may repeat it, with the URL shown as [`shown_url`].
+fn redacted(url: &str, message: &str) -> String {
+    message.replace(url, &shown_url(url))
 }
 
 /// A `file:` URL's path, percent-decoded, without the slash before a Windows drive letter.
 fn file_url_path(url: &str) -> Result<PathBuf, PluginError> {
+    let shown = || shown_url(url);
     let rest = url
         .strip_prefix("file://")
-        .ok_or_else(|| fetch_failed(format!("{url}: not a file URL")))?;
+        .ok_or_else(|| fetch_failed(format!("{}: not a file URL", shown())))?;
     let path = rest.strip_prefix("localhost").unwrap_or(rest);
     if !path.starts_with('/') {
         return Err(fetch_failed(format!(
-            "{url}: a file URL names a local absolute path"
+            "{}: a file URL names a local absolute path",
+            shown()
         )));
     }
     let mut bytes = Vec::with_capacity(path.len());
@@ -128,13 +140,19 @@ fn file_url_path(url: &str) -> Result<PathBuf, PluginError> {
             let digit = |b: Option<u8>| b.and_then(|b| char::from(b).to_digit(16));
             match (digit(hex[0]), digit(hex[1])) {
                 (Some(high), Some(low)) => bytes.push(u8::try_from(high * 16 + low).unwrap_or(0)),
-                _ => return Err(fetch_failed(format!("{url}: a malformed percent escape"))),
+                _ => {
+                    return Err(fetch_failed(format!(
+                        "{}: a malformed percent escape",
+                        shown()
+                    )));
+                }
             }
         } else {
             bytes.push(byte);
         }
     }
-    let path = String::from_utf8(bytes).map_err(|_| fetch_failed(format!("{url}: not UTF-8")))?;
+    let path =
+        String::from_utf8(bytes).map_err(|_| fetch_failed(format!("{}: not UTF-8", shown())))?;
     let windows_drive = path.len() > 2 && path.as_bytes()[2] == b':' && cfg!(windows);
     Ok(PathBuf::from(if windows_drive {
         &path[1..]
@@ -198,7 +216,8 @@ fn manifest_location(location: &str) -> Result<Location, PluginError> {
         Some("file") => file_url_path(location).map(Location::Path),
         // A drive letter, `C:\...`, is a path.
         Some(scheme) if scheme.len() > 1 => Err(fetch_failed(format!(
-            "{location}: only https: and file: URLs are fetched"
+            "{}: only https: and file: URLs are fetched",
+            shown_url(location)
         ))),
         _ => Ok(Location::Path(PathBuf::from(location))),
     }
@@ -207,7 +226,8 @@ fn manifest_location(location: &str) -> Result<Location, PluginError> {
 impl Base {
     /// Where a manifest's `url` points: under the manifest's own location, or an `https:` URL.
     fn resolve(&self, url: &str) -> Result<Location, PluginError> {
-        match reference(url).map_err(|why| PluginError::new(codes::LOAD_FAILED, why))? {
+        let refused = |why: String| PluginError::new(codes::LOAD_FAILED, redacted(url, &why));
+        match reference(url).map_err(refused)? {
             Reference::Https(url) => Ok(Location::Url(url.to_owned())),
             Reference::Relative(path) => Ok(match self {
                 Base::Url(base) => Location::Url(join_url(base, path)),
@@ -263,19 +283,22 @@ fn open(
             .as_ref()
             .is_some_and(|origin| policy.allows_origin(origin, manifest))
         {
-            return Err(policy.origin_refusal(&shown(&current), origin.as_ref()));
+            return Err(policy.origin_refusal(&shown_url(&current), origin.as_ref()));
         }
-        match download
-            .get(&current)
-            .map_err(|error| fetch_failed(format!("{}: {error}", shown(&current))))?
-        {
+        match download.get(&current).map_err(|error| {
+            fetch_failed(format!(
+                "{}: {}",
+                shown_url(&current),
+                redacted(&current, &error)
+            ))
+        })? {
             Answer::Body(body) => return Ok(body),
             Answer::Redirect(location) => current = redirect_target(&current, &location),
         }
     }
     Err(fetch_failed(format!(
         "{}: more than {MAX_REDIRECTS} redirects",
-        shown(url)
+        shown_url(url)
     )))
 }
 
@@ -309,8 +332,8 @@ pub fn manifest(
             let origin = policy.check_manifest_url(&url)?;
             let body = open(download, &url, policy, Some(&origin))?;
             let bytes = read_bounded(body, limit)
-                .map_err(|error| fetch_failed(format!("{}: {error}", shown(&url))))?
-                .ok_or_else(|| too_long(&shown(&url)))?;
+                .map_err(|error| fetch_failed(format!("{}: {error}", shown_url(&url))))?
+                .ok_or_else(|| too_long(&shown_url(&url)))?;
             (bytes, Base::Url(url))
         }
         Location::Path(path) => {
@@ -339,7 +362,7 @@ pub fn manifest(
             }
             Base::Url(_) => format!(
                 "the manifest at {} does not match the SHA-256 the request pins",
-                shown(location)
+                shown_url(location)
             ),
         };
         return Err(PluginError::new(codes::HASH_MISMATCH, message));
@@ -558,13 +581,14 @@ impl Fetcher {
         size: u64,
         should_stop: &dyn Fn() -> bool,
     ) -> Result<(), PluginError> {
-        let failed = |error: String| fetch_failed(format!("{}: {error}", shown(url)));
+        let failed =
+            |error: String| fetch_failed(format!("{}: {}", shown_url(url), redacted(url, &error)));
         let mismatch = || {
             PluginError::new(
                 codes::HASH_MISMATCH,
                 format!(
                     "{} does not match the length and SHA-256 the manifest pins",
-                    shown(url)
+                    shown_url(url)
                 ),
             )
         };
@@ -581,7 +605,7 @@ impl Fetcher {
             if should_stop() {
                 return Err(PluginError::new(
                     alpha2_host_core::plugins::CANCELLED,
-                    format!("the download of {} was cancelled", shown(url)),
+                    format!("the download of {} was cancelled", shown_url(url)),
                 ));
             }
             let n = match body.read(&mut buffer) {
@@ -616,7 +640,9 @@ impl Fetch for Fetcher {
                     .as_ref()
                     .is_some_and(|origin| self.policy.allows_origin(origin, self.origin.as_ref()))
                 {
-                    return Err(self.policy.origin_refusal(&shown(&url), origin.as_ref()));
+                    return Err(self
+                        .policy
+                        .origin_refusal(&shown_url(&url), origin.as_ref()));
                 }
                 Fetched {
                     path: self.cached(&url, sha256, bytes)?,
@@ -1259,15 +1285,49 @@ mod tests {
     }
 
     #[test]
-    fn messages_show_urls_without_credentials_or_query() {
-        assert_eq!(
-            shown("https://user:secret@example.com/p/a.wasm?token=x#y"),
-            "https://example.com/p/a.wasm"
-        );
-        assert_eq!(
-            shown("https://example.com/a@b.wasm"),
-            "https://example.com/a@b.wasm"
-        );
+    fn a_url_in_a_message_has_no_user_info_query_or_fragment() {
+        for (url, shown) in [
+            (
+                "https://user:secret@cdn.example.com:8443/p/manifest.json?token=abc#part",
+                "https://cdn.example.com:8443/p/manifest.json",
+            ),
+            (
+                "https://example.com/m.json?X-Amz-Signature=abc",
+                "https://example.com/m.json",
+            ),
+            ("https://token@example.com", "https://example.com"),
+            (
+                "https://example.com/a@b.wasm",
+                "https://example.com/a@b.wasm",
+            ),
+            (
+                "file:///tmp/a%20b/manifest.json#x",
+                "file:///tmp/a%20b/manifest.json",
+            ),
+            ("ftp://user:pw@example.com/m", "ftp://example.com/m"),
+            ("/plugins/p?/manifest.json", "/plugins/p?/manifest.json"),
+            (r"C:\plugins\manifest.json", r"C:\plugins\manifest.json"),
+        ] {
+            assert_eq!(shown_url(url), shown, "{url}");
+        }
+        let secret =
+            |error: &PluginError| error.message.contains("pw") || error.message.contains("abc");
+        let refused = manifest_location("ftp://user:pw@example.com/m?token=abc").expect_err("ftp");
+        assert!(!secret(&refused), "{}", refused.message);
+        let reference = Base::Directory(PathBuf::from("/p"))
+            .resolve("http://user:pw@example.com/a.wasm?token=abc")
+            .expect_err("http");
+        assert!(!secret(&reference), "{}", reference.message);
+        // Port 1 refuses the connection; the failure must not repeat the credentials.
+        let failed = manifest(
+            "https://user:pw@127.0.0.1:1/m.json?token=abc",
+            &"0".repeat(64),
+            &*https(),
+            &DEFAULT_POLICY,
+        )
+        .expect_err("nothing listens");
+        assert_eq!(failed.code, codes::FETCH_FAILED);
+        assert!(!secret(&failed), "{}", failed.message);
     }
 
     #[test]
