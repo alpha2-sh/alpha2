@@ -2820,6 +2820,68 @@ fn identity_states_raster_the_static_bytes() {
 }
 
 #[test]
+fn a_tile_reused_from_the_cache_draws_what_a_fresh_tile_draws() {
+    let turned = |rasterizer: &TextRasterizer, request: &TextRasterRequest, dx: f32| {
+        let mut states = identity_states(rasterizer, request);
+        for state in &mut states {
+            state.rotation = 0.3;
+            state.scale = [1.7, 1.7];
+            state.offset = [dx, 0.0];
+        }
+        states
+    };
+    let first = request("Cache", 40.0);
+    let moved = TextRasterRequest {
+        content_version: 2,
+        ..first.clone()
+    };
+    let mut warm = fixture();
+    let states = turned(&warm, &first, 0.0);
+    warm.rasterize_animated(&first, &states).expect("draws");
+    let states = turned(&warm, &moved, 3.0);
+    let reused = warm.rasterize_animated(&moved, &states).expect("draws");
+    let mut cold = fixture();
+    let fresh = cold.rasterize_animated(&moved, &states).expect("draws");
+    assert_eq!(reused.pixels.rgba8, fresh.pixels.rgba8);
+    assert_eq!(reused.descriptor, fresh.descriptor);
+}
+
+#[test]
+fn an_animated_raster_past_its_area_or_tile_budget_is_too_large() {
+    let mut rasterizer = fixture();
+    let caption = TextRasterRequest {
+        strokes: vec![TextStroke {
+            color: [0, 0, 0, 255],
+            width: 2.0,
+        }],
+        ..request("Twenty char caption.", 54.0)
+    };
+    let mut states = identity_states(&rasterizer, &caption);
+    for state in &mut states {
+        state.scale = [100.0, 100.0];
+    }
+    assert_eq!(
+        rasterizer.rasterize_animated(&caption, &states).map(drop),
+        Err(TextRasterError::TooLarge)
+    );
+    for state in &mut states {
+        state.scale = [1.0e8, 1.0e8];
+    }
+    assert_eq!(
+        rasterizer
+            .rasterize_animated(
+                &TextRasterRequest {
+                    content_version: 2,
+                    ..caption.clone()
+                },
+                &states
+            )
+            .map(drop),
+        Err(TextRasterError::TooLarge)
+    );
+}
+
+#[test]
 fn tracking_shifts_later_clusters_without_rewrapping() {
     let mut rasterizer = fixture();
     let start = request("IIII", 40.0);

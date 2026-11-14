@@ -674,6 +674,11 @@ All notable changes to this project are documented in this file.
   Before, a body of a few hundred bytes could declare a 256 MiB array that held registration for
   seconds and stalled a software adapter's first draw for minutes. Declaring, building or copying
   a whole array now counts its elements in the effect's cost.
+- Animated text sizes every character's tile before drawing any: a raster past 33,554,432
+  pixels, or whose new tiles would take more than 256 MiB, is refused as too large at once. The
+  tile cache keeps at most 64 MiB, least recently used first out. Before, a caption scaled a
+  hundredfold drew for seconds and took most of a gigabyte before the size check, a larger scale
+  stopped the browser module, and a title animation left over a gigabyte of tiles held.
 
 ## [0.6.0] - 2026-11-08
 

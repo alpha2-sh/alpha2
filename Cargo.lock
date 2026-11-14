@@ -87,6 +87,7 @@ dependencies = [
  "alpha2-model",
  "alpha2-native",
  "alpha2-render",
+ "alpha2-text",
  "alpha2-time",
  "flate2",
  "libm",

@@ -574,12 +574,12 @@ impl TextRasterizer {
             }
         }
         // Tiles depend only on the glyphs, the linear part of the map and the subpixel position,
-        // so they can be cached.
+        // so they can be cached. Every tile is sized here, before any is drawn.
         let look_key = look_key(request);
-        let mut tiles = Vec::with_capacity(states.len());
+        let mut planned = Vec::with_capacity(states.len());
         for (glyphs, affine) in &placed {
             let Some(first) = glyphs.first() else {
-                tiles.push(None);
+                planned.push(None);
                 continue;
             };
             let [x, y] = apply(*affine, first.origin);
@@ -592,23 +592,22 @@ impl TextRasterizer {
                 affine[4] - whole[0],
                 affine[5] - whole[1],
             ];
-            let key = cluster_key(look_key, glyphs, local);
-            let drawn = if let Some(drawn) = cache.get(key) {
-                drawn
-            } else {
-                let drawn = Arc::new(draw_cluster(request, &drawings, glyphs, local));
-                cache.insert(key, &drawn);
-                drawn
-            };
-            tiles.push(Some((drawn, [whole[0] as i64, whole[1] as i64])));
+            let (bounds, color) = cluster_box(&drawings, glyphs, local);
+            planned.push(Some(PlannedCluster {
+                key: cluster_key(look_key, glyphs, local),
+                whole: [whole[0] as i64, whole[1] as i64],
+                local,
+                bounds,
+                color,
+            }));
         }
         // Same symmetric margin as the static raster, with room for strokes.
         let (outline, padding) = decoration_extents(request);
         let (mut overflow_x, mut overflow_y) = (0_i64, 0_i64);
-        for bounds in tiles
+        for bounds in planned
             .iter()
             .flatten()
-            .filter_map(|(drawn, at)| drawn.tile.bounds().map(|bounds| bounds.moved(*at)))
+            .filter_map(|cluster| cluster.bounds.map(|bounds| bounds.moved(cluster.whole)))
         {
             overflow_x = overflow_x
                 .max(bounds.left.saturating_neg())
@@ -634,16 +633,58 @@ impl TextRasterizer {
             .and_then(|margins| box_height.checked_add(margins))
             .ok_or(TextRasterError::TooLarge)?;
         // Two owner planes of `u32`, and an owner plane per stroke band.
-        let colors = tiles
-            .iter()
-            .flatten()
-            .any(|(drawn, _)| drawn.tile.colors.is_some());
+        let colors = planned.iter().flatten().any(|cluster| cluster.color);
         let owners = 8 + 4 * request.strokes.len() as u64;
         let pixel_count = raster_pixels(
             width,
             height,
             raster_bytes_per_pixel(request, colors) + owners,
         )?;
+        if u64::from(width) * u64::from(height) > MAX_ANIMATED_PIXELS {
+            return Err(TextRasterError::TooLarge);
+        }
+        let reach = stroke_radius(&request.strokes).map_or(0, disc_extent);
+        let mut drawing = std::collections::HashSet::new();
+        let mut tile_bytes = 0_u64;
+        for cluster in planned.iter().flatten() {
+            if !cache.contains(cluster.key) && drawing.insert(cluster.key) {
+                tile_bytes =
+                    tile_bytes.saturating_add(cluster.drawing_bytes(request.strokes.len(), reach));
+            }
+        }
+        if tile_bytes > MAX_REQUEST_TILE_BYTES {
+            return Err(TextRasterError::TooLarge);
+        }
+        let mut tiles = Vec::with_capacity(states.len());
+        for cluster in &planned {
+            let Some(cluster) = cluster else {
+                tiles.push(None);
+                continue;
+            };
+            let drawn = if let Some(drawn) = cache.get(cluster.key) {
+                drawn
+            } else {
+                let glyphs = &placed[tiles.len()].0;
+                let drawn = Arc::new(draw_cluster(request, &drawings, glyphs, cluster.local));
+                debug_assert_eq!(
+                    drawn.tile.bounds().map(|bounds| [
+                        bounds.left,
+                        bounds.top,
+                        bounds.right,
+                        bounds.bottom
+                    ]),
+                    cluster.bounds.map(|bounds| [
+                        bounds.left,
+                        bounds.top,
+                        bounds.right,
+                        bounds.bottom
+                    ]),
+                );
+                cache.insert(cluster.key, &drawn);
+                drawn
+            };
+            tiles.push(Some((drawn, cluster.whole)));
+        }
         let margins = [margin_x, margin_y];
         let mut coverage = vec![0_u8; pixel_count];
         let mut fill_owner = vec![u32::MAX; pixel_count];
@@ -777,6 +818,81 @@ impl TextRasterizer {
     }
 }
 
+/// Most pixels an animated raster may have. Its planes and the owner planes take 17 to 37 bytes
+/// per pixel, about twice a static raster.
+const MAX_ANIMATED_PIXELS: u64 = 1 << 25;
+
+/// Most bytes the tiles one request draws (those not cached) may take while drawn.
+const MAX_REQUEST_TILE_BYTES: u64 = 256 << 20;
+
+/// Most bytes the tile cache holds.
+const MAX_TILE_CACHE_BYTES: usize = 64 << 20;
+
+/// A cluster's tile key, placement and box, known before the tile is drawn.
+struct PlannedCluster {
+    key: u64,
+    whole: [i64; 2],
+    local: Affine,
+    /// The box [`draw_cluster`] gives the tile, in the frame offset by `whole`.
+    bounds: Option<PixelBox>,
+    /// Whether a glyph is a color glyph.
+    color: bool,
+}
+
+impl PlannedCluster {
+    /// Bytes drawing the tile takes: coverage and the outline accumulator (4 bytes) per pixel,
+    /// color glyphs and their resampled copy (8 more), and over the box padded by `reach` the
+    /// ink plane and one band per stroke.
+    fn drawing_bytes(&self, strokes: usize, reach: u32) -> u64 {
+        let Some(bounds) = self.bounds else {
+            return 0;
+        };
+        let side = |from: i64, to: i64| u64::try_from(to.saturating_sub(from)).unwrap_or(0);
+        let (width, height) = (
+            side(bounds.left, bounds.right),
+            side(bounds.top, bounds.bottom),
+        );
+        let pixels = width.saturating_mul(height);
+        let padded = width
+            .saturating_add(2 * u64::from(reach))
+            .saturating_mul(height.saturating_add(2 * u64::from(reach)));
+        let per_pixel = 5 + if self.color { 8 } else { 0 };
+        let planes = if strokes == 0 { 0 } else { strokes as u64 + 1 };
+        pixels
+            .saturating_mul(per_pixel)
+            .saturating_add(padded.saturating_mul(planes))
+    }
+}
+
+/// The tile box [`draw_cluster`] draws `glyphs` into through `affine`, and whether one is a
+/// color glyph.
+fn cluster_box(
+    drawings: &HashMap<(usize, u16), Drawing>,
+    glyphs: &[Placed],
+    affine: Affine,
+) -> (Option<PixelBox>, bool) {
+    let mut union: Option<PixelBox> = None;
+    let mut color = false;
+    for glyph in glyphs {
+        let drawing = &drawings[&glyph.key];
+        let Some(bounds) = drawing.bounds() else {
+            continue;
+        };
+        let target = mapped_box(bounds, glyph.origin, glyph.scale, affine);
+        if target.right <= target.left || target.bottom <= target.top {
+            continue;
+        }
+        color |= !matches!(drawing, Drawing::Outline(_));
+        union = Some(union.map_or(target, |held| PixelBox {
+            left: held.left.min(target.left),
+            top: held.top.min(target.top),
+            right: held.right.max(target.right),
+            bottom: held.bottom.max(target.bottom),
+        }));
+    }
+    (union, color)
+}
+
 /// A glyph with its origin before the cluster's map and its pixels per font unit.
 #[derive(Clone, Debug)]
 struct Placed {
@@ -808,18 +924,20 @@ impl Tile {
 impl PixelBox {
     fn moved(self, [x, y]: [i64; 2]) -> Self {
         Self {
-            left: self.left + x,
-            top: self.top + y,
-            right: self.right + x,
-            bottom: self.bottom + y,
+            left: self.left.saturating_add(x),
+            top: self.top.saturating_add(y),
+            right: self.right.saturating_add(x),
+            bottom: self.bottom.saturating_add(y),
         }
     }
 }
 
-/// LRU cache of drawn clusters, so held or settled characters are drawn once.
+/// LRU cache of drawn clusters, so held or settled characters are drawn once. Bounded by
+/// [`MAX_TILE_CACHE_BYTES`] and [`MAX_CACHED_CLUSTERS`].
 #[derive(Debug, Default)]
 pub(crate) struct TileCache {
     entries: HashMap<u64, (Arc<DrawnCluster>, u64)>,
+    bytes: usize,
     next_use: u64,
 }
 
@@ -833,9 +951,21 @@ impl std::fmt::Debug for DrawnCluster {
     }
 }
 
+impl DrawnCluster {
+    fn bytes(&self) -> usize {
+        self.tile.coverage.len()
+            + self.tile.colors.as_ref().map_or(0, Vec::len)
+            + self.bands.iter().map(Vec::len).sum::<usize>()
+    }
+}
+
 const MAX_CACHED_CLUSTERS: usize = 4_096;
 
 impl TileCache {
+    fn contains(&self, key: u64) -> bool {
+        self.entries.contains_key(&key)
+    }
+
     fn get(&mut self, key: u64) -> Option<Arc<DrawnCluster>> {
         self.next_use += 1;
         let use_now = self.next_use;
@@ -845,7 +975,13 @@ impl TileCache {
         })
     }
 
+    /// Keeps `drawn` unless it is larger than a quarter of the byte budget, evicting the least
+    /// recently used entries to make room.
     fn insert(&mut self, key: u64, drawn: &Arc<DrawnCluster>) {
+        let bytes = drawn.bytes();
+        if bytes > MAX_TILE_CACHE_BYTES / 4 {
+            return;
+        }
         if self.entries.len() >= MAX_CACHED_CLUSTERS {
             // Drop the older half so eviction stays rare.
             let mut uses = self
@@ -856,12 +992,38 @@ impl TileCache {
             uses.sort_unstable();
             let cut = uses[uses.len() / 2];
             self.entries.retain(|_, (_, used)| *used > cut);
+            self.bytes = self.entries.values().map(|(drawn, _)| drawn.bytes()).sum();
         }
-        self.entries.insert(key, (Arc::clone(drawn), self.next_use));
+        if self.bytes + bytes > MAX_TILE_CACHE_BYTES {
+            let mut by_use = self
+                .entries
+                .iter()
+                .map(|(key, (drawn, used))| (*used, *key, drawn.bytes()))
+                .collect::<Vec<_>>();
+            by_use.sort_unstable();
+            for (_, old, old_bytes) in by_use {
+                if self.bytes + bytes <= MAX_TILE_CACHE_BYTES {
+                    break;
+                }
+                self.entries.remove(&old);
+                self.bytes -= old_bytes;
+            }
+        }
+        if let Some((replaced, _)) = self.entries.insert(key, (Arc::clone(drawn), self.next_use)) {
+            self.bytes -= replaced.bytes();
+        }
+        self.bytes += bytes;
+    }
+
+    /// Bytes the cached tiles hold.
+    #[cfg(test)]
+    pub(crate) const fn bytes(&self) -> usize {
+        self.bytes
     }
 
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+        self.bytes = 0;
     }
 }
 
@@ -1115,5 +1277,45 @@ fn text_layout(layout: &Layout, request: &TextRasterRequest) -> TextLayout {
         clusters,
         lines,
         font_size: request.font_size,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn drawn(bytes: usize) -> Arc<DrawnCluster> {
+        Arc::new(DrawnCluster {
+            tile: Tile {
+                left: 0,
+                top: 0,
+                width: bytes,
+                height: 1,
+                coverage: vec![0; bytes],
+                colors: None,
+            },
+            padded: Tile::empty(),
+            bands: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn the_tile_cache_evicts_the_least_recently_used_by_bytes() {
+        let mut cache = TileCache::default();
+        let tile = 10 << 20;
+        for key in 0..6 {
+            cache.insert(key, &drawn(tile));
+        }
+        assert_eq!(cache.bytes(), 6 * tile);
+        assert!(cache.get(0).is_some());
+        cache.insert(6, &drawn(tile));
+        assert!(cache.bytes() <= MAX_TILE_CACHE_BYTES);
+        assert!(cache.contains(0) && cache.contains(6) && !cache.contains(1));
+        cache.insert(7, &drawn(MAX_TILE_CACHE_BYTES / 4 + 1));
+        assert!(!cache.contains(7));
+        cache.insert(6, &drawn(tile));
+        assert!(cache.bytes() <= MAX_TILE_CACHE_BYTES);
+        cache.clear();
+        assert_eq!(cache.bytes(), 0);
     }
 }

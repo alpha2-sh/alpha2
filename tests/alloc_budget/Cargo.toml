@@ -28,6 +28,7 @@ alpha2-media.workspace = true
 alpha2-model.workspace = true
 alpha2-native.workspace = true
 alpha2-render = { workspace = true, features = ["wgpu-interop"] }
+alpha2-text.workspace = true
 alpha2-time.workspace = true
 flate2 = "1.1.10"
 libm = "0.2.16"
