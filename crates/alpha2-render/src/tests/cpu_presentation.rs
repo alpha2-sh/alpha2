@@ -460,3 +460,58 @@ fn the_table_path_equals_the_per_pixel_path() {
         }
     }
 }
+
+#[test]
+fn the_rgba_table_path_equals_the_per_pixel_path() {
+    use crate::RenderControls;
+
+    let canvas = sized(24, 16);
+    for budget in [64, 12] {
+        let renderer = crate::CpuRenderer::with_band_rows(2, 3);
+        renderer.set_quality_controls(budget, 1);
+        for size in [sized(16, 12), canvas, sized(60, 40), sized(192, 128)] {
+            let card = super::cpu_parity::test_card(size, false);
+            // Straight alpha reads the card as straight color: translucent corners stay soft.
+            for alpha in [SourceAlpha::Straight, SourceAlpha::Premultiplied] {
+                for exif in 1..=8 {
+                    let presentation = SourcePresentation {
+                        orientation: Orientation::from_exif(exif).expect("orientation"),
+                        sample_aspect_ratio: if exif % 3 == 0 { (4, 3) } else { (1, 1) },
+                        ..presentation(size, canvas)
+                    };
+                    let source = renderer
+                        .present_rgba8(Arc::new(card.clone()), size, 0, presentation, alpha)
+                        .expect("present");
+                    assert!(
+                        source.presented_by(&renderer, true).stored_bits()
+                            == source.presented_by(&renderer, false).stored_bits(),
+                        "{size:?} {alpha:?} exif {exif} budget {budget}"
+                    );
+                }
+            }
+            // Linear half floats past both ends of `0..1`.
+            let linear = card
+                .iter()
+                .flat_map(|&code| {
+                    half::f16::from_f32(f32::from(code) / 200.0 - 0.1)
+                        .to_bits()
+                        .to_le_bytes()
+                })
+                .collect::<Vec<u8>>();
+            for exif in [1, 6] {
+                let presentation = SourcePresentation {
+                    orientation: Orientation::from_exif(exif).expect("orientation"),
+                    ..presentation(size, canvas)
+                };
+                let source = renderer
+                    .present_linear_rgba16f(Arc::new(linear.clone()), size, 0, presentation)
+                    .expect("present");
+                assert!(
+                    source.presented_by(&renderer, true).stored_bits()
+                        == source.presented_by(&renderer, false).stored_bits(),
+                    "linear {size:?} exif {exif} budget {budget}"
+                );
+            }
+        }
+    }
+}

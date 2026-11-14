@@ -145,6 +145,7 @@ impl CpuSource {
                     encoding: *encoding,
                 },
                 geometry,
+                Path::Fastest,
             ),
         });
         add_elapsed(&renderer.stats.present_micros, started);
@@ -165,7 +166,23 @@ impl CpuSource {
             Content::Yuv { planes, conversion } => {
                 present_yuv(renderer, &planes.frame(), conversion, path)
             }
-            Content::Rgba { .. } => unimplemented!("RGBA sources have one path"),
+            Content::Rgba {
+                pixels,
+                stride,
+                size,
+                geometry,
+                encoding,
+            } => present_rgba(
+                renderer,
+                &RgbaSource {
+                    bytes: pixels.plane().bytes,
+                    stride: *stride as usize,
+                    size: *size,
+                    encoding: *encoding,
+                },
+                geometry,
+                path,
+            ),
         }
     }
 }
@@ -774,6 +791,17 @@ enum Path {
     PerPixel,
 }
 
+impl Path {
+    /// Whether the table paths may run.
+    const fn tables(self) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::PerPixel => false,
+            _ => true,
+        }
+    }
+}
+
 fn present_yuv(
     renderer: &CpuRenderer,
     frame: &YuvFrame<'_>,
@@ -831,11 +859,7 @@ fn present_yuv(
     {
         return image;
     }
-    #[cfg(test)]
-    let tables = path != Path::PerPixel;
-    #[cfg(not(test))]
-    let tables = true;
-    if tables && let Some(image) = present_tables(renderer, output, &planes, conversion) {
+    if path.tables() && let Some(image) = present_tables(renderer, output, &planes, conversion) {
         return image;
     }
     let geometry = conversion.geometry;
@@ -1117,25 +1141,22 @@ struct AxisTable {
 }
 
 impl AxisTable {
-    /// Taps for positions `first..first + count` on output `axis`, with `filtered`'s offsets.
+    /// Taps `tap(axis, position)` for positions `first..first + count` on output `axis`, with
+    /// `filtered`'s offsets.
     fn new(
-        conversion: &YuvConversion,
-        planes: &Planes<'_>,
+        geometry: &Geometry,
         axis: usize,
         (first, count): (u32, u32),
         offsets: &[f32],
+        tap: impl Fn(usize, f32) -> AxisTap,
     ) -> Self {
         let mut inside = Vec::with_capacity(count as usize);
         let mut taps = Vec::with_capacity(count as usize * offsets.len());
         for position in first..first + count {
             #[allow(clippy::cast_precision_loss)]
             let destination = position as f32 + 0.5;
-            inside.push(conversion.geometry.inside_axis(axis, destination));
-            taps.extend(
-                offsets
-                    .iter()
-                    .map(|offset| conversion.axis_tap(axis, destination + offset, planes)),
-            );
+            inside.push(geometry.inside_axis(axis, destination));
+            taps.extend(offsets.iter().map(|offset| tap(axis, destination + offset)));
         }
         Self {
             inside,
@@ -1247,19 +1268,20 @@ fn present_tables(
     #[allow(clippy::float_cmp)]
     let single = grid == [1.0, 1.0];
     let count = grid[0] * grid[1];
+    let tap = |axis, destination| conversion.axis_tap(axis, destination, planes);
     let columns = AxisTable::new(
-        conversion,
-        planes,
+        geometry,
         0,
         (bounds.x, bounds.width),
         &Geometry::grid_offsets(grid, 0),
+        tap,
     );
     let rows = AxisTable::new(
-        conversion,
-        planes,
+        geometry,
         1,
         (bounds.y, bounds.height),
         &Geometry::grid_offsets(grid, 1),
+        tap,
     );
     // Upright and half-turned rows fix a source row pair; quarter-turned rows fix a column pair.
     let turned = geometry.source_axis(1) == 0;
@@ -1401,6 +1423,28 @@ impl RgbaSource<'_> {
             self.texel(x, y + 1),
             self.texel(x + 1, y + 1),
         ];
+        self.filtered_corners(&corners, weight)
+    }
+
+    /// The texels a bilinear sample at source coordinate `position` reads along an axis `size`
+    /// texels long, clamped as [`Self::texel`] clamps them.
+    fn axis_tap(position: f32, size: u32) -> Tap {
+        let texel = position - 0.5;
+        let floor = texel.floor();
+        let last = i64::from(size) - 1;
+        #[allow(clippy::cast_possible_truncation)]
+        let first = floor as i64;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        (
+            first.clamp(0, last) as u32,
+            (first + 1).clamp(0, last) as u32,
+            texel - floor,
+        )
+    }
+
+    /// `filtered_sample` from its four texels (left to right, then top to bottom) and weights.
+    #[inline]
+    fn filtered_corners(&self, corners: &[[f32; 4]; 4], weight: [f32; 2]) -> [f32; 4] {
         let mix = |a: [f32; 4], b: [f32; 4], t: f32| {
             [0, 1, 2, 3].map(|channel| a[channel] + (b[channel] - a[channel]) * t)
         };
@@ -1412,7 +1456,7 @@ impl RgbaSource<'_> {
             )
         };
         if self.encoding != PresentedEncoding::Srgb(SourceAlpha::Straight) {
-            return bilinear(&corners);
+            return bilinear(corners);
         }
         // Straight alpha is premultiplied before filtering.
         let premultiplied = corners.map(|texel| {
@@ -1424,7 +1468,7 @@ impl RgbaSource<'_> {
             ]
         });
         if premultiplied.iter().all(|texel| texel[3] >= 1.0) {
-            let source = bilinear(&corners);
+            let source = bilinear(corners);
             return [
                 source[0] * source[3],
                 source[1] * source[3],
@@ -1437,7 +1481,12 @@ impl RgbaSource<'_> {
 
     /// `stored_sample`.
     fn stored_sample(&self, source_pixel: [f32; 2]) -> [f32; 4] {
-        let filtered = self.filtered_sample(source_pixel);
+        self.stored(self.filtered_sample(source_pixel))
+    }
+
+    /// A filtered sample as stored.
+    #[inline]
+    fn stored(&self, filtered: [f32; 4]) -> [f32; 4] {
         if self.encoding != PresentedEncoding::Linear {
             return filtered;
         }
@@ -1454,17 +1503,174 @@ impl RgbaSource<'_> {
     }
 }
 
-fn present_rgba(renderer: &CpuRenderer, source: &RgbaSource<'_>, geometry: &Geometry) -> CpuImage {
+fn present_rgba(
+    renderer: &CpuRenderer,
+    source: &RgbaSource<'_>,
+    geometry: &Geometry,
+    path: Path,
+) -> CpuImage {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let output = RenderSize {
         width: geometry.output[0] as u32,
         height: geometry.output[1] as u32,
     };
+    if path.tables() {
+        return present_rgba_tables(renderer, output, source, geometry);
+    }
     present_rows(renderer, output, geometry, |destination| {
         geometry.filtered(destination, |source_pixel| {
             source.stored_sample(source_pixel)
         })
     })
+}
+
+/// Two lines of RGBA texels a fixed tap selects across the other source axis.
+struct RgbaLines {
+    near: Vec<[f32; 4]>,
+    far: Vec<[f32; 4]>,
+    first: u32,
+}
+
+/// [`present_tables`] for RGBA sources: the same tables, with each sample's four texels read from
+/// two decoded lines and filtered by `filtered_sample`'s own arithmetic.
+#[allow(clippy::too_many_lines)]
+fn present_rgba_tables(
+    renderer: &CpuRenderer,
+    output: RenderSize,
+    source: &RgbaSource<'_>,
+    geometry: &Geometry,
+) -> CpuImage {
+    let bounds = geometry.bounds(output);
+    if bounds.is_empty() {
+        return CpuImage::transparent(output);
+    }
+    let grid = geometry.filter_grid();
+    #[allow(clippy::float_cmp)]
+    let single = grid == [1.0, 1.0];
+    let count = grid[0] * grid[1];
+    let tap = |axis, destination| {
+        let source_axis = geometry.source_axis(axis);
+        let size = if source_axis == 0 {
+            source.size.width
+        } else {
+            source.size.height
+        };
+        let taps = RgbaSource::axis_tap(geometry.source_coordinate(axis, destination), size);
+        AxisTap {
+            inside: geometry.inside_axis(axis, destination),
+            luma: taps,
+            chroma: taps,
+        }
+    };
+    let columns = AxisTable::new(
+        geometry,
+        0,
+        (bounds.x, bounds.width),
+        &Geometry::grid_offsets(grid, 0),
+        tap,
+    );
+    let rows = AxisTable::new(
+        geometry,
+        1,
+        (bounds.y, bounds.height),
+        &Geometry::grid_offsets(grid, 1),
+        tap,
+    );
+    let turned = geometry.source_axis(1) == 0;
+    let [(first, last), _] = columns.reach();
+    let width = bounds.width as usize;
+    let scratch = || {
+        let length = (last - first + 1) as usize;
+        (
+            RgbaLines {
+                near: vec![[0.0; 4]; length],
+                far: vec![[0.0; 4]; length],
+                first,
+            },
+            vec![[0.0_f32; 4]; width],
+        )
+    };
+    let mut pixels = renderer.frame_pool.take(bounds.pixels());
+    renderer.workers.bands_with(
+        &mut pixels,
+        width,
+        scratch,
+        |(lines, sums), first_row, band| {
+            band.fill([0; 4]);
+            for (index, line) in band.chunks_mut(width).enumerate() {
+                let row = first_row + index;
+                if !rows.inside[row] {
+                    continue;
+                }
+                sums.fill([0.0; 4]);
+                for row_tap in rows.at(row) {
+                    let fixed = row_tap.luma;
+                    for (offset, (near, far)) in
+                        lines.near.iter_mut().zip(lines.far.iter_mut()).enumerate()
+                    {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let along = i64::from(lines.first + offset as u32);
+                        let (a, b) = (i64::from(fixed.0), i64::from(fixed.1));
+                        (*near, *far) = if turned {
+                            (source.texel(a, along), source.texel(b, along))
+                        } else {
+                            (source.texel(along, a), source.texel(along, b))
+                        };
+                    }
+                    for (offset, (out, sum)) in line.iter_mut().zip(sums.iter_mut()).enumerate() {
+                        if !columns.inside[offset] {
+                            continue;
+                        }
+                        for column_tap in columns.at(offset) {
+                            let across = column_tap.luma;
+                            let (low, high) = (
+                                (across.0 - lines.first) as usize,
+                                (across.1 - lines.first) as usize,
+                            );
+                            // Corners left to right, then top to bottom, and the x and y weights.
+                            let (corners, weight) = if turned {
+                                (
+                                    [
+                                        lines.near[low],
+                                        lines.far[low],
+                                        lines.near[high],
+                                        lines.far[high],
+                                    ],
+                                    [fixed.2, across.2],
+                                )
+                            } else {
+                                (
+                                    [
+                                        lines.near[low],
+                                        lines.near[high],
+                                        lines.far[low],
+                                        lines.far[high],
+                                    ],
+                                    [across.2, fixed.2],
+                                )
+                            };
+                            let value = source.stored(source.filtered_corners(&corners, weight));
+                            if single {
+                                *out = half::store4(value);
+                            } else {
+                                for (total, channel) in sum.iter_mut().zip(value) {
+                                    *total += channel;
+                                }
+                            }
+                        }
+                    }
+                }
+                if !single {
+                    for (offset, (out, sum)) in line.iter_mut().zip(sums.iter()).enumerate() {
+                        if columns.inside[offset] {
+                            *out = half::store4(sum.map(|total| total / count));
+                        }
+                    }
+                }
+            }
+        },
+    );
+    CpuImage::pooled(output, bounds, pixels, &renderer.frame_pool)
 }
 
 impl CpuRenderer {
