@@ -1997,16 +1997,18 @@ impl<'a> Context<'a> {
                     }
                 }
                 let composition = video.blur.map(|radius| self.blur_composition(radius));
+                // Every clip of the node carries its zoom keys over the node's own span.
+                let span = range(start, end);
+                Self::zoom_fits(visual, span)?;
                 for clip in &mut clips {
-                    Self::zoom_fits(visual, clip.timeline_range)?;
                     clip.visual = self.picture_visual(
                         video.size,
                         rect,
                         visual,
                         &opacity,
-                        clip.timeline_range,
+                        (clip.timeline_range, span),
                     );
-                    clip.masks = self.picture_masks(video.size, rect, visual, clip.timeline_range);
+                    clip.masks = self.picture_masks(video.size, rect, visual, span);
                     clip.composition = composition.clone().map(ClipComposition::new);
                     clip.audio.gain = constant(video.volume);
                     clip.audio.muted = video.muted;
@@ -2024,10 +2026,10 @@ impl<'a> Context<'a> {
                     range(start, end),
                     range(0, slot.len),
                 );
-                Self::zoom_fits(visual, clip.timeline_range)?;
-                clip.visual =
-                    self.picture_visual(*size, rect, visual, &opacity, clip.timeline_range);
-                clip.masks = self.picture_masks(*size, rect, visual, clip.timeline_range);
+                let span = clip.timeline_range;
+                Self::zoom_fits(visual, span)?;
+                clip.visual = self.picture_visual(*size, rect, visual, &opacity, (span, span));
+                clip.masks = self.picture_masks(*size, rect, visual, span);
                 clip.composition =
                     blur.map(|radius| ClipComposition::new(self.blur_composition(radius)));
                 lane.clips.push(clip);
@@ -2202,11 +2204,11 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
-    /// Refuses zoom keys placed on `clip` past the latest time a project holds.
-    fn zoom_fits(visual: &Visual, clip: TimeRange) -> Result<(), ComposeError> {
-        let length = clip.end().ticks() - clip.start().ticks();
+    /// Refuses zoom keys placed on the node's `span` past the latest time a project holds.
+    fn zoom_fits(visual: &Visual, span: TimeRange) -> Result<(), ComposeError> {
+        let length = span.end().ticks() - span.start().ticks();
         let last = visual.zoom.as_ref().and_then(|zoom| last_key(zoom, length));
-        keys_fit([last], clip, &format!("{}.zoom", visual.head.path))
+        keys_fit([last], span, &format!("{}.zoom", visual.head.path))
     }
 
     /// A shape's items placed in `rect`, animated over `0..len` of the picture's time.
@@ -2437,15 +2439,15 @@ impl<'a> Context<'a> {
         })
     }
 
-    /// Where a picture `size` pixels at scale 1 lies to fill `rect` as `visual` asks, and its
-    /// opacity over `clip`.
+    /// Where a picture `size` pixels at scale 1 lies to fill `rect` as `visual` asks, with its
+    /// zoom keyed over the node's `span` and its opacity over `clip`.
     fn picture_visual(
         &self,
         size: (u32, u32),
         rect: Rect,
         visual: &Visual,
         opacity: &Opacity,
-        clip: TimeRange,
+        (clip, span): (TimeRange, TimeRange),
     ) -> VisualProperties {
         let (width, height) = self.canvas_px();
         let fitted = Fitted::new(size, (width, height), rect, visual.fit);
@@ -2455,7 +2457,7 @@ impl<'a> Context<'a> {
             None => constant(fitted.scale),
             Some(AnimPrim::Value(zoom)) => constant(scaled(*zoom)),
             Some(AnimPrim::Keys(keys)) => Animated::Keyframes {
-                keyframes: resolve_keys(keys, clip)
+                keyframes: resolve_keys(keys, span)
                     .into_iter()
                     .map(|(time, zoom, easing)| Keyframe {
                         time,
@@ -2481,22 +2483,22 @@ impl<'a> Context<'a> {
     }
 
     /// The mask that crops a picture to `rect` where it overflows inside the canvas (the
-    /// canvas crops the rest).
+    /// canvas crops the rest), keyed over the node's `span`.
     fn picture_masks(
         &self,
         size: (u32, u32),
         rect: Rect,
         visual: &Visual,
-        clip: TimeRange,
+        span: TimeRange,
     ) -> Vec<ShapeMask> {
         let (width, height) = self.canvas_px();
         let fitted = Fitted::new(size, (width, height), rect, visual.fit);
         let (x, y) = align_point(visual.align);
         let full = rect == self.canvas_rect();
         let keys = match &visual.zoom {
-            None => vec![(clip.start(), 1.0, Easing::Linear)],
-            Some(AnimPrim::Value(zoom)) => vec![(clip.start(), *zoom, Easing::Linear)],
-            Some(AnimPrim::Keys(keys)) => resolve_keys(keys, clip),
+            None => vec![(span.start(), 1.0, Easing::Linear)],
+            Some(AnimPrim::Value(zoom)) => vec![(span.start(), *zoom, Easing::Linear)],
+            Some(AnimPrim::Keys(keys)) => resolve_keys(keys, span),
         };
         let overflows = |zoom: f32| {
             fitted.displayed.0 * zoom > rect.width * 1.0001

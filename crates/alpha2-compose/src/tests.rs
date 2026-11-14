@@ -1782,3 +1782,44 @@ fn a_middle_child_shorter_than_its_two_transitions_is_refused() {
         "seconds": 0.8, "transition": {"type": "crossfade", "duration": 0.5}}}),
     );
 }
+
+#[test]
+fn a_zoom_runs_over_its_node_across_a_held_last_frame() {
+    // grid1.mp4 lasts 31 s, so a 40 s node plays it and holds its last frame.
+    for zoom in [
+        json!({"from": 1, "to": 1.2}),
+        json!({"from": 1, "to": 1.2, "ease": "ease-in-out"}),
+        json!({"keys": [{"t": 0, "v": 1}, {"t": 35, "v": 1.3, "ease": "ease-in"}, {"t": 40, "v": 1.1}]}),
+    ] {
+        for inset in [0, 100] {
+            let clips = video_clips(&json!({"duration": 40, "zoom": zoom, "inset": inset,
+                "fit": "cover"}))
+            .expect("compiles");
+            assert_eq!(clips.len(), 2, "{zoom}");
+            assert_eq!(clips[1]["time_map"]["type"], "freeze");
+            let played = &clips[0]["visual"]["scale"];
+            assert_eq!(played, &clips[1]["visual"]["scale"], "{zoom}");
+            let times = keyframe_times(played);
+            assert_eq!(times.first(), Some(&0), "{zoom}");
+            assert_eq!(times.last(), Some(&(40 * SECOND)), "{zoom}");
+            assert_eq!(clips[0]["masks"], clips[1]["masks"], "{zoom}");
+            if inset > 0 {
+                let times = keyframe_times(&clips[0]["masks"][0]["shape"]["size"]);
+                assert_eq!(times.first(), Some(&0), "{zoom}");
+                assert_eq!(times.last(), Some(&(40 * SECOND)), "{zoom}");
+            }
+        }
+    }
+    // A slideshow of videos longer than each video pans each node once.
+    let compiled = compile(
+        &json!({"body": {"type": "slideshow", "items": ["wide.mp4", "wide.mp4"],
+        "seconds": 12, "ken_burns": 1.2, "transition": "cut"}}),
+    );
+    let clips = visual_clips(&compiled);
+    assert_eq!(clips.len(), 4);
+    for (index, clip) in clips.iter().enumerate() {
+        let start = if index < 2 { 0 } else { 12 * SECOND };
+        let times = keyframe_times(&clip["visual"]["scale"]);
+        assert_eq!(times, [start, start + 12 * SECOND], "clip {index}");
+    }
+}

@@ -218,6 +218,8 @@ All notable changes to this project are documented in this file.
   its own, another transition is refused at the child whose part is short, and a middle child or
   slide shorter than its two transitions is refused at its path. Such specs failed with "the
   compiled project is not valid" and no path.
+- A compose zoom (including a slideshow's `ken_burns`) on a video shorter than its node runs once
+  over the node; it no longer restarts on the held last frame.
 
 ## [0.6.0] - 2026-11-08
 
