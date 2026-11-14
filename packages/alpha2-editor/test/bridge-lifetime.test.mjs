@@ -299,7 +299,7 @@ function addColor(editor) {
   assert.ok(result.ok, result.error?.message);
 }
 
-async function previewSession({ workerFactory }) {
+async function previewSession({ workerFactory, workerRequestTimeoutMs }) {
   resetPageGpuLosses();
   const reported = [];
   const editor = createEditor({
@@ -310,6 +310,7 @@ async function previewSession({ workerFactory }) {
     audio: false,
     assetDecisions: await engineWasm(),
     runtimeAssets: { workerFactory },
+    ...(workerRequestTimeoutMs === undefined ? {} : { workerRequestTimeoutMs }),
     onError: (error) => reported.push(error),
   });
   addColor(editor);
@@ -389,6 +390,35 @@ for (const mute of ["seek", "init"])
       assert.ok(worker.terminated);
       assert.notEqual((await within(binding, 100)).state, "pending");
       assert.notEqual((await within(seeking, 100)).state, "pending");
+      editor.dispose();
+    },
+  );
+
+for (const mute of ["seek", "init"])
+  test(
+    `a preview worker that never answers ${mute} hands the surface to the main thread after its deadline`,
+    { skip },
+    async () => {
+      let worker;
+      const { editor, bridge, reported } = await previewSession({
+        workerFactory: () => (worker = muteWorker(new Set([mute]))),
+        workerRequestTimeoutMs: 300,
+      });
+      const bound = await within(
+        bridge.bindPreview(new FakeCanvas(64, 36)),
+        3000,
+      );
+      assert.equal(bound.state, "resolved");
+      const seek = await within(bridge.seek(4000), 3000);
+      assert.deepEqual(seek, { state: "resolved", value: true });
+      assert.equal(bridge.previewBackend, "main-thread");
+      assert.ok(worker.terminated);
+      assert.deepEqual(
+        reported.map((e) => e.code),
+        ["preview_worker_failed"],
+      );
+      assert.equal(reported[0].cause.code, "worker_timeout");
+      await bridge.dispose();
       editor.dispose();
     },
   );

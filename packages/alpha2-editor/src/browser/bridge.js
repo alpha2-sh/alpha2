@@ -306,6 +306,7 @@ export function createBrowserBridge(options) {
     mediaAdapter = createMediaAdapter({ ...runtimeAssets, hdrWithoutPlanes }),
     resourceLimit = 128,
     audio = true,
+    workerRequestTimeoutMs,
     onError = () => {},
     assetDecisions,
     previewScale: initialPreviewScale = 0.5,
@@ -1783,6 +1784,9 @@ export function createBrowserBridge(options) {
             opaqueEngineFrames,
             // Match the main renderer: the CPU once recovery or `auto` moved there.
             renderer: onCpu() ? "cpu" : rendererMode,
+            ...(workerRequestTimeoutMs === undefined
+              ? {}
+              : { requestTimeoutMs: workerRequestTimeoutMs }),
           });
           await workerPreview.ready;
           await workerPreview.setPreviewScale(previewScale);

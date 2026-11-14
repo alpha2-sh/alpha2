@@ -243,3 +243,20 @@ test("a worker error fails pending and later calls at once", async () => {
     await preview.dispose();
   }
 });
+
+test("a request unanswered past its active-time deadline fails the worker with a fatal timeout", async () => {
+  const worker = silentWorker();
+  const preview = createWorkerPreview(worker, { requestTimeoutMs: 300 });
+  await assert.rejects(
+    preview.ready,
+    (error) => error.code === "worker_timeout" && error.fatal === true,
+  );
+  const before = worker.requests.length;
+  await assert.rejects(
+    preview.cancel(),
+    (error) => error.code === "worker_timeout",
+  );
+  assert.equal(worker.requests.length, before);
+  await preview.dispose();
+  assert.ok(worker.terminated);
+});

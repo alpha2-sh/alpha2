@@ -176,6 +176,12 @@ export interface BrowserBridgeOptions {
   /** `false` renders picture only: no AudioContext opens and playback runs on the wall clock. */
   readonly audio?: boolean;
   /**
+   * Overrides the preview worker's request deadlines (`WorkerPreviewOptions.requestTimeoutMs`).
+   * A request past it gives the worker up: the main-thread renderer takes over the surface and
+   * `onError` receives one `preview_worker_failed`.
+   */
+  readonly workerRequestTimeoutMs?: number;
+  /**
    * Receives errors no caller awaits, such as a failed preview render or audio that did not start.
    * The bridge keeps running after each.
    */
@@ -794,6 +800,13 @@ export interface WorkerPreviewOptions {
   readonly opaqueEngineFrames?: "refuse" | "present-degraded";
   /** `"auto"` (the default: a hardware GPU, else the CPU renderer), `"gpu"` or `"cpu"`. */
   readonly renderer?: "auto" | "gpu" | "cpu";
+  /**
+   * Milliseconds of active time (a hidden or frozen page does not count) any request waits for
+   * its reply. Default 60000 for `init` and `replaceProject`, 30000 for every other call. Past it
+   * the call rejects with a fatal `worker_timeout` and every later call fails: the worker must be
+   * replaced.
+   */
+  readonly requestTimeoutMs?: number;
 }
 /** The main-thread side of a preview renderer running in a worker. */
 export interface WorkerPreview {

@@ -1,4 +1,5 @@
 import { Alpha2WasmError, serializeError } from "alpha2/worker-error";
+import { withinActiveTime } from "alpha2/active-clock";
 import { SourcePixels } from "./runtime/sources.js";
 import { extensionWasmUrls } from "./runtime/extension-import.js";
 import { AudioWindowSupplier, mixBlock } from "./runtime/audio.js";
@@ -6,6 +7,12 @@ import { AudioWindowSupplier, mixBlock } from "./runtime/audio.js";
 const INSTALLED = Symbol.for("alpha2.editorWorker");
 /** How long `WorkerPreview.dispose()` waits for the worker's reply before terminating it. */
 const DISPOSE_REPLY_MS = 1000;
+/** Active milliseconds a request may wait for its reply, by type; others take the default. */
+const REQUEST_TIMEOUT_MS = Object.freeze({
+  init: 60_000,
+  "replace-project": 60_000,
+});
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 /**
  * Serves the editor's preview protocol (`createWorkerPreview`) on `scope`, a dedicated worker's
@@ -263,7 +270,9 @@ function serveEditorWorker(scope) {
  * worker; `dispose()` terminates it. This port renders picture and mixes audio blocks only, apart
  * from a bridge's main-thread audio output. Every call waits for `ready`, which rejects if the
  * worker cannot start its engine; a disposed preview rejects new calls, and a worker error rejects
- * every pending and later call. `dispose()` waits at most a second for the worker's reply.
+ * every pending and later call. A request unanswered past its deadline (active time, see
+ * `WorkerPreviewOptions.requestTimeoutMs`) fails the worker the same way, with a fatal
+ * `worker_timeout`. `dispose()` waits at most a second for the worker's reply.
  * @param {Worker} worker
  * @param {import("./types.js").WorkerPreviewOptions} [options]
  * @returns {import("./types.js").WorkerPreview}
@@ -280,6 +289,7 @@ export function createWorkerPreview(
     videoConversion,
     opaqueEngineFrames,
     renderer,
+    requestTimeoutMs,
   } = {},
 ) {
   let nextId = 0,
@@ -319,13 +329,10 @@ export function createWorkerPreview(
       waiter.reject(error);
     }
   };
-  const fail = (message) => {
-    failure ??= new Alpha2WasmError({
-      code: "worker_error",
-      message,
-      fatal: true,
-    });
+  const fail = (message, code = "worker_error") => {
+    failure ??= new Alpha2WasmError({ code, message, fatal: true });
     rejectAll(failure);
+    return failure;
   };
   worker.onerror = (event) =>
     fail(event?.message || "The preview worker failed");
@@ -349,7 +356,16 @@ export function createWorkerPreview(
   const call = (type, body, transfer) => {
     if (disposed) return Promise.reject(new Error("Worker preview disposed"));
     if (failure) return Promise.reject(failure);
-    return send(type, body, transfer);
+    const limit =
+      requestTimeoutMs ??
+      REQUEST_TIMEOUT_MS[type] ??
+      DEFAULT_REQUEST_TIMEOUT_MS;
+    return withinActiveTime(send(type, body, transfer), limit, () =>
+      fail(
+        `The preview worker did not answer ${type} within ${limit / 1000} s of active time`,
+        "worker_timeout",
+      ),
+    );
   };
   const ready = call(
     "init",

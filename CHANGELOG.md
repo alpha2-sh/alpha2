@@ -28,6 +28,13 @@ All notable changes to this project are documented in this file.
   and the worker, its GPU device and its decoders stayed alive. A worker `error` or
   `messageerror` fails every later call at once, and one reply the worker cannot post no longer
   stops it answering later requests.
+- Worker requests have a deadline in active time (a hidden or frozen page does not count): 60 s
+  for start, project load and recovery, 30 s for every other call, overridable with
+  `requestTimeoutMs` on `WorkerRenderBackend` and `createWorkerPreview` and
+  `workerRequestTimeoutMs` on the editor bridge. Past it `WorkerRenderBackend` fails with a fatal
+  `RENDER_WORKER_FAILED` (also on a `messageerror`), and the editor gives the preview worker up and
+  draws on the main thread; before, one unanswered request froze the preview or player with no
+  error.
 
 ## [0.6.0] - 2026-11-08
 
