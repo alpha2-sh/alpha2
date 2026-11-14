@@ -1,6 +1,9 @@
 //! A cache of prepared source frames, keyed by source and time, bounded by count and bytes: what
 //! a player or an exporter renders from ([`FrameProvider`] for entries that are [`StoredFrame`]s).
 //!
+//! A frame is found only under the request time the host inserted or aliased it at, so the
+//! presented-at rule of [`FrameProvider::texture_for`] holds only for times the host stored.
+//!
 //! Every upload gets a generation number. Aliases share their target's generation, and a
 //! replaced entry is retired, still counted, until the host releases it or the budget evicts it.
 //!

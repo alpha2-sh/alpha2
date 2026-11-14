@@ -7,10 +7,10 @@
 //! takes the blocks before it that fell below `threshold`, gives up the blocks already rising into
 //! the next speech, and is kept when at least `min_silence_ms` long.
 //!
-//! Params: `threshold` (0.5), `min_silence_ms` (200).
+//! Params: `threshold` (0.5), `min_silence_ms` (200). Another key, or a value that is not a number
+//! in the range the descriptor declares, fails `begin`.
 
 use alpha2_plugin_sdk::{Audio, Context, Emitter, Error, Extractor, Host};
-use serde_json::Value;
 use tract_onnx::prelude::*;
 
 /// The model's rate.
@@ -50,22 +50,50 @@ pub struct Silence {
     threshold: f32,
     /// The shortest silence kept, in samples.
     shortest: i64,
-    /// The range in samples, the end rounded up.
+    /// The range in samples, both ends rounded up as the session rounds them.
     range: (i64, i64),
+    /// The range's start in ticks.
+    range_start: i64,
     /// The range's end in ticks.
     range_end: i64,
 }
 
-fn number(context: &Context, key: &str, default: f64) -> f64 {
-    context
+/// Each param with its default and the inclusive bounds `descriptor.json` declares.
+const PARAMS: [(&str, f64, f64, f64); 2] = [
+    ("threshold", 0.5, 0.05, 0.95),
+    ("min_silence_ms", 200.0, 0.0, 60_000.0),
+];
+
+/// `threshold` and `min_silence_ms`, defaults filled in.
+fn params(context: &Context) -> Result<[f64; 2], Error> {
+    if let Some(key) = context
         .params
-        .get(key)
-        .and_then(Value::as_f64)
-        .unwrap_or(default)
+        .keys()
+        .find(|key| PARAMS.iter().all(|(name, ..)| name != key))
+    {
+        return Err(Error(format!(
+            "params.{key} is not a param of alpha2.silence"
+        )));
+    }
+    let mut values = [0.0; 2];
+    for (value, (key, default, min, max)) in values.iter_mut().zip(PARAMS) {
+        *value = match context.params.get(key) {
+            None => default,
+            Some(given) => given
+                .as_f64()
+                .filter(|number| (min..=max).contains(number))
+                .ok_or_else(|| {
+                    Error(format!("params.{key} must be a number from {min} to {max}"))
+                })?,
+        };
+    }
+    Ok(values)
 }
 
-fn to_sample(ticks: i64) -> i64 {
-    ticks * RATE / TICKS_PER_SECOND
+/// The first sample at or after `ticks`.
+fn to_sample_ceil(ticks: i64) -> i64 {
+    (ticks * RATE).div_euclid(TICKS_PER_SECOND)
+        + i64::from((ticks * RATE).rem_euclid(TICKS_PER_SECOND) != 0)
 }
 
 fn to_ticks(sample: i64) -> i64 {
@@ -93,9 +121,13 @@ impl Silence {
         let next = outputs.pop().ok_or("the model gave no state")?;
         let probability = outputs.pop().ok_or("the model gave no probability")?;
         self.state = next.into_tensor();
-        let start = samples.len().saturating_sub(CONTEXT);
-        self.context
-            .copy_from_slice(&samples[start..start + CONTEXT.min(samples.len())]);
+        // A block shorter than the context, the last of a range, shifts into it.
+        if let Some(tail) = samples.len().checked_sub(CONTEXT) {
+            self.context.copy_from_slice(&samples[tail..]);
+        } else {
+            self.context.rotate_left(samples.len());
+            self.context[CONTEXT - samples.len()..].copy_from_slice(samples);
+        }
         let value = probability
             .to_plain_array_view::<f32>()
             .ok()
@@ -114,10 +146,11 @@ impl Extractor for Silence {
             .ok_or("no resource named vad.onnx")?;
         let model =
             load(&bytes).map_err(|error| Error(format!("vad.onnx does not load: {error}")))?;
+        let [threshold, min_silence_ms] = params(context)?;
         #[allow(clippy::cast_possible_truncation)]
-        let threshold = number(context, "threshold", 0.5) as f32;
+        let threshold = threshold as f32;
         #[allow(clippy::cast_possible_truncation)]
-        let shortest = (number(context, "min_silence_ms", 200.0) * SAMPLES_PER_MS) as i64;
+        let shortest = (min_silence_ms * SAMPLES_PER_MS) as i64;
         Ok(Self {
             model,
             state: Self::fresh_state(),
@@ -126,10 +159,10 @@ impl Extractor for Silence {
             threshold,
             shortest,
             range: (
-                to_sample(context.range.start),
-                (context.range.end * RATE).div_euclid(TICKS_PER_SECOND)
-                    + i64::from((context.range.end * RATE).rem_euclid(TICKS_PER_SECOND) != 0),
+                to_sample_ceil(context.range.start),
+                to_sample_ceil(context.range.end),
             ),
+            range_start: context.range.start,
             range_end: context.range.end,
         })
     }
@@ -201,8 +234,15 @@ impl Extractor for Silence {
                     .sum::<f32>()
                     / (to - from) as f32;
             if end - start >= self.shortest.max(1) {
+                let start = if from == 0 {
+                    self.range_start
+                } else {
+                    to_ticks(start).max(self.range_start)
+                };
                 let end = to_ticks(end).min(self.range_end);
-                out.interval("silence", to_ticks(start), end, None, Some(score));
+                if end > start {
+                    out.interval("silence", start, end, None, Some(score));
+                }
             }
             index = run_end;
         }

@@ -732,7 +732,7 @@ fn a_surface_that_cannot_be_imported_reaches_the_frame_through_a_download() {
     // Without the shared context the import fails like a failed per-frame allocation; the frame
     // must still arrive from the CPU.
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let frames = NativeGpuFrames::new(size);
+    let frames = NativeGpuFrames::new(size, crate::frames::next_cache_scope());
     let mut metrics = FrameInstallMetrics::default();
     let (upload, imported) = frames
         .upload_or_download(&renderer, &frame, &mut metrics)
@@ -776,7 +776,7 @@ fn a_surface_that_cannot_be_imported_reaches_the_frame_through_a_download() {
         "the frame has content to compare"
     );
 
-    let mut strict = NativeGpuFrames::new(size);
+    let mut strict = NativeGpuFrames::new(size, crate::frames::next_cache_scope());
     strict.import_fallback = false;
     let Err(error) =
         strict.upload_or_download(&renderer, &frame, &mut FrameInstallMetrics::default())

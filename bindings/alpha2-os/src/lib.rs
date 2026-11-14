@@ -2,9 +2,6 @@
 //! does not offer at the minimum Rust version: file locks, no-replace publishing, termination
 //! handling, parent and child lifetime, clocks, memory, and the OS version.
 //!
-//! The rest of the workspace forbids `unsafe`; this crate and `alpha2-ffmpeg-bridge` hold the few
-//! calls that need it.
-//!
 //! In iOS and Android apps the system owns the process, so the termination, parent-exit and
 //! child-lifetime calls have no use there; files, clocks, memory and the version do.
 
@@ -28,9 +25,9 @@ use windows as platform;
 pub use lifetime::{
     KillOnCloseJob, claim_stdout, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
 };
-pub use memory::{MemoryCapacity, memory_capacity};
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub use memory::{cgroup_v2_usage, memory_capacity_at};
+pub use memory::{CgroupMemory, cgroup_memory, cgroup_memory_at, memory_capacity_at};
+pub use memory::{MemoryCapacity, memory_capacity};
 pub use os_version::os_version;
 
 /// Takes an exclusive advisory lock on `file` without waiting. Returns `Ok(false)` when another
@@ -354,6 +351,12 @@ impl Termination {
     #[must_use]
     pub const fn closing(self) -> bool {
         self.closing
+    }
+
+    /// Whether the process that started this one exited ([`crate::watch_parent`]).
+    #[must_use]
+    pub fn parent_exited(self) -> bool {
+        self.name == crate::lifetime::PARENT_EXITED_NAME
     }
 }
 

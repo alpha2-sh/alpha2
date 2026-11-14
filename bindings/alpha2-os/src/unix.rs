@@ -503,6 +503,7 @@ fn machine_capacity() -> crate::MemoryCapacity {
         limit_bytes: physical,
         limit_source: "physical",
         used_in_limit_bytes: None,
+        charged_in_limit_bytes: None,
     }
 }
 

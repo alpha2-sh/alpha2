@@ -25,6 +25,8 @@ use crate::{ExtensionError, Format, NoResources, Registry, ResourceResolver, Tim
 mod animations;
 #[cfg(feature = "exr")]
 mod exr_images;
+#[cfg(any(feature = "svg", feature = "exr"))]
+mod hostile;
 #[cfg(any(
     feature = "svg",
     feature = "animated-image",

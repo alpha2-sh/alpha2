@@ -289,3 +289,76 @@ fn a_clamped_style_asks_the_text_host_to_cut_at_its_box() {
         None
     );
 }
+
+const KEYED: &str =
+    r#""font_size": 0.2, "position": { "x": 0.5, "y": 0.5 }, "anchor": { "x": 0.5, "y": 0.5 }"#;
+
+fn keyed_style(extra: &str) -> TextStyle {
+    serde_json::from_str(&format!("{{ {KEYED}{extra} }}")).expect("a text style")
+}
+
+#[test]
+fn animated_keys_differ_for_styles_that_differ_only_in_an_animator() {
+    let size = PictureSize::new(640, 360).expect("size");
+    let content = alpha2_model::TextContent::Plain("Hello".to_owned());
+    let time = alpha2_time::MediaTime::from_ticks(30_000);
+    let animated = |animators: &str| keyed_style(&format!(", \"animators\": {animators}"));
+    let pairs = [
+        (
+            r#"[ { "selector": { "type": "range" }, "properties": { "offset": { "mode": "constant", "value": { "x": 0, "y": 0.1 } } } } ]"#,
+            r#"[ { "selector": { "type": "range" }, "properties": { "offset": { "mode": "constant", "value": { "x": 0, "y": 0.3 } } } } ]"#,
+        ),
+        (
+            r#"[ { "selector": { "type": "range", "shape": "square" }, "properties": { "opacity": { "mode": "constant", "value": 0 } } } ]"#,
+            r#"[ { "selector": { "type": "range", "shape": "ramp_up" }, "properties": { "opacity": { "mode": "constant", "value": 0 } } } ]"#,
+        ),
+        (
+            r##"[ { "selector": { "type": "range" }, "properties": { "fill": { "mode": "constant", "value": "#ff0000" } } } ]"##,
+            r##"[ { "selector": { "type": "range" }, "properties": { "fill": { "mode": "constant", "value": "#00ff00" } } } ]"##,
+        ),
+        (
+            r##"[ { "selector": { "type": "range" }, "properties": { "fill": { "mode": "constant", "value": "#ff0000" } } } ]"##,
+            r##"[ { "selector": { "type": "range" }, "properties": { "fill": { "mode": "constant", "value": "#ff0000" } } },
+                  { "selector": { "type": "range" }, "properties": { "scale": { "mode": "constant", "value": { "x": 2, "y": 2 } } } } ]"##,
+        ),
+    ];
+    for (first, second) in pairs {
+        let (first, second) = (animated(first), animated(second));
+        assert_ne!(
+            animated_text_key(&content, &first, size, time),
+            animated_text_key(&content, &second, size, time),
+            "{:?} and {:?}",
+            first.animators,
+            second.animators
+        );
+        assert_eq!(
+            animated_text_key(&content, &first, size, time),
+            animated_text_key(&content, &first.clone(), size, time)
+        );
+    }
+}
+
+#[test]
+fn the_request_hash_covers_the_background_box_and_the_emoji_policy() {
+    let size = PictureSize::new(640, 360).expect("size");
+    let request = |extra: &str| text_request("Hello", &keyed_style(extra), size, 1);
+    let keys = [
+        request(r##", "background": { "color": "#ff0000", "padding": 0.2 }"##),
+        request(r##", "background": { "color": "#0000ff", "padding": 0.2 }"##),
+        request(r##", "background": { "color": "#ff0000", "padding": 0.6 }"##),
+        request(""),
+    ]
+    .iter()
+    .map(|request| layout_text_key(request, &[], &[]))
+    .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(keys.len(), 4);
+    let plain = request("");
+    let monochrome = TextRasterRequest {
+        emoji_policy: alpha2_media::EmojiPolicy::Monochrome,
+        ..plain.clone()
+    };
+    assert_ne!(
+        layout_text_key(&plain, &[], &[]),
+        layout_text_key(&monochrome, &[], &[])
+    );
+}

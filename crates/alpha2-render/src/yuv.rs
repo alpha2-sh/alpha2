@@ -1513,7 +1513,7 @@ fn color_uniform_bytes(
         _ => 0,
     };
     if color.matrix == ColorMatrix::Rgb {
-        return identity_rgb_uniform_bytes(alpha, transfer);
+        return identity_rgb_uniform_bytes(alpha, transfer, code_scale);
     }
     let (kr, kb) = color
         .matrix
@@ -1566,7 +1566,9 @@ fn range_scale_offset(range: ColorRange, depth: u8, code: f32) -> ([f32; 4], [f3
     )
 }
 
-fn identity_rgb_uniform_bytes(alpha: f32, transfer: u32) -> Vec<u8> {
+/// The identity matrix over RGB codes; `code` is [`PlaneStorage::code_scale`]. The range flag is
+/// ignored: untagged RGB reads as limited, and RGB codes are always full range.
+fn identity_rgb_uniform_bytes(alpha: f32, transfer: u32, code: f32) -> Vec<u8> {
     let rows = [
         [1.0_f32, 0.0, 0.0, 0.0],
         [0.0_f32, 1.0, 0.0, 0.0],
@@ -1576,7 +1578,7 @@ fn identity_rgb_uniform_bytes(alpha: f32, transfer: u32) -> Vec<u8> {
     for value in rows
         .into_iter()
         .flatten()
-        .chain([1.0, 1.0, 1.0, 0.0])
+        .chain([code, code, code, 0.0])
         .chain([0.0; 4])
     {
         bytes.extend_from_slice(&value.to_ne_bytes());
@@ -1714,6 +1716,37 @@ mod tests {
             .into_iter()
             .map(f32::to_bits)
             .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rgb_uniform_scales_ten_bit_codes_to_full_range() {
+        let code_scale = 65535.0 / 1023.0;
+        let bytes = uniform_bytes(
+            ColorMetadata {
+                primaries: ColorPrimaries::Bt2020,
+                transfer: TransferFunction::Bt709,
+                matrix: ColorMatrix::Rgb,
+                range: ColorRange::Full,
+                dynamic_range: DynamicRange::Sdr,
+            },
+            None,
+            1.0,
+            RenderSize::new(2, 2).expect("size"),
+            SourcePresentation::identity(RenderSize::new(2, 2).expect("size")),
+            YuvFormat::planar(0, 0, 10),
+            code_scale,
+            64.0,
+        );
+        let scale = bytes[48..64]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_ne_bytes(*bytes).to_bits())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            scale,
+            [code_scale, code_scale, code_scale, 0.0].map(f32::to_bits)
         );
     }
 

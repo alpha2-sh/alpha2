@@ -7,15 +7,17 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::mem::{offset_of, size_of};
 use std::path::Path;
 
 use alpha2_engine::extract::AudioInput;
 use alpha2_plugin_abi::{ABI_MAJOR, HostV1, NATIVE_ENTRY, PluginV1};
 
-use super::{Call, Collected, PluginError, Transport, codes};
+use super::{Call, Collected, OutputCap, PluginError, Transport, codes};
 
 struct State {
     collected: Collected,
+    caps: Vec<OutputCap>,
     resources: HashMap<String, Vec<u8>>,
 }
 
@@ -51,7 +53,10 @@ unsafe fn state<'a>(context: *mut c_void) -> &'a RefCell<State> {
 unsafe extern "C" fn emit(context: *mut c_void, records: *const u8, len: usize) -> i32 {
     // SAFETY: the ABI's rules for the context and the records, borrowed for the call.
     let (state, batch) = unsafe { (state(context), borrowed(records, len)) };
-    state.borrow_mut().collected.emit(batch)
+    let State {
+        collected, caps, ..
+    } = &mut *state.borrow_mut();
+    collected.emit(batch, caps)
 }
 
 unsafe extern "C" fn resource(
@@ -89,39 +94,84 @@ unsafe extern "C" fn log(_context: *mut c_void, _level: u32, message: *const u8,
     super::log_line(&String::from_utf8_lossy(message));
 }
 
+// Both tables are a few pointers long.
+#[allow(clippy::cast_possible_truncation)]
+const HOST_BYTES: u32 = size_of::<HostV1>() as u32;
+#[allow(clippy::cast_possible_truncation)]
+const PLUGIN_BYTES: u32 = size_of::<PluginV1>() as u32;
+
+/// Entries in `PluginV1`, the pointers after `abi` and `size`.
+const ENTRIES: usize =
+    (size_of::<PluginV1>() - offset_of!(PluginV1, describe)) / size_of::<*const c_void>();
+
+/// A copy of the plugin's table, after its `abi` and `size` are read and every entry is checked.
+///
+/// # Safety
+/// A non-null `table` is valid for reads of the `size` bytes it states, at least its header.
+pub(super) unsafe fn checked(table: *const PluginV1) -> Result<PluginV1, PluginError> {
+    let failed = |why: String| PluginError::new(codes::LOAD_FAILED, why);
+    if table.is_null() {
+        return Err(failed("alpha2_plugin_v1 returned null".to_owned()));
+    }
+    // SAFETY: every `/1` table starts with `abi` and `size`.
+    let (abi, size) = unsafe {
+        (
+            (&raw const (*table).abi).read(),
+            (&raw const (*table).size).read(),
+        )
+    };
+    if abi != ABI_MAJOR {
+        return Err(PluginError::new(
+            codes::ABI_UNSUPPORTED,
+            format!("the library implements alpha2-plugin/{abi}"),
+        ));
+    }
+    if size < PLUGIN_BYTES {
+        return Err(failed(format!(
+            "the plugin table is {size} bytes; alpha2-plugin/1 needs {PLUGIN_BYTES}"
+        )));
+    }
+    // SAFETY: the table holds at least this build's `PluginV1`, whose entries are pointers from
+    // `describe` on.
+    let entries = unsafe {
+        std::slice::from_raw_parts(
+            (&raw const (*table).describe).cast::<*const c_void>(),
+            ENTRIES,
+        )
+    };
+    if entries.iter().any(|entry| entry.is_null()) {
+        return Err(failed("the plugin table has a null entry".to_owned()));
+    }
+    // SAFETY: the bytes are a `PluginV1` with every entry set.
+    Ok(unsafe { table.read() })
+}
+
 impl NativeTransport {
     pub(super) fn new(
         path: &Path,
         resources: HashMap<String, Vec<u8>>,
+        caps: Vec<OutputCap>,
     ) -> Result<Self, PluginError> {
         let failed = |why: String| PluginError::new(codes::LOAD_FAILED, why);
         // SAFETY: loading runs the library's initializers with the process's rights, which the
         // caller allowed for this plugin.
         let library = unsafe { libloading::Library::new(path) }
             .map_err(|error| failed(format!("{}: {error}", path.display())))?;
-        // SAFETY: the ABI types the entry as `extern "C" fn() -> *const PluginV1`.
-        let table = unsafe {
-            let entry = library
-                .get::<unsafe extern "C" fn() -> *const PluginV1>(NATIVE_ENTRY)
-                .map_err(|error| {
-                    failed(format!("the library exports no alpha2_plugin_v1: {error}"))
-                })?;
-            entry()
-        };
-        if table.is_null() {
-            return Err(failed("alpha2_plugin_v1 returned null".to_owned()));
+        // SAFETY: the ABI types the entry as `extern "C" fn() -> *const PluginV1`; a null symbol
+        // reads as `None`.
+        let entry = unsafe {
+            library.get::<Option<unsafe extern "C" fn() -> *const PluginV1>>(NATIVE_ENTRY)
         }
+        .map_err(|error| failed(format!("the library exports no alpha2_plugin_v1: {error}")))?;
+        let entry = (*entry).ok_or_else(|| failed("alpha2_plugin_v1 is null".to_owned()))?;
+        // SAFETY: the entry takes nothing and returns a static table or null.
+        let table = unsafe { entry() };
         // SAFETY: a non-null table is static while the library is loaded.
-        let table = unsafe { *table };
-        if table.abi != ABI_MAJOR {
-            return Err(PluginError::new(
-                codes::ABI_UNSUPPORTED,
-                format!("the library implements alpha2-plugin/{}", table.abi),
-            ));
-        }
+        let table = unsafe { checked(table) }?;
         let mut host = Box::new((
             HostV1 {
                 abi: ABI_MAJOR,
+                size: HOST_BYTES,
                 context: std::ptr::null_mut(),
                 emit,
                 resource,
@@ -130,6 +180,7 @@ impl NativeTransport {
             },
             RefCell::new(State {
                 collected: Collected::default(),
+                caps,
                 resources,
             }),
         ));

@@ -57,6 +57,10 @@ impl AudioFrameGrid {
     }
 }
 
+/// Most whole-sample periods [`audio_frame_grid`] tries: enough for a rounding unit of about 4,000
+/// samples, far past any real stream's.
+const MAX_GRID_CANDIDATES: i128 = 4_096;
+
 /// The frame grid shown by an audio stream's first packet timestamps (any order, in `num / den`
 /// second units) at `sample_rate`, or `None`.
 ///
@@ -66,7 +70,8 @@ impl AudioFrameGrid {
 ///
 /// Returns `None` when half a unit is under a sample (timestamps are already exact), when fewer
 /// than three distinct timestamps are given or none fits (variable frame sizes, a missing packet),
-/// when no period exceeds twice the trimmed tolerance, or when an argument is not positive.
+/// when no period exceeds twice the trimmed tolerance, when an argument is not positive, when the
+/// timestamps allow 4,096 periods or more, or when the arithmetic overflows.
 #[must_use]
 pub fn audio_frame_grid(
     timestamps: &[i64],
@@ -89,29 +94,39 @@ pub fn audio_frame_grid(
     // Samples per time-base unit, times `den`.
     let unit = i128::from(num) * i128::from(sample_rate);
     // Rounding unit in samples, times `den`.
-    let rounding = unit * i128::from(rounding_quantum(&sorted).max(1));
+    let rounding = unit.checked_mul(i128::from(rounding_quantum(&sorted).max(1)))?;
     if rounding < 2 * den {
         return None;
     }
     // Twice the trimmed tolerance must stay under the period for a timestamp to name one frame.
-    let trimmed_tolerance = (rounding + den).div_euclid(den);
+    let trimmed_tolerance = rounding.checked_add(den)?.div_euclid(den);
     // The span is off by up to a unit at either end, which bounds the candidate periods.
-    let span = (i128::from(last) - i128::from(first)) * unit;
-    let frames = count - 1;
-    let shortest = (span - rounding)
-        .div_euclid(den * frames)
-        .max(2 * trimmed_tolerance + 1);
-    let longest = (span + rounding).div_euclid(den * frames) + 1;
+    let span = (i128::from(last) - i128::from(first)).checked_mul(unit)?;
+    let step = den.checked_mul(count - 1)?;
+    let shortest = span
+        .checked_sub(rounding)?
+        .div_euclid(step)
+        .max(trimmed_tolerance.checked_mul(2)?.checked_add(1)?);
+    let longest = span
+        .checked_add(rounding)?
+        .div_euclid(step)
+        .checked_add(1)?;
+    if longest.checked_sub(shortest)? >= MAX_GRID_CANDIDATES {
+        return None;
+    }
     let mut best: Option<(i128, i128, i128)> = None;
     for period in shortest..=longest {
-        if let Some((low, high)) = fit(&sorted, unit, rounding, den, period)
+        if let Fit::Window(low, high) = fit(&sorted, unit, rounding, den, period)?
             && best.is_none_or(|(_, best_low, best_high)| high - low > best_high - best_low)
         {
             best = Some((period, low, high));
         }
     }
     let (period, low, high) = best?;
-    let anchor = (low + high + 2 * den).div_euclid(4 * den);
+    let anchor = low
+        .checked_add(high)?
+        .checked_add(2 * den)?
+        .div_euclid(4 * den);
     Some(AudioFrameGrid {
         anchor: i64::try_from(anchor).ok()?,
         period: i64::try_from(period).ok()?,
@@ -120,23 +135,29 @@ pub fn audio_frame_grid(
     })
 }
 
-/// Feasible first-frame starts (samples times `2 * den`) for a `period` grid within `rounding`
-/// of every timestamp, or `None`.
-fn fit(
-    sorted: &[i64],
-    unit: i128,
-    rounding: i128,
-    den: i128,
-    period: i128,
-) -> Option<(i128, i128)> {
+/// Feasible first-frame starts of a period, in samples times `2 * den`.
+enum Fit {
+    Empty,
+    Window(i128, i128),
+}
+
+/// The starts for a `period` grid within `rounding` of every timestamp, or `None` when the
+/// arithmetic overflows.
+fn fit(sorted: &[i64], unit: i128, rounding: i128, den: i128, period: i128) -> Option<Fit> {
     let (mut low, mut high) = (i128::MIN, i128::MAX);
     for (index, &timestamp) in sorted.iter().enumerate() {
         let index = i128::try_from(index).ok()?;
-        let center = 2 * i128::from(timestamp) * unit - 2 * index * period * den;
-        low = low.max(center - rounding);
-        high = high.min(center + rounding);
+        let center = (2 * i128::from(timestamp))
+            .checked_mul(unit)?
+            .checked_sub((2 * index).checked_mul(period)?.checked_mul(den)?)?;
+        low = low.max(center.checked_sub(rounding)?);
+        high = high.min(center.checked_add(rounding)?);
     }
-    (low <= high).then_some((low, high))
+    Some(if low <= high {
+        Fit::Window(low, high)
+    } else {
+        Fit::Empty
+    })
 }
 
 #[cfg(test)]
@@ -226,5 +247,26 @@ mod tests {
             .collect();
         let grid = audio_frame_grid(&copied, 1, 48_000, 48_000).expect("a grid");
         assert_eq!((grid.anchor, grid.period), (-1_024, 1_024));
+    }
+
+    #[test]
+    fn timestamps_that_allow_too_many_periods_have_no_grid() {
+        for q in [1_000_000_i64, 1_000_000_000, 1_000_000_000_000] {
+            assert_eq!(
+                audio_frame_grid(&[0, 3 * q, 7 * q], 1, 1_000, 48_000),
+                None,
+                "{q}"
+            );
+        }
+        let regular = (0..64).map(|k| 3 * k).collect::<Vec<_>>();
+        assert_eq!(audio_frame_grid(&regular, 10_000_000, 1, 48_000), None);
+    }
+
+    #[test]
+    fn arithmetic_that_overflows_has_no_grid() {
+        assert_eq!(
+            audio_frame_grid(&[i64::MIN, 0, i64::MAX], i64::MAX, 1, u32::MAX),
+            None
+        );
     }
 }

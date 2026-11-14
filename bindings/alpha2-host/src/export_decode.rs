@@ -244,16 +244,19 @@ impl Host {
 
     pub(crate) fn export_gpu_frames(&self, size: RenderSize, project: &Project) -> NativeGpuFrames {
         #[cfg(all(target_os = "linux", feature = "hwdecode"))]
-        let mut gpu_frames = NativeGpuFrames::with_vulkan(size, self.decode_vulkan());
+        let mut gpu_frames =
+            NativeGpuFrames::with_vulkan(size, self.cache_scope, self.decode_vulkan());
         #[cfg(all(target_os = "macos", feature = "hwdecode"))]
-        let mut gpu_frames = NativeGpuFrames::with_metal(size, self.decode_metal());
+        let mut gpu_frames =
+            NativeGpuFrames::with_metal(size, self.cache_scope, self.decode_metal());
         #[cfg(all(target_os = "windows", feature = "hwdecode"))]
-        let mut gpu_frames = NativeGpuFrames::with_d3d12(size, self.decode_d3d12());
+        let mut gpu_frames =
+            NativeGpuFrames::with_d3d12(size, self.cache_scope, self.decode_d3d12());
         #[cfg(not(all(
             any(target_os = "linux", target_os = "macos", target_os = "windows"),
             feature = "hwdecode"
         )))]
-        let mut gpu_frames = NativeGpuFrames::new(size);
+        let mut gpu_frames = NativeGpuFrames::new(size, self.cache_scope);
         gpu_frames.import_fallback = !self.decode_policy.requires_hardware();
         gpu_frames.color = alpha2_engine::color_policy(&project.settings.color);
         #[cfg(test)]

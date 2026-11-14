@@ -542,6 +542,8 @@ enum Eval {
 #[derive(Clone, Default)]
 struct Scope {
     values: Map<String, Value>,
+    /// Set inside a template body, the only place directives and `{{name}}` are evaluated.
+    template: bool,
 }
 
 impl Scope {
@@ -582,19 +584,22 @@ impl Binder<'_> {
                 }
                 Ok(Eval::Value(Value::Array(out)))
             }
-            Value::String(text) if !key.is_some_and(|key| NAME_KEYS.contains(&key)) => {
+            Value::String(text)
+                if scope.template && !key.is_some_and(|key| NAME_KEYS.contains(&key)) =>
+            {
                 Ok(Eval::Value(Value::String(interpolate(text, scope, path)?)))
             }
             other => Ok(Eval::Value(other.clone())),
         }
     }
 
-    fn eval_object(
+    /// A `$param`, `$if`, `$switch` or `$each` object evaluated, or `None` for any other object.
+    fn directive(
         &mut self,
         object: &Map<String, Value>,
         scope: &Scope,
         path: &str,
-    ) -> Result<Eval, ComposeError> {
+    ) -> Result<Option<Eval>, ComposeError> {
         if let Some(name) = object.get("$param") {
             let name = name
                 .as_str()
@@ -602,9 +607,11 @@ impl Binder<'_> {
             if object.len() != 1 {
                 return Err(error(path, "a `$param` object has no other fields"));
             }
-            return Ok(scope
-                .lookup(name)
-                .map_or(Eval::Absent, |value| Eval::Value(value.clone())));
+            return Ok(Some(
+                scope
+                    .lookup(name)
+                    .map_or(Eval::Absent, |value| Eval::Value(value.clone())),
+            ));
         }
         if let Some(name) = object.get("$if") {
             let name = name
@@ -616,8 +623,10 @@ impl Binder<'_> {
                 "else"
             };
             return match object.get(branch) {
-                Some(node) => self.eval(node, scope, None, &format!("{path}.{branch}")),
-                None => Ok(Eval::Absent),
+                Some(node) => self
+                    .eval(node, scope, None, &format!("{path}.{branch}"))
+                    .map(Some),
+                None => Ok(Some(Eval::Absent)),
             };
         }
         if let Some(name) = object.get("$switch") {
@@ -638,8 +647,8 @@ impl Binder<'_> {
                         .map(|node| (node, format!("{path}.default")))
                 });
             return match picked {
-                Some((node, at)) => self.eval(node, scope, None, &at),
-                None => Ok(Eval::Absent),
+                Some((node, at)) => self.eval(node, scope, None, &at).map(Some),
+                None => Ok(Some(Eval::Absent)),
             };
         }
         if let Some(name) = object.get("$each") {
@@ -672,7 +681,21 @@ impl Binder<'_> {
                     Eval::Splice(values) => out.extend(values),
                 }
             }
-            return Ok(Eval::Splice(out));
+            return Ok(Some(Eval::Splice(out)));
+        }
+        Ok(None)
+    }
+
+    fn eval_object(
+        &mut self,
+        object: &Map<String, Value>,
+        scope: &Scope,
+        path: &str,
+    ) -> Result<Eval, ComposeError> {
+        if scope.template
+            && let Some(eval) = self.directive(object, scope, path)?
+        {
+            return Ok(eval);
         }
         if let Some(kind) = object.get("type").and_then(Value::as_str) {
             if kind.contains('/') {
@@ -815,7 +838,10 @@ impl Binder<'_> {
     ) -> Result<Value, ComposeError> {
         let params = params(template.get("params"), &format!("{path}.params"))?;
         let values = resolve(&params, data, data_path)?;
-        let scope = Scope { values };
+        let scope = Scope {
+            values,
+            template: true,
+        };
         match header.kind {
             Kind::Node => {
                 let node = template
@@ -915,7 +941,8 @@ fn index(templates: &[Value]) -> Result<BTreeMap<String, &Value>, ComposeError> 
 
 /// Binds `document` to `data`: a template's parameters replaced and its template nodes
 /// expanded, giving a plain spec (or, for a node template, a plain node). A document without a
-/// header has only its template nodes expanded.
+/// header has only its template nodes expanded; directives and `{{name}}` exist only in template
+/// bodies. Without a header, template nodes or a theme, `bind` returns `document` unchanged.
 ///
 /// # Errors
 /// Returns where in the template or data, and why, it does not bind.

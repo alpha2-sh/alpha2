@@ -87,14 +87,20 @@ function addColor(editor) {
 }
 
 /**
- * A bridge on the recording renderer. Its adapter stages any object with a fingerprint as video,
- * its proxy store counts lookups, finds `kept` proxies by original hash and holds each conversion
- * until the test finishes it, and each engine conform is counted.
+ * A bridge on the recording renderer. Its adapter stages any object with a fingerprint as video
+ * (a kept proxy through `stageProxy` when given), its proxy store counts lookups and holds, finds
+ * `kept` proxies by original hash and holds each conversion until the test finishes it, and each
+ * engine conform is counted.
  */
-async function session({ document, kept = {} } = {}) {
+async function session({
+  document,
+  kept = {},
+  stageProxy,
+  resourceLimit,
+} = {}) {
   const reported = [];
   const engine = await engineWasm();
-  const counts = { conform: 0, find: 0 };
+  const counts = { conform: 0, find: 0, proxyStages: 0, holds: 0, released: 0 };
   const assetDecisions = {
     ...engine,
     conformProject: (...args) => {
@@ -110,9 +116,14 @@ async function session({ document, kept = {} } = {}) {
     editor,
     audio: false,
     assetDecisions,
+    resourceLimit,
     onError: (error) => reported.push(error),
     mediaAdapter: {
-      async stage(file) {
+      async stage(file, signal, options) {
+        if (options?.fingerprint === false) {
+          counts.proxyStages += 1;
+          if (stageProxy) return stageProxy(file);
+        }
         return {
           runtime: {
             id: file.name,
@@ -129,7 +140,12 @@ async function session({ document, kept = {} } = {}) {
     },
     proxyStore: {
       async hold() {
-        return { release: async () => {} };
+        counts.holds += 1;
+        return {
+          release: async () => {
+            counts.released += 1;
+          },
+        };
       },
       async find(hash) {
         counts.find += 1;
@@ -188,6 +204,15 @@ async function importClip(bridge, name, digit) {
     { name, fingerprint: { content_sha256: hash(digit), byte_length: 10 } },
   ]);
 }
+
+const keptProxy = (sha) => ({
+  record: {
+    made_from: { content_sha256: sha, byte_length: 10 },
+    width: 32,
+    height: 18,
+  },
+  file: { name: `${sha.slice(-4)}.proxy`, fingerprint: {} },
+});
 
 const until = async (condition, what) => {
   for (let i = 0; i < 200 && !condition(); i += 1) await settle(2);
@@ -354,6 +379,123 @@ test(
     assert.equal(bridge.proxyStatus("clip").reading, "original");
     assert.throws(() => bridge.setPreviewMedia("half"));
     assert.deepEqual(reported, []);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "a kept proxy that cannot be staged is reported once, and preview, conform and native assets go on",
+  { skip },
+  async () => {
+    const { editor, bridge, reported, counts } = await session({
+      kept: { [hash("e")]: keptProxy(hash("e")) },
+      stageProxy: async () => {
+        throw new Error("this session cannot read the proxy file");
+      },
+    });
+    addColor(editor);
+    await importClip(bridge, "clip", "e");
+    ok(
+      editor.dispatch({
+        type: "asset.put",
+        asset: { ...editor.document.assets.clip, missing: true },
+      }),
+    );
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(await bridge.seek(0), true);
+    assert.equal(await bridge.seek(4000), true);
+    assert.ok(await bridge.conform("preview"));
+    await bridge.nativeAssets();
+    ok(editor.dispatch({ type: "project.update", patch: { name: "edited" } }));
+    assert.equal(await bridge.seek(0), true);
+    assert.deepEqual(
+      reported.map((e) => [e.code, e.entityId, e.recoverable]),
+      [["proxy_unavailable", "clip", true]],
+    );
+    assert.match(reported[0].cause.message, /cannot read the proxy file/);
+    assert.equal(counts.proxyStages, 1, "not staged again on later loads");
+    assert.equal(counts.released, counts.holds);
+    assert.equal(bridge.proxyStatus("clip").available, false);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "a kept proxy the runtime has no room for is reported, and preview draws the rest",
+  { skip },
+  async () => {
+    const { editor, bridge, reported } = await session({
+      kept: { [hash("e")]: keptProxy(hash("e")) },
+      resourceLimit: 1,
+    });
+    await importClip(bridge, "shown", "a");
+    place(editor, "shown");
+    ok(
+      editor.dispatch({
+        type: "asset.put",
+        asset: {
+          id: "clip",
+          kind: "video",
+          name: "clip.mp4",
+          contentRevision: 0,
+          missing: true,
+          fingerprint: { content_sha256: hash("e"), byte_length: 10 },
+        },
+        source: {
+          id: "clip",
+          kind: "video",
+          locator: "browser://clip",
+          fingerprint: { content_sha256: hash("e"), byte_length: 10 },
+        },
+      }),
+    );
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(await bridge.seek(0), true);
+    assert.ok(await bridge.conform("preview"));
+    assert.deepEqual(
+      reported.map((e) => [e.code, e.entityId, e.cause?.code]),
+      [["proxy_unavailable", "clip", "resource_budget"]],
+    );
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "proxy preview of more sources than the runtime holds reads the originals of the rest",
+  { skip },
+  async () => {
+    const sha = (n) => n.toString(16).padStart(64, "0");
+    const count = 70;
+    const kept = {};
+    for (let n = 1; n <= count; n += 1) kept[sha(n)] = keptProxy(sha(n));
+    const { editor, bridge, reported, counts } = await session({ kept });
+    await bridge.importFiles(
+      Array.from({ length: count }, (_, i) => ({
+        name: `f${i + 1}`,
+        fingerprint: { content_sha256: sha(i + 1), byte_length: 10 },
+      })),
+    );
+    place(editor, "f1");
+    place(editor, `f${count}`);
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(await bridge.seek(0), true);
+    bridge.setPreviewMedia("proxies");
+    assert.equal(await bridge.seek(0), true);
+    assert.equal(bridge.proxyStatus("f1").reading, "proxy");
+    assert.equal(bridge.proxyStatus(`f${count}`).reading, "original");
+    const refused = reported.map((e) => e.entityId);
+    assert.ok(refused.length > 0);
+    assert.ok(reported.every((e) => e.code === "proxy_unavailable"));
+    assert.equal(new Set(refused).size, refused.length, "once per proxy");
+    assert.ok(refused.includes(`f${count}`));
+    const staged = counts.proxyStages;
+    ok(editor.dispatch({ type: "project.update", patch: { name: "edited" } }));
+    assert.equal(await bridge.seek(4000), true);
+    assert.equal(counts.proxyStages, staged);
+    assert.equal(reported.length, refused.length);
     await bridge.dispose();
     editor.dispose();
   },

@@ -3,7 +3,7 @@
 //! The NDK objects are not thread-safe; a session owns its codec and uses it from one thread at a
 //! time, which the host-core backend traits guarantee (`&mut self` methods on a `Send` value).
 
-// The crate's only FFI boundary.
+// The NDK media codec's FFI boundary.
 #![allow(unsafe_code)]
 
 use std::ffi::{CStr, CString, c_char, c_void};

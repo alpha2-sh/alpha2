@@ -1029,6 +1029,12 @@ fn validate_wgsl_body(body: &str) -> Result<(), ShaderDiagnostics> {
     }
     // Only code is checked; comments may contain anything.
     let code = blank_comments(body);
+    // The cost analysis reads ASCII identifiers and blankspace only.
+    if !code.is_ascii() {
+        return Err(ShaderDiagnostics::error(
+            "a runtime effect's code is ASCII; comments may hold any text",
+        ));
+    }
     if let Some(identifier) = identifiers(&code).find(|word| word.starts_with(RESERVED_PREFIX)) {
         return Err(ShaderDiagnostics::error(format!(
             "WGSL identifier {identifier} is reserved: names starting with {RESERVED_PREFIX} belong to the generated wrapper"

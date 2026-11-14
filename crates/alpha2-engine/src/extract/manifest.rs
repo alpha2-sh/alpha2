@@ -57,7 +57,7 @@ pub struct PluginArtifact {
     /// What kind of code it is.
     #[serde(rename = "type")]
     pub kind: ArtifactKind,
-    /// Where it is, relative to the manifest's own URL or absolute.
+    /// Where it is: a path under the manifest's own directory, or an absolute `https:` URL.
     pub url: String,
     /// SHA-256 of its bytes, 64 lowercase hexadecimal digits.
     #[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9a-f]{64}$")))]
@@ -86,7 +86,7 @@ pub enum ArtifactKind {
 pub struct PluginResource {
     /// The name the plugin asks for.
     pub name: String,
-    /// Where it is, relative to the manifest's own URL or absolute.
+    /// Where it is: a path under the manifest's own directory, or an absolute `https:` URL.
     pub url: String,
     /// SHA-256 of its bytes, 64 lowercase hexadecimal digits.
     #[cfg_attr(feature = "schema", schemars(regex(pattern = r"^[0-9a-f]{64}$")))]
@@ -207,10 +207,67 @@ impl PluginManifest {
 /// The target of a wasm artifact.
 pub const WASM_TARGET: &str = "wasm32";
 
-fn check_file(url: &str, sha256: &str) -> Result<(), String> {
+/// What a manifest's `url` names.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Reference<'a> {
+    /// A path under the manifest's own directory, `/`-separated.
+    Relative(&'a str),
+    /// An absolute `https:` URL.
+    Https(&'a str),
+}
+
+/// The scheme of `url`, when it starts with one (RFC 3986).
+fn scheme(url: &str) -> Option<&str> {
+    let (scheme, _) = url.split_once(':')?;
+    let valid = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    valid.then_some(scheme)
+}
+
+/// Reads a manifest's `url` as a path under the manifest's directory or an `https:` URL.
+///
+/// # Errors
+/// For any other scheme, an absolute or drive-prefixed path, a backslash or NUL, and a path whose
+/// `..` segments climb above the manifest's directory.
+pub fn reference(url: &str) -> Result<Reference<'_>, String> {
+    let refused = |why: &str| Err(format!("{url}: {why}"));
     if url.is_empty() {
         return Err("a URL is empty".to_owned());
     }
+    match scheme(url) {
+        Some("https") => return Ok(Reference::Https(url)),
+        Some(scheme) if scheme.len() == 1 => {
+            return refused("a drive-prefixed path is not under the manifest");
+        }
+        Some(_) => return refused("only https: URLs and paths under the manifest are allowed"),
+        None => {}
+    }
+    if url.contains(['\\', '\0']) {
+        return refused("a path takes neither backslashes nor NUL");
+    }
+    if url.starts_with('/') {
+        return refused("an absolute path is not under the manifest");
+    }
+    let path = url.split(['?', '#']).next().unwrap_or_default();
+    let mut depth = 0_usize;
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| format!("{url}: the path climbs above the manifest"))?;
+            }
+            _ => depth += 1,
+        }
+    }
+    Ok(Reference::Relative(url))
+}
+
+fn check_file(url: &str, sha256: &str) -> Result<(), String> {
+    reference(url)?;
     if sha256.len() != 64
         || !sha256
             .bytes()

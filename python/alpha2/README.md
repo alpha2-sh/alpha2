@@ -38,6 +38,9 @@ print(result["output"], result["videoPipeline"], result["frames"])
   takes only requests that would start a host with its environment, decode and renderer modes
   included, so changing `os.environ` starts new hosts. `client.close()`, or a `with` block, ends
   them; an idle host never keeps Python from exiting.
+- A forked child (`os.fork`, or `multiprocessing` with the `fork` start method) does not use the
+  hosts it inherits: it starts its own on its first request, and the parent keeps its hosts.
+  Capability reports the parent already had stay cached in the child.
 - An existing `output` is refused unless you pass `overwrite=True`, which replaces it only once
   the export is whole. An output that is one of the export's inputs is always refused.
 - Setting a `cancel` event (`threading.Event`) or pressing Ctrl-C cancels the request: the client
@@ -250,7 +253,10 @@ edited = alpha2.edit.apply(
 )
 ```
 
-Every kept moment renders as before, and `project_json` is the same bytes on every surface.
+Kept moments render as before for clip picture and sound, clip keyframes, captions, hold data
+and linear automation; a matte or a binding read through another clip follows the part beside it
+or the edit is refused (`matte_source`, `read_through`). The host protocol lists what is not exact
+in this release. `project_json` is the same bytes on every surface.
 A refusal raises `alpha2.Alpha2EditError`, whose `refusal` names why (`unknown_data`,
 `empty_target`, ...). [The host protocol](../../docs/host-protocol.md#edit) lists the fields.
 
@@ -347,7 +353,9 @@ claude mcp add alpha2 -- python -m alpha2 mcp --font Inter.ttf --templates ./tem
 
 `--font` gives the fonts text is drawn with (text needs one), `--templates` a directory of template
 JSON files beside the built-in ones, and `--host` the `alpha2-host` binary. Relative paths in specs
-are read from the server's working directory.
+are read from the server's working directory. `render_frame` (given an `output`) and `render_video`
+write files, replacing one only with `overwrite`, and are marked destructive; the other tools only
+read. A call that fails, however malformed, is answered with an error and the server keeps serving.
 
 ## Finding `alpha2-host`
 

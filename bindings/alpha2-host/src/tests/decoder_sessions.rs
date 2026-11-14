@@ -141,6 +141,7 @@ fn an_export_larger_than_available_memory_is_refused_before_output() {
         limit_bytes: Some(64 << 30),
         limit_source: "physical",
         used_in_limit_bytes: None,
+        charged_in_limit_bytes: None,
     };
     crate::memory::injected::CAPACITY.with(|capacity| capacity.set(Some(tight)));
     let refused = host.handle(grid_export(&output, None), &mut |_| Ok(()));

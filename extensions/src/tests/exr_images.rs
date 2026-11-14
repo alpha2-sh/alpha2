@@ -619,3 +619,122 @@ fn exr_chromaticities_that_define_no_color_space_are_left_out_and_reported() {
         );
     }
 }
+
+#[cfg(feature = "exr")]
+fn exr_outcomes(file: &[u8]) -> (String, String) {
+    let file: Arc<[u8]> = file.into();
+    let probed = match Registry::with_defaults().probe(&file) {
+        Some(Ok(_)) => "ok".to_owned(),
+        Some(Err(error)) => error.to_string(),
+        None => "not claimed".to_owned(),
+    };
+    let opened = Registry::with_defaults()
+        .open(
+            &ProviderSource::Exr { primaries: None },
+            Some(file),
+            Arc::new(NoResources),
+        )
+        .map_or_else(|error| error.to_string(), |_| "ok".to_owned());
+    (probed, opened)
+}
+
+#[cfg(feature = "exr")]
+fn exr_block_refused(file: &[u8], what: &str) {
+    let (probed, opened) = exr_outcomes(file);
+    for outcome in [probed, opened] {
+        assert!(
+            outcome.starts_with("too large: a part decodes blocks of")
+                && outcome.ends_with("more than 268435456"),
+            "{what}: {outcome}"
+        );
+    }
+}
+
+#[cfg(feature = "exr")]
+#[test]
+fn an_exr_part_whose_blocks_hold_too_many_channels_is_refused_before_a_chunk_is_read() {
+    use super::hostile::{ExrChunks, ExrPart, exr_file};
+    let tile = |width, height, extra, chunks| ExrPart {
+        width,
+        height,
+        extra,
+        tiled: true,
+        chunks,
+    };
+    exr_block_refused(
+        &exr_file(&[tile(3840, 2160, 400, ExrChunks::Empty)]),
+        "400 channels",
+    );
+    exr_block_refused(
+        &exr_file(&[tile(3840, 2160, 60_000, ExrChunks::Empty)]),
+        "60000 channels",
+    );
+    exr_block_refused(
+        &exr_file(&[tile(3840, 2160, 400, ExrChunks::Claim(2_000_000_000))]),
+        "a chunk that claims 2 GB",
+    );
+    exr_block_refused(
+        &exr_file(&[tile(1920, 1080, 40, ExrChunks::Zeros)]),
+        "a valid tile of 40 extra channels",
+    );
+    // The bound holds for parts that are not shown, whose chunks are never read.
+    exr_block_refused(
+        &exr_file(&[
+            ExrPart {
+                tiled: false,
+                ..tile(8, 8, 0, ExrChunks::Zeros)
+            },
+            tile(3840, 2160, 400, ExrChunks::Empty),
+        ]),
+        "a second part",
+    );
+}
+
+#[cfg(feature = "exr")]
+#[test]
+fn an_exr_scan_line_block_is_sized_by_its_lines_per_block() {
+    use super::hostile::{ExrChunks, ExrPart, exr_file};
+    // ZIP blocks are 16 lines: 3840 x 16 x (6 + 4 x 1000) bytes is just under 256 MiB.
+    let lines = |extra| {
+        exr_file(&[ExrPart {
+            width: 3840,
+            height: 32,
+            extra,
+            tiled: false,
+            chunks: ExrChunks::Empty,
+        }])
+    };
+    let (probed, opened) = exr_outcomes(&lines(1000));
+    assert!(!probed.starts_with("too large") && !opened.starts_with("too large"));
+    exr_block_refused(&lines(1100), "1100 channels in scan lines");
+}
+
+#[cfg(feature = "exr")]
+#[test]
+fn exr_scan_lines_with_many_extra_channels_open_with_the_same_pixels() {
+    use exr::prelude::{AnyChannels, Compression, FlatSamples, Image, Layer};
+    let ramp = |offset: f32| {
+        (0..64)
+            .map(|at| (at as f32).mul_add(0.125, offset))
+            .collect::<Vec<_>>()
+    };
+    let color = [("R", ramp(-1.0)), ("G", ramp(0.0)), ("B", ramp(2.0))];
+    let mut wide = color.to_vec();
+    let names = (0..40).map(|at| format!("c{at:02}")).collect::<Vec<_>>();
+    wide.extend(names.iter().map(|name| (name.as_str(), ramp(5.0))));
+    let zip = |image: &mut Image<Layer<AnyChannels<FlatSamples>>>| {
+        image.layer_data.encoding.compression = Compression::ZIP16;
+    };
+    let reference = exr_frame(written_exr(8, &color, true, zip), None);
+    let file = written_exr(8, &wide, true, zip);
+    assert!(
+        exr_source(Arc::clone(&file), None)
+            .diagnostics
+            .iter()
+            .any(|diagnostic| matches!(
+                diagnostic,
+                Diagnostic::UnsupportedFeature { count: 40, .. }
+            ))
+    );
+    assert_eq!(exr_frame(file, None), reference);
+}

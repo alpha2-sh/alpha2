@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import {
+  mkdir,
   mkdtemp,
   readFile,
   realpath,
@@ -542,6 +543,34 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
       /two stills write/,
     );
   } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test("a relative output is written in the directory the call was made from", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-still-cwd-"));
+  const started = process.cwd();
+  const cpu = new Alpha2NodeClient({ hostPath, renderer: "cpu" });
+  try {
+    const written = [];
+    for (const name of ["first", "second"]) {
+      await mkdir(join(scratch, name));
+      process.chdir(join(scratch, name));
+      const result = await cpu.still({
+        project: SOLID_PROJECT,
+        assets: {},
+        time: 0,
+        output: "frame.png",
+      });
+      written.push(result.stills[0].output);
+    }
+    assert.deepEqual(written, [
+      await realpath(join(scratch, "first", "frame.png")),
+      await realpath(join(scratch, "second", "frame.png")),
+    ]);
+  } finally {
+    process.chdir(started);
+    await cpu.close();
     await rm(scratch, { recursive: true, force: true });
   }
 });

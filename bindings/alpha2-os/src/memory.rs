@@ -17,8 +17,11 @@ pub struct MemoryCapacity {
     /// What set `limit_bytes`: `cgroup-v2`, `cgroup-v1`, `job`, `app` (the per-app limit on
     /// iOS) or `physical`.
     pub limit_source: &'static str,
-    /// Usage charged against a cgroup limit; `None` for physical and job limits.
+    /// The working set under a cgroup limit ([`CgroupMemory::working_set_bytes`]); `None` for
+    /// physical and job limits.
     pub used_in_limit_bytes: Option<u64>,
+    /// What the kernel charges against a cgroup limit, file page cache included.
+    pub charged_in_limit_bytes: Option<u64>,
 }
 
 impl MemoryCapacity {
@@ -85,15 +88,15 @@ pub fn memory_capacity_at(root: &Path) -> MemoryCapacity {
     };
     let physical = kib("MemTotal:");
     let available = kib("MemAvailable:");
-    let cgroup = cgroup_limit(root);
-    match cgroup {
-        Some((limit, used, source)) if physical.is_none_or(|physical| limit < physical) => {
+    match cgroup_memory_at(root) {
+        Some(cgroup) if physical.is_none_or(|physical| cgroup.limit_bytes < physical) => {
             MemoryCapacity {
                 physical_bytes: physical,
                 available_bytes: available,
-                limit_bytes: Some(limit),
-                limit_source: source,
-                used_in_limit_bytes: used,
+                limit_bytes: Some(cgroup.limit_bytes),
+                limit_source: cgroup.source,
+                used_in_limit_bytes: cgroup.working_set_bytes,
+                charged_in_limit_bytes: cgroup.charged_bytes,
             }
         }
         _ => MemoryCapacity {
@@ -102,44 +105,91 @@ pub fn memory_capacity_at(root: &Path) -> MemoryCapacity {
             limit_bytes: physical,
             limit_source: "physical",
             used_in_limit_bytes: None,
+            charged_in_limit_bytes: None,
         },
     }
 }
 
-/// `(limit, charged, source)` of the lowest limit on the process's cgroup path, v2 first. Levels
-/// without a limit (`max`, or v1's near-`u64::MAX` default) are skipped.
+/// The lowest memory limit on this process's cgroup path and what is charged against it.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn cgroup_limit(root: &Path) -> Option<(u64, Option<u64>, &'static str)> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CgroupMemory {
+    /// The limit, `memory.max` or `memory.limit_in_bytes`.
+    pub limit_bytes: u64,
+    /// What the kernel charges at that level, file page cache included.
+    pub charged_bytes: Option<u64>,
+    /// The charge less the page cache the kernel reclaims before it kills (`inactive_file` and
+    /// `active_file`); the charge itself when `memory.stat` cannot be read.
+    pub working_set_bytes: Option<u64>,
+    /// `cgroup-v2` or `cgroup-v1`.
+    pub source: &'static str,
+}
+
+/// [`CgroupMemory`] of this process, read now; `None` without a cgroup memory limit.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[must_use]
+pub fn cgroup_memory() -> Option<CgroupMemory> {
+    cgroup_memory_at(Path::new("/"))
+}
+
+/// [`cgroup_memory`] with `root` standing in for `/`. Levels without a limit (`max`, or v1's
+/// near-`u64::MAX` default) are skipped; v2 is read first.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[must_use]
+pub fn cgroup_memory_at(root: &Path) -> Option<CgroupMemory> {
     let membership = std::fs::read_to_string(root.join("proc/self/cgroup")).ok()?;
     let read = |path: &Path| {
         std::fs::read_to_string(path)
             .ok()
             .and_then(|text| text.trim().parse::<u64>().ok())
     };
-    let lowest = |mount: &Path, relative: &str, limit_file: &str, usage_file: &str| {
-        let mut best: Option<(u64, Option<u64>)> = None;
+    let lowest = |mount: &Path, relative: &str, files: [&str; 2], cache: [&str; 2], source| {
+        let mut best: Option<CgroupMemory> = None;
         let mut path = Some(Path::new(relative.trim_start_matches('/')));
         while let Some(level) = path {
             let directory = mount.join(level);
-            if let Some(limit) = read(&directory.join(limit_file))
+            if let Some(limit) = read(&directory.join(files[0]))
                 && limit < (1_u64 << 60)
-                && best.is_none_or(|(known, _)| limit < known)
+                && best.is_none_or(|known| limit < known.limit_bytes)
             {
-                best = Some((limit, read(&directory.join(usage_file))));
+                let charged = read(&directory.join(files[1]));
+                let cached = std::fs::read_to_string(directory.join("memory.stat"))
+                    .ok()
+                    .and_then(|stat| {
+                        cache.iter().try_fold(0_u64, |sum, key| {
+                            let value = stat.lines().find_map(|line| {
+                                line.strip_prefix(key)?
+                                    .strip_prefix(' ')?
+                                    .trim()
+                                    .parse()
+                                    .ok()
+                            })?;
+                            Some(sum.saturating_add(value))
+                        })
+                    });
+                best = Some(CgroupMemory {
+                    limit_bytes: limit,
+                    charged_bytes: charged,
+                    working_set_bytes: charged.map(|charged| {
+                        cached.map_or(charged, |cached| charged.saturating_sub(cached))
+                    }),
+                    source,
+                });
             }
             path = level.parent();
         }
         best
     };
     if let Some(relative) = membership.lines().find_map(|line| line.strip_prefix("0::"))
-        && let Some((limit, used)) = lowest(
+        && let Some(memory) = lowest(
             &root.join("sys/fs/cgroup"),
             relative,
-            "memory.max",
-            "memory.current",
+            ["memory.max", "memory.current"],
+            ["inactive_file", "active_file"],
+            "cgroup-v2",
         )
     {
-        return Some((limit, used, "cgroup-v2"));
+        return Some(memory);
     }
     let relative = membership.lines().find_map(|line| {
         let mut fields = line.splitn(3, ':');
@@ -151,43 +201,13 @@ fn cgroup_limit(root: &Path) -> Option<(u64, Option<u64>, &'static str)> {
             .then(|| fields.next())
             .flatten()
     })?;
-    let (limit, used) = lowest(
+    lowest(
         &root.join("sys/fs/cgroup/memory"),
         relative,
-        "memory.limit_in_bytes",
-        "memory.usage_in_bytes",
-    )?;
-    Some((limit, used, "cgroup-v1"))
-}
-
-/// The process's cgroup v2 `(working set, memory.max)` when it has a limit. The working set
-/// excludes reclaimable `inactive_file` page cache, which the kernel drops at the limit instead of
-/// killing anything.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-#[must_use]
-pub fn cgroup_v2_usage() -> Option<(u64, u64)> {
-    let membership = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-    let relative = membership
-        .lines()
-        .find_map(|line| line.strip_prefix("0::"))?;
-    let directory = Path::new("/sys/fs/cgroup").join(relative.trim_start_matches('/'));
-    let read = |name: &str| {
-        std::fs::read_to_string(directory.join(name))
-            .ok()
-            .and_then(|text| text.trim().parse::<u64>().ok())
-    };
-    let inactive_file = std::fs::read_to_string(directory.join("memory.stat"))
-        .ok()
-        .and_then(|stat| {
-            stat.lines()
-                .find_map(|line| line.strip_prefix("inactive_file "))
-                .and_then(|value| value.trim().parse::<u64>().ok())
-        })
-        .unwrap_or(0);
-    Some((
-        read("memory.current")?.saturating_sub(inactive_file),
-        read("memory.max")?,
-    ))
+        ["memory.limit_in_bytes", "memory.usage_in_bytes"],
+        ["total_inactive_file", "total_active_file"],
+        "cgroup-v1",
+    )
 }
 
 #[cfg(test)]

@@ -145,6 +145,8 @@ pub struct Host {
     pub memory: crate::memory::MemoryPolicy,
     /// What the response to the current request carries besides its header.
     pub reply_attachments: Vec<alpha2_host_core::host_frames::Attachment>,
+    /// The current request's result-cache scope, new at each [`Self::begin_request`].
+    pub(crate) cache_scope: u64,
 }
 
 impl std::ops::Deref for Host {
@@ -256,6 +258,7 @@ impl Host {
             failure: crate::failure::FailureContext::default(),
             memory: crate::memory::MemoryPolicy::default(),
             reply_attachments: Vec::new(),
+            cache_scope: crate::frames::next_cache_scope(),
         }
     }
 
@@ -1188,6 +1191,7 @@ impl Host {
         memory: crate::memory::MemoryRequest,
         facts: Option<&ExportRequestFacts<'_>>,
     ) -> Result<(), HostError> {
+        self.cache_scope = crate::frames::next_cache_scope();
         self.failure.begin();
         if self.requests.load(std::sync::atomic::Ordering::Relaxed) <= 1 {
             self.gpu_log.clear();
@@ -1869,11 +1873,12 @@ impl Host {
             && self.renderer.intermediate_format() == wgpu::TextureFormat::Rgba8Unorm
         {
             return Err(code_tag(
-                "UNSUPPORTED",
+                "INVALID_INPUT",
                 "10-bit output needs the rgba16float intermediate; this renderer stores 8 bits",
             ));
         }
-        // This export's source keys (`export_source_key`) mean something else in any other.
+        // Frees the last request's entries; the request scope in every source key, not this clear,
+        // keeps requests apart.
         self.renderer.clear_result_cache();
         self.renderer.set_result_cache_budget(result_cache_budget(
             size,
@@ -2278,13 +2283,21 @@ impl Host {
         let video_encoder_name = video_encoder.encoder_name.clone();
         let providers = self.export_providers(&project, size);
         let mut synchronous_frames = (!pipeline_enabled)
-            .then(|| NativeFrames::new(size, &project, assets, self.failure.decoding()))
+            .then(|| {
+                NativeFrames::new(
+                    size,
+                    self.cache_scope,
+                    &project,
+                    assets,
+                    self.failure.decoding(),
+                )
+            })
             .transpose()?;
         if let Some(frames) = synchronous_frames.as_mut() {
             frames.providers = std::sync::Arc::clone(&providers);
         }
         let mut gpu_frames = self.export_gpu_frames(size, &project);
-        let mut cpu_frames = crate::cpu_frames::NativeCpuFrames::new(size);
+        let mut cpu_frames = crate::cpu_frames::NativeCpuFrames::new(size, self.cache_scope);
         cpu_frames.color = gpu_frames.color;
         let packed_bytes_per_frame = packed_yuv420_bytes(size);
         let mut decode_scheduler = DecodeScheduler::new(decode_lookahead, &project);

@@ -58,6 +58,18 @@ pub enum Record {
     },
 }
 
+impl Record {
+    /// Index in the descriptor's `outputs`.
+    #[must_use]
+    pub const fn output(&self) -> u16 {
+        match self {
+            Self::Sample { output, .. }
+            | Self::Word { output, .. }
+            | Self::Interval { output, .. } => *output,
+        }
+    }
+}
+
 /// Why a batch could not be read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordError {
@@ -81,13 +93,13 @@ impl core::error::Error for RecordError {}
 /// When a body or a text is longer than `u32::MAX` bytes.
 pub fn encode(record: &Record, out: &mut Vec<u8>) {
     let header = out.len();
-    let (tag, output) = match record {
-        Record::Sample { output, .. } => (SAMPLE, *output),
-        Record::Word { output, .. } => (WORD, *output),
-        Record::Interval { output, .. } => (INTERVAL, *output),
+    let tag = match record {
+        Record::Sample { .. } => SAMPLE,
+        Record::Word { .. } => WORD,
+        Record::Interval { .. } => INTERVAL,
     };
     out.extend_from_slice(&[tag, 0]);
-    out.extend_from_slice(&output.to_le_bytes());
+    out.extend_from_slice(&record.output().to_le_bytes());
     out.extend_from_slice(&[0; 4]);
     let body = out.len();
     match record {
@@ -150,17 +162,72 @@ fn optional_length(text: Option<&str>) -> u32 {
     text.map_or(ABSENT, |text| length(text.len()))
 }
 
+/// Bounds on one record, checked before anything is allocated for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// The most values one sample may carry.
+    pub max_values: usize,
+    /// The most bytes one text may have.
+    pub max_text_bytes: usize,
+}
+
+impl Limits {
+    /// No bound beyond the batch's own length.
+    pub const NONE: Self = Self {
+        max_values: usize::MAX,
+        max_text_bytes: usize::MAX,
+    };
+}
+
+/// Reads a batch one record at a time, ending after the first error.
+///
+/// # Errors
+/// Each item is an error for a record with an unknown tag, a nonzero reserved byte, a body that
+/// ends early or has bytes left over, text that is not UTF-8, or a value count or text length
+/// past `limits`.
+pub fn records(batch: &[u8], limits: Limits) -> impl Iterator<Item = Result<Record, RecordError>> {
+    Records {
+        rest: batch,
+        index: 0,
+        limits,
+    }
+}
+
 /// Reads a whole batch.
 ///
 /// # Errors
-/// The first record with an unknown tag, a nonzero reserved byte, a body that ends early or has
-/// bytes left over, or text that is not UTF-8.
-pub fn decode(mut batch: &[u8]) -> Result<Vec<Record>, RecordError> {
-    let mut records = Vec::new();
-    while !batch.is_empty() {
-        let index = records.len();
+/// The first record [`records`] refuses with [`Limits::NONE`].
+pub fn decode(batch: &[u8]) -> Result<Vec<Record>, RecordError> {
+    records(batch, Limits::NONE).collect()
+}
+
+struct Records<'a> {
+    rest: &'a [u8],
+    index: usize,
+    limits: Limits,
+}
+
+impl Iterator for Records<'_> {
+    type Item = Result<Record, RecordError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.rest.is_empty() {
+            return None;
+        }
+        let record = self.read();
+        self.index += 1;
+        if record.is_err() {
+            self.rest = &[];
+        }
+        Some(record)
+    }
+}
+
+impl Records<'_> {
+    fn read(&mut self) -> Result<Record, RecordError> {
+        let index = self.index;
         let fail = |reason| RecordError { index, reason };
-        let mut header = Reader(batch);
+        let mut header = Reader(self.rest);
         let tag = header.u8().ok_or(fail("the header ends early"))?;
         let reserved = header.u8().ok_or(fail("the header ends early"))?;
         let output = header.u16().ok_or(fail("the header ends early"))?;
@@ -171,21 +238,21 @@ pub fn decode(mut batch: &[u8]) -> Result<Vec<Record>, RecordError> {
         let body = header
             .take(size)
             .ok_or(fail("the body is shorter than its length"))?;
-        batch = header.0;
+        self.rest = header.0;
         let mut body = Reader(body);
+        let limits = self.limits;
         let record = match tag {
-            SAMPLE => body.sample(output),
-            WORD => body.word(output),
-            INTERVAL => body.interval(output),
+            SAMPLE => body.sample(output, limits),
+            WORD => body.word(output, limits),
+            INTERVAL => body.interval(output, limits),
             _ => Err("unknown record tag"),
         }
         .map_err(fail)?;
         if !body.0.is_empty() {
             return Err(fail("the body is longer than its fields"));
         }
-        records.push(record);
+        Ok(record)
     }
-    Ok(records)
 }
 
 struct Reader<'a>(&'a [u8]);
@@ -224,9 +291,12 @@ impl<'a> Reader<'a> {
         self.array().map(f32::from_le_bytes)
     }
 
-    fn text(&mut self, len: u32) -> Result<Option<String>, &'static str> {
+    fn text(&mut self, len: u32, limits: Limits) -> Result<Option<String>, &'static str> {
         if len == ABSENT {
             return Ok(None);
+        }
+        if len as usize > limits.max_text_bytes {
+            return Err("a text is longer than the host takes");
         }
         let bytes = self.take(len as usize).ok_or("a text runs past the body")?;
         core::str::from_utf8(bytes)
@@ -234,10 +304,13 @@ impl<'a> Reader<'a> {
             .map_err(|_| "a text is not UTF-8")
     }
 
-    fn sample(&mut self, output: u16) -> Result<Record, &'static str> {
+    fn sample(&mut self, output: u16, limits: Limits) -> Result<Record, &'static str> {
         const SHORT: &str = "the sample's fields end early";
         let time = self.i64().ok_or(SHORT)?;
         let count = self.u32().ok_or(SHORT)? as usize;
+        if count > limits.max_values {
+            return Err("a sample has more values than the host takes");
+        }
         // Every value takes at least 4 bytes, so a count the body cannot hold is refused before
         // anything is allocated for it.
         if count > self.0.len() / 4 {
@@ -266,14 +339,14 @@ impl<'a> Reader<'a> {
         })
     }
 
-    fn word(&mut self, output: u16) -> Result<Record, &'static str> {
+    fn word(&mut self, output: u16, limits: Limits) -> Result<Record, &'static str> {
         const SHORT: &str = "the word's fields end early";
         let start = self.i64().ok_or(SHORT)?;
         let end = self.i64().ok_or(SHORT)?;
         let text_len = self.u32().ok_or(SHORT)?;
         let speaker_len = self.u32().ok_or(SHORT)?;
-        let text = self.text(text_len)?.ok_or("a word has no text")?;
-        let speaker = self.text(speaker_len)?;
+        let text = self.text(text_len, limits)?.ok_or("a word has no text")?;
+        let speaker = self.text(speaker_len, limits)?;
         Ok(Record::Word {
             output,
             start,
@@ -283,7 +356,7 @@ impl<'a> Reader<'a> {
         })
     }
 
-    fn interval(&mut self, output: u16) -> Result<Record, &'static str> {
+    fn interval(&mut self, output: u16, limits: Limits) -> Result<Record, &'static str> {
         const SHORT: &str = "the interval's fields end early";
         let start = self.i64().ok_or(SHORT)?;
         let end = self.i64().ok_or(SHORT)?;
@@ -293,7 +366,7 @@ impl<'a> Reader<'a> {
         if flags > 1 {
             return Err("unknown interval flags");
         }
-        let label = self.text(label_len)?;
+        let label = self.text(label_len, limits)?;
         Ok(Record::Interval {
             output,
             start,

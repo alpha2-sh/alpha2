@@ -16,10 +16,9 @@ use alpha2_media::{
     EncodeEvent, EncodeSink, Orientation, PixelFormat, SampleAspectRatio, VideoRateControl,
 };
 use alpha2_time::{FrameRate, MediaTime};
-use rsmpeg::avutil::{AVFrameWithImage, AVImage, AVRational, av_rescale_q, ra};
+use rsmpeg::avutil::{AVRational, av_rescale_q, ra};
 use rsmpeg::error::RsmpegError;
 use rsmpeg::ffi;
-use rsmpeg::swscale::SwsContext;
 
 /// Configuration for deterministic native video encoding.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -144,7 +143,7 @@ pub struct NativeVideoEncodeSink {
     /// One frame in `encoder_time_base`.
     pub(crate) frame_units: i64,
     pub(crate) stream_time_base: AVRational,
-    pub(crate) scaler: SwsContext,
+    pub(crate) scaler: alpha2_ffmpeg_bridge::PackedScaler,
     /// Turns decoded YUV of any layout into the encoder's 4:2:0.
     pub(crate) yuv_input: crate::convert::Yuv420pConverter,
     pub(crate) width: i32,
@@ -246,19 +245,13 @@ impl NativeVideoEncodeSink {
             .write_header(&mut crate::convert::muxer_header_options(config.container))
             .map_err(encode_adapter_error)?;
         stream_time_base = output.streams()[usize::try_from(stream_index).unwrap_or(0)].time_base;
-        let mut scaler = SwsContext::get_context(
+        let mut scaler = alpha2_ffmpeg_bridge::PackedScaler::new(
             width,
             height,
             ffi::AV_PIX_FMT_RGBA,
-            width,
-            height,
             ffi::AV_PIX_FMT_YUV420P,
-            ffi::SWS_BILINEAR,
-            None,
-            None,
-            None,
         )
-        .ok_or_else(|| EncodeError::Adapter("cannot create RGBA to YUV scaler".into()))?;
+        .map_err(|_| EncodeError::Adapter("cannot create RGBA to YUV scaler".into()))?;
         configure_rgba_to_yuv(&mut scaler, config.color).map_err(encode_adapter_error)?;
         Ok(Self {
             output: Some(output),
@@ -426,11 +419,9 @@ impl NativeVideoEncodeSink {
         // translucent layers at full strength.
         let rgba = alpha2_ffmpeg_bridge::rgba_frame(&plane.bytes, self.width, self.height)
             .map_err(encode_adapter_error)?;
-        let yuv_image = AVImage::new(ffi::AV_PIX_FMT_YUV420P, self.width, self.height, 1)
-            .ok_or_else(|| EncodeError::Adapter("cannot allocate YUV input".into()))?;
-        let mut yuv = AVFrameWithImage::new(yuv_image);
-        self.scaler
-            .scale_frame(&rgba, 0, self.height, &mut yuv)
+        let mut yuv = self
+            .scaler
+            .convert_to_frame(&rgba)
             .map_err(encode_adapter_error)?;
         yuv.set_pts(pts);
         yuv.set_time_base(self.encoder_time_base);

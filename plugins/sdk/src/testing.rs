@@ -120,6 +120,10 @@ impl Instance {
         // SAFETY: the caller passes the static table a plugin's entry returned.
         let table = unsafe { *table };
         assert_eq!(table.abi, ABI_MAJOR, "plugin table of another ABI");
+        assert!(
+            table.size as usize >= size_of::<PluginV1>(),
+            "plugin table shorter than alpha2-plugin/1"
+        );
         let state = RefCell::new(State {
             received: Received::default(),
             resources,
@@ -127,6 +131,7 @@ impl Instance {
         let mut host = Box::new((
             HostV1 {
                 abi: ABI_MAJOR,
+                size: u32::try_from(size_of::<HostV1>()).expect("a small table"),
                 context: std::ptr::null_mut(),
                 emit,
                 resource,

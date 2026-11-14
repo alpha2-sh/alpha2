@@ -25,10 +25,9 @@ use alpha2_media::{
 };
 use alpha2_time::MediaTime;
 use rsmpeg::avcodec::{AVCodecContext, AVPacket};
-use rsmpeg::avutil::{AVFrameWithImage, AVImage, AVRational, av_rescale_q};
+use rsmpeg::avutil::{AVRational, av_rescale_q};
 use rsmpeg::error::RsmpegError;
 use rsmpeg::ffi;
-use rsmpeg::swscale::SwsContext;
 
 /// Where one encode sink's wall time went, split into codec, packet drain and mux write so a
 /// change in one is visible.
@@ -129,7 +128,7 @@ pub struct NativeAvEncodeSink {
     /// One frame in `video_encoder_time_base`.
     pub(crate) video_frame_units: i64,
     pub(crate) video_stream_time_base: AVRational,
-    pub(crate) video_scaler: SwsContext,
+    pub(crate) video_scaler: alpha2_ffmpeg_bridge::PackedScaler,
     /// Turns decoded YUV of any layout into the encoder's 4:2:0.
     pub(crate) yuv_input: crate::convert::Yuv420pConverter,
     pub(crate) width: i32,
@@ -359,19 +358,13 @@ impl NativeAvEncodeSink {
             output.streams()[usize::try_from(video_stream_index).unwrap_or(0)].time_base;
         let audio_stream_time_base =
             output.streams()[usize::try_from(audio_stream_index).unwrap_or(0)].time_base;
-        let mut video_scaler = SwsContext::get_context(
+        let mut video_scaler = alpha2_ffmpeg_bridge::PackedScaler::new(
             width,
             height,
             ffi::AV_PIX_FMT_RGBA,
-            width,
-            height,
             ffi::AV_PIX_FMT_YUV420P,
-            ffi::SWS_BILINEAR,
-            None,
-            None,
-            None,
         )
-        .ok_or_else(|| EncodeError::Adapter("cannot create RGBA to YUV scaler".into()))?;
+        .map_err(|_| EncodeError::Adapter("cannot create RGBA to YUV scaler".into()))?;
         configure_rgba_to_yuv(&mut video_scaler, config.video.color)
             .map_err(encode_adapter_error)?;
         let audio_input = audio.input;
@@ -628,11 +621,9 @@ impl NativeAvEncodeSink {
         // translucent layers at full strength.
         let rgba = alpha2_ffmpeg_bridge::rgba_frame(&plane.bytes, self.width, self.height)
             .map_err(encode_adapter_error)?;
-        let yuv_image = AVImage::new(ffi::AV_PIX_FMT_YUV420P, self.width, self.height, 1)
-            .ok_or_else(|| EncodeError::Adapter("cannot allocate YUV input".into()))?;
-        let mut yuv = AVFrameWithImage::new(yuv_image);
-        self.video_scaler
-            .scale_frame(&rgba, 0, self.height, &mut yuv)
+        let mut yuv = self
+            .video_scaler
+            .convert_to_frame(&rgba)
             .map_err(encode_adapter_error)?;
         yuv.set_pts(pts);
         yuv.set_time_base(self.video_encoder_time_base);

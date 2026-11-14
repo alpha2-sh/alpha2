@@ -904,7 +904,7 @@ fn validate_grid(node: &LayoutNode, at: &str) -> LayoutChecked {
     ] {
         let in_range = |edge: GridEdge| match edge {
             GridEdge::Auto => true,
-            GridEdge::Line(line) => line != 0 && line.abs() <= MAX_GRID_LINE,
+            GridEdge::Line(line) => line != 0 && (-MAX_GRID_LINE..=MAX_GRID_LINE).contains(&line),
             GridEdge::Span(count) => (1..=64).contains(&count),
         };
         if placement.is_some_and(|placement| !placement.edges().into_iter().all(in_range)) {

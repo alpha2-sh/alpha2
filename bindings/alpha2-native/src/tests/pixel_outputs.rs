@@ -310,3 +310,89 @@ fn an_encoder_without_the_pixel_format_is_passed_over() {
     .expect("refused");
     assert!(error.to_string().contains("pixel-format"), "{error}");
 }
+
+#[test]
+fn vp9_alpha_off_the_16_pixel_grid_decodes_every_column_opaque() {
+    for (width, height) in [(64, 32), (38, 16), (250, 100), (854, 32), (1080, 64)] {
+        let pixels = layout(Chroma::Yuv420, BitDepth::Eight, true);
+        let path = output_path(&format!("vp9-alpha-{width}x{height}")).with_extension("webm");
+        let selection = encode(
+            &path,
+            config(
+                NativeVideoCodec::Vp9,
+                Container::Webm,
+                pixels,
+                width,
+                height,
+            ),
+            1,
+            |plane, _, _| match plane {
+                0 => 126,
+                1 | 2 => 128,
+                _ => 255,
+            },
+        );
+        assert_eq!(selection.encoder_name, "libvpx-vp9");
+        let mut decoder = NativeExportDecoder::open_with_threads(&path, 1).expect("decoder");
+        let frame = decoder
+            .decode_video_next(&CancelToken::default())
+            .expect("decodes")
+            .expect("a frame");
+        let frame = frame.as_cpu().expect("a software frame").clone();
+        drop(decoder);
+        fs::remove_file(&path).expect("remove");
+        assert_eq!(frame.pixel_format, PixelFormat::Rgba8);
+        let plane = &frame.planes[0];
+        let (w, h) = (width as usize, height as usize);
+        assert_eq!(plane.stride as usize, 4 * w);
+        assert_eq!(plane.bytes.len(), 4 * w * h);
+        for y in 0..h {
+            let row = &plane.bytes[y * 4 * w..(y + 1) * 4 * w];
+            for x in 0..w {
+                assert!(row[4 * x + 3] >= 250, "{width}x{height} at ({x}, {y})");
+            }
+            for channel in 0..3 {
+                let (first, last) = (row[channel], row[4 * (w - 1) + channel]);
+                assert!(
+                    first.abs_diff(last) <= 3,
+                    "{width}x{height} row {y}: {first} and {last}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn tiny_rgba_frames_encode_through_the_event_path() {
+    for (width, height) in [(4, 4), (6, 4)] {
+        let path = output_path(&format!("tiny-{width}x{height}")).with_extension("mp4");
+        let _ = fs::remove_file(&path);
+        let mut sink = NativeVideoEncodeSink::create(
+            &path,
+            config(
+                NativeVideoCodec::Mpeg4Part2,
+                Container::Mp4,
+                alpha2_media::PixelLayout::YUV420P,
+                width,
+                height,
+            ),
+        )
+        .expect("sink");
+        let cancel = CancelToken::default();
+        sink.write(
+            EncodeEvent::Video(rgba_frame_sized(
+                MediaTime::ZERO,
+                [200, 20, 20, 255],
+                width,
+                height,
+            )),
+            &cancel,
+        )
+        .expect("frame");
+        sink.finish(&cancel).expect("finish");
+        let probed = probe(&path).expect("probe");
+        let stream = probed.selected_video_stream().expect("video");
+        assert_eq!(stream.dimensions, Some((width, height)));
+        fs::remove_file(&path).expect("remove");
+    }
+}

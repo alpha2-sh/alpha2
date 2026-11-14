@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { box, layout, measureLayout, shape, text } from "../dist/layout.js";
+import { parseLength, parseSize } from "../dist/layout-values.js";
 import { validateProject } from "../dist/project.js";
 
 const constant = (value) => ({ mode: "constant", value });
@@ -236,4 +237,44 @@ test("measureLayout sends a layout generator and its canvas and reads the engine
     [{ type: "layout", root }, 1280, 720, 600, 1280, 720],
     [{ type: "layout", root }, 960, 540, 0, 3840, 2160],
   ]);
+});
+
+test("layout values trim ASCII spaces only, in linear time", () => {
+  assert.deepEqual(parseSize("  12px  "), {
+    ok: true,
+    value: { unit: "px", value: 12 },
+  });
+  assert.deepEqual(parseLength(" 50% "), {
+    ok: true,
+    value: { unit: "percent", value: 50 },
+  });
+  assert.equal(
+    parseSize("\t12px").error,
+    'invalid length "\t12px": write a number or "<n>px"',
+  );
+  assert.equal(
+    parseSize("   ").error,
+    'invalid length "": write a number or "<n>px"',
+  );
+  const started = performance.now();
+  const inner = parseSize(`1${" ".repeat(1_000_000)}px`);
+  assert.ok(performance.now() - started < 1000);
+  assert.equal(inner.ok, false);
+  assert.match(inner.error, /^invalid length "1 +px" \(write 1px\)/);
+});
+
+test("a layout length with a long inner run of spaces gets the problem one space gets", () => {
+  const withGap = (value) => {
+    const generator = layout(box({}));
+    generator.root.gap = constant(value);
+    return projectOf(generator);
+  };
+  const spaces = " ".repeat(64_000);
+  const started = performance.now();
+  const problems = validateProject(withGap(`1${spaces}px`)).map((problem) =>
+    problem.replace(spaces, " "),
+  );
+  assert.ok(performance.now() - started < 1000);
+  assert.deepEqual(problems, validateProject(withGap("1 px")));
+  assert.equal(problems.length, 1);
 });

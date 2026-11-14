@@ -37,7 +37,11 @@ function tokens(text: string): string[] {
 
 /** Matches Rust's `trim_matches(' ')`: ASCII spaces only. */
 function trimSpaces(text: string): string {
-  return text.replace(/^ +| +$/g, "");
+  let start = 0;
+  let end = text.length;
+  while (start < end && text.charCodeAt(start) === 32) start += 1;
+  while (end > start && text.charCodeAt(end - 1) === 32) end -= 1;
+  return text.slice(start, end);
 }
 
 function invalidLength(token: string, percent: boolean): string {

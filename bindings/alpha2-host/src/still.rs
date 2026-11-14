@@ -85,7 +85,7 @@ impl Host {
             PipelineFailure::default(),
         )?;
         let mut gpu_frames = self.export_gpu_frames(size, &project);
-        let mut cpu_frames = crate::cpu_frames::NativeCpuFrames::new(size);
+        let mut cpu_frames = crate::cpu_frames::NativeCpuFrames::new(size, self.cache_scope);
         cpu_frames.color = gpu_frames.color;
         let mut metrics = ExportMetrics::default();
         let mut timings = StillTimings::default();

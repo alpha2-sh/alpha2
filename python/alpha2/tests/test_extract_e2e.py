@@ -233,6 +233,30 @@ def test_cancel_mid_pass_aborts(client: HostClient) -> None:
         )
 
 
+class Abandoned(BaseException):
+    """Stands in for a task queue's time limit, which is not an ``Exception``."""
+
+
+def test_extracts_abandoned_mid_run_leave_the_pool_serving() -> None:
+    class Abandoning(Scripted):
+        def end(self, _out: Emitter) -> None:
+            raise Abandoned
+
+    extractor = Abandoning([{"name": "track", "kind": "points", "channels": ["a"]}], [])
+    with HostClient(host_path=HOST, renderer="cpu", video_decode="software") as cpu:
+        for _ in range(2):
+            with pytest.raises(Abandoned):
+                cpu.extract(PROJECT, request(extractor, 40_000, 64), extractor, assets=video())
+        cancel = threading.Event()
+        timer = threading.Timer(10.0, cancel.set)
+        timer.start()
+        try:
+            still = cpu.still({**PROJECT, "sources": []}, 0, cancel=cancel)
+        finally:
+            timer.cancel()
+    assert still["stills"][0]["png"][1:4] == b"PNG"
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="finds the host by its parent pid")
 def test_a_host_exit_mid_run_fails_and_the_pool_starts_another(client: HostClient) -> None:
     class Killing(Digest):

@@ -131,6 +131,25 @@ impl Responder {
         self.write(&frame.map_err(HostError::io)?)
     }
 
+    /// [`Self::send`], or `None` without writing when another thread holds the output.
+    pub(crate) fn try_send(&self, header: &Value) -> Option<Result<(), HostError>> {
+        let mut output = match self.0.try_lock() {
+            Ok(output) => output,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        let frame = match frame_bytes(&json_line(header), &[]) {
+            Ok(frame) => frame,
+            Err(error) => return Some(Err(HostError::io(error))),
+        };
+        Some(
+            output
+                .write_all(&frame)
+                .and_then(|()| output.flush())
+                .map_err(HostError::io),
+        )
+    }
+
     fn write(&self, bytes: &[u8]) -> Result<(), HostError> {
         let mut output = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         output.write_all(bytes).map_err(HostError::io)?;
@@ -303,6 +322,8 @@ pub(crate) fn read_requests(
             }) => InputFrame::TooLarge(u64::from(header_bytes) + u64::from(attachment_bytes)),
             // A read error ends the input as its end would.
             Ok(ReadFrame::End) | Err(_) => {
+                // No acknowledgement can arrive any more.
+                crate::extract_request::close_ack_routes();
                 frames.send(InputFrame::End);
                 return;
             }

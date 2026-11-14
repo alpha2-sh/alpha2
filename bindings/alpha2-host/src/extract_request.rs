@@ -77,6 +77,9 @@ pub struct ExtractHostRequest {
     pub protocol_version: u32,
     pub request_id: String,
     pub operation: String,
+    /// The frame's attachment list, read with the frame.
+    #[serde(default, rename = "attachments")]
+    pub(crate) _attachments: serde::de::IgnoredAny,
     pub project: ProjectJson,
     pub assets: HashMap<String, PathBuf>,
     #[serde(default)]
@@ -151,12 +154,22 @@ impl Drop for AckRoute {
     }
 }
 
+/// Set once the input has ended: no acknowledgement can arrive, so new routes start closed.
+static ACKS_CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Closes every route, so a run waiting on an acknowledgement sees its route close.
+pub fn close_ack_routes() {
+    let mut routes = acks().lock().unwrap_or_else(PoisonError::into_inner);
+    ACKS_CLOSED.store(true, std::sync::atomic::Ordering::Release);
+    routes.clear();
+}
+
 fn register(request_id: &str) -> (AckRoute, Receiver<String>) {
     let (sender, receiver) = std::sync::mpsc::channel();
-    acks()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(request_id.to_owned(), sender);
+    let mut routes = acks().lock().unwrap_or_else(PoisonError::into_inner);
+    if !ACKS_CLOSED.load(std::sync::atomic::Ordering::Acquire) {
+        routes.insert(request_id.to_owned(), sender);
+    }
     (AckRoute(request_id.to_owned()), receiver)
 }
 
@@ -257,8 +270,11 @@ impl Client<'_> {
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     return Err(HostError::new(
-                        "INTERNAL",
-                        "the acknowledgement route closed",
+                        "CANCELLED",
+                        crate::protocol::cancelled(format!(
+                            "the input ended before step {} was acknowledged",
+                            self.seq
+                        )),
                     ));
                 }
             }

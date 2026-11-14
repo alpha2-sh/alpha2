@@ -109,43 +109,61 @@ pub fn shaped_key(request: &TextRasterRequest) -> u64 {
 }
 
 fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
-    feed(request.text.as_bytes());
+    // No `..`: a new field must decide whether it is part of the key.
+    let TextRasterRequest {
+        text,
+        font_size,
+        max_width,
+        line_height,
+        align,
+        fill,
+        emoji_policy,
+        content_version: _,
+        strokes,
+        background,
+        split_background,
+        font_family,
+        letter_spacing,
+        font_weight,
+        clamp,
+    } = request;
+    feed(text.as_bytes());
     feed(&[0xff]);
-    feed(
-        request
-            .font_family
-            .as_deref()
-            .unwrap_or_default()
-            .as_bytes(),
-    );
-    feed(&[0xff, u8::from(request.font_family.is_some())]);
-    for value in [
-        request.font_size,
-        request.max_width,
-        request.line_height,
-        request.letter_spacing,
-    ] {
+    feed(font_family.as_deref().unwrap_or_default().as_bytes());
+    feed(&[0xff, u8::from(font_family.is_some())]);
+    for value in [*font_size, *max_width, *line_height, *letter_spacing] {
         feed(&value.to_bits().to_le_bytes());
     }
-    feed(&request.font_weight.to_le_bytes());
-    match &request.fill {
+    feed(&font_weight.to_le_bytes());
+    match fill {
         TextFill::Solid(color) => feed(color),
         TextFill::Gradient(gradient) => feed_text_gradient(feed, gradient),
     }
-    feed(&[match request.align {
+    feed(&[match align {
         alpha2_media::TextAlign::Start => 0,
         alpha2_media::TextAlign::Center => 1,
         alpha2_media::TextAlign::End => 2,
     }]);
-    feed_count(feed, request.strokes.len());
-    for stroke in &request.strokes {
+    feed_count(feed, strokes.len());
+    for stroke in strokes {
         feed(&stroke.color);
         feed(&stroke.width.to_bits().to_le_bytes());
     }
-    if request.split_background {
+    if *split_background {
         feed(&[0xfd]);
     }
-    if let Some(clamp) = &request.clamp {
+    if let Some(background) = background {
+        feed(&[0xfb]);
+        feed(&background.color);
+        feed(&background.padding.to_bits().to_le_bytes());
+    }
+    // The default policy feeds nothing, so keys of requests that never set it stay as they were.
+    match emoji_policy {
+        alpha2_media::EmojiPolicy::Color => {}
+        alpha2_media::EmojiPolicy::Monochrome => feed(&[0xf9, 1]),
+        alpha2_media::EmojiPolicy::Replace => feed(&[0xf9, 2]),
+    }
+    if let Some(clamp) = clamp {
         feed(&[0xfc]);
         feed(&clamp.max_lines.unwrap_or(0).to_le_bytes());
         feed(&clamp.max_height.to_bits().to_le_bytes());
@@ -214,6 +232,27 @@ fn feed_look(feed: &mut impl FnMut(&[u8]), strokes: &[TextStroke], shadows: &[Te
 /// Never zero.
 #[must_use]
 pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
+    // No `..`: a new field must decide whether it is part of the key.
+    let TextStyle {
+        font_family,
+        font_size,
+        fill,
+        line_height,
+        letter_spacing,
+        font_weight,
+        align,
+        max_width,
+        max_height,
+        font_size_fit,
+        line_clamp,
+        position,
+        anchor,
+        strokes,
+        shadows,
+        background,
+        // `animated_text_key` adds the sampled animators.
+        animators: _,
+    } = style;
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     let mut feed = |bytes: &[u8]| {
         for byte in bytes {
@@ -223,29 +262,29 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
     feed(text.as_bytes());
     feed(&[0xff]);
     // Family names cannot hold 0xff (they are UTF-8), so the text and family stay apart.
-    feed(style.font_family.as_deref().unwrap_or_default().as_bytes());
-    feed(&[0xff, u8::from(style.font_family.is_some())]);
+    feed(font_family.as_deref().unwrap_or_default().as_bytes());
+    feed(&[0xff, u8::from(font_family.is_some())]);
     for value in [
-        style.font_size,
-        style.line_height,
-        style.letter_spacing,
-        style.max_width,
-        style.position.x,
-        style.position.y,
-        style.anchor.x,
-        style.anchor.y,
+        *font_size,
+        *line_height,
+        *letter_spacing,
+        *max_width,
+        position.x,
+        position.y,
+        anchor.x,
+        anchor.y,
     ] {
         feed(&value.to_bits().to_le_bytes());
     }
-    feed(&style.font_weight.to_le_bytes());
-    feed_paint(&mut feed, &style.fill);
-    feed(&[match style.align {
+    feed(&font_weight.to_le_bytes());
+    feed_paint(&mut feed, fill);
+    feed(&[match align {
         TextAlign::Start => 0,
         TextAlign::Center => 1,
         TextAlign::End => 2,
     }]);
-    feed_look(&mut feed, &style.strokes, &style.shadows);
-    match style.background {
+    feed_look(&mut feed, strokes, shadows);
+    match background {
         Some(background) => {
             feed(&[1]);
             feed(&rgba8(background.color));
@@ -254,16 +293,16 @@ pub fn text_key(text: &str, style: &TextStyle, size: PictureSize) -> u64 {
         None => feed(&[0]),
     }
     // Only fields that are set are fed.
-    if let Some(height) = style.max_height {
+    if let Some(height) = max_height {
         feed(&[0xf0]);
         feed(&height.to_bits().to_le_bytes());
     }
-    if let Some(fit) = style.font_size_fit {
+    if let Some(fit) = font_size_fit {
         feed(&[0xf1]);
         feed(&fit.min.to_bits().to_le_bytes());
         feed(&fit.max.unwrap_or(-1.0).to_bits().to_le_bytes());
     }
-    if let Some(clamp) = &style.line_clamp {
+    if let Some(clamp) = line_clamp {
         feed(&[0xf2]);
         feed(&clamp.max_lines.unwrap_or(0).to_le_bytes());
         feed(clamp.block_ellipsis.text().unwrap_or_default().as_bytes());
@@ -624,6 +663,12 @@ pub fn animated_text_key(
         }
     };
     feed(&[0xfa]);
+    let mut stable = alpha2_geometry::StableHash::new();
+    alpha2_eval::hash_sampled_animators(
+        &mut stable,
+        &alpha2_eval::sample_text_animators(&style.animators, time),
+    );
+    feed(&stable.finish().to_le_bytes());
     for run in content.runs() {
         feed(&run.text.len().to_le_bytes());
         for class in &run.class {

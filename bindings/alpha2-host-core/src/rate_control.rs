@@ -62,7 +62,7 @@ impl AppliedRateControl {
 const VIDEOTOOLBOX_QUALITY: [(u32, f64); 5] =
     [(23, 0.65), (27, 0.57), (31, 0.50), (35, 0.40), (41, 0.25)];
 
-/// The `VideoToolbox` quality for an H.264 `quantizer`: [`VIDEOTOOLBOX_QUALITY`] interpolated,
+/// The `VideoToolbox` quality for an H.264 `quantizer`: a measured table interpolated,
 /// extrapolated along its end segments, rounded to hundredths and clamped to 0.01-1.
 #[must_use]
 pub fn videotoolbox_quality(quantizer: u32) -> f64 {

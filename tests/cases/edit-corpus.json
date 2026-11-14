@@ -9648,6 +9648,496 @@
     "error": "sync_conflict"
   },
   {
+    "name": "ripple-trim-the-start-closes-the-head-on-sync-tracks-and-data",
+    "project": {
+      "schema_version": 1,
+      "id": "edit",
+      "name": "Edit",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "A",
+                "source_id": "v1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 120000, "end": 240000 }
+              },
+              {
+                "id": "B",
+                "source_id": "v2",
+                "timeline_range": { "start": 240000, "end": 360000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "Audio",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "M0",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 100000 },
+                "source_range": { "start": 0, "end": 100000 }
+              },
+              {
+                "id": "M",
+                "source_id": "a1",
+                "timeline_range": { "start": 180000, "end": 220000 },
+                "source_range": { "start": 180000, "end": 220000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t3",
+            "name": "Captions",
+            "kind": "caption",
+            "captions": {
+              "cues": [
+                {
+                  "timeline_range": { "start": 40000, "end": 80000 },
+                  "text": "before"
+                },
+                {
+                  "timeline_range": { "start": 180000, "end": 220000 },
+                  "text": "beside"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "held",
+          "kind": "scalars",
+          "anchor": { "type": "timeline" },
+          "channels": ["level"],
+          "interpolation": "hold",
+          "times": [0, 100000, 120000, 140000, 160000, 180000, 280000],
+          "values": [0, 25, 30, 35, 40, 45, 70]
+        },
+        {
+          "id": "ramp",
+          "kind": "scalars",
+          "anchor": { "type": "timeline" },
+          "channels": ["level"],
+          "interpolation": "linear",
+          "times": [0, 132000, 200000, 380000],
+          "values": [0, 0.33, 0.5, 0.95]
+        },
+        {
+          "id": "said",
+          "kind": "words",
+          "anchor": { "type": "timeline" },
+          "words": [
+            { "start": 128000, "end": 144000, "text": "head" },
+            { "start": 180000, "end": 200000, "text": "kept" },
+            { "start": 340000, "end": 352000, "text": "after" }
+          ]
+        },
+        {
+          "id": "quiet",
+          "kind": "intervals",
+          "anchor": { "type": "timeline" },
+          "intervals": [
+            { "start": 80000, "end": 140000 },
+            { "start": 144000, "end": 152000 },
+            { "start": 220000, "end": 260000 }
+          ]
+        }
+      ]
+    },
+    "operation": "rippleTrim",
+    "arguments": {
+      "clip": "A",
+      "edge": "start",
+      "to": 160000,
+      "syncTracks": ["t2", "t3"]
+    },
+    "expected": {
+      "schema_version": 1,
+      "id": "edit",
+      "name": "Edit",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "A",
+                "source_id": "v1",
+                "timeline_range": { "start": 120000, "end": 200000 },
+                "source_range": { "start": 160000, "end": 240000 }
+              },
+              {
+                "id": "B",
+                "source_id": "v2",
+                "timeline_range": { "start": 200000, "end": 320000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "Audio",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "M0",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 100000 },
+                "source_range": { "start": 0, "end": 100000 }
+              },
+              {
+                "id": "M",
+                "source_id": "a1",
+                "timeline_range": { "start": 140000, "end": 180000 },
+                "source_range": { "start": 180000, "end": 220000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t3",
+            "name": "Captions",
+            "kind": "caption",
+            "captions": {
+              "cues": [
+                {
+                  "timeline_range": { "start": 40000, "end": 80000 },
+                  "text": "before"
+                },
+                {
+                  "timeline_range": { "start": 140000, "end": 180000 },
+                  "text": "beside"
+                }
+              ]
+            },
+            "clips": [],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "held",
+          "kind": "scalars",
+          "anchor": { "type": "timeline" },
+          "channels": ["level"],
+          "interpolation": "hold",
+          "times": [0, 100000, 120000, 140000, 240000],
+          "values": [0, 25, 40, 45, 70]
+        },
+        {
+          "id": "ramp",
+          "kind": "scalars",
+          "anchor": { "type": "timeline" },
+          "channels": ["level"],
+          "interpolation": "linear",
+          "times": [0, 120000, 160000, 340000],
+          "values": [0, 0.4, 0.5, 0.95]
+        },
+        {
+          "id": "said",
+          "kind": "words",
+          "anchor": { "type": "timeline" },
+          "words": [
+            { "start": 140000, "end": 160000, "text": "kept" },
+            { "start": 300000, "end": 312000, "text": "after" }
+          ]
+        },
+        {
+          "id": "quiet",
+          "kind": "intervals",
+          "anchor": { "type": "timeline" },
+          "intervals": [
+            { "start": 80000, "end": 120000 },
+            { "start": 180000, "end": 220000 }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "ripple-trim-the-start-opens-time-at-the-head-on-sync-tracks-and-data",
+    "project": {
+      "schema_version": 1,
+      "id": "edit",
+      "name": "Edit",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "A",
+                "source_id": "v1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 120000, "end": 240000 }
+              },
+              {
+                "id": "B",
+                "source_id": "v2",
+                "timeline_range": { "start": 240000, "end": 360000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "Audio",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "M0",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 100000 },
+                "source_range": { "start": 0, "end": 100000 }
+              },
+              {
+                "id": "M",
+                "source_id": "a1",
+                "timeline_range": { "start": 180000, "end": 220000 },
+                "source_range": { "start": 180000, "end": 220000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t3",
+            "name": "Captions",
+            "kind": "caption",
+            "captions": {
+              "cues": [
+                {
+                  "timeline_range": { "start": 40000, "end": 80000 },
+                  "text": "before"
+                },
+                {
+                  "timeline_range": { "start": 180000, "end": 220000 },
+                  "text": "beside"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "held",
+          "kind": "scalars",
+          "anchor": { "type": "timeline" },
+          "channels": ["level"],
+          "interpolation": "hold",
+          "times": [0, 100000, 120000, 140000, 160000, 180000, 280000],
+          "values": [0, 25, 30, 35, 40, 45, 70]
+        },
+        {
+          "id": "ramp",
+          "kind": "scalars",
+          "anchor": { "type": "timeline" },
+          "channels": ["level"],
+          "interpolation": "linear",
+          "times": [0, 132000, 200000, 380000],
+          "values": [0, 0.33, 0.5, 0.95]
+        },
+        {
+          "id": "said",
+          "kind": "words",
+          "anchor": { "type": "timeline" },
+          "words": [
+            { "start": 128000, "end": 144000, "text": "head" },
+            { "start": 180000, "end": 200000, "text": "kept" },
+            { "start": 340000, "end": 352000, "text": "after" }
+          ]
+        },
+        {
+          "id": "quiet",
+          "kind": "intervals",
+          "anchor": { "type": "timeline" },
+          "intervals": [
+            { "start": 80000, "end": 140000 },
+            { "start": 144000, "end": 152000 },
+            { "start": 220000, "end": 260000 }
+          ]
+        }
+      ]
+    },
+    "operation": "rippleTrim",
+    "arguments": {
+      "clip": "A",
+      "edge": "start",
+      "to": 80000,
+      "syncTracks": ["t2", "t3"]
+    },
+    "expected": {
+      "schema_version": 1,
+      "id": "edit",
+      "name": "Edit",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "A",
+                "source_id": "v1",
+                "timeline_range": { "start": 120000, "end": 280000 },
+                "source_range": { "start": 80000, "end": 240000 }
+              },
+              {
+                "id": "B",
+                "source_id": "v2",
+                "timeline_range": { "start": 280000, "end": 400000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "Audio",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "M0",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 100000 },
+                "source_range": { "start": 0, "end": 100000 }
+              },
+              {
+                "id": "M",
+                "source_id": "a1",
+                "timeline_range": { "start": 220000, "end": 260000 },
+                "source_range": { "start": 180000, "end": 220000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t3",
+            "name": "Captions",
+            "kind": "caption",
+            "captions": {
+              "cues": [
+                {
+                  "timeline_range": { "start": 40000, "end": 80000 },
+                  "text": "before"
+                },
+                {
+                  "timeline_range": { "start": 220000, "end": 260000 },
+                  "text": "beside"
+                }
+              ]
+            },
+            "clips": [],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "held",
+          "kind": "scalars",
+          "anchor": { "type": "timeline" },
+          "channels": ["level"],
+          "interpolation": "hold",
+          "times": [0, 100000, 120000, 160000, 180000, 200000, 220000, 320000],
+          "values": [0, 25, 30, 30, 35, 40, 45, 70]
+        },
+        {
+          "id": "ramp",
+          "kind": "scalars",
+          "anchor": { "type": "timeline" },
+          "channels": ["level"],
+          "interpolation": "linear",
+          "times": [0, 120000, 160000, 172000, 240000, 420000],
+          "values": [0, 0.3, 0.3, 0.33, 0.5, 0.95]
+        },
+        {
+          "id": "said",
+          "kind": "words",
+          "anchor": { "type": "timeline" },
+          "words": [
+            { "start": 168000, "end": 184000, "text": "head" },
+            { "start": 220000, "end": 240000, "text": "kept" },
+            { "start": 380000, "end": 392000, "text": "after" }
+          ]
+        },
+        {
+          "id": "quiet",
+          "kind": "intervals",
+          "anchor": { "type": "timeline" },
+          "intervals": [
+            { "start": 80000, "end": 180000 },
+            { "start": 184000, "end": 192000 },
+            { "start": 260000, "end": 300000 }
+          ]
+        }
+      ]
+    }
+  },
+  {
     "name": "ripple-trim-refused-where-a-video-sync-track-would-overlap",
     "project": {
       "schema_version": 1,

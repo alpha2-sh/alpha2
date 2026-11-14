@@ -63,6 +63,7 @@ mod plugins;
 mod providers;
 mod render_cache;
 mod rendering;
+mod request_isolation;
 mod requests;
 mod stalls;
 mod stills;

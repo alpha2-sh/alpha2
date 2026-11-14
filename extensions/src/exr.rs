@@ -14,6 +14,7 @@ use std::sync::Arc;
 use alpha2_model::{LinearPrimaries, ProviderSource};
 use alpha2_time::MediaTime;
 use exr::block::reader::ChunksReader as _;
+use exr::meta::BlockDescription;
 use exr::meta::attribute::{ChannelDescription, ChannelList, SampleType};
 use half::f16;
 
@@ -24,6 +25,10 @@ use crate::api::{
 use crate::budget::{MAX_CANVAS_PIXELS, check_canvas};
 
 const MAGIC: [u8; 4] = [0x76, 0x2f, 0x31, 0x01];
+
+/// Most bytes one block of a part may decompress to. The decoder holds a block of every channel,
+/// shown or not, and peaks at two to three times its size.
+pub(crate) const MAX_EXR_BLOCK_BYTES: u64 = 256 << 20;
 
 pub(crate) fn is_exr(bytes: &[u8]) -> bool {
     bytes.starts_with(&MAGIC)
@@ -124,8 +129,8 @@ pub(crate) fn project_color(primaries: LinearPrimaries) -> LinearColor {
     }
 }
 
-/// Decodes an OpenEXR file, overriding its color with `color` when given. Only the shown part's
-/// shown channels are decompressed, placed into the canvas block by block.
+/// Decodes an OpenEXR file, overriding its color with `color` when given. Only the shown part is
+/// decompressed, with all its channels, and its shown channels are placed block by block.
 pub(crate) fn decode_exr(
     bytes: &[u8],
     color: Option<LinearColor>,
@@ -138,6 +143,7 @@ pub(crate) fn decode_exr(
             "deep OpenEXR data is not supported".into(),
         ));
     }
+    check_block_bytes(headers)?;
     let Some(part) = headers.iter().position(|header| {
         !header.deep
             && channels_shown(header.channels.list.iter().map(|c| c.name.to_string())).is_some()
@@ -348,6 +354,32 @@ fn check_part(
         });
     }
     Ok(diagnostics)
+}
+
+/// Refuses a file with a flat part whose largest block decompresses past
+/// [`MAX_EXR_BLOCK_BYTES`], shown or not. Saturating, since a hostile tile size overflows the exr
+/// crate's own block size.
+fn check_block_bytes(headers: &[exr::meta::header::Header]) -> Result<(), ExtensionError> {
+    let wide = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);
+    for header in headers.iter().filter(|header| !header.deep) {
+        let (columns, rows) = match header.blocks {
+            BlockDescription::Tiles(tiles) => (tiles.tile_size.x(), tiles.tile_size.y()),
+            BlockDescription::ScanLines => (
+                header.layer_size.x(),
+                header.compression.scan_lines_per_block(),
+            ),
+        };
+        let bytes = wide(header.channels.bytes_per_pixel)
+            .saturating_mul(wide(columns))
+            .saturating_mul(wide(rows));
+        if bytes > MAX_EXR_BLOCK_BYTES {
+            return Err(ExtensionError::Budget(format!(
+                "a part decodes blocks of {bytes} bytes for its {} channels, more than {MAX_EXR_BLOCK_BYTES}",
+                header.channels.list.len()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Where data-window position `at` lands in the display window, if inside.

@@ -81,8 +81,10 @@ pub fn claim_stdout() -> io::Result<std::fs::File> {
     }
 }
 
+pub(crate) const PARENT_EXITED_NAME: &str = "PARENT_EXITED";
+
 /// Reported like `SIGTERM`.
-const PARENT_EXITED: Termination = Termination::new("PARENT_EXITED", 143, false);
+const PARENT_EXITED: Termination = Termination::new(PARENT_EXITED_NAME, 143, false);
 
 /// Calls the [`crate::on_termination`] handler with a `PARENT_EXITED` termination (status 143)
 /// when the parent process exits, or at once if it already has.

@@ -57,12 +57,16 @@ pub const NATIVE_ENTRY: &[u8] = b"alpha2_plugin_v1\0";
 
 /// What a host gives a native plugin instance. Every function takes `context` first.
 ///
-/// Pointers passed to these functions are borrowed for the call alone.
+/// Pointers passed to these functions are borrowed for the call alone. `/1` grows only by fields
+/// appended here; a plugin reads `abi` and `size` first and uses a later field only when `size`
+/// covers it.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct HostV1 {
     /// [`ABI_MAJOR`].
     pub abi: u32,
+    /// Bytes of the table as the host that filled it knows it.
+    pub size: u32,
     /// The host's own state for this instance.
     pub context: *mut c_void,
     /// Takes a batch of [`records`]; returns [`status::OK`], or [`status::FAILED`] once the
@@ -85,12 +89,15 @@ pub struct HostV1 {
 /// The static table a native plugin's [`NATIVE_ENTRY`] returns, which outlives every instance.
 ///
 /// Calls other than `describe` and `create` take the instance `create` returned. Pointers passed to
-/// the plugin are borrowed for the call alone.
+/// the plugin are borrowed for the call alone. Every entry is required. `/1` grows only by fields
+/// appended here; a host reads `abi` and `size` first and refuses a table shorter than its own.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct PluginV1 {
     /// [`ABI_MAJOR`].
     pub abi: u32,
+    /// Bytes of the table as the plugin that filled it knows it.
+    pub size: u32,
     /// The descriptor as UTF-8 JSON and its length; static, valid while the library is loaded.
     pub describe: unsafe extern "C" fn(len: *mut usize) -> *const u8,
     /// A new instance that calls `host`'s functions; null when it cannot be made. `host` stays

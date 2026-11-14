@@ -1,5 +1,6 @@
-//! Checks a wasm artifact. It must validate without relaxed SIMD, threads or shared memory, import
-//! only the `alpha2` host functions, and export every `alpha2-plugin/1` function.
+//! Checks a wasm artifact. It must validate without relaxed SIMD, threads, shared memory, more than
+//! one memory or 64-bit memory, import only the `alpha2` host functions, and export every
+//! `alpha2-plugin/1` function.
 
 use wasmparser::{Parser, Payload, TypeRef, Validator, WasmFeatures};
 
@@ -17,14 +18,17 @@ const EXPORTS: [&str; 10] = [
     "alpha2_end",
 ];
 
-/// The default features minus those whose results differ between runtimes or that need threads.
+/// The default features minus those whose results differ between runtimes, that need threads, or
+/// that give a module memory the ABI cannot address. Mirrors the host loader's list.
 fn features() -> WasmFeatures {
     let mut features = WasmFeatures::default();
     features.remove(
         WasmFeatures::RELAXED_SIMD
             | WasmFeatures::THREADS
             | WasmFeatures::SHARED_EVERYTHING_THREADS
-            | WasmFeatures::COMPONENT_MODEL,
+            | WasmFeatures::COMPONENT_MODEL
+            | WasmFeatures::MULTI_MEMORY
+            | WasmFeatures::MEMORY64,
     );
     features
 }
@@ -124,6 +128,26 @@ mod tests {
         module.extend_from_slice(&[0x05, 0x04, 0x01, 0x03, 0x01, 0x01]);
         let shared = refusal(&module);
         assert!(shared.contains("threads must be enabled"), "{shared}");
+    }
+
+    #[test]
+    fn a_second_memory_and_a_64_bit_memory_are_refused() {
+        let mut two = HEADER.to_vec();
+        // Two memories of one page each.
+        two.extend_from_slice(&[0x05, 0x05, 0x02, 0x00, 0x01, 0x00, 0x01]);
+        let refused = refusal(&two);
+        assert!(
+            refused.starts_with("the module uses a feature"),
+            "{refused}"
+        );
+        let mut wide = HEADER.to_vec();
+        // One memory with the 64-bit flag, minimum one page.
+        wide.extend_from_slice(&[0x05, 0x03, 0x01, 0x04, 0x01]);
+        let refused = refusal(&wide);
+        assert!(
+            refused.starts_with("the module uses a feature"),
+            "{refused}"
+        );
     }
 
     #[test]

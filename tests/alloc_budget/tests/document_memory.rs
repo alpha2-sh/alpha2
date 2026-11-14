@@ -1,9 +1,9 @@
-//! Peak heap held while reading a Lottie document, dotLottie package, or PDF page, as a multiple
-//! of its size or against a fixed bound.
+//! Peak heap held while reading an SVG, Lottie document, dotLottie package, EXR image, or PDF
+//! page, as a multiple of its size or against a fixed bound.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
-#![cfg(any(feature = "lottie", feature = "pdf"))]
+#![cfg(any(feature = "svg", feature = "lottie", feature = "exr", feature = "pdf"))]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 #[cfg(feature = "lottie")]
 use alpha2_extensions::LottieProvider;
+#[cfg(feature = "svg")]
+use alpha2_extensions::SvgProvider;
 use alpha2_extensions::{ExtensionError, NoResources, VisualProvider};
 #[cfg(feature = "lottie")]
 use alpha2_model::MAX_LOTTIE_DOCUMENT_BYTES;
@@ -378,4 +380,110 @@ fn a_pdf_page_of_one_photo_opens_holding_a_few_times_its_pixels() {
     eprintln!("open held {held:.1} times the file");
     // Covers the decoded samples, their PNG, its base64 in the SVG, and usvg's decoded copy.
     assert!(held < 12.0, "the open held {held:.1} times the file");
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_whose_entities_expand_to_a_hundred_million_elements_is_refused_holding_little() {
+    let bytes: Arc<[u8]> = format!(
+        concat!(
+            "<?xml version=\"1.0\"?>\n<!DOCTYPE svg [\n<!ENTITY b \"{}\">\n]>\n",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">{}</svg>\n"
+        ),
+        "<g/>".repeat(1000),
+        "&b;".repeat(100_000)
+    )
+    .into_bytes()
+    .into();
+    let (opened, held) = peak_ratio(&bytes, || {
+        SvgProvider
+            .open(Arc::clone(&bytes), &ProviderSource::Svg, &NoResources)
+            .map(drop)
+    });
+    assert!(
+        matches!(opened, Err(ExtensionError::Budget(_))),
+        "{opened:?}"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let held = held * bytes.len() as f64;
+    eprintln!("held {held:.0} bytes");
+    // The parser's node limit holds about 300 MB of nodes before it refuses.
+    assert!(held < 512.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
+}
+
+/// A ZIP-compressed EXR file of one 3840 by 2160 tile with B, G, R and `extra` float channels, whose only
+/// chunk holds a 9-byte zlib stream.
+#[cfg(feature = "exr")]
+fn exr_one_tile(extra: usize) -> Arc<[u8]> {
+    fn attribute(out: &mut Vec<u8>, name: &str, kind: &str, value: &[u8]) {
+        out.extend_from_slice(&[name.as_bytes(), b"\0", kind.as_bytes(), b"\0"].concat());
+        out.extend_from_slice(&u32::try_from(value.len()).expect("size").to_le_bytes());
+        out.extend_from_slice(value);
+    }
+    let channel = |name: &str, pixel_type: u32| {
+        let mut bytes = [name.as_bytes(), b"\0"].concat();
+        for word in [pixel_type, 0, 1, 1] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    };
+    let mut list = ["B", "G", "R"].map(|name| channel(name, 1)).concat();
+    for at in 0..extra {
+        list.extend(channel(&format!("c{at:06}"), 2));
+    }
+    list.push(0);
+    let window = [0_i32, 0, 3839, 2159].map(i32::to_le_bytes).concat();
+    let mut tiles = [3840_u32, 2160].map(u32::to_le_bytes).concat();
+    tiles.push(0);
+    let mut out = [20_000_630_u32, 0x202].map(u32::to_le_bytes).concat();
+    attribute(&mut out, "channels", "chlist", &list);
+    attribute(&mut out, "compression", "compression", &[3]);
+    attribute(&mut out, "dataWindow", "box2i", &window);
+    attribute(&mut out, "displayWindow", "box2i", &window);
+    attribute(&mut out, "lineOrder", "lineOrder", &[0]);
+    attribute(
+        &mut out,
+        "pixelAspectRatio",
+        "float",
+        &1.0_f32.to_le_bytes(),
+    );
+    attribute(&mut out, "screenWindowCenter", "v2f", &[0; 8]);
+    attribute(
+        &mut out,
+        "screenWindowWidth",
+        "float",
+        &1.0_f32.to_le_bytes(),
+    );
+    attribute(&mut out, "tiles", "tiledesc", &tiles);
+    out.push(0);
+    let chunk = u64::try_from(out.len() + 8).expect("offset");
+    out.extend_from_slice(&chunk.to_le_bytes());
+    out.extend_from_slice(&[0; 16]);
+    out.extend_from_slice(&9_i32.to_le_bytes());
+    out.extend_from_slice(&[0x78, 0x9c, 0x63, 0, 0, 0, 1, 0, 1]);
+    out.into()
+}
+
+#[cfg(feature = "exr")]
+#[test]
+fn an_exr_header_of_sixty_thousand_channels_is_refused_holding_little() {
+    let bytes = exr_one_tile(60_000);
+    let (opened, held) = peak_ratio(&bytes, || {
+        alpha2_extensions::ExrProvider
+            .open(
+                Arc::clone(&bytes),
+                &ProviderSource::Exr { primaries: None },
+                &NoResources,
+            )
+            .map(drop)
+    });
+    assert!(
+        matches!(opened, Err(ExtensionError::Budget(_))),
+        "{opened:?}"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let held = held * bytes.len() as f64;
+    eprintln!("held {held:.0} bytes");
+    // The parsed channel list; the 2 TB block it describes is never allocated.
+    assert!(held < 16.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
 }

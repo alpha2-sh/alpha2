@@ -36,7 +36,7 @@ export type ComposeDocument = Readonly<Record<string, unknown>>;
 export interface ComposeRequirements {
   readonly media: readonly {
     readonly path: string;
-    readonly kind: "video" | "image" | "audio" | null;
+    readonly kind: "video" | "image" | "audio";
   }[];
   readonly texts: readonly string[];
 }

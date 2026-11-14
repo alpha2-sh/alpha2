@@ -646,3 +646,30 @@ fn a_d3d12va_stream_whose_sps_brings_a_left_crop_in_band_decodes_it_in_hardware(
     );
     assert_eq!(decoder.hardware_failure(), None, "{name}");
 }
+
+/// The renderer gets the 10-bit codes as stored, under the identity matrix; it applies the scale.
+#[test]
+fn ten_bit_rgb_reaches_the_renderer_as_ten_bit_identity_planes() {
+    let name = "rgb10-bt2020.mkv";
+    let mut decoder = NativeDecoder::open(corpus(name)).expect(name);
+    let frame = first_frame(&mut decoder, name);
+    assert_eq!(
+        frame.pixel_format,
+        PixelFormat::Yuv(YuvFormat::planar(0, 0, 10)),
+        "{name}"
+    );
+    assert_eq!(
+        frame.color.map(|color| color.matrix),
+        Some(ColorMatrix::Rgb)
+    );
+    let maxima = frame
+        .planes
+        .iter()
+        .map(|plane| (0..plane.height).flat_map(|row| row16(plane, row)).max())
+        .collect::<Vec<_>>();
+    // The fixture's red is 1018 of 1023.
+    assert!(
+        maxima[0] > Some(1000) && maxima[1..] == [Some(0), Some(0)],
+        "{name}: red, green, blue maxima {maxima:?}"
+    );
+}

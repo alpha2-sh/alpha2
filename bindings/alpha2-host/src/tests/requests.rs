@@ -1599,6 +1599,32 @@ impl ServeChild {
         stdin.flush().expect("flush");
     }
 
+    #[cfg(unix)]
+    /// The exit status if the child ends within `limit`.
+    pub(super) fn exited_within(&mut self, limit: Duration) -> Option<std::process::ExitStatus> {
+        let started = Instant::now();
+        loop {
+            if let Some(status) = self.child.try_wait().expect("child status") {
+                return Some(status);
+            }
+            if started.elapsed() > limit {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(unix)]
+    pub(super) fn terminate(&self) {
+        let killed = std::process::Command::new("kill")
+            .args(["-TERM", &self.child.id().to_string()])
+            .status()
+            .expect("kill");
+        assert!(killed.success());
+    }
+
     pub(super) fn finish(mut self) -> Option<i32> {
         drop(self.stdin.take());
         let started = Instant::now();
@@ -1631,6 +1657,18 @@ fn serve_standard_input() {
         });
         std::thread::sleep(Duration::from_millis(20));
     }
+    if std::env::var_os("ALPHA2_TEST_REQUEST_PARK").is_some() {
+        crate::compose_request::INJECT_REQUEST_PARK
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_TERMINATION_GRACE_MS") {
+        *crate::termination::TEST_GRACE.lock().expect("grace") =
+            Some(Duration::from_millis(milliseconds.parse().expect("ms")));
+    }
+    if std::env::var_os("ALPHA2_TEST_REQUEST_PANIC").is_some() {
+        crate::compose_request::INJECT_REQUEST_PANIC
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_SLOW_ENCODE_MS") {
         let milliseconds = milliseconds.parse().expect("milliseconds");
         *crate::encode::SERVE_SLOW_ENCODE
@@ -1659,7 +1697,10 @@ fn serve_writes_ready_before_reading_input() {
 #[test]
 fn the_end_of_input_finishes_queued_requests_before_exiting() {
     let _gpu = gpu_test_lock();
-    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[("ALPHA2_TEST_SERVE_ARGS", "--max-running 2")],
+    );
     serving.write(r#"{"protocolVersion":2,"requestId":"one","operation":"capabilities"}"#);
     serving.write(r#"{"protocolVersion":2,"requestId":"two","operation":"capabilities"}"#);
     drop(serving.stdin.take());
@@ -2002,7 +2043,13 @@ fn a_cancel_line_stops_the_running_export_and_the_host_serves_the_next_request()
         "output": output
     });
     // 120 frames at 100 ms each: far longer than the cancel takes to arrive.
-    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SLOW_ENCODE_MS", "100")]);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_SLOW_ENCODE_MS", "100"),
+            ("ALPHA2_TEST_SERVE_ARGS", "--max-running 2"),
+        ],
+    );
     assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
     serving.write(&export.to_string());
     let progress = serving.message(Duration::from_secs(60));
@@ -2134,4 +2181,268 @@ fn every_line_the_host_writes_is_ascii_and_reads_back_the_same() {
         "{text}"
     );
     assert_eq!(serde_json::from_str::<Value>(text).expect("JSON"), value);
+}
+
+#[test]
+fn a_request_that_panics_is_answered_and_the_host_serves_the_next() {
+    let edit = json!({
+        "protocolVersion": 2, "requestId": "P", "operation": "edit",
+        "project": {
+            "schema_version": 1, "id": "p", "name": "P",
+            "settings": {"width": 64, "height": 48, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [], "timeline": {"tracks": []}
+        },
+        "edit": {"op": "remove_ranges", "ranges": []}
+    });
+    let compose =
+        r#"{"protocolVersion":2,"requestId":"P","operation":"compose","action":"templates"}"#;
+    for first in [compose.to_owned(), edit.to_string()] {
+        let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_REQUEST_PANIC", "1")]);
+        assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+        serving.write(&first);
+        let answer = serving.message(Duration::from_secs(10));
+        assert_eq!(answer["requestId"], "P", "{answer}");
+        assert_eq!(answer["error"]["code"], "INTERNAL", "{answer}");
+        assert!(
+            answer["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("injected panic")),
+            "{answer}"
+        );
+        serving.write(r#"{"protocolVersion":2,"requestId":"st","operation":"status"}"#);
+        let status = serving.message(Duration::from_secs(10));
+        assert_eq!(
+            status["result"]["details"]["runningRequests"], 0,
+            "{status}"
+        );
+        assert_eq!(status["result"]["details"]["activity"], "idle", "{status}");
+        serving.write(&templates("next"));
+        let next = serving.message(Duration::from_secs(10));
+        assert_eq!(next["requestId"], "next", "{next}");
+        assert_eq!(next["ok"], true, "{next}");
+        assert_eq!(serving.finish(), Some(0));
+    }
+}
+
+#[test]
+fn an_unknown_operation_names_every_operation_the_host_takes() {
+    let error = parse_request(r#"{"protocolVersion":2,"requestId":"x","operation":"bogus"}"#)
+        .err()
+        .expect("refused");
+    assert_eq!(error.code, "INVALID_REQUEST");
+    for operation in [
+        "capabilities",
+        "export",
+        "conform",
+        "still",
+        "compose",
+        "edit",
+        "extract",
+        "cancel",
+        "status",
+    ] {
+        assert!(
+            error.message.contains(&format!("`{operation}`")),
+            "{operation}: {}",
+            error.message
+        );
+    }
+}
+
+/// An adapter whose intermediate is 8-bit refuses a 10-bit export with a code the protocol lists.
+#[test]
+fn ten_bit_output_on_an_eight_bit_renderer_is_invalid_input() {
+    let _gpu = gpu_test_lock();
+    crate::INJECT_RGBA8_INTERMEDIATE.with(|inject| inject.set(true));
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
+    assert_eq!(
+        host.device().renderer.intermediate_format(),
+        wgpu::TextureFormat::Rgba8Unorm
+    );
+    let directory = scratch_directory("ten-bit-on-eight");
+    let end = alpha2_time::TICKS_PER_SECOND / 10;
+    let request = json!({
+        "protocolVersion": 2, "operation": "export", "requestId": "U",
+        "project": {
+            "schema_version": 1, "id": "p", "name": "P",
+            "settings": {"width": 64, "height": 48, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [], "timeline": {"tracks": []}
+        },
+        "assets": {},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "prores",
+        "bitDepth": 10,
+        "output": directory.join("out.mov")
+    });
+    let error = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |_| Ok(()),
+        )
+        .expect_err("refused");
+    assert_eq!(error.code, "INVALID_INPUT", "{}", error.message);
+}
+
+#[test]
+fn every_operation_refuses_an_unknown_field_and_takes_an_attachment_list() {
+    let project = json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": {"width": 64, "height": 48, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+        "sources": [], "timeline": {"tracks": []}
+    });
+    let requests = [
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "export", "project": project,
+               "assets": {}, "startTicks": 0, "endTicks": 4000, "frameRate": {"num": 30, "den": 1},
+               "output": "/nowhere/out.mp4"}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "conform", "project": project}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "compose", "action": "templates"}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "edit", "project": project,
+               "edit": {"op": "split_at", "time": 0}}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "capabilities"}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "still", "project": project,
+               "assets": {}, "stills": [{"time": 0}]}),
+    ];
+    let refusal = |result: Result<(), HostError>, what: &str| {
+        let error = result.err().unwrap_or_else(|| panic!("{what}: accepted"));
+        assert_eq!(error.code, "INVALID_REQUEST", "{what}: {}", error.message);
+        assert!(
+            error.message.contains("aUnknownField"),
+            "{what}: {}",
+            error.message
+        );
+    };
+    for request in &requests {
+        let operation = request["operation"].as_str().expect("operation");
+        let mut with_attachments = request.clone();
+        with_attachments["attachments"] = json!([]);
+        assert!(
+            parse_request(&with_attachments.to_string()).is_ok(),
+            "{operation} with an attachment list"
+        );
+        let mut unknown = request.clone();
+        unknown["aUnknownField"] = json!(true);
+        refusal(parse_request(&unknown.to_string()).map(|_| ()), operation);
+    }
+    let cancel =
+        json!({"protocolVersion": 2, "requestId": "c", "operation": "cancel", "target": "r"});
+    let status = json!({"protocolVersion": 2, "requestId": "s", "operation": "status"});
+    for (name, request) in [("cancel", &cancel), ("status", &status)] {
+        let mut unknown = request.clone();
+        unknown["aUnknownField"] = json!(true);
+        let parse = |line: &str| {
+            if name == "cancel" {
+                crate::protocol::parse_cancel(line).map(|_| ())
+            } else {
+                crate::protocol::parse_status(line).map(|_| ())
+            }
+        };
+        let mut with_attachments = request.clone();
+        with_attachments["attachments"] = json!([]);
+        assert!(parse(&with_attachments.to_string()).is_ok(), "{name}");
+        refusal(parse(&unknown.to_string()), name);
+    }
+    for (field, value) in [
+        ("includeaudio", json!(false)),
+        ("overWrite", json!(true)),
+        ("bitdepth", json!(10)),
+        ("inputpolicy", json!("cpu-readback")),
+        ("loudnes", json!({"targetLufs": -16.0})),
+        ("rendercache", json!({"directory": "/nowhere"})),
+        ("proxys", json!({})),
+    ] {
+        let mut request = requests[0].clone();
+        request[field] = value;
+        let error = parse_request(&request.to_string())
+            .err()
+            .unwrap_or_else(|| panic!("{field}: accepted"));
+        assert_eq!(error.code, "INVALID_REQUEST", "{field}");
+        assert!(error.message.contains(field), "{field}: {}", error.message);
+    }
+    let mut rate = requests[0].clone();
+    rate["frameRate"]["denominator"] = json!(1);
+    assert_eq!(
+        parse_request(&rate.to_string())
+            .err()
+            .map(|error| error.code),
+        Some("INVALID_REQUEST")
+    );
+}
+
+/// A request thread that never returns cannot keep a terminated host alive past its grace.
+#[cfg(unix)]
+#[test]
+fn a_terminated_host_whose_request_never_returns_exits_at_its_deadline() {
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_REQUEST_PARK", "1"),
+            ("ALPHA2_TEST_TERMINATION_GRACE_MS", "1000"),
+        ],
+    );
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    serving.write(&templates("parked"));
+    std::thread::sleep(Duration::from_millis(300));
+    serving.terminate();
+    let status = serving
+        .exited_within(Duration::from_secs(10))
+        .expect("the host outlived its deadline");
+    assert_eq!(status.code(), Some(143));
+}
+
+/// A client that stops reading cannot hold the exit: the deadline writes nothing.
+#[cfg(unix)]
+#[test]
+fn a_terminated_host_whose_output_nobody_reads_exits_at_its_deadline() {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            SERVE_CHILD,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("ALPHA2_TEST_TERMINATION_GRACE_MS", "1000")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("child");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let frame = alpha2_host_core::host_frames::frame_bytes(
+        br#"{"protocolVersion":2,"requestId":"st","operation":"status"}"#,
+        &[],
+    )
+    .expect("frame");
+    // Under a pipe's worth of requests, whose answers are far more than a pipe holds.
+    for _ in 0..800 {
+        if stdin.write_all(&frame).is_err() {
+            break;
+        }
+    }
+    let _ = stdin.flush();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status()
+            .expect("kill")
+            .success()
+    );
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("child status") {
+            break Some(status);
+        }
+        if started.elapsed() > Duration::from_secs(10) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    drop(stdin);
+    assert_eq!(status.and_then(|status| status.code()), Some(143));
 }

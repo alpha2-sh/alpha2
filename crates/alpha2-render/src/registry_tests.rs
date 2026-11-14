@@ -103,6 +103,64 @@ fn a_call_chain_that_inlines_exponentially_is_refused_at_registration() {
     }
 }
 
+/// The doubling chain of `call_budget::call_chain`, with each function named by `name` and
+/// `gap` between a callee and its `(`.
+fn spelled_call_chain(depth: usize, name: impl Fn(usize) -> String, gap: &str) -> String {
+    let base = format!(
+        "fn {}(x: f32) -> f32 {{ return fract(x * 1.0001 + 0.37); }}\n",
+        name(0)
+    );
+    let levels = (1..=depth).map(|level| {
+        let callee = name(level - 1);
+        format!(
+            "fn {}(x: f32) -> f32 {{ return {callee}{gap}({callee}{gap}(x)); }}\n",
+            name(level)
+        )
+    });
+    let effect = format!(
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f {{ return vec4f({}{gap}(uv.x), src.g, src.b, src.a); }}",
+        name(depth)
+    );
+    std::iter::once(base)
+        .chain(levels)
+        .chain([effect])
+        .collect()
+}
+
+#[test]
+fn runtime_effect_code_outside_comments_is_ascii() {
+    let refused = |body: &str| {
+        let error = validate_wgsl_body(body).expect_err("non-ASCII code");
+        assert!(
+            error.messages[0]
+                .message
+                .contains("a runtime effect's code is ASCII"),
+            "{error:?}"
+        );
+    };
+    let ascii = |level: usize| format!("f{level}");
+    assert_eq!(
+        spelled_call_chain(13, ascii, ""),
+        crate::call_budget::call_chain(13)
+    );
+    refused(&spelled_call_chain(
+        13,
+        |level| format!("\u{e9}{level}"),
+        "",
+    ));
+    refused(&spelled_call_chain(13, ascii, "\u{200e}"));
+    refused(&spelled_call_chain(13, ascii, "\u{200f}"));
+    refused(
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f { var acc = 0.0; for (var i = 0u; i < 4u; i++) { i\u{200e}= 0u; acc += 1.0; } return vec4f(acc); }",
+    );
+    assert_eq!(
+        validate_wgsl_body(
+            "// d\u{e9}grad\u{e9} \u{2014} \u{200e}\nfn effect(uv: vec2f, src: vec4f) -> vec4f { /* \u{e9}t\u{e9} */ return src; }"
+        ),
+        Ok(())
+    );
+}
+
 #[test]
 fn a_body_cannot_name_what_the_wrapper_declares() {
     // A body that could assign the loop guard would reset it and never end.

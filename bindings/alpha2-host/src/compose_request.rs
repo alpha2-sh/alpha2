@@ -25,12 +25,37 @@ fn parsed(text: &str) -> Result<Value, HostError> {
     serde_json::from_str(text).map_err(|error| HostError::new("INTERNAL", error.to_string()))
 }
 
+/// Makes the next `compose` or `edit` request panic, as a defect inside the engine would.
+#[cfg(test)]
+pub static INJECT_REQUEST_PANIC: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Parks the next `compose` or `edit` request's thread for good, as a call that never returns.
+#[cfg(test)]
+pub static INJECT_REQUEST_PARK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn injected_panic(operation: &str) {
+    if INJECT_REQUEST_PARK.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        loop {
+            std::thread::park();
+        }
+    }
+    assert!(
+        !INJECT_REQUEST_PANIC.swap(false, std::sync::atomic::Ordering::Relaxed),
+        "injected panic in {operation}"
+    );
+}
+
 /// Answers a compose request.
 ///
 /// # Errors
 /// `INVALID_REQUEST` for an unknown action or a missing field, `INVALID_INPUT` for a spec,
 /// template or data that does not compile or bind, and an I/O failure reading a font file.
 pub fn answer(request: &ComposeRequest) -> Result<Value, HostError> {
+    #[cfg(test)]
+    injected_panic("compose");
     let options = || {
         json!({
             "theme": request.theme,

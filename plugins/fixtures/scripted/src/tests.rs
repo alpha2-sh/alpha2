@@ -179,3 +179,46 @@ fn the_descriptor_is_the_file() {
     assert_eq!(described["id"], "alpha2.test.scripted");
     assert_eq!(described["outputs"].as_array().map(Vec::len), Some(5));
 }
+
+#[test]
+fn the_table_states_its_size_and_create_refuses_a_shorter_host_table() {
+    use alpha2_plugin_abi::{ABI_MAJOR, HostV1, PluginV1};
+    use std::ffi::c_void;
+
+    unsafe extern "C" fn emit(_: *mut c_void, _: *const u8, _: usize) -> i32 {
+        status::OK
+    }
+    unsafe extern "C" fn resource(
+        _: *mut c_void,
+        _: *const u8,
+        _: usize,
+        _: *mut usize,
+    ) -> *const u8 {
+        std::ptr::null()
+    }
+    unsafe extern "C" fn fail(_: *mut c_void, _: *const u8, _: usize) {}
+    unsafe extern "C" fn log(_: *mut c_void, _: u32, _: *const u8, _: usize) {}
+
+    // SAFETY: the plugin's own entry returns its static table.
+    let table = unsafe { *alpha2_plugin_v1() };
+    assert_eq!(table.size as usize, size_of::<PluginV1>());
+    let full = u32::try_from(size_of::<HostV1>()).expect("small");
+    for (size, created) in [(full, true), (full - 8, false)] {
+        let host = HostV1 {
+            abi: ABI_MAJOR,
+            size,
+            context: std::ptr::null_mut(),
+            emit,
+            resource,
+            fail,
+            log,
+        };
+        // SAFETY: the host table outlives the instance, destroyed below.
+        let instance = unsafe { (table.create)(&raw const host) };
+        assert_eq!(!instance.is_null(), created, "{size}");
+        if created {
+            // SAFETY: the instance `create` returned, destroyed once.
+            unsafe { (table.destroy)(instance) };
+        }
+    }
+}

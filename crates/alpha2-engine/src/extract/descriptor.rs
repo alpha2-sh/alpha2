@@ -174,6 +174,19 @@ impl OutputSpec {
             DataKind::Words | DataKind::Intervals => 0,
         }
     }
+
+    /// The most samples, words or intervals one data set of this output holds, from the data
+    /// limits ([`alpha2_model::MAX_DATA_VALUES`] counts numbers, not samples).
+    #[must_use]
+    pub fn max_items(&self) -> usize {
+        match self.kind {
+            DataKind::Points | DataKind::Scalars | DataKind::Similarity => {
+                alpha2_model::MAX_DATA_VALUES / self.sample_width().max(1)
+            }
+            DataKind::Words => alpha2_model::MAX_DATA_WORDS,
+            DataKind::Intervals => alpha2_model::MAX_DATA_INTERVALS,
+        }
+    }
 }
 
 /// How an output is usually used.

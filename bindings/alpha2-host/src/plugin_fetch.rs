@@ -1,13 +1,14 @@
 //! Fetches plugin files into a cache keyed by SHA-256. A manifest is named by `https:` URL,
-//! `file:` URL or path, and names its artifacts and resources relative to itself.
+//! `file:` URL or path, and names its artifacts and resources by paths under itself or `https:`
+//! URLs.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use alpha2_engine::extract::MAX_MANIFEST_BYTES;
-use alpha2_host_core::plugins::{Fetch, PluginError, codes, sha256_hex};
+use alpha2_engine::extract::{MAX_MANIFEST_BYTES, Reference, reference};
+use alpha2_host_core::plugins::{Fetch, Fetched, PluginError, codes, sha256_hex};
 
 /// How long one download may take, connecting included.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
@@ -114,19 +115,28 @@ fn join_url(base: &str, reference: &str) -> String {
     format!("{authority}{path}{suffix}")
 }
 
+/// Where the request's manifest is: an `https:` URL, a `file:` URL or a path.
+fn manifest_location(location: &str) -> Result<Location, PluginError> {
+    match has_scheme(location) {
+        Some("https") => Ok(Location::Url(location.to_owned())),
+        Some("file") => file_url_path(location).map(Location::Path),
+        // A drive letter, `C:\...`, is a path.
+        Some(scheme) if scheme.len() > 1 => Err(fetch_failed(format!(
+            "{location}: only https: and file: URLs are fetched"
+        ))),
+        _ => Ok(Location::Path(PathBuf::from(location))),
+    }
+}
+
 impl Base {
-    fn locate(&self, url: &str) -> Result<Location, PluginError> {
-        match has_scheme(url) {
-            Some("https") => Ok(Location::Url(url.to_owned())),
-            Some("file") => file_url_path(url).map(Location::Path),
-            // A drive letter, `C:\...`, is a path.
-            Some(scheme) if scheme.len() > 1 => Err(fetch_failed(format!(
-                "{url}: only https: and file: URLs are fetched"
-            ))),
-            _ => match self {
-                Base::Url(base) => Ok(Location::Url(join_url(base, url))),
-                Base::Directory(directory) => Ok(Location::Path(directory.join(url))),
-            },
+    /// Where a manifest's `url` points: under the manifest's own location, or an `https:` URL.
+    fn resolve(&self, url: &str) -> Result<Location, PluginError> {
+        match reference(url).map_err(|why| PluginError::new(codes::LOAD_FAILED, why))? {
+            Reference::Https(url) => Ok(Location::Url(url.to_owned())),
+            Reference::Relative(path) => Ok(match self {
+                Base::Url(base) => Location::Url(join_url(base, path)),
+                Base::Directory(directory) => Location::Path(directory.join(path)),
+            }),
         }
     }
 }
@@ -167,7 +177,7 @@ fn download(url: &str, limit: u64) -> Result<Vec<u8>, PluginError> {
 /// `PLUGIN_FETCH_FAILED` when it cannot be read, `PLUGIN_HASH_MISMATCH` when its hash differs.
 pub fn manifest(location: &str, sha256: &str) -> Result<(String, Base), PluginError> {
     let limit = MAX_MANIFEST_BYTES as u64;
-    let (bytes, base) = match Base::Directory(PathBuf::new()).locate(location)? {
+    let (bytes, base) = match manifest_location(location)? {
         Location::Url(url) => (download(&url, limit)?, Base::Url(url)),
         Location::Path(path) => {
             let bytes = std::fs::read(&path)
@@ -178,10 +188,15 @@ pub fn manifest(location: &str, sha256: &str) -> Result<(String, Base), PluginEr
     };
     let found = sha256_hex(&bytes);
     if found != sha256.to_ascii_lowercase() {
-        return Err(PluginError::new(
-            codes::HASH_MISMATCH,
-            format!("the manifest has SHA-256 {found}; the request pins {sha256}"),
-        ));
+        let message = match base {
+            Base::Directory(_) => {
+                format!("the manifest has SHA-256 {found}; the request pins {sha256}")
+            }
+            Base::Url(_) => {
+                format!("the manifest at {location} does not match the SHA-256 the request pins")
+            }
+        };
+        return Err(PluginError::new(codes::HASH_MISMATCH, message));
     }
     let text = String::from_utf8(bytes).map_err(|_| fetch_failed("the manifest is not UTF-8"))?;
     Ok((text, base))
@@ -255,11 +270,14 @@ impl Fetcher {
 }
 
 impl Fetch for Fetcher {
-    fn fetch(&mut self, url: &str, sha256: &str, bytes: u64) -> Result<PathBuf, PluginError> {
-        match self.base.locate(url)? {
-            Location::Path(path) => Ok(path),
-            Location::Url(url) => self.cached(&url, sha256, bytes),
-        }
+    fn fetch(&mut self, url: &str, sha256: &str, bytes: u64) -> Result<Fetched, PluginError> {
+        Ok(match self.base.resolve(url)? {
+            Location::Path(path) => Fetched { path, local: true },
+            Location::Url(url) => Fetched {
+                path: self.cached(&url, sha256, bytes)?,
+                local: false,
+            },
+        })
     }
 
     #[cfg(target_os = "macos")]
@@ -321,36 +339,63 @@ mod tests {
     }
 
     #[test]
-    fn only_https_and_local_files_are_fetched() {
-        let base = Base::Url("https://example.com/p/manifest.json".to_owned());
+    fn a_manifest_names_https_urls_and_paths_under_itself() {
+        let remote = Base::Url("https://example.com/p/manifest.json".to_owned());
         assert_eq!(
-            base.locate("https://cdn.example.com/a.wasm"),
+            remote.resolve("https://cdn.example.com/a.wasm"),
             Ok(Location::Url("https://cdn.example.com/a.wasm".to_owned()))
         );
         assert_eq!(
-            base.locate("a.wasm"),
+            remote.resolve("a.wasm"),
             Ok(Location::Url("https://example.com/p/a.wasm".to_owned()))
         );
+        let local = Base::Directory(PathBuf::from("/plugins/p"));
+        assert_eq!(
+            local.resolve("x/a.wasm"),
+            Ok(Location::Path(PathBuf::from("/plugins/p/x/a.wasm")))
+        );
+        for base in [remote, local] {
+            for refused in [
+                "file:///etc/hostname",
+                "/etc/hostname",
+                "../a.wasm",
+                "http://example.com/a.wasm",
+                "data:text/plain,x",
+            ] {
+                assert_eq!(
+                    base.resolve(refused).expect_err(refused).code,
+                    codes::LOAD_FAILED
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_request_names_its_manifest_by_https_or_file_url_or_path() {
+        assert_eq!(
+            manifest_location("https://example.com/p/manifest.json"),
+            Ok(Location::Url(
+                "https://example.com/p/manifest.json".to_owned()
+            ))
+        );
+        assert_eq!(
+            manifest_location("file:///tmp/a%20b/manifest.json"),
+            Ok(Location::Path(PathBuf::from("/tmp/a b/manifest.json")))
+        );
+        assert_eq!(
+            manifest_location("p/manifest.json"),
+            Ok(Location::Path(PathBuf::from("p/manifest.json")))
+        );
         for refused in [
-            "http://example.com/a.wasm",
-            "ftp://example.com/a",
-            "data:text/plain,x",
+            "http://example.com/manifest.json",
+            "ftp://example.com/m",
+            "file://server/share/manifest.json",
         ] {
             assert_eq!(
-                base.locate(refused).expect_err(refused).code,
+                manifest_location(refused).expect_err(refused).code,
                 codes::FETCH_FAILED
             );
         }
-        let local = Base::Directory(PathBuf::from("/plugins/p"));
-        assert_eq!(
-            local.locate("a.wasm"),
-            Ok(Location::Path(PathBuf::from("/plugins/p/a.wasm")))
-        );
-        assert_eq!(
-            local.locate("file:///tmp/a%20b.wasm"),
-            Ok(Location::Path(PathBuf::from("/tmp/a b.wasm")))
-        );
-        assert!(local.locate("file://server/share/a.wasm").is_err());
     }
 
     #[test]

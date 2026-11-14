@@ -20,7 +20,7 @@ const DEFAULT_MAX_MEMORY_GROWTH_BYTES: u64 = 1 << 30;
 const DEFAULT_MAX_REQUESTS: u64 = 1000;
 const DEFAULT_MAX_HANDLES: u64 = 4096;
 const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
-const DEFAULT_MAX_RUNNING: usize = 2;
+const DEFAULT_MAX_RUNNING: usize = 1;
 
 /// `serve`'s flags.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -60,8 +60,9 @@ impl ServeOptions {
                 extract.plugin_call_deadline = Duration::from_millis(millis);
             } else if flag == "--plugin-memory-limit" {
                 let bytes = number("bytes")?;
-                if bytes == 0 {
-                    return Err(format!("{flag} takes bytes from 1"));
+                let most = alpha2_host_core::plugins::MAX_MEMORY_BYTES;
+                if bytes == 0 || bytes > most {
+                    return Err(format!("{flag} takes bytes from 1 to {most}"));
                 }
                 extract.plugin_memory_bytes = bytes;
             } else if flag == "--max-running" {
@@ -437,11 +438,18 @@ pub(crate) fn install(lifecycle: &Arc<Lifecycle>, out: &Arc<Responder>) {
     let _ = ANNOUNCED.set((Arc::clone(lifecycle), Arc::clone(out)));
 }
 
-/// Writes the `terminating` state message, when `serve` installed one. Nothing may depend on it:
-/// the client may have closed the pipe.
+/// Writes the `terminating` state message, when `serve` installed one and no other thread holds
+/// the output. Nothing may depend on it: the client may have closed the pipe or stopped reading.
 pub(crate) fn announce_termination() {
     if let Some((lifecycle, out)) = ANNOUNCED.get() {
-        let _ = lifecycle.drain(DrainReason::Terminating, out);
+        {
+            let mut life = lifecycle.lock();
+            if life.draining.is_some() {
+                return;
+            }
+            life.draining = Some((DrainReason::Terminating, Instant::now()));
+        }
+        let _ = out.try_send(&lifecycle.state_message());
     }
 }
 
@@ -482,6 +490,19 @@ mod tests {
             "--restart-often 1",
         ] {
             assert!(SoftLimits::from_args(args(refused)).is_err(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn the_plugin_memory_limit_is_at_most_2_gib() {
+        let options =
+            ServeOptions::from_args(args("--plugin-memory-limit 2147483648")).expect("flags");
+        assert_eq!(options.extract.plugin_memory_bytes, 1 << 31);
+        for refused in [
+            "--plugin-memory-limit 0",
+            "--plugin-memory-limit 2147483649",
+        ] {
+            assert!(ServeOptions::from_args(args(refused)).is_err(), "{refused}");
         }
     }
 

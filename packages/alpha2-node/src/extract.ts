@@ -5,7 +5,7 @@ import {
   type ExtractContext,
   type Extractor,
   collectEmits,
-} from "alpha2/extract";
+} from "alpha2/extractor";
 import type { Attachment } from "./host-wire.js";
 import type { ExtractStepMessage } from "./protocol.js";
 
@@ -20,7 +20,7 @@ export {
   type Extractor,
   type ExtractorDescriptor,
   schemaProblem,
-} from "alpha2/extract";
+} from "alpha2/extractor";
 
 /** The acknowledgement payload for one step: emits, or the extractor's failure. */
 export type StepAck =

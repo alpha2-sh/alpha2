@@ -203,4 +203,4 @@ It extracts the SDK afresh from its checked download, sets the FFmpeg environmen
 
 ## Versions
 
-`npm run version:set -- <x.y.z>` sets one version everywhere: the Cargo workspace, each crate's dependency on its siblings, and the npm packages and their pins on each other. The release workflow refuses a tag that does not match it.
+`npm run version:set -- <x.y.z>` sets one version in the Cargo workspace, each crate's dependency on its siblings, the npm packages and their pins on each other, and the Python package's `alpha2-host` pin (the Python package takes its own version from Cargo), then updates `Cargo.lock`, `fuzz/Cargo.lock` and `package-lock.json`. It does not touch the plugin workspace: set the version in `plugins/Cargo.toml` by hand and update `plugins/Cargo.lock`. The release workflow refuses a tag that does not match it.

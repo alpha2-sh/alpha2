@@ -2,7 +2,8 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::records::{Record, RecordError, decode, encode};
+use crate::records::{Limits, Record, RecordError, decode, encode, records};
+use crate::{HostV1, PluginV1};
 
 fn batch(records: &[Record]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -151,4 +152,86 @@ fn malformed_batches_name_the_record_and_the_reason() {
             reason: "unknown interval flags"
         })
     );
+}
+
+#[test]
+fn the_record_iterator_reads_what_decode_reads() {
+    let every = batch(&every_kind());
+    assert_eq!(
+        records(&every, Limits::NONE).collect::<Result<Vec<_>, _>>(),
+        decode(&every)
+    );
+    let mut broken = every.clone();
+    broken.extend_from_slice(&[9, 0, 0, 0, 0, 0, 0, 0]);
+    let read = records(&broken, Limits::NONE).collect::<Vec<_>>();
+    assert_eq!(read.len(), every_kind().len() + 1);
+    assert_eq!(
+        read.last(),
+        Some(&Err(RecordError {
+            index: every_kind().len(),
+            reason: "unknown record tag"
+        }))
+    );
+}
+
+#[test]
+fn a_record_past_the_limits_is_refused() {
+    let limits = Limits {
+        max_values: 256,
+        max_text_bytes: 256,
+    };
+    let sample = |count: usize| Record::Sample {
+        output: 0,
+        time: 0,
+        values: vec![Some(0.5); count],
+    };
+    let interval = |label: usize| Record::Interval {
+        output: 0,
+        start: 0,
+        end: 1,
+        label: Some("a".repeat(label)),
+        score: None,
+    };
+    let word = |speaker: usize| Record::Word {
+        output: 0,
+        start: 0,
+        end: 1,
+        text: String::from("a"),
+        speaker: Some("b".repeat(speaker)),
+    };
+    for inside in [sample(256), interval(256), word(256)] {
+        let bytes = batch(core::slice::from_ref(&inside));
+        assert_eq!(
+            records(&bytes, limits).collect::<Vec<_>>(),
+            vec![Ok(inside)]
+        );
+    }
+    for (past, reason) in [
+        (sample(257), "a sample has more values than the host takes"),
+        (interval(1 << 20), "a text is longer than the host takes"),
+        (word(257), "a text is longer than the host takes"),
+    ] {
+        let bytes = batch(&[sample(1), past]);
+        assert_eq!(
+            records(&bytes, limits).nth(1),
+            Some(Err(RecordError { index: 1, reason }))
+        );
+    }
+}
+
+#[test]
+fn the_native_tables_carry_their_size_after_the_abi() {
+    use core::mem::{offset_of, size_of};
+    assert_eq!(offset_of!(HostV1, abi), 0);
+    assert_eq!(offset_of!(HostV1, size), 4);
+    assert_eq!(offset_of!(PluginV1, abi), 0);
+    assert_eq!(offset_of!(PluginV1, size), 4);
+    // The size takes what was the padding before the first pointer on 64-bit targets.
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(offset_of!(HostV1, context), 8);
+        assert_eq!(offset_of!(PluginV1, describe), 8);
+        assert_eq!(size_of::<HostV1>(), 48);
+        assert_eq!(size_of::<PluginV1>(), 72);
+    }
 }

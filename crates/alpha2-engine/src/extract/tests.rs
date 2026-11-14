@@ -523,6 +523,110 @@ fn words_and_intervals_follow_their_rules() {
     );
 }
 
+/// A session over `outputs` that names only `requested`, driven to [`Step::Done`] without emits.
+fn session_at_done(outputs: Vec<OutputSpec>, requested: &[&str]) -> ExtractSession {
+    let scripted = Scripted::new(
+        video_input(VideoFormat::Rgba8, 960),
+        outputs,
+        vec![],
+        vec![],
+    );
+    let descriptor = scripted.describe().clone();
+    let mut read = request(&descriptor, InputFrom::Source, range(4_000, 16_000), vec![]);
+    read.outputs
+        .retain(|name, _| requested.contains(&name.as_str()));
+    let mut session = ExtractSession::new(&project(), &descriptor, read).expect("session");
+    let mut fake = Fake::new(PTS.to_vec());
+    loop {
+        match session.next() {
+            Step::Need(need) => match fake.frame(&need).expect("frame") {
+                Some(frame) => session.supply_video(frame).expect("supply"),
+                None => session.supply_end().expect("end"),
+            },
+            Step::Deliver(_) | Step::PassBoundary { .. } => {}
+            Step::Done => return session,
+        }
+    }
+}
+
+fn refused_at(result: Result<(), SessionError>) -> usize {
+    match result {
+        Err(SessionError::InvalidEmit { index, reason }) => {
+            assert!(reason.contains("would hold more than"), "{reason}");
+            index
+        }
+        other => panic!("expected a refusal at a data limit, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_emit_past_a_data_limit_is_refused_when_it_is_emitted() {
+    let output = |name: &str, kind: DataKind, channels: usize| OutputSpec {
+        name: name.into(),
+        kind,
+        channels: (0..channels).map(|channel| format!("c{channel}")).collect(),
+        interpolation: None,
+        suggest: None,
+    };
+    let interval = |name: &str, score: f32| Emit::Interval {
+        output: name.into(),
+        interval: DataInterval {
+            start: MediaTime(4_000),
+            end: MediaTime(4_000),
+            label: None,
+            score: Some(score),
+        },
+    };
+    let sample = |width: usize| Emit::Sample {
+        output: "s".into(),
+        time: MediaTime(4_000),
+        values: vec![Some(0.5); width],
+    };
+    let intervals = vec![output("i", DataKind::Intervals, 0)];
+
+    let mut session = session_at_done(intervals.clone(), &["i"]);
+    assert_eq!(
+        refused_at(session.emit(&vec![interval("i", 0.5); 200_001])),
+        200_000
+    );
+    let mut session = session_at_done(intervals, &["i"]);
+    session
+        .emit(&vec![interval("i", 0.5); 100_000])
+        .expect("inside the limit");
+    assert_eq!(
+        refused_at(session.emit(&vec![interval("i", 0.5); 100_001])),
+        100_000
+    );
+
+    let mut session = session_at_done(vec![output("s", DataKind::Scalars, 1)], &["s"]);
+    let batch = vec![sample(1); 100_000];
+    for _ in 0..40 {
+        session.emit(&batch).expect("inside the limit");
+    }
+    assert_eq!(refused_at(session.emit(&batch[..1])), 0);
+    let mut session = session_at_done(vec![output("s", DataKind::Scalars, 64)], &["s"]);
+    assert_eq!(refused_at(session.emit(&vec![sample(64); 62_501])), 62_500);
+
+    // An output the request does not name is checked, then neither kept nor counted.
+    let both = vec![
+        output("i", DataKind::Intervals, 0),
+        output("j", DataKind::Intervals, 0),
+    ];
+    let mut session = session_at_done(both.clone(), &["i"]);
+    assert!(matches!(
+        session.emit(&[interval("j", f32::NAN)]),
+        Err(SessionError::InvalidEmit { index: 0, .. })
+    ));
+    let mut batch = vec![interval("i", 0.5); 200_000];
+    batch.push(interval("j", 0.25));
+    session
+        .emit(&batch)
+        .expect("the unnamed output does not count");
+    let sets = session.finish().expect("finish");
+    assert_eq!(sets.len(), 1);
+    assert!(matches!(&sets[0].values, DataValues::Intervals(items) if items.len() == 200_000));
+}
+
 #[test]
 fn audio_blocks_are_a_function_of_range_passes_and_block_size() {
     let digest = Digest::new(audio_input(64));

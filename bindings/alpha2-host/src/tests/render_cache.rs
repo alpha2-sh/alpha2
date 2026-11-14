@@ -177,9 +177,14 @@ fn the_synchronous_frame_supply_keys_a_frame_by_its_picture() {
     let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     let renderer = alpha2_render::Renderer::new(gpu);
     let size = RenderSize::new(96, 64).expect("size");
-    let mut frames =
-        crate::frames::NativeFrames::new(size, &project, &assets, std::sync::Arc::default())
-            .expect("frames");
+    let mut frames = crate::frames::NativeFrames::new(
+        size,
+        crate::frames::next_cache_scope(),
+        &project,
+        &assets,
+        std::sync::Arc::default(),
+    )
+    .expect("frames");
     let mut key_at = |ticks: i64| {
         let need = FrameNeed {
             reader: None,

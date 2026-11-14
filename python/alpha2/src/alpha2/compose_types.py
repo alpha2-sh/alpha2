@@ -1426,7 +1426,7 @@ class NodeMedia(TypedDict):
     label: NotRequired[str | None]
     """A label a comparison grid shows on the cell."""
     loop: NotRequired[bool]
-    """Plays a video again from its start while the node lasts."""
+    """Plays a video again from its start while the node lasts. Its `speed` must be 1."""
     muted: NotRequired[bool]
     """Silences a video's sound."""
     opacity: NotRequired[float | None]
@@ -1438,7 +1438,9 @@ class NodeMedia(TypedDict):
     resampled). Default true.
     """
     speed: NotRequired[float | None]
-    """Playback speed of a video: 2 plays it twice as fast. Default 1."""
+    """Playback speed of a video: 2 plays it twice as fast. Default 1. A video that loops takes
+    only speed 1.
+    """
     trim_end: NotRequired[float | None]
     """Where in the file a video ends, in seconds. Default: its end."""
     trim_start: NotRequired[float | None]

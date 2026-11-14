@@ -1913,6 +1913,15 @@ impl<'a> Context<'a> {
                         range(video.trim_start, video.trim_end),
                     ));
                 } else if looped {
+                    #[allow(clippy::float_cmp)]
+                    let sped = video.speed != 1.0;
+                    if sped {
+                        return Err(ComposeError::new(
+                            &format!("{}.speed", visual.head.path),
+                            "a video that loops (loop, when_short loop or a longest_loop grid) \
+                             plays at speed 1",
+                        ));
+                    }
                     let mut clip = Clip::new(
                         self.clip_id(),
                         source,

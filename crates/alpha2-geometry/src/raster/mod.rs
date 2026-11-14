@@ -208,7 +208,8 @@ impl From<RunSlot> for Run {
 /// The coverage of `path` under `rule` within `clip` (device pixels, grown to whole tiles).
 ///
 /// Nonzero maps winding `w` to `min(|w|, 1)`, even-odd to a period-2 triangle wave in `|w|`.
-/// Only pixels crossed by three or more windings are approximate.
+/// Only pixels crossed by three or more windings, and under even-odd pixels two coincident edges
+/// cross, are approximate.
 #[must_use]
 // A single pass over strips, rows and tiles; splitting it would spread its state across calls.
 #[allow(clippy::too_many_lines)]

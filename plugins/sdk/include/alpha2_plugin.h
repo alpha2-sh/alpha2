@@ -45,10 +45,15 @@ extern "C" {
 /* The length of an absent speaker or label. */
 #define ALPHA2_RECORD_ABSENT 0xFFFFFFFFu
 
+/* Both tables grow within /1 only by fields appended at their end. Each side sets size to the
+ * bytes of the table as it knows it; read abi and size before using a field added after the
+ * first /1. */
+
 /* What a host gives a native plugin instance; valid until destroy. Pointers passed to these
  * functions are borrowed for the call alone. */
 typedef struct Alpha2HostV1 {
     uint32_t abi;
+    uint32_t size;
     void *context;
     /* A batch of emit records. ALPHA2_OK, or ALPHA2_FAILED once the session has refused an
      * emit; the plugin then returns ALPHA2_FAILED from the call it is in. */
@@ -62,10 +67,12 @@ typedef struct Alpha2HostV1 {
     void (*log)(void *context, uint32_t level, const uint8_t *message, size_t len);
 } Alpha2HostV1;
 
-/* What alpha2_plugin_v1 returns: a static table. Pointers passed to the plugin are borrowed
- * for the call alone. The host calls an instance from one thread at a time. */
+/* What alpha2_plugin_v1 returns: a static table in which every entry is required. Pointers
+ * passed to the plugin are borrowed for the call alone. The host calls an instance from one
+ * thread at a time. */
 typedef struct Alpha2PluginV1 {
     uint32_t abi;
+    uint32_t size;
     /* The descriptor, UTF-8 JSON; static. */
     const uint8_t *(*describe)(size_t *len);
     /* A new instance, or NULL. */

@@ -241,3 +241,32 @@ fn an_extract_runs_beside_an_export_and_a_still() {
     }
     assert_eq!(serving.finish(), Some(0));
 }
+
+/// No acknowledgement can arrive once the input ends: the step is answered `CANCELLED`.
+#[test]
+fn an_extraction_whose_input_ends_before_an_acknowledgement_is_cancelled() {
+    let _gpu = gpu_test_lock();
+    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    serving.write(&extract("x", 40_000));
+    loop {
+        let message = serving.message(Duration::from_secs(60));
+        if message["type"] == "extract.step" {
+            break;
+        }
+    }
+    drop(serving.stdin.take());
+    let answer = loop {
+        let message = serving.message(Duration::from_secs(60));
+        if message.get("ok").is_some() {
+            break message;
+        }
+    };
+    assert_eq!(answer["error"]["code"], "CANCELLED", "{answer}");
+    assert!(
+        answer["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("the input ended before step")),
+        "{answer}"
+    );
+    assert_eq!(serving.finish(), Some(0));
+}

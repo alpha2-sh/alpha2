@@ -2394,5 +2394,155 @@
         "hostState": "ready"
       }
     ]
+  },
+  {
+    "name": "a capabilities request with an unknown field is refused",
+    "requestValid": false,
+    "expectedErrorCode": "INVALID_REQUEST",
+    "request": {
+      "protocolVersion": 2,
+      "operation": "capabilities",
+      "requestId": "unknown-capabilities",
+      "includeaudio": false
+    },
+    "messages": []
+  },
+  {
+    "name": "a conform request with an unknown field is refused",
+    "requestValid": false,
+    "expectedErrorCode": "INVALID_REQUEST",
+    "request": {
+      "protocolVersion": 2,
+      "operation": "conform",
+      "requestId": "unknown-conform",
+      "project": {
+        "schema_version": 1,
+        "id": "p",
+        "name": "P",
+        "settings": {
+          "width": 64,
+          "height": 48,
+          "frame_rate": {
+            "num": 30,
+            "den": 1
+          },
+          "sample_rate": 48000
+        },
+        "sources": [],
+        "timeline": {
+          "tracks": []
+        }
+      },
+      "includeaudio": false
+    },
+    "messages": []
+  },
+  {
+    "name": "a compose request with an unknown field is refused",
+    "requestValid": false,
+    "expectedErrorCode": "INVALID_REQUEST",
+    "request": {
+      "protocolVersion": 2,
+      "operation": "compose",
+      "requestId": "unknown-compose",
+      "action": "templates",
+      "includeaudio": false
+    },
+    "messages": []
+  },
+  {
+    "name": "a edit request with an unknown field is refused",
+    "requestValid": false,
+    "expectedErrorCode": "INVALID_REQUEST",
+    "request": {
+      "protocolVersion": 2,
+      "operation": "edit",
+      "requestId": "unknown-edit",
+      "project": {
+        "schema_version": 1,
+        "id": "p",
+        "name": "P",
+        "settings": {
+          "width": 64,
+          "height": 48,
+          "frame_rate": {
+            "num": 30,
+            "den": 1
+          },
+          "sample_rate": 48000
+        },
+        "sources": [],
+        "timeline": {
+          "tracks": []
+        }
+      },
+      "edit": {
+        "op": "split_at",
+        "time": 0
+      },
+      "includeaudio": false
+    },
+    "messages": []
+  },
+  {
+    "name": "a still request with an unknown field is refused",
+    "requestValid": false,
+    "expectedErrorCode": "INVALID_REQUEST",
+    "request": {
+      "protocolVersion": 2,
+      "operation": "still",
+      "requestId": "unknown-still",
+      "project": {
+        "schema_version": 1,
+        "id": "p",
+        "name": "P",
+        "settings": {
+          "width": 64,
+          "height": 48,
+          "frame_rate": {
+            "num": 30,
+            "den": 1
+          },
+          "sample_rate": 48000
+        },
+        "sources": [],
+        "timeline": {
+          "tracks": []
+        }
+      },
+      "assets": {},
+      "stills": [
+        {
+          "time": 0
+        }
+      ],
+      "includeaudio": false
+    },
+    "messages": []
+  },
+  {
+    "name": "a cancel request with an unknown field is refused",
+    "requestValid": false,
+    "expectedErrorCode": "INVALID_REQUEST",
+    "request": {
+      "protocolVersion": 2,
+      "operation": "cancel",
+      "requestId": "unknown-cancel",
+      "target": "r",
+      "includeaudio": false
+    },
+    "messages": []
+  },
+  {
+    "name": "a status request with an unknown field is refused",
+    "requestValid": false,
+    "expectedErrorCode": "INVALID_REQUEST",
+    "request": {
+      "protocolVersion": 2,
+      "operation": "status",
+      "requestId": "unknown-status",
+      "includeaudio": false
+    },
+    "messages": []
   }
 ]

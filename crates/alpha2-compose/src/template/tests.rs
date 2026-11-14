@@ -238,3 +238,35 @@ fn lint_finds_unknown_names_unused_parameters_and_literal_content() {
         "{issues:?}"
     );
 }
+
+fn holds_template_node(value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.iter().any(holds_template_node),
+        Value::Object(object) => {
+            object
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.contains('/') || bare_template(kind).is_some())
+                || object.values().any(holds_template_node)
+        }
+        _ => false,
+    }
+}
+
+#[test]
+fn a_spec_without_template_nodes_binds_to_itself() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/old-specs.golden.json");
+    let cases: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
+    let mut plain = 0;
+    for spec in cases.iter().map(|case| &case["spec"]) {
+        if !holds_template_node(spec) {
+            assert_eq!(
+                &bind(spec, &Value::Null, &BindOptions::default()).expect("binds"),
+                spec
+            );
+            plain += 1;
+        }
+    }
+    assert!(plain > 0);
+}

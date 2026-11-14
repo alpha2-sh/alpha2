@@ -1,6 +1,6 @@
-//! Runs wasm plugins as core modules in wasmtime with only the `alpha2` imports. Memory is capped,
-//! each call is bounded by an epoch deadline, and NaNs are canonicalized so results do not depend
-//! on the CPU.
+//! Runs wasm plugins as core modules in wasmtime with only the `alpha2` imports. A module has one
+//! capped 32-bit memory and one element bound for all its tables. Each call is bounded by an epoch
+//! deadline, and NaNs are canonicalized so results do not depend on the CPU.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -14,7 +14,7 @@ use wasmtime::{
     TypedFunc,
 };
 
-use super::{Call, Collected, PluginError, Policy, Transport, codes};
+use super::{Call, Collected, MAX_MEMORY_BYTES, OutputCap, PluginError, Policy, Transport, codes};
 
 /// How often the engine's epoch advances; deadlines are counted in these.
 const EPOCH_TICK: Duration = Duration::from_millis(10);
@@ -22,6 +22,8 @@ const EPOCH_TICK: Duration = Duration::from_millis(10);
 const KEPT_MODULES: usize = 8;
 
 const IMPORTS: [&str; 5] = ["emit", "resource_size", "resource_read", "fail", "log"];
+/// Elements all of a module's tables may hold together.
+const MAX_TABLE_ELEMENTS: usize = 1 << 20;
 
 fn engine() -> Result<&'static Engine, PluginError> {
     static ENGINE: OnceLock<Result<Engine, String>> = OnceLock::new();
@@ -31,7 +33,9 @@ fn engine() -> Result<&'static Engine, PluginError> {
             config
                 .epoch_interruption(true)
                 .cranelift_nan_canonicalization(true)
-                .wasm_relaxed_simd(false);
+                .wasm_relaxed_simd(false)
+                .wasm_multi_memory(false)
+                .wasm_memory64(false);
             // Apps on iOS may not generate code at run time; the interpreter runs the module.
             #[cfg(target_os = "ios")]
             config
@@ -55,14 +59,17 @@ fn engine() -> Result<&'static Engine, PluginError> {
         .map_err(|error| PluginError::new(codes::LOAD_FAILED, format!("wasmtime: {error}")))
 }
 
-/// The default features minus those whose results differ between runtimes or that need threads.
+/// The default features minus those whose results differ between runtimes, that need threads, or
+/// that give a module memory the ABI cannot address.
 fn features() -> WasmFeatures {
     let mut features = WasmFeatures::default();
     features.remove(
         WasmFeatures::RELAXED_SIMD
             | WasmFeatures::THREADS
             | WasmFeatures::SHARED_EVERYTHING_THREADS
-            | WasmFeatures::COMPONENT_MODEL,
+            | WasmFeatures::COMPONENT_MODEL
+            | WasmFeatures::MULTI_MEMORY
+            | WasmFeatures::MEMORY64,
     );
     features
 }
@@ -75,8 +82,8 @@ pub(super) fn check_module(module: &[u8]) -> Result<(), PluginError> {
     if let Err(error) = Validator::new_with_features(features()).validate_all(module) {
         return Err(if Validator::new().validate_all(module).is_ok() {
             unsupported(format!(
-                "the module uses relaxed SIMD, threads or shared memory, which plugins may not \
-                 use: {error}"
+                "the module uses relaxed SIMD, threads, shared memory, more than one memory or \
+                 64-bit memory, which plugins may not use: {error}"
             ))
         } else {
             PluginError::new(
@@ -127,9 +134,19 @@ fn compiled(sha256: &str, bytes: &[u8]) -> Result<Module, PluginError> {
     Ok(module)
 }
 
+/// Which limit refused a memory or table the module asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hit {
+    Memory,
+    Tables,
+}
+
 struct Limiter {
     memory_bytes: usize,
-    hit: bool,
+    /// Elements of all the instance's tables.
+    table_elements: usize,
+    /// Set by a refusal during the current call.
+    hit: Option<Hit>,
 }
 
 impl ResourceLimiter for Limiter {
@@ -140,23 +157,42 @@ impl ResourceLimiter for Limiter {
         _maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
         let fits = desired <= self.memory_bytes;
-        self.hit |= !fits;
+        if !fits {
+            self.hit = Some(Hit::Memory);
+        }
         Ok(fits)
     }
 
     fn table_growing(
         &mut self,
-        _current: usize,
+        current: usize,
         desired: usize,
         _maximum: Option<usize>,
     ) -> wasmtime::Result<bool> {
-        Ok(desired <= 1 << 20)
+        let total =
+            (self.table_elements - current.min(self.table_elements)).saturating_add(desired);
+        let fits = total <= MAX_TABLE_ELEMENTS;
+        if fits {
+            self.table_elements = total;
+        } else {
+            self.hit = Some(Hit::Tables);
+        }
+        Ok(fits)
+    }
+
+    fn instances(&self) -> usize {
+        1
+    }
+
+    fn memories(&self) -> usize {
+        1
     }
 }
 
 struct State {
     limiter: Limiter,
     collected: Collected,
+    caps: Vec<OutputCap>,
     resources: HashMap<String, Vec<u8>>,
 }
 
@@ -186,14 +222,22 @@ fn linker() -> Result<Linker<State>, PluginError> {
         .func_wrap(
             "alpha2",
             "emit",
-            |mut caller: Caller<'_, State>, ptr: i32, len: i32| {
-                if let Some(batch) = read(&mut caller, ptr, len) {
-                    caller.data_mut().collected.emit(&batch)
+            |mut caller: Caller<'_, State>, ptr: i32, len: i32| -> wasmtime::Result<i32> {
+                if caller.data().collected.refusal.is_some() {
+                    return Err(wasmtime::Error::msg(
+                        "the plugin emitted after a refused emit",
+                    ));
+                }
+                Ok(if let Some(batch) = read(&mut caller, ptr, len) {
+                    let State {
+                        collected, caps, ..
+                    } = caller.data_mut();
+                    collected.emit(&batch, caps)
                 } else {
-                    caller.data_mut().collected.undecodable =
+                    caller.data_mut().collected.refusal =
                         Some("the records lie outside the module's memory".to_owned());
                     alpha2_plugin_abi::status::FAILED
-                }
+                })
             },
         )
         .map_err(failed)?;
@@ -302,6 +346,7 @@ impl WasmTransport {
         bytes: &[u8],
         sha256: &str,
         resources: HashMap<String, Vec<u8>>,
+        caps: Vec<OutputCap>,
         policy: &Policy,
     ) -> Result<Self, PluginError> {
         check_module(bytes)?;
@@ -312,21 +357,32 @@ impl WasmTransport {
                 format!("{id} did not instantiate: {error}"),
             )
         };
+        let memory_cap = policy.memory_bytes.min(MAX_MEMORY_BYTES);
         let mut store = Store::new(
             engine()?,
             State {
                 limiter: Limiter {
-                    memory_bytes: usize::try_from(policy.memory_bytes).unwrap_or(usize::MAX),
-                    hit: false,
+                    memory_bytes: usize::try_from(memory_cap).unwrap_or(usize::MAX),
+                    table_elements: 0,
+                    hit: None,
                 },
                 collected: Collected::default(),
+                caps,
                 resources,
             },
         );
         store.limiter(|state| &mut state.limiter);
         store.epoch_deadline_trap();
         store.set_epoch_deadline(ticks(policy.call_deadline));
-        let instance: Instance = linker()?.instantiate(&mut store, &module).map_err(failed)?;
+        let instance: Instance = match linker()?.instantiate(&mut store, &module) {
+            Ok(instance) => instance,
+            Err(error) => {
+                return Err(match store.data().limiter.hit {
+                    Some(hit) => PluginError::new(codes::LIMIT, limit_message(hit, memory_cap)),
+                    None => failed(error),
+                });
+            }
+        };
         let memory = instance
             .get_memory(&mut store, names::MEMORY)
             .ok_or_else(|| PluginError::new(codes::LOAD_FAILED, "the module exports no memory"))?;
@@ -361,22 +417,17 @@ impl WasmTransport {
             memory,
             exports,
             deadline: policy.call_deadline,
-            memory_cap: policy.memory_bytes,
+            memory_cap,
         })
     }
 
-    /// Why a call failed: past its memory cap or deadline, or trapped.
+    /// Why a call failed: a refused emit, past its memory cap or deadline, or trapped.
     fn failure(&mut self, error: &wasmtime::Error) -> ExtractorError {
         let state = self.store.data_mut();
-        state.collected = Collected::default();
-        if std::mem::take(&mut state.limiter.hit) {
-            ExtractorError::with_code(
-                codes::LIMIT,
-                format!(
-                    "the plugin needed more than {} bytes of memory",
-                    self.memory_cap
-                ),
-            )
+        if let Some(reason) = std::mem::take(&mut state.collected).refusal {
+            ExtractorError::with_code("INVALID_EMIT", reason)
+        } else if let Some(hit) = state.limiter.hit.take() {
+            ExtractorError::with_code(codes::LIMIT, limit_message(hit, self.memory_cap))
         } else if matches!(error.downcast_ref::<Trap>(), Some(Trap::Interrupt)) {
             ExtractorError::with_code(
                 codes::LIMIT,
@@ -390,9 +441,15 @@ impl WasmTransport {
         }
     }
 
-    /// Runs `call` with a fresh deadline and turns its status into the call's outcome.
-    fn run(&mut self, call: impl FnOnce(&mut Self) -> wasmtime::Result<i32>) -> Call {
+    /// Starts a call: a fresh deadline, and no refusal left from an earlier call.
+    fn start_call(&mut self) {
         self.store.set_epoch_deadline(ticks(self.deadline));
+        self.store.data_mut().limiter.hit = None;
+    }
+
+    /// Runs `call` and turns its status into the call's outcome.
+    fn run(&mut self, call: impl FnOnce(&mut Self) -> wasmtime::Result<i32>) -> Call {
+        self.start_call();
         match call(self) {
             Ok(status) => self.store.data_mut().collected.outcome(status),
             Err(error) => Err(self.failure(&error)),
@@ -407,7 +464,7 @@ impl WasmTransport {
         call: impl FnOnce(&mut Self, i32) -> wasmtime::Result<i32>,
     ) -> Call {
         let len = to_i32(bytes.len())?;
-        self.store.set_epoch_deadline(ticks(self.deadline));
+        self.start_call();
         let alloc = self.exports.alloc.clone();
         let offset = match alloc.call(&mut self.store, (len, align)) {
             Ok(0) if len > 0 => {
@@ -429,6 +486,15 @@ impl WasmTransport {
             return Err(self.failure(&error));
         }
         outcome
+    }
+}
+
+fn limit_message(hit: Hit, memory_cap: u64) -> String {
+    match hit {
+        Hit::Memory => format!("the plugin needed more than {memory_cap} bytes of memory"),
+        Hit::Tables => {
+            format!("the plugin needed more than {MAX_TABLE_ELEMENTS} table elements")
+        }
     }
 }
 

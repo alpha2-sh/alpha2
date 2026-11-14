@@ -86,7 +86,8 @@ struct Shared {
     error: Mutex<Option<String>>,
 }
 
-/// A project's preview on an app window.
+/// A project's preview on an app window, drawn on a GPU device that presents to it whatever the
+/// session's [`crate::RendererMode`].
 #[derive(uniffi::Object)]
 pub struct Player {
     commands: Mutex<Option<Sender<Command>>>,

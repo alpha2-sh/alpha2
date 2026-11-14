@@ -210,6 +210,17 @@ pub enum EditError {
     NothingToBake(String),
     /// A correction has no keyframe equivalent.
     CorrectionNotBakeable(String),
+    /// The edit cuts a matte source where a clip it mattes is not cut, or removes it from under
+    /// one, so no single part of it can stay that clip's matte.
+    MatteSource(ClipId),
+    /// The edit cuts a clip where a binding reading through it (`via`) is not cut, or removes it,
+    /// so no single part of it can be read through.
+    ReadThrough {
+        /// The clip read through.
+        clip: ClipId,
+        /// The binding's owner, such as `clip b`, `track t` or `the master bus`.
+        by: String,
+    },
     /// The edited project failed validation, which is a bug.
     InvalidResult(ModelError),
 }
@@ -230,6 +241,14 @@ impl fmt::Display for EditError {
             Self::CorrectionNotBakeable(at) => {
                 write!(formatter, "{at} is a correction, which has no keyframes")
             }
+            Self::MatteSource(clip) => write!(
+                formatter,
+                "clip {clip} is another clip's matte, and the edit cuts the two apart"
+            ),
+            Self::ReadThrough { clip, by } => write!(
+                formatter,
+                "{by} reads data through clip {clip}, and the edit cuts the two apart"
+            ),
             Self::InvalidResult(error) => {
                 write!(formatter, "the edited project is invalid: {error}")
             }
@@ -242,7 +261,7 @@ impl std::error::Error for EditError {}
 impl EditError {
     /// The refusal in snake case, as every binding reports it: `unknown_data`, `wrong_kind`,
     /// `unknown_target`, `empty_target`, `missing_anchor`, `invalid_range`, `nothing_to_bake`,
-    /// `correction_not_bakeable` or `invalid_result`.
+    /// `correction_not_bakeable`, `matte_source`, `read_through` or `invalid_result`.
     #[must_use]
     pub const fn kind(&self) -> &'static str {
         match self {
@@ -254,6 +273,8 @@ impl EditError {
             Self::InvalidRange(_) => "invalid_range",
             Self::NothingToBake(_) => "nothing_to_bake",
             Self::CorrectionNotBakeable(_) => "correction_not_bakeable",
+            Self::MatteSource(_) => "matte_source",
+            Self::ReadThrough { .. } => "read_through",
             Self::InvalidResult(_) => "invalid_result",
         }
     }

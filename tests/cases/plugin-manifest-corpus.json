@@ -1167,5 +1167,481 @@
         "outputs": []
       }
     }
+  },
+  {
+    "name": "nested-relative",
+    "valid": true,
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "a/b/c.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "dot-segments-inside",
+    "valid": true,
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "a/../b.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "absolute-https-resource",
+    "valid": true,
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "https://cdn.example.com/models/vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ]
+    }
+  },
+  {
+    "name": "file-url-resource",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "file:///etc/hostname",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ]
+    }
+  },
+  {
+    "name": "absolute-path-artifact",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "/usr/lib/silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "parent-escape-resource",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "../vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ]
+    }
+  },
+  {
+    "name": "parent-escape-nested-resource",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      },
+      "resources": [
+        {
+          "name": "vad.onnx",
+          "url": "models/../../vad.onnx",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ]
+    }
+  },
+  {
+    "name": "backslash-path",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "wasm\\silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "drive-letter-path",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "C:/plugins/silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "other-scheme",
+    "valid": false,
+    "rejected_by_schema": false,
+    "error": "invalid",
+    "manifest": {
+      "id": "com.example.silence",
+      "version": "1.0.0",
+      "abi": "alpha2-plugin/1",
+      "kind": "extractor",
+      "artifacts": [
+        {
+          "target": "wasm32",
+          "type": "wasm",
+          "url": "http://example.com/silence.wasm",
+          "sha256": "000000000000000000000000000000000000000000000000000000000000000a",
+          "bytes": 4
+        }
+      ],
+      "descriptor": {
+        "id": "com.example.silence",
+        "version": 1,
+        "input": {
+          "media": "audio",
+          "from": [
+            "source"
+          ],
+          "format": "f32",
+          "sample_rate": 16000,
+          "channels": "mono",
+          "block_frames": 512
+        },
+        "params_schema": {
+          "type": "object"
+        },
+        "outputs": [
+          {
+            "name": "silence",
+            "kind": "intervals",
+            "suggest": "remove_ranges"
+          }
+        ]
+      }
+    }
   }
 ]

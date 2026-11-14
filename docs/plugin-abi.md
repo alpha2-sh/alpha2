@@ -1,6 +1,6 @@
 # Plugin ABI
 
-A plugin is a package an alpha2 host loads at run time: a manifest, one or more code artifacts and the resources they read. This page is `alpha2-plugin/1`, the ABI every artifact implements, as a core wasm module or as a C-ABI library. Plugins written in Rust use `plugins/sdk`, which builds both from one `Extractor` implementation. In C, C++, Zig or Go, implement [`plugins/sdk/include/alpha2_plugin.h`](../plugins/sdk/include/alpha2_plugin.h) directly.
+A plugin is a package an alpha2 host loads at run time: a manifest, one or more code artifacts and the resources they read. This page is `alpha2-plugin/1`, the ABI every artifact implements, as a core wasm module or as a C-ABI library. Plugins written in Rust use `plugins/sdk`, which builds both from one `Extractor` implementation. The SDK is not published to crates.io, so a Rust plugin crate lives in a checkout of this repository, as a member of the `plugins` workspace or with a path dependency on `plugins/sdk`. In C, C++, Zig or Go, implement [`plugins/sdk/include/alpha2_plugin.h`](../plugins/sdk/include/alpha2_plugin.h) directly.
 
 A plugin of kind `extractor` provides one extractor: the host runs the extraction session, decodes the input and calls the plugin step by step, exactly as it drives an extractor written in the host's own language. `alpha2-host` runs one named in an `extract` request's `plugin` (see [`host-protocol.md`](host-protocol.md#plugins)), and Rust programs load one with `alpha2_host_core::plugins` (feature `plugins`). Every value the plugin emits is validated by the session, so a plugin cannot write invalid project data.
 
@@ -31,18 +31,18 @@ A plugin of kind `extractor` provides one extractor: the host runs the extractio
 
 - `id` names both the plugin and its extractor, and equals `descriptor.id`. `version` is the package's semantic version; `descriptor.version` is the extractor's output-contract version. Ids starting `alpha2.` are kept for first-party plugins.
 - `artifacts` has one entry per build: `target` is `wasm32` for a wasm module (`type` `wasm`), or the Rust target triple of a native one (`type` `cdylib`, or `staticlib` for a library an app links at build time). A loader takes the native artifact for its own target when the caller allows native code for this plugin, else the wasm artifact, else fails with `PLUGIN_NO_ARTIFACT`.
-- `url` is relative to the manifest's own URL, or absolute. Every artifact and resource is pinned by `sha256` (64 lowercase hexadecimal digits) and `bytes`; a mismatch refuses the load.
+- `url` is a path under the manifest's own directory (`/`-separated, never climbing above it with `..`) or an absolute `https:` URL; a manifest with any other `url` is refused with `PLUGIN_LOAD_FAILED`. Every artifact and resource is pinned by `sha256` (64 lowercase hexadecimal digits) and `bytes`; a mismatch refuses the load.
 - `descriptor` is exactly what the artifact's `describe` returns; a loader refuses an artifact whose descriptor differs.
 
 ## Trust
 
-A wasm artifact is sandboxed: it imports only the functions below, with no files, network or clock, its memory is capped and its run time bounded. It is allowed once its hash matches. A loader refuses a module that uses relaxed SIMD, threads or shared memory, so the same module gives the same values on every runtime; it must not depend on the bit pattern of a NaN (emits refuse NaN anyway).
+A wasm artifact is sandboxed: it imports only the functions below, with no files, network or clock, and its run time is bounded. It has one memory, capped by the host and never larger than 2 GiB, and its tables together hold at most 1,048,576 elements. It is allowed once its hash matches. A loader refuses a module that uses relaxed SIMD, threads, shared memory, more than one memory or 64-bit memory, so the same module gives the same values on every runtime; it must not depend on the bit pattern of a NaN (emits refuse NaN anyway).
 
 A native artifact runs with the full rights of the process and is refused unless the caller allows native code for that plugin id. It must not bring libraries that collide with the host's own (FFmpeg under its standard names). Native builds may differ across targets in floating-point results.
 
 ## Mobile apps
 
-The App Store and Google Play forbid downloading executable code, so an app bundles each plugin it runs: the manifest, the artifacts and the resources, at the same relative paths the manifest names (`pack` writes that layout). With the library's `plugins` feature, `Plugin.load(manifestPath, sha256, allowNative)` reads them from the bundle, checks every hash, and `Alpha2.extractPlugin(request, plugin)` runs the plugin like an extractor the app wrote. Manifest URLs that are not relative paths are refused with `PLUGIN_FETCH_FAILED`.
+The App Store and Google Play forbid downloading executable code, so an app bundles each plugin it runs: the manifest, the artifacts and the resources, at the same relative paths the manifest names (`pack` writes that layout). With the library's `plugins` feature, `Plugin.load(manifestPath, sha256, allowNative)` reads them from the bundle, checks every hash, and `Alpha2.extractPlugin(request, plugin)` runs the plugin like an extractor the app wrote. A bundled manifest's `https:` URLs are refused with `PLUGIN_FETCH_FAILED`.
 
 - The wasm artifact runs everywhere, sandboxed: wasmtime compiles it on Android; on iOS, where apps may not generate code, it runs in wasmtime's interpreter.
 - An Android app may bundle the `.so` built for its ABI (`aarch64-linux-android`) and pass `allowNative`; it runs with the app's rights.
@@ -74,7 +74,7 @@ The context `begin` receives:
 }
 ```
 
-`video` (`size`, the delivered frame's longer side; `format`) is set for a video extractor, `audio` (`rate`, `channels` as `mono` or `source`, `block_frames`) for an audio one, and `frame_rate` (`num`, `den`) for timeline video. `params` is the request's, checked against the descriptor's `params_schema` by the caller.
+`video` (`size`, the delivered frame's longer side; `format`) is set for a video extractor, `audio` (`rate`, `channels` as `mono` or `source`, `block_frames`) for an audio one, and `frame_rate` (`num`, `den`) for timeline video. `params` is the request's. The browser's `runExtractor` and the Node and Python clients check a request's `params` against the descriptor's `params_schema` before an extractor in the caller's own process runs, but no surface checks the params a plugin receives (in the browser, those given to `plugin.extractor(params)`), so a plugin must check what it reads.
 
 The host gives the plugin these functions:
 
@@ -89,9 +89,9 @@ Within a pass, a value is emitted no further along the pass than what the pass h
 
 ## Native artifacts
 
-A native artifact exports one symbol, `alpha2_plugin_v1`, a C function without arguments that returns a pointer to a static `Alpha2PluginV1` table (the header has the exact types). The table and the descriptor's bytes stay valid while the library is loaded.
+A native artifact exports one symbol, `alpha2_plugin_v1`, a C function without arguments that returns a pointer to a static `Alpha2PluginV1` table (the header has the exact types). The table and the descriptor's bytes stay valid while the library is loaded. Both tables start with `abi` and `size`, the bytes of the table as the side that filled it knows it. A host refuses a plugin table that is shorter than its own or has a null entry with `PLUGIN_LOAD_FAILED`; every entry is required.
 
-- `create(host)` returns a new instance, or null. The host's `Alpha2HostV1` table stays valid until `destroy`, and every host function takes the table's `context` first. One run uses one instance; the host calls it from one thread at a time.
+- `create(host)` returns a new instance, or null. The host's `Alpha2HostV1` table stays valid until `destroy`, and every host function takes the table's `context` first. One run uses one instance; the host calls it from one thread at a time. A plugin calls the host functions only during a call the host made, on that call's thread.
 - Every other call takes the instance first. Pixels, samples, the context and the strings passed to the plugin are borrowed for the call. Records passed to `emit` are borrowed for that call alone.
 - `resource(context, name, name_len, &len)` returns the resource's bytes, or null for a name the manifest does not declare. They stay valid until `destroy`.
 - A panic must not cross the boundary: catch it and return `2`. The SDK does.
@@ -125,7 +125,7 @@ The host functions are imports from module `alpha2`:
 | `fail` | `(ptr: i32, len: i32)` | |
 | `log` | `(level: i32, ptr: i32, len: i32)` | |
 
-A trap ends the run with `PLUGIN_TRAPPED`; running past the memory cap or the time limit with `PLUGIN_LIMIT`.
+A trap ends the run with `PLUGIN_TRAPPED`; running past the memory cap, the table bound or the time limit with `PLUGIN_LIMIT`.
 
 ## Emit records
 
@@ -146,11 +146,11 @@ A trap ends the run with `PLUGIN_TRAPPED`; running past the memory cap or the ti
 
 - A sample carries one value per channel component, as the output's kind has them: two per channel for `points`, one per channel for `scalars`, four for `similarity`. Bit `i % 32` of mask `i / 32` set marks value `i` lost at that time (its float is ignored); bits past `count` are `0`.
 - Texts are UTF-8. A speaker or label length of `0xFFFFFFFF` means it is absent; a word's text is never absent. An interval has a score when bit 0 of its flags is set; the other flag bits are `0`.
-- A batch with an unknown tag, a nonzero reserved byte, a body shorter or longer than its fields, or text that is not UTF-8 is refused whole, as an invalid emit.
+- A batch with an unknown tag, a nonzero reserved byte, a body shorter or longer than its fields, text that is not UTF-8, a sample of more than 256 values or a text of more than 256 bytes is refused whole, as an invalid emit. So is a batch that takes an output past the items one data set holds (`MAX_DATA_VALUES` values, `MAX_DATA_WORDS` words, `MAX_DATA_INTERVALS` intervals), checked as it is emitted. A wasm plugin that calls `emit` again in the call after a refusal traps, and the run ends with `INVALID_EMIT`.
 
 ## Versions
 
-`alpha2-plugin/1` changes only by additions a `/1` plugin cannot notice: new host imports a plugin may use when the host offers them, and new record tags only plugins that know them emit. A change an existing plugin would notice is `alpha2-plugin/2`, with its own manifest `abi`, wasm `alpha2_abi` value and native symbol. A loader refuses an ABI it does not implement with `PLUGIN_ABI_UNSUPPORTED`.
+`alpha2-plugin/1` changes only by additions a `/1` plugin cannot notice. The native tables grow by fields appended at their end, and each side reads the other's `size` before it uses a field added after the first `/1`. A wasm module has no such query: one built against a later `/1` imports the new host function and loads only on a host that has it; an older host refuses it with `PLUGIN_UNSUPPORTED_FEATURE`, naming the import. New record tags are emitted only by plugins that know them. A change an existing plugin would notice is `alpha2-plugin/2`, with its own manifest `abi`, wasm `alpha2_abi` value and native symbol. A loader refuses an ABI it does not implement with `PLUGIN_ABI_UNSUPPORTED`.
 
 ## Errors
 
