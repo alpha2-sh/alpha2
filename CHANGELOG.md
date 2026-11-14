@@ -203,6 +203,9 @@ All notable changes to this project are documented in this file.
   taking two.
 - An OpenEXR file of B44 blocks whose deltas wrap below zero no longer panics the release build:
   the exr decoder is built with the wrapping arithmetic of the reference implementation.
+- Compose refuses a time past the latest a project holds, and a sum of times that runs past it,
+  at the field or node that holds it, and refuses an invalid canvas before lowering anything. Such
+  specs panicked the compiler or compiled to a project no host loads.
 
 ## [0.6.0] - 2026-11-08
 

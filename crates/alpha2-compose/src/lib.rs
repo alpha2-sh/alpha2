@@ -100,6 +100,8 @@ pub struct Compiled {
 /// `fonts` are the font files an export registers, in fallback order; with them, text that
 /// must fit is measured and shrunk to fit.
 ///
+/// A spec either compiles to a project that [`Project::from_json`] loads, or fails here.
+///
 /// # Errors
 /// Returns where in the spec, and why, it cannot be compiled.
 pub fn compile(

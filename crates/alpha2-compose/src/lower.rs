@@ -7,7 +7,7 @@ use alpha2_model::{
     CaptionCue, CubicBezier, Easing, EffectValue, LayoutNode, Paint, Rgba, RunState, TextShadow,
     TextStroke, TextStyle, TextUnit,
 };
-use alpha2_time::MediaTime;
+use alpha2_time::{MAX_SERIALIZED_TICKS, MediaTime};
 
 use crate::ComposeError;
 use crate::compile::Context;
@@ -264,6 +264,52 @@ pub(crate) enum GeometryPrim {
     Path(alpha2_model::Path),
 }
 
+impl MaskShapePrim {
+    /// Its animations' last keys from the start of a span `length` long.
+    pub(crate) fn last_keys(&self, length: i64) -> Vec<Option<i64>> {
+        use crate::compile::last_key;
+        let mut last = match &self.geometry {
+            GeometryPrim::Rect {
+                center,
+                size,
+                corner,
+                rotation,
+            } => vec![
+                last_key(center, length),
+                last_key(size, length),
+                last_key(corner, length),
+                last_key(rotation, length),
+            ],
+            GeometryPrim::Ellipse {
+                center,
+                size,
+                rotation,
+            } => vec![
+                last_key(center, length),
+                last_key(size, length),
+                last_key(rotation, length),
+            ],
+            GeometryPrim::Polystar {
+                center,
+                outer,
+                inner,
+                roundness,
+                rotation,
+                ..
+            } => vec![
+                last_key(center, length),
+                last_key(outer, length),
+                last_key(inner, length),
+                last_key(roundness, length),
+                last_key(rotation, length),
+            ],
+            GeometryPrim::Path(_) => Vec::new(),
+        };
+        last.push(last_key(&self.feather, length));
+        last
+    }
+}
+
 /// A paint with its theme colors resolved and positions in the area's unit square.
 #[derive(Clone, Debug)]
 pub(crate) enum PaintPrim {
@@ -447,6 +493,21 @@ pub(crate) fn seconds_to_ticks(seconds: f64) -> i64 {
     (seconds * alpha2_time::TICKS_PER_SECOND as f64).round() as i64
 }
 
+/// The latest time a project holds, for messages.
+pub(crate) fn latest_time() -> String {
+    format!(
+        "the latest time a project holds ({MAX_SERIALIZED_TICKS} ticks, {} s)",
+        MAX_SERIALIZED_TICKS / alpha2_time::TICKS_PER_SECOND
+    )
+}
+
+/// `a + b` ticks, refused at `path` past the latest time a project holds.
+pub(crate) fn add_ticks(a: i64, b: i64, path: &str) -> Result<i64, ComposeError> {
+    a.checked_add(b)
+        .filter(|sum| *sum <= MAX_SERIALIZED_TICKS)
+        .ok_or_else(|| ComposeError::new(path, format!("it ends past {}", latest_time())))
+}
+
 /// The most units of a revealed text changing at once, which keeps the range selector's
 /// offset inside the indices a project allows.
 const REVEAL_MAX_OVERLAP: i64 = 1024;
@@ -512,16 +573,45 @@ impl Context<'_> {
         ComposeError::new(path, message)
     }
 
-    /// Seconds a field holds as ticks: finite and not negative.
+    /// Seconds a field holds as ticks: finite, not negative, and no later than a project holds.
     pub(crate) fn time(path: &str, field: &str, seconds: f64) -> Result<i64, ComposeError> {
-        if seconds.is_finite() && seconds >= 0.0 {
-            Ok(seconds_to_ticks(seconds))
-        } else {
-            Err(Self::error(
+        if !(seconds.is_finite() && seconds >= 0.0) {
+            return Err(Self::error(
                 &format!("{path}.{field}"),
                 format!("{seconds} is not a time: seconds are finite and not negative"),
-            ))
+            ));
         }
+        let ticks = seconds_to_ticks(seconds);
+        if ticks > MAX_SERIALIZED_TICKS {
+            return Err(Self::error(
+                &format!("{path}.{field}"),
+                format!("{seconds} s is past {}", latest_time()),
+            ));
+        }
+        Ok(ticks)
+    }
+
+    /// The duration the facts give for `file`, refused at `field` of the node when absent or
+    /// out of range.
+    pub(crate) fn facts_duration(&self, file: &str, field: &str) -> Result<i64, ComposeError> {
+        let ticks = self
+            .facts
+            .media
+            .get(file)
+            .and_then(|facts| facts.duration_ticks)
+            .ok_or_else(|| Self::error(field, format!(
+                "no duration for \"{file}\" in the facts; gather them for every file `requirements` lists"
+            )))?;
+        if !(0..=MAX_SERIALIZED_TICKS).contains(&ticks) {
+            return Err(Self::error(
+                field,
+                format!(
+                    "the facts give \"{file}\" a duration of {ticks} ticks; a duration is 0 to {}",
+                    latest_time()
+                ),
+            ));
+        }
+        Ok(ticks)
     }
 
     fn optional_time(
@@ -658,7 +748,7 @@ impl Context<'_> {
                 }
                 let at = Self::optional_time(path, "at", ramp.at)?.unwrap_or(0);
                 let end = match Self::optional_time(path, "duration", ramp.duration)? {
-                    Some(duration) => KeyTime::Ticks(at + duration),
+                    Some(duration) => KeyTime::Ticks(add_ticks(at, duration, path)?),
                     None => KeyTime::End,
                 };
                 Ok(AnimPrim::Keys(vec![
@@ -1562,7 +1652,7 @@ impl Context<'_> {
             },
             FileKind::Video => {
                 let facts = facts.ok_or_else(|| missing("media facts"))?;
-                let end = facts.duration_ticks.ok_or_else(|| missing("duration"))?;
+                let end = self.facts_duration(&media.path, &format!("{path}.path"))?;
                 let trim_start =
                     Self::optional_time(path, "trim_start", media.trim_start)?.unwrap_or(0);
                 let trim_end =
@@ -2124,14 +2214,7 @@ impl Context<'_> {
         fades: (f64, f64),
     ) -> Result<Prim, ComposeError> {
         let path = head.path.clone();
-        let end = self
-            .facts
-            .media
-            .get(file)
-            .and_then(|facts| facts.duration_ticks)
-            .ok_or_else(|| Self::error(&format!("{path}.path"), format!(
-                "no duration for \"{file}\" in the facts; gather them for every file `requirements` lists"
-            )))?;
+        let end = self.facts_duration(file, &format!("{path}.path"))?;
         let trim_start = Self::optional_time(&path, "trim_start", trim_start)?.unwrap_or(0);
         let trim_end = Self::optional_time(&path, "trim_end", trim_end)?.unwrap_or(end);
         if trim_end <= trim_start {
@@ -2179,14 +2262,7 @@ impl Context<'_> {
         let seconds = match (slideshow.seconds, &slideshow.fit_to) {
             (Some(seconds), _) => seconds,
             (None, Some(file)) => {
-                let length = self
-                    .facts
-                    .media
-                    .get(file)
-                    .and_then(|facts| facts.duration_ticks)
-                    .ok_or_else(|| Self::error(&format!("{path}.fit_to"), format!(
-                        "no duration for \"{file}\" in the facts; gather them for every file `requirements` lists"
-                    )))?;
+                let length = self.facts_duration(file, &format!("{path}.fit_to"))?;
                 (crate::compile::seconds(length) - overlap) / slides as f64 + overlap
             }
             (None, None) => self.theme.still_seconds,

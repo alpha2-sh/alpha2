@@ -26,7 +26,7 @@ use crate::lower::{
     AnimPrim, AudioPrim, BoxContent, BoxPrim, BoxTree, CaptionsPrim, Content, CounterContent,
     Coverage, CoveragePrim, EffectPrim, GeometryPrim, GridLayout, GroupPrim, Head, KeyPrim,
     KeyTime, MaskShapePrim, NodeMotion, PaintPrim, Preset, Prim, RevealPrim, SequencePrim,
-    ShapeContent, StackPrim, Visual, align_point, ticks_scaled,
+    ShapeContent, StackPrim, Visual, add_ticks, align_point, ticks_scaled,
 };
 use crate::spec::{
     Canvas, CustomCanvas, Fit, FrameRateChoice, GridLength, Loudness, Transition, VideoSpec,
@@ -251,6 +251,7 @@ pub(crate) struct Context<'a> {
     width: u32,
     height: u32,
     pub(crate) rate: FrameRate,
+    settings: ProjectSettings,
     measurer: Option<TextRasterizer>,
     sources: Vec<MediaSource>,
     media_sources: BTreeMap<(String, &'static str), SourceId>,
@@ -301,11 +302,7 @@ fn frame_rate(choice: FrameRateChoice) -> Result<FrameRate, String> {
 }
 
 impl<'a> Context<'a> {
-    fn new(
-        spec: &VideoSpec,
-        facts: &'a Facts,
-        fonts: &[Arc<[u8]>],
-    ) -> Result<(Self, Rgb), ComposeError> {
+    fn new(spec: &VideoSpec, facts: &'a Facts, fonts: &[Arc<[u8]>]) -> Result<Self, ComposeError> {
         let theme = crate::theme::resolve(&spec.theme)
             .map_err(|error| ComposeError::new("spec.theme", error))?;
         let custom = match &spec.canvas {
@@ -334,6 +331,15 @@ impl<'a> Context<'a> {
             )
             .map_err(|error| ComposeError::new("spec.canvas.frame_rate", error))?;
         let background = custom.background.unwrap_or(theme.background);
+        let settings = ProjectSettings::new(width, height, rate, 48_000)
+            .and_then(|settings| {
+                settings.with_background(Rgb::new(
+                    background.red,
+                    background.green,
+                    background.blue,
+                ))
+            })
+            .map_err(|error| ComposeError::new("spec.canvas", error.to_string()))?;
         let measurer = if fonts.is_empty() {
             None
         } else {
@@ -375,27 +381,25 @@ impl<'a> Context<'a> {
                     .collect::<Vec<_>>()
             })
             .collect();
-        Ok((
-            Self {
-                facts,
-                theme,
-                width,
-                height,
-                rate,
-                measurer,
-                sources: Vec::new(),
-                media_sources: BTreeMap::new(),
-                assets: BTreeMap::new(),
-                compositions: Vec::new(),
-                blur_compositions: BTreeMap::new(),
-                reserved,
-                next_source: 0,
-                next_clip: 0,
-                next_composition: 0,
-                warnings: Vec::new(),
-            },
-            Rgb::new(background.red, background.green, background.blue),
-        ))
+        Ok(Self {
+            facts,
+            theme,
+            width,
+            height,
+            rate,
+            settings,
+            measurer,
+            sources: Vec::new(),
+            media_sources: BTreeMap::new(),
+            assets: BTreeMap::new(),
+            compositions: Vec::new(),
+            blur_compositions: BTreeMap::new(),
+            reserved,
+            next_source: 0,
+            next_clip: 0,
+            next_composition: 0,
+            warnings: Vec::new(),
+        })
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -513,33 +517,43 @@ impl<'a> Context<'a> {
         id
     }
 
-    /// `prim`'s own length, or the one it takes by default.
-    fn length(&self, prim: &Prim) -> Length {
-        if let Some(duration) = prim.head().duration {
-            return Length::Fixed(duration);
+    /// `prim`'s own length, or the one it takes by default, refused at its path past the latest
+    /// time a project holds.
+    fn length(&self, prim: &Prim) -> Result<Length, ComposeError> {
+        let length = self.own_length(prim)?;
+        if length.resolve() > alpha2_time::MAX_SERIALIZED_TICKS {
+            return Err(ComposeError::new(
+                &prim.head().path,
+                format!("it lasts past {}", crate::lower::latest_time()),
+            ));
         }
-        match prim {
+        Ok(length)
+    }
+
+    fn own_length(&self, prim: &Prim) -> Result<Length, ComposeError> {
+        if let Some(duration) = prim.head().duration {
+            return Ok(Length::Fixed(duration));
+        }
+        Ok(match prim {
             Prim::Sequence(sequence) => {
                 let overlap = sequence.transition.as_ref().map_or(0, transition_ticks);
-                let total = sequence
-                    .children
-                    .iter()
-                    .enumerate()
-                    .map(|(index, child)| {
-                        self.length(child).resolve() - if index > 0 { overlap } else { 0 }
-                    })
-                    .sum::<i64>();
+                let mut total = 0_i64;
+                for (index, child) in sequence.children.iter().enumerate() {
+                    let length =
+                        self.length(child)?.resolve() - if index > 0 { overlap } else { 0 };
+                    total = add_ticks(total, length, &sequence.head.path)?;
+                }
                 Length::Fixed(total.max(0))
             }
-            Prim::Stack(stack) => self.stack_length(stack),
-            Prim::Group(group) => self.stack_length(&group.stack),
-            Prim::Coverage(coverage) => self.length(&coverage.content),
+            Prim::Stack(stack) => self.stack_length(stack)?,
+            Prim::Group(group) => self.stack_length(&group.stack)?,
+            Prim::Coverage(coverage) => self.length(&coverage.content)?,
             Prim::Box(node) => self.stack_length(&StackPrim {
                 head: Head::default(),
                 children: box_prims(&node.tree),
                 inset: [0.0; 4],
                 grid: None,
-            }),
+            })?,
             Prim::Visual(visual) => match &visual.content {
                 Content::Video(video) if video.looped => Length::Flexible(video.natural()),
                 Content::Video(video) => Length::Fixed(video.natural()),
@@ -567,19 +581,22 @@ impl<'a> Context<'a> {
             }
             Prim::Audio(audio) => Length::Fixed(audio.trim_end - audio.trim_start),
             Prim::Raw(..) => Length::Flexible(0),
-        }
+        })
     }
 
     /// A stack's own length, or the one it takes by default.
-    fn stack_length(&self, stack: &StackPrim) -> Length {
-        let lengths = stack
-            .children
+    fn stack_length(&self, stack: &StackPrim) -> Result<Length, ComposeError> {
+        let mut lengths = Vec::with_capacity(stack.children.len());
+        for child in &stack.children {
+            let length = self.length(child)?;
+            let at = child.head().at.unwrap_or(0);
+            let end = add_ticks(at, length.resolve(), &child.head().path)?;
+            lengths.push((end, matches!(length, Length::Fixed(_))));
+        }
+        let fixed = lengths
             .iter()
-            .map(|child| (child.head().at.unwrap_or(0), self.length(child)));
-        let fixed = lengths.clone().filter_map(|(at, length)| match length {
-            Length::Fixed(ticks) => Some(at + ticks),
-            Length::Flexible(_) => None,
-        });
+            .filter(|(_, fixed)| *fixed)
+            .map(|(end, _)| *end);
         let shortest = matches!(
             stack.grid,
             Some(GridLayout {
@@ -588,17 +605,10 @@ impl<'a> Context<'a> {
             })
         );
         let fixed = if shortest { fixed.min() } else { fixed.max() };
-        fixed.map_or_else(
-            || {
-                Length::Flexible(
-                    lengths
-                        .map(|(at, length)| at + length.resolve())
-                        .max()
-                        .unwrap_or(0),
-                )
-            },
+        Ok(fixed.map_or_else(
+            || Length::Flexible(lengths.iter().map(|(end, _)| *end).max().unwrap_or(0)),
             Length::Fixed,
-        )
+        ))
     }
 
     /// Places `prim` in `slot`, adding its lanes to `out`.
@@ -606,6 +616,7 @@ impl<'a> Context<'a> {
         if slot.len <= 0 {
             return Ok(());
         }
+        add_ticks(slot.start, slot.len, &prim.head().path)?;
         let mut slot = slot.clone();
         slot.owners.extend(prim.head().id.clone());
         self.resolve_motion(prim.head(), &mut slot);
@@ -643,7 +654,7 @@ impl<'a> Context<'a> {
         for motion in motions {
             let mut entered = start;
             if let Some(preset) = motion.enter {
-                let from = (start + slot.delay).min(end);
+                let from = start.saturating_add(slot.delay).min(end);
                 entered = (from + preset.duration).min(end);
                 trimmed |= from + preset.duration > end;
                 if entered > from {
@@ -678,7 +689,7 @@ impl<'a> Context<'a> {
         // The lane and clip of the previous child, when it was one picture.
         let mut previous: Option<(usize, ClipId, i64)> = None;
         for (index, child) in sequence.children.iter().enumerate() {
-            let length = self.length(child).resolve();
+            let length = self.length(child)?.resolve();
             let joined = index > 0 && overlap > 0;
             if joined {
                 let previous_length = previous.as_ref().map_or(i64::MAX, |(_, _, length)| *length);
@@ -792,7 +803,7 @@ impl<'a> Context<'a> {
                 continue;
             }
             let remaining = slot.len - at;
-            let len = match self.length(child) {
+            let len = match self.length(child)? {
                 Length::Fixed(_) if hold != Hold::None => remaining,
                 Length::Fixed(ticks) => ticks.min(remaining),
                 Length::Flexible(_) => remaining,
@@ -967,6 +978,9 @@ impl<'a> Context<'a> {
                     range(0, still.len),
                 );
                 let place = Placement::new(rect, self.canvas_px());
+                for shape in shapes {
+                    keys_fit(shape.last_keys(still.len), clip.timeline_range, path)?;
+                }
                 clip.masks = shapes
                     .iter()
                     .map(|shape| ShapeMask {
@@ -1958,6 +1972,7 @@ impl<'a> Context<'a> {
                 }
                 let composition = video.blur.map(|radius| self.blur_composition(radius));
                 for clip in &mut clips {
+                    Self::zoom_fits(visual, clip.timeline_range)?;
                     clip.visual = self.picture_visual(
                         video.size,
                         rect,
@@ -1983,6 +1998,7 @@ impl<'a> Context<'a> {
                     range(start, end),
                     range(0, slot.len),
                 );
+                Self::zoom_fits(visual, clip.timeline_range)?;
                 clip.visual =
                     self.picture_visual(*size, rect, visual, &opacity, clip.timeline_range);
                 clip.masks = self.picture_masks(*size, rect, visual, clip.timeline_range);
@@ -2127,7 +2143,7 @@ impl<'a> Context<'a> {
                 lane.clips.push(clip);
             }
             Content::Counter(counter) => {
-                let root = self.counter_root(counter, rect, visual, start, slot.len);
+                let root = self.counter_root(counter, rect, visual, start, slot.len)?;
                 let source = self.generated_source(Generator::Layout {
                     root: Box::new(root),
                 });
@@ -2158,6 +2174,13 @@ impl<'a> Context<'a> {
         }
         out.visual.push(lane);
         Ok(())
+    }
+
+    /// Refuses zoom keys placed on `clip` past the latest time a project holds.
+    fn zoom_fits(visual: &Visual, clip: TimeRange) -> Result<(), ComposeError> {
+        let length = clip.end().ticks() - clip.start().ticks();
+        let last = visual.zoom.as_ref().and_then(|zoom| last_key(zoom, length));
+        keys_fit([last], clip, &format!("{}.zoom", visual.head.path))
     }
 
     /// A shape's items placed in `rect`, animated over `0..len` of the picture's time.
@@ -2272,7 +2295,7 @@ impl<'a> Context<'a> {
         visual: &Visual,
         start: i64,
         len: i64,
-    ) -> LayoutNode {
+    ) -> Result<LayoutNode, ComposeError> {
         let (width, height) = self.canvas_px();
         let frame = self.rate.frame_start(1).map_or(1, MediaTime::ticks).max(1);
         let count = counter.count.unwrap_or(len - frame).clamp(1, len.max(1));
@@ -2359,7 +2382,12 @@ impl<'a> Context<'a> {
             "align_items": place(y),
             "children": [leaf],
         });
-        serde_json::from_value(root).expect("a counter's layout tree is well formed")
+        serde_json::from_value(root).map_err(|error| {
+            ComposeError::new(
+                &visual.head.path,
+                format!("a counter field is invalid: {error}"),
+            )
+        })
     }
 
     /// Where a picture `size` pixels at scale 1 lies to fill `rect` as `visual` asks, and its
@@ -2692,19 +2720,9 @@ impl Fitted {
 /// node's end that would not follow the key before it falls one tick after it.
 fn resolve_keys<T: Clone>(keys: &[KeyPrim<T>], clip: TimeRange) -> Vec<(MediaTime, T, Easing)> {
     let length = clip.end().ticks() - clip.start().ticks();
-    let mut previous = None;
-    keys.iter()
-        .map(|key| {
-            let mut ticks = match key.at {
-                KeyTime::Ticks(ticks) => ticks,
-                KeyTime::End => length,
-            };
-            if let Some(previous) = previous
-                && ticks <= previous
-            {
-                ticks = previous + 1;
-            }
-            previous = Some(ticks);
+    key_ticks(keys, length)
+        .zip(keys)
+        .map(|(ticks, key)| {
             (
                 MediaTime::from_ticks(clip.start().ticks() + ticks),
                 key.value.clone(),
@@ -2712,6 +2730,45 @@ fn resolve_keys<T: Clone>(keys: &[KeyPrim<T>], clip: TimeRange) -> Vec<(MediaTim
             )
         })
         .collect()
+}
+
+/// Each key's ticks from the start of a span `length` long, as [`resolve_keys`] places them.
+fn key_ticks<T>(keys: &[KeyPrim<T>], length: i64) -> impl Iterator<Item = i64> + '_ {
+    let mut previous: Option<i64> = None;
+    keys.iter().map(move |key| {
+        let mut ticks = match key.at {
+            KeyTime::Ticks(ticks) => ticks,
+            KeyTime::End => length,
+        };
+        if let Some(previous) = previous
+            && ticks <= previous
+        {
+            ticks = previous + 1;
+        }
+        previous = Some(ticks);
+        ticks
+    })
+}
+
+/// The ticks of `anim`'s last key from the start of a span `length` long.
+pub(crate) fn last_key<T>(anim: &AnimPrim<T>, length: i64) -> Option<i64> {
+    match anim {
+        AnimPrim::Value(_) => None,
+        AnimPrim::Keys(keys) => key_ticks(keys, length).last(),
+    }
+}
+
+/// Refuses animations whose last keys, `last` ticks after `clip`'s start, fall past the latest
+/// time a project holds.
+fn keys_fit(
+    last: impl IntoIterator<Item = Option<i64>>,
+    clip: TimeRange,
+    path: &str,
+) -> Result<(), ComposeError> {
+    for ticks in last.into_iter().flatten() {
+        add_ticks(clip.start().ticks(), ticks, path)?;
+    }
+    Ok(())
 }
 
 /// `anim` as a property animation over `clip`.
@@ -3662,7 +3719,7 @@ pub(crate) fn compile(
             ),
         ));
     }
-    let (mut context, background) = Context::new(spec, facts, fonts)?;
+    let mut context = Context::new(spec, facts, fonts)?;
     let body = context.lower(&spec.body, "spec.body")?;
     let overlays = spec
         .overlays
@@ -3689,7 +3746,7 @@ pub(crate) fn compile(
         .collect::<Result<Vec<_>, _>>()?;
     let total = match spec.duration {
         Some(seconds) => Context::time("spec", "duration", seconds)?,
-        None => context.length(&body).resolve(),
+        None => context.length(&body)?.resolve(),
     };
     if total <= 0 {
         return Err(ComposeError::new(
@@ -3740,7 +3797,7 @@ pub(crate) fn compile(
             continue;
         }
         let remaining = total - at;
-        let len = match context.length(prim) {
+        let len = match context.length(prim)? {
             Length::Fixed(ticks) => ticks.min(remaining),
             Length::Flexible(_) => remaining,
         };
@@ -3758,7 +3815,6 @@ pub(crate) fn compile(
         spec,
         context,
         lanes,
-        background,
         raw_sources,
         raw_compositions,
         raw_assets,
@@ -3774,7 +3830,6 @@ fn assemble(
     spec: &VideoSpec,
     mut context: Context<'_>,
     lanes: Lanes,
-    background: Rgb,
     raw_sources: Vec<MediaSource>,
     raw_compositions: Vec<Composition>,
     raw_assets: BTreeMap<String, String>,
@@ -3860,9 +3915,7 @@ fn assemble(
         tracks.push(track);
     }
     let name = spec.name.clone().unwrap_or_else(|| "video".to_owned());
-    let settings = ProjectSettings::new(context.width, context.height, context.rate, 48_000)
-        .and_then(|settings| settings.with_background(background))
-        .map_err(|error| ComposeError::new("spec.canvas", error.to_string()))?;
+    let settings = context.settings.clone();
     let mut sources = std::mem::take(&mut context.sources);
     sources.extend(raw_sources);
     let mut compositions = std::mem::take(&mut context.compositions);

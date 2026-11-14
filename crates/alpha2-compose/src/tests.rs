@@ -1548,3 +1548,114 @@ fn a_looping_video_refuses_a_speed_other_than_one() {
         2 * span(slower, "source_range")
     );
 }
+
+#[test]
+fn times_past_what_a_project_holds_are_refused_with_a_path() {
+    let cases = [
+        (
+            json!({"body": {"type": "stack", "children": [
+                {"type": "color", "at": 1e300, "duration": 1e300},
+            ]}}),
+            "spec.body.children[0].duration: ",
+        ),
+        (
+            json!({"body": {"type": "stack", "children": [
+                {"type": "color", "at": 1e14, "duration": 1e14},
+            ]}}),
+            "spec.body.children[0].duration: ",
+        ),
+        (
+            json!({"duration": 1e11, "body": {"type": "color"}}),
+            "spec.duration: ",
+        ),
+        // Each value fits; their sum does not.
+        (
+            json!({"body": {"type": "stack", "children": [
+                {"type": "color", "at": 5e10, "duration": 5e10},
+            ]}}),
+            "spec.body.children[0]: it ends past the latest time a project holds",
+        ),
+        (
+            json!({"body": {"type": "sequence", "children": [
+                {"type": "color", "duration": 3e10},
+                {"type": "color", "duration": 3e10},
+                {"type": "color", "duration": 3e10},
+            ]}}),
+            "spec.body: it ends past the latest time a project holds",
+        ),
+        (
+            json!({"duration": 1, "body": {"type": "media", "path": "logo.png",
+                "zoom": {"from": 1, "to": 2, "at": 5e10, "duration": 3e10}}}),
+            "spec.body.zoom: it ends past the latest time a project holds",
+        ),
+        // The key fits from the node's start, which is late on the timeline.
+        (
+            json!({"body": {"type": "stack", "children": [
+                {"type": "media", "path": "logo.png", "at": 3e9, "duration": 1,
+                    "zoom": {"from": 1, "to": 2, "at": 7e10, "duration": 3e9}},
+            ]}}),
+            "spec.body.children[0].zoom: it ends past the latest time a project holds",
+        ),
+        (
+            json!({"theme": {"text_seconds": 1e11}, "body": {"type": "text", "text": "x"}}),
+            "spec.theme: text_seconds is 100000000000 s, past the latest time",
+        ),
+    ];
+    for (spec, expected) in cases {
+        let outcome =
+            std::panic::catch_unwind(|| compile_json(&spec.to_string(), &facts().to_string(), &[]))
+                .unwrap_or_else(|_| panic!("panicked: {spec}"));
+        let error = outcome.expect_err("refused").to_string();
+        assert!(error.starts_with(expected), "{error}");
+    }
+    // Entrance delays past the latest time are not added up: the spec is refused for its
+    // track count, not lost to an overflow.
+    let staggered = json!({"duration": 1, "body": {"type": "stack", "stagger": 7e10,
+        "enter": {"type": "fade", "duration": 0.5},
+        "children": vec![json!({"type": "color"}); 1100]}});
+    assert!(std::panic::catch_unwind(|| compile_error(&staggered)).is_ok());
+    let mut facts = facts();
+    facts["media"]["wide.mp4"]["duration_ticks"] = json!(i64::MAX);
+    let error = compile_json(
+        &json!({"body": {"type": "media", "path": "wide.mp4"}}).to_string(),
+        &facts.to_string(),
+        &[],
+    )
+    .expect_err("refused")
+    .to_string();
+    assert!(
+        error.starts_with("spec.body.path: the facts give \"wide.mp4\" a duration of"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_zero_canvas_is_refused_before_anything_is_lowered() {
+    for counter in [
+        json!({"type": "counter", "start": 0, "end": 5, "duration": 1}),
+        json!({"type": "counter", "start": 0, "end": 5, "duration": 1, "font_size": 40}),
+        json!({"type": "color", "duration": 1}),
+    ] {
+        let spec = json!({"canvas": {"width": 0, "height": 0}, "body": counter});
+        let outcome =
+            std::panic::catch_unwind(|| compile_json(&spec.to_string(), &facts().to_string(), &[]))
+                .unwrap_or_else(|_| panic!("panicked: {spec}"));
+        let error = outcome.expect_err("refused").to_string();
+        assert!(error.starts_with("spec.canvas: "), "{error}");
+    }
+}
+
+#[test]
+fn old_specs_compile_to_projects_that_load() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/old-specs.golden.json");
+    let cases: Vec<Value> =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
+    for case in &cases {
+        let compiled: Value = serde_json::from_str(
+            &compile_json(&case["spec"].to_string(), &facts().to_string(), &[]).expect("compiles"),
+        )
+        .expect("JSON");
+        alpha2_model::Project::from_json(&compiled["project"].to_string())
+            .unwrap_or_else(|error| panic!("{error}: {}", case["spec"]));
+    }
+}
