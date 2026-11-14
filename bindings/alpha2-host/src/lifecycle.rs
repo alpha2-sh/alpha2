@@ -60,8 +60,9 @@ impl ServeOptions {
                 extract.plugin_call_deadline = Duration::from_millis(millis);
             } else if flag == "--plugin-memory-limit" {
                 let bytes = number("bytes")?;
-                if bytes == 0 {
-                    return Err(format!("{flag} takes bytes from 1"));
+                let most = alpha2_host_core::plugins::MAX_MEMORY_BYTES;
+                if bytes == 0 || bytes > most {
+                    return Err(format!("{flag} takes bytes from 1 to {most}"));
                 }
                 extract.plugin_memory_bytes = bytes;
             } else if flag == "--max-running" {
@@ -489,6 +490,19 @@ mod tests {
             "--restart-often 1",
         ] {
             assert!(SoftLimits::from_args(args(refused)).is_err(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn the_plugin_memory_limit_is_at_most_2_gib() {
+        let options =
+            ServeOptions::from_args(args("--plugin-memory-limit 2147483648")).expect("flags");
+        assert_eq!(options.extract.plugin_memory_bytes, 1 << 31);
+        for refused in [
+            "--plugin-memory-limit 0",
+            "--plugin-memory-limit 2147483649",
+        ] {
+            assert!(ServeOptions::from_args(args(refused)).is_err(), "{refused}");
         }
     }
 

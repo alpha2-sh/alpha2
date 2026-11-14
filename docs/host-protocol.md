@@ -254,11 +254,11 @@ The host answers a request the session refuses (an unknown output, a range outsi
 
 An acknowledgement carries the `requestId` and `seq` of its step and either `emits` or `"error": { "message" }`. It is not a request and gets no response of its own; one for a request that has ended or for another `seq` is ignored. Each emit names an `output` of the descriptor:
 
-- `{ "output", "time", "values": [...] }` for `points`, `scalars` and `similarity`, one value per channel, `null` for a channel lost at that time;
+- `{ "output", "time", "values": [...] }` for `points`, `scalars` and `similarity`, one finite number per channel, `null` for a channel lost at that time;
 - `{ "output", "start", "end", "text", "speaker"? }` for `words`;
-- `{ "output", "start", "end", "label"?, "score"? }` for `intervals`.
+- `{ "output", "start", "end", "label"?, "score"? }` for `intervals`, the score finite.
 
-Times are ticks on the input's clock, inside the range. During a pass an emit reaches no further along the pass than what it has delivered; `end` may emit anywhere in the range.
+Times are integer ticks on the input's clock, inside the range. The clients refuse an emit that breaks these types (a time that is not an integer, a value or score that is not finite) inside the step that made it, which fails the request with `EXTRACTOR_FAILED` naming the emit. The data limits are checked as values are emitted: an emit that takes a requested output past one ends the request with `INVALID_EMIT`, `details` naming that emit. During a pass an emit reaches no further along the pass than what it has delivered; `end` may emit anywhere in the range.
 
 - A client that does not acknowledge a `pass`, `video` or `audio` step within `--extract-step-timeout <ms>` (a `serve` flag, 60000 by default, 0 for none) ends the request with `EXTRACTOR_TIMEOUT` and frees its place among the running requests. `begin` and `end` have no timeout.
 - An emit the session refuses ends the request with `INVALID_EMIT`, `details` `{ "index", "reason" }` naming the emit in the acknowledgement and why. An acknowledgement with `error` ends it with `EXTRACTOR_FAILED` and that message.
@@ -288,9 +288,9 @@ The result is `{ "dataSets": [...], "timings": { "totalMs", "clientMs" } }`: one
 
 With `plugin`, the host runs the extractor itself; no steps go to the client, and progress and `cancel` work as above.
 
-- `manifest` is an `https:` URL, a `file:` URL or a path on the host's file system, and `sha256` the SHA-256 of its bytes; a manifest with another hash is refused with `PLUGIN_HASH_MISMATCH`. Its artifact and resource URLs are relative to it, or absolute; only `https:` URLs (through the platform's certificate verifier and `HTTPS_PROXY` / `NO_PROXY`), `file:` URLs and paths are read.
+- `manifest` is an `https:` URL, a `file:` URL or a path on the host's file system, and `sha256` the SHA-256 of its bytes; a manifest with another hash is refused with `PLUGIN_HASH_MISMATCH`. Each artifact and resource `url` is a path under the manifest's own directory or an absolute `https:` URL (fetched through the platform's certificate verifier and `HTTPS_PROXY` / `NO_PROXY`); a manifest with any other `url` is refused with `PLUGIN_LOAD_FAILED`. A mismatch message states the length and digest found only for a local file.
 - Downloaded files are kept under their SHA-256 in `ALPHA2_PLUGIN_CACHE`, else the platform's cache directory (`~/.cache/alpha2/plugins`, `~/Library/Caches/alpha2/plugins`, `%LOCALAPPDATA%\alpha2\plugins`). Every file is checked against the hash and length its manifest pins before it is used, cached or not.
-- The host takes the native artifact for its own target when `allow_native` is true and `force_wasm` is not, else the wasm artifact. A native artifact runs with the host's rights, inside this host process: if it crashes, the host exits and the request gets no response. A wasm artifact is sandboxed, its memory capped by `--plugin-memory-limit <bytes>` (a `serve` flag, 1 GiB by default) and each call bounded by `--plugin-call-timeout <ms>` (300000 by default); past either it fails with `PLUGIN_LIMIT` and the host goes on serving.
+- The host takes the native artifact for its own target when `allow_native` is true and `force_wasm` is not, else the wasm artifact. A native artifact runs with the host's rights, inside this host process: if it crashes, the host exits and the request gets no response. A wasm artifact is sandboxed: it has one memory, capped by `--plugin-memory-limit <bytes>` (a `serve` flag, 1 GiB by default, at most 2147483648), its tables together hold at most 1,048,576 elements, and each call is bounded by `--plugin-call-timeout <ms>` (300000 by default); past any of these it fails with `PLUGIN_LIMIT` and the host goes on serving. What it emits is refused at the data limits of its outputs as it is emitted (`INVALID_EMIT`).
 - The artifact's descriptor must equal the manifest's. The request's `params` go to the plugin as they are; the plugin checks them.
 - A manifest is at most `alpha2_engine::extract::MAX_MANIFEST_BYTES` (1 MiB) with at most `MAX_PLUGIN_ARTIFACTS` artifacts and `MAX_PLUGIN_RESOURCES` resources (64 each). The `--plugin-memory-limit` and `--plugin-call-timeout` defaults are `alpha2_host_core::plugins::DEFAULT_MEMORY_BYTES` and `DEFAULT_CALL_DEADLINE`.
 - The `PLUGIN_*` codes below say why a plugin did not load or run. A plugin call that fails is `EXTRACTOR_FAILED` with the plugin's message, and output the session refuses is `INVALID_EMIT`, as for a client.
@@ -348,10 +348,10 @@ A `cancel` without a `target` is answered `INVALID_REQUEST`. The host reads canc
 | `PLUGIN_NO_ARTIFACT` | The manifest has no artifact this host runs; the message lists the targets it offers. |
 | `PLUGIN_NATIVE_REFUSED` | Only a native artifact runs here, and the request does not allow native code. |
 | `PLUGIN_DESCRIPTOR_MISMATCH` | The artifact describes another extractor than the manifest. |
-| `PLUGIN_UNSUPPORTED_FEATURE` | The wasm module uses relaxed SIMD, threads or shared memory, or imports something other than the host functions. |
-| `PLUGIN_LOAD_FAILED` | The manifest is not one, or the artifact did not load. |
+| `PLUGIN_UNSUPPORTED_FEATURE` | The wasm module uses relaxed SIMD, threads, shared memory, more than one memory or 64-bit memory, or imports something other than the host functions. |
+| `PLUGIN_LOAD_FAILED` | The manifest is not one (including a `url` outside its directory), or the artifact did not load (including a native table shorter than this host's or with a null entry). |
 | `PLUGIN_TRAPPED` | The wasm module trapped, or the native plugin caught a panic at its boundary. |
-| `PLUGIN_LIMIT` | A wasm plugin ran past its memory cap or a call past its deadline. |
+| `PLUGIN_LIMIT` | A wasm plugin ran past its memory cap or table bound, or a call past its deadline. |
 | `HOST_RETIRING` | The host is `draining` and did not start the request; send it to another host. |
 | `INTERNAL` | A defect in the host failed the request. The host answers the requests after it. |
 | `ALPHA2_ERROR` | A failure no other code describes. |

@@ -16,6 +16,9 @@ export const PLUGIN_ABI = "alpha2-plugin/1";
 /** Linear memory a plugin may grow to when the caller sets no cap. */
 export const DEFAULT_PLUGIN_MEMORY_BYTES = 1024 * 1024 * 1024;
 
+/** The memory a module's `i32` offsets address; a larger cap is taken as this. */
+const MAX_PLUGIN_MEMORY_BYTES = 2 ** 31;
+
 /** A plugin that was refused, did not load or failed, with the code every surface uses. */
 export class PluginError extends Error {
   readonly code: string;
@@ -49,7 +52,7 @@ interface Manifest {
 
 /** Where {@link loadPlugin} reads a plugin from. */
 export interface LoadPluginOptions {
-  /** The most linear memory the module may have, in bytes. */
+  /** The most linear memory the module may have, in bytes; at most 2 GiB. */
   readonly memoryBytes?: number;
   /** Fetches the manifest's files; `globalThis.fetch` when left out. */
   readonly fetch?: typeof fetch;
@@ -616,7 +619,10 @@ export async function loadPlugin(
     );
   }
   checkModule(module, bytes);
-  const memoryBytes = options.memoryBytes ?? DEFAULT_PLUGIN_MEMORY_BYTES;
+  const memoryBytes = Math.min(
+    options.memoryBytes ?? DEFAULT_PLUGIN_MEMORY_BYTES,
+    MAX_PLUGIN_MEMORY_BYTES,
+  );
   const described = (
     await Run.start(module, parsed.descriptor, resources, memoryBytes)
   ).describe();

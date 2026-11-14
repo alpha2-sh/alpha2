@@ -5,8 +5,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use alpha2_engine::extract::{Reference, reference};
 use alpha2_host_core::plugins::{
-    Fetch, PluginError, Policy, codes, load, parse_manifest, sha256_hex,
+    Fetch, Fetched, PluginError, Policy, codes, load, parse_manifest, sha256_hex,
 };
 
 use crate::error::Alpha2Error;
@@ -24,16 +25,19 @@ fn plugin_error(error: PluginError) -> Alpha2Error {
 struct Bundled(PathBuf);
 
 impl Fetch for Bundled {
-    fn fetch(&mut self, url: &str, _sha256: &str, _bytes: u64) -> Result<PathBuf, PluginError> {
-        if url.contains("://") || Path::new(url).is_absolute() {
-            return Err(PluginError::new(
+    fn fetch(&mut self, url: &str, _sha256: &str, _bytes: u64) -> Result<Fetched, PluginError> {
+        match reference(url) {
+            Ok(Reference::Relative(path)) => Ok(Fetched {
+                path: self.0.join(path),
+                local: true,
+            }),
+            _ => Err(PluginError::new(
                 codes::FETCH_FAILED,
                 format!(
-                    "{url}: apps bundle their plugins, so only paths relative to the manifest are read"
+                    "{url}: apps bundle their plugins, so only paths under the manifest are read"
                 ),
-            ));
+            )),
         }
-        Ok(self.0.join(url))
     }
 }
 
@@ -131,5 +135,34 @@ impl Alpha2 {
                 })
             }),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bundled_plugin_reads_only_paths_under_its_manifest() {
+        let mut bundled = Bundled(PathBuf::from("/app/plugin"));
+        assert_eq!(
+            bundled.fetch("x86_64/a.so", "", 0),
+            Ok(Fetched {
+                path: PathBuf::from("/app/plugin/x86_64/a.so"),
+                local: true,
+            })
+        );
+        for refused in [
+            "../x",
+            "a/../../x",
+            "/etc/hostname",
+            "file:///etc/hostname",
+            "https://example.com/a.wasm",
+        ] {
+            assert_eq!(
+                bundled.fetch(refused, "", 0).expect_err(refused).code,
+                codes::FETCH_FAILED
+            );
+        }
     }
 }

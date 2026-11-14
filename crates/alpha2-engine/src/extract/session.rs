@@ -357,6 +357,25 @@ struct Gathered {
     intervals: Vec<DataInterval>,
 }
 
+impl Gathered {
+    /// Items of the one kind an output gathers.
+    fn len(&self) -> usize {
+        self.samples.len() + self.words.len() + self.intervals.len()
+    }
+}
+
+/// Why an emit to `output` was refused at its data limit.
+fn over_limit(output: &OutputSpec) -> String {
+    let (limit, what) = match output.kind {
+        DataKind::Points | DataKind::Scalars | DataKind::Similarity => {
+            (alpha2_model::MAX_DATA_VALUES, "values")
+        }
+        DataKind::Words => (alpha2_model::MAX_DATA_WORDS, "words"),
+        DataKind::Intervals => (alpha2_model::MAX_DATA_INTERVALS, "intervals"),
+    };
+    format!("output {} would hold more than {limit} {what}", output.name)
+}
+
 /// One run of an extractor over a range, driven by the host.
 ///
 /// The host loops on [`Self::next`]: it supplies each [`Need`], hands each [`Delivery`] to the
@@ -1059,18 +1078,36 @@ impl ExtractSession {
     ///
     /// During a pass, times lie inside the range (or are a delivered frame's pts), go no further
     /// than what the pass has delivered, and move in the pass direction per output. After
-    /// [`Step::Done`] any time inside the range is accepted.
+    /// [`Step::Done`] any time inside the range is accepted. A requested output holds at most
+    /// [`OutputSpec::max_items`]; emits to a declared output the request does not name are
+    /// checked and dropped.
     ///
     /// # Errors
     /// [`SessionError::InvalidEmit`] naming the first offending emit and the rule.
     pub fn emit(&mut self, emits: &[Emit]) -> Result<(), SessionError> {
         let mut last = self.last_time.clone();
+        let mut added = BTreeMap::<&str, usize>::new();
         for (index, emit) in emits.iter().enumerate() {
-            self.check_emit(emit, &mut last)
-                .map_err(|reason| SessionError::InvalidEmit { index, reason })?;
+            let invalid = |reason| SessionError::InvalidEmit { index, reason };
+            self.check_emit(emit, &mut last).map_err(invalid)?;
+            let name = emit.output();
+            if !self.request.outputs.contains_key(name) {
+                continue;
+            }
+            let count = added.entry(name).or_default();
+            *count += 1;
+            let held = self.gathered.get(name).map_or(0, Gathered::len);
+            if let Some(output) = self.output(name)
+                && held + *count > output.max_items()
+            {
+                return Err(invalid(over_limit(output)));
+            }
         }
         self.last_time = last;
         for emit in emits {
+            if !self.request.outputs.contains_key(emit.output()) {
+                continue;
+            }
             let gathered = self.gathered.entry(emit.output().to_owned()).or_default();
             match emit {
                 Emit::Sample { time, values, .. } => gathered.samples.push((*time, values.clone())),

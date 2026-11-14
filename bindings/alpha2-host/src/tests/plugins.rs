@@ -344,3 +344,39 @@ fn a_wasm_plugin_past_its_limits_fails_and_the_host_stays_ready() {
     assert_eq!(ok["result"]["dataSets"].as_array().map(Vec::len), Some(5));
     assert_eq!(serving.finish(), Some(0));
 }
+
+#[test]
+fn a_manifest_naming_a_local_file_outside_its_directory_is_refused_unread() {
+    let _gpu = gpu_test_lock();
+    let dir = scratch_directory("plugin-outside");
+    let (manifest, _) = plugin_dir(&dir, "scripted", true, false);
+    let elsewhere = scratch_directory("plugin-outside-secret");
+    let secret = elsewhere.join("secret.txt");
+    std::fs::write(&secret, "a secret line").expect("secret");
+    let mut named: Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest).expect("manifest")).expect("json");
+    let url = format!("file://{}", secret.to_str().expect("utf-8"));
+    named["resources"] = json!([{ "name": "secret", "url": url,
+                                  "sha256": sha256_hex(b"a secret line"), "bytes": 13 }]);
+    let text = serde_json::to_string_pretty(&named).expect("json");
+    std::fs::write(&manifest, &text).expect("manifest");
+    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    serving.write(&extract(
+        "outside",
+        "alpha2.test.scripted",
+        &manifest,
+        &sha256_hex(text.as_bytes()),
+        &json!({}),
+        &json!({ "resource": "secret" }),
+    ));
+    let response = answer(&serving, "outside");
+    assert_eq!(
+        response["error"]["code"], "PLUGIN_LOAD_FAILED",
+        "{response}"
+    );
+    assert!(
+        !response.to_string().contains("a secret line"),
+        "{response}"
+    );
+    assert_eq!(serving.finish(), Some(0));
+}

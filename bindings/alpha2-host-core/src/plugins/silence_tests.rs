@@ -3,7 +3,8 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use alpha2_engine::extract::{
-    ExtractRequest, ExtractSession, Need, SuppliedAudio, SuppliedFrame, Supplier, drive,
+    DriveError, ExtractRequest, ExtractSession, Need, RequestError, SuppliedAudio, SuppliedFrame,
+    Supplier, drive,
 };
 use alpha2_eval::edit::{DataRef, EditRequest, Ranges, Ripple, Target, apply};
 use alpha2_model::{DataSet, DataValues, Project};
@@ -23,12 +24,12 @@ fn ticks(sample: i64) -> i64 {
     sample * 120_000 / RATE
 }
 
-/// The packed plugin's directory, packed once per test process.
+/// The packed plugin's directory, packed once per test process and shared by its tests.
 fn packed() -> &'static Path {
     static PACKED: OnceLock<PathBuf> = OnceLock::new();
     PACKED.get_or_init(|| {
         let plugins = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins");
-        let out = std::env::temp_dir().join(format!("alpha2-silence-{}", std::process::id()));
+        let out = plugins.join("target/tmp/silence-packed");
         let status = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
             .args(["run", "--manifest-path"])
             .arg(plugins.join("Cargo.toml"))
@@ -50,8 +51,11 @@ fn packed() -> &'static Path {
 struct Packed;
 
 impl Fetch for Packed {
-    fn fetch(&mut self, url: &str, _sha256: &str, _bytes: u64) -> Result<PathBuf, PluginError> {
-        Ok(packed().join(url))
+    fn fetch(&mut self, url: &str, _sha256: &str, _bytes: u64) -> Result<Fetched, PluginError> {
+        Ok(Fetched {
+            path: packed().join(url),
+            local: true,
+        })
     }
 }
 
@@ -140,45 +144,78 @@ fn project(duration: i64, data: &[DataSet]) -> Project {
     .expect("project")
 }
 
-/// The silences that the artifact `policy` picks finds in the fixture, in ticks.
-fn run(samples: &[f32], policy: &Policy) -> (DataSet, Vec<(i64, i64)>) {
-    let manifest =
-        parse_manifest(&std::fs::read_to_string(packed().join("manifest.json")).expect("manifest"))
-            .expect("manifest");
-    let mut plugin =
-        load(&manifest, serde_json::Map::new(), policy, &mut Packed).expect("plugin loads");
-    let duration = ticks(i64::try_from(samples.len()).expect("small"));
-    let request: ExtractRequest = serde_json::from_value(json!({
-        "extractor": "alpha2.silence", "version": 1,
-        "input": { "from": "source", "source_id": "a", "range": { "start": 0, "end": duration } },
+fn silence_request(input: &Value, params: &Value) -> ExtractRequest {
+    serde_json::from_value(json!({
+        "extractor": "alpha2.silence", "version": 1, "params": params, "input": input,
         "outputs": { "silence": "quiet" }
     }))
-    .expect("request");
+    .expect("request")
+}
+
+fn packed_manifest() -> PluginManifest {
+    parse_manifest(&std::fs::read_to_string(packed().join("manifest.json")).expect("manifest"))
+        .expect("manifest")
+}
+
+/// The data set the artifact `policy` picks makes from `samples` over `start..end` (ticks).
+fn extract(
+    samples: &[f32],
+    (start, end): (i64, i64),
+    params: &Value,
+    policy: &Policy,
+) -> Result<DataSet, DriveError> {
+    let manifest = packed_manifest();
+    let mut plugin = load(
+        &manifest,
+        params.as_object().cloned().unwrap_or_default(),
+        policy,
+        &mut Packed,
+    )
+    .expect("plugin loads");
+    let duration = ticks(i64::try_from(samples.len()).expect("small")).max(end);
+    let request = silence_request(
+        &json!({ "from": "source", "source_id": "a", "range": { "start": start, "end": end } }),
+        params,
+    );
     let session = ExtractSession::new(&project(duration, &[]), &manifest.descriptor, request)
         .expect("session");
-    let mut sets = drive(session, &mut plugin, &mut Audio(samples)).expect("run");
-    let set = sets.remove(0);
+    Ok(drive(session, &mut plugin, &mut Audio(samples))?.remove(0))
+}
+
+fn intervals(set: &DataSet) -> Vec<(i64, i64)> {
     let DataValues::Intervals(intervals) = &set.values else {
         panic!("intervals");
     };
-    let found = intervals
+    intervals
         .iter()
         .map(|interval| (interval.start.ticks(), interval.end.ticks()))
-        .collect();
+        .collect()
+}
+
+/// The silences that the artifact `policy` picks finds in the fixture, in ticks.
+fn run(samples: &[f32], policy: &Policy) -> (DataSet, Vec<(i64, i64)>) {
+    let duration = ticks(i64::try_from(samples.len()).expect("small"));
+    let set = extract(samples, (0, duration), &json!({}), policy).expect("run");
+    let found = intervals(&set);
     (set, found)
+}
+
+fn wasm_and_native() -> [Policy; 2] {
+    [
+        Policy::default(),
+        Policy {
+            allow_native: true,
+            ..Policy::default()
+        },
+    ]
 }
 
 #[test]
 fn the_silence_plugin_finds_the_inserted_silences_and_its_cuts_keep_the_speech() {
     let (samples, inserted) = fixture();
-    let (set, wasm) = run(&samples, &Policy::default());
-    let (_, native) = run(
-        &samples,
-        &Policy {
-            allow_native: true,
-            ..Policy::default()
-        },
-    );
+    let [wasm_policy, native_policy] = wasm_and_native();
+    let (set, wasm) = run(&samples, &wasm_policy);
+    let (_, native) = run(&samples, &native_policy);
     assert_eq!(wasm.len(), native.len(), "{wasm:?} against {native:?}");
     for ((start, end), (native_start, native_end)) in wasm.iter().zip(&native) {
         assert!(
@@ -244,5 +281,89 @@ fn the_silence_plugin_finds_the_inserted_silences_and_its_cuts_keep_the_speech()
             "kept time {tick}"
         );
     }
-    let _ = std::fs::remove_dir_all(packed());
+}
+
+#[test]
+fn a_last_block_shorter_than_the_model_context_is_taken() {
+    let (samples, _) = fixture();
+    for policy in wasm_and_native() {
+        for tail in [0_usize, 1, 10, 63, 64, 65, 300] {
+            let len = 512 * 200 + tail;
+            let end = ticks(i64::try_from(len).expect("small"));
+            let set = extract(&samples[..len], (0, end), &json!({}), &policy)
+                .unwrap_or_else(|error| panic!("last block of {tail}: {error}"));
+            assert!(!intervals(&set).is_empty(), "last block of {tail}");
+        }
+    }
+}
+
+#[test]
+fn a_range_starting_off_the_sample_grid_keeps_the_leading_silence_inside_it() {
+    let (samples, inserted) = fixture();
+    assert_eq!(inserted[0].0, 0);
+    for policy in wasm_and_native() {
+        for start in [0_i64, 3_990, 4_000, 4_004, 4_005, 8_000, 12_000] {
+            // Whole blocks from the first sample at or after the start.
+            let first = (start * RATE).div_euclid(120_000)
+                + i64::from((start * RATE).rem_euclid(120_000) != 0);
+            let end = ticks(first + 512 * 200);
+            let set = extract(&samples, (start, end), &json!({}), &policy)
+                .unwrap_or_else(|error| panic!("range from {start}: {error}"));
+            assert_eq!(intervals(&set).first().map(|found| found.0), Some(start));
+        }
+    }
+}
+
+#[test]
+fn params_outside_the_schema_fail_the_run_naming_the_key() {
+    let (samples, _) = fixture();
+    for (params, key) in [
+        (json!({ "threshold": "0.7" }), "threshold"),
+        (json!({ "threshold": 2 }), "threshold"),
+        (json!({ "x": 1 }), "x"),
+    ] {
+        let failed = extract(
+            &samples[..512 * 4],
+            (0, ticks(512 * 4)),
+            &params,
+            &Policy::default(),
+        )
+        .expect_err("refused");
+        let DriveError::Extractor(error) = failed else {
+            panic!("an extractor failure, not {failed:?}");
+        };
+        assert_eq!(error.code, None);
+        assert!(
+            error.message.contains(&format!("params.{key}")),
+            "{}",
+            error.message
+        );
+    }
+    assert!(
+        extract(
+            &samples[..512 * 4],
+            (0, ticks(512 * 4)),
+            &json!({}),
+            &Policy::default()
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn a_timeline_request_is_refused_before_the_run() {
+    let manifest = packed_manifest();
+    let refused = ExtractSession::new(
+        &project(120_000, &[]),
+        &manifest.descriptor,
+        silence_request(
+            &json!({ "from": "timeline", "range": { "start": 0, "end": 120_000 } }),
+            &json!({}),
+        ),
+    )
+    .expect_err("refused");
+    assert_eq!(
+        refused,
+        RequestError::InvalidInput("the descriptor does not read this input".to_owned())
+    );
 }

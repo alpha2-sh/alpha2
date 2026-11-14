@@ -312,7 +312,7 @@
           "description": "What kind of code it is."
         },
         "url": {
-          "description": "Where it is, relative to the manifest's own URL or absolute.",
+          "description": "Where it is: a path under the manifest's own directory, or an absolute `https:` URL.",
           "type": "string"
         }
       },
@@ -355,7 +355,7 @@
           "type": "string"
         },
         "url": {
-          "description": "Where it is, relative to the manifest's own URL or absolute.",
+          "description": "Where it is: a path under the manifest's own directory, or an absolute `https:` URL.",
           "type": "string"
         }
       },

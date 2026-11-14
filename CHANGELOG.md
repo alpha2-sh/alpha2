@@ -134,6 +134,21 @@ All notable changes to this project are documented in this file.
   exhausting memory, and once one nested SVG image is refused no further one is parsed. An OpenEXR
   file whose largest block in any part decompresses to more than 256 MiB (every channel counted,
   shown or not) is refused before any chunk is read.
+- The silence plugin no longer traps on a range whose last audio block has 1 to 63 samples, keeps
+  a leading silence inside a range that starts off its 16 kHz grid, refuses unknown, mistyped or
+  out-of-range params naming the key, and no longer offers timeline input.
+- A plugin manifest's artifact and resource `url` must be a path under the manifest's directory or
+  an absolute `https:` URL; `file:` URLs, other schemes, absolute or drive paths, backslashes and
+  `..` above the manifest are refused with `PLUGIN_LOAD_FAILED`, and a downloaded file's hash
+  mismatch no longer states the length or digest found.
+- A wasm plugin has one 32-bit memory of at most 2 GiB and tables of at most 1,048,576 elements
+  together; several memories or 64-bit memory are refused with `PLUGIN_UNSUPPORTED_FEATURE`, and
+  `--plugin-memory-limit` takes at most 2147483648. Extraction data limits are checked as values
+  are emitted, so an emit that takes a requested output past its limit fails at once with
+  `INVALID_EMIT`.
+- The `alpha2-plugin/1` native tables (`HostV1`, `PluginV1`, `alpha2_plugin.h`) carry `size` after
+  `abi`; hosts refuse a plugin table shorter than their own or with a null entry. Native plugins
+  must be rebuilt.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

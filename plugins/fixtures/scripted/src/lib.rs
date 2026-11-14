@@ -4,7 +4,9 @@
 //!
 //! For loader tests, a delivery index in `fail_at`, `panic_at`, `spin_at`, `hog_at` or `abort_at`
 //! makes that delivery fail, panic, never return, allocate without bound, or end the process; and
-//! `resource` names a resource whose UTF-8 text `end` emits as a word of `words`.
+//! `resource` names a resource whose UTF-8 text `end` emits as a word of `words`. As wasm,
+//! `flood` (`calls`, 0 for no end, and `ignore_refusal`) makes the second delivery call the host's
+//! `emit` that many times with one interval of `quiet`.
 
 use alpha2_plugin_sdk::{Context, Emitter, Error, Extractor, Frame, Host};
 use serde_json::Value;
@@ -19,7 +21,46 @@ pub struct Scripted {
     hog_at: Option<u64>,
     abort_at: Option<u64>,
     resource: Option<String>,
+    flood: Option<(u64, bool)>,
     delivered: u64,
+}
+
+/// Calls the host's `emit` `calls` times (0 for no end) with one interval of `quiet`, stopping at
+/// a refusal unless `ignore_refusal`.
+#[cfg(target_arch = "wasm32")]
+fn flood(calls: u64, ignore_refusal: bool) -> Result<(), Error> {
+    use alpha2_plugin_sdk::abi::records::{Record, encode};
+
+    #[link(wasm_import_module = "alpha2")]
+    unsafe extern "C" {
+        fn emit(ptr: *const u8, len: usize) -> i32;
+    }
+    let mut record = Vec::new();
+    encode(
+        &Record::Interval {
+            output: 4,
+            start: 0,
+            end: 4_000,
+            label: None,
+            score: None,
+        },
+        &mut record,
+    );
+    let mut sent = 0;
+    while calls == 0 || sent < calls {
+        sent += 1;
+        // SAFETY: the record stays alive for the call.
+        let status = unsafe { emit(record.as_ptr(), record.len()) };
+        if status != alpha2_plugin_sdk::abi::status::OK && !ignore_refusal {
+            return Err("the host refused an emit".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn flood(_calls: u64, _ignore_refusal: bool) -> Result<(), Error> {
+    Err("flood runs only as wasm".into())
 }
 
 fn list(context: &Context, key: &str) -> Result<Vec<Value>, Error> {
@@ -81,6 +122,15 @@ impl Extractor for Scripted {
             hog_at: index("hog_at"),
             abort_at: index("abort_at"),
             resource,
+            flood: context.params.get("flood").map(|flood| {
+                (
+                    flood.get("calls").and_then(Value::as_u64).unwrap_or(0),
+                    flood
+                        .get("ignore_refusal")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                )
+            }),
             delivered: 0,
         })
     }
@@ -102,6 +152,9 @@ impl Extractor for Scripted {
             loop {
                 std::hint::black_box(delivery);
             }
+        }
+        if let Some((calls, ignore_refusal)) = self.flood.filter(|_| delivery == 1) {
+            flood(calls, ignore_refusal)?;
         }
         if self.hog_at == Some(delivery) {
             let mut held = Vec::new();

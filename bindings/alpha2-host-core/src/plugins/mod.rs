@@ -21,8 +21,8 @@ use alpha2_engine::extract::{
     ArtifactKind, AudioInput, Descriptor, Emitter, Extractor, ExtractorError, ManifestError,
     PassInfo, PluginArtifact, PluginManifest, RunContext, VideoFormat, VideoInput, WASM_TARGET,
 };
-use alpha2_model::{DataInterval, DataWord, MadeByPlugin};
-use alpha2_plugin_abi::records::Record;
+use alpha2_model::{DataInterval, DataWord, MAX_DATA_CHANNELS, MAX_DATA_LABEL_BYTES, MadeByPlugin};
+use alpha2_plugin_abi::records::{Limits, Record, records};
 use alpha2_plugin_abi::{direction, status, video_format};
 use alpha2_time::MediaTime;
 use sha2::{Digest, Sha256};
@@ -41,13 +41,14 @@ pub mod codes {
     pub const NATIVE_REFUSED: &str = "PLUGIN_NATIVE_REFUSED";
     /// The artifact's descriptor differs from the manifest's.
     pub const DESCRIPTOR_MISMATCH: &str = "PLUGIN_DESCRIPTOR_MISMATCH";
-    /// The wasm module uses relaxed SIMD, threads or shared memory, or imports something else.
+    /// The wasm module uses relaxed SIMD, threads, shared memory, more than one memory or 64-bit
+    /// memory, or imports something else.
     pub const UNSUPPORTED_FEATURE: &str = "PLUGIN_UNSUPPORTED_FEATURE";
     /// The manifest is not one, or the artifact did not load.
     pub const LOAD_FAILED: &str = "PLUGIN_LOAD_FAILED";
     /// A wasm trap, or a native panic caught at the boundary.
     pub const TRAPPED: &str = "PLUGIN_TRAPPED";
-    /// The wasm module ran past its memory cap or a call past its deadline.
+    /// The wasm module ran past its memory cap or table bound, or a call past its deadline.
     pub const LIMIT: &str = "PLUGIN_LIMIT";
 }
 
@@ -117,7 +118,7 @@ pub struct Policy {
     pub allow_native: bool,
     /// The wasm artifact even where a native one is allowed.
     pub force_wasm: bool,
-    /// The most linear memory a wasm module may have, in bytes.
+    /// The most linear memory a wasm module may have, in bytes; at most [`MAX_MEMORY_BYTES`].
     pub memory_bytes: u64,
     /// The longest one wasm call may run.
     pub call_deadline: Duration,
@@ -125,6 +126,9 @@ pub struct Policy {
 
 /// Linear memory a wasm plugin may grow to when the caller sets no cap.
 pub const DEFAULT_MEMORY_BYTES: u64 = 1024 * 1024 * 1024;
+/// The most memory a wasm plugin may have, the span its `i32` offsets address; a larger cap is
+/// taken as this.
+pub const MAX_MEMORY_BYTES: u64 = 1 << 31;
 /// How long one wasm call may run when the caller sets no deadline.
 pub const DEFAULT_CALL_DEADLINE: Duration = Duration::from_secs(300);
 
@@ -203,32 +207,50 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// # Errors
-/// `PLUGIN_HASH_MISMATCH` when `bytes` are not the `size` bytes with the pinned `sha256`.
-pub fn verify(bytes: &[u8], sha256: &str, size: u64, what: &str) -> Result<(), PluginError> {
-    if bytes.len() as u64 != size {
-        return Err(PluginError::new(
-            codes::HASH_MISMATCH,
-            format!("{what} is {} bytes; the manifest pins {size}", bytes.len()),
-        ));
+/// `PLUGIN_HASH_MISMATCH` when `bytes` are not the `size` bytes with the pinned `sha256`. Only
+/// for a `local` file does the message state the length or digest found.
+pub fn verify(
+    bytes: &[u8],
+    sha256: &str,
+    size: u64,
+    what: &str,
+    local: bool,
+) -> Result<(), PluginError> {
+    let length_differs = bytes.len() as u64 != size;
+    if !length_differs && sha256_hex(bytes) == sha256 {
+        return Ok(());
     }
-    let found = sha256_hex(bytes);
-    if found != sha256 {
-        return Err(PluginError::new(
-            codes::HASH_MISMATCH,
-            format!("{what} has SHA-256 {found}; the manifest pins {sha256}"),
-        ));
-    }
-    Ok(())
+    let message = if !local {
+        format!("{what} does not match the length and SHA-256 the manifest pins")
+    } else if length_differs {
+        format!("{what} is {} bytes; the manifest pins {size}", bytes.len())
+    } else {
+        format!(
+            "{what} has SHA-256 {}; the manifest pins {sha256}",
+            sha256_hex(bytes)
+        )
+    };
+    Err(PluginError::new(codes::HASH_MISMATCH, message))
+}
+
+/// A file a [`Fetch`] supplied.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fetched {
+    /// Where its bytes are.
+    pub path: PathBuf,
+    /// A local file the caller named; false for a download, whose content a mismatch message
+    /// must not describe.
+    pub local: bool,
 }
 
 /// Where a plugin's files come from.
 pub trait Fetch {
-    /// A local file with the bytes `url` names (relative to the manifest, or absolute). The
-    /// loader checks them against `sha256` and `bytes` itself.
+    /// The file a manifest's `url` names, a path under the manifest's directory or an `https:`
+    /// URL. The loader checks its bytes against `sha256` and `bytes` itself.
     ///
     /// # Errors
     /// `PLUGIN_FETCH_FAILED`, or `PLUGIN_HASH_MISMATCH` when the fetcher checks too.
-    fn fetch(&mut self, url: &str, sha256: &str, bytes: u64) -> Result<PathBuf, PluginError>;
+    fn fetch(&mut self, url: &str, sha256: &str, bytes: u64) -> Result<Fetched, PluginError>;
 
     /// The file to load for the native artifact at `verified`, whose bytes the loader has checked;
     /// macOS hosts sign a copy here.
@@ -246,11 +268,11 @@ fn read_verified(
     sha256: &str,
     size: u64,
 ) -> Result<(PathBuf, Vec<u8>), PluginError> {
-    let path = fetch.fetch(url, sha256, size)?;
+    let Fetched { path, local } = fetch.fetch(url, sha256, size)?;
     let bytes = std::fs::read(&path).map_err(|error| {
         PluginError::new(codes::FETCH_FAILED, format!("{}: {error}", path.display()))
     })?;
-    verify(&bytes, sha256, size, url)?;
+    verify(&bytes, sha256, size, url, local)?;
     Ok((path, bytes))
 }
 
@@ -279,27 +301,54 @@ trait Transport {
     fn end(&mut self) -> Call;
 }
 
+/// The most items a declared output takes in one call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OutputCap {
+    name: String,
+    items: usize,
+}
+
+fn output_caps(descriptor: &Descriptor) -> Vec<OutputCap> {
+    descriptor
+        .outputs
+        .iter()
+        .map(|output| OutputCap {
+            name: output.name.clone(),
+            items: output.max_items(),
+        })
+        .collect()
+}
+
+/// Bounds on one emitted record: the widest sample and the longest text any output takes.
+const RECORD_LIMITS: Limits = Limits {
+    max_values: MAX_DATA_CHANNELS * 4,
+    max_text_bytes: MAX_DATA_LABEL_BYTES,
+};
+
 /// What a call's emit and fail callbacks left, turned into the call's outcome.
 #[derive(Debug, Default)]
 struct Collected {
     records: Vec<Record>,
-    undecodable: Option<String>,
+    /// Records each output took in this call, by output index.
+    counts: Vec<usize>,
+    /// Why an emit of this call was refused; later emits of the call are refused at once.
+    refusal: Option<String>,
     failure: Option<String>,
 }
 
 impl Collected {
     fn outcome(&mut self, status: i32) -> Call {
         let collected = std::mem::take(self);
+        if let Some(reason) = collected.refusal {
+            return Err(ExtractorError::with_code("INVALID_EMIT", reason));
+        }
         match status {
             status::OK => Ok(collected.records),
-            status::FAILED => Err(match collected.undecodable {
-                Some(reason) => ExtractorError::with_code("INVALID_EMIT", reason),
-                None => ExtractorError::new(
-                    collected
-                        .failure
-                        .unwrap_or_else(|| "the plugin failed without saying why".to_owned()),
-                ),
-            }),
+            status::FAILED => {
+                Err(ExtractorError::new(collected.failure.unwrap_or_else(
+                    || "the plugin failed without saying why".to_owned(),
+                )))
+            }
             status::TRAPPED => Err(ExtractorError::with_code(
                 codes::TRAPPED,
                 "the plugin panicked; it caught the panic at its boundary",
@@ -311,17 +360,41 @@ impl Collected {
         }
     }
 
-    fn emit(&mut self, batch: &[u8]) -> i32 {
-        match alpha2_plugin_abi::records::decode(batch) {
-            Ok(records) => {
-                self.records.extend(records);
-                status::OK
-            }
-            Err(error) => {
-                self.undecodable = Some(error.to_string());
-                status::FAILED
+    /// Takes a batch whole, or refuses it and keeps nothing of it.
+    fn emit(&mut self, batch: &[u8], caps: &[OutputCap]) -> i32 {
+        if self.refusal.is_some() {
+            return status::FAILED;
+        }
+        let start = self.records.len();
+        self.counts.resize(caps.len(), 0);
+        for record in records(batch, RECORD_LIMITS) {
+            let refusal = match record {
+                Err(error) => Some(error.to_string()),
+                Ok(record) => {
+                    let output = usize::from(record.output());
+                    match (caps.get(output), self.counts.get_mut(output)) {
+                        (Some(cap), Some(count)) if *count < cap.items => {
+                            *count += 1;
+                            self.records.push(record);
+                            None
+                        }
+                        (Some(cap), _) => Some(format!(
+                            "the plugin emitted more than {} items to output {} in one call",
+                            cap.items, cap.name
+                        )),
+                        _ => Some(format!(
+                            "the plugin emitted to output {output}, which it does not declare"
+                        )),
+                    }
+                }
+            };
+            if let Some(reason) = refusal {
+                self.records.truncate(start);
+                self.refusal = Some(reason);
+                return status::FAILED;
             }
         }
+        status::OK
     }
 }
 
@@ -361,17 +434,20 @@ pub fn load(
         resources.insert(resource.name.clone(), bytes);
     }
     let (path, bytes) = read_verified(fetch, &artifact.url, &artifact.sha256, artifact.bytes)?;
+    let caps = output_caps(&manifest.descriptor);
     let mut transport: Box<dyn Transport> = match artifact.kind {
         ArtifactKind::Wasm => Box::new(wasm::WasmTransport::new(
             &manifest.id,
             &bytes,
             &artifact.sha256,
             resources,
+            caps,
             policy,
         )?),
         ArtifactKind::Cdylib => Box::new(native::NativeTransport::new(
             &fetch.prepare_native(&path)?,
             resources,
+            caps,
         )?),
         ArtifactKind::Staticlib => {
             return Err(PluginError::new(

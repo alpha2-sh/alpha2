@@ -53,36 +53,41 @@ fn resources() -> HashMap<String, Vec<u8>> {
     HashMap::from([("vad.onnx".to_owned(), model)])
 }
 
-/// Runs the native build over `samples` and returns the silences in samples, with their scores.
-fn silences(samples: &[f32], params: &Value) -> Vec<(i64, i64, f32)> {
+fn instance() -> Instance {
     // SAFETY: the plugin's own entry returns its static table.
-    let mut plugin =
-        unsafe { Instance::new(alpha2_plugin_silence::alpha2_plugin_v1(), resources()) };
-    let end = samples.len() as i64 * 120_000 / RATE;
-    let context = json!({
+    unsafe { Instance::new(alpha2_plugin_silence::alpha2_plugin_v1(), resources()) }
+}
+
+fn context(end: i64, params: &Value) -> String {
+    json!({
         "range": { "start": 0, "end": end }, "passes": [{ "start": 0, "direction": "forward" }],
         "from": "source", "video": null,
         "audio": { "rate": 16_000, "channels": "mono", "block_frames": 512 },
         "frame_rate": null, "params": params
-    });
+    })
+    .to_string()
+}
+
+/// Runs the native build over `samples` and returns the silences in samples, with their scores.
+fn silences(samples: &[f32], params: &Value) -> Vec<(i64, i64, f32)> {
+    let mut plugin = instance();
+    let end = samples.len() as i64 * 120_000 / RATE;
     assert_eq!(
-        plugin.begin(&context.to_string()),
+        plugin.begin(&context(end, params)),
         status::OK,
         "{:?}",
         plugin.take().failure
     );
     assert_eq!(plugin.pass(0, 0), status::OK);
     for (index, block) in samples.chunks(512).enumerate() {
-        let mut padded = block.to_vec();
-        padded.resize(512, 0.0);
         let start_sample = index as i64 * 512;
         let status = plugin.audio(
             start_sample * 120_000 / RATE,
             start_sample,
-            512,
+            block.len() as u32,
             16_000,
             1,
-            &padded,
+            block,
         );
         assert_eq!(status, status::OK, "{:?}", plugin.take().failure);
     }
@@ -133,4 +138,30 @@ fn a_higher_minimum_drops_the_short_silences() {
         .filter(|(start, end)| end - start >= RATE * 800 / 1000)
         .count();
     assert_eq!(found.len(), long);
+}
+
+#[test]
+fn a_last_block_shorter_than_the_context_is_taken() {
+    let (samples, _) = fixture();
+    for tail in [1, 10, 63, 64, 65, 300] {
+        let found = silences(&samples[..512 * 200 + tail], &json!({}));
+        assert!(!found.is_empty(), "last block of {tail}");
+    }
+}
+
+#[test]
+fn params_outside_the_schema_fail_begin_naming_the_key() {
+    for (params, key) in [
+        (json!({ "threshold": "0.7" }), "threshold"),
+        (json!({ "threshold": 2 }), "threshold"),
+        (json!({ "min_silence_ms": -1 }), "min_silence_ms"),
+        (json!({ "x": 1 }), "x"),
+    ] {
+        let mut plugin = instance();
+        assert_eq!(plugin.begin(&context(120_000, &params)), status::FAILED);
+        let failure = plugin.take().failure.expect("a reason");
+        assert!(failure.contains(&format!("params.{key}")), "{failure}");
+    }
+    let mut plugin = instance();
+    assert_eq!(plugin.begin(&context(120_000, &json!({}))), status::OK);
 }

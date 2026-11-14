@@ -6,11 +6,18 @@ use alpha2_plugin_abi::{ABI_MAJOR, HostV1, PluginV1};
 
 use crate::{Extractor, Host, Runtime};
 
+// Both tables are a few pointers long.
+#[allow(clippy::cast_possible_truncation)]
+const HOST_BYTES: u32 = size_of::<HostV1>() as u32;
+#[allow(clippy::cast_possible_truncation)]
+const PLUGIN_BYTES: u32 = size_of::<PluginV1>() as u32;
+
 /// The function table for `E`, which [`crate::export_extractor`] puts in a static.
 #[must_use]
 pub const fn table<E: Extractor>() -> PluginV1 {
     PluginV1 {
         abi: ABI_MAJOR,
+        size: PLUGIN_BYTES,
         describe: describe::<E>,
         create: create::<E>,
         destroy: destroy::<E>,
@@ -54,11 +61,18 @@ unsafe extern "C" fn create<E: Extractor>(host: *const HostV1) -> *mut c_void {
     if host.is_null() {
         return std::ptr::null_mut();
     }
-    // SAFETY: the host passes its table, valid until `destroy`.
-    let table = unsafe { *host };
-    if table.abi != ABI_MAJOR {
+    // SAFETY: the host passes its table, valid until `destroy`, which starts with `abi` and `size`.
+    let (abi, size) = unsafe {
+        (
+            (&raw const (*host).abi).read(),
+            (&raw const (*host).size).read(),
+        )
+    };
+    if abi != ABI_MAJOR || size < HOST_BYTES {
         return std::ptr::null_mut();
     }
+    // SAFETY: the table holds at least this build's `HostV1`.
+    let table = unsafe { host.read() };
     std::panic::catch_unwind(|| Box::into_raw(Box::new(Runtime::<E>::new(Host { table }))))
         .map_or(std::ptr::null_mut(), <*mut Runtime<E>>::cast)
 }

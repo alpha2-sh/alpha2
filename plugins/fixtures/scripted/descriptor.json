@@ -17,7 +17,8 @@
       "spin_at": { "type": "integer" },
       "hog_at": { "type": "integer" },
       "abort_at": { "type": "integer" },
-      "resource": { "type": "string" }
+      "resource": { "type": "string" },
+      "flood": { "type": "object" }
     },
     "additionalProperties": false
   },

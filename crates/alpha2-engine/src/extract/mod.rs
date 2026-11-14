@@ -128,7 +128,7 @@ pub use manifest::plugin_manifest_json_schema;
 pub use manifest::{
     ArtifactKind, MAX_MANIFEST_BYTES, MAX_PLUGIN_ARTIFACTS, MAX_PLUGIN_RESOURCES, ManifestError,
     PLUGIN_MANIFEST_SCHEMA_ID, PluginArtifact, PluginKind, PluginManifest, PluginResource,
-    WASM_TARGET,
+    Reference, WASM_TARGET, reference,
 };
 pub use pixels::{
     delivered_size, displayed_size, luma8_from_rgba8, mono_downmix, present_for_extraction,

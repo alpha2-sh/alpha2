@@ -3,7 +3,7 @@
   "version": 1,
   "input": {
     "media": "audio",
-    "from": ["source", "timeline"],
+    "from": ["source"],
     "format": "f32",
     "sample_rate": 16000,
     "channels": "mono",
