@@ -430,12 +430,13 @@ impl Recovery {
     }
 }
 
-/// The longest a decoder operation (seek, next frame, open) may go without producing a frame before
-/// failing with "decode progress budget exceeded".
+/// The longest a decoder operation (seek, next frame, open) may go without a step forward (a packet
+/// of its stream read, a packet accepted, or a frame) before failing with "decode progress budget
+/// exceeded".
 ///
-/// Time blocked inside one `FFmpeg` call is not counted, since such a call cannot
-/// be stopped; a stall watcher allows this plus its own GPU wait limit from the
-/// last [`watch_decode_progress`] report.
+/// A call that blocks and then returns is such a step, so a slow read does not fail a decode that
+/// advances. A call that never returns is the stall watcher's, which allows this plus its own GPU
+/// wait limit from the last [`watch_decode_progress`] report.
 pub const DECODE_WORK_LIMIT: Duration = Duration::from_secs(10);
 
 /// The most loop steps a decoder operation takes without producing a frame.
@@ -522,8 +523,8 @@ impl Drop for DecodeProgressWatch {
     }
 }
 
-/// Time and loop steps one decoder operation has spent since it started or last produced a frame,
-/// checked against [`DECODE_WORK_LIMIT`] and a bound of 65,536 loop steps.
+/// Time since one decoder operation started or last stepped forward, and loop steps since it started
+/// or last produced a frame, checked against [`DECODE_WORK_LIMIT`] and a bound of 65,536 loop steps.
 pub struct WorkBudget {
     /// On the awake clock, so system sleep does not count.
     started: alpha2_os::AwakeInstant,
@@ -583,6 +584,16 @@ impl WorkBudget {
         }
         Ok(())
     }
+    /// The operation read a packet of its stream or the decoder accepted one: the time limit starts
+    /// again from now. The step count does not, so a stream that never gives a frame still ends.
+    pub fn advanced(&mut self) {
+        self.started = alpha2_os::AwakeInstant::now();
+        #[cfg(any(test, feature = "test-hooks"))]
+        {
+            self.started_virtual = VIRTUAL_CLOCK.with(std::cell::Cell::get);
+        }
+    }
+
     /// The operation produced a frame: its limits start again from now.
     pub fn progressed(&mut self) {
         self.started = alpha2_os::AwakeInstant::now();
@@ -608,6 +619,7 @@ pub fn submit_packet(
     for _ in 0..64 {
         budget.step(cancel)?;
         if step(false)? {
+            budget.advanced();
             return Ok(());
         }
         budget.step(cancel)?;
@@ -788,5 +800,59 @@ mod tests {
             &cancel,
         );
         assert_eq!(result, Err(DecodeError::Cancelled));
+    }
+
+    #[test]
+    fn the_time_limit_runs_from_the_last_step_forward_and_the_step_limit_from_the_last_frame() {
+        let cancel = CancelToken::default();
+        let limit = Duration::from_secs(10);
+        WORK_LIMIT.with(|cell| cell.set(limit));
+        VIRTUAL_CLOCK.with(|clock| clock.set(Some(Duration::ZERO)));
+        let advance = |by: Duration| {
+            VIRTUAL_CLOCK.with(|clock| clock.set(clock.get().map(|now| now + by)));
+        };
+        // A read that blocks past the limit and returns its packet is a step forward.
+        let mut budget = WorkBudget::new();
+        budget.step(&cancel).unwrap();
+        advance(Duration::from_secs(11));
+        budget.advanced();
+        budget.step(&cancel).expect("a slow read that returned");
+        // Nothing read or accepted for the limit still fails.
+        advance(Duration::from_secs(11));
+        assert!(budget.step(&cancel).is_err());
+        // Packets that never give a frame still end at the step limit.
+        WORK_STEPS.with(|cell| cell.set(100));
+        let mut budget = WorkBudget::new();
+        for _ in 0..100 {
+            budget.step(&cancel).unwrap();
+            budget.advanced();
+        }
+        assert!(budget.step(&cancel).is_err());
+        WORK_STEPS.with(|cell| cell.set(DECODE_WORK_STEPS));
+        VIRTUAL_CLOCK.with(|clock| clock.set(None));
+    }
+
+    #[test]
+    fn an_accepted_packet_restarts_the_time_limit() {
+        let cancel = CancelToken::default();
+        WORK_LIMIT.with(|cell| cell.set(Duration::from_secs(10)));
+        VIRTUAL_CLOCK.with(|clock| clock.set(Some(Duration::ZERO)));
+        let mut budget = WorkBudget::new();
+        submit_packet(
+            |_| {
+                // The send blocks for 11 s, then accepts.
+                VIRTUAL_CLOCK.with(|clock| {
+                    clock.set(clock.get().map(|now| now + Duration::from_secs(11)));
+                });
+                Ok(true)
+            },
+            &mut budget,
+            &cancel,
+        )
+        .unwrap();
+        budget
+            .step(&cancel)
+            .expect("the accepted packet was a step forward");
+        VIRTUAL_CLOCK.with(|clock| clock.set(None));
     }
 }

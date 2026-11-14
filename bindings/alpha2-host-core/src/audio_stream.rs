@@ -680,38 +680,43 @@ impl AudioStream {
                 self.timeline.finish();
                 continue;
             }
-            self.step()?;
+            if self.step()? {
+                budget.advanced();
+            }
         }
     }
 
-    fn step(&mut self) -> Result<(), DecodeError> {
+    /// One receive, or one packet in; `true` when a packet was read or accepted.
+    fn step(&mut self) -> Result<bool, DecodeError> {
         match self.backend.receive(self.input != Input::Open)? {
             AudioPoll::Chunk(chunk) => {
                 if self.input == Input::Full {
                     self.input = Input::Open;
                 }
-                return self.place(chunk);
+                return self.place(chunk).map(|()| false);
             }
             AudioPoll::Drained => {
                 self.input = Input::Drained;
-                return Ok(());
+                return Ok(false);
             }
             AudioPoll::Pending => {}
         }
         if matches!(self.input, Input::Ended | Input::Drained) {
-            return Ok(());
+            return Ok(false);
         }
+        let mut advanced = false;
         if self.pending_packet.is_none() {
             if let Some(packet) = self.reader.next_packet(self.track.id)? {
                 self.pending_packet = Some(packet);
+                advanced = true;
             } else {
                 self.backend.finish_input()?;
                 self.input = Input::Ended;
-                return Ok(());
+                return Ok(false);
             }
         }
         let Some(packet) = self.pending_packet.as_ref() else {
-            return Ok(());
+            return Ok(advanced);
         };
         match self.backend.submit(packet)? {
             Submit::Accepted => {
@@ -720,10 +725,11 @@ impl AudioStream {
                 }
                 self.pending_packet = None;
                 self.input = Input::Open;
+                advanced = true;
             }
             Submit::Busy => self.input = Input::Full,
         }
-        Ok(())
+        Ok(advanced)
     }
 
     /// Drops a chunk's skip-samples and places it by its timestamp.

@@ -482,3 +482,31 @@ fn the_probe_reports_decoded_frame_bytes() {
             .all(|stream| stream.frame_bytes.is_none())
     );
 }
+
+#[test]
+fn a_packet_read_slower_than_the_work_limit_still_gives_its_frame() {
+    crate::require_pinned_ffmpeg_for_tests();
+    crate::recovery::VIRTUAL_CLOCK.with(|clock| clock.set(Some(std::time::Duration::ZERO)));
+    let limit = crate::recovery::WORK_LIMIT.with(std::cell::Cell::get);
+    let mut decoder = NativeDecoder::open_with_threads(corpus("long-gop.mp4"), 1).expect("open");
+    let cancel = CancelToken::default();
+    // Past the packets read ahead at open, so the delayed read is a real one.
+    for frame in 0..20 {
+        assert!(
+            matches!(decoder.decode_next(&cancel), Ok(DecodeEvent::Video(_))),
+            "frame {frame}"
+        );
+    }
+    crate::decode::READ_DELAY.with(|delay| delay.set(limit + std::time::Duration::from_secs(1)));
+    let next = decoder.decode_next(&cancel);
+    let consumed = crate::decode::READ_DELAY
+        .with(std::cell::Cell::get)
+        .is_zero();
+    crate::recovery::VIRTUAL_CLOCK.with(|clock| clock.set(None));
+    assert!(consumed, "the delayed read happened");
+    assert!(
+        matches!(next, Ok(DecodeEvent::Video(_))),
+        "{:?}",
+        next.err()
+    );
+}

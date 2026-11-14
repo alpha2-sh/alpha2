@@ -716,24 +716,26 @@ impl VideoStream {
                 return Ok(None);
             }
             budget.step(cancel)?;
-            self.step()?;
+            if self.step()? {
+                budget.advanced();
+            }
         }
     }
 
-    /// One receive, or one packet in.
-    fn step(&mut self) -> Result<(), Interrupt> {
+    /// One receive, or one packet in; `true` when a packet was read or accepted.
+    fn step(&mut self) -> Result<bool, Interrupt> {
         match self.backend.receive(self.input != Input::Open) {
             Ok(Poll::Frame(picture)) => {
                 if self.input == Input::Full {
                     self.input = Input::Open;
                 }
                 self.reorder.arrive(picture);
-                return Ok(());
+                return Ok(false);
             }
             Ok(Poll::Drained) => {
                 self.reorder.drain();
                 self.input = Input::Drained;
-                return Ok(());
+                return Ok(false);
             }
             Ok(Poll::Pending) => {}
             Err(BackendError::HardwarePicture(reason))
@@ -743,29 +745,32 @@ impl VideoStream {
             {
                 self.recovery
                     .corrupt_with_detail("video receive", None, Some(reason))?;
-                return Ok(());
+                return Ok(false);
             }
             Err(error) => return Err(Interrupt::Backend(error)),
         }
         if matches!(self.input, Input::Ended | Input::Drained) {
-            return Ok(());
+            return Ok(false);
         }
+        let mut advanced = false;
         if self.pending.is_none() {
             if let Some(packet) = self.reader.next_packet(self.track.id)? {
                 self.pending = Some(packet);
+                advanced = true;
             } else {
                 self.backend.finish_input().map_err(Interrupt::Backend)?;
                 self.input = Input::Ended;
-                return Ok(());
+                return Ok(false);
             }
         }
         let Some(packet) = self.pending.as_ref() else {
-            return Ok(());
+            return Ok(advanced);
         };
         match self.backend.submit(packet) {
             Ok(Submit::Accepted) => {
                 self.pending = None;
                 self.input = Input::Open;
+                advanced = true;
             }
             Ok(Submit::Busy) => self.input = Input::Full,
             Err(BackendError::Corrupt(reason))
@@ -778,7 +783,7 @@ impl VideoStream {
             }
             Err(error) => return Err(Interrupt::Backend(error)),
         }
-        Ok(())
+        Ok(advanced)
     }
 
     /// Empties the session and the queues, keeping `lookahead`.

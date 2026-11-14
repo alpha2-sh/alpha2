@@ -509,6 +509,10 @@ All notable changes to this project are documented in this file.
   its limit) is reported as unsuitable, not absent, and a device with fewer B-frames than the two
   alpha2 asks for opens again without B-frames. Before, such a GPU reported no HEVC encoder and the
   export failed with "no usable hevc encoder". Devices that take two B-frames encode as before.
+- The 10 s decode work limit runs from the decoder's last step forward (a packet of its stream
+  read, a packet accepted, or a frame), not from the start of the call, so one read that stalls
+  for longer and then succeeds no longer fails a healthy export. A decode that never returns is
+  still ended by the host's stall limit, and 65,536 packets without a frame still fail.
 
 ## [0.6.0] - 2026-11-08
 

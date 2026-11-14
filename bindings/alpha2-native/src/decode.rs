@@ -191,8 +191,27 @@ pub struct DroppedLayer {
 
 #[cfg(test)]
 thread_local! {
+    /// How long the next video packet read on this thread takes, slept or added to the virtual
+    /// clock (`recovery::VIRTUAL_CLOCK`) when set.
+    pub(crate) static READ_DELAY: std::cell::Cell<std::time::Duration> =
+        const { std::cell::Cell::new(std::time::Duration::ZERO) };
     /// Forces software VP9 opens on this thread onto `FFmpeg`'s own `vp9`, as without libvpx.
     pub(crate) static WITHOUT_LIBVPX_VP9: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Takes [`READ_DELAY`] once.
+#[cfg(test)]
+fn take_read_delay() {
+    let delay = READ_DELAY.with(|cell| cell.replace(std::time::Duration::ZERO));
+    if delay.is_zero() {
+        return;
+    }
+    match crate::recovery::VIRTUAL_CLOCK.with(std::cell::Cell::get) {
+        Some(now) => {
+            crate::recovery::VIRTUAL_CLOCK.with(|clock| clock.set(Some(now.saturating_add(delay))));
+        }
+        None => std::thread::sleep(delay),
+    }
 }
 
 /// Packets read ahead from the demuxer, consumed before it until a seek drops them.
@@ -900,6 +919,7 @@ impl NativeAudioDecoder {
                 foreign = true;
                 continue;
             }
+            budget.advanced();
             if packet.flags & i32::try_from(ffi::AV_PKT_FLAG_CORRUPT).expect("flag fits i32") != 0 {
                 self.recovery
                     .corrupt("audio packet", crate::recovery::pts(packet.pts))?;
@@ -1820,6 +1840,8 @@ impl NativeDecoder {
                 .pop_front()
                 .unwrap_or_else(|| self.input.read_packet());
             self.stages.demux = self.stages.demux.saturating_add(demux_started.elapsed());
+            #[cfg(test)]
+            take_read_delay();
             let packet = match packet {
                 Ok(Some(packet)) => packet,
                 Ok(None) => {
@@ -1836,6 +1858,7 @@ impl NativeDecoder {
                 foreign = true;
                 continue;
             }
+            budget.advanced();
             if packet.flags & i32::try_from(ffi::AV_PKT_FLAG_CORRUPT).expect("flag fits i32") != 0 {
                 self.recovery
                     .corrupt("video packet", crate::recovery::pts(packet.pts))?;
