@@ -7,7 +7,7 @@ use bytes::{Bytes, BytesMut};
 
 use super::block::{self, Block};
 use super::describe::{self, Described, Encoding, Entry, Timing, rescale};
-use super::ebml::{self, Children, Header, id, is_level1};
+use super::ebml::{self, Children, Header, Span, Step, header_at, id, is_level1};
 use super::timing::{Clock, Raw};
 use crate::audio::Input;
 use crate::{ContainerReader, DemuxError, Packet, Source, TrackId, TrackInfo, VideoCodec};
@@ -16,8 +16,6 @@ use crate::{ContainerReader, DemuxError, Packet, Source, TrackId, TrackInfo, Vid
 const MAX_HEADER_ELEMENT: u64 = 64 << 20;
 /// The largest block or block group read into memory.
 const MAX_BLOCK: u64 = 256 << 20;
-/// Bytes read to decode an element header.
-const HEADER_PEEK: usize = 12;
 /// Packets waiting for a decode time beyond the deepest reordering (16 frames).
 const MAX_HELD: usize = 17;
 /// How far stream probing reads (`FFmpeg`'s default `probesize`).
@@ -176,11 +174,6 @@ impl TrackState {
 
 fn invalid(reason: impl Into<String>) -> DemuxError {
     DemuxError::Invalid(reason.into())
-}
-
-/// The element header at `pos`, `None` at the end of the file or where none can be read.
-fn header_at(input: &mut Input, pos: u64) -> Result<Option<Header>, DemuxError> {
-    Ok(ebml::header(input.peek(pos, HEADER_PEEK)?))
 }
 
 /// The payload of the element at `pos` with header `header`, at most `limit` bytes.
@@ -452,12 +445,31 @@ impl MatroskaReader {
         let segment_end = self.segment.end;
         loop {
             if let Some(cluster) = scan.cluster.as_mut() {
-                let end = cluster.end.unwrap_or(segment_end);
-                if scan.pos >= end {
+                let mut walk = Span {
+                    pos: scan.pos,
+                    end: cluster.end.unwrap_or(segment_end),
+                };
+                let found = match walk.next(&mut self.input)? {
+                    Step::Element(found) => found,
+                    Step::End => {
+                        scan.pos = walk.end;
+                        scan.cluster = None;
+                        continue;
+                    }
+                    Step::Unreadable => {
+                        scan.cluster = None;
+                        match resync(&mut self.input, scan.pos + 1, segment_end)? {
+                            Some(next) => scan.pos = next,
+                            None => return Ok(None),
+                        }
+                        continue;
+                    }
+                };
+                if cluster.end.is_none() && is_level1(found.header.id) {
                     scan.cluster = None;
                     continue;
                 }
-                let Some(found) = header_at(&mut self.input, scan.pos)? else {
+                let Some(size) = found.header.size else {
                     scan.cluster = None;
                     match resync(&mut self.input, scan.pos + 1, segment_end)? {
                         Some(next) => scan.pos = next,
@@ -465,38 +477,23 @@ impl MatroskaReader {
                     }
                     continue;
                 };
-                if cluster.end.is_none() && is_level1(found.id) {
-                    scan.cluster = None;
-                    continue;
-                }
-                let payload = scan.pos + found.len as u64;
-                let Some(size) = found.size else {
-                    scan.cluster = None;
-                    match resync(&mut self.input, scan.pos + 1, segment_end)? {
-                        Some(next) => scan.pos = next,
-                        None => return Ok(None),
-                    }
-                    continue;
-                };
-                let next = payload.saturating_add(size);
-                if next > self.input.len() {
+                if found.payload.saturating_add(size) > self.input.len() {
                     scan.pos = segment_end;
                     scan.cluster = None;
                     return Ok(None);
                 }
-                let at = scan.pos;
-                scan.pos = next.min(end);
-                match found.id {
+                scan.pos = walk.pos;
+                match found.header.id {
                     id::CLUSTER_TIMESTAMP => {
-                        let bytes = load(&mut self.input, at, found, 8)?;
+                        let bytes = load(&mut self.input, found.at, found.header, 8)?;
                         cluster.timestamp = ebml::uint(&bytes).unwrap_or(0);
                     }
                     id::SIMPLE_BLOCK | id::BLOCK_GROUP => {
                         return Ok(Some(Found {
-                            at,
-                            payload,
-                            size: scan.pos - payload,
-                            group: found.id == id::BLOCK_GROUP,
+                            at: found.at,
+                            payload: found.payload,
+                            size: found.size,
+                            group: found.header.id == id::BLOCK_GROUP,
                             cluster_timestamp: cluster.timestamp,
                         }));
                     }
@@ -535,24 +532,19 @@ impl MatroskaReader {
     /// The timestamp of the cluster whose payload starts at `payload`, from its elements before
     /// the first block (0 without one, as `FFmpeg` defaults it).
     fn cluster_timestamp(&mut self, payload: u64, end: Option<u64>) -> Result<u64, DemuxError> {
-        let end = end.unwrap_or(self.segment.end);
-        let mut pos = payload;
-        while pos < end {
-            let Some(found) = header_at(&mut self.input, pos)? else {
-                break;
-            };
-            match (found.id, found.size) {
+        let mut span = Span {
+            pos: payload,
+            end: end.unwrap_or(self.segment.end),
+        };
+        while let Step::Element(found) = span.next(&mut self.input)? {
+            match (found.header.id, found.header.size) {
                 (id::CLUSTER_TIMESTAMP, Some(_)) => {
-                    let bytes = load(&mut self.input, pos, found, 8)?;
+                    let bytes = load(&mut self.input, found.at, found.header, 8)?;
                     return Ok(ebml::uint(&bytes).unwrap_or(0));
                 }
                 (id::SIMPLE_BLOCK | id::BLOCK_GROUP, _) | (_, None) => break,
-                (element, Some(size)) => {
-                    if is_level1(element) {
-                        break;
-                    }
-                    pos = pos + found.len as u64 + size;
-                }
+                (element, Some(_)) if is_level1(element) => break,
+                _ => {}
             }
         }
         Ok(0)
@@ -563,17 +555,14 @@ impl MatroskaReader {
         if !found.group {
             return Ok(block::head(self.input.peek(found.payload, 16)?));
         }
-        let end = found.payload + found.size;
-        let mut pos = found.payload;
-        while pos < end {
-            let Some(child) = header_at(&mut self.input, pos)? else {
-                return Ok(None);
-            };
-            let body = pos + child.len as u64;
-            if child.id == id::BLOCK {
-                return Ok(block::head(self.input.peek(body, 16)?));
+        let mut span = Span {
+            pos: found.payload,
+            end: found.payload + found.size,
+        };
+        while let Step::Element(child) = span.next(&mut self.input)? {
+            if child.header.id == id::BLOCK {
+                return Ok(block::head(self.input.peek(child.payload, 16)?));
             }
-            pos = body.saturating_add(child.size.unwrap_or(u64::MAX));
         }
         Ok(None)
     }
@@ -656,7 +645,7 @@ impl MatroskaReader {
             if samples > 0 {
                 (0, clamp(samples))
             } else {
-                (clamp(-samples), 0)
+                (clamp(samples.saturating_neg()), 0)
             }
         };
         let mut out = Vec::with_capacity(block.frames.len());
@@ -933,7 +922,7 @@ impl MatroskaReader {
             let Some(found) = self.next_block(&mut scan)? else {
                 break;
             };
-            if found.at - start > PROBE_BYTES {
+            if found.at.saturating_sub(start) > PROBE_BYTES {
                 break;
             }
             let Some((number, laces)) = self.block_head(&found)? else {

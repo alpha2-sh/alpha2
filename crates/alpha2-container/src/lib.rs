@@ -7,6 +7,8 @@
 //!
 //! Inputs are untrusted: sizes, counts and dimensions are bounded before anything is allocated
 //! (frames at most 16384 pixels per side and 2^26 pixels in all, as the engine refuses larger).
+//! Arithmetic with an operand from the file uses the `checked_`, `saturating_` or `wrapping_`
+//! method that says what an out-of-range result means, since release builds panic on overflow.
 
 use std::path::Path;
 

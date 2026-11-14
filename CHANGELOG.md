@@ -86,6 +86,11 @@ All notable changes to this project are documented in this file.
 - Mobile: Matroska and WebM exports with more than 10 s of audio place the audio beside the video
   it plays with, so a reader seeking in the file finds both. The encoded audio is now written at
   most one second ahead of the video. MP4 and MOV bytes do not change.
+- `alpha2-container`: crafted or damaged files no longer panic the readers. A Matroska block
+  element whose header crosses its cluster's end ends the cluster, a DTS frame shorter than its
+  header has no duration, and an H.264 sequence with huge dimensions, a `DiscardPadding` of
+  `i64::MIN` and Ogg granule positions at either end of the range read. The Matroska writer refuses
+  a packet whose time does not fit a millisecond timestamp.
 
 ## [0.6.0] - 2026-11-08
 

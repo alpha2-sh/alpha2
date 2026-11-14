@@ -23,6 +23,26 @@ pub(super) fn expected() -> serde_json::Value {
     serde_json::from_str(&text).expect("expected JSON")
 }
 
+/// The inputs under `tests/corpus/hostile/<target>/`, in that fuzz target's layout, by name.
+pub(crate) fn hostile_inputs(target: &str) -> Vec<(String, Vec<u8>)> {
+    let dir = corpus_dir().join("hostile").join(target);
+    let mut inputs = std::fs::read_dir(&dir)
+        .expect("hostile inputs")
+        .map(|entry| {
+            let path = entry.expect("entry").path();
+            let name = path
+                .file_name()
+                .expect("name")
+                .to_string_lossy()
+                .into_owned();
+            (name, std::fs::read(&path).expect("read"))
+        })
+        .collect::<Vec<_>>();
+    inputs.sort();
+    assert!(!inputs.is_empty(), "{}", dir.display());
+    inputs
+}
+
 /// Every packet of `track`, in decode order.
 pub(crate) fn packets(reader: &mut dyn ContainerReader, track: TrackId) -> Vec<Packet> {
     let mut packets = Vec::new();

@@ -2,6 +2,12 @@
 
 use bytes::{BufMut, BytesMut};
 
+use crate::DemuxError;
+use crate::audio::Input;
+
+/// Bytes read to decode an element header.
+const HEADER_PEEK: usize = 12;
+
 /// Element IDs, with their length markers, as Matroska and EBML define them.
 pub(crate) mod id {
     pub const EBML: u32 = 0x1A45_DFA3;
@@ -170,6 +176,64 @@ pub(crate) fn header(data: &[u8]) -> Option<Header> {
         size,
         len: id_len + size_len,
     })
+}
+
+/// The element header at `pos`, `None` at the end of the file or where none can be read.
+pub(crate) fn header_at(input: &mut Input, pos: u64) -> Result<Option<Header>, DemuxError> {
+    Ok(header(input.peek(pos, HEADER_PEEK)?))
+}
+
+/// A walk over the elements of the file between `pos` and `end`. An element is taken only when
+/// its header lies inside the span; a payload that runs past `end` is cut there, as [`Children`]
+/// cuts one in memory.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Span {
+    pub pos: u64,
+    pub end: u64,
+}
+
+/// An element a [`Span`] reached.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Element {
+    /// Its first byte.
+    pub at: u64,
+    pub header: Header,
+    pub payload: u64,
+    /// The payload's bytes inside the span; all that remains of it for an unknown size.
+    pub size: u64,
+}
+
+pub(crate) enum Step {
+    Element(Element),
+    /// The span has no bytes left, or the next header crosses its end.
+    End,
+    /// No element header can be read at the span's position.
+    Unreadable,
+}
+
+impl Span {
+    /// The element at the span's position, which then moves past its payload.
+    pub fn next(&mut self, input: &mut Input) -> Result<Step, DemuxError> {
+        if self.pos >= self.end {
+            return Ok(Step::End);
+        }
+        let Some(header) = header_at(input, self.pos)? else {
+            return Ok(Step::Unreadable);
+        };
+        let Some(room) = (self.end - self.pos).checked_sub(header.len as u64) else {
+            return Ok(Step::End);
+        };
+        let at = self.pos;
+        let payload = at + header.len as u64;
+        let size = header.size.map_or(room, |size| size.min(room));
+        self.pos = payload + size;
+        Ok(Step::Element(Element {
+            at,
+            header,
+            payload,
+            size,
+        }))
+    }
 }
 
 /// A signed lace size difference: the number less half its range (EBML lacing).

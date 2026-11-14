@@ -276,3 +276,18 @@ fn video_tracks_carry_the_reorder_depth_their_bitstream_declares() {
     assert_eq!(depth("av1.mp4"), Some(0));
     assert_eq!(depth("vp9.webm"), Some(0));
 }
+
+#[test]
+fn hostile_mp4_inputs_read_and_seek_without_a_panic() {
+    for (_, input) in super::hostile_inputs("container_mp4") {
+        let Ok(mut reader) = Mp4Reader::new(Cursor::new(input)) else {
+            continue;
+        };
+        for track in reader.tracks().to_vec() {
+            while let Ok(Some(_)) = reader.next_packet(track.id) {}
+            if reader.seek(track.id, 0).is_ok() {
+                let _ = reader.next_packet(track.id);
+            }
+        }
+    }
+}

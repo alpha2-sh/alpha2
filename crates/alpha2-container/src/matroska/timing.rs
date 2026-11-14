@@ -231,6 +231,7 @@ fn dts_samples(data: &[u8]) -> Option<i64> {
     if data.get(..4)? != [0x7f, 0xfe, 0x80, 0x01] {
         return None;
     }
-    let blocks = ((u16::from(data[4] & 1) << 6) | u16::from(data[5] >> 2)) + 1;
+    let rest = data.get(4..6)?;
+    let blocks = ((u16::from(rest[0] & 1) << 6) | u16::from(rest[1] >> 2)) + 1;
     Some(32 * i64::from(blocks))
 }

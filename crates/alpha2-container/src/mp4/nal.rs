@@ -290,7 +290,9 @@ fn avc_sequence(avcc: &[u8]) -> Option<AvcSequence> {
         profile,
         constraint_set3,
         level,
-        frame_macroblocks: width * height * if frame_mbs_only { 1 } else { 2 },
+        frame_macroblocks: width
+            .saturating_mul(height)
+            .saturating_mul(if frame_mbs_only { 1 } else { 2 }),
         declared,
     })
 }
