@@ -50,7 +50,7 @@ jobs:
           test -n "$version"
           mismatches="$(
             section_values Cargo.toml workspace.dependencies 'version = "[^"]*", path = ' |
-              awk -v want="$version" '$2 != want { print "Cargo.toml workspace.dependencies " $1 " " $2 }'
+              awk -v want="=$version" '$2 != want { print "Cargo.toml workspace.dependencies " $1 " " $2 }'
             section_values plugins/Cargo.toml workspace.package '^version = "[^"]*"' |
               awk -v want="$version" '$2 != want { print "plugins/Cargo.toml workspace.package " $2 }'
             names="$(jq -r '.workspaces[] + "/package.json"' package.json | xargs jq -s '[.[].name]')"

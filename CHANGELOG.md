@@ -149,6 +149,9 @@ All notable changes to this project are documented in this file.
 - The Python package no longer installs an `alpha2` command, which shared its name with the native
   archive's media program; run `python -m alpha2 install`, `python -m alpha2 mcp` and the other
   commands instead. Its messages start with `python -m alpha2 <command>:`.
+- The published crates require their alpha2 siblings at exactly their own version (`=x.y.z`), as
+  the npm packages and the Python wheel already do, so Cargo no longer mixes patch levels that were
+  never built together.
 
 ### Fixed
 

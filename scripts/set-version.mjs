@@ -5,6 +5,11 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import {
+  pluginsSections,
+  setCargoVersions,
+  workspaceSections,
+} from "./lib/cargo-versions.mjs";
 
 const version = process.argv[2];
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version ?? "")) {
@@ -38,40 +43,19 @@ manifests.forEach((manifest, index) => {
 });
 
 // The plugin SDK depends on `alpha2-plugin-abi` by path, so plugins take the engine version.
-const setCargoVersions = (manifest, patterns, minimum) => {
+const writeCargoVersions = (manifest, sections, minimum) => {
   const path = join(root, manifest);
-  let section = "";
-  let lines = 0;
-  const text = readFileSync(path, "utf8")
-    .split("\n")
-    .map((line) => {
-      section = line.match(/^\[([^\]]+)\]$/)?.[1] ?? section;
-      const pattern = patterns[section];
-      if (!pattern?.test(line)) return line;
-      lines += 1;
-      return line.replace(pattern, `$1"${version}"`);
-    })
-    .join("\n");
+  const { text, lines } = setCargoVersions(
+    readFileSync(path, "utf8"),
+    sections,
+  );
   if (lines < minimum)
     throw new Error(`${manifest}: no workspace version to set`);
   writeFileSync(path, text);
   console.log(`${manifest} workspace@${version} (${lines} lines)`);
 };
-const workspaceVersion = /^(version = )"[^"]*"$/;
-setCargoVersions(
-  "Cargo.toml",
-  {
-    "workspace.package": workspaceVersion,
-    "workspace.dependencies":
-      /^(alpha2[\w-]* = \{ version = )"[^"]*"(?=, path = )/,
-  },
-  2,
-);
-setCargoVersions(
-  "plugins/Cargo.toml",
-  { "workspace.package": workspaceVersion },
-  1,
-);
+writeCargoVersions("Cargo.toml", workspaceSections(version), 2);
+writeCargoVersions("plugins/Cargo.toml", pluginsSections(version), 1);
 
 // The Python package's own version comes from Cargo; only its `alpha2-host` pin is written here.
 const pyprojectPath = join(root, "python", "alpha2", "pyproject.toml");
