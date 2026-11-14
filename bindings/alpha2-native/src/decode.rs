@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::recovery::{
-    DecodeDiagnostics, DecodePolicy, FfmpegRecovery, Recovery, WorkBudget, submit_packet,
+    DecodeDiagnostics, DecodePolicy, FfmpegRecovery, Recovery, WorkBudget,
+    audio_timestamp_in_range, submit_packet,
 };
 use alpha2_host_core::audio_timeline::SourceTimeline;
 
@@ -670,7 +671,8 @@ impl NativeAudioDecoder {
             frame.best_effort_timestamp
         })
         .filter(|pts| *pts != ffi::AV_NOPTS_VALUE);
-        if pts.is_some_and(|pts| !audio_timestamp_in_range(pts, self.time_base)) {
+        let (num, den) = (self.time_base.num.into(), self.time_base.den.into());
+        if pts.is_some_and(|pts| !audio_timestamp_in_range(pts, num, den)) {
             self.recovery.corrupt("audio timestamp", pts)?;
             self.repair_audio = AudioContinuity::Damaged;
             return Ok(true);
@@ -1031,15 +1033,6 @@ fn open_audio_decoder(
     decoder.set_pkt_timebase(stream.time_base);
     decoder.open(None).map_err(adapter_error)?;
     Ok(decoder)
-}
-
-/// Maximum audio timestamp distance from zero (2^31 s). Sample counts at the fastest rate then stay
-/// below 2^51, so placement cannot overflow; anything further is damaged input.
-const AUDIO_TIMESTAMP_LIMIT_SECONDS: i128 = 1 << 31;
-
-fn audio_timestamp_in_range(pts: i64, time_base: AVRational) -> bool {
-    let (num, den) = (i128::from(time_base.num), i128::from(time_base.den));
-    num > 0 && den > 0 && (i128::from(pts) * num).abs() <= AUDIO_TIMESTAMP_LIMIT_SECONDS * den
 }
 
 /// Accepted source sample rates (1 kHz to 768 kHz, the `alpha2_audio::Resampler` range).

@@ -91,6 +91,9 @@ All notable changes to this project are documented in this file.
   header has no duration, and an H.264 sequence with huge dimensions, a `DiscardPadding` of
   `i64::MIN` and Ogg granule positions at either end of the range read. The Matroska writer refuses
   a packet whose time does not fit a millisecond timestamp.
+- `alpha2-host-core`: an audio timestamp more than 2^31 seconds from zero is damaged input on the
+  built-in decode path too, as it is on the FFmpeg path: `strict` fails and `tolerant` drops the
+  chunk, where before it was placed at time 0 or overflowed.
 
 ## [0.6.0] - 2026-11-08
 

@@ -779,7 +779,7 @@ impl AudioToolboxAudio {
             return;
         }
         let length = i64::try_from(frames).unwrap_or(0) * self.timescale / i64::from(self.rate);
-        self.next_pts = Some(pts + length);
+        self.next_pts = Some(pts.saturating_add(length));
         self.out.push_back(PcmChunk {
             pts,
             sample_rate: self.rate,

@@ -183,6 +183,18 @@ pub enum DecodeFailure {
     Other,
 }
 
+/// Largest distance of an audio timestamp from zero (2^31 s). Sample counts at the fastest
+/// accepted rate then stay below 2^51, so placement cannot overflow; anything further is damage.
+const AUDIO_TIMESTAMP_LIMIT_SECONDS: i128 = 1 << 31;
+
+/// Whether an audio timestamp of `pts` units of `num / den` seconds lies within 2^31 s of zero.
+/// Decoders record one outside as corruption ([`Recovery::corrupt`]) and drop its samples.
+#[must_use]
+pub fn audio_timestamp_in_range(pts: i64, num: i64, den: i64) -> bool {
+    let (num, den) = (i128::from(num), i128::from(den));
+    num > 0 && den > 0 && (i128::from(pts) * num).abs() <= AUDIO_TIMESTAMP_LIMIT_SECONDS * den
+}
+
 /// Corruption, timestamp and progress budgets for one decoder, with the diagnostics it collected.
 #[derive(Default)]
 pub struct Recovery {
@@ -616,6 +628,19 @@ mod tests {
         assert_eq!(DecodePolicy::Tolerant.as_str(), "tolerant");
         assert_eq!(DecodePolicy::parse("Tolerant"), None);
         assert_eq!(DecodePolicy::parse(""), None);
+    }
+
+    #[test]
+    fn an_audio_timestamp_is_in_range_up_to_two_to_the_31_seconds() {
+        let limit = (1_i64 << 31) * 48_000;
+        assert!(audio_timestamp_in_range(limit, 1, 48_000));
+        assert!(audio_timestamp_in_range(-limit, 1, 48_000));
+        assert!(!audio_timestamp_in_range(limit + 1, 1, 48_000));
+        assert!(!audio_timestamp_in_range(i64::MIN, 1, 48_000));
+        assert!(!audio_timestamp_in_range(i64::MAX, 1, 1));
+        assert!(audio_timestamp_in_range(1 << 31, 1, 1));
+        assert!(!audio_timestamp_in_range(0, 0, 1));
+        assert!(!audio_timestamp_in_range(0, 1, 0));
     }
 
     #[test]
