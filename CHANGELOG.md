@@ -53,6 +53,9 @@ All notable changes to this project are documented in this file.
   samples (option `stallTimeoutMs` on `open`) and at once on abort, so an export no longer hangs, or
   ignores a cancel, in its audio step. Decoder stall errors carry code `DECODE_STALLED` and classify
   as `GPU_TIMEOUT` in the decode phase (they were unclassified).
+- The audio worklet processor stays stopped after its DSP module traps or fails: later quanta no
+  longer enter the module (a node with a connected input was called again and posted an error
+  each quantum), and later configuration requests are answered with the stored failure.
 
 ## [0.6.0] - 2026-11-08
 
