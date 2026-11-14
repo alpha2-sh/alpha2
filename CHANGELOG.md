@@ -151,6 +151,11 @@ All notable changes to this project are documented in this file.
 - GPU renderer: a layer whose pixels are transparent leaves the picture below it unchanged. Before,
   each such layer re-stored the colors under it, so a stack of transparent overlays darkened the
   picture by up to a few code values and the GPU differed from the CPU renderer.
+- Node and Python clients: `extract` takes the render inputs (`frames`, `resources`,
+  `effectAssets` / `effect_assets`, `fonts`, `effects`) and sends them, so a timeline input draws
+  the project's effects and images. Only a timeline input needs a path for every effect resource;
+  in Python every `extract` of a project with an effect resource failed with `MISSING_INPUT`
+  before a host started.
 - Plugins: a plugin's `log` never ends the host when standard error is closed (a native plugin's
   log callback aborted the process, a wasm plugin's ended it with a panic). Every loader writes at
   most 64 KiB of log text per run, then one notice, and keeps the first 4096 bytes of a `fail`

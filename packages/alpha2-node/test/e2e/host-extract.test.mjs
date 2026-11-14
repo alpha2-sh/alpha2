@@ -604,3 +604,65 @@ test("conform reports data made from other media once its source is relinked", a
     ["track"],
   );
 });
+
+test("an extraction reads a project with a LUT: a source input without it, the timeline with it", async () => {
+  const effects = JSON.parse(
+    await readFile(
+      join(root, "tests", "cases", "host-parity-effects-project.json"),
+      "utf8",
+    ),
+  );
+  const corpus = (name) => join(root, "tests", "corpus", name);
+  const assets = {
+    video: corpus("parity-rgb.mov"),
+    still: corpus("parity-image.png"),
+  };
+  const input = {
+    media: "video",
+    from: ["source", "timeline"],
+    format: "rgba8",
+    max_size: 960,
+  };
+  const run = (from, effectAssets) =>
+    client.extract(
+      {
+        project: effects,
+        assets,
+        effectAssets,
+        request: {
+          extractor: "alpha2.test.digest",
+          version: 1,
+          // The LUT clip.
+          input: {
+            from,
+            ...(from === "source" ? { source_id: "video" } : {}),
+            range: { start: 20_000, end: 30_000 },
+            size: 32,
+          },
+          outputs: { digest: "frames" },
+        },
+      },
+      digest(input),
+    );
+  const source = await run("source");
+  assert.ok(source.dataSets[0].times.length > 0);
+  const dir = await mkdtemp(join(tmpdir(), "alpha2-lut-"));
+  try {
+    const identity = join(dir, "identity.cube");
+    await writeFile(
+      identity,
+      "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n",
+    );
+    const graded = await run("timeline", {
+      grade: corpus("parity-grade.cube"),
+    });
+    const plain = await run("timeline", { grade: identity });
+    assert.equal(
+      graded.dataSets[0].times.length,
+      plain.dataSets[0].times.length,
+    );
+    assert.notDeepEqual(graded.dataSets[0].values, plain.dataSets[0].values);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -95,6 +95,40 @@
     }
   },
   {
+    "id": "extract-render-inputs-follow-the-caller",
+    "kind": "request-paths",
+    "given": {
+      "directories": ["first", "second"],
+      "requests": [
+        {
+          "operation": "extract",
+          "fields": {
+            "assets": { "a": "clip.mp4" },
+            "frames": { "seq": ["frames/1.png", null] },
+            "resources": { "seq": { "index.json": "resources/index.json" } },
+            "effectAssets": { "lut": "luts/look.cube" },
+            "plugin": { "manifest": "plugins/levels/manifest.json" }
+          }
+        }
+      ]
+    },
+    "expect": {
+      "hosts": 1,
+      "requests": [
+        {
+          "resolved": [
+            "/assets/a",
+            "/frames/seq/0",
+            "/resources/seq/index.json",
+            "/effectAssets/lut",
+            "/plugin/manifest"
+          ],
+          "unchanged": ["/frames/seq/1"]
+        }
+      ]
+    }
+  },
+  {
     "id": "compose-font-paths-follow-the-caller",
     "kind": "request-paths",
     "clients": ["node"],

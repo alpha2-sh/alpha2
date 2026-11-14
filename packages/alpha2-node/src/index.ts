@@ -1802,8 +1802,11 @@ export class Alpha2NodeClient {
       );
     const problems = projectProblems(request.project);
     if (problems.length > 0) throw new Alpha2ProjectValidationError(problems);
-    validateMediaPaths(request, false);
-    checkFontPaths(request.fonts);
+    // A source input draws nothing, so only a timeline input needs the effect resources.
+    validateRenderInputs(request, {
+      assetsRequired: false,
+      effectResources: request.request.input?.from === "timeline",
+    });
     let runs: Readonly<Record<string, unknown>>;
     if (extractor !== undefined) {
       const descriptor = extractor.describe();
@@ -1837,11 +1840,7 @@ export class Alpha2NodeClient {
     const answer = await this.#request(
       "extract",
       {
-        project: request.project,
-        assets: pathRecord(request.assets),
-        proxies: proxiesPayload(request.proxies),
-        media: request.media ?? "original",
-        fonts: (request.fonts ?? []).map(absolutePath),
+        ...renderInputsPayload(request),
         request: request.request,
         ...runs,
       },
@@ -1908,16 +1907,24 @@ export class Alpha2NodeClient {
   }
 }
 
-/** An `extract` request for {@link Alpha2NodeClient.extract}. */
+/**
+ * An `extract` request for {@link Alpha2NodeClient.extract}. The render inputs (`frames`,
+ * `resources`, `effectAssets`, `fonts`, `effects`) are those of {@link ExportProjectRequest}; a
+ * timeline input draws with them, and needs a path for every effect resource.
+ */
 export interface ExtractRequest {
   readonly project: Project;
   /** Source id to media path. */
   readonly assets?: Readonly<Record<string, string>>;
   readonly proxies?: Readonly<Record<string, readonly ProxyFile[]>>;
+  readonly frames?: ExportProjectRequest["frames"];
+  readonly resources?: ExportProjectRequest["resources"];
   /** Read proxies (where fresh) instead of originals; `made_from` is the original's either way. */
   readonly media?: "original" | "proxies";
+  readonly effectAssets?: ExportProjectRequest["effectAssets"];
   /** Fonts for timeline input that draws text. */
   readonly fonts?: readonly string[];
+  readonly effects?: ExportProjectRequest["effects"];
   readonly request: ExtractRun;
   /** A plugin the host fetches and runs, instead of a client-side extractor. */
   readonly plugin?: ExtractPlugin;
@@ -2122,7 +2129,6 @@ function checkHostStartTimeout(value: unknown): number {
 type RenderInputs = Pick<
   ExportProjectRequest,
   | "project"
-  | "assets"
   | "proxies"
   | "frames"
   | "resources"
@@ -2130,11 +2136,17 @@ type RenderInputs = Pick<
   | "effectAssets"
   | "fonts"
   | "effects"
->;
+> & { readonly assets?: ExportProjectRequest["assets"] };
 
-/** Shape checks only; media usability is left to the host's conform check. */
-function validateRenderInputs(request: RenderInputs): void {
-  validateMediaPaths(request, true);
+/**
+ * Shape checks only; media usability is left to the host's conform check. Every effect resource
+ * needs a path unless `effectResources` is false.
+ */
+function validateRenderInputs(
+  request: RenderInputs,
+  { assetsRequired = true, effectResources = true } = {},
+): void {
+  validateMediaPaths(request, assetsRequired);
   checkPathRecord("effectAssets", request.effectAssets, "effect asset path");
   if (request.resources !== undefined) {
     if (!isRecord(request.resources))
@@ -2154,6 +2166,7 @@ function validateRenderInputs(request: RenderInputs): void {
     );
   }
   checkFontPaths(request.fonts);
+  if (!effectResources) return;
   for (const resource of request.project.effect_resources ?? []) {
     const path = request.effectAssets?.[resource.id];
     if (typeof path !== "string" || path.length === 0) {

@@ -480,3 +480,33 @@ def test_conform_reports_data_made_from_other_media_once_its_source_is_relinked(
     assert client.conform(project, assets=video())["report"]["stale_data"] == []
     relinked = client.conform(project, assets=video("rotation.mp4"))
     assert [entry["data"] for entry in relinked["report"]["stale_data"]] == ["track"]
+
+
+def test_a_project_with_a_lut_extracts_its_source_without_it_and_its_timeline_with_it(
+    client: HostClient, tmp_path: Path
+) -> None:
+    project = json.loads(
+        (ROOT / "tests" / "cases" / "host-parity-effects-project.json").read_text("utf-8")
+    )
+    corpus = ROOT / "tests" / "corpus"
+    assets = {"video": corpus / "parity-rgb.mov", "still": corpus / "parity-image.png"}
+    digest = Digest({"media": "video", "from": ["source", "timeline"], "format": "rgba8"})
+
+    def run(source: str, **fields: Any) -> dict[str, Any]:
+        # The LUT clip.
+        read: dict[str, Any] = {"from": source, "range": {"start": 20_000, "end": 30_000}}
+        read["size"] = 32
+        if source == "source":
+            read["source_id"] = "video"
+        asked = {**request(digest, 0, 32), "input": read, "outputs": {"digest": "frames"}}
+        return client.extract(project, asked, digest, assets=assets, **fields)
+
+    assert run("source")["dataSets"][0]["times"]
+    identity = tmp_path / "identity.cube"
+    identity.write_text(
+        "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n", "utf-8"
+    )
+    graded = run("timeline", effect_assets={"grade": corpus / "parity-grade.cube"})
+    plain = run("timeline", effect_assets={"grade": identity})
+    assert len(graded["dataSets"][0]["times"]) == len(plain["dataSets"][0]["times"])
+    assert graded["dataSets"][0]["values"] != plain["dataSets"][0]["values"]

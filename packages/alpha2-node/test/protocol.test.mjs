@@ -3733,3 +3733,67 @@ for (const scenario of CLIENT_SCENARIOS)
       await driver(scenario);
     },
   );
+
+test("extract sends the render inputs, and only a timeline input needs every effect asset", async () => {
+  const root = await scratch("alpha2-node-extract-inputs-");
+  const log = join(root, "log");
+  const client = new Alpha2NodeClient({
+    hostPath: await fakeHost(root, PATHS_HOST(log)),
+  });
+  const project = JSON.parse(
+    await readFile(
+      new URL(
+        "../../../tests/cases/host-parity-effects-project.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const extractor = {
+    describe: () => ({
+      id: "example.levels",
+      version: 1,
+      input: { media: "video", from: ["source", "timeline"], format: "rgba8" },
+      params_schema: { type: "object" },
+      outputs: [],
+    }),
+  };
+  const run = (from, fields = {}) =>
+    client.extract(
+      {
+        project,
+        request: {
+          extractor: "example.levels",
+          version: 1,
+          input: {
+            from,
+            ...(from === "source" ? { source_id: "video" } : {}),
+            range: { start: 0, end: 4000 },
+          },
+          outputs: {},
+        },
+        assets: { video: "/media/v.mov", still: "/media/s.png" },
+        ...fields,
+      },
+      extractor,
+    );
+  await run("source");
+  await run("timeline", {
+    effectAssets: { grade: "/media/grade.cube" },
+    effects: [],
+  });
+  await assert.rejects(
+    run("timeline"),
+    (error) =>
+      error.code === "MISSING_INPUT" && /resource grade/.test(error.message),
+  );
+  const requests = (await startsIn(log))
+    .map((line) => JSON.parse(line))
+    .filter((line) => line.request?.operation === "extract")
+    .map((line) => line.request);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].effectAssets, {});
+  assert.deepEqual(requests[1].effectAssets, { grade: "/media/grade.cube" });
+  for (const field of ["frames", "resources", "effects", "fonts"])
+    assert.ok(field in requests[1], field);
+});

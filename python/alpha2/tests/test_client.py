@@ -2997,3 +2997,46 @@ def test_client_behavior_scenario(
     driver = SCENARIO_DRIVERS.get(scenario["kind"])
     assert driver is not None, f"no driver for scenario kind {scenario['kind']}"
     driver(scenario, tmp_path, fake_host)
+
+
+def test_extract_sends_the_render_inputs_and_only_a_timeline_input_needs_every_effect_asset(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    log = tmp_path / "log"
+    client = HostClient(host_path=fake_host(tmp_path / "host", paths_host(log)))
+    project = corpus("host-parity-effects-project.json")
+    descriptor = {
+        "id": "example.levels",
+        "version": 1,
+        "input": {"media": "video", "from": ["source", "timeline"], "format": "rgba8"},
+        "params_schema": {"type": "object"},
+        "outputs": [],
+    }
+
+    class Extractor:
+        def describe(self) -> dict[str, Any]:
+            return descriptor
+
+    def run(source: str, **fields: Any) -> None:
+        read: dict[str, Any] = {"from": source, "range": {"start": 0, "end": 4000}}
+        if source == "source":
+            read["source_id"] = "video"
+        request = {"extractor": "example.levels", "version": 1, "input": read, "outputs": {}}
+        assets = {"video": "/media/v.mov", "still": "/media/s.png"}
+        client.extract(project, request, Extractor(), assets=assets, **fields)
+
+    run("source")
+    run("timeline", effect_assets={"grade": "/media/grade.cube"}, effects=[])
+    with pytest.raises(Alpha2HostError) as missing:
+        run("timeline")
+    assert missing.value.code == "MISSING_INPUT"
+    assert "resource grade" in missing.value.message
+    requests = [
+        line["request"]
+        for line in map(json.loads, lines_in(log))
+        if line.get("request", {}).get("operation") == "extract"
+    ]
+    assert len(requests) == 2
+    assert requests[0]["effectAssets"] == {}
+    assert requests[1]["effectAssets"] == {"grade": "/media/grade.cube"}
+    assert {"frames", "resources", "effects", "fonts"} <= requests[1].keys()

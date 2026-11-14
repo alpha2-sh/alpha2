@@ -499,7 +499,11 @@ def _request_inputs(
     effect_assets: object,
     fonts: object,
     effects: object,
+    *,
+    effect_resources: bool = True,
 ) -> dict[str, Any]:
+    """The render inputs of a request; every effect resource needs a path unless
+    ``effect_resources`` is false."""
     effect_payload = _path_record("effect_assets", effect_assets, "effect asset path")
     resources_payload: dict[str, dict[str, str]] = {}
     if resources is not None:
@@ -522,7 +526,7 @@ def _request_inputs(
             if not isinstance(text, str) or not text:
                 raise _invalid("fonts must be a list of font file paths")
             font_paths.append(_absolute(text))
-    for resource in project.get("effect_resources") or []:
+    for resource in (project.get("effect_resources") or []) if effect_resources else []:
         if not effect_payload.get(resource["id"]):
             raise Alpha2HostError(
                 "MISSING_INPUT", f"missing effect asset path for resource {resource['id']}"
@@ -1187,8 +1191,12 @@ class HostClient:
         plugin: ExtractPlugin | None = None,
         assets: Mapping[str, PathLike] | None = None,
         proxies: Mapping[str, Sequence[ProxyFile]] | None = None,
+        frames: Mapping[str, Sequence[PathLike | None]] | None = None,
+        resources: Mapping[str, Mapping[str, PathLike]] | None = None,
         media: Literal["original", "proxies"] = "original",
+        effect_assets: Mapping[str, PathLike] | None = None,
         fonts: Sequence[PathLike] | None = None,
+        effects: Sequence[Mapping[str, Any]] | None = None,
         on_progress: Callable[[ExtractProgress], object] | None = None,
         cancel: threading.Event | None = None,
     ) -> dict[str, Any]:
@@ -1201,6 +1209,10 @@ class HostClient:
         Returns ``{"dataSets", "timings"}`` with the data sets the session validated,
         ``made_from`` set to the conformed original and, for a plugin, ``made_by.plugin`` naming
         the artifact that ran.
+
+        The render inputs (``frames``, ``resources``, ``effect_assets``, ``fonts``, ``effects``)
+        are those of :meth:`stills`; a timeline input draws with them and needs a path for every
+        effect resource, a source input draws nothing.
 
         A client-side extractor's ``request["params"]`` is checked against its
         ``params_schema`` first. Raises with ``INVALID_EMIT`` for output the session refuses,
@@ -1234,7 +1246,20 @@ class HostClient:
                     "force_wasm": bool(plugin.get("force_wasm", False)),
                 }
             }
-        inputs = _request_inputs(project, assets, proxies, None, None, media, None, fonts, None)
+        read = request.get("input")
+        from_timeline = isinstance(read, Mapping) and read.get("from") == "timeline"
+        inputs = _request_inputs(
+            project,
+            assets,
+            proxies,
+            frames,
+            resources,
+            media,
+            effect_assets,
+            fonts,
+            effects,
+            effect_resources=from_timeline,
+        )
         payload = {**inputs, "request": dict(request), **runs}
         return self._pool.request(  # type: ignore[no-any-return]
             "extract",
