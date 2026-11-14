@@ -412,7 +412,9 @@ class Run {
       alpha2: {
         emit: (ptr: number, len: number): number => {
           try {
-            this.#records.push(...decodeRecords(bytes(ptr, len).slice()));
+            // A loop: spreading a large batch into arguments passes the engine's argument limit.
+            for (const record of decodeRecords(bytes(ptr, len).slice()))
+              this.#records.push(record);
             return 0;
           } catch (error) {
             this.#undecodable =
@@ -461,12 +463,33 @@ class Run {
 
   /** The descriptor JSON the module itself returns. */
   describe(): string {
-    const packed = BigInt.asUintN(64, this.#exports.alpha2_describe());
-    const ptr = Number(packed & 0xffffffffn);
-    const len = Number(packed >> 32n);
-    return new TextDecoder().decode(
-      new Uint8Array(this.#exports.memory.buffer, ptr, len),
-    );
+    try {
+      const packed = BigInt.asUintN(64, this.#exports.alpha2_describe());
+      const ptr = Number(packed & 0xffffffffn);
+      const len = Number(packed >> 32n);
+      return new TextDecoder().decode(
+        new Uint8Array(this.#exports.memory.buffer, ptr, len),
+      );
+    } catch (cause) {
+      throw new PluginError(
+        "PLUGIN_DESCRIPTOR_MISMATCH",
+        `describe failed: ${String(cause)}`,
+        { cause },
+      );
+    }
+  }
+
+  /** Runs a guest call outside a step, reporting a trap or an out-of-range pointer as one. */
+  #guest<T>(run: () => T): T {
+    try {
+      return run();
+    } catch (cause) {
+      throw new PluginError(
+        "PLUGIN_TRAPPED",
+        `the plugin trapped: ${String(cause)}`,
+        { cause },
+      );
+    }
   }
 
   /** Runs a call, turning its status, a trap or the memory cap into the run's outcome. */
@@ -510,15 +533,21 @@ class Run {
     align: number,
     run: (ptr: number) => number,
   ): PluginRecord[] {
-    const ptr = this.#exports.alpha2_alloc(data.byteLength, align);
+    const ptr = this.#guest(() =>
+      this.#exports.alpha2_alloc(data.byteLength, align),
+    );
     if (ptr === 0 && data.byteLength > 0)
       throw new PluginError(
         "PLUGIN_LIMIT",
         "the plugin could not allocate the call's input",
       );
-    new Uint8Array(this.#exports.memory.buffer, ptr, data.byteLength).set(data);
+    this.#guest(() =>
+      new Uint8Array(this.#exports.memory.buffer, ptr, data.byteLength).set(
+        data,
+      ),
+    );
     const records = this.call(() => run(ptr));
-    this.#exports.alpha2_free(ptr, data.byteLength, align);
+    this.#guest(() => this.#exports.alpha2_free(ptr, data.byteLength, align));
     return records;
   }
 

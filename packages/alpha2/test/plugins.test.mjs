@@ -86,13 +86,15 @@ const DESCRIPTOR = {
 };
 
 /**
- * A plugin whose module is the ABI's exports around `body`: WAT for `begin`, `video` and `end`
- * (each `(result i32)`), with the descriptor at offset 0 and 2 MiB of zeroed memory.
+ * A plugin whose module is the ABI's exports with WAT bodies for `begin`, `video`, `end` (each
+ * `(result i32)`), `alloc` and `describe`, the descriptor at offset 0 and 8 MiB of zeroed memory.
  */
 async function hostedPlugin({
   begin = "i32.const 0",
   video = "i32.const 0",
+  end = "i32.const 0",
   alloc = "i32.const 65536",
+  describe = null,
 } = {}) {
   const binaryen = (await import("binaryen")).default;
   const json = JSON.stringify(DESCRIPTOR);
@@ -101,17 +103,17 @@ async function hostedPlugin({
     (import "alpha2" "fail" (func $fail (param i32 i32)))
     (import "alpha2" "log" (func $log (param i32 i32 i32)))
     (import "alpha2" "emit" (func $emit (param i32 i32) (result i32)))
-    (memory (export "memory") 32)
+    (memory (export "memory") 128)
     (data (i32.const 0) "${json.replaceAll('"', "\\22")}")
     (func (export "alpha2_abi") (result i32) i32.const 1)
-    (func (export "alpha2_describe") (result i64) i64.const ${packed})
+    (func (export "alpha2_describe") (result i64) ${describe ?? `i64.const ${packed}`})
     (func (export "alpha2_alloc") (param i32 i32) (result i32) ${alloc})
     (func (export "alpha2_free") (param i32 i32 i32))
     (func (export "alpha2_begin") (param i32 i32) (result i32) (local $i i32) ${begin})
     (func (export "alpha2_pass") (param i32 i32) (result i32) i32.const 0)
     (func (export "alpha2_video") (param i64 i32 i32 i32 i32 i32) (result i32) (local $i i32) ${video})
     (func (export "alpha2_audio") (param i64 i64 i32 i32 i32 i32 i32) (result i32) i32.const 0)
-    (func (export "alpha2_end") (result i32) i32.const 0))`);
+    (func (export "alpha2_end") (result i32) (local $i i32) (local $at i32) ${end}))`);
   const wasm = module.emitBinary();
   module.dispose();
   const hex = async (bytes) =>
@@ -193,5 +195,51 @@ test("a plugin's fail message is cut to 4096 bytes before it is decoded", async 
     () => extractor.video(FRAME, {}),
     (error) =>
       error.code === "EXTRACTOR_FAILED" && error.message.length === 4096,
+  );
+});
+
+test("a batch of 150,000 samples is taken whole, past the engine's argument limit", async () => {
+  const count = 150_000;
+  // Each record: tag 1, output 0, a 20-byte body of time (i64), one channel, no nulls, value.
+  const plugin = await hostedPlugin({
+    end: `(loop $l
+      (local.set $at (i32.add (i32.const 65536) (i32.mul (local.get $i) (i32.const 28))))
+      (i32.store (local.get $at) (i32.const 1))
+      (i32.store (i32.add (local.get $at) (i32.const 4)) (i32.const 20))
+      (i64.store (i32.add (local.get $at) (i32.const 8)) (i64.extend_i32_u (local.get $i)))
+      (i32.store (i32.add (local.get $at) (i32.const 16)) (i32.const 1))
+      (i32.store (i32.add (local.get $at) (i32.const 20)) (i32.const 0))
+      (f32.store (i32.add (local.get $at) (i32.const 24)) (f32.const 0.5))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $l (i32.lt_u (local.get $i) (i32.const ${count}))))
+      (drop (call $emit (i32.const 65536) (i32.const ${count * 28})))
+      i32.const 0`,
+  });
+  const extractor = plugin.extractor();
+  await extractor.begin(CONTEXT);
+  let samples = 0;
+  extractor.end({
+    sample: () => {
+      samples += 1;
+    },
+  });
+  assert.equal(samples, count);
+});
+
+test("a trap in describe or in the allocation is a PluginError", async () => {
+  await assert.rejects(
+    hostedPlugin({ describe: "unreachable" }),
+    (error) => error.code === "PLUGIN_DESCRIPTOR_MISMATCH",
+  );
+  const trapping = await hostedPlugin({ alloc: "unreachable" });
+  const extractor = trapping.extractor();
+  await assert.rejects(
+    extractor.begin(CONTEXT),
+    (error) => error.code === "PLUGIN_TRAPPED" && /trapped/.test(error.message),
+  );
+  const outside = await hostedPlugin({ alloc: "i32.const -16" });
+  await assert.rejects(
+    outside.extractor().begin(CONTEXT),
+    (error) => error.code === "PLUGIN_TRAPPED",
   );
 });
