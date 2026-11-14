@@ -1,4 +1,5 @@
-//! Peak heap held while a project document over a count limit is read and refused.
+//! Peak heap held while a project document over a count limit, or a hostile subtitle file, is
+//! read.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
@@ -6,7 +7,10 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use alpha2_model::{MAX_PROJECT_JSON_BYTES, Project, ProjectLoadError};
+use alpha2_model::{
+    MAX_CAPTION_FILE_BYTES, MAX_PROJECT_JSON_BYTES, Project, ProjectLoadError, parse_srt,
+    parse_webvtt,
+};
 
 struct Counting;
 
@@ -120,4 +124,15 @@ fn a_full_document_of_merge_layers_is_refused_within_a_fixed_budget() {
     // 48 bytes per layer remain, a third of reading them as layers.
     let held = refused_by_the_parser(&json);
     assert!(held < 3 << 29, "held {held} bytes beyond the input");
+}
+
+#[test]
+fn a_subtitle_file_of_line_feeds_is_read_within_a_fixed_budget() {
+    let feeds = "\n".repeat(MAX_CAPTION_FILE_BYTES);
+    let vtt = format!("WEBVTT{}", &feeds[6..]);
+    let (srt, held_srt) = peak(|| parse_srt(&feeds).expect("an empty SRT file"));
+    let (vtt, held_vtt) = peak(|| parse_webvtt(&vtt).expect("an empty WebVTT file"));
+    assert!(srt.cues.is_empty() && vtt.cues.is_empty());
+    assert!(held_srt < 1 << 20, "held {held_srt} bytes for SRT");
+    assert!(held_vtt < 1 << 20, "held {held_vtt} bytes for WebVTT");
 }

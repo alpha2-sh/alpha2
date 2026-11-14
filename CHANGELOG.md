@@ -193,6 +193,11 @@ All notable changes to this project are documented in this file.
   cache is pruned past `ALPHA2_PLUGIN_CACHE_QUOTA` (4 GiB by default). A plugin manifest pins an
   artifact of at most 256 MiB and resources of at most 2 GiB each and 4 GiB together, and a local
   manifest must be a regular file. Fetch messages show URLs without user info or query.
+- Caption import: reading SRT and WebVTT is linear in the file, and memory is bounded per cue. A
+  block over 65,536 bytes or 1,024 lines is skipped, a cue with more than 32 tags open, 64 classes
+  or 512 runs is imported as plain text (`notes.flattened`), and a WebVTT `<` with no `>` after it
+  ends the cue text. Before, markup could take minutes and gigabytes for a file of tens of
+  kilobytes, and a cue whose markup was cut short could be imported with empty text.
 - Projects: a clip may follow other clips in canvas space at most 8 links deep; a deeper chain is
   refused when the project loads. Before, a long or doubly followed chain validated and then hung
   evaluation or overflowed the stack, and the cycle check took quadratic time.
