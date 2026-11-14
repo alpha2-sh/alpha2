@@ -666,9 +666,14 @@ fn a_declared_color_wins_on_the_native_frame_paths() {
     let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     let renderer = alpha2_render::Renderer::new(gpu);
     let size = RenderSize::new(64, 48).expect("size");
-    let mut frames =
-        crate::frames::NativeFrames::new(size, &project, &assets, std::sync::Arc::default())
-            .expect("frames");
+    let mut frames = crate::frames::NativeFrames::new(
+        size,
+        crate::frames::next_cache_scope(),
+        &project,
+        &assets,
+        std::sync::Arc::default(),
+    )
+    .expect("frames");
     frames
         .supply(&renderer, std::slice::from_ref(&need))
         .expect("supplies");

@@ -114,7 +114,8 @@ fn reference(host: &Host, project: &Value, time: MediaTime) -> Vec<u8> {
                 .expect("reads back")
         }
         crate::renderer_backend::RendererBackend::Cpu(renderer) => {
-            let mut frames = crate::cpu_frames::NativeCpuFrames::new(size);
+            let mut frames =
+                crate::cpu_frames::NativeCpuFrames::new(size, crate::frames::next_cache_scope());
             frames.install(renderer, decoded).expect("installs");
             let frames = FramesWithText::new(&frames, &texts);
             let mut player =
