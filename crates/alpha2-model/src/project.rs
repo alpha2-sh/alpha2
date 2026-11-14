@@ -639,6 +639,17 @@ fn validate_clip<'a>(
             clip: clip.id.clone(),
         });
     }
+    if let crate::TimeMap::Loop { .. } = clip.time_map {
+        let length = |range: alpha2_time::TimeRange| range.duration().map_or(0, MediaTime::ticks);
+        let found = crate::loop_passes(length(clip.timeline_range), length(clip.source_range));
+        if found > crate::MAX_LOOP_PASSES {
+            return Err(ModelError::TooManyLoopPasses {
+                clip: clip.id.clone(),
+                found,
+                maximum: crate::MAX_LOOP_PASSES,
+            });
+        }
+    }
     Ok(())
 }
 

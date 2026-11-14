@@ -190,6 +190,9 @@ All notable changes to this project are documented in this file.
 - Projects: a clip may follow other clips in canvas space at most 8 links deep; a deeper chain is
   refused when the project loads. Before, a long or doubly followed chain validated and then hung
   evaluation or overflowed the stack, and the cycle check took quadratic time.
+- Projects: a looping clip makes at most 65,536 passes; a longer loop is refused when the project
+  loads. Before, a one-tick loop over a long clip asked for gigabytes when its captions or edits
+  were mapped.
 - Editor: an import, relink or caption import that finishes after another project was opened is
   refused with `stale_import` and changes nothing; before, a relink waiting for the engine module
   could add its asset and an undo step to the new project.

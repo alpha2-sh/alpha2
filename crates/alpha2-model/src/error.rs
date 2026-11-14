@@ -486,6 +486,15 @@ pub enum ModelError {
         /// The clip.
         clip: ClipId,
     },
+    /// A looping clip makes more than [`crate::MAX_LOOP_PASSES`] passes.
+    TooManyLoopPasses {
+        /// The clip.
+        clip: ClipId,
+        /// Its passes, rounded up.
+        found: u64,
+        /// The most passes a clip makes.
+        maximum: u64,
+    },
     /// A clip's matte names no visual clip, itself, a clip with its own matte, or a clip in a
     /// transition; or an audio clip has a matte.
     InvalidMatte {
@@ -718,6 +727,7 @@ impl ModelError {
             | Self::FrameDrawsTooManyNodes { clip, .. }
             | Self::InvalidClipMask { clip }
             | Self::InvalidTimeMap { clip }
+            | Self::TooManyLoopPasses { clip, .. }
             | Self::InvalidMatte { clip } => Clip(clip),
             Self::DuplicateCompositionId(composition)
             | Self::InvalidNodeId { composition, .. }
@@ -960,6 +970,14 @@ impl fmt::Display for ModelError {
             Self::InvalidTimeMap { clip } => {
                 write!(formatter, "clip {clip} freezes outside its source range")
             }
+            Self::TooManyLoopPasses {
+                clip,
+                found,
+                maximum,
+            } => write!(
+                formatter,
+                "clip {clip} loops {found} times; the maximum is {maximum}"
+            ),
             Self::InvalidClipTransition { track } => {
                 write!(formatter, "track {track} has an invalid clip transition")
             }

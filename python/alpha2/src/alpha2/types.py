@@ -193,6 +193,9 @@ MAX_LINE_HEIGHT = 3
 MAX_LOOKAHEAD_MS = 100
 """Mirrors `alpha2_model::MAX_LOOKAHEAD_MS`."""
 
+MAX_LOOP_PASSES = 65536
+"""Mirrors `alpha2_model::MAX_LOOP_PASSES`."""
+
 MAX_LOTTIE_DOCUMENT_BYTES = 16777216
 """Mirrors `alpha2_model::MAX_LOTTIE_DOCUMENT_BYTES`."""
 

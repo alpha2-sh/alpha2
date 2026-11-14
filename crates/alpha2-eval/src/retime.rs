@@ -150,39 +150,45 @@ enum Direction {
 }
 
 /// The stretches of `timeline` over which `time_map` moves the shown source time one way: the
-/// whole clip, or one per loop pass.
+/// whole clip, or one per loop pass, made as they are read. `None` when a pass would end beyond
+/// ticks.
 fn monotone_stretches(
     timeline: TimeRange,
     source: TimeRange,
     time_map: TimeMap,
-) -> Option<Vec<(i64, i64, Direction)>> {
+) -> Option<impl Iterator<Item = (i64, i64, Direction)>> {
     let (start, end) = (timeline.start().ticks(), timeline.end().ticks());
     let source_length = source.duration()?.ticks();
-    if start >= end || source_length <= 0 {
-        return Some(Vec::new());
-    }
-    Some(match time_map {
-        TimeMap::Forward => vec![(start, end, Direction::Rising)],
-        TimeMap::Reverse => vec![(start, end, Direction::Falling)],
-        TimeMap::Freeze { .. } => vec![(start, end, Direction::Still)],
-        TimeMap::Loop { mode } => {
-            let mut stretches = Vec::new();
-            let mut pass = 0_i64;
-            let mut from = start;
-            while from < end {
-                let to = from.checked_add(source_length)?.min(end);
-                let direction = if mode == LoopMode::PingPong && pass % 2 == 1 {
-                    Direction::Falling
-                } else {
-                    Direction::Rising
-                };
-                stretches.push((from, to, direction));
-                from = to;
-                pass += 1;
-            }
-            stretches
+    let empty = start >= end || source_length <= 0;
+    let step = match time_map {
+        TimeMap::Loop { .. } if !empty => {
+            let passes = (i128::from(end) - i128::from(start) - 1) / i128::from(source_length);
+            let last_end = i128::from(start) + (passes + 1) * i128::from(source_length);
+            i64::try_from(last_end).ok()?;
+            source_length
         }
-    })
+        _ => i64::MAX,
+    };
+    let mut from = if empty { end } else { start };
+    let mut pass = 0_i64;
+    Some(std::iter::from_fn(move || {
+        if from >= end {
+            return None;
+        }
+        let to = from.saturating_add(step).min(end);
+        let direction = match time_map {
+            TimeMap::Freeze { .. } => Direction::Still,
+            TimeMap::Reverse => Direction::Falling,
+            TimeMap::Loop {
+                mode: LoopMode::PingPong,
+            } if pass % 2 == 1 => Direction::Falling,
+            TimeMap::Forward | TimeMap::Loop { .. } => Direction::Rising,
+        };
+        let stretch = (from, to, direction);
+        from = to;
+        pass += 1;
+        Some(stretch)
+    }))
 }
 
 /// The first tick in `from..to` at which `reached` holds, for a `reached` that never stops
@@ -223,6 +229,18 @@ pub fn source_range_to_timeline(
             .map_or(i64::MIN, MediaTime::ticks)
     };
     let (low, high) = (range_start.ticks(), range_end.ticks());
+    // Every map but a freeze shows only times inside the source range, so an interval covering
+    // it is the whole clip, found without walking loop passes.
+    if !matches!(time_map, TimeMap::Freeze { .. })
+        && low <= source.start().ticks()
+        && high >= source.end().ticks()
+    {
+        return Some(if timeline.is_empty() || source.is_empty() {
+            Vec::new()
+        } else {
+            vec![timeline]
+        });
+    }
     let mut ranges: Vec<TimeRange> = Vec::new();
     for (from, to, direction) in monotone_stretches(timeline, source, time_map)? {
         let (first, last) = match direction {

@@ -440,6 +440,67 @@ fn a_double_follow_chain_at_the_depth_limit_evaluates() {
     assert!(double_follow_chain(alpha2_model::MAX_FOLLOW_DEPTH + 1).is_err());
 }
 
+/// An audio clip looping `source` ticks over `timeline` ticks, a one-word `words` set on its
+/// source, and a caption track that follows the words through the clip's track.
+fn tiny_loop(timeline: i64, source: i64) -> Value {
+    json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": { "width": 640, "height": 360, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+        "sources": [{ "id": "a", "kind": "audio", "locator": "a.m4a" }],
+        "timeline": { "tracks": [
+            { "id": "t-audio", "name": "A", "kind": "audio", "clips": [
+                { "id": "lp", "source_id": "a",
+                  "timeline_range": { "start": 0, "end": timeline },
+                  "source_range": { "start": 0, "end": source },
+                  "time_map": { "type": "loop", "mode": "repeat" } } ] },
+            { "id": "t-subs", "name": "C", "kind": "caption",
+              "captions": { "from_words": { "data": "speech", "track": "t-audio", "max_chars": 40 } } }
+        ] },
+        "data": [{ "id": "speech", "anchor": { "type": "source", "source_id": "a" }, "kind": "words",
+                   "words": [{ "start": 0, "end": source, "text": "Hi" }] }]
+    })
+}
+
+#[test]
+fn a_loop_of_the_most_passes_builds_its_index() {
+    let passes = i64::try_from(alpha2_model::MAX_LOOP_PASSES).expect("passes");
+    let project = Project::from_json(&tiny_loop(passes, 1).to_string()).expect("valid");
+    ActiveIndex::build(&project).expect("index");
+    let clip = &project.timeline.tracks[0].clips[0];
+    let whole = source_range_to_timeline(
+        clip.timeline_range,
+        clip.source_range,
+        clip.time_map,
+        project.settings.frame_rate,
+        MediaTime(0),
+        MediaTime(1),
+    );
+    assert_eq!(whole, Some(vec![clip.timeline_range]));
+}
+
+#[test]
+fn a_loop_of_more_passes_is_refused_before_it_is_walked() {
+    let document = tiny_loop(1 << 40, 1);
+    let error = Project::from_json(&document.to_string()).expect_err("too many passes");
+    assert_eq!(
+        error.to_string(),
+        "invalid project: clip lp loops 1099511627776 times; the maximum is 65536"
+    );
+    let passes = i64::try_from(alpha2_model::MAX_LOOP_PASSES).expect("passes");
+    assert!(Project::from_json(&tiny_loop(passes + 1, 1).to_string()).is_err());
+    let mut uncaptioned = document;
+    uncaptioned["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks")
+        .pop();
+    uncaptioned["data"] = json!([]);
+    let split = json!({ "op": "split_at",
+        "times": { "list": [0], "anchor": { "type": "source", "source_id": "a" } },
+        "target": { "track": "t-audio" } });
+    let refused = crate::edit::apply_json(&uncaptioned.to_string(), &split.to_string());
+    assert!(matches!(refused, Err(failure) if failure.refusal == "invalid_project"));
+}
+
 #[test]
 fn a_gain_bound_to_data_changes_only_at_sample_times() {
     let project = project((30, 1), &frame_numbers("hold"), |document| {

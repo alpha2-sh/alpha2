@@ -185,6 +185,9 @@ export const MAX_LINE_HEIGHT = 3;
 /** Mirrors `alpha2_model::MAX_LOOKAHEAD_MS`. */
 export const MAX_LOOKAHEAD_MS = 100;
 
+/** Mirrors `alpha2_model::MAX_LOOP_PASSES`. */
+export const MAX_LOOP_PASSES = 65536;
+
 /** Mirrors `alpha2_model::MAX_LOTTIE_DOCUMENT_BYTES`. */
 export const MAX_LOTTIE_DOCUMENT_BYTES = 16777216;
 

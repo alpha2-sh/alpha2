@@ -35098,6 +35098,79 @@
     }
   },
   {
+    "name": "loop-at-pass-limit",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "a1", "kind": "audio", "locator": "a.m4a" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 131072 },
+                "source_range": { "start": 100, "end": 102 },
+                "time_map": { "type": "loop", "mode": "ping_pong" }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "loop-over-pass-limit",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["clip c1 loops 65537 times; the maximum is 65536"],
+    "error": "clip c1 loops 65537 times; the maximum is 65536",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "a1", "kind": "audio", "locator": "a.m4a" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 131073 },
+                "source_range": { "start": 100, "end": 102 },
+                "time_map": { "type": "loop", "mode": "ping_pong" }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
     "name": "data-correction",
     "valid": true,
     "project": {

@@ -138,6 +138,6 @@ pub use text_animation::{
     TextAnimator, TextAnimatorProperties, TextContent, TextRun, TextSelector, TextUnit,
     valid_class_name,
 };
-pub use time_map::{LOOP_FADE_SECONDS, LoopMode, TimeMap};
+pub use time_map::{LOOP_FADE_SECONDS, LoopMode, MAX_LOOP_PASSES, TimeMap, loop_passes};
 pub use timeline::{CacheIntent, Clip, ClipTransition, Timeline, Track, TrackKind};
 pub use timeline_values::{ClipReference, TimelineOwner, TimelineValue, TimelineVisit};

@@ -103,6 +103,7 @@ import {
   MAX_RUN_CLASSES,
   MAX_TEXT_ANIMATORS,
   MAX_TEXT_RUNS,
+  MAX_LOOP_PASSES,
   MIN_RANGE_PERCENT,
   MAX_TEXT_SHADOW_BLUR,
   MAX_TEXT_SHADOW_OFFSET,
@@ -684,6 +685,12 @@ function clipProblems(
   }
   if (!freezesInside(clip.time_map, clip.source_range)) {
     problems.push(`clip ${clipId} freezes outside its source range`);
+  }
+  const passes = loopPasses(clip);
+  if (passes > BigInt(MAX_LOOP_PASSES)) {
+    problems.push(
+      `clip ${clipId} loops ${passes} times; the maximum is ${MAX_LOOP_PASSES}`,
+    );
   }
   const sourceId = text(clip.source_id);
   const source = catalog.sources.get(sourceId);
@@ -2445,6 +2452,20 @@ function freezesInside(timeMap: unknown, sourceRange: unknown): boolean {
     instant >= sourceRange.start &&
     instant < sourceRange.end
   );
+}
+
+/** Passes of a valid looping clip, rounded up, as `loop_passes`; else 0. */
+function loopPasses(clip: Record<string, unknown>): bigint {
+  const map = clip.time_map;
+  if (!isRecord(map) || map.type !== "loop") return 0n;
+  if (!validRange(clip.timeline_range) || !validRange(clip.source_range))
+    return 0n;
+  const length = (range: unknown): bigint => {
+    const { start, end } = range as { start: number; end: number };
+    return BigInt(end) - BigInt(start);
+  };
+  const source = length(clip.source_range);
+  return (length(clip.timeline_range) + source - 1n) / source;
 }
 
 function rangeStart(range: unknown): number {
