@@ -399,3 +399,5 @@ pub fn open_source(mut source: Box<dyn Source>) -> Result<Box<dyn ContainerReade
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod work_tests;

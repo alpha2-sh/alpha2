@@ -236,6 +236,11 @@ pub(super) fn vorbis_comments(block: &[u8]) -> Vec<String> {
 
 /// Builds `codec_private` from metadata blocks: `fLaC` and every block but padding and pictures,
 /// the last flagged as last.
+/// The length of `from..to` as a read size.
+fn span(from: u64, to: u64) -> usize {
+    usize::try_from(to - from).unwrap_or(usize::MAX)
+}
+
 pub(super) fn codec_private(blocks: &[(u8, Vec<u8>)]) -> Bytes {
     let kept = blocks
         .iter()
@@ -407,12 +412,18 @@ impl FlacFramer {
     ) -> Result<Option<u64>, DemuxError> {
         let trusted = self.state.last.is_some_and(|last| header.follows(&last));
         let mut from = pos + 1;
+        // The CRC of `pos..summed`, extended to each candidate, so one frame is read once.
+        let (mut crc, mut summed) = (0, pos);
         while let Some((next, child)) = Self::next_header(input, from)? {
             if next - pos > MAX_FRAME {
                 break;
             }
-            let size = usize::try_from(next - pos).unwrap_or(usize::MAX);
-            if (trusted && header.continued_by(&child)) || crc16(input.exact(pos, size)?) == 0 {
+            if trusted && header.continued_by(&child) {
+                return Ok(Some(next));
+            }
+            crc = crc16(crc, input.exact(summed, span(summed, next))?);
+            summed = next;
+            if crc == 0 {
                 return Ok(Some(next));
             }
             from = next + 1;
@@ -433,6 +444,7 @@ impl FlacFramer {
                 break;
             }
             let mut probe = pos + 1;
+            let (mut crc, mut summed) = (0, pos);
             for _ in 0..PROBE_CANDIDATES {
                 let Some((next, _)) = Self::next_header(input, probe)? else {
                     break;
@@ -440,8 +452,9 @@ impl FlacFramer {
                 if next - pos > self.max_frame {
                     break;
                 }
-                let size = usize::try_from(next - pos).unwrap_or(usize::MAX);
-                if crc16(input.exact(pos, size)?) == 0 {
+                crc = crc16(crc, input.exact(summed, span(summed, next))?);
+                summed = next;
+                if crc == 0 {
                     return Ok(Some((pos, header)));
                 }
                 probe = next + 1;

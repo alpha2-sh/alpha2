@@ -74,9 +74,10 @@ pub(crate) fn crc8(bytes: &[u8]) -> u8 {
         .fold(0, |crc, byte| CRC8[usize::from(crc ^ byte)])
 }
 
-/// FLAC's frame CRC-16 (polynomial 0x8005, initial 0); 0 over a frame with its footer.
-pub(crate) fn crc16(bytes: &[u8]) -> u16 {
-    bytes.iter().fold(0, |crc, byte| {
+/// FLAC's frame CRC-16 (polynomial 0x8005, initial 0) continued from `crc`; 0 over a frame
+/// with its footer.
+pub(crate) fn crc16(crc: u16, bytes: &[u8]) -> u16 {
+    bytes.iter().fold(crc, |crc, byte| {
         (crc << 8) ^ CRC16[usize::from((crc >> 8) as u8 ^ byte)]
     })
 }

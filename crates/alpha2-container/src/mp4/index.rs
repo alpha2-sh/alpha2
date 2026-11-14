@@ -161,7 +161,7 @@ pub(crate) fn build(
         )?
     };
     if complete && context.advanced && !trak.edits.is_empty() && !index.entries.is_empty() {
-        fix_index(trak, layout, context.movie_timescale, &mut index, most);
+        fix_index(trak, layout, context.movie_timescale, &mut index, most)?;
     }
     context.entries_left -= index.entries.len();
     Ok(index)
@@ -516,7 +516,7 @@ fn chunked_entries(
 
 /// `av_index_search_timestamp` with `AVSEEK_FLAG_BACKWARD`: the last entry at or before
 /// `wanted`, skipping back to a keyframe unless `any`.
-fn search_backward(entries: &[Entry], wanted: i64, any: bool) -> Option<usize> {
+fn search_backward(entries: &[Entry], wanted: i64, any: bool, steps: &mut u64) -> Option<usize> {
     let count = entries.len();
     // `low` is `FFmpeg`'s `a`, with `None` for -1.
     let mut low: Option<usize> = None;
@@ -544,6 +544,7 @@ fn search_backward(entries: &[Entry], wanted: i64, any: bool) -> Option<usize> {
     let mut found = low;
     if !any {
         while let Some(at) = found.filter(|at| entries[*at].flags & KEY == 0) {
+            *steps += 1;
             found = at.checked_sub(1);
         }
     }
@@ -557,15 +558,17 @@ fn previous_closest(
     dts_shift: i32,
     timestamp: i64,
     any: bool,
+    steps: &mut u64,
 ) -> Option<usize> {
     let timestamp = if dts_shift > 0 {
         timestamp.saturating_sub(i64::from(dts_shift))
     } else {
         timestamp
     };
-    let mut index = search_backward(entries, timestamp, any)?;
+    let mut index = search_backward(entries, timestamp, any, steps)?;
     let mut at = index;
     while at > 0 && entries[at].dts == entries[at - 1].dts {
+        *steps += 1;
         if any || entries[at - 1].flags & KEY != 0 {
             index = at - 1;
         }
@@ -575,6 +578,7 @@ fn previous_closest(
         return Some(index);
     }
     loop {
+        *steps += 1;
         let entry = entries[index];
         let Some((_, offset)) = entry.tts else {
             return Some(index);
@@ -595,7 +599,7 @@ fn fix_index(
     movie_timescale: u32,
     index: &mut Index,
     budget: usize,
-) {
+) -> Result<(), DemuxError> {
     let old = std::mem::take(&mut index.entries);
     let audio = layout.kind == TrackKind::Audio;
     let vorbis = layout.family == Family::Vorbis;
@@ -613,8 +617,14 @@ fn fix_index(
     let mut found_non_empty = false;
     let mut first_audio_edit: i32 = -1;
     let mut skip_samples = index.skip_samples;
+    // Each walk back over the old index is paid for by the samples kept after it, so a list
+    // whose walks exceed this is not one a muxer writes.
+    let step_budget = (old.len() as u64)
+        .saturating_mul(32)
+        .saturating_add((trak.edits.len() as u64).saturating_mul(64));
+    let mut steps = 0_u64;
     for edit in &trak.edits {
-        if movie_timescale == 0 {
+        if movie_timescale == 0 || entries.len() >= most {
             break;
         }
         let media_time = edit.media_time;
@@ -649,13 +659,33 @@ fn fix_index(
         if audio {
             search = search.saturating_sub(timescale).max(old[0].dts);
         }
-        let start = previous_closest(&old, index.has_ctts, index.dts_shift, search, false)
-            .or_else(|| previous_closest(&old, index.has_ctts, index.dts_shift, search, true))
-            .unwrap_or(0);
+        let start = previous_closest(
+            &old,
+            index.has_ctts,
+            index.dts_shift,
+            search,
+            false,
+            &mut steps,
+        )
+        .or_else(|| {
+            previous_closest(
+                &old,
+                index.has_ctts,
+                index.dts_shift,
+                search,
+                true,
+                &mut steps,
+            )
+        })
+        .unwrap_or(0);
         let mut started = false;
         let mut keyframe_after_edit = false;
         let mut position = start;
         while position < old.len() {
+            steps += 1;
+            if steps > step_budget {
+                return Err(invalid("an edit list is too expensive to apply"));
+            }
             let current = old[position];
             let frame_duration = old
                 .get(position + 1)
@@ -738,6 +768,7 @@ fn fix_index(
     index.skip_samples = skip_samples;
     index.start_pad = skip_samples;
     index.entries = apply_kept(old, &entries);
+    Ok(())
 }
 
 /// A sample `fix_index` keeps: its position in the old index, new decode time and flags.

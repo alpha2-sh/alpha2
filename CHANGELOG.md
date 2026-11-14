@@ -205,6 +205,11 @@ All notable changes to this project are documented in this file.
   Edit lists no longer hold the old and the new index side by side when no sample repeats, WAV
   formats, FLAC metadata and Ogg header packets are bounded, and the read window shrinks after a
   large read. Before, an 8 MB file could hold gigabytes after open.
+- Container layer: open, read and seek work grows with the file. An MP4 edit list stops once its
+  index is full and is refused when its walks back over the samples pass a step budget, a FLAC frame
+  end extends one running CRC instead of re-summing per candidate, and a Matroska seek without a
+  keyframe reads the file at most once. Before, crafted files of a few megabytes kept the calling
+  thread busy for minutes.
 - Caption import: reading SRT and WebVTT is linear in the file, and memory is bounded per cue. A
   block over 65,536 bytes or 1,024 lines is skipped, a cue with more than 32 tags open, 64 classes
   or 512 runs is imported as plain text (`notes.flattened`), and a WebVTT `<` with no `>` after it

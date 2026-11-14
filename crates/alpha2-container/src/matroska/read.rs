@@ -885,19 +885,23 @@ impl MatroskaReader {
         Ok(())
     }
 
-    /// The latest keyframe at or before `target` reached by reading from `pos`: its block, lace
-    /// and presentation time.
+    /// The latest keyframe at or before `target` reached by reading from `pos` up to `stop`: its
+    /// block, lace and presentation time.
     fn keyframe_from(
         &mut self,
         index: usize,
         pos: u64,
         target: i64,
+        stop: Option<u64>,
     ) -> Result<Option<Landing>, DemuxError> {
         let mut scan = Scan { pos, cluster: None };
         let mut clock = self.states[index].clock_start.clone();
         let mut best = None;
         let mut from_start = Some(pos) == self.segment.first_cluster;
         while let Some((found, block)) = self.next_track_block(index, &mut scan)? {
+            if stop.is_some_and(|stop| found.at >= stop) {
+                break;
+            }
             let first = self.is_first_block(index, found.at);
             let produced = Self::packets_of(&self.states[index], &mut clock, &found, &block, first);
             let state = &mut self.states[index];
@@ -982,14 +986,18 @@ impl ContainerReader for MatroskaReader {
             .iter()
             .rposition(|(_, time)| *time <= pts)
             .unwrap_or(0);
+        // A retry stops where the attempt after it started: that one already read the rest and
+        // found no keyframe at or before `pts`, so one seek reads the file at most once.
+        let mut stop = None;
         while let Some(&(pos, _)) = starts.get(at) {
-            if let Some((origin, found)) = self.keyframe_from(index, pos, pts)? {
+            if let Some((origin, found)) = self.keyframe_from(index, pos, pts, stop)? {
                 self.restart(index, pos, Some(origin));
                 return Ok(Some(found));
             }
             if at == 0 {
                 break;
             }
+            stop = Some(pos);
             at -= 1;
         }
         self.restart(index, begin, None);
