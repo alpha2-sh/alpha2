@@ -299,5 +299,22 @@
       "hosts": 2,
       "afterInstall": "capabilities and the export run on the second host"
     }
+  },
+  {
+    "id": "defect-answer-retires-the-host",
+    "kind": "defect",
+    "given": {
+      "operations": ["export", "conform"],
+      "firstHost": "says draining (reason defect), answers INTERNAL with hostState draining, then answers HOST_RETIRING until its input ends",
+      "failureReport": { "export": { "code": "DEFECT", "phase": "render", "resource": "unknown" } }
+    },
+    "expect": {
+      "code": "INTERNAL",
+      "failureCode": "DEFECT",
+      "exportRetry": { "retry": true, "delayMs": 0, "profile": "default" },
+      "nextRequest": "ok on a second host",
+      "firstHostRequests": 1,
+      "firstHostEnded": true
+    }
   }
 ]

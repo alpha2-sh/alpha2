@@ -2678,6 +2678,12 @@ fn a_request_that_panics_is_answered_and_the_host_retires() {
         assert_eq!(answer["requestId"], "P", "{answer}");
         assert_eq!(answer["error"]["code"], "INTERNAL", "{answer}");
         assert_eq!(answer["hostState"], "draining", "{answer}");
+        // The clients read an export's class from its report and derive it from the code otherwise.
+        if hook == "ALPHA2_TEST_EXPORT_PANIC" {
+            assert_eq!(answer["error"]["failure"]["code"], "DEFECT", "{answer}");
+        } else {
+            assert!(answer["error"].get("failure").is_none(), "{answer}");
+        }
         assert!(
             answer["error"]["message"]
                 .as_str()

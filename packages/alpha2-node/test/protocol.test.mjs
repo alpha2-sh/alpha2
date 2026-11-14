@@ -3308,6 +3308,33 @@ async function assertHostsEnded(pids) {
 const MORTAL_HOST = (log, exits) =>
   POOLED_HOST(log, exits ? "setTimeout(() => process.exit(0), 50);" : "");
 
+/**
+ * The first host to start retires as a host does after a caught panic: it says it is draining
+ * with reason `defect`, answers `INTERNAL` (with `report` as the failure of an export), and refuses
+ * later requests until its input ends. Every other host answers with its pid.
+ */
+const DEFECT_HOST = (
+  log,
+  marker,
+  report,
+) => `import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { drain, respond, serve } from ${IO};
+appendFileSync(${JSON.stringify(log)}, "start " + process.pid + "\\n");
+if (!existsSync(${JSON.stringify(marker)})) writeFileSync(${JSON.stringify(marker)}, String(process.pid));
+const first = readFileSync(${JSON.stringify(marker)}, "utf8") === String(process.pid);
+let answered = false;
+serve((request) => {
+  appendFileSync(${JSON.stringify(log)}, "request " + process.pid + "\\n");
+  if (!first) return respond(request, { ok: true, result: { pid: process.pid } });
+  if (answered)
+    return respond(request, { ok: false, hostState: "draining", error: { code: "HOST_RETIRING", message: "the host is draining" } });
+  answered = true;
+  drain("defect");
+  const failure = request.operation === "export" ? { failure: ${JSON.stringify(report)} } : {};
+  respond(request, { ok: false, hostState: "draining", error: { code: "INTERNAL", message: "injected panic", ...failure } });
+});
+`;
+
 /** Reports ready, then exits when the first bytes of a request arrive. */
 const READING_HOST = (log) => `import { appendFileSync } from "node:fs";
 import { ready } from ${IO};
@@ -3554,6 +3581,60 @@ const SCENARIO_DRIVERS = {
         );
         first = next;
       }
+    }
+  },
+  async defect(scenario) {
+    for (const operation of scenario.given.operations) {
+      const root = await scratch(`alpha2-node-defect-${operation}-`);
+      const log = join(root, "log");
+      const client = new Alpha2NodeClient({
+        hostPath: await fakeHost(
+          root,
+          DEFECT_HOST(
+            log,
+            join(root, "first-host"),
+            scenario.given.failureReport.export,
+          ),
+        ),
+      });
+      const run = () =>
+        operation === "export"
+          ? exported(client)
+          : client.conform({ project: exportRequest("").project });
+      const error = await run().then(
+        () => assert.fail("the first request resolved"),
+        (cause) => cause,
+      );
+      assert.equal(error.code, scenario.expect.code, error.message);
+      assert.equal(error.failure.code, scenario.expect.failureCode);
+      if (operation === "export") {
+        const decision = decideRetry([
+          {
+            failure: error.failure,
+            profile: RETRY_PROFILES[0],
+            renderer: "gpu",
+            videoEncoder: "default",
+          },
+        ]);
+        assert.equal(decision.retry, scenario.expect.exportRetry.retry);
+        assert.equal(decision.delayMs, scenario.expect.exportRetry.delayMs);
+        assert.equal(
+          decision.profile.name,
+          scenario.expect.exportRetry.profile,
+        );
+      }
+      const next = await run();
+      const lines = await startsIn(log);
+      const [first, second] = lines
+        .filter((line) => line.startsWith("start "))
+        .map((line) => Number(line.split(" ")[1]));
+      assert.equal(requestsOf(lines, first), scenario.expect.firstHostRequests);
+      if (operation === "export") assert.equal(next.pid, second);
+      assert.notEqual(second, undefined, "a second host started");
+      assert.notEqual(second, first);
+      if (scenario.expect.firstHostEnded)
+        await waitUntil(() => !alive(first), "the retired host to end");
+      await client.close();
     }
   },
   async "dies-reading"(scenario) {

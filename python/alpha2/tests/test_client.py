@@ -2683,6 +2683,65 @@ def run_dead_idle_host(scenario: dict[str, Any], tmp_path: Path, fake_host: Fake
             first = following
 
 
+def defect_host(log: Path, marker: Path, report: dict[str, Any]) -> str:
+    """The first host to start retires as a host does after a caught panic: it says it is draining
+    with reason ``defect``, answers ``INTERNAL`` (with ``report`` as an export's failure), and
+    refuses later requests until its input ends. Every other host answers with its pid."""
+    return f"""
+    record({str(log)!r}, "start " + str(os.getpid()))
+    if not os.path.exists({str(marker)!r}):
+        open({str(marker)!r}, "w").write(str(os.getpid()))
+    first = open({str(marker)!r}).read() == str(os.getpid())
+    answered = []
+    def answer(request):
+        record({str(log)!r}, "request " + str(os.getpid()))
+        if not first:
+            send(request, ok=True, result={{"pid": os.getpid()}})
+        elif answered:
+            send(request, ok=False, error={{"code": "HOST_RETIRING", "message": "draining"}}, hostState="draining")
+        else:
+            answered.append(True)
+            state("draining", "defect")
+            error = {{"code": "INTERNAL", "message": "injected panic"}}
+            if request["operation"] == "export":
+                error["failure"] = {report!r}
+            send(request, ok=False, error=error, hostState="draining")
+    serve(answer)
+    """
+
+
+def run_defect(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    for operation in scenario["given"]["operations"]:
+        run_defect_operation(scenario, operation, tmp_path / operation, fake_host)
+
+
+def run_defect_operation(
+    scenario: dict[str, Any], operation: str, root: Path, fake_host: FakeHost
+) -> None:
+    expect = scenario["expect"]
+    log = root / "log"
+    report = scenario["given"]["failureReport"]["export"]
+    client = HostClient(host_path=fake_host(root, defect_host(log, root / "first", report)))
+
+    def run() -> Any:
+        if operation == "export":
+            return client.export(**export_args("out.mp4"))
+        return client.conform(project_document())
+
+    with pytest.raises(Alpha2HostError) as caught:
+        run()
+    assert caught.value.code == expect["code"], caught.value.message
+    assert caught.value.failure["code"] == expect["failureCode"]
+    run()
+    first, second = starts_in(log)
+    assert first != second
+    served = [line for line in lines_in(log) if line == f"request {first}"]
+    assert len(served) == expect["firstHostRequests"]
+    if expect["firstHostEnded"]:
+        wait_until(lambda: pid_exited(first))
+    client.close()
+
+
 def reading_host(log: Path) -> str:
     """Reports ready, then exits once the first bytes of a request arrive."""
     return f"""
@@ -2978,6 +3037,7 @@ SCENARIO_DRIVERS: dict[str, Callable[[dict[str, Any], Path, FakeHost], None]] = 
     "foreign-host": run_foreign_host,
     "dead-idle-host": run_dead_idle_host,
     "dies-reading": run_dies_reading,
+    "defect": run_defect,
     "grandchild-holds-the-pipes": run_grandchild_holds_the_pipes,
     "arrival-order": run_arrival_order,
     "cache-directory": run_cache_directory,
