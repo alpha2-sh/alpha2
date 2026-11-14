@@ -279,12 +279,14 @@ pub enum EditError {
         /// The most it holds.
         maximum: usize,
     },
-    /// A caption bake would write more cues than a track holds.
+    /// A caption bake's cues do not fit a track: more than it holds, or words past the limits of
+    /// cues from words ([`alpha2_model::MAX_DERIVED_CUES`] cues or
+    /// [`alpha2_model::MAX_DATA_WORDS`] mapped words), which derive no cues to count.
     TooManyCues {
         /// The track.
         track: TrackId,
-        /// The cues it would hold.
-        found: usize,
+        /// The cues it would hold; `None` when the words pass the limits of cues from words.
+        found: Option<usize>,
         /// The most it holds.
         maximum: usize,
     },
@@ -340,11 +342,19 @@ impl fmt::Display for EditError {
             ),
             Self::TooManyCues {
                 track,
-                found,
+                found: Some(found),
                 maximum,
             } => write!(
                 formatter,
                 "the bake writes {found} cues on track {track}; a track holds {maximum}"
+            ),
+            Self::TooManyCues {
+                track, found: None, ..
+            } => write!(
+                formatter,
+                "the words of track {track} derive more than {} cues or map more than {} words",
+                alpha2_model::MAX_DERIVED_CUES,
+                alpha2_model::MAX_DATA_WORDS
             ),
             Self::InvalidResult(error) => {
                 write!(formatter, "the edited project is invalid: {error}")

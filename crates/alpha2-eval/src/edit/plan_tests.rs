@@ -233,7 +233,7 @@ fn baking_more_cues_than_a_track_holds_is_refused_by_count() {
         apply(&project, &request(&bake)).expect_err("refused"),
         EditError::TooManyCues {
             track: alpha2_model::TrackId::new("t-subs").expect("id"),
-            found: 5_000,
+            found: Some(5_000),
             maximum: alpha2_model::MAX_CLIPS_PER_TRACK,
         }
     );

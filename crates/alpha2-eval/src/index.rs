@@ -132,12 +132,13 @@ impl ActiveIndex {
                 track.captions.as_ref().map(|captions| {
                     let mut shown = captions.clone();
                     if shown.from_words.is_some() {
-                        shown.cues = crate::caption_cues(project, captions);
+                        shown.cues = crate::caption_cues(project, &track.id, captions)
+                            .map_err(EvalError::InvalidProject)?;
                     }
-                    IndexedCaptions::new(track.id.clone(), track_order, shown)
+                    Ok(IndexedCaptions::new(track.id.clone(), track_order, shown))
                 })
             })
-            .collect();
+            .collect::<Result<_, EvalError>>()?;
         entries.sort_unstable_by_key(|entry| {
             (
                 entry.timeline_range.start(),

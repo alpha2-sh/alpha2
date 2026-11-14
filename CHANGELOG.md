@@ -199,6 +199,11 @@ All notable changes to this project are documented in this file.
 - Projects: a looping clip makes at most 65,536 passes; a longer loop is refused when the project
   loads. Before, a one-tick loop over a long clip asked for gigabytes when its captions or edits
   were mapped.
+- Captions from words: a derived cue ends before it would pass 4,096 bytes or 512 runs, a word of
+  white space is skipped, and of two cues with one start only the later is kept, so every derived
+  cue is a valid explicit cue. A track that would derive more than 65,536 cues, or map more than
+  200,000 words through its clips, is refused when the project is indexed; baking it is refused with
+  `too_many_cues`. Grouping is linear in the words.
 - Editor: an import, relink or caption import that finishes after another project was opened is
   refused with `stale_import` and changes nothing; before, a relink waiting for the engine module
   could add its asset and an undo step to the new project.

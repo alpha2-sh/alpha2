@@ -193,6 +193,7 @@ pub fn project_limits_json() -> Value {
             json!(crate::MAX_CAPTION_FILE_BYTES),
         ),
         ("MAX_CAPTION_FILE_CUES", json!(crate::MAX_CAPTION_FILE_CUES)),
+        ("MAX_DERIVED_CUES", json!(crate::MAX_DERIVED_CUES)),
         ("MAX_FONT_FAMILY_BYTES", json!(crate::MAX_FONT_FAMILY_BYTES)),
         (
             "MAX_TRANSITIONS_PER_TRACK",

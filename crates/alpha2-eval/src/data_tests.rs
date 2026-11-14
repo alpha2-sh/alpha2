@@ -502,6 +502,37 @@ fn a_loop_of_more_passes_is_refused_before_it_is_walked() {
 }
 
 #[test]
+fn words_mapped_through_a_long_loop_stop_at_the_word_limit() {
+    let passes = i64::try_from(alpha2_model::MAX_LOOP_PASSES).expect("passes");
+    // A two-tick source: each one-tick word is shown once per pass, apart from the next pass's.
+    let with_words = |count: usize| {
+        let mut document = tiny_loop(2 * passes, 2);
+        document["data"][0]["words"] =
+            json!(vec![json!({ "start": 0, "end": 1, "text": "Hi" }); count]);
+        Project::from_json(&document.to_string()).expect("valid")
+    };
+    let project = with_words(1);
+    let index = ActiveIndex::build(&project).expect("one cue per pass");
+    let last_pass = crate::evaluate(&project, &index, MediaTime(2 * passes - 2)).expect("frame");
+    assert_eq!(last_pass.captions.len(), 1);
+    let bake = json!({ "op": "bake", "targets": [{ "track": "t-subs", "property": "captions" }] });
+    let baked = crate::edit::apply_json(
+        &serde_json::to_string(&with_words(4)).expect("json"),
+        &bake.to_string(),
+    );
+    assert!(matches!(baked, Err(failure) if failure.refusal == "too_many_cues"));
+    let refused = ActiveIndex::build(&with_words(4));
+    assert_eq!(
+        refused.err().map(|error| error.to_string()),
+        Some(
+            "cannot index invalid project: track t-subs derives more than 65536 caption cues or \
+             maps more than 200000 words"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
 fn a_gain_bound_to_data_changes_only_at_sample_times() {
     let project = project((30, 1), &frame_numbers("hold"), |document| {
         document["sources"][2]["id"] = json!("a1");
@@ -569,7 +600,8 @@ fn cue_texts(project: &Project) -> Vec<(i64, i64, String, Option<String>)> {
         .captions
         .as_ref()
         .expect("captions");
-    crate::caption_cues(project, captions)
+    crate::caption_cues(project, &project.timeline.tracks[3].id, captions)
+        .expect("within the limits")
         .into_iter()
         .map(|cue| {
             (

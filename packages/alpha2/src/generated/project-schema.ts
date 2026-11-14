@@ -107,6 +107,9 @@ export const MAX_DATA_VALUES = 4000000;
 /** Mirrors `alpha2_model::MAX_DATA_WORDS`. */
 export const MAX_DATA_WORDS = 200000;
 
+/** Mirrors `alpha2_model::MAX_DERIVED_CUES`. */
+export const MAX_DERIVED_CUES = 65536;
+
 /** Mirrors `alpha2_model::MAX_EFFECT_INPUTS`. */
 export const MAX_EFFECT_INPUTS = 8;
 

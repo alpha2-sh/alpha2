@@ -88,7 +88,7 @@ fn check_counts(edited: &Project) -> Result<(), EditError> {
         {
             return Err(EditError::TooManyCues {
                 track: track.id.clone(),
-                found: captions.cues.len(),
+                found: Some(captions.cues.len()),
                 maximum,
             });
         }

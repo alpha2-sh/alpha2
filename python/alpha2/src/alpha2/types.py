@@ -115,6 +115,9 @@ MAX_DATA_VALUES = 4000000
 MAX_DATA_WORDS = 200000
 """Mirrors `alpha2_model::MAX_DATA_WORDS`."""
 
+MAX_DERIVED_CUES = 65536
+"""Mirrors `alpha2_model::MAX_DERIVED_CUES`."""
+
 MAX_EFFECT_INPUTS = 8
 """Mirrors `alpha2_model::MAX_EFFECT_INPUTS`."""
 

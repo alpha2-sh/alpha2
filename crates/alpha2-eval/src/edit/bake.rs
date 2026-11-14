@@ -40,7 +40,8 @@ pub(super) fn bake(
                     .as_ref()
                     .filter(|captions| captions.from_words.is_some())
                     .ok_or_else(|| EditError::NothingToBake(format!("track {track} captions")))?;
-                let cues = crate::caption_cues(project, captions);
+                let cues = crate::caption_cues(project, track, captions)
+                    .map_err(|_| words_past_their_limits(track))?;
                 let captions = edited.timeline.tracks[position]
                     .captions
                     .as_mut()
@@ -464,4 +465,13 @@ fn with_crossings(times: &[i64], domain: Domain, sample: impl Fn(i64) -> Vec<f32
     out.sort_unstable();
     out.dedup();
     out
+}
+
+/// The refusal of a caption bake whose words derive no cues to count.
+fn words_past_their_limits(track: &alpha2_model::TrackId) -> EditError {
+    EditError::TooManyCues {
+        track: track.clone(),
+        found: None,
+        maximum: alpha2_model::MAX_CLIPS_PER_TRACK,
+    }
 }

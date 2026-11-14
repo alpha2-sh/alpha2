@@ -371,33 +371,54 @@ fn unspaced(character: char) -> bool {
 /// The longest gap between two words of one cue, in ticks (0.6 s).
 pub const WORD_PAUSE_TICKS: i64 = 72_000;
 
+/// Most cues a caption track derives from words, as many as one subtitle file holds.
+pub const MAX_DERIVED_CUES: usize = crate::MAX_CAPTION_FILE_CUES;
+
 /// Words grouped into cues that end at `max_chars` characters, a sentence's end, a pause longer
-/// than [`WORD_PAUSE_TICKS`] or a change of speaker. Each cue has one run per word (with the
-/// separator that follows it), timed from the cue's start, so Timing selectors follow the speech.
+/// than [`WORD_PAUSE_TICKS`], a change of speaker, or before the text would pass
+/// [`MAX_TEXT_CONTENT_BYTES`] or [`crate::MAX_TEXT_RUNS`] runs. Each cue has one run per word
+/// (with the separator that follows it), timed from the cue's start, so Timing selectors follow
+/// the speech. A word whose text trims to nothing is skipped.
 ///
 /// Words are joined by a space, except where both neighbouring characters belong to scripts
 /// written without spaces between words: the Unicode line breaking classes ID, CJ and SA (UAX
 /// #14), which cover Han, kana, CJK punctuation, fullwidth forms, Thai, Lao, Khmer and Myanmar.
 ///
-/// `words` are in start order, each ending after it starts with non-empty trimmed text. Where
-/// words overlap, each cue ends where the next starts.
+/// `words` are in start order, each ending after it starts. Every cue is a valid explicit cue,
+/// and the cues are ordered and disjoint: where words overlap, each cue ends where the next
+/// starts, and of two cues with one start only the later is kept.
 #[must_use]
 pub fn group_words(words: &[crate::DataWord], max_chars: u32) -> Vec<CaptionCue> {
-    // Each cue being built: its start, end, speaker, words with their times and its length.
-    type Words = (i64, i64, Option<String>, Vec<(String, i64, i64)>, usize);
+    // Each cue being built: its start, end, speaker, words with their times, and its length in
+    // characters and in bytes.
+    type Words = (
+        i64,
+        i64,
+        Option<String>,
+        Vec<(String, i64, i64)>,
+        usize,
+        usize,
+    );
     let mut groups: Vec<Words> = Vec::new();
     let mut current: Option<Words> = None;
     for word in words {
         let (start, end) = (word.start.ticks(), word.end.ticks());
         let text = word.text.trim().to_owned();
+        if text.is_empty() {
+            continue;
+        }
         let characters = text.chars().count();
-        if let Some((_, cue_end, speaker, held, held_length)) = &mut current {
+        if let Some((_, cue_end, speaker, held, held_length, held_bytes)) = &mut current {
             let last = held.last().map_or("", |(word, ..)| word.as_str());
-            let length = *held_length + word_separator(last, &text).len() + characters;
+            let separator = word_separator(last, &text).len();
+            let length = *held_length + separator + characters;
+            let bytes = *held_bytes + separator + text.len();
             let sentence_end = last.ends_with([
                 '.', '?', '!', '\u{3002}', '\u{ff01}', '\u{ff0e}', '\u{ff1f}',
             ]);
             if length <= max_chars as usize
+                && bytes <= MAX_TEXT_CONTENT_BYTES
+                && held.len() < crate::MAX_TEXT_RUNS
                 && start - *cue_end <= WORD_PAUSE_TICKS
                 && !sentence_end
                 && *speaker == word.speaker
@@ -405,22 +426,25 @@ pub fn group_words(words: &[crate::DataWord], max_chars: u32) -> Vec<CaptionCue>
                 held.push((text, start, end));
                 *cue_end = (*cue_end).max(end);
                 *held_length = length;
+                *held_bytes = bytes;
                 continue;
             }
             groups.extend(current.take());
         }
+        let bytes = text.len();
         current = Some((
             start,
             end,
             word.speaker.clone(),
             vec![(text, start, end)],
             characters,
+            bytes,
         ));
     }
     groups.extend(current);
     let mut cues = groups
         .into_iter()
-        .filter_map(|(start, end, speaker, held, _)| {
+        .filter_map(|(start, end, speaker, held, _, _)| {
             let separators = held
                 .windows(2)
                 .map(|pair| word_separator(&pair[0].0, &pair[1].0))
@@ -449,16 +473,23 @@ pub fn group_words(words: &[crate::DataWord], max_chars: u32) -> Vec<CaptionCue>
             })
         })
         .collect::<Vec<_>>();
+    end_cues_where_the_next_starts(&mut cues);
+    cues
+}
+
+/// Ends each cue of `cues`, sorted by start, where the next starts, and drops a cue left empty.
+pub fn end_cues_where_the_next_starts(cues: &mut Vec<CaptionCue>) {
     for index in 1..cues.len() {
         let next = cues[index].timeline_range.start();
         let previous = &mut cues[index - 1];
-        if previous.timeline_range.end() > next && previous.timeline_range.start() < next {
-            previous.timeline_range = TimeRange::new(previous.timeline_range.start(), next)
-                .unwrap_or(previous.timeline_range);
+        if previous.timeline_range.end() > next {
+            let start = previous.timeline_range.start().min(next);
+            previous.timeline_range =
+                TimeRange::new(start, next).unwrap_or(previous.timeline_range);
             clip_runs(previous);
         }
     }
-    cues
+    cues.retain(|cue| !cue.timeline_range.is_empty());
 }
 
 /// Clamps a cue's run times to its range after the range was shortened. A run that would start

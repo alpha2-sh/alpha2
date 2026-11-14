@@ -56,7 +56,8 @@ pub use audio::{
 pub use audio_load::AudioEffectLoad;
 pub use caption::{
     CaptionCue, Captions, MAX_CAPTION_FONT_SIZE, MAX_CAPTION_NAME_BYTES, MAX_CAPTION_STYLES,
-    TextStylePatch, WORD_PAUSE_TICKS, clip_runs, group_words,
+    MAX_DERIVED_CUES, TextStylePatch, WORD_PAUSE_TICKS, clip_runs, end_cues_where_the_next_starts,
+    group_words,
 };
 pub use caption_import::{
     CaptionImportError, ImportNotes, ImportedCaptions, MAX_CAPTION_FILE_BYTES,

@@ -523,6 +523,12 @@ pub enum ModelError {
         /// The transition's second clip.
         second: ClipId,
     },
+    /// A caption track derives more than [`crate::MAX_DERIVED_CUES`] cues from its words, or maps
+    /// more than [`crate::MAX_DATA_WORDS`] words through its clips.
+    TooManyDerivedCues {
+        /// The caption track.
+        track: TrackId,
+    },
     /// The project has more than [`crate::MAX_EFFECT_RESOURCES`] effect resources.
     TooManyEffectResources {
         /// Number supplied by the document.
@@ -720,6 +726,7 @@ impl ModelError {
             | Self::DuplicateTransition { track, .. }
             | Self::TooManyClipsOnTrack { track, .. }
             | Self::TooManyCaptionCues { track, .. }
+            | Self::TooManyDerivedCues { track }
             | Self::TooManyTransitions { track, .. } => Track(track),
             Self::DuplicateClipId(clip)
             | Self::UnknownEffectResource { clip, .. }
@@ -1001,6 +1008,12 @@ impl fmt::Display for ModelError {
             } => write!(
                 formatter,
                 "clips {first} and {second} have more than one transition on track {track}"
+            ),
+            Self::TooManyDerivedCues { track } => write!(
+                formatter,
+                "track {track} derives more than {} caption cues or maps more than {} words",
+                crate::MAX_DERIVED_CUES,
+                crate::MAX_DATA_WORDS
             ),
             Self::TooManyEffectResources { found, maximum } => write!(
                 formatter,
