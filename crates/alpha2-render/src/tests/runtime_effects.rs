@@ -202,9 +202,27 @@ fn a_flat_operator_chain_fails_its_registration_not_the_process() {
     };
     let error = register(chain(16_000), 1 << 20).expect_err("a 16,000-operand chain is refused");
     assert!(error.contains("operators"), "{error}");
-    // A release build needs well under 1 MiB at the limit; debug frames are about 20x larger.
-    let stack = if cfg!(debug_assertions) { 8 } else { 1 } << 20;
-    register(chain(256), stack).expect("a chain at the limit registers");
+    register(chain(256), 1 << 20).expect("a chain at the limit registers");
+}
+
+#[test]
+fn an_else_if_chain_at_the_nesting_limit_registers_from_a_small_stack() {
+    let _lock = gpu_test_lock();
+    let body = format!(
+        "fn effect(_uv: vec2f, src: vec4f) -> vec4f {{ let b = src.a > 2.0; var x = src.r; \
+         if b {{ x += 1.0; }}{} return vec4f(x); }}",
+        "else if b { x += 1.0; }".repeat(39)
+    );
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || {
+            let renderer = Renderer::new(gpu());
+            pollster::block_on(renderer.register_effect(runtime_tint_effect(&body))).map(drop)
+        })
+        .expect("the registering thread starts")
+        .join()
+        .expect("registration returns instead of overflowing the stack")
+        .expect("a 40-arm chain registers");
 }
 
 #[test]

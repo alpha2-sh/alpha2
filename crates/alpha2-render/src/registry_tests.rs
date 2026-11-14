@@ -201,6 +201,45 @@ fn a_statement_is_limited_in_operators_not_delimiters() {
     assert_eq!(validate_wgsl_body(&split), Ok(()));
 }
 
+fn else_if_chain(arms: usize) -> String {
+    format!(
+        "if b {{ x += 1.0; }}{}",
+        "else if b { x += 1.0; }".repeat(arms - 1)
+    )
+}
+
+fn in_effect(code: &str) -> String {
+    format!(
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f {{ let b = src.a > 2.0; var x = src.r; \
+         {code} return vec4f(x); }}"
+    )
+}
+
+#[test]
+fn each_arm_of_an_else_if_chain_nests_one_level() {
+    let error = validate_wgsl_body(&in_effect(&else_if_chain(70))).expect_err("70 arms");
+    assert!(error.messages[0].message.contains("switch"), "{error:?}");
+    assert_eq!(validate_wgsl_body(&in_effect(&else_if_chain(40))), Ok(()));
+    assert_eq!(
+        validate_wgsl_body(&in_effect(&else_if_chain(20).repeat(4))),
+        Ok(())
+    );
+    assert_eq!(
+        validate_wgsl_body(&in_effect(&format!(
+            "{} else {{ x = 0.0; }}",
+            else_if_chain(62)
+        ))),
+        Ok(())
+    );
+    // The body of a deep arm starts at that arm's depth.
+    let nested = format!(
+        "{} else if b {{ {} }}",
+        else_if_chain(39),
+        else_if_chain(30)
+    );
+    assert!(validate_wgsl_body(&in_effect(&nested)).is_err());
+}
+
 #[test]
 fn delimiters_in_comments_are_not_counted() {
     // Balance is checked on code only; a comment may contain a half-open range.

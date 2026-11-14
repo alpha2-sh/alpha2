@@ -664,6 +664,10 @@ All notable changes to this project are documented in this file.
   as its cost was priced, even when its body writes the counter in a form the cost check does not
   see or the counter wraps at its type's maximum. Before, such a loop ran the whole shared budget of
   1024 iterations at a fraction of its priced cost.
+- Each arm of a runtime effect's `else if` chain counts one level against the nesting limit of
+  64, as the shader compiler nests it, so a long chain is refused with a diagnostic suggesting
+  `switch`. Native hosts compile effect shaders on a thread with an 8 MiB stack on every backend,
+  so registering from a thread with a small stack no longer overflows it.
 
 ## [0.6.0] - 2026-11-08
 

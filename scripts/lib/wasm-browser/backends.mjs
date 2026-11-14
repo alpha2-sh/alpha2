@@ -365,6 +365,31 @@ report({
 `;
 }
 
+// naga recurses once per arm of an else-if chain, and the WebGL2 module has a 1 MiB stack: a
+// 900-arm chain must fail its registration with a diagnostic, not trap the module.
+export function webgl2ElseIfChain() {
+  return `
+Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(16, 16));
+const effect = (id, body) => JSON.stringify({ id, version: 1, kind: "effect", params: [], wgslBody: body });
+const chain = (arms) => "fn effect(uv: vec2f, src: vec4f) -> vec4f { let b = src.a > 2.0; var x = src.r; if b { x += 1.0; }" +
+  "else if b { x += 1.0; }".repeat(arms - 1) + " return vec4f(x); }";
+const attempt = async (definition) => {
+  try { return { registered: engine.registerCompiledEffect(await engine.compileEffect(definition)) }; } catch (error) {
+    return { name: error?.name ?? null, code: error?.code ?? null, message: String(error?.message ?? error).slice(0, 300) };
+  }
+};
+const long = await attempt(effect("test.long", chain(900)));
+const short = await attempt(effect("test.short", chain(40)));
+report({
+  ok: long.code === "EFFECT_ERROR" && long.message.includes("switch") && short.registered === "test.short@1",
+  long, short,
+});
+`;
+}
+
 // Without EXT_color_buffer_float, uploads must not ask for RENDER_ATTACHMENT on RGBA16F or
 // R16F/RG16F textures, which invalidates them.
 export function webgl2WithoutFloatColorBuffers() {
