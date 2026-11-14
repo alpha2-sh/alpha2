@@ -427,6 +427,8 @@ All notable changes to this project are documented in this file.
 - An output is synced after every 256 MiB written, so the final sync of a large export to a slow
   disk or share no longer outlasts the encoder's stall limit, answering `ENCODE_STALLED` and leaving
   the finished file as a partial; each step of the publish (sync, rename, folder sync) beats.
+- On the readback and GPU-resident paths, a progress message that cannot be written while the
+  encoder finishes no longer fails an export whose file the encoder then puts in place.
 
 ## [0.6.0] - 2026-11-08
 

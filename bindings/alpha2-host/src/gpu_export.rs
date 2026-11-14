@@ -841,7 +841,7 @@ impl Host {
                     &mut encode_state,
                     total_frames,
                     started,
-                    &mut crate::protocol::finalizing(progress),
+                    &mut crate::protocol::after_finish(&mut crate::protocol::finalizing(progress)),
                     &mut metrics,
                 )? {
                     break;

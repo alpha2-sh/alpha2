@@ -566,20 +566,21 @@ fn dropping_a_worker_with_a_stuck_shard_returns_when_no_stall_was_reported() {
     assert!(crate::heartbeat::worker_threads_abandoned());
 }
 
+fn encode_stall_request_json(output: &Path) -> String {
+    json!({
+        "protocolVersion": 2, "requestId": "encode-stall", "operation": "export",
+        "project": conform_project(&json!({})),
+        "assets": {"video": corpus("parity-rgb.mov")},
+        "startTicks": 0, "endTicks": 120_000,
+        "frameRate": {"num": 12, "den": 1},
+        "videoCodec": "mpeg4-part2",
+        "output": output
+    })
+    .to_string()
+}
+
 fn encode_stall_request(output: &Path) -> Request {
-    parse_request(
-        &json!({
-            "protocolVersion": 2, "requestId": "encode-stall", "operation": "export",
-            "project": conform_project(&json!({})),
-            "assets": {"video": corpus("parity-rgb.mov")},
-            "startTicks": 0, "endTicks": 120_000,
-            "frameRate": {"num": 12, "den": 1},
-            "videoCodec": "mpeg4-part2",
-            "output": output
-        })
-        .to_string(),
-    )
-    .expect("export request")
+    parse_request(&encode_stall_request_json(output)).expect("export request")
 }
 
 fn export_with_a_stuck_encoder(
@@ -1115,5 +1116,64 @@ fn an_output_synced_while_written_publishes_although_one_whole_sync_would_stall(
         "{bytes} bytes: too small for one whole sync to outlast the limit"
     );
     assert_eq!(result["frames"], 60);
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// Once the encoder is told to finish it publishes the file, so a progress message that fails
+/// then (a client that stopped reading) must not answer a failure beside a published output.
+#[test]
+fn a_progress_message_that_fails_while_the_encoder_finishes_does_not_fail_the_export() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("progress-after-finish");
+    let export = |host: &mut Host, request: Value, output: &Path| {
+        let mut finalizing = 0;
+        crate::encode::INJECT_SLOW_ENCODE.with(|slow| slow.set(Some(Duration::from_millis(15))));
+        let result = host.handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |progress| {
+                if progress.phase == crate::protocol::ProgressPhase::Finalizing {
+                    finalizing += 1;
+                    // The first is sent before the encoder is told to finish.
+                    if finalizing > 1 {
+                        return Err(HostError::io(std::io::Error::from(
+                            std::io::ErrorKind::BrokenPipe,
+                        )));
+                    }
+                }
+                Ok(())
+            },
+        );
+        let result = result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+        assert!(output.is_file(), "{result}");
+        assert!(
+            finalizing > 1,
+            "no progress came while the encoder finished"
+        );
+        result
+    };
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let output = directory.join("readback.mp4");
+    let mut request =
+        serde_json::from_str::<Value>(&encode_stall_request_json(&output)).expect("request");
+    request["inputPolicy"] = json!("cpu-readback");
+    let result = export(&mut host, request, &output);
+    assert_eq!(result["videoPipeline"], json!("readback"), "{result}");
+
+    #[cfg(all(
+        any(target_os = "linux", target_os = "macos", target_os = "windows"),
+        feature = "hwencode"
+    ))]
+    if let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) {
+        let output = directory.join("gpu.mp4");
+        let mut request =
+            serde_json::from_str::<Value>(&encode_stall_request_json(&output)).expect("request");
+        request["videoCodec"] = json!("h264");
+        request["inputPolicy"] = json!("gpu-required");
+        // Above the smallest picture hardware H.264 encoders take.
+        request["project"]["settings"]["width"] = json!(320);
+        request["project"]["settings"]["height"] = json!(192);
+        let result = export(&mut host, request, &output);
+        assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
+    }
     std::fs::remove_dir_all(&directory).ok();
 }

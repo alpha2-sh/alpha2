@@ -1055,6 +1055,17 @@ impl ProgressPhase {
     }
 }
 
+/// Progress once the encoder was told to finish: it publishes the file whatever the caller does,
+/// so a message that cannot be written must not fail the export.
+pub fn after_finish(
+    progress: &mut dyn FnMut(Progress) -> Result<(), HostError>,
+) -> impl FnMut(Progress) -> Result<(), HostError> + '_ {
+    move |event| {
+        let _ = progress(event);
+        Ok(())
+    }
+}
+
 /// Frames an encoder completes while flushing still count, but the phase stays `finalizing`.
 pub fn finalizing(
     progress: &mut dyn FnMut(Progress) -> Result<(), HostError>,
