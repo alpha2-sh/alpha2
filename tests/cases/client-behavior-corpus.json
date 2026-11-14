@@ -198,7 +198,7 @@
     "given": {
       "stdout": "a library's diagnostic line\n",
       "stderr": "held before ready\n",
-      "startTimeoutMs": 500
+      "startTimeoutMs": 2000
     },
     "expect": {
       "code": "HOST_START_TIMEOUT",
