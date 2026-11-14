@@ -613,6 +613,109 @@ report({
 `;
 }
 
+// Trimmed clips of N 1080p files played in turn through one refill coordinator, with its default
+// cursor budget and with none: live configured decoders, decoded frames not closed, and the first
+// failure. The first N at which a browser fails without the budget bounds the default.
+export function decoderCursorBudget() {
+  return `
+const Native = globalThis.VideoDecoder;
+if (Native === undefined) skip("webcodecs-video", "this browser has no WebCodecs VideoDecoder");
+const counts = { live: 0, peak: 0, framesHeld: 0 };
+globalThis.VideoDecoder = class extends Native {
+  #counted = false;
+  constructor(init) {
+    super({
+      ...init,
+      output: (frame) => {
+        counts.framesHeld += 1;
+        const close = frame.close.bind(frame);
+        let closed = false;
+        frame.close = () => {
+          if (!closed) counts.framesHeld -= 1;
+          closed = true;
+          close();
+        };
+        init.output(frame);
+      },
+    });
+  }
+  configure(config) {
+    if (!this.#counted) {
+      this.#counted = true;
+      counts.live += 1;
+      counts.peak = Math.max(counts.peak, counts.live);
+    }
+    return super.configure(config);
+  }
+  close() {
+    if (this.#counted) counts.live -= 1;
+    this.#counted = false;
+    return super.close();
+  }
+};
+const { canEncodeVideoTrack, MediabunnySink, MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
+const { DecoderRefillCoordinator } = await import("/packages/alpha2/dist/media.js");
+// A 4 s 1080p file made here, so a clip of its first frames never reaches the end of its stream.
+const frameRate = { num: 30, den: 1 };
+const rate = { bitrate: 4_000_000, bitrateMode: "variable" };
+const encoding = await canEncodeVideoTrack("avc", { width: 1920, height: 1080, frameRate, rate });
+if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder");
+const sink = new MediabunnySink({ container: "mp4", videoCodec: "avc", videoRateControl: rate, frameRate,
+  ...(encoding.codecString === undefined ? {} : { videoCodecString: encoding.codecString }),
+  destination: { kind: "memory", maxBytes: 1 << 26 } });
+const pixels = new Uint8Array(1920 * 1080 * 3 / 2);
+for (let index = 0; index < 120; index += 1) {
+  pixels.fill(16 + index, 0, 1920 * 1080);
+  pixels.fill(128, 1920 * 1080);
+  const frame = new VideoFrame(pixels, { format: "I420", codedWidth: 1920, codedHeight: 1080,
+    timestamp: Math.round((index * 1e6) / 30), duration: Math.round(1e6 / 30) });
+  await sink.writeVideo({ index: BigInt(index), timeTicks: BigInt(index * 4000), frame });
+}
+await sink.finish();
+const bytes = new Uint8Array(sink.output.buffer);
+const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const play = async (sources, options) => {
+  Object.assign(counts, { live: 0, peak: 0, framesHeld: 0 });
+  const coordinator = new DecoderRefillCoordinator(
+    (sourceId) => MediabunnyVideoDecoder.open(sourceId, bytes),
+    async (decoded) => decoded.frame.close(),
+    options,
+  );
+  let failure = null;
+  const started = performance.now();
+  try {
+    for (let source = 0; source < sources && failure === null; source += 1)
+      for (let frame = 0; frame < 10 && failure === null; frame += 1)
+        try {
+          await coordinator.refill({ sourceId: "file-" + source, consumerId: "clip-" + source,
+            mediaTimeTicks: BigInt(frame) * 4000n, reason: frame === 0 ? "seek" : "prefetch", generation: 0 });
+        } catch (error) {
+          failure = { source, frame, error: String(error?.name) + ": " + String(error?.message ?? error) };
+        }
+    const played = { live: counts.live, framesHeld: counts.framesHeld, ms: Math.round(performance.now() - started) };
+    await settle(2500);
+    return { sources, failure, peak: counts.peak, played, idle: { live: counts.live, framesHeld: counts.framesHeld },
+      diagnostics: coordinator.diagnostics };
+  } finally {
+    coordinator.close();
+    await settle(100);
+  }
+};
+const unbounded = { maxCursors: Number.MAX_SAFE_INTEGER, idleMs: Number.MAX_SAFE_INTEGER };
+const results = {};
+for (const sources of [12, 40]) {
+  results["budget-" + sources] = await play(sources, {});
+  results["none-" + sources] = await play(sources, unbounded);
+}
+globalThis.VideoDecoder = Native;
+const budgeted = [results["budget-12"], results["budget-40"]];
+report({
+  ok: budgeted.every((result) => result.failure === null && result.peak <= 16 + 1 && result.idle.framesHeld === 0),
+  ...results,
+});
+`;
+}
+
 // Phone HDR video (HEVC Main 10, HLG) through the SDK and the editor's import: either it renders on
 // every route, or both refuse it at import, typed. With `degraded`, a source decoded only to frames
 // without planes is previewed through the browser's tone mapping and its export refused.

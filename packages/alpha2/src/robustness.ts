@@ -1,22 +1,11 @@
-/** Observable browser capability/degradation categories. */
+/** A capability a probe found missing. */
 export type BrowserCapabilityDiagnostic =
   | "webgpu-unavailable"
   | "webgl2-unavailable"
   | "webcodecs-unavailable"
   | "offscreen-canvas-unavailable"
   | "wasm-simd-unavailable"
-  | "wasm-reference-types-unavailable"
-  | "visibility-suspended"
-  | "memory-pressure"
-  | "decoder-session-limit"
-  | "context-lost";
-
-/** Caller-configured browser resource limits; both must be positive integers. */
-export interface BrowserResourceBudget {
-  readonly textureBytes: number;
-  /** Video decoders allowed open at once. */
-  readonly decoderSessions: number;
-}
+  | "wasm-reference-types-unavailable";
 
 /**
  * Facts hosts use to select WebGPU, WebGL2 and media fallbacks. They hold only for the probing
@@ -37,6 +26,10 @@ export interface BrowserCapabilities {
    */
   readonly renderer: "gpu" | "cpu";
   readonly webcodecs: boolean;
+  /** WebCodecs `AudioDecoder` exists. */
+  readonly audioDecoder: boolean;
+  /** WebCodecs `AudioEncoder` exists. */
+  readonly audioEncoder: boolean;
   readonly offscreenCanvas: boolean;
   /**
    * WebAssembly SIMD and reference types are supported. Without them neither the engine, the audio
@@ -80,6 +73,8 @@ export async function detectBrowserCapabilities(): Promise<BrowserCapabilities> 
     webgl2Renderer,
     renderer: webgpu || hardwareWebgl2 ? "gpu" : "cpu",
     webcodecs,
+    audioDecoder: globalThis.AudioDecoder !== undefined,
+    audioEncoder: globalThis.AudioEncoder !== undefined,
     offscreenCanvas,
     wasm: simd && referenceTypes,
     diagnostics,
@@ -188,84 +183,4 @@ function detectWebgl2(): string | null {
     // The context exists even if its name is unknown.
   }
   return renderer;
-}
-
-/**
- * Tracks browser lifecycle events against a {@link BrowserResourceBudget} and reports each
- * degradation through `notify`. The host acts on what it reports.
- *
- * @throws RangeError From the constructor when either budget is not a positive safe integer.
- */
-export class BrowserRobustnessCoordinator {
-  readonly #budget: BrowserResourceBudget;
-  readonly #notify: (diagnostic: BrowserCapabilityDiagnostic) => void;
-  #decoders = 0;
-  #visible = true;
-
-  constructor(
-    budget: BrowserResourceBudget,
-    notify: (diagnostic: BrowserCapabilityDiagnostic) => void,
-  ) {
-    if (
-      !Number.isSafeInteger(budget.textureBytes) ||
-      budget.textureBytes <= 0 ||
-      !Number.isSafeInteger(budget.decoderSessions) ||
-      budget.decoderSessions <= 0
-    ) {
-      throw new RangeError("browser resource budget must be positive integers");
-    }
-    this.#budget = budget;
-    this.#notify = notify;
-  }
-
-  /**
-   * Sizes `canvas`'s backing store to its CSS size times `scale` (device pixel ratio), min 1x1.
-   *
-   * @throws RangeError When the scaled size is not a safe integer.
-   */
-  resize(
-    canvas: HTMLCanvasElement | OffscreenCanvas,
-    cssWidth: number,
-    cssHeight: number,
-    scale = 1,
-  ): void {
-    const width = Math.max(1, Math.round(cssWidth * scale));
-    const height = Math.max(1, Math.round(cssHeight * scale));
-    if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) {
-      throw new RangeError("canvas size is unsupported");
-    }
-    canvas.width = width;
-    canvas.height = height;
-  }
-
-  /** Records page visibility; hiding a visible page reports `visibility-suspended`. */
-  setVisible(visible: boolean): void {
-    if (this.#visible && !visible) this.#notify("visibility-suspended");
-    this.#visible = visible;
-  }
-
-  /** Reports `memory-pressure` and returns the reduced texture budget (half, at least 1 byte). */
-  memoryPressure(): number {
-    this.#notify("memory-pressure");
-    return Math.max(1, Math.floor(this.#budget.textureBytes / 2));
-  }
-
-  contextLost(): void {
-    this.#notify("context-lost");
-  }
-
-  /** Takes one decoder session, or reports `decoder-session-limit` and returns `false`. */
-  acquireDecoder(): boolean {
-    if (this.#decoders >= this.#budget.decoderSessions) {
-      this.#notify("decoder-session-limit");
-      return false;
-    }
-    this.#decoders += 1;
-    return true;
-  }
-
-  /** Returns a session taken by {@link acquireDecoder}; extra calls are ignored. */
-  releaseDecoder(): void {
-    this.#decoders = Math.max(0, this.#decoders - 1);
-  }
 }

@@ -148,7 +148,7 @@ A timeline input needs `timelineFrame(time, width, height)`, such as the CPU ren
 | `alpha2/audio`, `alpha2/audio-worker` | Offline audio rendering into a sink, in a worker or not. |
 | `alpha2/audio-timeline`, `alpha2/audio-worklet`, `alpha2/audio-worklet-processor` | Real-time audio: the shared ring, its pump, and the AudioWorklet and its processor module. |
 | `alpha2/loudness`, `alpha2/waveform` | Loudness measurement and normalization; waveform summaries. |
-| `alpha2/robustness` | Browser capability detection and degradation reports. |
+| `alpha2/robustness` | Browser capability detection. |
 | `alpha2` | `alpha2/assets`, `audio`, `audio-timeline`, `audio-worker`, `audio-worklet`, `containers`, `effects`, `exporter`, `extensions`, `frame-supply`, `hdr-frames`, `loudness`, `media`, `player`, `project`, `rate-control`, `robustness`, `text`, `waveform` and `worker` in one import. |
 
 Each module's declarations document its API.

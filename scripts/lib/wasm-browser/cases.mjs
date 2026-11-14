@@ -105,6 +105,7 @@ import {
 } from "./preview.mjs";
 import {
   browserVideoConversion,
+  decoderCursorBudget,
   webcodecsDecodeOrder,
   decoderSoftwareFallback,
   hdrHevcSource,
@@ -145,6 +146,7 @@ export const cases = {
   "browser-video-conversion": browserVideoConversion,
   "decoder-software-fallback": decoderSoftwareFallback,
   "reverse-window-pixels": reverseWindowPixels,
+  "decoder-cursor-budget": decoderCursorBudget,
   "hdr-hevc-source": hdrHevcSource,
   "hdr-hevc-source-degraded": () => hdrHevcSource({ degraded: true }),
   "export-survives-frozen-page": exportSurvivesFrozenPage,

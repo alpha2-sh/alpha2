@@ -1295,7 +1295,7 @@ test("each consumer of a source decodes forward through its own cursor", async (
   );
 });
 
-test("a source keeps at most its cursor limit open, closing the one used least recently", async () => {
+test("at most maxCursors cursors stay open, closing the one used least recently", async () => {
   const opened = [];
   const open = () => {
     const decoder = {
@@ -1320,7 +1320,7 @@ test("a source keeps at most its cursor limit open, closing the one used least r
   const coordinator = new DecoderRefillCoordinator(
     open,
     async (frame) => frame.frame.close(),
-    { maxCursorsPerSource: 2 },
+    { maxCursors: 2 },
   );
   const request = (consumerId) => ({
     sourceId: "source",
@@ -1346,7 +1346,7 @@ test("a source keeps at most its cursor limit open, closing the one used least r
   assert.throws(
     () =>
       new DecoderRefillCoordinator(open, async () => {}, {
-        maxCursorsPerSource: 0,
+        maxCursors: 0,
       }),
     RangeError,
   );

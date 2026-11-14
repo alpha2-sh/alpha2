@@ -279,6 +279,16 @@ All notable changes to this project are documented in this file.
   float field of an impossible size is refused without reading it, an MP4 whose `moov` follows an
   `mdat` larger than 64 MiB has its rotation and mirror read (it was shown unmirrored), and a
   truncated `stsd` entry or `tkhd` no longer makes the audio layout reader throw `RangeError`.
+- `DecoderRefillCoordinator` bounds its decoders across sources: option `maxCursors` (default 16)
+  replaces `maxCursorsPerSource`, and past it the least recently used cursor that is neither
+  refilling nor retained closes; `retain(cursors)` declares the current round's cursors; a cursor
+  without a request for `idleMs` (default 2000, active time) releases its decoded frames and keeps
+  the file open; `diagnostics` counts open cursors, evictions, idle flushes and budget overruns.
+  Before, a timeline with many source files kept a configured decoder and its queued frames per
+  file until the coordinator closed, and several consumers of one source reopened decoders every
+  frame. `BrowserRobustnessCoordinator` and `BrowserResourceBudget` are removed (nothing used
+  them), with the diagnostics only they reported; `detectBrowserCapabilities` now reports
+  `audioDecoder` and `audioEncoder`.
 
 ## [0.6.0] - 2026-11-08
 
