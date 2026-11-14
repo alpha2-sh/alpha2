@@ -1,5 +1,15 @@
 use super::*;
 
+/// An f32 is read through an f64, as `Math.fround` reads a JSON number: at an exact f32 midpoint
+/// the f64 rounds to the midpoint and the f32 then to even.
+#[test]
+fn json_floats_parse_as_the_shipped_hosts_and_the_browser_parse_them() {
+    assert_eq!(
+        serde_json::from_str::<f32>("1.0000000596046448").expect("f32"),
+        1.0
+    );
+}
+
 #[test]
 fn a_font_check_refuses_what_adding_the_font_refuses() {
     let fixture = std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture");
@@ -142,6 +152,9 @@ fn fixture_requests_match_the_pinned_rasters() {
         if update {
             case["expected"] = actual;
         } else {
+            // The product's parser may read a pinned f32 back one f64 step off, so both sides take it.
+            let actual: serde_json::Value =
+                serde_json::from_str(&actual.to_string()).expect("JSON");
             assert_eq!(case["expected"], actual, "{}", case["name"]);
         }
     }
