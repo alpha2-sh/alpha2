@@ -462,6 +462,9 @@ All notable changes to this project are documented in this file.
   linear set's last line keeps its slope. Before, data outside the range made the bake fail as
   `INTERNAL`, and a linear set held its last value to the clip's end. A parameter of a host effect,
   whose range only the renderer knows, is refused as `unbounded_parameter`.
+- Editor: a command that removes clips or tracks removes their metadata (names, flags, mask, cue
+  and transition ids) too; before, a track added with a removed track's id was born with its flags,
+  and the saved file kept metadata of every clip ever created.
 
 ## [0.6.0] - 2026-11-08
 

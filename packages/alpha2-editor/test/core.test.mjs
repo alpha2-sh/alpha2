@@ -1612,3 +1612,75 @@ test("masks a command or gesture gives a clip of a frozen document are named, an
     "c/masks/1",
   ]);
 });
+
+test("deleting a clip removes its metadata and mask ids, and undo brings them back", () => {
+  const mask = {
+    shape: {
+      type: "rectangle",
+      center: { mode: "constant", value: { x: 0.5, y: 0.5 } },
+      size: { mode: "constant", value: { x: 0.5, y: 0.5 } },
+    },
+  };
+  const e = createEditor({ document: simple() });
+  e.dispatch({ type: "clip.update", id: "c", patch: { masks: [mask] } });
+  e.dispatch({ type: "clip.metadata", id: "c", patch: { name: "Intro" } });
+  const before = e.document;
+  assert.ok(e.dispatch({ type: "clip.delete", id: "c" }).ok);
+  assert.equal("c" in e.document.metadata.clips, false);
+  assert.equal("c/masks" in e.document.metadata.instanceIds, false);
+  e.undo();
+  assert.equal(e.document, before);
+  assert.deepEqual(e.document.metadata.clips.c, { name: "Intro" });
+});
+
+test("a track added with a removed track's id starts with default metadata", () => {
+  const e = createEditor({ document: simple() });
+  e.dispatch({
+    type: "track.metadata",
+    id: "other",
+    patch: { syncLock: true, height: 90 },
+  });
+  assert.ok(e.dispatch({ type: "track.remove", id: "other" }).ok);
+  assert.equal("other" in e.document.metadata.tracks, false);
+  assert.equal("other/transitions" in e.document.metadata.instanceIds, false);
+  assert.equal("other/cues" in e.document.metadata.instanceIds, false);
+  assert.ok(
+    e.dispatch({
+      type: "track.add",
+      track: { id: "other", name: "Again", kind: "video", clips: [] },
+    }).ok,
+  );
+  assert.equal(e.document.metadata.tracks.other?.syncLock ?? false, false);
+});
+
+test("a transaction that deletes and re-inserts a clip id keeps the inserted clip's metadata", () => {
+  const e = createEditor({ document: simple() });
+  e.dispatch({ type: "clip.metadata", id: "c", patch: { name: "Old" } });
+  const clip = e.query().clips.get("c").clip;
+  assert.ok(
+    e.dispatch({
+      type: "transaction",
+      commands: [
+        { type: "clip.delete", id: "c" },
+        {
+          type: "clip.place",
+          mode: "overwrite",
+          trackId: "t",
+          clip,
+          at: 0,
+          name: "New",
+        },
+      ],
+    }).ok,
+  );
+  assert.deepEqual(e.document.metadata.clips.c, { name: "New" });
+});
+
+test("moving a clip to another track keeps its metadata", () => {
+  const e = createEditor({ document: simple() });
+  e.dispatch({ type: "clip.metadata", id: "c", patch: { name: "Kept" } });
+  assert.ok(
+    e.dispatch({ type: "clip.move", id: "c", trackId: "other", at: 0 }).ok,
+  );
+  assert.deepEqual(e.document.metadata.clips.c, { name: "Kept" });
+});

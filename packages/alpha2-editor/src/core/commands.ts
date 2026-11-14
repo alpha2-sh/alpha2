@@ -1815,25 +1815,69 @@ function assertLocksKept(
       );
   }
 }
-/** `document` without the editor metadata of clips the project no longer has. */
-function withoutRemovedClips(
-  document: DraftDocument,
-  before: Project,
+/**
+ * `next` without the editor metadata of the clips and tracks `before` has and `next` lost: their
+ * metadata entries and instance id lists. A clip that moved keeps its id and its metadata. Costs the
+ * tracks that are not the same objects in both.
+ */
+function withoutRemovedMetadata(
+  before: DraftDocument,
+  next: DraftDocument,
 ): DraftDocument {
-  const kept = indexDocument(document).clips;
-  const removed = [...indexDocument({ project: before }).clips.keys()].filter(
-    (id) => !kept.has(id),
-  );
-  if (!removed.length) return document;
-  const clips = { ...document.metadata.clips };
-  const instanceIds = { ...document.metadata.instanceIds };
-  for (const id of removed) {
-    delete clips[id];
-    delete instanceIds[`${id}/masks`];
-  }
+  const old = before.project.timeline.tracks;
+  const now = next.project.timeline.tracks;
+  if (old === now) return next;
+  const kept = new Set<Track>(now);
+  const changed = old.filter((track) => !kept.has(track));
+  if (!changed.length) return next;
+  const unchanged = new Set<Track>(old);
+  const added = now.filter((track) => !unchanged.has(track));
+  const byId = new Map(added.map((track) => [track.id, track]));
+  // A track whose clips keep their ids in place (a move or trim) loses no clip.
+  const sameIds = (before: Track) => {
+    const track = byId.get(before.id);
+    const after = track?.clips ?? [];
+    const clips = before.clips ?? [];
+    return (
+      track !== undefined &&
+      clips.length === after.length &&
+      clips.every((clip, index) => clip.id === after[index].id)
+    );
+  };
+  const losing = changed.filter((track) => !sameIds(track));
+  if (!losing.length) return next;
+  const present = new Set<string>();
+  for (const track of added)
+    for (const clip of track.clips ?? []) present.add(clip.id);
+  const trackIds = new Set(now.map((track) => track.id));
+  const clips = losing
+    .flatMap((track) => (track.clips ?? []).map((clip) => clip.id))
+    .filter((id) => !present.has(id));
+  const tracks = losing
+    .map((track) => track.id)
+    .filter((id) => !trackIds.has(id));
+  const { metadata } = next;
+  const stale = [
+    ...clips.map((id) => `${id}/masks`),
+    ...tracks.flatMap((id) => [`${id}/cues`, `${id}/transitions`]),
+  ].filter((key) => key in metadata.instanceIds);
+  const named = clips.filter((id) => id in metadata.clips);
+  const flagged = tracks.filter((id) => id in metadata.tracks);
+  if (!stale.length && !named.length && !flagged.length) return next;
+  const instanceIds = { ...metadata.instanceIds };
+  for (const key of stale) delete instanceIds[key];
+  const clipMetadata = { ...metadata.clips };
+  for (const id of named) delete clipMetadata[id];
+  const trackMetadata = { ...metadata.tracks };
+  for (const id of flagged) delete trackMetadata[id];
   return {
-    ...document,
-    metadata: { ...document.metadata, clips, instanceIds },
+    ...next,
+    metadata: {
+      ...metadata,
+      instanceIds,
+      clips: clipMetadata,
+      tracks: trackMetadata,
+    },
   };
 }
 /**
@@ -1854,13 +1898,10 @@ export function executeEditResult(
   let edited: EditorDocument;
   try {
     edited = withValidated(() => {
-      let next: DraftDocument = withoutRemovedClips(
-        {
-          ...document,
-          project: JSON.parse(applied.projectJson) as Project,
-        },
-        document.project,
-      );
+      let next: DraftDocument = withoutRemovedMetadata(document, {
+        ...document,
+        project: JSON.parse(applied.projectJson) as Project,
+      });
       for (const created of applied.report.created)
         next = afterSplit(next, created.id, created.from);
       assertLocksKept(document, next, { type: "edit" });
@@ -1913,7 +1954,10 @@ export function executeCommand(
 ): Result<EditorDocument> {
   try {
     return withValidated(() => {
-      const reduced = apply(document, structuredClone(command));
+      const reduced = withoutRemovedMetadata(
+        document,
+        apply(document, structuredClone(command)),
+      );
       // A clip owns the composition it shows: what the command stopped drawing goes.
       const undrawn = withoutUndrawn(document.project, reduced.project);
       // Canonicalize what the command brought in.
