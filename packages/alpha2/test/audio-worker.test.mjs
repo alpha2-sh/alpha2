@@ -456,7 +456,7 @@ test("a cancelled render aborts its sink with the signal's reason and never fini
   ]);
 });
 
-test("a cancel during the last block or during finish still cancels the render", async () => {
+test("a cancel during the last block or while finish is pending cancels the render", async () => {
   for (const at of ["render", "write", "finish"]) {
     const controller = new AbortController();
     const reason = new DOMException("Cancelled", "AbortError");
@@ -465,9 +465,11 @@ test("a cancel during the last block or during finish still cancels the render",
         sink.calls.push(["write", value.channels[0].length]);
         if (at === "write" && sink.calls.length === 2) controller.abort(reason);
       },
-      async finish() {
+      finish() {
         sink.calls.push(["finish"]);
-        if (at === "finish") controller.abort(reason);
+        if (at !== "finish") return Promise.resolve();
+        controller.abort(reason);
+        return new Promise(() => {});
       },
     });
     let pulls = 0;
@@ -497,6 +499,21 @@ test("a cancel during the last block or during finish still cancels the render",
       at,
     );
   }
+});
+
+test("a cancel that lands once finish has resolved leaves a finished render", async () => {
+  const controller = new AbortController();
+  const sink = callSink({
+    finish() {
+      sink.calls.push(["finish"]);
+      const done = Promise.resolve();
+      void done.then(() => controller.abort());
+      return done;
+    },
+  });
+  await renderOfflineAudio(128n, [64], fill, sink, controller.signal);
+  assert.equal(controller.signal.aborted, true);
+  assert.deepEqual(sink.calls, [["write", 64], ["write", 64], ["finish"]]);
 });
 
 test("a block of the wrong length fails the render and aborts the sink", async () => {

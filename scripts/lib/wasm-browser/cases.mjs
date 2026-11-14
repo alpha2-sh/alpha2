@@ -73,6 +73,7 @@ import {
 } from "./cpu.mjs";
 import {
   exportAacPriming,
+  exportCancelDuringFinish,
   exportEveryContainer,
   exportPixels,
   exportEveryProjectRate,
@@ -170,6 +171,7 @@ export const cases = {
   "export-every-container": exportEveryContainer,
   "export-pixels": exportPixels,
   "export-aac-priming": exportAacPriming,
+  "export-cancel-during-finish": exportCancelDuringFinish,
   "loudness-under-limiter": loudnessUnderLimiter,
   "text-raster-parity": textRasterParity,
   "webgl2-transparent-edges": () => transparentEdges(true),

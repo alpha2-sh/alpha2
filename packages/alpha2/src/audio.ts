@@ -1,3 +1,4 @@
+import { raceAbort } from "./abort.js";
 import { recordCleanupFailure } from "./export-failure.js";
 import type { BrowserAudioBlock } from "./media.js";
 
@@ -11,8 +12,8 @@ export interface BrowserAudioBlockSink {
   /** Called once after the last block was written. */
   finish(): Promise<void>;
   /**
-   * Called once instead of `finish` when the render fails or is aborted; `reason` is the error the
-   * render rejects with.
+   * Called once instead of `finish`, or while `finish` is pending, when the render fails or is
+   * aborted; `reason` is the error the render rejects with.
    */
   abort(reason: Error): Promise<void> | void;
 }
@@ -31,8 +32,9 @@ export type OfflineAudioRenderer = (
  * sizes cycling through `blockSizes`.
  *
  * On success the sink's `finish` is awaited. On any failure, including `signal` aborting before
- * the promise resolves, the sink's `abort` is awaited and the promise rejects with the error
- * (`signal.reason` or an `AbortError` for an abort). An error thrown by `abort` does not replace it.
+ * `finish` resolves, the sink's `abort` is awaited and the promise rejects with the error
+ * (`signal.reason` or an `AbortError` for an abort). An abort after `finish` resolved is ignored.
+ * An error thrown by `abort` does not replace it.
  *
  * @throws RangeError When `totalFrames` is negative, `blockSizes` is empty or holds a size that is
  *   not a positive safe integer (checked before the sink is touched), or `render` returns a block
@@ -54,10 +56,11 @@ export async function renderOfflineAudio(
   }
   let position = 0n;
   let block = 0;
-  // Also checked after `finish`, so a late cancel never reports success.
+  const abortReason = (aborted: AbortSignal): Error =>
+    (aborted.reason as Error | undefined) ??
+    new DOMException("Aborted", "AbortError");
   const throwIfAborted = (): void => {
-    if (signal?.aborted === true)
-      throw signal.reason ?? new DOMException("Aborted", "AbortError");
+    if (signal?.aborted === true) throw abortReason(signal);
   };
   try {
     while (position < totalFrames) {
@@ -76,8 +79,7 @@ export async function renderOfflineAudio(
       block += 1;
     }
     throwIfAborted();
-    await sink.finish();
-    throwIfAborted();
+    await raceAbort(sink.finish(), signal, undefined, abortReason);
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     try {

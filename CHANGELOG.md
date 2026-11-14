@@ -255,6 +255,12 @@ All notable changes to this project are documented in this file.
   until the end. A preview keeps at most two more sessions open than its timeline reads at once,
   closing the one read longest ago, and every clip of one image shares one decoded picture. The
   decoded frames sources hold count against the frame budget.
+- A browser export cancelled while its sink is finishing rejects at once with `cancelled` and
+  commits nothing, also when `finish` never settles; before, the export waited for `finish` and
+  then reported a committed file as cancelled. `MediabunnySink.finish` rejects with
+  `ENCODE_STALLED` (stage `finalize-stalled`) when no packet or write arrives for the stall time,
+  and refuses to commit once `abort` was called. A cancel that lands after `finish` resolved no
+  longer fails a finished export or offline audio render.
 
 ## [0.6.0] - 2026-11-08
 

@@ -2708,6 +2708,9 @@ export class MediabunnySink
   #framesOut = 0;
   /** Active time, so a frozen page does not count as a stall. */
   #progress?: ActiveStopwatch;
+  /** Active time since the last packet or write while `finish` runs. */
+  #finishing?: ActiveStopwatch;
+  #aborted: Error | undefined;
   readonly #audio?: AudioSampleSource;
   readonly #audioCodec?: "aac" | "opus";
   readonly #audioBitrate?: number;
@@ -2749,6 +2752,7 @@ export class MediabunnySink
       this.#target = new BufferTarget();
       // Stopping at the reserved size keeps the output within its budget.
       this.#target.onwrite = (_start, end) => {
+        this.#finishing?.reset();
         this.#written = Math.max(this.#written, end);
         if (end > destination.maxBytes)
           this.#overflow ??= new ExportFailureError({
@@ -2770,11 +2774,15 @@ export class MediabunnySink
       const muxed = new WritableStream<PositionedWrite>({
         write: async (chunk) => {
           await file.ready;
-          void file.write(chunk).catch(() => {});
+          void file.write(chunk).then(
+            () => this.#finishing?.reset(),
+            () => {},
+          );
         },
       });
       this.#target = new StreamTarget(muxed, { chunked: false });
       this.#target.onwrite = (_start, end) => {
+        this.#finishing?.reset();
         this.#written = Math.max(this.#written, end);
       };
     }
@@ -2881,6 +2889,7 @@ export class MediabunnySink
 
   #madeProgress(): void {
     (this.#progress ??= new ActiveStopwatch()).reset();
+    this.#finishing?.reset();
   }
 
   #watched<T>(work: Promise<T>): Promise<T> {
@@ -3153,35 +3162,96 @@ export class MediabunnySink
 
   /**
    * Finalizes the file and commits a stream destination; idempotent once resolved. Rejects with
-   * `RESOURCE_LIMIT`, `ENCODE_STALLED`, or the muxer's or destination's error, discarding a stream.
+   * `RESOURCE_LIMIT`, `ENCODE_STALLED` (no packet or write for the stall time), the muxer's or
+   * destination's error, or the reason of an `abort` that arrived meanwhile, discarding a stream.
    */
   async finish(): Promise<void> {
     if (this.#finished) return;
     await this.#ready;
+    const finishing = (this.#finishing = new ActiveStopwatch());
     try {
-      await this.#flushAudio();
-      await this.#watched(this.#output.finalize());
-      if (this.#overflow) throw this.#overflow;
-      await this.#file?.close();
+      await this.#finishWatched(
+        (async () => {
+          await this.#flushAudio();
+          await this.#output.finalize();
+          if (this.#overflow) throw this.#overflow;
+          if (this.#aborted !== undefined) throw this.#aborted;
+          await this.#file?.close();
+        })(),
+        finishing,
+      );
     } catch (error) {
-      await this.#discard(error).catch(() => {});
+      const discarded = this.#discard(error).catch(() => {});
+      // A stalled destination may never take the abort either.
+      if ((error as { code?: unknown }).code !== "ENCODE_STALLED")
+        await discarded;
       throw error;
     } finally {
+      finishing.dispose();
       this.#progress?.dispose();
     }
+    if (this.#aborted !== undefined) throw this.#aborted;
     this.#finished = true;
   }
 
-  /** Discards the output unless already finished; rejects if the destination refuses. */
+  // Fails when neither a packet nor a write arrived for the stall time.
+  #finishWatched(
+    work: Promise<void>,
+    finishing: ActiveStopwatch,
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const stop = finishing.onTick(() => {
+        const waited = finishing.elapsed();
+        if (waited < this.#stallTimeoutMs) return;
+        stop();
+        const held = this.#framesIn - this.#framesOut;
+        reject(
+          Object.assign(
+            new Error(
+              held > 0
+                ? `video encoder stalled: no output for ${Math.round(waited)} ms with ${held} frames queued`
+                : `export finalize stalled: no packet or write for ${Math.round(waited)} ms`,
+            ),
+            {
+              code: "ENCODE_STALLED",
+              failure:
+                held > 0
+                  ? {
+                      code: "GPU_TIMEOUT",
+                      phase: "encode",
+                      stage: "encoder-stalled",
+                      resource: "unknown",
+                    }
+                  : {
+                      code: "GPU_TIMEOUT",
+                      phase: "mux",
+                      stage: "finalize-stalled",
+                      resource: "unknown",
+                    },
+            },
+          ),
+        );
+      });
+      void work.finally(stop).then(resolve, reject);
+    });
+  }
+
+  /**
+   * Discards the output unless already finished, also while `finish` is pending; rejects if the
+   * destination refuses.
+   */
   async abort(reason: Error): Promise<void> {
     if (this.#finished) return;
+    this.#aborted ??= reason;
     this.#progress?.dispose();
     if (this.#audioConverter !== undefined && !this.#audioFlushed) {
       this.#audioFlushed = true;
       this.#audioConverter.free();
     }
     try {
-      if (this.#output.state !== "canceled") await this.#output.cancel();
+      // mediabunny ignores a cancel while finalizing; `finish` then refuses to commit.
+      if (this.#output.state === "started" || this.#output.state === "pending")
+        await this.#output.cancel();
     } finally {
       await this.#discard(reason);
     }

@@ -38,7 +38,13 @@ class TestVideoFrame {
   close() {}
 }
 
-const encoders = { failFlush: false, stall: null, delayMs: 0, configs: [] };
+const encoders = {
+  failFlush: false,
+  stall: null,
+  delayMs: 0,
+  flush: null,
+  configs: [],
+};
 const STALL_MS = 500;
 
 const AVC_CONFIG = new Uint8Array([
@@ -88,6 +94,7 @@ class StampEncoder extends CustomVideoEncoder {
     );
   }
   flush() {
+    if (encoders.flush !== null) return encoders.flush();
     if (encoders.failFlush) throw new Error("encoder flush failed");
     if (encoders.stall === "flush")
       return new Promise((resolve) => setTimeout(resolve, STALL_MS));
@@ -524,7 +531,12 @@ async function withEncoders(settings, run) {
   try {
     return await run();
   } finally {
-    Object.assign(encoders, { failFlush: false, stall: null, delayMs: 0 });
+    Object.assign(encoders, {
+      failFlush: false,
+      stall: null,
+      delayMs: 0,
+      flush: null,
+    });
   }
 }
 
@@ -606,4 +618,147 @@ test("a stall timeout out of range is refused at construction", () => {
       () => streamSink(swapFile(), { video: true }, { stallTimeoutMs }),
       RangeError,
     );
+});
+
+function settlesWithin(promise, ms) {
+  return Promise.race([
+    promise.then(
+      (value) => ({ value }),
+      (error) => ({ error }),
+    ),
+    new Promise((resolve) => setTimeout(() => resolve({ pending: true }), ms)),
+  ]);
+}
+
+test("a cancel while the encoder flush never ends rejects at once and commits nothing", async () => {
+  const file = swapFile();
+  const controller = new AbortController();
+  const sink = streamSink(file);
+  const result = await withEncoders(
+    {
+      flush: () => {
+        controller.abort();
+        return new Promise(() => {});
+      },
+    },
+    () =>
+      settlesWithin(
+        exportToSink(exporter(3), sink, async () => {}, {
+          signal: controller.signal,
+        }),
+        2_000,
+      ),
+  );
+  assert.equal(result.error?.name, "ExportAbortedError", String(result.error));
+  assert.equal(result.error.code, "cancelled");
+  assert.equal(file.committed, null);
+  assert.equal(file.aborted, true);
+  assert.equal(sink.output, null);
+});
+
+test("a cancel during finish discards the output even when finalizing completes later", async () => {
+  for (const kind of ["stream", "memory"]) {
+    const file = swapFile();
+    const controller = new AbortController();
+    const sink =
+      kind === "stream"
+        ? streamSink(file)
+        : new MediabunnySink({
+            container: "mp4",
+            videoCodec: "vp9",
+            videoRateControl: { bitrate: 1_000_000, bitrateMode: "variable" },
+            frameRate: { num: 30, den: 1 },
+            destination: { kind: "memory", maxBytes: 1 << 20 },
+          });
+    await cancelDuringFinish(sink, controller);
+    if (kind === "stream") {
+      assert.equal(file.committed, null, "a cancelled export commits nothing");
+      assert.equal(file.aborted, true);
+    }
+    assert.equal(sink.output, null, kind);
+  }
+});
+
+async function cancelDuringFinish(sink, controller) {
+  let flushed;
+  const finalized = new Promise((resolve) => (flushed = resolve));
+  await withEncoders(
+    {
+      flush: () => {
+        controller.abort();
+        return new Promise((resolve) =>
+          setTimeout(() => {
+            resolve();
+            flushed();
+          }, 100),
+        );
+      },
+    },
+    async () => {
+      await assert.rejects(
+        exportToSink(exporter(3), sink, async () => {}, {
+          signal: controller.signal,
+        }),
+        { name: "ExportAbortedError", code: "cancelled" },
+      );
+      await finalized;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    },
+  );
+}
+
+test("a cancel that lands once finish has resolved leaves a finished export", async () => {
+  const file = swapFile();
+  const controller = new AbortController();
+  const real = streamSink(file);
+  const sink = {
+    writeVideo: (frame) => real.writeVideo(frame),
+    finish: () => {
+      const done = real.finish();
+      void done.then(() => controller.abort());
+      return done;
+    },
+    abort: (reason) => real.abort(reason),
+  };
+  const result = await exportToSink(exporter(3), sink, async () => {}, {
+    signal: controller.signal,
+  });
+  assert.equal(result.frames, 3);
+  assert.equal(controller.signal.aborted, true);
+  assert.ok(file.committed !== null);
+  await real.abort(new Error("late"));
+  assert.equal(file.aborted, false);
+  assert.deepEqual(real.output, {
+    kind: "stream",
+    bytes: file.committed.byteLength,
+  });
+});
+
+test("a file that stops taking writes while the export finishes fails it as stalled", async () => {
+  const file = swapFile();
+  const write = file.write;
+  let finishing = false;
+  file.write = (chunk) => (finishing ? new Promise(() => {}) : write(chunk));
+  const real = streamSink(file, { video: true }, { stallTimeoutMs: 50 });
+  const sink = {
+    writeVideo: (frame) => real.writeVideo(frame),
+    finish: () => {
+      finishing = true;
+      return real.finish();
+    },
+    abort: (reason) => real.abort(reason),
+  };
+  const result = await settlesWithin(
+    exportToSink(exporter(3), sink, async () => {}),
+    3_000,
+  );
+  const stalled = result.error?.cause ?? result.error;
+  assert.equal(stalled?.code, "ENCODE_STALLED", JSON.stringify(result));
+  assert.deepEqual(stalled.failure, {
+    code: "GPU_TIMEOUT",
+    phase: "mux",
+    stage: "finalize-stalled",
+    resource: "unknown",
+  });
+  assert.equal(file.committed, null);
 });
