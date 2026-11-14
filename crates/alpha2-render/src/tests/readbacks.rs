@@ -257,3 +257,57 @@ fn a_readback_failure_names_the_step_that_failed() {
         "GPU texture readback failed: map-failed"
     );
 }
+
+#[test]
+fn a_mapping_reported_on_another_thread_is_waited_for_and_a_lost_one_times_out() {
+    use crate::readback::{MAP_REPORT, MapReport};
+    let _lock = gpu_test_lock();
+    let size = RenderSize::new(8, 4).expect("even size");
+    let renderer = Renderer::new(gpu());
+    let target = renderer
+        .render_solid(size, Color::rgba(0.25, 0.5, 0.75, 1.0))
+        .expect("solid target renders");
+    let planes = renderer
+        .begin_yuv420p_readback(&target, centred(ColorMetadata::default()))
+        .expect("readback submits")
+        .wait()
+        .expect("planes");
+    let pixels = read_rgba8(&renderer, &target);
+    let later = || {
+        MAP_REPORT.with(|report| {
+            report.set(Some(MapReport::Elsewhere(
+                std::time::Duration::from_millis(200),
+            )));
+        });
+    };
+    later();
+    let delayed = renderer
+        .begin_yuv420p_readback(&target, centred(ColorMetadata::default()))
+        .expect("readback submits");
+    assert_eq!(delayed.wait().expect("a late report maps"), planes);
+    later();
+    let delayed = renderer
+        .begin_rgba8_readback(&target)
+        .expect("readback submits");
+    assert_eq!(delayed.wait().expect("a late report maps"), pixels);
+
+    // A report that never comes ends the wait at the renderer's timeout. The lost mapping's
+    // buffer is never reused, and this renderer is dropped after it.
+    let mut lost = Renderer::new(gpu());
+    lost.set_gpu_wait_timeout(std::time::Duration::from_millis(100));
+    let target = lost
+        .render_solid(size, Color::rgba(0.25, 0.5, 0.75, 1.0))
+        .expect("solid target renders");
+    MAP_REPORT.with(|report| report.set(Some(MapReport::Never)));
+    let readback = lost
+        .begin_yuv420p_readback(&target, centred(ColorMetadata::default()))
+        .expect("readback submits");
+    let started = std::time::Instant::now();
+    assert_eq!(readback.wait_ready(), Err(RenderError::GpuTimeout));
+    MAP_REPORT.with(|report| report.set(Some(MapReport::Never)));
+    let readback = lost
+        .begin_rgba8_readback(&target)
+        .expect("readback submits");
+    assert_eq!(readback.wait_ready(), Err(RenderError::GpuTimeout));
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}

@@ -94,10 +94,11 @@ impl PendingVideoReadback {
             return Ok(());
         }
         self.readback.wait_for_submission().map_err(error_message)?;
-        let mapping = self
-            .mapping
-            .recv()
-            .unwrap_or((Err(DROPPED), Duration::ZERO));
+        let mapping = match self.readback.wait_for_mapped(&self.mapping) {
+            Ok(mapping) => mapping,
+            Err(DROPPED) => (Err(DROPPED), Duration::ZERO),
+            Err(error) => return Err(error_message(error)),
+        };
         self.mapping_ready = Some(mapping);
         mapping_error(mapping.0)
     }

@@ -1030,9 +1030,7 @@ impl Rgba8Readback {
                 timeout: Some(self.timeout),
             })
             .map_err(crate::error::poll_error)?;
-        receiver
-            .recv()
-            .map_err(|_| RenderError::TextureReadback(ReadbackFailure::CallbackDropped))?
+        receive_mapped(&self.gpu, &receiver, self.timeout)?
     }
 
     /// Waits for this readback and returns tightly packed RGBA8 pixels.
@@ -1275,9 +1273,18 @@ impl Yuv420pReadback {
             let _ = sender.send(mapped);
         });
         self.wait_for_submission()?;
-        receiver
-            .recv()
-            .map_err(|_| RenderError::TextureReadback(ReadbackFailure::CallbackDropped))?
+        self.wait_for_mapped(&receiver)?
+    }
+
+    /// Waits for what a [`Self::map_async`] callback sends to `receiver`, after
+    /// [`Self::wait_for_submission`], polling the device, for at most the renderer's wait timeout.
+    ///
+    /// # Errors
+    /// [`RenderError::GpuTimeout`] when nothing arrives in time, and
+    /// [`ReadbackFailure::CallbackDropped`] when the callback was dropped without sending.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn wait_for_mapped<T>(&self, receiver: &mpsc::Receiver<T>) -> Result<T, RenderError> {
+        receive_mapped(&self.gpu, receiver, self.timeout)
     }
 
     /// Blocks until this readback's submission completes; may follow an earlier
@@ -1527,12 +1534,54 @@ impl Yuv420pReadback {
     }
 }
 
+/// A map callback runs on whichever thread's poll collected the mapping, possibly after this
+/// thread's own wait returned.
+#[cfg(not(target_arch = "wasm32"))]
+fn receive_mapped<T>(
+    gpu: &GpuContext,
+    receiver: &mpsc::Receiver<T>,
+    timeout: std::time::Duration,
+) -> Result<T, RenderError> {
+    crate::settle::receive_polling(receiver, timeout, || {
+        let _ = gpu.device().poll(wgpu::PollType::Poll);
+    })
+}
+
+/// How the next [`map_staging`] on this thread delivers its callback in tests.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum MapReport {
+    /// From another thread, after this delay.
+    Elsewhere(std::time::Duration),
+    Never,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MAP_REPORT: std::cell::Cell<Option<MapReport>> =
+        const { std::cell::Cell::new(None) };
+}
+
 fn map_staging(
     gpu: &GpuContext,
     buffer: &ReadbackBufferLease,
     requested: &AtomicBool,
     on_ready: impl FnOnce(Result<(), RenderError>) + Send + 'static,
 ) {
+    #[cfg(test)]
+    let on_ready = {
+        let report = MAP_REPORT.with(std::cell::Cell::take);
+        move |result: Result<(), RenderError>| match report {
+            None => on_ready(result),
+            Some(MapReport::Elsewhere(delay)) => {
+                std::thread::spawn(move || {
+                    std::thread::sleep(delay);
+                    on_ready(result);
+                });
+            }
+            Some(MapReport::Never) => std::mem::forget(on_ready),
+        }
+    };
     if requested.swap(true, Ordering::AcqRel) {
         on_ready(Err(RenderError::TextureReadback(
             ReadbackFailure::DuplicateMapRequest,

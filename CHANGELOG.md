@@ -114,6 +114,7 @@ All notable changes to this project are documented in this file.
   request running, and takes the memory-growth baseline again after it makes its renderer, so a
   running export no longer drains the host and a first `compose` no longer counts the device as
   growth.
+- A readback whose mapping result never arrives fails with `GPU_TIMEOUT` instead of waiting forever.
 
 ## [0.6.0] - 2026-11-08
 
