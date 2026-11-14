@@ -22,7 +22,9 @@
 //!
 //! The quota holds while an export runs: room is made by deleting other snapshots' frames, unpinned
 //! before pinned, least recently accessed first; when none is left the frame and every later one
-//! are not written. An export never deletes its own snapshot's frames, which it and its retries
+//! are not written. A failed write drops its frame; one that will fail again (full or read-only
+//! storage, a quota, no permission to create) or [`MAX_CONSECUTIVE_WRITE_FAILURES`] in a row stop
+//! the writing. An export never deletes its own snapshot's frames, which it and its retries
 //! read. Concurrent exports are seen by walking the directory again each time another sixteenth
 //! of the quota is written.
 //!
@@ -39,7 +41,7 @@
 //! state, so an export still encodes and mixes from its start and matches a live render.
 
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, TrySendError};
@@ -82,6 +84,9 @@ pub const READ_AHEAD_FRAMES: usize = 2 * READER_THREADS;
 /// The export rescans the directory after writing this fraction of the quota, to see what other
 /// exports wrote and deleted.
 const RESCAN_FRACTION: u64 = 16;
+
+/// Failed writes in a row after which an export stops writing frames.
+pub const MAX_CONSECUTIVE_WRITE_FAILURES: u32 = 8;
 
 const OPEN: u8 = 0;
 const FULL: u8 = 1;
@@ -673,6 +678,7 @@ impl RenderCache {
             stored_bytes: 0,
             written_since_scan: 0,
             evictable: std::collections::VecDeque::new(),
+            failures_in_a_row: 0,
         };
         let writer = Self::start_writer(store, write_beat, Arc::clone(&in_flight));
         let mut cache = Self {
@@ -930,7 +936,8 @@ impl RenderCache {
         true
     }
 
-    /// A failed write is counted and stops further writes; it never fails the export.
+    /// A failed write is counted ([`Store::write`] decides whether writing goes on); it never fails
+    /// the export.
     ///
     /// The wait for room is not a blocking send: it ends when the writer takes a frame, and checks
     /// for the export's cancel and for a stuck writer as it goes.
@@ -1114,11 +1121,30 @@ fn read_frame(layout: &Layout, key: &str) -> Found {
     Found::Frame(frame, bytes)
 }
 
+/// The longest file a frame of `planes` bytes can be. Deflate grows incompressible input by a few
+/// bytes per stored block; an eighth is a wide margin.
+const fn longest_frame_file(planes: usize) -> u64 {
+    (HEADER_BYTES + planes + planes / 8 + 1024) as u64
+}
+
+/// Reads at most what a frame of this layout can take, so a file another process wrote cannot make
+/// a reader allocate more than one frame.
 fn read_file(layout: &Layout, path: &Path) -> Result<(BakedFrame, u64), String> {
-    let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|mut file| file.read_to_end(&mut bytes))
+    let (luma, chroma) = layout.plane_sizes();
+    let expected = luma + 2 * chroma;
+    let longest = longest_frame_file(expected);
+    let file = File::open(path).map_err(|error| error.to_string())?;
+    let length = file.metadata().map_err(|error| error.to_string())?.len();
+    if length > longest {
+        return Err("longer than any frame of this size".to_owned());
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or(0));
+    file.take(longest + 1)
+        .read_to_end(&mut bytes)
         .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > longest {
+        return Err("longer than any frame of this size".to_owned());
+    }
     let header = bytes.get(..HEADER_BYTES).ok_or("short header")?;
     let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().expect("4 bytes"));
     let format = layout.format;
@@ -1134,17 +1160,15 @@ fn read_file(layout: &Layout, path: &Path) -> Result<(BakedFrame, u64), String> 
         return Err("unexpected header".to_owned());
     }
     let length = u64::from_le_bytes(header[length_at..digest_at].try_into().expect("8 bytes"));
-    let (luma, chroma) = layout.plane_sizes();
-    if length != (luma + 2 * chroma) as u64 {
+    if length != expected as u64 {
         return Err("unexpected length".to_owned());
     }
-    let mut planes = Vec::with_capacity(luma + 2 * chroma);
+    let mut planes = Vec::with_capacity(expected);
     flate2::read::DeflateDecoder::new(&bytes[HEADER_BYTES..])
+        .take(expected as u64 + 1)
         .read_to_end(&mut planes)
         .map_err(|error| error.to_string())?;
-    if planes.len() != luma + 2 * chroma
-        || Sha256::digest(&planes)[..] != header[digest_at..HEADER_BYTES]
-    {
+    if planes.len() != expected || Sha256::digest(&planes)[..] != header[digest_at..HEADER_BYTES] {
         return Err("checksum mismatch".to_owned());
     }
     let v = planes.split_off(luma + chroma);
@@ -1173,6 +1197,27 @@ struct Store {
     written_since_scan: u64,
     /// Other snapshots' frames this export may delete, unpinned and least recently accessed first.
     evictable: std::collections::VecDeque<(PathBuf, u64)>,
+    failures_in_a_row: u32,
+}
+
+/// The step of [`Store::store`] that failed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StoreStep {
+    Create,
+    Write,
+    Rename,
+}
+
+/// Whether every later write into the directory would fail the same way.
+fn fails_again(step: StoreStep, error: &io::Error) -> bool {
+    match error.kind() {
+        io::ErrorKind::StorageFull
+        | io::ErrorKind::QuotaExceeded
+        | io::ErrorKind::ReadOnlyFilesystem => true,
+        // A rename refused for a moment (a scanner holding the file on Windows) is not.
+        io::ErrorKind::PermissionDenied => step == StoreStep::Create,
+        _ => false,
+    }
 }
 
 impl Store {
@@ -1189,7 +1234,7 @@ impl Store {
             return;
         }
         let Ok(encoded) = self.encode(frame) else {
-            self.fail();
+            self.failed(false);
             return;
         };
         let bytes = encoded.len() as u64;
@@ -1204,19 +1249,25 @@ impl Store {
             self.state.store(FULL, Ordering::Release);
             return;
         }
-        if self.store(key, &encoded, pinned).is_ok() {
-            self.stats.writes += 1;
-            self.stats.bytes_written += bytes;
-            self.stored_bytes += bytes;
-            self.written_since_scan += bytes;
-        } else {
-            self.fail();
+        match self.store(key, &encoded, pinned) {
+            Ok(()) => {
+                self.stats.writes += 1;
+                self.stats.bytes_written += bytes;
+                self.stored_bytes += bytes;
+                self.written_since_scan += bytes;
+                self.failures_in_a_row = 0;
+            }
+            Err((step, error)) => self.failed(fails_again(step, &error)),
         }
     }
 
-    fn fail(&mut self) {
+    /// Drops the frame; writing stops when the failure repeats or too many came in a row.
+    fn failed(&mut self, repeats: bool) {
         self.stats.write_errors += 1;
-        self.state.store(FAILED, Ordering::Release);
+        self.failures_in_a_row += 1;
+        if repeats || self.failures_in_a_row >= MAX_CONSECUTIVE_WRITE_FAILURES {
+            self.state.store(FAILED, Ordering::Release);
+        }
     }
 
     fn publish(&self) {
@@ -1285,30 +1336,32 @@ impl Store {
         Ok(encoded)
     }
 
-    fn store(&self, key: &str, encoded: &[u8], pinned: bool) -> Result<(), String> {
+    fn store(&self, key: &str, encoded: &[u8], pinned: bool) -> Result<(), (StoreStep, io::Error)> {
         let path = self.layout.path(key, pinned);
-        let parent = path.parent().ok_or("no parent")?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| (StoreStep::Create, io::Error::other("no parent")))?;
         let temporary = parent.join(format!(
             "{key}.{}.{}.tmp",
             std::process::id(),
             TEMPORARY.fetch_add(1, Ordering::Relaxed)
         ));
         let written = (|| {
+            let at = |step| move |error| (step, error);
             // Another export may remove a shard it found empty: make it again and retry once.
             let mut file = if let Ok(file) = File::create(&temporary) {
                 file
             } else {
-                fs::create_dir_all(parent)?;
-                File::create(&temporary)?
+                fs::create_dir_all(parent).map_err(at(StoreStep::Create))?;
+                File::create(&temporary).map_err(at(StoreStep::Create))?
             };
-            file.write_all(encoded)?;
-            fs::rename(&temporary, &path)
+            file.write_all(encoded).map_err(at(StoreStep::Write))?;
+            fs::rename(&temporary, &path).map_err(at(StoreStep::Rename))
         })();
-        if let Err(failure) = written {
+        if written.is_err() {
             let _ = fs::remove_file(&temporary);
-            return Err(failure.to_string());
         }
-        Ok(())
+        written
     }
 
     /// Also deletes temporaries left an hour or more ago and removes emptied directories. This
@@ -1344,4 +1397,42 @@ impl Store {
 #[must_use]
 pub fn unavailable(reason: &str) -> Value {
     json!({ "status": "unavailable", "reason": reason })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StoreStep, fails_again};
+    use std::io::{Error, ErrorKind};
+
+    #[test]
+    fn only_a_failure_every_later_write_would_meet_stops_the_writing() {
+        for kind in [
+            ErrorKind::StorageFull,
+            ErrorKind::QuotaExceeded,
+            ErrorKind::ReadOnlyFilesystem,
+        ] {
+            for step in [StoreStep::Create, StoreStep::Write, StoreStep::Rename] {
+                assert!(fails_again(step, &Error::from(kind)), "{kind:?} {step:?}");
+            }
+        }
+        assert!(fails_again(
+            StoreStep::Create,
+            &Error::from(ErrorKind::PermissionDenied)
+        ));
+        assert!(!fails_again(
+            StoreStep::Rename,
+            &Error::from(ErrorKind::PermissionDenied)
+        ));
+        for kind in [
+            ErrorKind::IsADirectory,
+            ErrorKind::DirectoryNotEmpty,
+            ErrorKind::NotFound,
+            ErrorKind::Interrupted,
+        ] {
+            assert!(
+                !fails_again(StoreStep::Rename, &Error::from(kind)),
+                "{kind:?}"
+            );
+        }
+    }
 }

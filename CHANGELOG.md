@@ -118,6 +118,8 @@ All notable changes to this project are documented in this file.
 - An export whose file is in place answers `ok`: an encoder teardown that fails afterwards is
   reported in `encoderTeardownFailure` (and retires the host if it leaves a thread stuck), and the
   `hardware-required` check runs before the output is finished, on both render paths.
+- The render cache keeps baking after a write that fails once, stops only on failures that repeat
+  or eight in a row, and reads at most what a frame of its size can take.
 
 ## [0.6.0] - 2026-11-08
 
