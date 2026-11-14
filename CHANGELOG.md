@@ -468,6 +468,10 @@ All notable changes to this project are documented in this file.
 - Android: the AAR ships consumer shrinker rules, so an app built with R8 (minified release)
   keeps what JNA and the generated bindings reach by name; before, such an app failed at its first
   call with an `UnsatisfiedLinkError` from JNA.
+- Android: an HEVC source with an alpha layer (as VideoToolbox writes it) decodes its base layer,
+  as on the desktop, and the export reports the dropped alpha; before, the decoder was handed the
+  alpha layer's units too and decoded no picture, and the export failed with "decode request is
+  out of range".
 - A browser export cancelled while its sink is finishing rejects at once with `cancelled` and
   commits nothing, also when `finish` never settles; before, the export waited for `finish` and
   then reported a committed file as cancelled. `MediabunnySink.finish` rejects with
