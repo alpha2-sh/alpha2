@@ -237,6 +237,12 @@ All notable changes to this project are documented in this file.
 - Compose facts must say whether a video has sound (`has_audio`) when a spec plays it unmuted;
   facts without it compiled the video silently. `requirements` lists a file named first by an
   `audio` node and then by a `media` node once, as the picture.
+- Mobile: a video source whose decoder session the system takes away (a trip to the background)
+  fails only after three losses in a row with no frame decoded between them, instead of at the
+  fourth loss in its life. Catching up to where a lost session stopped gets the 10 s decode budget
+  per frame, and a seek after a failed catch-up shows the frame at its time instead of a later one.
+  Under the tolerant decode policy a picture a hardware decoder cannot decode is skipped and
+  reported, as on the desktop.
 
 ## [0.6.0] - 2026-11-08
 

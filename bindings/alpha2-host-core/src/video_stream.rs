@@ -342,7 +342,8 @@ impl ReorderBuffer {
     }
 }
 
-/// Sessions the system may take from one stream before its decode fails.
+/// Sessions the system may take from one stream in a row, with no frame decoded between them,
+/// before its decode fails.
 const MAX_SESSION_REOPENS: u32 = 3;
 
 /// Where a session's input stands.
@@ -468,6 +469,7 @@ impl VideoStream {
         let slack = scan_slack(reader.as_mut(), &track)?;
         let mut recovery = Recovery::new((1, i32::try_from(timescale).unwrap_or(i32::MAX)));
         recovery.policy = options.policy;
+        recovery.set_hardware(backend.kind() == BackendKind::Hardware);
         let dimensions = crop
             .and_then(|crop| crop.visible())
             .map_or((video.width, video.height), |rect| {
@@ -617,6 +619,7 @@ impl VideoStream {
         time: MediaTime,
         cancel: &CancelToken,
     ) -> Result<StreamFrame, Interrupt> {
+        self.resume_after = None;
         let deadline = time.presentation_deadline(self.slack);
         let mut target = self.track_units_floor(deadline);
         let mut keyframe = self.reader.seek(self.track.id, target)?;
@@ -676,11 +679,13 @@ impl VideoStream {
             if let Some(picture) = self.reorder.take() {
                 let frame = self.facts(picture);
                 let pts = self.track_units(frame.facts.pts);
+                // A frame dropped on the way back to the resume point is progress too.
+                budget.progressed();
                 if self.resume_after.is_some_and(|after| pts <= after) {
                     continue;
                 }
                 self.resume_after = None;
-                budget.progressed();
+                self.reopens = 0;
                 self.recovery.progress(Some(pts))?;
                 return Ok(Some(frame));
             }
@@ -791,6 +796,8 @@ impl VideoStream {
             DecodeError::Adapter(format!("{error}; no session replaces it: {reopen}"))
         })?;
         self.reorder = ReorderBuffer::new(reorder_depth(self.backend.as_ref(), &self.track));
+        self.recovery
+            .set_hardware(self.backend.kind() == BackendKind::Hardware);
         Ok(())
     }
 

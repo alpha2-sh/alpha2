@@ -230,6 +230,10 @@ impl Recovery {
             ..Self::new(time_base)
         }
     }
+    /// Marks the decoder as a hardware session or not, keeping what was recorded so far.
+    pub fn set_hardware(&mut self, hardware: bool) {
+        self.hardware = hardware;
+    }
     /// Closes an open video recovery gap at `recovered_pts`.
     pub fn finish_video_gap(&mut self, recovered_pts: Option<i64>) {
         if !self.video_damage {
