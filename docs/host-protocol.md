@@ -56,12 +56,12 @@ A host is `ready`, taking requests, or `draining`, taking none and about to exit
 {"protocolVersion":2,"type":"state","state":"draining","reason":"memory","details":{...}}
 ```
 
-The host decides when a new process would serve better than itself and drains; the client only follows. After each request it compares itself with its soft limits, set by `serve` flags (`0` turns a limit off):
+The host decides when a new process would serve better than itself and drains; the client only follows. After each request it compares itself with its soft limits, set by `serve` flags (`0` turns a limit off). `memory`, `memory-growth` and `handles` measure the whole process, so they are compared only after an answer that leaves no request running:
 
 | Reason | Flag | Default | The host drains when |
 | --- | --- | --- | --- |
 | `memory` | `--max-memory-share <fraction>` | `0.5` | its footprint (the memory the operating system charges it: `RssAnon + RssShmem` on Linux, the physical footprint on macOS, private bytes on Windows) is over this share of the memory it may use (the lower of its cgroup or job limit and the physical memory) |
-| `memory-growth` | `--max-memory-growth <bytes>` | 1 GiB | its footprint grew by more than this since its first request ended |
+| `memory-growth` | `--max-memory-growth <bytes>` | 1 GiB | its footprint grew by more than this since its baseline, taken at the first answer that left no request running and taken again at the first such answer after the host made its renderer |
 | `requests` | `--max-requests <count>` | `1000` | it has answered this many requests |
 | `handles` | `--max-handles <count>` | `4096`, and at most half the open-file limit on Linux and macOS | it holds more open handles (file descriptors on Linux and macOS, kernel handles on Windows) than this |
 | `degraded` | none | | it has a degradation a new process would not have, such as a hardware encoder it turned off for the rest of its life, or a render cache directory it stopped using because a thread got stuck in its file system; `details.degradations` names it |
@@ -78,7 +78,7 @@ A response written when the request moved the host to `draining` carries `"hostS
 | `activity` | `idle` or `busy` |
 | `runningRequests` | requests running now |
 | `requestsServed` | requests answered so far |
-| `memory` | `{ "residentBytes", "footprintBytes", "baselineBytes", "capacityBytes" }`: now, after the first request, and what the host may use; `null` where unknown |
+| `memory` | `{ "residentBytes", "footprintBytes", "baselineBytes", "capacityBytes" }`: now, the `memory-growth` baseline (`null` until it is taken), and what the host may use; `null` where unknown |
 | `openHandles` | open handles (file descriptors, or kernel handles on Windows), `null` where unknown |
 | `renderer` | `gpu`, `cpu`, or `null` before a request needed one |
 | `rendererFallback` | why the host renders on the CPU, when `auto` chose it |

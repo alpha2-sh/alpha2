@@ -1771,6 +1771,106 @@ fn each_soft_limit_drains_the_host_and_later_requests_are_retired() {
     }
 }
 
+fn slow_export(id: &str, output: &Path, seconds: i64) -> String {
+    let end = seconds * alpha2_time::TICKS_PER_SECOND;
+    json!({
+        "protocolVersion": 2, "operation": "export", "requestId": id,
+        "project": {
+            "schema_version": 1, "id": "slow", "name": "Slow",
+            "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": end},
+                "source_range": {"start": 0, "end": end}
+            }]}]}
+        },
+        "assets": {"video": corpus("h264-long-gop.mp4")},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "inputPolicy": "cpu-readback",
+        "output": output
+    })
+    .to_string()
+}
+
+/// Reads up to the answer to `id`, returning it and the `state` messages before it.
+fn answer_and_states(serving: &ServeChild, id: &str) -> (Value, Vec<Value>) {
+    let mut states = Vec::new();
+    loop {
+        let message = serving.message(Duration::from_secs(120));
+        if message["requestId"] == id && message.get("ok").is_some() {
+            return (message, states);
+        }
+        if message["type"] == "state" {
+            states.push(message);
+        }
+    }
+}
+
+#[test]
+fn soft_limits_on_the_whole_process_wait_until_nothing_runs() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("soft-limits-busy");
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_SLOW_ENCODE_MS", "100"),
+            (
+                "ALPHA2_TEST_SERVE_ARGS",
+                "--max-running 2 --max-handles 1 --max-memory-share 0 --max-memory-growth 0 \
+                 --max-requests 0",
+            ),
+        ],
+    );
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    serving.write(&slow_export("export", &directory.join("out.mp4"), 3));
+    let progress = serving.message(Duration::from_secs(60));
+    assert_eq!(progress["type"], "progress", "{progress}");
+    serving.write(&templates("beside"));
+    let (beside, states) = answer_and_states(&serving, "beside");
+    assert_eq!(beside["ok"], true, "{beside}");
+    assert_eq!(beside["hostState"], "ready", "{beside}");
+    assert!(states.is_empty(), "{states:?}");
+    let (export, states) = answer_and_states(&serving, "export");
+    assert_eq!(export["ok"], true, "{export}");
+    assert_eq!(export["hostState"], "draining", "{export}");
+    assert_eq!(states.len(), 1, "{states:?}");
+    assert_eq!(states[0]["reason"], "handles", "{states:?}");
+    assert_eq!(serving.finish(), Some(0));
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn the_memory_baseline_is_taken_after_the_first_request_that_makes_the_device() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("soft-limit-baseline");
+    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    let baseline = |serving: &mut ServeChild, id: &str| {
+        serving.write(
+            &json!({"protocolVersion": 2, "requestId": id, "operation": "status"}).to_string(),
+        );
+        let (answer, _) = answer_and_states(serving, id);
+        answer["result"]["details"]["memory"]["baselineBytes"].as_u64()
+    };
+    serving.write(&templates("compose"));
+    assert_eq!(answer_and_states(&serving, "compose").0["ok"], true);
+    let before = baseline(&mut serving, "before").expect("a baseline after the first answer");
+    serving.write(&slow_export("export", &directory.join("out.mp4"), 1));
+    let (export, _) = answer_and_states(&serving, "export");
+    assert_eq!(export["ok"], true, "{export}");
+    let after = baseline(&mut serving, "after").expect("a baseline after the export");
+    assert!(
+        after > before,
+        "the baseline {after} still predates the device ({before} after compose)"
+    );
+    assert_eq!(serving.finish(), Some(0));
+    std::fs::remove_dir_all(&directory).ok();
+}
+
 #[test]
 fn an_idle_host_drains_and_exits_on_its_own() {
     let serving = ServeChild::start(

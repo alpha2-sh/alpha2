@@ -110,6 +110,10 @@ All notable changes to this project are documented in this file.
 - `validateProject` no longer throws on a project object nested deeper than 127 levels or on an
   array with holes; it reports the depth problem of the text path, and a hole fails its item's
   shape as `undefined` does.
+- `serve` compares its memory, memory-growth and handle limits only after an answer that leaves no
+  request running, and takes the memory-growth baseline again after it makes its renderer, so a
+  running export no longer drains the host and a first `compose` no longer counts the device as
+  growth.
 
 ## [0.6.0] - 2026-11-08
 

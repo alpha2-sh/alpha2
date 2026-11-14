@@ -1,7 +1,8 @@
 //! Whether `serve` takes new requests, and the soft limits after which it retires.
 //!
 //! The host decides when a new process would serve better than itself and reports `draining`;
-//! a client only follows. Soft limits are compared between requests, never during one.
+//! a client only follows. Limits on what the whole process holds (memory, handles) are compared
+//! only at an answer after which nothing runs, so they never count a running request's share.
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
@@ -172,6 +173,48 @@ impl SoftLimits {
     }
 }
 
+impl SoftLimits {
+    /// The first limit `life` and `usage` are over. Memory and handles are the whole process's,
+    /// so they are compared only while nothing runs.
+    fn over(self, life: &Life, usage: &Usage) -> Option<DrainReason> {
+        let quiet = life.running == 0;
+        #[allow(clippy::cast_precision_loss)]
+        if let (true, Some(share), Some(footprint), Some(capacity)) = (
+            quiet,
+            self.max_memory_share,
+            usage.footprint,
+            usage.capacity,
+        ) && footprint as f64 > share * capacity as f64
+        {
+            return Some(DrainReason::Memory);
+        }
+        if let (true, Some(growth), Some(footprint), Some(baseline)) = (
+            quiet,
+            self.max_memory_growth_bytes,
+            usage.footprint,
+            life.baseline_footprint,
+        ) && footprint.saturating_sub(baseline) > growth
+        {
+            return Some(DrainReason::MemoryGrowth);
+        }
+        if self
+            .max_requests
+            .is_some_and(|limit| life.requests_served >= limit)
+        {
+            return Some(DrainReason::Requests);
+        }
+        if let (true, Some(limit), Some(open)) = (quiet, self.max_handles, usage.handles)
+            && open > limit
+        {
+            return Some(DrainReason::Handles);
+        }
+        if self.drain_degraded && usage.degraded {
+            return Some(DrainReason::Degraded);
+        }
+        None
+    }
+}
+
 const fn nonzero(value: u64) -> Option<u64> {
     if value == 0 { None } else { Some(value) }
 }
@@ -239,6 +282,7 @@ struct Life {
     draining: Option<(DrainReason, Instant)>,
     requests_served: u64,
     running: usize,
+    /// Taken at the first answer after which nothing runs, and again after the renderer is made.
     baseline_footprint: Option<u64>,
     renderer: Option<RendererFacts>,
 }
@@ -278,61 +322,35 @@ impl Lifecycle {
         self.lock().draining
     }
 
+    /// Making the renderer grows the process, so the memory baseline is taken again after it.
     pub(crate) fn set_renderer(&self, facts: RendererFacts) {
-        self.lock().renderer = Some(facts);
+        let mut life = self.lock();
+        life.renderer = Some(facts);
+        life.baseline_footprint = None;
     }
 
     pub(crate) fn begin_request(&self) {
         self.lock().running += 1;
     }
 
-    /// Counts the answer and takes the memory baseline after the first.
-    pub(crate) fn end_request(&self) {
-        let footprint = footprint_bytes();
+    /// Counts the answer and returns the first soft limit the host is over after it, if any.
+    pub(crate) fn end_request(&self) -> Option<DrainReason> {
+        self.end_with(&Usage::now())
+    }
+
+    fn end_with(&self, usage: &Usage) -> Option<DrainReason> {
         let mut life = self.lock();
         life.running = life.running.saturating_sub(1);
         life.requests_served += 1;
-        if life.baseline_footprint.is_none() {
-            life.baseline_footprint = footprint;
+        if life.running == 0 && life.baseline_footprint.is_none() {
+            life.baseline_footprint = usage.footprint;
         }
+        self.limits.over(&life, usage)
     }
 
-    /// The first soft limit the host is over now, if any.
-    pub(crate) fn over_soft_limit(&self) -> Option<DrainReason> {
-        self.over_limit(&Usage::now())
-    }
-
+    #[cfg(test)]
     fn over_limit(&self, usage: &Usage) -> Option<DrainReason> {
-        let (served, baseline) = {
-            let life = self.lock();
-            (life.requests_served, life.baseline_footprint)
-        };
-        let limits = self.limits;
-        #[allow(clippy::cast_precision_loss)]
-        if let (Some(share), Some(footprint), Some(capacity)) =
-            (limits.max_memory_share, usage.footprint, usage.capacity)
-            && footprint as f64 > share * capacity as f64
-        {
-            return Some(DrainReason::Memory);
-        }
-        if let (Some(growth), Some(footprint), Some(baseline)) =
-            (limits.max_memory_growth_bytes, usage.footprint, baseline)
-            && footprint.saturating_sub(baseline) > growth
-        {
-            return Some(DrainReason::MemoryGrowth);
-        }
-        if limits.max_requests.is_some_and(|limit| served >= limit) {
-            return Some(DrainReason::Requests);
-        }
-        if let (Some(limit), Some(open)) = (limits.max_handles, usage.handles)
-            && open > limit
-        {
-            return Some(DrainReason::Handles);
-        }
-        if limits.drain_degraded && usage.degraded {
-            return Some(DrainReason::Degraded);
-        }
-        None
+        self.limits.over(&self.lock(), usage)
     }
 
     /// Moves to `draining` and writes the `state` message. A host already draining keeps its
@@ -365,12 +383,15 @@ impl Lifecycle {
 
     /// `{state, reason, details}` as the host is now.
     pub(crate) fn status(&self) -> Value {
+        let memory = alpha2_os::process_memory();
+        let capacity = alpha2_os::memory_capacity().effective_limit();
+        let handles = alpha2_os::open_handles();
+        let degradations = degradations();
         let life = self.lock();
         let (state, reason) = match life.draining {
             Some((reason, _)) => (HostState::Draining, reason.as_str()),
             None => (HostState::Ready, "started"),
         };
-        let memory = alpha2_os::process_memory();
         let renderer = life.renderer.as_ref();
         json!({
             "state": state.as_str(),
@@ -383,14 +404,14 @@ impl Lifecycle {
                     "residentBytes": memory.resident_bytes,
                     "footprintBytes": memory.footprint_bytes.or(memory.resident_bytes),
                     "baselineBytes": life.baseline_footprint,
-                    "capacityBytes": alpha2_os::memory_capacity().effective_limit(),
+                    "capacityBytes": capacity,
                 },
-                "openHandles": alpha2_os::open_handles(),
+                "openHandles": handles,
                 "renderer": renderer.map(|facts| facts.renderer),
                 "rendererFallback": renderer.and_then(|facts| facts.fallback.clone()),
                 "hardwareDecodeFallback":
                     renderer.and_then(|facts| facts.hardware_decode_fallback.clone()),
-                "degradations": degradations(),
+                "degradations": degradations,
                 "limits": self.limits.to_json(),
             },
         })
@@ -525,7 +546,7 @@ mod tests {
         };
         let lifecycle = Lifecycle::new(limits);
         lifecycle.begin_request();
-        lifecycle.end_request();
+        let _ = lifecycle.end_request();
         lifecycle.lock().baseline_footprint = Some(200 * MIB);
         assert_eq!(lifecycle.over_limit(&usage(300, 50, false)), None);
         assert_eq!(
@@ -545,7 +566,7 @@ mod tests {
             Some(DrainReason::Degraded)
         );
         lifecycle.begin_request();
-        lifecycle.end_request();
+        let _ = lifecycle.end_request();
         assert_eq!(
             lifecycle.over_limit(&usage(300, 0, false)),
             Some(DrainReason::Requests)
@@ -553,6 +574,88 @@ mod tests {
         let off = Lifecycle::new(SoftLimits::OFF);
         assert_eq!(off.over_limit(&usage(999, 1 << 20, false)), None);
         assert_eq!(off.over_limit(&usage(999, 0, true)), None);
+    }
+
+    #[test]
+    fn memory_and_handles_are_compared_only_when_nothing_runs() {
+        const MIB: u64 = 1 << 20;
+        let usage = |footprint: u64, handles: u64| Usage {
+            footprint: Some(footprint * MIB),
+            capacity: Some(1000 * MIB),
+            handles: Some(handles),
+            degraded: false,
+        };
+        let limits = SoftLimits {
+            max_memory_share: Some(0.5),
+            max_memory_growth_bytes: Some(100 * MIB),
+            max_requests: None,
+            max_handles: Some(50),
+            idle_timeout: None,
+            drain_degraded: true,
+        };
+        let lifecycle = Lifecycle::new(limits);
+        lifecycle.begin_request();
+        lifecycle.begin_request();
+        // Another request still runs: what the process holds is partly its.
+        assert_eq!(lifecycle.end_with(&usage(900, 500)), None);
+        assert_eq!(lifecycle.lock().baseline_footprint, None);
+        assert_eq!(lifecycle.end_with(&usage(200, 10)), None);
+        assert_eq!(lifecycle.lock().baseline_footprint, Some(200 * MIB));
+        lifecycle.begin_request();
+        lifecycle.begin_request();
+        assert_eq!(lifecycle.end_with(&usage(400, 10)), None);
+        assert_eq!(
+            lifecycle.end_with(&usage(400, 10)),
+            Some(DrainReason::MemoryGrowth)
+        );
+        let handles = Lifecycle::new(limits);
+        handles.begin_request();
+        handles.begin_request();
+        assert_eq!(handles.end_with(&usage(10, 51)), None);
+        assert_eq!(handles.end_with(&usage(10, 51)), Some(DrainReason::Handles));
+        // The count and degradations are this host's whatever runs.
+        let counted = Lifecycle::new(SoftLimits {
+            max_requests: Some(1),
+            ..limits
+        });
+        counted.begin_request();
+        counted.begin_request();
+        assert_eq!(
+            counted.end_with(&usage(900, 500)),
+            Some(DrainReason::Requests)
+        );
+    }
+
+    #[test]
+    fn the_memory_baseline_is_taken_again_after_the_renderer_is_made() {
+        const MIB: u64 = 1 << 20;
+        let usage = |footprint: u64| Usage {
+            footprint: Some(footprint * MIB),
+            capacity: Some(1000 * MIB),
+            handles: Some(1),
+            degraded: false,
+        };
+        let lifecycle = Lifecycle::new(SoftLimits {
+            max_memory_growth_bytes: Some(100 * MIB),
+            ..SoftLimits::OFF
+        });
+        lifecycle.begin_request();
+        assert_eq!(lifecycle.end_with(&usage(50)), None);
+        assert_eq!(lifecycle.lock().baseline_footprint, Some(50 * MIB));
+        lifecycle.set_renderer(RendererFacts {
+            renderer: "gpu",
+            fallback: None,
+            hardware_decode_fallback: None,
+        });
+        assert_eq!(lifecycle.lock().baseline_footprint, None);
+        lifecycle.begin_request();
+        assert_eq!(lifecycle.end_with(&usage(400)), None);
+        assert_eq!(lifecycle.lock().baseline_footprint, Some(400 * MIB));
+        lifecycle.begin_request();
+        assert_eq!(
+            lifecycle.end_with(&usage(501)),
+            Some(DrainReason::MemoryGrowth)
+        );
     }
 
     #[test]
@@ -564,7 +667,7 @@ mod tests {
         );
         lifecycle.begin_request();
         assert_eq!(lifecycle.status()["details"]["activity"], "busy");
-        lifecycle.end_request();
+        let _ = lifecycle.end_request();
         let details = &lifecycle.status()["details"];
         assert_eq!(details["activity"], "idle");
         assert_eq!(details["requestsServed"], 1);

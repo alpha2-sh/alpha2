@@ -1754,7 +1754,7 @@ struct RequestEnd<'a> {
 impl Drop for RequestEnd<'_> {
     fn drop(&mut self) {
         if !self.ended {
-            self.lifecycle.end_request();
+            let _ = self.lifecycle.end_request();
         }
     }
 }
@@ -1913,10 +1913,10 @@ fn answer(
     attachments: &[Attachment],
     unusable: &Unusable<'_>,
 ) -> Result<(), HostError> {
-    lifecycle.end_request();
+    let over_limit = lifecycle.end_request();
     let reason = unusable(device)
         .or_else(|| termination::requested().map(|_| DrainReason::Terminating))
-        .or_else(|| lifecycle.over_soft_limit());
+        .or(over_limit);
     if let Some(reason) = reason {
         lifecycle.drain(reason, out)?;
     }
