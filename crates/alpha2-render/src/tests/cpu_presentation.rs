@@ -16,7 +16,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-struct OwnedPlanes {
+pub(super) struct OwnedPlanes {
     format: YuvFormat,
     planes: Vec<(Vec<u8>, u32)>,
     alpha: Option<(Vec<u8>, u32)>,
@@ -52,7 +52,7 @@ impl YuvPlanes for OwnedPlanes {
 }
 
 /// A frame of `format` whose planes hold smooth ramps and noise.
-fn frame(format: YuvFormat, size: RenderSize, color: ColorMetadata) -> OwnedPlanes {
+pub(super) fn frame(format: YuvFormat, size: RenderSize, color: ColorMetadata) -> OwnedPlanes {
     let bytes = format.bytes_per_sample() as usize;
     let maximum = (1_u32 << format.bit_depth) - 1;
     let shift = if format.msb_aligned {
@@ -106,7 +106,11 @@ fn frame(format: YuvFormat, size: RenderSize, color: ColorMetadata) -> OwnedPlan
     }
 }
 
-fn sdr(matrix: ColorMatrix, range: ColorRange, primaries: ColorPrimaries) -> ColorMetadata {
+pub(super) fn sdr(
+    matrix: ColorMatrix,
+    range: ColorRange,
+    primaries: ColorPrimaries,
+) -> ColorMetadata {
     ColorMetadata {
         primaries,
         transfer: TransferFunction::Bt709,

@@ -234,6 +234,18 @@ impl CpuImage {
         bytes
     }
 
+    /// Every pixel's stored half-float bits, row by row; zero outside the content.
+    #[cfg(test)]
+    pub(crate) fn stored_bits(&self) -> Vec<[u16; 4]> {
+        let mut bits = Vec::with_capacity(self.size.width as usize * self.size.height as usize);
+        for y in 0..self.size.height {
+            for x in 0..self.size.width {
+                bits.push(half::store4(self.texel(x, y)));
+            }
+        }
+        bits
+    }
+
     /// Pixel at `(x, y)` inside the picture; transparent outside the content.
     #[inline]
     pub(crate) fn texel(&self, x: u32, y: u32) -> [f32; 4] {

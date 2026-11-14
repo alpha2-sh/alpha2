@@ -9,6 +9,8 @@ pub(crate) struct Workers {
     #[cfg(not(target_arch = "wasm32"))]
     pool: Option<rayon::ThreadPool>,
     threads: usize,
+    /// Rows of every band in place of [`band_rows`], so tests can move band seams.
+    fixed_rows: Option<usize>,
 }
 
 impl std::fmt::Debug for Workers {
@@ -37,13 +39,34 @@ impl Workers {
                 })
                 .flatten();
             let threads = if pool.is_some() { threads } else { 1 };
-            Self { pool, threads }
+            Self {
+                pool,
+                threads,
+                fixed_rows: None,
+            }
         }
         #[cfg(target_arch = "wasm32")]
         {
             let _ = threads;
-            Self { threads: 1 }
+            Self {
+                threads: 1,
+                fixed_rows: None,
+            }
         }
+    }
+
+    /// As [`Self::new`], with every band `rows` rows high (`usize::MAX` for one band).
+    #[cfg(test)]
+    pub(crate) fn with_band_rows(threads: usize, rows: usize) -> Self {
+        Self {
+            fixed_rows: Some(rows.max(1)),
+            ..Self::new(threads)
+        }
+    }
+
+    /// Rows per band for an image `width` pixels wide.
+    fn band_rows(&self, width: usize) -> usize {
+        self.fixed_rows.unwrap_or_else(|| band_rows(width))
     }
 
     pub(crate) const fn threads(&self) -> usize {
@@ -63,19 +86,19 @@ impl Workers {
         if width == 0 || pixels.is_empty() {
             return;
         }
-        let rows = band_rows(width);
+        let rows = self.band_rows(width);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(pool) = &self.pool {
             use rayon::prelude::*;
             pool.install(|| {
                 pixels
-                    .par_chunks_mut(rows * width)
+                    .par_chunks_mut(rows.saturating_mul(width))
                     .enumerate()
                     .for_each(|(band, chunk)| wide(|| draw(band * rows, chunk)));
             });
             return;
         }
-        for (band, chunk) in pixels.chunks_mut(rows * width).enumerate() {
+        for (band, chunk) in pixels.chunks_mut(rows.saturating_mul(width)).enumerate() {
             wide(|| draw(band * rows, chunk));
         }
     }
@@ -96,7 +119,7 @@ impl Workers {
         if width == 0 || pixels.is_empty() {
             return;
         }
-        let rows = band_rows(width);
+        let rows = self.band_rows(width);
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(pool) = &self.pool {
             use rayon::prelude::*;
@@ -107,7 +130,7 @@ impl Workers {
                 .collect::<Vec<_>>();
             pool.install(|| {
                 pixels
-                    .par_chunks_mut(rows * width)
+                    .par_chunks_mut(rows.saturating_mul(width))
                     .enumerate()
                     .for_each(|(band, chunk)| {
                         let slot = rayon::current_thread_index()
@@ -127,7 +150,7 @@ impl Workers {
             return;
         }
         let mut scratch = init();
-        for (band, chunk) in pixels.chunks_mut(rows * width).enumerate() {
+        for (band, chunk) in pixels.chunks_mut(rows.saturating_mul(width)).enumerate() {
             wide(|| draw(&mut scratch, band * rows, chunk));
         }
     }

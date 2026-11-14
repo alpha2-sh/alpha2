@@ -112,6 +112,16 @@ impl CpuRenderer {
     /// registered.
     #[must_use]
     pub fn new(threads: usize) -> Self {
+        Self::with_workers(Workers::new(threads))
+    }
+
+    /// As [`Self::new`], with every band `rows` rows high (`usize::MAX` for one band).
+    #[cfg(test)]
+    pub(crate) fn with_band_rows(threads: usize, rows: usize) -> Self {
+        Self::with_workers(Workers::with_band_rows(threads, rows))
+    }
+
+    fn with_workers(workers: Workers) -> Self {
         let mut catalog = HashMap::new();
         let mut internal = HashSet::new();
         for (definition, is_internal) in crate::builtins::internal_effect_definitions()
@@ -141,7 +151,7 @@ impl CpuRenderer {
             );
         }
         Self {
-            workers: Workers::new(threads),
+            workers,
             blend_space: BlendSpace::default(),
             frame_pool: Arc::default(),
             quality: Mutex::new(RenderQualityControls::default()),
