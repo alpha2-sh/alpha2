@@ -11,6 +11,12 @@ All notable changes to this project are documented in this file.
   media removed from the document still counts while undo can bring it back, and the import refusal
   says so.
 
+### Fixed
+
+- Editor: an import, relink or caption import that finishes after another project was opened is
+  refused with `stale_import` and changes nothing; before, a relink waiting for the engine module
+  could add its asset and an undo step to the new project.
+
 ## [0.6.0] - 2026-11-08
 
 ### Added

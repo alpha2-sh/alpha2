@@ -1165,7 +1165,14 @@ export function createBrowserBridge(options) {
   const off = editor.subscribe(() => {
     if (editor.generation !== sessionGeneration) {
       sessionGeneration = editor.generation;
-      for (const abort of pendingImports) abort.abort();
+      for (const abort of pendingImports)
+        abort.abort(
+          new EditorError(
+            "stale_import",
+            "Project changed during import",
+            "import",
+          ),
+        );
       pause();
       renderKey = null;
       workerSent = new Map();
@@ -2083,14 +2090,43 @@ export function createBrowserBridge(options) {
     };
   }
   /**
+   * The project an operation started in. `assert` throws once its result no longer belongs there:
+   * `signal`'s reason when aborted, `disposed` after the bridge or the session is disposed, and
+   * `stale_import` once another project was opened. Call it after the operation's last await,
+   * directly before it changes the document.
+   */
+  function projectScope(signal) {
+    const generation = editor.generation;
+    return {
+      assert(operation, entityId) {
+        signal?.throwIfAborted();
+        if (disposed || editor.disposed)
+          throw new EditorError(
+            "disposed",
+            "Bridge is disposed",
+            operation,
+            entityId,
+          );
+        if (editor.generation !== generation)
+          throw new EditorError(
+            "stale_import",
+            "Project changed during import",
+            operation,
+            entityId,
+          );
+      },
+    };
+  }
+  /**
    * Stages `units` (at most {@link IMPORT_STAGE_CONCURRENCY} at once) and adds them to the document
    * in order as one undo step. A relink has exactly one unit.
    */
   async function importUnits(units, { signal, relinkId } = {}) {
     if (disposed)
       throw new EditorError("disposed", "Bridge is disposed", "import");
-    const generation = editor.generation,
-      controller = new AbortController();
+    const controller = new AbortController(),
+      scope = projectScope(controller.signal),
+      operation = relinkId ? "relink" : "import";
     pendingImports.add(controller);
     const abort = () => controller.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });
@@ -2133,16 +2169,13 @@ export function createBrowserBridge(options) {
         Array.from({ length: Math.min(limit, units.length) }, stageNext),
       );
       if (failure) throw failure.error;
+      // Loaded before the commit loop, which must not await.
+      const binding =
+        relinkId && staged[0]?.fingerprint ? await decisions() : null;
       for (const [index, unit] of units.entries()) {
         const item = staged[index];
         const fileName = unit.name ?? item.name ?? item.runtime.name;
-        controller.signal.throwIfAborted();
-        if (disposed || editor.disposed || editor.generation !== generation)
-          throw new EditorError(
-            "stale_import",
-            "Project changed during import",
-            "import",
-          );
+        scope.assert(operation);
         const old = relinkId ? editor.document.assets[relinkId] : null;
         if (relinkId && !old)
           throw new EditorError(
@@ -2155,7 +2188,7 @@ export function createBrowserBridge(options) {
         // means other media.
         if (old?.fingerprint && item.fingerprint) {
           const match = compareFingerprints(
-            await decisions(),
+            binding,
             old.fingerprint,
             item.fingerprint,
           );
@@ -2250,6 +2283,7 @@ export function createBrowserBridge(options) {
           lease: entry.lease,
           revision: entry.contentRevision,
         });
+      scope.assert(operation);
       const result = editor.dispatch({ type: "transaction", commands });
       if (!result.ok) throw result.error;
       for (const entry of leases) analyze(entry.lease.value);
@@ -2579,7 +2613,10 @@ export function createBrowserBridge(options) {
           ? cancelAnimationFrame
           : clearTimeout)(refreshFrame);
       ++binding;
-      for (const controller of pendingImports) controller.abort();
+      for (const controller of pendingImports)
+        controller.abort(
+          new EditorError("disposed", "Bridge is disposed", "import"),
+        );
       for (const controller of analyses.values()) controller.abort();
       globalThis.document?.removeEventListener("visibilitychange", visibility);
       await Promise.all([...jobs].map((job) => job.cancel()));
@@ -2622,7 +2659,7 @@ export function createBrowserBridge(options) {
           "provider",
           id,
         );
-      const generation = editor.generation;
+      const scope = projectScope(signal);
       let read;
       try {
         read = await describeProvider(provider, signal);
@@ -2635,13 +2672,7 @@ export function createBrowserBridge(options) {
           id,
         );
       }
-      if (disposed || editor.disposed || editor.generation !== generation)
-        throw new EditorError(
-          "stale_import",
-          "Project changed while the source opened",
-          "provider",
-          id,
-        );
+      scope.assert("provider", id);
       const assetId = id ?? crypto.randomUUID();
       const descriptor = editor.document.assets[assetId];
       const previous = editor.document.project.sources.find(
@@ -2731,7 +2762,9 @@ export function createBrowserBridge(options) {
     pause,
     startExport,
     async importCaptions(file) {
-      const generation = editor.generation;
+      if (disposed)
+        throw new EditorError("disposed", "Bridge is disposed", "import");
+      const scope = projectScope();
       // A larger file holds more cues than a project can, so refuse it unread.
       if (file.size > MAX_CAPTION_FILE_BYTES)
         throw new EditorError(
@@ -2756,8 +2789,7 @@ export function createBrowserBridge(options) {
           { cause: error },
         );
       }
-      if (disposed || editor.generation !== generation)
-        throw Error("Project changed during caption import");
+      scope.assert("import");
       const assetId = crypto.randomUUID();
       const result = editor.dispatch({
         type: "asset.put",
