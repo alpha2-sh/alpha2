@@ -1599,6 +1599,7 @@ impl ServeChild {
         stdin.flush().expect("flush");
     }
 
+    #[cfg(unix)]
     /// The exit status if the child ends within `limit`.
     pub(super) fn exited_within(&mut self, limit: Duration) -> Option<std::process::ExitStatus> {
         let started = Instant::now();
@@ -1615,6 +1616,7 @@ impl ServeChild {
         }
     }
 
+    #[cfg(unix)]
     pub(super) fn terminate(&self) {
         let killed = std::process::Command::new("kill")
             .args(["-TERM", &self.child.id().to_string()])
