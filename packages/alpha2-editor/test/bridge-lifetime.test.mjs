@@ -1,4 +1,8 @@
-import { FakeCanvas, resetPageGpuLosses } from "./support/preview-stubs.mjs";
+import {
+  FakeCanvas,
+  resetPageGpuLosses,
+  workingWorker,
+} from "./support/preview-stubs.mjs";
 import { register } from "node:module";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -312,6 +316,37 @@ async function previewSession({ workerFactory }) {
   return { editor, bridge, reported };
 }
 
+/** A working preview worker that never answers the request types in `mute`. */
+function muteWorker(mute) {
+  const inner = workingWorker();
+  const worker = {
+    requests: [],
+    terminated: false,
+    onmessage: null,
+    onerror: null,
+    postMessage(message) {
+      worker.requests.push(message.type);
+      if (mute.has(message.type)) return;
+      inner.onmessage = (event) => worker.onmessage?.(event);
+      inner.postMessage(message);
+    },
+    terminate() {
+      worker.terminated = true;
+    },
+  };
+  return worker;
+}
+
+/** What `promise` did within `ms`: `{ state, value | error }`, or `{ state: "pending" }`. */
+const within = (promise, ms) =>
+  Promise.race([
+    promise.then(
+      (value) => ({ state: "resolved", value }),
+      (error) => ({ state: "rejected", error }),
+    ),
+    settle(ms).then(() => ({ state: "pending" })),
+  ]);
+
 test(
   "a worker factory that throws leaves the preview on the main thread",
   { skip },
@@ -333,3 +368,27 @@ test(
     editor.dispose();
   },
 );
+
+for (const mute of ["seek", "init"])
+  test(
+    `disposing the bridge terminates a preview worker that never answers ${mute}`,
+    { skip },
+    async () => {
+      let worker;
+      const { editor, bridge } = await previewSession({
+        workerFactory: () => (worker = muteWorker(new Set([mute]))),
+      });
+      const binding = bridge.bindPreview(new FakeCanvas(64, 36));
+      binding.catch(() => {});
+      await settle(20);
+      const seeking = bridge.seek(0);
+      seeking.catch(() => {});
+      await settle(20);
+      const disposed = await within(bridge.dispose(), 2000);
+      assert.equal(disposed.state, "resolved");
+      assert.ok(worker.terminated);
+      assert.notEqual((await within(binding, 100)).state, "pending");
+      assert.notEqual((await within(seeking, 100)).state, "pending");
+      editor.dispose();
+    },
+  );

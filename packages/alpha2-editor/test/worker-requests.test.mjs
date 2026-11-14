@@ -149,3 +149,97 @@ test("a worker entry evaluated again while init loads the engine keeps the first
   await installed.dispose();
   assert.notEqual(installEditorWorker(scope), installed);
 });
+
+test("an error reply that cannot be posted is replaced by a plain one and later requests are still answered", async () => {
+  const posted = [];
+  let failNextError = true;
+  const scope = {
+    onmessage: null,
+    postMessage(message) {
+      if (!message.ok && failNextError) {
+        failNextError = false;
+        throw new DOMException(
+          "the reply could not be cloned",
+          "DataCloneError",
+        );
+      }
+      posted.push([message.requestId, message.ok, message.error?.code]);
+    },
+  };
+  const installed = installEditorWorker(scope);
+  const send = (type, requestId) =>
+    scope.onmessage({
+      data: {
+        type,
+        sessionId: "s",
+        revision: 0,
+        requestId,
+        runtimeAssets: {},
+        width: 16,
+        height: 16,
+      },
+    });
+  send("init", 1);
+  send("no-such-request", 2);
+  send("cancel", 3);
+  send("set-preview-scale", 4);
+  for (let i = 0; i < 100 && posted.length < 4; i++)
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  assert.deepEqual(posted, [
+    [1, true, undefined],
+    [2, false, "worker_error"],
+    [3, true, undefined],
+    [4, true, undefined],
+  ]);
+  await installed.dispose();
+});
+
+/** A worker that answers nothing, recording what it was sent. */
+function silentWorker() {
+  const worker = {
+    requests: [],
+    onmessage: null,
+    onerror: null,
+    onmessageerror: null,
+    terminated: false,
+    postMessage(message) {
+      worker.requests.push(message.type);
+    },
+    terminate() {
+      worker.terminated = true;
+    },
+  };
+  return worker;
+}
+
+test("disposing a preview whose worker never answers terminates it within a second", async () => {
+  const worker = silentWorker();
+  const preview = createWorkerPreview(worker);
+  preview.ready.catch(() => {});
+  const seeking = preview.seek(0);
+  seeking.catch(() => {});
+  const started = performance.now();
+  await preview.dispose();
+  assert.ok(performance.now() - started < 1500);
+  assert.ok(worker.terminated);
+  assert.deepEqual(worker.requests, ["init", "dispose"]);
+  await assert.rejects(seeking);
+  await assert.rejects(preview.seek(0));
+});
+
+test("a worker error fails pending and later calls at once", async () => {
+  for (const event of ["onerror", "onmessageerror"]) {
+    const worker = silentWorker();
+    const preview = createWorkerPreview(worker);
+    preview.ready.catch(() => {});
+    worker[event]({ message: "the worker script failed" });
+    await assert.rejects(preview.ready);
+    const before = worker.requests.length;
+    await assert.rejects(
+      preview.cancel(),
+      /the worker script failed|could not/,
+    );
+    assert.equal(worker.requests.length, before, event);
+    await preview.dispose();
+  }
+});

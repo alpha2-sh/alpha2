@@ -23,6 +23,11 @@ All notable changes to this project are documented in this file.
 - Editor: a preview `workerFactory` that throws (a blocked cross-origin worker script, say) leaves
   the preview on the main thread with one `preview_worker_failed` report, as documented; before,
   `bindPreview` rejected and GPU recovery ended with `preview_unavailable`.
+- Editor: disposing the browser bridge or a `WorkerPreview` behind a preview worker that stopped
+  answering resolves within about a second and terminates the worker; before, it never resolved
+  and the worker, its GPU device and its decoders stayed alive. A worker `error` or
+  `messageerror` fails every later call at once, and one reply the worker cannot post no longer
+  stops it answering later requests.
 
 ## [0.6.0] - 2026-11-08
 

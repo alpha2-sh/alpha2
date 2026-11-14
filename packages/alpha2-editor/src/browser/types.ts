@@ -852,6 +852,9 @@ export interface WorkerPreview {
   mix(startSample: number, frames: number): Promise<Float32Array[]>;
   /** Drops the render in flight; its `seek` resolves with `rendered: false`. */
   cancel(): Promise<void>;
-  /** Releases the worker's engine and terminates the worker. Idempotent. */
+  /**
+   * Asks the worker to release its engine, waits at most one second for its reply, then terminates
+   * it and rejects every pending call. Idempotent.
+   */
   dispose(): Promise<void>;
 }

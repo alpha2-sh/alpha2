@@ -4,6 +4,8 @@ import { extensionWasmUrls } from "./runtime/extension-import.js";
 import { AudioWindowSupplier, mixBlock } from "./runtime/audio.js";
 
 const INSTALLED = Symbol.for("alpha2.editorWorker");
+/** How long `WorkerPreview.dispose()` waits for the worker's reply before terminating it. */
+const DISPOSE_REPLY_MS = 1000;
 
 /**
  * Serves the editor's preview protocol (`createWorkerPreview`) on `scope`, a dedicated worker's
@@ -215,17 +217,33 @@ function serveEditorWorker(scope) {
         } catch {
           lossReport = undefined;
         }
-        scope.postMessage({
-          ...response,
-          ok: false,
-          error: {
-            ...serializeError(error, false, "worker_error"),
-            ...(typeof causeCode === "string" ? { causeCode } : {}),
-            ...(lossReport === undefined ? {} : { lossReport }),
-          },
-        });
+        const serialized = serializeError(error, false, "worker_error");
+        try {
+          scope.postMessage({
+            ...response,
+            ok: false,
+            error: {
+              ...serialized,
+              ...(typeof causeCode === "string" ? { causeCode } : {}),
+              ...(lossReport === undefined ? {} : { lossReport }),
+            },
+          });
+        } catch {
+          // A field that cannot be cloned must not leave the request unanswered.
+          scope.postMessage({
+            ...response,
+            ok: false,
+            error: {
+              code: "worker_error",
+              message: String(serialized.message),
+              fatal: serialized.fatal === true,
+            },
+          });
+        }
       }
     });
+    // One request that fails outside its handler must not stop the ones after it.
+    tail = tail.catch(() => {});
   };
   return {
     async dispose() {
@@ -245,7 +263,7 @@ function serveEditorWorker(scope) {
  * worker; `dispose()` terminates it. This port renders picture and mixes audio blocks only, apart
  * from a bridge's main-thread audio output. Every call waits for `ready`, which rejects if the
  * worker cannot start its engine; a disposed preview rejects new calls, and a worker error rejects
- * every pending one.
+ * every pending and later call. `dispose()` waits at most a second for the worker's reply.
  * @param {Worker} worker
  * @param {import("./types.js").WorkerPreviewOptions} [options]
  * @returns {import("./types.js").WorkerPreview}
@@ -266,7 +284,9 @@ export function createWorkerPreview(
 ) {
   let nextId = 0,
     revision = 0,
-    disposed = false;
+    disposed = false,
+    // Set once the worker failed as a whole; every later call rejects with it at once.
+    failure = null;
   const pending = new Map();
   const rejectAll = (error) => {
     for (const waiter of pending.values()) waiter.reject(error);
@@ -299,9 +319,19 @@ export function createWorkerPreview(
       waiter.reject(error);
     }
   };
-  worker.onerror = (event) => rejectAll(new Error(event.message));
-  const call = (type, body = {}, transfer = []) => {
-    if (disposed) return Promise.reject(new Error("Worker preview disposed"));
+  const fail = (message) => {
+    failure ??= new Alpha2WasmError({
+      code: "worker_error",
+      message,
+      fatal: true,
+    });
+    rejectAll(failure);
+  };
+  worker.onerror = (event) =>
+    fail(event?.message || "The preview worker failed");
+  worker.onmessageerror = () =>
+    fail("A preview worker reply could not be read");
+  const send = (type, body = {}, transfer = []) => {
     const requestId = ++nextId;
     return new Promise((resolve, reject) => {
       pending.set(requestId, { resolve, reject });
@@ -315,6 +345,11 @@ export function createWorkerPreview(
         reject(error);
       }
     });
+  };
+  const call = (type, body, transfer) => {
+    if (disposed) return Promise.reject(new Error("Worker preview disposed"));
+    if (failure) return Promise.reject(failure);
+    return send(type, body, transfer);
   };
   const ready = call(
     "init",
@@ -366,14 +401,20 @@ export function createWorkerPreview(
     cancel: () => call("cancel"),
     async dispose() {
       if (disposed) return;
-      try {
-        await ready;
-        await call("dispose");
-      } finally {
-        disposed = true;
-        worker.terminate();
-        rejectAll(new Error("Worker disposed"));
+      disposed = true;
+      // The worker releases its engine if it answers in time; terminating frees it either way.
+      if (!failure) {
+        let timer = 0;
+        await Promise.race([
+          send("dispose").catch(() => {}),
+          new Promise((resolve) => {
+            timer = setTimeout(resolve, DISPOSE_REPLY_MS);
+          }),
+        ]);
+        clearTimeout(timer);
       }
+      worker.terminate();
+      rejectAll(new Error("Worker disposed"));
     },
   };
 }

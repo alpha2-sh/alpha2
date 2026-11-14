@@ -1514,7 +1514,7 @@ export function createBrowserBridge(options) {
     workerFonts = null;
     copySurface = true;
     await failed?.dispose().catch(() => {});
-    if (isGpuLoss(error)) return;
+    if (isGpuLoss(error) || disposed) return;
     workerGivenUp = true;
     const reason = error instanceof Error ? error.message : String(error ?? "");
     onError(
@@ -2631,6 +2631,10 @@ export function createBrowserBridge(options) {
       await Promise.all([...extractions].map((job) => job.cancel()));
       // Its conversion stops on `lifetime`; nothing may write after teardown.
       await proxyRun?.done;
+      // Before the queue drains, so a queued render waiting on the worker is rejected.
+      const worker = workerPreview;
+      workerPreview = null;
+      await worker?.dispose();
       await queue;
       await mixer?.close();
       await supplier?.close();
