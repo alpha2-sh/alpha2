@@ -75,6 +75,13 @@ All notable changes to this project are documented in this file.
   command line's `--purpose`) takes the conform report's spelling, `export_original` and so on;
   the kebab-case spelling is refused. Both clients send the purpose as given and accept a loudness
   without a ceiling.
+- Failure classes: a new class `DEFECT` for an engine fault: the host's `INTERNAL` (a caught panic)
+  and the browser runtime's `WASM_TRAP` and `WASM_TRAPPED`. `alpha2/export-retry` retries it once,
+  at once and unchanged, on a fresh worker or host, then stops (before, three attempts with
+  backoff as `UNKNOWN`). The browser runtime's own codes are classified: `WASM_COMPILE_ERROR`,
+  `WASM_LINK_ERROR` and `INVALID_STATE` are not retried; `RENDER_WORKER_ERROR`,
+  `RENDER_WORKER_FAILED` and `AUDIO_WORKER_ERROR` stay `UNKNOWN`. `alpha2/export-failure` exports
+  `BROWSER_ERROR_CODES`.
 
 ### Fixed
 

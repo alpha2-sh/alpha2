@@ -10,6 +10,8 @@
  * - Memory exhaustion steps down to a smaller profile.
  * - An encode failure retries once with the software video encoder when available.
  * - `RESOURCE_BUSY` retries unchanged after the longer of its `retryAfterMs` and the backoff.
+ * - `DEFECT` (an engine panic or wasm trap) retries once, unchanged and at once, on a fresh worker
+ *   or host; a second one stops.
  * - Other transient failures retry unchanged and step down only if they recur at the same point.
  *   A browser that has already lost the GPU twice moves to the CPU or stops, since the browser
  *   withdraws GPU access at the next reset.
@@ -191,6 +193,20 @@ export function decideRetry(
           : "there is no CPU renderer to retry on"
       }`,
       hung,
+    );
+  }
+  if (failure.code === "DEFECT") {
+    const defects = history.filter(
+      (attempt) => attempt.failure.code === "DEFECT",
+    ).length;
+    if (defects > 1)
+      return stop(
+        "DEFECT again on a fresh attempt: the engine fails this export the same way",
+      );
+    if (!attemptsLeft) return stop(`all ${maxAttempts} attempts failed`);
+    return retry(
+      `DEFECT: an engine fault; retrying once on a fresh ${failure.origin === "browser" ? "worker" : "host"}`,
+      { delayMs: 0 },
     );
   }
   if (!isRetryableFailure(failure))

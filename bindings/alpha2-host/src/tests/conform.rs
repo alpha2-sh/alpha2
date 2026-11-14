@@ -295,7 +295,7 @@ fn a_panic_handling_a_request_fails_that_request_and_the_host_answers_the_next()
         .expect_err("the export's conform panics");
     assert_eq!(error.code, "INTERNAL");
     let failure = error.failure.expect("an export failure report");
-    assert_eq!(failure["code"], "UNKNOWN");
+    assert_eq!(failure["code"], "DEFECT");
     assert_eq!(failure["hostCode"], "INTERNAL");
     assert_eq!(failure["phase"], "prepare");
     assert!(!refused.exists());

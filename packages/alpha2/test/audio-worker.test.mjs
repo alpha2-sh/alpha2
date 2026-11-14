@@ -211,7 +211,7 @@ test("a platform error and a wasm trap keep their name and fatality across the a
       false,
       "STORAGE_QUOTA_EXCEEDED",
     ],
-    [() => new WebAssembly.RuntimeError("unreachable"), true, "UNKNOWN"],
+    [() => new WebAssembly.RuntimeError("unreachable"), true, "DEFECT"],
   ]) {
     const host = new AudioWorkerHost(async () => {
       throw make();

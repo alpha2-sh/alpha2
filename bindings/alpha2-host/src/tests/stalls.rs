@@ -115,7 +115,7 @@ fn a_shard_that_panics_fails_the_export_at_once_as_a_defect() {
     );
     let (code, class) = stall_report(error.clone());
     assert_eq!(code, "INTERNAL", "{error}");
-    assert_eq!((class.code, class.resource), ("UNKNOWN", "unknown"));
+    assert_eq!((class.code, class.resource), ("DEFECT", "unknown"));
     assert!(
         worker
             .heartbeats

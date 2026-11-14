@@ -13,6 +13,7 @@ import type {
   WasmMissingFrame,
 } from "./effects.js";
 import type { ExportBackend, ExportTicket } from "./exporter.js";
+import type { BrowserErrorCode } from "./export-failure.js";
 import {
   lossReportFromJson,
   type GpuLossReport,
@@ -1193,7 +1194,7 @@ export class WorkerRenderBackend implements RenderBackend {
   /** Fails every pending and later call with one fatal `RENDER_WORKER_FAILED`. */
   #fail(reason: string): Alpha2WasmError {
     this.#failure ??= new Alpha2WasmError({
-      code: "RENDER_WORKER_FAILED",
+      code: "RENDER_WORKER_FAILED" satisfies BrowserErrorCode,
       message: `${reason}; the render worker must be replaced`,
       fatal: true,
     });

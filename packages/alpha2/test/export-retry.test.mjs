@@ -91,6 +91,35 @@ test("a failure a retry cannot help is final", () => {
   );
 });
 
+test("a defect retries once at once on a fresh worker or host, unchanged, then stops", () => {
+  const options = { cpuRenderer: true, softwareVideoEncoder: true };
+  const once = decideRetry(
+    [failed("DEFECT", REDUCED, { phase: "encode" })],
+    options,
+  );
+  assert.equal(once.retry, true);
+  assert.equal(once.delayMs, 0);
+  assert.equal(once.profile, REDUCED);
+  assert.equal(once.renderer, "gpu");
+  assert.equal(once.videoEncoder, "default");
+  assert.match(once.reason, /fresh host/);
+  const browser = decideRetry([
+    failed("DEFECT", DEFAULT, { origin: "browser" }),
+  ]);
+  assert.match(browser.reason, /fresh worker/);
+  const twice = decideRetry(
+    [failed("DEFECT"), failed("UNKNOWN"), failed("DEFECT")],
+    { ...options, maxAttempts: 5 },
+  );
+  assert.equal(twice.retry, false);
+  assert.match(twice.reason, /DEFECT again/);
+  assert.equal(
+    decideRetry([failed("UNKNOWN"), failed("UNKNOWN"), failed("DEFECT")]).retry,
+    false,
+  );
+  assert.equal(decideRetry([failed("UNKNOWN"), failed("DEFECT")]).delayMs, 0);
+});
+
 test("resource busy retries after the hint", () => {
   const busy = (profile, retryAfterMs) =>
     failed("RESOURCE_BUSY", profile, {

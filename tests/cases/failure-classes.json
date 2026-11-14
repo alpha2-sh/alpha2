@@ -1,5 +1,5 @@
 {
-  "description": "The failure class (export-failure's `code`) and memory region each error code is evidence of on its own, with nothing else known: no message, no device diagnostics, no typed evidence. `protocol` is every host protocol code, read by alpha2-host's classify_failure test and by alpha2's failureForCode test; `node` the codes only the host clients make (@alpha2-sh/node, read by its test, and the alpha2 Python package, read by its tests, which make the same ones); `browser` the codes only the browser SDK makes (alpha2's decode refusals and frame-supply failures), read by alpha2's failureForCode test; `editor` @alpha2-sh/editor's EditorError codes, read by its test. A code missing here is a test failure, so a new code is classified when it is added.",
+  "description": "The failure class (export-failure's `code`) and memory region each error code is evidence of on its own, with nothing else known: no message, no device diagnostics, no typed evidence. `protocol` is every host protocol code, read by alpha2-host's classify_failure test and by alpha2's failureForCode test; `node` the codes only the host clients make (@alpha2-sh/node, read by its test, and the alpha2 Python package, read by its tests, which make the same ones); `browser` the codes only the browser runtime makes (alpha2's decode refusals, frame-supply failures, wasm traps and worker errors, and alpha2-wasm's INVALID_STATE), read by alpha2's failureForCode test, which also checks it lists exactly BROWSER_ERROR_CODES, and by alpha2-wasm's code test; `editor` @alpha2-sh/editor's EditorError codes, read by its test. A code missing here is a test failure, so a new code is classified when it is added.",
   "protocol": {
     "UNSUPPORTED_PROTOCOL": { "code": "INVALID_INPUT", "resource": "unknown" },
     "INVALID_REQUEST": { "code": "INVALID_INPUT", "resource": "unknown" },
@@ -38,7 +38,7 @@
     "PLUGIN_LOAD_FAILED": { "code": "INVALID_INPUT", "resource": "unknown" },
     "PLUGIN_TRAPPED": { "code": "INVALID_INPUT", "resource": "unknown" },
     "PLUGIN_LIMIT": { "code": "RESOURCE_LIMIT", "resource": "unknown" },
-    "INTERNAL": { "code": "UNKNOWN", "resource": "unknown" },
+    "INTERNAL": { "code": "DEFECT", "resource": "unknown" },
     "ALPHA2_ERROR": { "code": "UNKNOWN", "resource": "unknown" }
   },
   "browser": {
@@ -46,7 +46,15 @@
     "PLANAR_DECODE_UNAVAILABLE": { "code": "INVALID_INPUT", "resource": "unknown" },
     "NON_PLANAR_FRAME": { "code": "INVALID_INPUT", "resource": "unknown" },
     "FRAME_SUPPLY_FAILED": { "code": "UNKNOWN", "resource": "unknown" },
-    "SOFTWARE_DECODE_REQUIRED": { "code": "UNKNOWN", "resource": "unknown" }
+    "SOFTWARE_DECODE_REQUIRED": { "code": "UNKNOWN", "resource": "unknown" },
+    "WASM_TRAP": { "code": "DEFECT", "resource": "unknown" },
+    "WASM_TRAPPED": { "code": "DEFECT", "resource": "unknown" },
+    "WASM_COMPILE_ERROR": { "code": "INVALID_INPUT", "resource": "unknown" },
+    "WASM_LINK_ERROR": { "code": "INVALID_INPUT", "resource": "unknown" },
+    "RENDER_WORKER_ERROR": { "code": "UNKNOWN", "resource": "unknown" },
+    "RENDER_WORKER_FAILED": { "code": "UNKNOWN", "resource": "unknown" },
+    "AUDIO_WORKER_ERROR": { "code": "UNKNOWN", "resource": "unknown" },
+    "INVALID_STATE": { "code": "INVALID_INPUT", "resource": "unknown" }
   },
   "node": {
     "HOST_NOT_FOUND": { "code": "INVALID_INPUT", "resource": "unknown" },
