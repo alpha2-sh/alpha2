@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use crate::config::{
     DecoderSessionCount, configured_decode_concurrency, configured_decode_lookahead,
     configured_decoder_session_override, configured_reverse_hardware_surfaces,
-    decoder_session_bytes, decoder_session_count, visual_decode_reads,
+    decoder_session_bytes, decoder_session_count,
 };
 use crate::decode::{CursorReads, DecodeWorkerConfig};
 use crate::frames::NativeGpuFrames;
@@ -164,7 +164,8 @@ impl Host {
         // The synchronous comparison path decodes in software on the coordinator.
         let hardware_decode = pipeline_enabled && self.hardware_decode_ready();
         let decode_lookahead = configured_decode_lookahead(pipeline_enabled);
-        let (workload_parallelism, reads) = visual_decode_reads(project, range);
+        let (workload_parallelism, reads) =
+            alpha2_host_core::cursor::visual_decode_reads(project, range);
         let probe_started = Instant::now();
         let admitted = *self
             .largest_video_frames

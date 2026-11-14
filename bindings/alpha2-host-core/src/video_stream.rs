@@ -246,6 +246,17 @@ pub struct StreamFrame {
 }
 
 impl StreamFrame {
+    /// Bytes the frame holds: its planes, or what its surface retains.
+    #[must_use]
+    pub fn retained_bytes(&self) -> u64 {
+        match &self.image {
+            BackendImage::Cpu { planes, .. } => {
+                planes.iter().map(|plane| plane.bytes.len() as u64).sum()
+            }
+            BackendImage::Surface(lease) => lease.retained_bytes(),
+        }
+    }
+
     /// The frame as a CPU frame; `None` for a surface.
     #[must_use]
     pub fn to_cpu(&self) -> Option<DecodedVideoFrame> {
@@ -544,6 +555,14 @@ impl VideoStream {
     #[must_use]
     pub const fn track(&self) -> &TrackInfo {
         &self.track
+    }
+
+    /// Bytes of the frame decoded ahead and kept for the next [`Self::next`].
+    #[must_use]
+    pub fn lookahead_bytes(&self) -> u64 {
+        self.lookahead
+            .as_ref()
+            .map_or(0, StreamFrame::retained_bytes)
     }
 
     /// How far after a time a frame may be stored and still be the one shown at it.

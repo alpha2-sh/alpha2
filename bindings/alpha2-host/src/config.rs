@@ -1,8 +1,7 @@
 use std::env;
 
 use alpha2_media::{AudioCodec, BitrateMode, VideoCodec, VideoRateControl};
-use alpha2_model::{MediaKind, Project};
-use alpha2_time::{FrameRate, TimeRange};
+use alpha2_time::FrameRate;
 
 use crate::protocol::{AudioQualityRequest, VideoQualityRequest};
 use crate::{
@@ -355,30 +354,6 @@ const fn decode_concurrency_policy(hardware_decode: bool) -> (usize, usize) {
     (DEFAULT_DECODE_CONCURRENCY, MAX_DECODE_CONCURRENCY)
 }
 
-/// The peak number of decoder cursors reading at once
-/// ([`alpha2_eval::ActiveIndex::peak_source_reads`]) and when each reads. Provider sources open no
-/// decoder.
-pub fn visual_decode_reads(
-    project: &Project,
-    export_range: TimeRange,
-) -> (usize, crate::decode::CursorReads) {
-    let decoded = project
-        .sources
-        .iter()
-        .filter(|source| source.kind == MediaKind::Video && source.provider.is_none())
-        .map(|source| &source.id)
-        .collect::<std::collections::HashSet<_>>();
-    // An export validated the project already; an index it cannot build reads nothing.
-    let Ok(index) = alpha2_eval::ActiveIndex::build(project) else {
-        return (1, crate::decode::CursorReads::default());
-    };
-    let counted = |source: &alpha2_media::SourceId| decoded.contains(source);
-    (
-        index.peak_source_reads(export_range, counted).max(1),
-        crate::decode::CursorReads::new(index.source_reads(export_range, counted)),
-    )
-}
-
 /// Chosen once when the host starts, because the renderer's device is created to match it.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum VideoDecodePolicy {
@@ -629,7 +604,7 @@ impl DecoderSessionLimit {
 pub struct DecoderSessionCount {
     pub sessions: usize,
     pub limit: DecoderSessionLimit,
-    /// ([`visual_decode_reads`]).
+    /// ([`alpha2_host_core::cursor::visual_decode_reads`]).
     pub peak: usize,
 }
 
@@ -861,13 +836,6 @@ mod tests {
         );
     }
 
-    use super::visual_decode_reads;
-    use alpha2_time::{MediaTime, TimeRange};
-
-    fn range(start: i64, end: i64) -> TimeRange {
-        TimeRange::new(MediaTime::from_ticks(start), MediaTime::from_ticks(end)).unwrap()
-    }
-
     #[test]
     fn reverse_hardware_surfaces_default_to_software_unless_strict() {
         use super::VideoDecodePolicy;
@@ -915,44 +883,6 @@ mod tests {
         assert_eq!(VideoDecodePolicy::default(), expected);
         // A device without a decode path must fall back, not fail the export.
         assert!(!VideoDecodePolicy::default().requires_hardware());
-    }
-
-    #[test]
-    fn decode_parallelism_counts_what_compositions_read() {
-        use serde_json::json;
-        let span = |start, end| json!({"start": start, "end": end});
-        let video = |id: &str| json!({"id": id, "kind": "video", "locator": format!("{id}.mp4")});
-        let media = |id: &str| json!({"id": id, "op": {"type": "media", "source_id": id}});
-        let quad = json!({"id": "quad", "nodes": [
-            media("a"), media("b"), media("c"), media("d"),
-            {"id": "mix", "op": {"type": "merge", "layers": [
-                {"input": "a"}, {"input": "b"}, {"input": "c"}, {"input": "d"}
-            ]}}
-        ], "output": "mix"});
-        let project = |clip: serde_json::Value| {
-            alpha2_model::Project::from_json(
-                &json!({
-                    "schema_version": 1, "id": "p", "name": "p",
-                    "settings": {"width": 64, "height": 36, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48_000},
-                    "sources": [video("a"), video("b"), video("c"), video("d"),
-                        {"id": "split", "kind": "composition", "composition": "quad"}],
-                    "compositions": [quad],
-                    "timeline": {"tracks": [{"id": "t", "name": "V", "kind": "video", "clips": [clip]}]}
-                })
-                .to_string(),
-            )
-            .expect("valid")
-        };
-        let composed = project(json!({
-            "id": "c", "source_id": "a", "composition": {"id": "quad"},
-            "timeline_range": span(0, 120_000), "source_range": span(0, 120_000)
-        }));
-        assert_eq!(visual_decode_reads(&composed, range(0, 120_000)).0, 4);
-        let source = project(json!({
-            "id": "c", "source_id": "split",
-            "timeline_range": span(0, 120_000), "source_range": span(0, 120_000)
-        }));
-        assert_eq!(visual_decode_reads(&source, range(0, 120_000)).0, 4);
     }
 
     #[test]

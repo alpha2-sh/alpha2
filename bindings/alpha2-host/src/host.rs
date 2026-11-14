@@ -1086,7 +1086,7 @@ impl Host {
             .largest_video_frames
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(largest);
-        let (videos, _) = crate::config::visual_decode_reads(project, range);
+        let (videos, _) = alpha2_host_core::cursor::visual_decode_reads(project, range);
         // The threads a software session runs once fitted to its budget.
         let mut threads =
             alpha2_native::codec_thread_allocation(alpha2_native::CodecThreadRequest {

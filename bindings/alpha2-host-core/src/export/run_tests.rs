@@ -20,7 +20,7 @@ use crate::video_stream::{
 
 const SIZE: u32 = 16;
 
-/// Intra frames presented at `first..end` in the track's units; frame `i` has luma `16 + 6 i`.
+/// Intra frames presented at `first..end` in the track's units; frame `i` has luma `16 + 6 i % 216`.
 struct Frames {
     tracks: Vec<TrackInfo>,
     next: i64,
@@ -100,7 +100,7 @@ impl VideoDecodeBackend for Session {
     fn receive(&mut self, _wait: bool) -> Result<Poll, BackendError> {
         Ok(match self.0.pop_front() {
             Some(pts) => {
-                let luma = u8::try_from(16 + 6 * pts).expect("small");
+                let luma = u8::try_from(16 + 6 * pts % 216).expect("small");
                 let plane = |width: u32, value: u8| Plane {
                     bytes: Bytes::from(vec![value; (width * width) as usize]),
                     stride: width,
@@ -608,4 +608,303 @@ fn the_stream_cursor_shows_the_frames_of_the_frame_selection_table() {
         }
     }
     assert_eq!(replayed, 13 * 5);
+}
+
+/// Software sessions over [`Session`] that count how many are alive.
+#[derive(Clone, Default)]
+struct Counted {
+    live: Arc<std::sync::atomic::AtomicUsize>,
+    peak: Arc<std::sync::atomic::AtomicUsize>,
+    opened: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct Tracked(Session, Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for Tracked {
+    fn drop(&mut self) {
+        self.1.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl VideoDecodeBackend for Tracked {
+    fn kind(&self) -> BackendKind {
+        self.0.kind()
+    }
+
+    fn submit(&mut self, packet: &Packet) -> Result<Submit, BackendError> {
+        self.0.submit(packet)
+    }
+
+    fn receive(&mut self, wait: bool) -> Result<Poll, BackendError> {
+        self.0.receive(wait)
+    }
+
+    fn finish_input(&mut self) -> Result<(), BackendError> {
+        self.0.finish_input()
+    }
+
+    fn flush(&mut self) -> Result<(), BackendError> {
+        self.0.flush()
+    }
+}
+
+impl VideoBackends for Counted {
+    fn open(
+        &self,
+        _track: &TrackInfo,
+        kind: BackendKind,
+    ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
+        use std::sync::atomic::Ordering;
+        if kind == BackendKind::Hardware {
+            return Err(BackendError::Unsupported("software only".into()));
+        }
+        let live = self.live.fetch_add(1, Ordering::Relaxed) + 1;
+        self.peak.fetch_max(live, Ordering::Relaxed);
+        self.opened.fetch_add(1, Ordering::Relaxed);
+        Ok(Box::new(Tracked(
+            Session(VecDeque::new(), false, false),
+            Arc::clone(&self.live),
+        )))
+    }
+}
+
+/// A 16x16 project at 30 fps of video clips of source `v`: `(start, frames, offset)` in frames.
+fn clips_project(clips: &[(i64, i64, i64)]) -> EngineProject {
+    let frame = |count: i64| MediaTime::from_ticks(count * alpha2_time::TICKS_PER_SECOND / 30);
+    let source = SourceId::new("v").expect("id");
+    let mut track = Track::new(
+        ModelTrackId::new("t").expect("id"),
+        "video",
+        ModelTrackKind::Video,
+    );
+    let mut overlay = Track::new(
+        ModelTrackId::new("o").expect("id"),
+        "overlay",
+        ModelTrackKind::Video,
+    );
+    let mut end = 0;
+    for (index, &(start, frames, offset)) in clips.iter().enumerate() {
+        let clip = Clip::new(
+            ClipId::new(format!("c{index}")).expect("id"),
+            source.clone(),
+            TimeRange::new(frame(start), frame(start + frames)).expect("range"),
+            TimeRange::new(frame(offset), frame(offset + frames)).expect("range"),
+        );
+        // Clips that overlap the one before go to the second track.
+        if start < end {
+            overlay.clips.push(clip);
+        } else {
+            track.clips.push(clip);
+        }
+        end = end.max(start + frames);
+    }
+    EngineProject::new(Project {
+        data: Vec::new(),
+        schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
+        id: ProjectId::new("p").expect("id"),
+        name: "clips".into(),
+        settings: ProjectSettings::new(SIZE, SIZE, FrameRate::new(30, 1).expect("rate"), 48_000)
+            .expect("settings"),
+        sources: vec![MediaSource::new(source, "asset://v", MediaKind::Video)],
+        effect_resources: Vec::new(),
+        compositions: Vec::new(),
+        timeline: Timeline {
+            tracks: vec![track, overlay],
+        },
+        audio: alpha2_model::MasterAudio::default(),
+    })
+    .expect("project")
+}
+
+/// Exports `snapshot` with sources from [`Counted`] sessions over 60 frames at 30 fps; `managed`
+/// closes finished cursors and limits the open streams as a mobile export does.
+fn export_counted(snapshot: &EngineProject, sessions: &Counted, managed: bool) -> Vec<(u64, u8)> {
+    let mut exporter = Exporter::for_project(
+        snapshot,
+        QualityProfile::export(),
+        alpha2_media::VideoCodec::H264,
+    )
+    .expect("exporter");
+    let renderer = CpuRenderer::new(2);
+    let backends = sessions.clone();
+    let mut sources = StreamSources::new(move |_: &SourceId| {
+        VideoStream::open(
+            late_reader(30, 0, 60),
+            0,
+            Arc::new(backends.clone()),
+            StreamOptions::default(),
+        )
+        .map(|stream| SourceStream::Video(Box::new(stream)))
+        .map_err(|error| error.to_string())
+    });
+    if managed {
+        let range = snapshot.timeline_range().expect("range");
+        let (peak, reads) = crate::cursor::visual_decode_reads(snapshot.project(), range);
+        sources = sources.with_reads(reads).with_session_limit(peak + 2);
+    }
+    let mut sink = Collect::default();
+    export_video(
+        snapshot,
+        &mut exporter,
+        ExportRenderer::Cpu(&renderer),
+        &mut TextTextures::new(),
+        &mut sources,
+        &mut sink,
+        (&FrameBudget::new(1 << 30), &CancelToken::default()),
+        &mut |_, _| {},
+    )
+    .expect("export");
+    drop(sources);
+    sink.0
+}
+
+fn peak(sessions: &Counted) -> usize {
+    sessions.peak.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[test]
+fn back_to_back_clips_of_one_source_keep_one_session_open() {
+    let snapshot = clips_project(&(0..40).map(|clip| (clip, 1, clip)).collect::<Vec<_>>());
+    let managed = Counted::default();
+    let frames = export_counted(&snapshot, &managed, true);
+    assert_eq!(frames.len(), 40);
+    assert_eq!(peak(&managed), 1, "sessions open at once");
+    assert_eq!(
+        frames,
+        export_counted(&snapshot, &Counted::default(), false)
+    );
+}
+
+#[test]
+fn overlapping_clips_of_one_source_keep_a_session_each() {
+    let snapshot = clips_project(&[(0, 10, 0), (5, 10, 20), (15, 10, 5)]);
+    let managed = Counted::default();
+    let frames = export_counted(&snapshot, &managed, true);
+    assert_eq!(frames.len(), 25);
+    assert_eq!(peak(&managed), 2, "sessions open at once");
+    assert_eq!(
+        frames,
+        export_counted(&snapshot, &Counted::default(), false)
+    );
+}
+
+#[test]
+fn random_reads_over_more_cursors_than_the_limit_show_the_same_frames() {
+    let sources = |sessions: &Counted, limit: Option<usize>| {
+        let backends = sessions.clone();
+        let sources = StreamSources::new(move |_: &SourceId| {
+            VideoStream::open(
+                late_reader(30, 0, 60),
+                0,
+                Arc::new(backends.clone()),
+                StreamOptions::default(),
+            )
+            .map(|stream| SourceStream::Video(Box::new(stream)))
+            .map_err(|error| error.to_string())
+        });
+        match limit {
+            Some(limit) => sources.with_session_limit(limit),
+            None => sources,
+        }
+    };
+    let (limited, unlimited) = (Counted::default(), Counted::default());
+    let (mut few, mut many) = (sources(&limited, Some(3)), sources(&unlimited, None));
+    // A fixed pseudo-random walk: one cursor of ten per output frame, at a time 0 to 59 frames in.
+    let mut state = 0x2545_f491_u64;
+    let mut next = |below: u64| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state % below
+    };
+    let shown = |sources: &mut StreamSources<_>, need: &FrameNeed, index| match sources
+        .frame(need, index, &CancelToken::default())
+        .expect("decodes")
+    {
+        Some(SourceFrame::Cpu(frame)) => frame.pts,
+        other => panic!("{other:?}"),
+    };
+    for index in 0..300 {
+        let need = FrameNeed {
+            reader: None,
+            clip_id: ClipId::new(format!("c{}", next(10))).expect("id"),
+            source_id: SourceId::new("v").expect("id"),
+            media_time: MediaTime::from_ticks(
+                i64::try_from(next(60)).expect("small") * alpha2_time::TICKS_PER_SECOND / 30,
+            ),
+        };
+        assert_eq!(
+            shown(&mut few, &need, index),
+            shown(&mut many, &need, index)
+        );
+        assert!(few.open_streams() <= 3, "{} streams", few.open_streams());
+    }
+    assert!(peak(&limited) <= 3, "{} sessions", peak(&limited));
+    assert_eq!(peak(&unlimited), 10);
+}
+
+#[test]
+fn every_clip_of_an_image_source_shares_one_decoded_still() {
+    let opened = std::rc::Rc::new(std::cell::Cell::new(0));
+    let count = std::rc::Rc::clone(&opened);
+    let still = Arc::new(DecodedVideoFrame {
+        pts: MediaTime::ZERO,
+        dts: None,
+        duration: None,
+        visible_rect: alpha2_media::Rect {
+            x: 0,
+            y: 0,
+            width: SIZE,
+            height: SIZE,
+        },
+        sample_aspect_ratio: alpha2_media::SampleAspectRatio { num: 1, den: 1 },
+        orientation: Orientation::default(),
+        pixel_format: alpha2_media::PixelFormat::Yuv(YuvFormat::I420),
+        chroma_location: alpha2_media::ChromaLocation::Left,
+        color: Some(alpha2_media::ColorMetadata::EXPORT),
+        planes: Vec::new(),
+    });
+    let mut sources = StreamSources::new(move |_: &SourceId| {
+        count.set(count.get() + 1);
+        Ok(SourceStream::Still(Arc::new((*still).clone())))
+    })
+    .with_session_limit(3);
+    for clip in 0..50_u64 {
+        let need = FrameNeed {
+            reader: None,
+            clip_id: ClipId::new(format!("c{clip}")).expect("id"),
+            source_id: SourceId::new("v").expect("id"),
+            media_time: MediaTime::ZERO,
+        };
+        sources
+            .frame(&need, clip, &CancelToken::default())
+            .expect("frame");
+    }
+    assert_eq!(opened.get(), 1);
+}
+
+#[test]
+fn the_frames_a_cursor_holds_count_against_the_budget() {
+    let mut sources = StreamSources::new(|_: &SourceId| {
+        VideoStream::open(
+            reader(),
+            0,
+            Arc::new(Sessions(false)),
+            StreamOptions::default(),
+        )
+        .map(|stream| SourceStream::Video(Box::new(stream)))
+        .map_err(|error| error.to_string())
+    });
+    assert_eq!(sources.held_bytes(), 0);
+    let need = FrameNeed {
+        reader: None,
+        clip_id: ClipId::new("c").expect("id"),
+        source_id: SourceId::new("v").expect("id"),
+        media_time: MediaTime::ZERO,
+    };
+    sources
+        .frame(&need, 0, &CancelToken::default())
+        .expect("frame");
+    // The frame answered and the one decoded after it, 16x16 I420 each.
+    assert_eq!(sources.held_bytes(), 2 * (16 * 16 + 2 * 8 * 8));
 }

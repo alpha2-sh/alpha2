@@ -834,7 +834,10 @@ impl State {
             .frame_needs(time)
             .map_err(|error| error.to_string())?;
         self.index += 1;
-        cache.follow(&session.budget);
+        cache.follow(
+            &session.budget,
+            alpha2_host_core::export::SourceFrames::held_bytes(&self.sources),
+        );
         cache
             .fill(
                 ExportRenderer::Gpu(&output.renderer),
@@ -871,7 +874,8 @@ impl State {
 }
 
 /// The decode side of a preview: one stream per source and cursor, opened on first use and kept
-/// while the preview lives. With `frames`, hardware-decoded frames stay on the GPU.
+/// while the preview lives, the least recently read closed past the timeline's peak of cursors
+/// reading at once plus a spare. With `frames`, hardware-decoded frames stay on the GPU.
 fn sources(
     session: &Session,
     providers: Arc<ProviderMedia>,
@@ -892,7 +896,12 @@ fn sources(
         video,
         session.preference,
     ));
-    let sources = StreamSources::new(open).with_providers(providers);
+    let peak = session.snapshot.timeline_range().map_or(1, |range| {
+        alpha2_host_core::cursor::visual_decode_reads(&session.project, range).0
+    });
+    let sources = StreamSources::new(open)
+        .with_providers(providers)
+        .with_session_limit(peak + crate::export::SPARE_SESSIONS);
     match frames {
         Some(frames) => sources.with_surface_import(Arc::clone(&frames.import)),
         None => sources,

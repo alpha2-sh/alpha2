@@ -140,7 +140,10 @@ pub(crate) fn render_each(
             .prefetch_needs(&snapshot, 1)
             .map_err(|error| failed("RENDER_FAILED", error.to_string()))?;
         let needs = needs.first().map_or(&[][..], |frame| &frame.needs[..]);
-        cache.follow(budget);
+        cache.follow(
+            budget,
+            alpha2_host_core::export::SourceFrames::held_bytes(&sources),
+        );
         cache
             .fill(
                 drawing.as_export(),

@@ -41,6 +41,9 @@ pub(crate) struct MediaBackends {
     pub audio_encoders: Arc<dyn AudioEncoders>,
 }
 
+/// Video streams a source reader may keep open beyond the most its timeline reads at once.
+pub(crate) const SPARE_SESSIONS: usize = 2;
+
 /// Samples per block of the offline mix.
 const AUDIO_BLOCK: usize = 4096;
 
@@ -386,13 +389,17 @@ fn attempt(
         || Arc::clone(&media.video_decoders),
         |frames| Arc::clone(&frames.decoders),
     );
+    // The limit sits above the peak of cursors reading at once, so it only catches a leak.
+    let (peak, reads) = alpha2_host_core::cursor::visual_decode_reads(&project, range);
     let mut sources = StreamSources::new(source_opener(
         &project,
         assets.clone(),
         Some(decoders),
         preference,
     ))
-    .with_providers(providers);
+    .with_providers(providers)
+    .with_reads(reads)
+    .with_session_limit(peak + SPARE_SESSIONS);
     if let Some(gpu_frames) = gpu_frames {
         sources = sources.with_surface_import(Arc::clone(&gpu_frames.import));
     }

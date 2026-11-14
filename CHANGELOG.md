@@ -250,6 +250,11 @@ All notable changes to this project are documented in this file.
   is what failed, after the app is back in the foreground. A full disk, a failed write, an audio
   encoder failure or a failed publish fail once with their own code; a failed publish keeps its
   `OUTPUT_PUBLISH_FAILED` error and the path of the kept file.
+- Mobile: an export closes a clip's decoder once the clip is past, so a project of many clips cut
+  from one recording holds as many decoder sessions as clips play at once instead of one per clip
+  until the end. A preview keeps at most two more sessions open than its timeline reads at once,
+  closing the one read longest ago, and every clip of one image shares one decoded picture. The
+  decoded frames sources hold count against the frame budget.
 
 ## [0.6.0] - 2026-11-08
 
