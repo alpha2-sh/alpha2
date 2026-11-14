@@ -669,8 +669,10 @@ export interface BrowserBridge {
    * export that starts restarts the conversion from 0 once it ends. Rejects for a source without a
    * single video file (`unsupported_media`, including HDR video), without its original in this
    * session (`missing_asset`), with a proxy already being made (`proxy_busy`), when the conversion
-   * makes no progress for 30 s (`proxy_stalled`; preview keeps reading the original), or when
-   * `signal` aborts.
+   * makes no progress for 30 s (`proxy_stalled`; preview keeps reading the original), when
+   * `signal` aborts, or when the bridge is disposed (`disposed`). Opening another project does not
+   * stop it: the proxy is kept in origin storage and used only while a document this session can
+   * show has that media.
    */
   generateProxy(id: string, options?: { signal?: AbortSignal }): Promise<void>;
   /** Whether a source has a kept proxy, the progress of one being made, and what preview reads. */

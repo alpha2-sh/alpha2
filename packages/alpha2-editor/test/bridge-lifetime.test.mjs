@@ -139,3 +139,117 @@ test(
     editor.dispose();
   },
 );
+
+/**
+ * A bridge whose proxy store holds each conversion until the test finishes it or its signal
+ * aborts, and counts proxy stagings, holds and releases.
+ */
+async function proxySession() {
+  const editor = createEditor();
+  const seen = { conversions: [], proxyStages: 0, holds: 0, released: 0 };
+  const bridge = createBrowserBridge({
+    editor,
+    audio: false,
+    assetDecisions: await engineWasm(),
+    mediaAdapter: {
+      async stage(file, signal, options) {
+        if (options?.fingerprint === false) seen.proxyStages += 1;
+        return videoAdapter.stage(file);
+      },
+    },
+    proxyStore: {
+      async hold() {
+        seen.holds += 1;
+        return {
+          release: async () => {
+            seen.released += 1;
+          },
+        };
+      },
+      find: async () => null,
+      generate(file, madeFrom, { signal }) {
+        return new Promise((resolve, reject) => {
+          const conversion = {
+            signal,
+            finish: () =>
+              resolve({
+                record: { made_from: madeFrom, width: 32, height: 18 },
+                file: { name: `${file.name}.proxy`, fingerprint: {} },
+              }),
+          };
+          seen.conversions.push(conversion);
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          });
+        });
+      },
+    },
+  });
+  await bridge.importFiles([{ name: "clip", fingerprint: fingerprint("a") }]);
+  return { editor, bridge, seen };
+}
+
+const started = async (seen, count = 1) => {
+  for (let i = 0; i < 200 && seen.conversions.length < count; i++)
+    await settle(2);
+  assert.equal(seen.conversions.length, count, "the conversion started");
+  return seen.conversions.at(-1);
+};
+
+test(
+  "disposing the bridge stops a running proxy conversion and refuses new ones",
+  { skip },
+  async () => {
+    const { editor, bridge, seen } = await proxySession();
+    const making = bridge.generateProxy("clip");
+    making.catch(() => {});
+    const conversion = await started(seen);
+    await bridge.dispose();
+    assert.equal(conversion.signal.aborted, true);
+    await assert.rejects(making);
+    assert.equal(seen.proxyStages, 0);
+    assert.equal(seen.released, seen.holds);
+    await assert.rejects(
+      bridge.generateProxy("clip"),
+      (error) => error.code === "disposed",
+    );
+    editor.dispose();
+  },
+);
+
+test(
+  "a proxy conversion outlives a project switch and is adopted only for a document with its media",
+  { skip },
+  async () => {
+    const { editor, bridge, seen } = await proxySession();
+    const first = bridge.generateProxy("clip");
+    const conversion = await started(seen);
+    editor.open(createEmptyDocument({ width: 64, height: 36 }));
+    await settle(20);
+    assert.equal(conversion.signal.aborted, false);
+    conversion.finish();
+    await first;
+    assert.equal(seen.proxyStages, 0, "not adopted for a project without it");
+    assert.equal(seen.released, seen.holds);
+
+    editor.open(createEmptyDocument({ width: 64, height: 36 }));
+    await bridge.importFiles([{ name: "clip", fingerprint: fingerprint("a") }]);
+    const second = bridge.generateProxy("clip");
+    const next = await started(seen, 2);
+    const document = editor.document;
+    editor.open(createEmptyDocument({ width: 64, height: 36 }));
+    assert.ok(
+      editor.dispatch({
+        type: "asset.put",
+        asset: { ...document.assets.clip, missing: true },
+        source: document.project.sources.find((s) => s.id === "clip"),
+      }).ok,
+    );
+    next.finish();
+    await second;
+    assert.equal(seen.proxyStages, 1, "adopted for a document with its media");
+    assert.equal(bridge.proxyStatus("clip").available, true);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);

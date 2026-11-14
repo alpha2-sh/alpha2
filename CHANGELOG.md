@@ -16,6 +16,10 @@ All notable changes to this project are documented in this file.
 - Editor: an import, relink or caption import that finishes after another project was opened is
   refused with `stale_import` and changes nothing; before, a relink waiting for the engine module
   could add its asset and an undo step to the new project.
+- Editor: disposing the browser bridge stops a running proxy conversion and waits for it to end;
+  before, the conversion kept reading the file and writing origin storage after `dispose()`. A
+  conversion that outlives a project switch keeps its proxy and adopts it only for a document that
+  has that media.
 
 ## [0.6.0] - 2026-11-08
 

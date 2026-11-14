@@ -2300,6 +2300,13 @@ export function createBrowserBridge(options) {
       signal?.removeEventListener("abort", abort);
     }
   }
+  /** Whether a document the session can return to has media with content hash `hash`. */
+  function readsMedia(hash) {
+    for (const document of editor.reachableDocuments())
+      for (const asset of Object.values(document.assets))
+        if (hashOf(asset) === hash) return true;
+    return false;
+  }
   /** The running proxy conversion: `preempt` stops it for an export, `done` settles at its end. */
   let proxyRun = null;
   /**
@@ -2621,6 +2628,8 @@ export function createBrowserBridge(options) {
       globalThis.document?.removeEventListener("visibilitychange", visibility);
       await Promise.all([...jobs].map((job) => job.cancel()));
       await Promise.all([...extractions].map((job) => job.cancel()));
+      // Its conversion stops on `lifetime`; nothing may write after teardown.
+      await proxyRun?.done;
       await queue;
       await mixer?.close();
       await supplier?.close();
@@ -2910,6 +2919,8 @@ export function createBrowserBridge(options) {
       return job.result;
     },
     async generateProxy(id, { signal } = {}) {
+      if (disposed)
+        throw new EditorError("disposed", "Bridge is disposed", "proxy", id);
       const descriptor = editor.document.assets[id];
       // No single video file for the proxy maker to read.
       const provider = editor.document.project.sources.find(
@@ -2940,11 +2951,16 @@ export function createBrowserBridge(options) {
         );
       proxyJobs.set(id, 0);
       notifyAssets();
+      // A conversion lives as long as the bridge, not the project: a proxy serves every project
+      // with the same media.
+      const stop = signal
+        ? AbortSignal.any([lifetime.signal, signal])
+        : lifetime.signal;
       let hold = null;
       try {
         for (;;) {
           // One proxy at a time and none during an export; a starting export preempts it.
-          const turn = await proxyTurn(signal);
+          const turn = await proxyTurn(stop);
           try {
             // Held until its runtime is released so no page removes it meanwhile.
             hold = await proxyStore.hold(hash);
@@ -2954,9 +2970,7 @@ export function createBrowserBridge(options) {
               runtime.file,
               descriptor.fingerprint,
               {
-                signal: signal
-                  ? AbortSignal.any([signal, turn.signal])
-                  : turn.signal,
+                signal: AbortSignal.any([stop, turn.signal]),
                 onProgress: (fraction) => {
                   proxyJobs.set(id, fraction);
                   const next = Math.floor(fraction * 100);
@@ -2966,13 +2980,23 @@ export function createBrowserBridge(options) {
                 },
               },
             );
+            if (disposed)
+              throw new EditorError(
+                "disposed",
+                "Bridge is disposed",
+                "proxy",
+                id,
+              );
+            // Kept on disk either way; adopted only while a document this session can show has
+            // that media.
+            if (!readsMedia(hash)) break;
             const adopted = adoptProxy(hash, found, hold);
             hold = null;
             await adopted;
             failedProxies.delete(hash);
             break;
           } catch (error) {
-            if (!turn.signal.aborted || signal?.aborted) throw error;
+            if (!turn.signal.aborted || stop.aborted) throw error;
             void hold?.release();
             hold = null;
             proxyJobs.set(id, 0);
