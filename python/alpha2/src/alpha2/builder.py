@@ -86,7 +86,11 @@ def seconds_to_ticks(seconds: float) -> int:
     """Seconds as the nearest tick, halves away from zero, so
     ``seconds_to_ticks(ticks_to_seconds(t)) == t``."""
     scaled = seconds * TICKS_PER_SECOND
-    return int(math.copysign(math.floor(abs(scaled) + 0.5), scaled))
+    whole = math.floor(abs(scaled))
+    # Adding 0.5 before the floor would round 0.49999999999999994 up.
+    if abs(scaled) - whole >= 0.5:
+        whole += 1
+    return int(math.copysign(whole, scaled))
 
 
 def ticks_to_seconds(count: int) -> float:

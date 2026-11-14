@@ -328,6 +328,9 @@ All notable changes to this project are documented in this file.
   raises `alpha2.Alpha2InternalError`, a `RuntimeError` with `code` `INTERNAL`, instead of a
   `BaseException` that `except Exception` does not catch. A `TextMeasurer` whose call panicked
   raises it again on every later call.
+- Python: `seconds_to_ticks` rounds halves away from zero without adding 0.5 first, so a value just
+  below a half tick (such as `0.49999999999999994` ticks) no longer rounds up; it now agrees with
+  the engine and both TypeScript packages, whose shared time-rules corpus the Python tests replay.
 
 ## [0.6.0] - 2026-11-08
 
