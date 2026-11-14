@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -26,6 +27,47 @@ const failed = (code, profile = DEFAULT, extra = {}, attempt = {}) => ({
   renderer: "gpu",
   videoEncoder: "default",
   ...attempt,
+});
+
+const corpus = JSON.parse(
+  await readFile(
+    new URL("../../../tests/cases/retry-decisions.json", import.meta.url),
+    "utf8",
+  ),
+);
+const profileNamed = (name) =>
+  RETRY_PROFILES.find((profile) => profile.name === name);
+
+test("the retry decisions corpus", () => {
+  for (const { name, history, options, decision } of corpus.cases) {
+    const decided = decideRetry(
+      history.map((attempt) => ({
+        ...attempt,
+        failure: {
+          message: attempt.failure.code,
+          origin: "native-host",
+          operation: "export",
+          backend: "native",
+          ...attempt.failure,
+        },
+        profile: profileNamed(attempt.profile),
+      })),
+      options,
+    );
+    assert.deepEqual(
+      decided.retry
+        ? {
+            retry: true,
+            delayMs: decided.delayMs,
+            profile: decided.profile.name,
+            renderer: decided.renderer,
+            videoEncoder: decided.videoEncoder,
+          }
+        : { retry: false, failureCode: decided.failure.code },
+      decision,
+      name,
+    );
+  }
 });
 
 test("a failure a retry cannot help is final", () => {

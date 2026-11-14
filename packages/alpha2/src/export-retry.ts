@@ -52,7 +52,10 @@ export interface AttemptOutcome {
 export interface RetryPolicyOptions {
   /** Total attempts, including the first. Default 3. */
   readonly maxAttempts?: number;
-  /** Delay before attempt `n + 1`, given `n` failed attempts. Default `1000 * 2^(n-1)` ms. */
+  /**
+   * Delay before attempt `n + 1`, given `n` failed attempts. Default `1000 * 2^(n-1)` ms, the
+   * exponent capped at 16.
+   */
   readonly backoffMs?: (failedAttempts: number) => number;
   /** Profiles to step down through, largest first. Default {@link RETRY_PROFILES}. */
   readonly profiles?: readonly RetryProfile[];
@@ -127,7 +130,8 @@ export function decideRetry(
   const maxAttempts = options.maxAttempts ?? 3;
   const profiles = options.profiles ?? RETRY_PROFILES;
   const backoff =
-    options.backoffMs ?? ((failed: number) => 1_000 * 2 ** (failed - 1));
+    options.backoffMs ??
+    ((failed: number) => 1_000 * 2 ** Math.min(failed - 1, 16));
   const last = history.at(-1);
   if (last === undefined)
     return { retry: false, reason: "nothing failed", failure: undefined };

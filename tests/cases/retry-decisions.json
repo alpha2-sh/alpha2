@@ -1,0 +1,1355 @@
+{
+  "description": "Retry decisions after failed export attempts. Each history is oldest first and is the path a retry loop takes: the first attempt runs the default profile on the GPU with the default video encoder, and each later one runs what the decision before it chose. Options left out take the defaults (3 attempts, no CPU renderer, a software video encoder, no page GPU losses). A case with surfaces applies to those surfaces only. Replayed by packages/alpha2/test/export-retry.test.mjs, packages/alpha2-editor/test/export-retry.test.mjs and bindings/alpha2-host-core/src/export_policy_tests.rs.",
+  "cases": [
+    {
+      "name": "CANCELLED is not retried",
+      "history": [
+        {
+          "failure": {
+            "code": "CANCELLED",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "CANCELLED"
+      }
+    },
+    {
+      "name": "INVALID_INPUT is not retried",
+      "history": [
+        {
+          "failure": {
+            "code": "INVALID_INPUT",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "INVALID_INPUT"
+      }
+    },
+    {
+      "name": "VALIDATION_FAILED is not retried",
+      "history": [
+        {
+          "failure": {
+            "code": "VALIDATION_FAILED",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "VALIDATION_FAILED"
+      }
+    },
+    {
+      "name": "RESOURCE_LIMIT is not retried",
+      "history": [
+        {
+          "failure": {
+            "code": "RESOURCE_LIMIT",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "RESOURCE_LIMIT"
+      }
+    },
+    {
+      "name": "STORAGE_QUOTA_EXCEEDED is not retried",
+      "history": [
+        {
+          "failure": {
+            "code": "STORAGE_QUOTA_EXCEEDED",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "STORAGE_QUOTA_EXCEEDED"
+      }
+    },
+    {
+      "name": "OUTPUT_IO_FAILED is not retried",
+      "history": [
+        {
+          "failure": {
+            "code": "OUTPUT_IO_FAILED",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "OUTPUT_IO_FAILED"
+      }
+    },
+    {
+      "name": "a failure while downloading is not retried",
+      "history": [
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "download",
+            "frameIndex": null,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": false,
+        "failureCode": "UNKNOWN"
+      }
+    },
+    {
+      "name": "DEVICE_HUNG moves to the CPU renderer",
+      "history": [
+        {
+          "failure": {
+            "code": "DEVICE_HUNG",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": true,
+        "delayMs": 1000,
+        "profile": "default",
+        "renderer": "cpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "DEVICE_HUNG without a CPU renderer stops",
+      "history": [
+        {
+          "failure": {
+            "code": "DEVICE_HUNG",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": false,
+        "failureCode": "DEVICE_HUNG"
+      }
+    },
+    {
+      "name": "DEVICE_HUNG on the CPU renderer stops",
+      "history": [
+        {
+          "failure": {
+            "code": "DEVICE_HUNG",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "DEVICE_HUNG",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "cpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "DEVICE_HUNG"
+      }
+    },
+    {
+      "name": "DEVICE_HUNG with no attempt left stops",
+      "history": [
+        {
+          "failure": {
+            "code": "DEVICE_HUNG",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true,
+        "maxAttempts": 1
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "DEVICE_HUNG"
+      }
+    },
+    {
+      "name": "a GPU loss recurring at one frame is a hang",
+      "history": [
+        {
+          "failure": {
+            "code": "DEVICE_LOST",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "DEVICE_LOST",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": false,
+        "failureCode": "DEVICE_HUNG"
+      }
+    },
+    {
+      "name": "a GPU loss recurring at one frame moves to the CPU renderer",
+      "history": [
+        {
+          "failure": {
+            "code": "DEVICE_LOST",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "GPU_TIMEOUT",
+            "phase": "readback",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": true,
+        "delayMs": 2000,
+        "profile": "default",
+        "renderer": "cpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a GPU loss on the CPU renderer after a hang at that frame stops as hung",
+      "history": [
+        {
+          "failure": {
+            "code": "DEVICE_HUNG",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "DEVICE_LOST",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "cpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "DEVICE_HUNG"
+      }
+    },
+    {
+      "name": "GPU losses at different frames retry unchanged",
+      "history": [
+        {
+          "failure": {
+            "code": "DEVICE_LOST",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "DEVICE_LOST",
+            "phase": "render",
+            "frameIndex": 40,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 2000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "all attempts failing stops",
+      "history": [
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 1,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 2,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 3,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": false,
+        "failureCode": "UNKNOWN"
+      }
+    },
+    {
+      "name": "one attempt allowed stops at once",
+      "history": [
+        {
+          "failure": {
+            "code": "READBACK_FAILED",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "maxAttempts": 1
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "READBACK_FAILED"
+      }
+    },
+    {
+      "name": "memory exhaustion steps down a profile",
+      "history": [
+        {
+          "failure": {
+            "code": "OUT_OF_MEMORY",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 1000,
+        "profile": "reduced",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "memory exhaustion again steps down to the smallest profile",
+      "history": [
+        {
+          "failure": {
+            "code": "OUT_OF_MEMORY",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "ALLOCATION_FAILED",
+            "phase": "upload",
+            "frameIndex": 30,
+            "resource": "cpu"
+          },
+          "profile": "reduced",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 2000,
+        "profile": "minimal",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "memory exhaustion at the smallest profile stops",
+      "history": [
+        {
+          "failure": {
+            "code": "OUT_OF_MEMORY",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "OUT_OF_MEMORY",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "reduced",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "OUT_OF_MEMORY",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "minimal",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "maxAttempts": 4
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "OUT_OF_MEMORY"
+      }
+    },
+    {
+      "name": "memory exhaustion while encoding steps down before switching encoders",
+      "history": [
+        {
+          "failure": {
+            "code": "OUT_OF_MEMORY",
+            "phase": "encode",
+            "frameIndex": 12,
+            "resource": "cpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 1000,
+        "profile": "reduced",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "an encode failure retries in software",
+      "history": [
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "encode",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 1000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "software"
+      }
+    },
+    {
+      "name": "an encode failure in software recurring at the same point steps down",
+      "history": [
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "encode",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "encode",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "software"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 2000,
+        "profile": "reduced",
+        "renderer": "gpu",
+        "videoEncoder": "software"
+      }
+    },
+    {
+      "name": "an encode failure without a software encoder retries unchanged",
+      "history": [
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "encode",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "softwareVideoEncoder": false
+      },
+      "decision": {
+        "retry": true,
+        "delayMs": 1000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a busy encoder at encode switches to software first",
+      "history": [
+        {
+          "failure": {
+            "code": "RESOURCE_BUSY",
+            "phase": "encode",
+            "frameIndex": null,
+            "resource": "gpu",
+            "retryAfterMs": 5000
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 1000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "software"
+      }
+    },
+    {
+      "name": "a busy device waits as long as it asks",
+      "history": [
+        {
+          "failure": {
+            "code": "RESOURCE_BUSY",
+            "phase": "prepare",
+            "frameIndex": null,
+            "resource": "gpu",
+            "retryAfterMs": 2000
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 2000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a busy device without a wait waits the backoff",
+      "history": [
+        {
+          "failure": {
+            "code": "RESOURCE_BUSY",
+            "phase": "prepare",
+            "frameIndex": null,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 1000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a busy device asking less than the backoff waits the backoff",
+      "history": [
+        {
+          "failure": {
+            "code": "RESOURCE_BUSY",
+            "phase": "prepare",
+            "frameIndex": null,
+            "resource": "gpu",
+            "retryAfterMs": 2000
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "RESOURCE_BUSY",
+            "phase": "prepare",
+            "frameIndex": null,
+            "resource": "gpu",
+            "retryAfterMs": 500
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 2000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a busy device runs out of attempts",
+      "history": [
+        {
+          "failure": {
+            "code": "RESOURCE_BUSY",
+            "phase": "prepare",
+            "frameIndex": null,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "RESOURCE_BUSY",
+            "phase": "prepare",
+            "frameIndex": null,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "RESOURCE_BUSY",
+            "phase": "prepare",
+            "frameIndex": null,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": false,
+        "failureCode": "RESOURCE_BUSY"
+      }
+    },
+    {
+      "name": "a transient failure retries unchanged",
+      "history": [
+        {
+          "failure": {
+            "code": "READBACK_FAILED",
+            "phase": "readback",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 1000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a transient failure at another point retries unchanged",
+      "history": [
+        {
+          "failure": {
+            "code": "READBACK_FAILED",
+            "phase": "readback",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "READBACK_FAILED",
+            "phase": "readback",
+            "frameIndex": 13,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 2000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a transient failure of another class at the same point retries unchanged",
+      "history": [
+        {
+          "failure": {
+            "code": "READBACK_FAILED",
+            "phase": "readback",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "readback",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 2000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a transient failure recurring at the same point steps down",
+      "history": [
+        {
+          "failure": {
+            "code": "READBACK_FAILED",
+            "phase": "readback",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "READBACK_FAILED",
+            "phase": "readback",
+            "frameIndex": 12,
+            "resource": "gpu"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {},
+      "decision": {
+        "retry": true,
+        "delayMs": 2000,
+        "profile": "reduced",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a transient failure recurring at the smallest profile stops early",
+      "history": [
+        {
+          "failure": {
+            "code": "HOST_EXITED",
+            "phase": "render",
+            "frameIndex": null,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "HOST_EXITED",
+            "phase": "render",
+            "frameIndex": null,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "HOST_EXITED",
+            "phase": "render",
+            "frameIndex": null,
+            "resource": "unknown"
+          },
+          "profile": "reduced",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "HOST_EXITED",
+            "phase": "render",
+            "frameIndex": null,
+            "resource": "unknown"
+          },
+          "profile": "minimal",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "maxAttempts": 5
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "HOST_EXITED"
+      }
+    },
+    {
+      "name": "the backoff doubles per failed attempt",
+      "history": [
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 1,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 2,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 3,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "maxAttempts": 5
+      },
+      "decision": {
+        "retry": true,
+        "delayMs": 4000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "the backoff stops doubling after 17 failed attempts",
+      "history": [
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 0,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 1,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 2,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 3,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 4,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 5,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 6,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 7,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 8,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 9,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 10,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 11,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 13,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 14,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 15,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 16,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 17,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        },
+        {
+          "failure": {
+            "code": "UNKNOWN",
+            "phase": "render",
+            "frameIndex": 18,
+            "resource": "unknown"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "maxAttempts": 20
+      },
+      "decision": {
+        "retry": true,
+        "delayMs": 65536000,
+        "profile": "default",
+        "renderer": "gpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a browser that lost the GPU twice moves to the CPU renderer",
+      "surfaces": [
+        "browser"
+      ],
+      "history": [
+        {
+          "failure": {
+            "code": "DEVICE_LOST",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu",
+            "origin": "browser"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "cpuRenderer": true,
+        "pageGpuLosses": 2
+      },
+      "decision": {
+        "retry": true,
+        "delayMs": 1000,
+        "profile": "default",
+        "renderer": "cpu",
+        "videoEncoder": "default"
+      }
+    },
+    {
+      "name": "a browser that lost the GPU twice without a CPU renderer stops",
+      "surfaces": [
+        "browser"
+      ],
+      "history": [
+        {
+          "failure": {
+            "code": "DEVICE_LOST",
+            "phase": "render",
+            "frameIndex": 12,
+            "resource": "gpu",
+            "origin": "browser"
+          },
+          "profile": "default",
+          "renderer": "gpu",
+          "videoEncoder": "default"
+        }
+      ],
+      "options": {
+        "pageGpuLosses": 2
+      },
+      "decision": {
+        "retry": false,
+        "failureCode": "DEVICE_LOST"
+      }
+    }
+  ]
+}

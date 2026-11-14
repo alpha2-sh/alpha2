@@ -52,6 +52,8 @@ All notable changes to this project are documented in this file.
   against (roxmltree, usvg, resvg, tiny-skia, the hayro crates, velato, exr, zip and their peers). A
   build that needs another version of one of them fails to resolve instead of running unmodeled
   code.
+- `decideRetry` (`alpha2/export-retry`): the default backoff stops doubling after 17 failed
+  attempts (at 65,536 s), as the native retry policy does.
 
 ### Fixed
 

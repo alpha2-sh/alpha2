@@ -6,6 +6,7 @@
 
 mod color;
 mod container;
+mod failure;
 mod ids;
 mod io;
 mod pixels;
@@ -16,6 +17,7 @@ pub use color::{
     YcbcrLevels, YuvEncoding,
 };
 pub use container::{Container, ContainerError, resolve_export_format};
+pub use failure::FailureClass;
 pub use ids::{IdError, SourceId};
 pub use io::{
     AudioBlock, AudioBlockProvider, AudioBlockSink, AudioSpan, CancelToken, ChromaLocation,
