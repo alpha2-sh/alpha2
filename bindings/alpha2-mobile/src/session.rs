@@ -144,9 +144,9 @@ pub struct ExportRequest {
     pub audio_codec: Option<String>,
     /// Mix and encode the project's audio.
     pub include_audio: bool,
-    /// The first rendered timeline tick; the timeline's start when unset.
+    /// The first rendered timeline tick; 0 when unset.
     pub start_ticks: Option<i64>,
-    /// The tick the export stops before; the timeline's end when unset.
+    /// The tick the export stops before; the end of what the timeline shows when unset.
     pub end_ticks: Option<i64>,
 }
 

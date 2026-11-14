@@ -509,7 +509,8 @@ fn end_ticks(requested: Option<i64>, project: &[u8]) -> Result<i64, HostError> {
     }
 }
 
-/// The end of everything the timeline shows, caption cues included; `None` when it shows nothing.
+/// The end of the project's default export range (everything the timeline shows, caption cues
+/// included); `None` when it shows nothing.
 ///
 /// # Errors
 /// Returns `INVALID_INPUT` for a document that is not a valid project.
@@ -518,5 +519,7 @@ pub fn project_end_ticks(project: &[u8]) -> Result<Option<i64>, HostError> {
         .map_err(|error| HostError::invalid_input(format!("the project is not UTF-8: {error}")))?;
     let project = alpha2_model::Project::from_json(text)
         .map_err(|error| HostError::invalid_input(error.to_string()))?;
-    Ok(project.extent().map(|extent| extent.end().ticks()))
+    Ok(project
+        .default_export_range()
+        .map(|range| range.end().ticks()))
 }

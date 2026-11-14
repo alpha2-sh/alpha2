@@ -338,7 +338,7 @@ impl Project {
     }
 
     /// The smallest interval holding every clip, caption cue and timeline-anchored word a caption
-    /// track shows, which a whole-project render covers. `None` for a project that shows nothing.
+    /// track shows. `None` for a project that shows nothing.
     #[must_use]
     pub fn extent(&self) -> Option<alpha2_time::TimeRange> {
         let words = self
@@ -364,6 +364,16 @@ impl Project {
                 Some(bounds.map_or((start, end), |(low, high)| (low.min(start), high.max(end))));
         }
         bounds.and_then(|(start, end)| alpha2_time::TimeRange::new(start, end).ok())
+    }
+
+    /// The range a whole-project export covers when none is asked for: from time 0, the origin
+    /// keyframes, markers and caption times count from, to the end of the [`Self::extent`].
+    /// `None` for a project that shows nothing or nothing after time 0.
+    #[must_use]
+    pub fn default_export_range(&self) -> Option<alpha2_time::TimeRange> {
+        let end = self.extent()?.end();
+        let range = alpha2_time::TimeRange::new(alpha2_time::MediaTime::ZERO, end).ok()?;
+        (end > alpha2_time::MediaTime::ZERO).then_some(range)
     }
 
     /// Creates an empty project using the current schema version.

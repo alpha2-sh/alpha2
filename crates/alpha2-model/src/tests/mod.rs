@@ -136,3 +136,20 @@ fn with_source(source: MediaSource) -> crate::Project {
     project.sources.push(source);
     project
 }
+
+#[test]
+fn a_whole_project_export_runs_from_zero_to_the_end_of_what_shows() {
+    let mut late = project();
+    let two_seconds = MediaTime(2 * alpha2_time::TICKS_PER_SECOND);
+    let clip = &mut late.timeline.tracks[0].clips[0];
+    clip.timeline_range =
+        TimeRange::new(two_seconds, MediaTime(two_seconds.0 + 120_000)).expect("ordered range");
+    assert_eq!(late.extent().map(TimeRange::start), Some(two_seconds));
+    assert_eq!(
+        late.default_export_range(),
+        Some(TimeRange::new(MediaTime(0), MediaTime(two_seconds.0 + 120_000)).expect("range"))
+    );
+    let mut empty = project();
+    empty.timeline.tracks[0].clips.clear();
+    assert_eq!(empty.default_export_range(), None);
+}

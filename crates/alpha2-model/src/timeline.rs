@@ -18,8 +18,8 @@ pub struct Timeline {
 }
 
 impl Timeline {
-    /// The smallest interval holding every clip and caption cue, which a whole-project render or
-    /// export covers. `None` for a timeline that shows nothing.
+    /// The smallest interval holding every clip and caption cue. `None` for a timeline that shows
+    /// nothing. A whole-project export covers `Project::default_export_range` instead.
     #[must_use]
     pub fn extent(&self) -> Option<TimeRange> {
         let mut ranges = self.tracks.iter().flat_map(|track| {

@@ -127,6 +127,10 @@ All notable changes to this project are documented in this file.
 - Editor: markers move with a ripple when it reaches every track, the rule timeline data follows;
   before, they moved when any other track was sync-locked, so a single-track project's markers
   stayed behind and a partly synced edit moved them.
+- Mobile: an export without `startTicks` starts at time 0, as the host CLI and the Python client
+  do, instead of at the first clip. A project whose first clip starts at 2 s now exports those 2 s
+  on a phone too. `alpha2_model::Project::default_export_range` states the rule:
+  `[0, extent end)`.
 
 ### Fixed
 

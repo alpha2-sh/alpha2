@@ -578,17 +578,19 @@ fn parse_audio(name: &str) -> Result<alpha2_media::AudioCodec, Alpha2Error> {
         .map_err(|_| Alpha2Error::invalid(format!("audioCodec: unknown codec {name}")))
 }
 
-/// The timeline range to export: the request's ticks within the timeline.
+/// The timeline range to export: the request's ticks, each unset end from the project's default
+/// export range.
 fn export_range(
     snapshot: &EngineProject,
     start: Option<i64>,
     end: Option<i64>,
 ) -> Result<alpha2_time::TimeRange, Alpha2Error> {
-    let timeline = snapshot
-        .timeline_range()
+    let whole = snapshot
+        .project()
+        .default_export_range()
         .ok_or_else(|| Alpha2Error::invalid("the timeline is empty"))?;
-    let start = start.map_or(timeline.start(), alpha2_time::MediaTime::from_ticks);
-    let end = end.map_or(timeline.end(), alpha2_time::MediaTime::from_ticks);
+    let start = start.map_or(whole.start(), alpha2_time::MediaTime::from_ticks);
+    let end = end.map_or(whole.end(), alpha2_time::MediaTime::from_ticks);
     alpha2_time::TimeRange::new(start, end)
         .map_err(|error| Alpha2Error::invalid(format!("export range: {error}")))
 }
@@ -779,6 +781,38 @@ mod tests {
         wav.extend(bytes.to_le_bytes());
         wav.resize(wav.len() + bytes as usize, 0);
         std::fs::write(path, wav).expect("wav");
+    }
+
+    #[test]
+    fn an_export_without_a_range_starts_at_zero() {
+        let tests = std::env::var_os("ALPHA2_TESTS_DIR").map_or_else(
+            || Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests"),
+            PathBuf::from,
+        );
+        let mut project = Project::from_json(
+            &std::fs::read_to_string(tests.join("cases/host-video-export-project.json"))
+                .expect("project"),
+        )
+        .expect("loads");
+        let two_seconds = 2 * alpha2_time::TICKS_PER_SECOND;
+        let clip = &mut project.timeline.tracks[0].clips[0];
+        clip.timeline_range = alpha2_time::TimeRange::new(
+            alpha2_time::MediaTime::from_ticks(two_seconds),
+            alpha2_time::MediaTime::from_ticks(two_seconds + 120_000),
+        )
+        .expect("range");
+        let snapshot = EngineProject::new(project).expect("snapshot");
+        let range = |start, end| {
+            export_range(&snapshot, start, end)
+                .map(|range| (range.start().ticks(), range.end().ticks()))
+                .ok()
+        };
+        assert_eq!(range(None, None), Some((0, two_seconds + 120_000)));
+        assert_eq!(
+            range(Some(two_seconds), None),
+            Some((two_seconds, two_seconds + 120_000))
+        );
+        assert_eq!(range(None, Some(60_000)), Some((0, 60_000)));
     }
 
     /// Video encoders whose hardware sessions fail at a frame, and an audio encoder that fails
