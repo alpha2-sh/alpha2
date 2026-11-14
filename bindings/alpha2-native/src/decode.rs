@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -10,11 +11,12 @@ use crate::recovery::{
     audio_timestamp_in_range, submit_packet,
 };
 use alpha2_host_core::audio_timeline::SourceTimeline;
+use alpha2_host_core::{probe_still, still_format};
 
 use crate::convert::{
-    adapter_error, codec_thread_budget, color_metadata, convert_video_frame, declared_sar,
-    frame_color_metadata, guess_sar, orientation_from_display, reject_unused_decode_options,
-    stream_rotation, tick_base, timestamp, video_decoder_options,
+    adapter_error, check_frame_size, codec_thread_budget, color_metadata, convert_video_frame,
+    declared_sar, frame_color_metadata, guess_sar, orientation_from_display,
+    reject_unused_decode_options, stream_rotation, tick_base, timestamp, video_decoder_options,
 };
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
@@ -1277,6 +1279,9 @@ impl NativeDecoder {
             .iter()
             .find(|stream| stream.index == video_index)
             .ok_or(DecodeError::OutOfRange)?;
+        if let Some((width, height)) = selected.dimensions {
+            check_frame_size(width, height)?;
+        }
         let orientation = selected.orientation;
         let sample_aspect_ratio = selected.sample_aspect_ratio;
         // HDR decodes like any 10-bit stream; the renderer tone-maps it or the project refuses it.
@@ -1356,6 +1361,9 @@ impl NativeDecoder {
             .iter()
             .find(|stream| stream.index == video_index)
             .ok_or_else(|| HardwareOpenError::new(SourceUnavailable, DecodeError::OutOfRange))?;
+        if let Some((width, height)) = selected.dimensions {
+            check_frame_size(width, height).map_err(unavailable)?;
+        }
         let orientation = selected.orientation;
         let sample_aspect_ratio = selected.sample_aspect_ratio;
         let color = selected.color;
@@ -2174,6 +2182,7 @@ pub(crate) const SOURCE_CONTAINERS: &CStr =
 pub(crate) fn open_input(path: &Path) -> Result<DemuxInput, DecodeError> {
     #[cfg(test)]
     INPUTS_OPENED.with(|opened| opened.set(opened.get() + 1));
+    refuse_oversized_still(path)?;
     alpha2_ffmpeg_bridge::open_input(path, SOURCE_CONTAINERS).map_err(|error| match error {
         OpenInputError::Path(error) => DecodeError::Unsupported(format!("media path {error}")),
         OpenInputError::Refused(format) => DecodeError::Unsupported(format!(
@@ -2181,6 +2190,29 @@ pub(crate) fn open_input(path: &Path) -> Result<DemuxInput, DecodeError> {
         )),
         OpenInputError::Ffmpeg(error) => adapter_error(error),
     })
+}
+
+/// Refuses a PNG, JPEG or WebP whose header states a picture larger than alpha2 renders, since
+/// `FFmpeg` learns a still's size only by decoding it. Anything else is left to `FFmpeg`.
+fn refuse_oversized_still(path: &Path) -> Result<(), DecodeError> {
+    // Holds the size field of the three formats, after any Exif and colour profile segments.
+    const HEAD_BYTES: u64 = 1 << 20;
+    let Ok(file) = std::fs::File::open(path) else {
+        return Ok(());
+    };
+    let mut head = Vec::new();
+    let mut file = file.take(12);
+    if file.read_to_end(&mut head).is_err() || still_format(&head).is_none() {
+        return Ok(());
+    }
+    file.set_limit(HEAD_BYTES - 12);
+    if file.read_to_end(&mut head).is_err() {
+        return Ok(());
+    }
+    match probe_still(&head) {
+        Err(error @ DecodeError::Unsupported(_)) => Err(error),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]

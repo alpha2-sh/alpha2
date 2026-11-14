@@ -39,6 +39,7 @@ pub(crate) fn convert_video_frame(
             u32::try_from(frame.crop_top.saturating_add(frame.crop_bottom)).unwrap_or(0),
         ),
     };
+    check_frame_size(width, height)?;
     // YCbCr layouts the renderer samples go as planes (shared when fully written, else copied); the
     // GPU applies subsampling, depth, crop, rotation and aspect ratio.
     if let Some(planes) = frame.yuv_planes().map_err(adapter_error)? {
@@ -71,14 +72,6 @@ pub(crate) fn convert_video_frame(
                 })
                 .collect(),
         });
-    }
-    // Converting allocates a whole frame, so refuse unsupported sizes first.
-    if !alpha2_media::frame_size_supported(width, height) {
-        return Err(DecodeError::Unsupported(format!(
-            "a {width}x{height} frame is larger than {} pixels or {} on a side",
-            alpha2_media::MAX_FRAME_PIXELS,
-            alpha2_media::MAX_FRAME_DIMENSION
-        )));
     }
     let (pixel_format, planes, color) = if converts_like_rgba8(color) {
         (
@@ -716,8 +709,25 @@ pub(crate) fn map_color(
 /// `flags=+unaligned` lets `FFmpeg` crop software frames exactly; without it a small left crop
 /// (under 64 columns of 8-bit 4:2:0) is dropped to keep planes aligned. Hardware frames keep their
 /// crop as the visible rectangle either way.
+/// Refuses a `width` x `height` frame larger than alpha2 renders.
+pub(crate) fn check_frame_size(width: u32, height: u32) -> Result<(), DecodeError> {
+    if alpha2_media::frame_size_supported(width, height) {
+        return Ok(());
+    }
+    Err(DecodeError::Unsupported(format!(
+        "a {width}x{height} frame is larger than {} pixels or {} on a side",
+        alpha2_media::MAX_FRAME_PIXELS,
+        alpha2_media::MAX_FRAME_DIMENSION
+    )))
+}
+
+/// `max_pixels` makes the decoder refuse a picture larger than alpha2 renders before allocating
+/// it, for sizes only the bitstream states and for a size change mid-stream.
 pub(crate) fn video_decoder_options(threads: i64) -> AVDictionary {
-    AVDictionary::new_int(c"threads", threads, 0).set(c"flags", c"+unaligned", 0)
+    let max_pixels = i64::try_from(alpha2_media::MAX_FRAME_PIXELS).unwrap_or(i64::MAX);
+    AVDictionary::new_int(c"threads", threads, 0)
+        .set(c"flags", c"+unaligned", 0)
+        .set_int(c"max_pixels", max_pixels, 0)
 }
 
 /// The `FFmpeg` pixel format of `layout`.

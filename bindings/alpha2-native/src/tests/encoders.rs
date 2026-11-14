@@ -409,7 +409,7 @@ fn codec_threading_policy_and_unused_option_guard_are_explicit() {
     }
     assert_eq!(
         unused_option_names(Some(video_decoder_options(1))).as_deref(),
-        Some("threads, flags")
+        Some("threads, flags, max_pixels")
     );
 
     let misspelled = AVDictionary::new(c"threadz", c"auto", 0);

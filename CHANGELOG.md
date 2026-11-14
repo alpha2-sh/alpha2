@@ -94,6 +94,10 @@ All notable changes to this project are documented in this file.
 - `alpha2-host-core`: an audio timestamp more than 2^31 seconds from zero is damaged input on the
   built-in decode path too, as it is on the FFmpeg path: `strict` fails and `tolerant` drops the
   chunk, where before it was placed at time 0 or overflowed.
+- Native hosts refuse a picture larger than 16384 pixels per side or 2^26 pixels before FFmpeg
+  allocates it: a PNG, JPEG or WebP whose header states such a size fails `probe` and open with
+  `Unsupported`, stream probing and the decoders take FFmpeg's `max_pixels`, and decoded YCbCr
+  frames are checked like converted ones.
 
 ## [0.6.0] - 2026-11-08
 

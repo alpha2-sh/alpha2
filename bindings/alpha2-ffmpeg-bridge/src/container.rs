@@ -323,9 +323,28 @@ fn open_with(
     // SAFETY: `avformat_open_input` succeeded, so `context` is an open input context this now owns;
     // its `Drop` closes it with `avformat_close_input`.
     let mut input = unsafe { AVFormatContextInput::from_raw(context) };
-    // SAFETY: the context is open and exclusively owned; null options read no per-stream
-    // dictionaries.
-    let found = unsafe { ffi::avformat_find_stream_info(input.as_mut_ptr(), ptr::null_mut()) };
+    // Probing decodes a picture to learn its size, so the decoders it opens refuse one larger
+    // than alpha2 takes before allocating it.
+    let max_pixels = i64::try_from(alpha2_media::MAX_FRAME_PIXELS).unwrap_or(i64::MAX);
+    let mut options = (0..input.nb_streams)
+        .map(|_| {
+            AVDictionary::new_int(c"max_pixels", max_pixels, 0)
+                .into_raw()
+                .as_ptr()
+        })
+        .collect::<Vec<_>>();
+    let pointer = if options.is_empty() {
+        ptr::null_mut()
+    } else {
+        options.as_mut_ptr()
+    };
+    // SAFETY: the context is open and exclusively owned; `pointer` is null or holds one dictionary
+    // per stream the context had before the call, which is how many the call reads.
+    let found = unsafe { ffi::avformat_find_stream_info(input.as_mut_ptr(), pointer) };
+    for dictionary in &mut options {
+        // SAFETY: each entry is null or a dictionary this owns, which the call may have replaced.
+        unsafe { ffi::av_dict_free(dictionary) };
+    }
     if found < 0 {
         return Err(OpenFailure::Other(OpenInputError::Ffmpeg(
             RsmpegError::FindStreamInfoError(found),
