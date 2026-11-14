@@ -35,6 +35,7 @@ import {
   audioWorkletQuanta,
 } from "./audio-worklet.mjs";
 import {
+  bindingBrowserExceptions,
   bitmapUploads,
   layers,
   layout,
@@ -140,6 +141,7 @@ export const cases = {
   "webgl-context-loss": webglContextLoss,
   "webgl-worker-recovery": webglWorkerRecovery,
   "webgl-worker-lost-calls": webglWorkerLostCalls,
+  "binding-browser-exceptions": bindingBrowserExceptions,
   "webgpu-dropped-work": webgpuDroppedWork,
   "webgpu-rejected-frame": webgpuRejectedFrame,
   "heavy-effect-split": heavyEffectSplit,

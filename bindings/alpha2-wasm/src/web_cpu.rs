@@ -403,11 +403,9 @@ impl WebCpuRenderer {
             &video_color_space(ColorMetadata::EXPORT)?,
         )?;
         set(&result, "layout", &layout)?;
-        set(
-            &result,
-            "pixels",
-            &web_sys::js_sys::Uint8Array::from(planes),
-        )?;
+        let pixels = crate::interop::copy_out_bytes(planes)
+            .map_err(|error| crate::interop::copy_out_failure(&error))?;
+        set(&result, "pixels", &pixels)?;
         Ok(result)
     }
 

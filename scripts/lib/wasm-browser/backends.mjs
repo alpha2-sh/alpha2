@@ -1209,3 +1209,72 @@ report({
 });
 `;
 }
+
+// A browser exception at the binding's frame import (WebGL2) or readback copy-out comes back as a
+// coded error, and the renderer keeps working after it.
+export function bindingBrowserExceptions() {
+  return `
+Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.text());
+const describe = (error) => ({ name: error?.name ?? null, code: error?.code ?? null, failure: error?.failure?.code ?? null,
+  stage: error?.failure?.stage ?? null, message: String(error?.message ?? error) });
+const attempt = async (work) => {
+  try {
+    await work();
+    return { ok: true };
+  } catch (error) {
+    return describe(error);
+  }
+};
+const frame = (value, width = 64, height = 48) => new VideoFrame(new Uint8Array(width * height * 4).fill(value),
+  { format: "RGBA", codedWidth: width, codedHeight: height, timestamp: 0 });
+const throwOnce = (target, name, error) => {
+  const original = target[name];
+  target[name] = function () {
+    target[name] = original;
+    throw error;
+  };
+  return () => (target[name] = original);
+};
+const exportOnce = async (engine) => {
+  const ticket = engine.beginExportAt(0n, "h264");
+  if (ticket.kind !== "rendered") throw new Error("the frame waits: " + ticket.kind);
+  await ticket.readback;
+};
+const results = {};
+const gpu = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+if (gpu.backend !== "webgl2") skip("webgl2", "the GPU renderer is " + gpu.backend);
+gpu.loadProject(project);
+results.firstUpload = await attempt(() => gpu.uploadVideoFrame("image-source", 0n, frame(200)));
+let restore = throwOnce(OffscreenCanvasRenderingContext2D.prototype, "drawImage", new TypeError("injected drawImage failure"));
+results.importThrows = await attempt(() => gpu.uploadVideoFrame("image-source", 0n, frame(100)));
+restore();
+results.importAfter = await attempt(() => gpu.uploadVideoFrame("image-source", 0n, frame(150)));
+results.renderAfter = await attempt(() => gpu.renderAt(0n));
+restore = throwOnce(Uint8Array.prototype, "slice", new RangeError("injected copy-out failure"));
+results.copyOutThrows = await Promise.race([
+  attempt(() => exportOnce(gpu)),
+  new Promise((resolve) => setTimeout(() => resolve({ unsettled: true }), 10000)),
+]);
+restore();
+results.exportAfter = await attempt(() => exportOnce(gpu));
+gpu.free();
+const cpu = WebEffectRegistry.createCpu(new OffscreenCanvas(64, 48));
+cpu.loadProject(project);
+cpu.uploadRgbaImage("image-source", 64, 48, new Uint8Array(64 * 48 * 4).fill(255));
+restore = throwOnce(Uint8Array.prototype, "slice", new RangeError("injected copy-out failure"));
+results.cpuCopyOutThrows = await attempt(() => exportOnce(cpu));
+restore();
+results.cpuExportAfter = await attempt(() => exportOnce(cpu));
+cpu.free();
+const coded = (entry, code) => entry?.code === code;
+report({
+  ok: results.firstUpload.ok && coded(results.importThrows, "INVALID_INPUT") && results.importAfter.ok && results.renderAfter.ok
+    && results.copyOutThrows.failure === "OUT_OF_MEMORY" && results.copyOutThrows.stage === "copy-out" && results.exportAfter.ok
+    && results.cpuCopyOutThrows.failure === "OUT_OF_MEMORY" && results.cpuExportAfter.ok,
+  ...results,
+});
+`;
+}

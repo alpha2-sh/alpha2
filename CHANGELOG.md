@@ -294,6 +294,11 @@ All notable changes to this project are documented in this file.
   context loss whose event has not arrived yet; before, such a call could reach the WebGL
   backend's unchecked object creation, or on WebGPU draw nothing without an error.
   `Alpha2Player` recovers and presents again when the renderer refuses a presentation this way.
+- A browser exception while the WebGL2 renderer imports a frame (the 2D canvas draw or read) is
+  refused as `INVALID_INPUT` (`INTERNAL` for the upload probe) and the renderer keeps working;
+  before it left the binding uncoded, which cost the editor its preview worker. An export frame
+  the browser cannot copy out of memory rejects with a coded failure (`OUT_OF_MEMORY`, stage
+  `copy-out`) instead of leaving the readback unsettled, on the GPU and the CPU renderer.
 
 ## [0.6.0] - 2026-11-08
 
