@@ -185,6 +185,7 @@ dependencies = [
 name = "alpha2-build-support"
 version = "0.6.0"
 dependencies = [
+ "alpha2-test-support",
  "bindgen",
  "cc",
 ]

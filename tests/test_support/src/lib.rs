@@ -59,6 +59,8 @@ pub enum Capability {
     Openh264,
     /// The pinned `ffmpeg` and `ffprobe` executables (`ALPHA2_FFMPEG`, `ALPHA2_FFPROBE`).
     FfmpegTools,
+    /// An `FFmpeg` 8.0 SDK in the SDK cache beside the pinned one.
+    PreviousFfmpegSdk,
     /// A GPU that presents to the platform's native windows (an app's surface or layer).
     WindowPresent,
     /// A VP9 or AV1 video encoder, which `WebM` output needs.
@@ -158,6 +160,7 @@ impl Capability {
         Self::HardwareH264Encode,
         Self::Openh264,
         Self::FfmpegTools,
+        Self::PreviousFfmpegSdk,
         Self::WindowPresent,
         Self::WebmEncode,
         Self::HardwareVideoDecode,
@@ -222,6 +225,7 @@ impl Capability {
             Self::HardwareH264Encode => "hardware-h264-encode",
             Self::Openh264 => "openh264",
             Self::FfmpegTools => "ffmpeg-tools",
+            Self::PreviousFfmpegSdk => "previous-ffmpeg-sdk",
             Self::WindowPresent => "window-present",
             Self::WebmEncode => "webm-encode",
             Self::HardwareVideoDecode => "hardware-video-decode",

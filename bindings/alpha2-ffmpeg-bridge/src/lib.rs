@@ -1249,6 +1249,7 @@ fn alloc_hwdevice(
     kind: ffi::AVHWDeviceType,
     name: &'static str,
 ) -> Result<AVHWDeviceContext, BridgeError> {
+    check_hardware_interop()?;
     if !hwdevice_available(kind) {
         return Err(BridgeError::MissingHwDevice(name));
     }
@@ -1270,6 +1271,9 @@ pub enum BridgeError {
     NativeGpu(NativeGpuFailure),
     /// The loaded `FFmpeg` runtime was built without this hardware device type.
     MissingHwDevice(&'static str),
+    /// The loaded libavutil is not the release the shims were compiled for, so hardware interop
+    /// is off; the text names both versions.
+    RuntimeMismatch(&'static str),
     /// A decoded surface the GPU interop does not take, with its description and the reason.
     UnsupportedSurface(String),
 }
@@ -1336,6 +1340,7 @@ impl fmt::Display for BridgeError {
                 write!(formatter, "the loaded FFmpeg has no {kind} hardware device")
             }
             Self::UnsupportedSurface(description) => formatter.write_str(description),
+            Self::RuntimeMismatch(reason) => formatter.write_str(reason),
         }
     }
 }
@@ -1686,6 +1691,50 @@ impl From<RsmpegError> for BridgeError {
     fn from(error: RsmpegError) -> Self {
         Self::Ffmpeg(error)
     }
+}
+
+unsafe extern "C" {
+    fn alpha2_ffmpeg_shim_avutil_version() -> std::ffi::c_uint;
+}
+
+/// Why hardware interop is off in this process, or `None` when the loaded libavutil has the
+/// major and minor version the shims were compiled against.
+///
+/// The shims read `FFmpeg` structures at offsets of one minor release, so every hardware device
+/// constructor of this crate refuses with [`BridgeError::RuntimeMismatch`] while this is `Some`.
+#[must_use]
+pub fn hardware_interop_refusal() -> Option<&'static str> {
+    static REFUSAL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    REFUSAL
+        .get_or_init(|| {
+            // SAFETY: returns a constant compiled into the shim.
+            let compiled = unsafe { alpha2_ffmpeg_shim_avutil_version() };
+            // SAFETY: a pure query of the loaded library.
+            let loaded = unsafe { ffi::avutil_version() };
+            interop_version_refusal(compiled, loaded)
+        })
+        .as_deref()
+}
+
+/// Refuses interop across a major or minor `AV_VERSION_INT` difference; micro versions may differ.
+fn interop_version_refusal(compiled: u32, loaded: u32) -> Option<String> {
+    let version = |value: u32| format!("{}.{}.{}", value >> 16, (value >> 8) & 0xff, value & 0xff);
+    (compiled >> 8 != loaded >> 8).then(|| {
+        format!(
+            "hardware interop is off: the FFmpeg shims were compiled for libavutil {} and the \
+             loaded libavutil is {}",
+            version(compiled),
+            version(loaded)
+        )
+    })
+}
+
+/// The refusal of [`hardware_interop_refusal`] as an error.
+///
+/// # Errors
+/// Returns [`BridgeError::RuntimeMismatch`] when the loaded libavutil is another minor release.
+pub fn check_hardware_interop() -> Result<(), BridgeError> {
+    hardware_interop_refusal().map_or(Ok(()), |reason| Err(BridgeError::RuntimeMismatch(reason)))
 }
 
 /// Returns the linked `FFmpeg` runtime version string.

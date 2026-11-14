@@ -119,6 +119,9 @@ pub struct FfmpegRuntimeIdentity {
     pub configuration: String,
     /// SDK release used by alpha2 release builds.
     pub pinned_sdk_release: &'static str,
+    /// Why hardware decode and encode interop is off: the loaded libavutil is another minor
+    /// release than the one the `FFmpeg` shims were compiled for.
+    pub interop_refusal: Option<&'static str>,
 }
 
 impl FfmpegRuntimeIdentity {
@@ -209,5 +212,6 @@ pub fn ffmpeg_runtime_identity() -> FfmpegRuntimeIdentity {
         version: alpha2_ffmpeg_bridge::runtime_version(),
         configuration: alpha2_ffmpeg_bridge::runtime_configuration(),
         pinned_sdk_release: "ffmpeg-8.1.3-shared-build5",
+        interop_refusal: alpha2_ffmpeg_bridge::hardware_interop_refusal(),
     }
 }

@@ -929,6 +929,11 @@ fn log_runtime_codecs() {
             ffmpeg.pinned_sdk_release
         ),
     }
+    if let Some(reason) = ffmpeg.interop_refusal {
+        alpha2_os::diagnostic!(
+            "alpha2-host FFmpeg: {reason}; decode and encode use the software and CPU-frame paths"
+        );
+    }
     alpha2_os::diagnostic!(
         "alpha2-host MP4 encoders: video=[{}] audio=[{}]{}",
         video_encoders

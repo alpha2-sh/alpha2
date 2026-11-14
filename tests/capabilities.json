@@ -99,6 +99,10 @@
     "description": "The pinned ffmpeg and ffprobe executables (scripts/fetch-ffmpeg-tools.sh).",
     "probe": "ALPHA2_FFPROBE and ALPHA2_FFMPEG name executables that report the pinned FFmpeg version"
   },
+  "previous-ffmpeg-sdk": {
+    "description": "An FFmpeg 8.0 SDK in the SDK cache beside the pinned one.",
+    "probe": "an ffmpeg-8.0.* release under ALPHA2_FFMPEG_CACHE (default target/ffmpeg-sdk-cache) has sdk/<target>/include"
+  },
   "c-compiler": {
     "description": "A C compiler that builds shared libraries.",
     "probe": "$CC (or cc) builds a shared library"

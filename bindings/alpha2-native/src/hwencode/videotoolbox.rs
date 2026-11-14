@@ -418,6 +418,8 @@ fn open_encoder(
 
 /// Builds the encoder-input pool: `IOSurface`-backed NV12 buffers at the output size, on demand.
 fn videotoolbox_encode_frames(width: i32, height: i32) -> Result<AVHWFramesContext, EncodeError> {
+    alpha2_ffmpeg_bridge::check_hardware_interop()
+        .map_err(|error| EncodeError::Adapter(error.to_string()))?;
     let device = AVHWDeviceContext::create(ffi::AV_HWDEVICE_TYPE_VIDEOTOOLBOX, None, None, 0)
         .map_err(|error| EncodeError::Adapter(format!("no VideoToolbox device: {error}")))?;
     let mut frames = device.hwframe_ctx_alloc();

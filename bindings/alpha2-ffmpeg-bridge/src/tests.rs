@@ -997,3 +997,25 @@ fn a_flipped_frame_inside_its_buffer_still_copies() {
         .collect();
     assert_eq!(luma, [5, 6, 3, 4, 1, 2]);
 }
+
+#[test]
+fn hardware_interop_needs_the_libavutil_minor_the_shims_were_compiled_for() {
+    let version = |major: u32, minor: u32, micro: u32| (major << 16) | (minor << 8) | micro;
+    assert_eq!(
+        interop_version_refusal(version(60, 26, 103), version(60, 26, 103)),
+        None
+    );
+    assert_eq!(
+        interop_version_refusal(version(60, 26, 103), version(60, 26, 100)),
+        None
+    );
+    let refusal = interop_version_refusal(version(60, 26, 103), version(60, 8, 103))
+        .expect("another minor is refused");
+    assert!(
+        refusal.contains("60.26.103") && refusal.contains("60.8.103"),
+        "{refusal}"
+    );
+    assert!(interop_version_refusal(version(60, 26, 103), version(61, 0, 100)).is_some());
+    assert_eq!(hardware_interop_refusal(), None, "the pinned SDK passes");
+    check_hardware_interop().expect("the pinned SDK passes");
+}

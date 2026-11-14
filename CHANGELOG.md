@@ -492,6 +492,11 @@ All notable changes to this project are documented in this file.
   format than the encoder's, plane copies stay inside the frame's buffers, and the Vulkan encode
   copy refuses a size larger than its planes or the encoder frame. In the bridge,
   `Yuv420pFrameBuffer::with_format` takes no plane list and `planes()` reports the layout.
+- Hardware decode and encode interop is off when the loaded libavutil is another minor release
+  than the one the `FFmpeg` shims were built for (the D3D12VA structures they read moved within
+  libavutil 60): the host says so at start and decodes and encodes through the software and
+  CPU-frame paths instead of reading the structures at wrong offsets. Building against headers
+  older than libavutil 60.13.100 stops with a message.
 
 ## [0.6.0] - 2026-11-08
 

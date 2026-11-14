@@ -643,6 +643,11 @@ impl NativeExportDecoder {
     ) -> Result<Self, HardwareOpenError> {
         // `VideoToolbox` creates its own session rather than adopting the renderer's device; Metal
         // interop happens at import.
+        alpha2_ffmpeg_bridge::check_hardware_interop()
+            .map_err(crate::convert::adapter_error)
+            .map_err(|error| {
+                HardwareOpenError::new(HardwareDecodeFallback::DecoderOpenFailed, error)
+            })?;
         let mark = alpha2_ffmpeg_bridge::log_mark();
         let device = rsmpeg::avutil::AVHWDeviceContext::create(
             ffi::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,

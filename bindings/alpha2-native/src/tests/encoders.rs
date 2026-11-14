@@ -852,6 +852,7 @@ fn a_runtime_other_than_the_pinned_sdk_says_why() {
         version: version.to_owned(),
         configuration: configuration.to_owned(),
         pinned_sdk_release: "ffmpeg-8.1.3-shared-build5",
+        interop_refusal: None,
     };
     let pinned = "--disable-gpl --disable-nonfree --disable-autodetect --enable-libdav1d \
                   --enable-libopus --enable-libvpx --enable-libsvtav1 --enable-videotoolbox";
