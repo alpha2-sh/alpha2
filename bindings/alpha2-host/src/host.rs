@@ -108,6 +108,9 @@ pub struct HostDevice {
     pub gpu_log: std::sync::Arc<alpha2_gpu::GpuDiagnosticLog>,
     /// Request contexts alive on this device.
     requests: std::sync::atomic::AtomicUsize,
+    /// The result-cache budget each rendering request asked for, by its cache scope; the
+    /// renderer's budget is their sum.
+    cache_budgets: std::sync::Mutex<HashMap<u64, u64>>,
     /// Runtime effects and effect resources, held by the requests that use them.
     pub(crate) registrations: crate::registrations::Registrations,
     /// Blocks this device's drop forever when a test asks, as on a device that never goes idle.
@@ -160,9 +163,17 @@ impl std::ops::Deref for Host {
 impl Drop for Host {
     fn drop(&mut self) {
         self.device.registrations.release(&self.held);
-        self.device
+        self.release_result_cache();
+        let before = self
+            .device
             .requests
-            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        // The last request out leaves an idle host holding no frames: nothing carries over to the
+        // next request, which would release it at its start anyway.
+        if before == 1 {
+            self.device.renderer.clear_result_cache();
+            self.device.renderer.release_idle_memory();
+        }
     }
 }
 
@@ -231,7 +242,7 @@ impl Host {
     pub fn for_request(device: std::sync::Arc<HostDevice>) -> Self {
         device
             .requests
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         #[cfg(all(target_os = "linux", feature = "hwdevice"))]
         let shared_vulkan = clone_shared(&device.shared_vulkan);
         #[cfg(all(target_os = "macos", feature = "hwdevice"))]
@@ -303,6 +314,7 @@ impl Host {
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
+            cache_budgets: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -327,6 +339,7 @@ impl Host {
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
+            cache_budgets: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -351,6 +364,7 @@ impl Host {
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
+            cache_budgets: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -375,6 +389,7 @@ impl Host {
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
+            cache_budgets: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -536,6 +551,7 @@ impl Host {
             #[cfg(test)]
             _drop_stall: crate::teardown::injected::DropStall,
             requests: std::sync::atomic::AtomicUsize::new(0),
+            cache_budgets: std::sync::Mutex::default(),
             registrations: crate::registrations::Registrations::default(),
         }))
     }
@@ -659,7 +675,7 @@ impl Host {
                 Err(error)
             }
         };
-        if export {
+        if export && self.alone() {
             // Frame buffers help only within one request, so an idle host holds none.
             self.renderer.release_frame_buffers();
         }
@@ -846,11 +862,14 @@ impl Host {
             .and_then(|parsed| crate::providers::check_resources(&parsed, inputs.resources))
             .map_err(|error| self.attach_failure(HostError::classify(error), None))?;
         let selections = media_selections(&resolved.report);
-        // A resident host's last request must not crowd this one.
-        let released = self
-            .renderer
-            .release_idle_memory()
-            .saturating_add(self.release_idle_decode_copies());
+        // A resident host's last request must not crowd this one; a running one keeps its pools.
+        let released = if self.alone() {
+            self.renderer
+                .release_idle_memory()
+                .saturating_add(self.release_idle_decode_copies())
+        } else {
+            0
+        };
         let provider_files = alpha2_host_core::providers::ProviderFiles {
             originals: resolved.paths.clone(),
             frames: inputs.frames.clone(),
@@ -1163,7 +1182,40 @@ impl Host {
         families
     }
 
+    /// Whether no other request context is alive on the device, so state the device shares is
+    /// this request's alone.
+    fn alone(&self) -> bool {
+        self.requests.load(std::sync::atomic::Ordering::Acquire) <= 1
+    }
+
+    /// Adds this request's result-cache budget to the renderer's, which holds every running
+    /// request's, and clears the cache when no other request could be using it.
+    pub(crate) fn reserve_result_cache(&self, bytes: u64) {
+        if self.alone() {
+            self.renderer.clear_result_cache();
+        }
+        let mut budgets = self
+            .cache_budgets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        budgets.insert(self.cache_scope, bytes);
+        self.renderer
+            .set_result_cache_budget(budgets.values().copied().fold(0, u64::saturating_add));
+    }
+
+    fn release_result_cache(&self) {
+        let mut budgets = self
+            .cache_budgets
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if budgets.remove(&self.cache_scope).is_some() && !budgets.is_empty() {
+            self.renderer
+                .set_result_cache_budget(budgets.values().copied().fold(0, u64::saturating_add));
+        }
+    }
+
     fn end_export(&mut self) {
+        self.release_result_cache();
         self.conformed_video_frames = None;
         *self
             .largest_video_frames
@@ -1887,10 +1939,8 @@ impl Host {
                 "10-bit output needs the rgba16float intermediate; this renderer stores 8 bits",
             ));
         }
-        // Frees the last request's entries; the request scope in every source key, not this clear,
-        // keeps requests apart.
-        self.renderer.clear_result_cache();
-        self.renderer.set_result_cache_budget(result_cache_budget(
+        // The request scope in every source key, not a clear, keeps requests apart.
+        self.reserve_result_cache(result_cache_budget(
             size,
             self.renderer.intermediate_format(),
         ));

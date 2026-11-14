@@ -1794,3 +1794,40 @@ fn a_frame_file_that_inflates_past_its_planes_is_deleted_without_inflating_it() 
     }
     std::fs::remove_dir_all(&directory).ok();
 }
+
+#[test]
+fn an_idle_host_holds_no_result_cache_entries_or_pooled_frames_after_an_export() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("result-cache-idle");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
+    let device = std::sync::Arc::clone(host.device());
+    let request = json!({
+        "protocolVersion": 2, "requestId": "idle", "operation": "export",
+        "project": conform_project(&json!({})),
+        "assets": {"video": corpus("parity-rgb.mov")},
+        "startTicks": 0, "endTicks": alpha2_time::TICKS_PER_SECOND,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "output": directory.join("idle.mp4"),
+    });
+    let result = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |_| Ok(()),
+        )
+        .expect("export");
+    assert!(
+        device.renderer.result_cache_stats().bytes > 0,
+        "the request still holds its entries: {}",
+        result["resultCache"]
+    );
+    drop(host);
+    assert_eq!(device.renderer.result_cache_stats().bytes, 0);
+    assert_eq!(
+        device.renderer.release_idle_memory(),
+        0,
+        "pools were released"
+    );
+    std::fs::remove_dir_all(&directory).ok();
+}

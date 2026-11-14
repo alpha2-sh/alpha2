@@ -411,6 +411,10 @@ All notable changes to this project are documented in this file.
   worker that panics fails its export with `INTERNAL` and the panic message instead of
   `ENCODE_ERROR`, which a retry policy read as a reason to switch encoders. A panicking watched
   worker's message is kept, and a memory watchdog that cannot start says so.
+- A request that starts beside a running one no longer clears the shared result cache, shrinks
+  its budget to its own frames or releases the renderer's pools under it: the cache holds the sum of
+  the running requests' budgets. The host releases the cache and the pools when the last running
+  request ends, so an idle GPU host no longer keeps up to four intermediate frames.
 
 ## [0.6.0] - 2026-11-08
 

@@ -350,3 +350,60 @@ fn two_exports_of_one_template_keep_their_own_video() {
         );
     }
 }
+
+/// The answers to `ids`, in any order.
+fn answers_to(serving: &ServeChild, ids: &[&str]) -> HashMap<String, Value> {
+    let mut answers = HashMap::new();
+    while answers.len() < ids.len() {
+        let message = serving.message(Duration::from_secs(120));
+        let id = message["requestId"].as_str().unwrap_or_default().to_owned();
+        if ids.contains(&id.as_str()) && message.get("ok").is_some() {
+            answers.insert(id, message);
+        }
+    }
+    answers
+}
+
+#[test]
+fn a_small_still_beside_an_export_leaves_the_exports_result_cache_as_it_is_alone() {
+    let _gpu = gpu_test_lock();
+    for renderer in RENDERERS {
+        let directory = scratch_directory(&format!("cache-beside-{renderer}"));
+        let image = directory.join("red.png");
+        write_solid_png(&image, RED);
+        // A held picture: one miss, then a hit for every later frame.
+        let project = one_clip_project("image", "image", 2 * alpha2_time::TICKS_PER_SECOND);
+        let mut serving = serve_two_at_once(renderer);
+        let alone = export_request("alone", &project, "image", &image, &directory.join("a.mp4"));
+        serving.write(&alone.to_string());
+        let alone = answers_to(&serving, &["alone"])
+            .remove("alone")
+            .expect("alone");
+        let beside = export_request(
+            "beside",
+            &project,
+            "image",
+            &image,
+            &directory.join("b.mp4"),
+        );
+        let still = json!({
+            "protocolVersion": 2, "operation": "still", "requestId": "still",
+            "project": project, "assets": {"image": image},
+            "stills": [{"time": 0}], "size": {"width": 32, "height": 18},
+        });
+        start_overlapping(&mut serving, &beside, &still);
+        let mut answers = answers_to(&serving, &["beside", "still"]);
+        assert_eq!(answers["still"]["ok"], true, "{}", answers["still"]);
+        let beside = answers.remove("beside").expect("beside");
+        for answer in [&alone, &beside] {
+            assert_eq!(answer["ok"], true, "{renderer}: {answer}");
+        }
+        assert_eq!(
+            beside["result"]["resultCache"]["hits"], alone["result"]["resultCache"]["hits"],
+            "{renderer}: {} against {}",
+            beside["result"]["resultCache"], alone["result"]["resultCache"]
+        );
+        assert_eq!(serving.finish(), Some(0));
+        std::fs::remove_dir_all(&directory).ok();
+    }
+}

@@ -63,8 +63,7 @@ impl Host {
                 .map_err(error_message)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        self.renderer.clear_result_cache();
-        self.renderer.set_result_cache_budget(result_cache_budget(
+        self.reserve_result_cache(result_cache_budget(
             size,
             self.renderer.intermediate_format(),
         ));
