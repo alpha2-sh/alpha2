@@ -46,12 +46,12 @@ def _install(arguments: argparse.Namespace) -> int:
     except Alpha2HostInstallError as error:
         if shown >= 0:
             sys.stderr.write("\n")
-        print(f"alpha2 install: {error}", file=sys.stderr)
+        print(f"python -m alpha2 install: {error}", file=sys.stderr)
         return 1
     if shown >= 0:
         sys.stderr.write("\n")
     for warning in caught:
-        print(f"alpha2 install: {warning.message}", file=sys.stderr)
+        print(f"python -m alpha2 install: {warning.message}", file=sys.stderr)
     if isinstance(result, OpenH264InstallResult):
         print(
             f"installed OpenH264 {result.version}: {result.library_path}"
@@ -84,7 +84,7 @@ def _pairs(values: Sequence[str], flag: str) -> dict[str, str]:
     for value in values:
         key, separator, path = value.partition("=")
         if not separator or not key or not path:
-            raise SystemExit(f"alpha2: {flag} takes <id>=<path>, not {value}")
+            raise SystemExit(f"python -m alpha2: {flag} takes <id>=<path>, not {value}")
         pairs[key] = path
     return pairs
 
@@ -95,14 +95,14 @@ def _read_project(path: str, command: str) -> Any:
         return json.loads(read_user_text(path, "project file"))
     except OSError as error:
         print(
-            f"alpha2 {command}: IO_ERROR: cannot read the project file {path}: {error}",
+            f"python -m alpha2 {command}: IO_ERROR: cannot read the project file {path}: {error}",
             file=sys.stderr,
         )
     except UserTextError as error:
-        print(f"alpha2 {command}: INVALID_INPUT: {error}", file=sys.stderr)
+        print(f"python -m alpha2 {command}: INVALID_INPUT: {error}", file=sys.stderr)
     except json.JSONDecodeError as error:
         print(
-            f"alpha2 {command}: INVALID_INPUT: project file {path} is not JSON: {error}",
+            f"python -m alpha2 {command}: INVALID_INPUT: project file {path} is not JSON: {error}",
             file=sys.stderr,
         )
     return None
@@ -140,7 +140,7 @@ def _export(arguments: argparse.Namespace) -> int:
     except Alpha2HostError as error:
         if shown >= 0:
             sys.stderr.write("\n")
-        print(f"alpha2 export: {error.code}: {error}", file=sys.stderr)
+        print(f"python -m alpha2 export: {error.code}: {error}", file=sys.stderr)
         return 1
     if shown >= 0:
         sys.stderr.write("\n")
@@ -166,7 +166,7 @@ def _still(arguments: argparse.Namespace) -> int:
             overwrite=arguments.overwrite,
         )
     except Alpha2HostError as error:
-        print(f"alpha2 still: {error.code}: {error}", file=sys.stderr)
+        print(f"python -m alpha2 still: {error.code}: {error}", file=sys.stderr)
         return 1
     if arguments.json:
         print(json.dumps(result, indent=2))
@@ -183,7 +183,7 @@ def _capabilities(arguments: argparse.Namespace) -> int:
     try:
         report = HostClient(host_path=arguments.host).capabilities()
     except Alpha2HostError as error:
-        print(f"alpha2 capabilities: {error.code}: {error}", file=sys.stderr)
+        print(f"python -m alpha2 capabilities: {error.code}: {error}", file=sys.stderr)
         return 1
     print(json.dumps(report, indent=2))
     return 0
@@ -211,7 +211,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="backslashreplace")
-    parser = argparse.ArgumentParser(prog="alpha2", description=__doc__)
+    parser = argparse.ArgumentParser(prog="python -m alpha2", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
 
     install = commands.add_parser(

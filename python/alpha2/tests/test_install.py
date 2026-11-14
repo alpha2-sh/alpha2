@@ -296,7 +296,7 @@ def test_store_python_warns_that_the_cache_is_private(
     assert main(["install"]) == 0
     err = capsys.readouterr().err
     assert (
-        "alpha2 install: this is the Microsoft Store Python: Windows keeps what it writes under "
+        "python -m alpha2 install: this is the Microsoft Store Python: Windows keeps what it writes under "
         "%LOCALAPPDATA% private to it, so other alpha2 clients will not see this install; set "
         "ALPHA2_HOST_CACHE_DIR to a folder outside %LOCALAPPDATA% to share it"
     ) in err

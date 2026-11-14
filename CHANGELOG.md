@@ -146,6 +146,9 @@ All notable changes to this project are documented in this file.
   is left out. `alpha2-host --allow-every-decoder` (`serve`, `export`, `conform`) lifts the list
   for the process; no request can. Before, a file in an allowed container could select any of the
   runtime's 506 decoders.
+- The Python package no longer installs an `alpha2` command, which shared its name with the native
+  archive's media program; run `python -m alpha2 install`, `python -m alpha2 mcp` and the other
+  commands instead. Its messages start with `python -m alpha2 <command>:`.
 
 ### Fixed
 

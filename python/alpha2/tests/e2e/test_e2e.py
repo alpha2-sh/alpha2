@@ -1166,6 +1166,6 @@ def test_a_project_file_in_cp949_is_invalid_input(tmp_path: Path) -> None:
         assert run.returncode == 1, run.stderr
         assert "Traceback" not in run.stderr
         assert (
-            f"alpha2 {command}: INVALID_INPUT: project file {project} is not UTF-8 text "
+            f"python -m alpha2 {command}: INVALID_INPUT: project file {project} is not UTF-8 text "
             "(invalid byte at offset 10); save it as UTF-8"
         ) in run.stderr
