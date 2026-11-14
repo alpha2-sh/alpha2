@@ -248,6 +248,7 @@ type ProtocolErrorCode =
   | "PLUGIN_ABI_UNSUPPORTED"
   | "PLUGIN_NO_ARTIFACT"
   | "PLUGIN_NATIVE_REFUSED"
+  | "PLUGIN_REFUSED"
   | "PLUGIN_DESCRIPTOR_MISMATCH"
   | "PLUGIN_UNSUPPORTED_FEATURE"
   | "PLUGIN_LOAD_FAILED"
@@ -339,6 +340,7 @@ const CODE_CLASSES: Readonly<Record<ClassifiedCode, FailureClass>> =
     PLUGIN_ABI_UNSUPPORTED: permanent,
     PLUGIN_NO_ARTIFACT: permanent,
     PLUGIN_NATIVE_REFUSED: permanent,
+    PLUGIN_REFUSED: permanent,
     PLUGIN_DESCRIPTOR_MISMATCH: permanent,
     PLUGIN_UNSUPPORTED_FEATURE: permanent,
     PLUGIN_LOAD_FAILED: permanent,

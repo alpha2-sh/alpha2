@@ -39,6 +39,8 @@ pub mod codes {
     pub const NO_ARTIFACT: &str = "PLUGIN_NO_ARTIFACT";
     /// Only a native artifact runs here, and the caller did not allow native code.
     pub const NATIVE_REFUSED: &str = "PLUGIN_NATIVE_REFUSED";
+    /// The host's plugin policy refuses the plugin or one of its files.
+    pub const REFUSED: &str = "PLUGIN_REFUSED";
     /// The artifact's descriptor differs from the manifest's.
     pub const DESCRIPTOR_MISMATCH: &str = "PLUGIN_DESCRIPTOR_MISMATCH";
     /// The wasm module uses relaxed SIMD, threads, shared memory, more than one memory or 64-bit
@@ -53,12 +55,13 @@ pub mod codes {
 }
 
 /// Every plugin error code.
-pub const PLUGIN_CODES: [&str; 10] = [
+pub const PLUGIN_CODES: [&str; 11] = [
     codes::FETCH_FAILED,
     codes::HASH_MISMATCH,
     codes::ABI_UNSUPPORTED,
     codes::NO_ARTIFACT,
     codes::NATIVE_REFUSED,
+    codes::REFUSED,
     codes::DESCRIPTOR_MISMATCH,
     codes::UNSUPPORTED_FEATURE,
     codes::LOAD_FAILED,
@@ -111,7 +114,8 @@ pub fn parse_manifest(text: &str) -> Result<PluginManifest, PluginError> {
     PluginManifest::from_json(text).map_err(PluginError::from)
 }
 
-/// What the caller allows a plugin.
+/// What the caller allows a plugin. A program that calls [`load`] is its own operator: it decides
+/// here what the `alpha2-host` operator decides with its `serve` flags.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
     /// Native code runs with the process's rights; refused unless allowed.

@@ -14,6 +14,8 @@ use alpha2_engine::extract::{MAX_MANIFEST_BYTES, Reference, reference};
 use alpha2_host_core::plugins::{Fetch, Fetched, PluginError, codes, sha256_hex};
 use sha2::{Digest, Sha256};
 
+use crate::plugin_policy::{Origin, PluginPolicy};
+
 /// How long one download may take, connecting included.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 /// The cache size past which least recently used files are removed, when
@@ -24,24 +26,42 @@ const DEFAULT_CACHE_QUOTA: u64 = 4 * 1024 * 1024 * 1024;
 const EVICTION_GRACE: Duration = Duration::from_secs(3600);
 /// Numbers partial files, so request threads of one host never write the same one.
 static PARTIALS: AtomicU64 = AtomicU64::new(0);
+/// Redirect hops one download follows at most.
+const MAX_REDIRECTS: usize = 5;
 /// Bytes read from a body or a file at a time.
 const CHUNK_BYTES: usize = 64 * 1024;
 
-/// Starts HTTPS downloads; production uses ureq, tests script the bodies.
+/// What one GET answered.
+pub enum Answer {
+    /// The body.
+    Body(Box<dyn Read + Send>),
+    /// A redirect to this `Location`, not followed.
+    Redirect(String),
+}
+
+/// Starts HTTPS downloads; production uses ureq, tests script the answers.
 pub trait Download: Send + Sync {
-    /// The body of a GET of `url`.
+    /// One GET of `url`, without following a redirect.
     ///
     /// # Errors
     /// Why the request failed, without the URL.
-    fn get(&self, url: &str) -> Result<Box<dyn Read + Send>, String>;
+    fn get(&self, url: &str) -> Result<Answer, String>;
 }
 
 struct Https;
 
 impl Download for Https {
-    fn get(&self, url: &str) -> Result<Box<dyn Read + Send>, String> {
+    fn get(&self, url: &str) -> Result<Answer, String> {
         let response = agent().get(url).call().map_err(|error| error.to_string())?;
-        Ok(Box::new(response.into_body().into_reader()))
+        if response.status().is_redirection() {
+            let location = response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| format!("a {} redirect without a Location", response.status()))?;
+            return Ok(Answer::Redirect(location.to_owned()));
+        }
+        Ok(Answer::Body(Box::new(response.into_body().into_reader())))
     }
 }
 
@@ -199,6 +219,7 @@ fn agent() -> &'static ureq::Agent {
     AGENT.get_or_init(|| {
         ureq::Agent::config_builder()
             .https_only(true)
+            .max_redirects(0)
             .timeout_global(Some(DOWNLOAD_TIMEOUT))
             .tls_config(
                 ureq::tls::TlsConfig::builder()
@@ -208,6 +229,49 @@ fn agent() -> &'static ureq::Agent {
             .build()
             .new_agent()
     })
+}
+
+/// Where a `Location` points, resolved against the URL that answered with it.
+fn redirect_target(from: &str, location: &str) -> String {
+    if location.starts_with("//") {
+        format!("https:{location}")
+    } else if has_scheme(location).is_some() {
+        location.to_owned()
+    } else {
+        join_url(from, location)
+    }
+}
+
+/// The body at `url`, following at most [`MAX_REDIRECTS`] redirects, each target only when
+/// `policy` allows its origin for a manifest from `manifest`; nothing is contacted before its
+/// check.
+fn open(
+    download: &dyn Download,
+    url: &str,
+    policy: &PluginPolicy,
+    manifest: Option<&Origin>,
+) -> Result<Box<dyn Read + Send>, PluginError> {
+    let mut current = url.to_owned();
+    for _ in 0..=MAX_REDIRECTS {
+        let origin = Origin::of_url(&current);
+        if !origin
+            .as_ref()
+            .is_some_and(|origin| policy.allows_origin(origin, manifest))
+        {
+            return Err(policy.origin_refusal(&shown(&current), origin.as_ref()));
+        }
+        match download
+            .get(&current)
+            .map_err(|error| fetch_failed(format!("{}: {error}", shown(&current))))?
+        {
+            Answer::Body(body) => return Ok(body),
+            Answer::Redirect(location) => current = redirect_target(&current, &location),
+        }
+    }
+    Err(fetch_failed(format!(
+        "{}: more than {MAX_REDIRECTS} redirects",
+        shown(url)
+    )))
 }
 
 /// Reads at most `limit` bytes of `reader`; `None` when there are more.
@@ -220,28 +284,32 @@ fn read_bounded(reader: impl Read, limit: u64) -> std::io::Result<Option<Vec<u8>
 }
 
 /// The manifest at `location` (an `https:` URL, a `file:` URL or a path), checked against
-/// `sha256`, and the base its relative URLs resolve against.
+/// `sha256`, and the base its relative URLs resolve against: the requested URL, also after a
+/// redirect.
 ///
 /// # Errors
-/// `PLUGIN_FETCH_FAILED` when it cannot be read, is not a regular file or is longer than
+/// `PLUGIN_REFUSED` when `policy` refuses the location, checked before anything is read or
+/// contacted; `PLUGIN_FETCH_FAILED` when it cannot be read, is not a regular file or is longer than
 /// `MAX_MANIFEST_BYTES`; `PLUGIN_HASH_MISMATCH` when its hash differs.
 pub fn manifest(
     location: &str,
     sha256: &str,
     download: &dyn Download,
+    policy: &PluginPolicy,
 ) -> Result<(String, Base), PluginError> {
     let limit = MAX_MANIFEST_BYTES as u64;
     let too_long = |what: &str| fetch_failed(format!("{what}: longer than {limit} bytes"));
     let (bytes, base) = match manifest_location(location)? {
         Location::Url(url) => {
-            let failed = |error: String| fetch_failed(format!("{}: {error}", shown(&url)));
-            let body = download.get(&url).map_err(failed)?;
+            let origin = policy.check_manifest_url(&url)?;
+            let body = open(download, &url, policy, Some(&origin))?;
             let bytes = read_bounded(body, limit)
-                .map_err(|error| failed(error.to_string()))?
+                .map_err(|error| fetch_failed(format!("{}: {error}", shown(&url))))?
                 .ok_or_else(|| too_long(&shown(&url)))?;
             (bytes, Base::Url(url))
         }
         Location::Path(path) => {
+            policy.check_manifest_path(&path)?;
             let failed =
                 |error: std::io::Error| fetch_failed(format!("{}: {error}", path.display()));
             let file = File::open(&path).map_err(failed)?;
@@ -381,20 +449,35 @@ fn evict(directory: &Path, quota: u64, now: SystemTime) {
 /// the cache under their hash.
 pub struct Fetcher {
     base: Base,
+    /// The manifest's origin; `None` for a local manifest.
+    origin: Option<Origin>,
     cache: Option<PathBuf>,
     quota: u64,
     download: Arc<dyn Download>,
+    policy: &'static PluginPolicy,
 }
 
 impl Fetcher {
-    /// Resolves relative URLs against `base` and keeps downloads in `cache`, made private.
+    /// Resolves relative URLs against `base`, fetches from origins `policy` allows and keeps
+    /// downloads in `cache`, made private.
     #[must_use]
-    pub fn new(base: Base, cache: Option<PathBuf>, download: Arc<dyn Download>) -> Self {
+    pub fn new(
+        base: Base,
+        cache: Option<PathBuf>,
+        download: Arc<dyn Download>,
+        policy: &'static PluginPolicy,
+    ) -> Self {
+        let origin = match &base {
+            Base::Url(url) => Origin::of_url(url),
+            Base::Directory(_) => None,
+        };
         Self {
             base,
+            origin,
             cache,
             quota: cache_quota(),
             download,
+            policy,
         }
     }
 
@@ -475,7 +558,7 @@ impl Fetcher {
             .create_new(true)
             .open(partial)
             .map_err(|error| fetch_failed(format!("{}: {error}", partial.display())))?;
-        let mut body = self.download.get(url).map_err(failed)?;
+        let mut body = open(&*self.download, url, self.policy, self.origin.as_ref())?;
         let mut hasher = Sha256::new();
         let mut buffer = vec![0; CHUNK_BYTES];
         let mut received = 0_u64;
@@ -509,10 +592,19 @@ impl Fetch for Fetcher {
     fn fetch(&mut self, url: &str, sha256: &str, bytes: u64) -> Result<Fetched, PluginError> {
         Ok(match self.base.resolve(url)? {
             Location::Path(path) => Fetched { path, local: true },
-            Location::Url(url) => Fetched {
-                path: self.cached(&url, sha256, bytes)?,
-                local: false,
-            },
+            Location::Url(url) => {
+                let origin = Origin::of_url(&url);
+                if !origin
+                    .as_ref()
+                    .is_some_and(|origin| self.policy.allows_origin(origin, self.origin.as_ref()))
+                {
+                    return Err(self.policy.origin_refusal(&shown(&url), origin.as_ref()));
+                }
+                Fetched {
+                    path: self.cached(&url, sha256, bytes)?,
+                    local: false,
+                }
+            }
         })
     }
 
@@ -569,25 +661,69 @@ mod tests {
         }
     }
 
-    /// Answers each URL with fixed bytes.
-    struct Scripted(HashMap<String, Vec<u8>>);
+    use crate::plugin_policy::DEFAULT_POLICY;
+    use std::sync::Mutex;
+
+    /// Answers each URL with fixed bytes, or a redirect when they start with `->`, and records
+    /// every URL it was asked for.
+    #[derive(Default)]
+    struct Scripted {
+        answers: HashMap<String, Vec<u8>>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl Scripted {
+        fn new(answers: &[(&str, &[u8])]) -> Self {
+            Self {
+                answers: answers
+                    .iter()
+                    .map(|(url, body)| ((*url).to_owned(), body.to_vec()))
+                    .collect(),
+                asked: Mutex::default(),
+            }
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.lock().expect("asked").clone()
+        }
+    }
 
     impl Download for Scripted {
-        fn get(&self, url: &str) -> Result<Box<dyn Read + Send>, String> {
-            let body = self.0.get(url).ok_or("404 Not Found")?.clone();
-            Ok(Box::new(std::io::Cursor::new(body)))
+        fn get(&self, url: &str) -> Result<Answer, String> {
+            self.asked.lock().expect("asked").push(url.to_owned());
+            let body = self.answers.get(url).ok_or("404 Not Found")?.clone();
+            Ok(match body.strip_prefix(b"->") {
+                Some(location) => {
+                    Answer::Redirect(String::from_utf8(location.to_vec()).expect("utf-8"))
+                }
+                None => Answer::Body(Box::new(std::io::Cursor::new(body))),
+            })
         }
     }
 
     const URL: &str = "https://example.com/p/a.wasm";
+    const MANIFEST: &str = "https://example.com/p/manifest.json";
 
     fn fetcher(cache: &Path, body: &[u8]) -> Fetcher {
-        let download = Scripted(HashMap::from([(URL.to_owned(), body.to_vec())]));
         Fetcher::new(
-            Base::Url("https://example.com/p/manifest.json".to_owned()),
+            Base::Url(MANIFEST.to_owned()),
             Some(cache.to_path_buf()),
-            Arc::new(download),
+            Arc::new(Scripted::new(&[(URL, body)])),
+            &DEFAULT_POLICY,
         )
+    }
+
+    fn policy(flags: &[(&str, &str)]) -> &'static PluginPolicy {
+        let mut policy = PluginPolicy::DEFAULT;
+        for (flag, value) in flags {
+            match *flag {
+                "--plugin-origins" => policy.set_origins(value),
+                "--plugin-root" => policy.set_root(value),
+                _ => policy.set_mode(value),
+            }
+            .expect("flag");
+        }
+        Box::leak(Box::new(policy))
     }
 
     fn names(directory: &Path) -> Vec<String> {
@@ -646,15 +782,16 @@ mod tests {
     fn a_body_that_never_ends_stops_past_the_pinned_length() {
         struct Endless;
         impl Download for Endless {
-            fn get(&self, _: &str) -> Result<Box<dyn Read + Send>, String> {
-                Ok(Box::new(std::io::repeat(7)))
+            fn get(&self, _: &str) -> Result<Answer, String> {
+                Ok(Answer::Body(Box::new(std::io::repeat(7))))
             }
         }
         let cache = Scratch::new("endless");
         let mut fetcher = Fetcher::new(
-            Base::Url("https://example.com/p/manifest.json".to_owned()),
+            Base::Url(MANIFEST.to_owned()),
             Some(cache.0.clone()),
             Arc::new(Endless),
+            &DEFAULT_POLICY,
         );
         let error = fetcher
             .fetch("a.wasm", &"0".repeat(64), 1 << 20)
@@ -717,9 +854,10 @@ mod tests {
     #[test]
     fn a_download_without_a_cache_directory_names_the_variable() {
         let mut fetcher = Fetcher::new(
-            Base::Url("https://example.com/p/manifest.json".to_owned()),
+            Base::Url(MANIFEST.to_owned()),
             None,
-            Arc::new(Scripted(HashMap::new())),
+            Arc::new(Scripted::default()),
+            &DEFAULT_POLICY,
         );
         let error = fetcher
             .fetch("a.wasm", &"0".repeat(64), 1)
@@ -755,19 +893,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_manifest_that_is_not_a_regular_file_is_refused_at_once() {
-        let error = manifest("/dev/zero", &"0".repeat(64), &*https()).expect_err("refused");
+        let error = manifest("/dev/zero", &"0".repeat(64), &*https(), &DEFAULT_POLICY)
+            .expect_err("refused");
         assert_eq!(error.code, codes::FETCH_FAILED);
         assert!(error.message.contains("not a regular file"), "{error}");
     }
 
     #[test]
     fn a_manifest_longer_than_the_bound_is_refused() {
-        let url = "https://example.com/p/manifest.json";
-        let download = Scripted(HashMap::from([(
-            url.to_owned(),
-            vec![b' '; MAX_MANIFEST_BYTES + 1],
-        )]));
-        let error = manifest(url, &"0".repeat(64), &download).expect_err("refused");
+        let long = vec![b' '; MAX_MANIFEST_BYTES + 1];
+        let download = Scripted::new(&[(MANIFEST, &long)]);
+        let error =
+            manifest(MANIFEST, &"0".repeat(64), &download, &DEFAULT_POLICY).expect_err("refused");
         assert_eq!(error.code, codes::FETCH_FAILED);
         assert!(error.message.contains("longer than"), "{error}");
     }
@@ -797,6 +934,169 @@ mod tests {
         // Only recent files are left over the quota: they stay.
         evict(&cache.0, 50, now);
         assert_eq!(names(&cache.0), ["recent"]);
+    }
+
+    fn fetch_with(
+        base: &str,
+        answers: &[(&str, &[u8])],
+        policy: &'static PluginPolicy,
+        url: &str,
+        body: &[u8],
+    ) -> (Result<Fetched, PluginError>, Vec<String>) {
+        let cache = Scratch::new("policy");
+        let download = Arc::new(Scripted::new(answers));
+        let base = if base.starts_with("https:") {
+            Base::Url(base.to_owned())
+        } else {
+            Base::Directory(PathBuf::from(base))
+        };
+        let mut fetcher = Fetcher::new(base, Some(cache.0.clone()), download.clone(), policy);
+        let result = fetcher.fetch(url, &sha256_hex(body), body.len() as u64);
+        (result, download.asked())
+    }
+
+    #[test]
+    fn a_reference_to_another_origin_is_fetched_only_when_listed() {
+        let cdn = "https://cdn.example.net/a.wasm";
+        let answers: &[(&str, &[u8])] = &[(cdn, b"x")];
+        let (refused, asked) = fetch_with(MANIFEST, answers, &DEFAULT_POLICY, cdn, b"x");
+        let refused = refused.expect_err("refused");
+        assert_eq!(refused.code, codes::REFUSED);
+        assert!(refused.message.contains("--plugin-origins"), "{refused}");
+        assert_eq!(asked, Vec::<String>::new());
+        let listed = policy(&[(
+            "--plugin-origins",
+            "https://example.com,https://cdn.example.net",
+        )]);
+        let (fetched, asked) = fetch_with(MANIFEST, answers, listed, cdn, b"x");
+        fetched.expect("fetched");
+        assert_eq!(asked, [cdn]);
+        // A local manifest has no origin of its own.
+        let (local, asked) = fetch_with("/plugins/p", answers, &DEFAULT_POLICY, cdn, b"x");
+        assert_eq!(local.expect_err("refused").code, codes::REFUSED);
+        assert_eq!(asked, Vec::<String>::new());
+        let none = policy(&[("--plugin-origins", "none")]);
+        let (refused, asked) = fetch_with(MANIFEST, &[(URL, b"x")], none, "a.wasm", b"x");
+        assert_eq!(refused.expect_err("refused").code, codes::REFUSED);
+        assert_eq!(asked, Vec::<String>::new());
+    }
+
+    #[test]
+    fn redirects_stay_on_allowed_origins_and_end_after_five_hops() {
+        let elsewhere: &[(&str, &[u8])] = &[
+            (URL, b"->https://cdn.example.net/a.wasm"),
+            ("https://cdn.example.net/a.wasm", b"x"),
+        ];
+        let (refused, asked) = fetch_with(MANIFEST, elsewhere, &DEFAULT_POLICY, "a.wasm", b"x");
+        let refused = refused.expect_err("refused");
+        assert_eq!(refused.code, codes::REFUSED, "{refused}");
+        assert_eq!(asked, [URL]);
+        let same: &[(&str, &[u8])] = &[
+            (URL, b"->/q/a.wasm?v=2"),
+            ("https://example.com/q/a.wasm?v=2", b"->b.wasm"),
+            ("https://example.com/q/b.wasm", b"->//example.com/c.wasm"),
+            ("https://example.com/c.wasm", b"x"),
+        ];
+        let (fetched, asked) = fetch_with(MANIFEST, same, &DEFAULT_POLICY, "a.wasm", b"x");
+        fetched.expect("followed");
+        assert_eq!(asked.len(), 4);
+        let to_http: &[(&str, &[u8])] = &[(URL, b"->http://example.com/a.wasm")];
+        let (refused, _) = fetch_with(MANIFEST, to_http, &DEFAULT_POLICY, "a.wasm", b"x");
+        assert_eq!(refused.expect_err("refused").code, codes::REFUSED);
+        let hops: Vec<(String, Vec<u8>)> = (0..6)
+            .map(|hop| {
+                (
+                    format!("https://example.com/p/{hop}.wasm"),
+                    format!("->{}.wasm", hop + 1).into_bytes(),
+                )
+            })
+            .chain([("https://example.com/p/6.wasm".to_owned(), b"x".to_vec())])
+            .collect();
+        let answers: Vec<(&str, &[u8])> = hops
+            .iter()
+            .map(|(url, body)| (url.as_str(), body.as_slice()))
+            .collect();
+        let (five, _) = fetch_with(MANIFEST, &answers[1..], &DEFAULT_POLICY, "1.wasm", b"x");
+        five.expect("five hops");
+        let (six, asked) = fetch_with(MANIFEST, &answers, &DEFAULT_POLICY, "0.wasm", b"x");
+        let six = six.expect_err("six hops");
+        assert_eq!(six.code, codes::FETCH_FAILED);
+        assert!(six.message.contains("more than 5 redirects"), "{six}");
+        assert_eq!(asked.len(), 6);
+    }
+
+    #[test]
+    fn a_redirected_manifest_resolves_against_the_requested_url() {
+        let text = b"{}";
+        let answers: &[(&str, &[u8])] = &[
+            (MANIFEST, b"->/v2/manifest.json"),
+            ("https://example.com/v2/manifest.json", text),
+        ];
+        let download = Scripted::new(answers);
+        let (_, base) =
+            manifest(MANIFEST, &sha256_hex(text), &download, &DEFAULT_POLICY).expect("manifest");
+        assert_eq!(base, Base::Url(MANIFEST.to_owned()));
+        let away: &[(&str, &[u8])] = &[(MANIFEST, b"->https://other.example.org/m.json")];
+        let refused = manifest(
+            MANIFEST,
+            &sha256_hex(text),
+            &Scripted::new(away),
+            &DEFAULT_POLICY,
+        )
+        .expect_err("refused");
+        assert_eq!(refused.code, codes::REFUSED);
+    }
+
+    #[test]
+    fn the_operator_policy_refuses_a_manifest_before_it_is_read_or_contacted() {
+        let download = Scripted::default();
+        let none = policy(&[("--plugin-origins", "none")]);
+        let refused = manifest(MANIFEST, &"0".repeat(64), &download, none).expect_err("refused");
+        assert_eq!(refused.code, codes::REFUSED);
+        assert!(
+            refused.message.contains("--plugin-origins none"),
+            "{refused}"
+        );
+        let listed = policy(&[("--plugin-origins", "https://cdn.example.net")]);
+        let refused = manifest(MANIFEST, &"0".repeat(64), &download, listed).expect_err("refused");
+        assert_eq!(refused.code, codes::REFUSED);
+        assert_eq!(download.asked(), Vec::<String>::new());
+
+        let root = Scratch::new("root");
+        let inside = root.0.join("inside");
+        let outside = Scratch::new("outside");
+        std::fs::create_dir_all(&inside).expect("dir");
+        std::fs::create_dir_all(&outside.0).expect("dir");
+        std::fs::write(inside.join("manifest.json"), b"{}").expect("manifest");
+        std::fs::write(outside.0.join("manifest.json"), b"{}").expect("manifest");
+        let rooted = policy(&[("--plugin-root", inside.to_str().expect("utf-8"))]);
+        let pinned = sha256_hex(b"{}");
+        let read = |path: &Path, policy| {
+            manifest(path.to_str().expect("utf-8"), &pinned, &download, policy)
+        };
+        read(&inside.join("manifest.json"), rooted).expect("inside");
+        for refused in [
+            outside.0.join("manifest.json"),
+            inside
+                .join("../inside/../../")
+                .join(outside.0.file_name().expect("name"))
+                .join("manifest.json"),
+            inside.join("none.json"),
+        ] {
+            let error = read(&refused, rooted).expect_err("refused");
+            assert_eq!(error.code, codes::REFUSED, "{}", refused.display());
+            assert!(error.message.contains("--plugin-root"), "{error}");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(outside.0.join("manifest.json"), inside.join("link.json"))
+                .expect("link");
+            let error = read(&inside.join("link.json"), rooted).expect_err("refused");
+            assert_eq!(error.code, codes::REFUSED);
+        }
+        let no_local = policy(&[("--plugin-root", "none")]);
+        let error = read(&inside.join("manifest.json"), no_local).expect_err("refused");
+        assert_eq!(error.code, codes::REFUSED);
     }
 
     #[test]
@@ -908,16 +1208,27 @@ mod tests {
         let path = dir.join("manifest.json");
         std::fs::write(&path, b"{}").expect("manifest");
         let pinned = sha256_hex(b"{}");
-        let (text, base) =
-            manifest(path.to_str().expect("utf-8"), &pinned, &*https()).expect("read");
+        let (text, base) = manifest(
+            path.to_str().expect("utf-8"),
+            &pinned,
+            &*https(),
+            &DEFAULT_POLICY,
+        )
+        .expect("read");
         assert_eq!((text.as_str(), base), ("{}", Base::Directory(dir.clone())));
-        let wrong = manifest(path.to_str().expect("utf-8"), &"0".repeat(64), &*https())
-            .expect_err("refused");
+        let wrong = manifest(
+            path.to_str().expect("utf-8"),
+            &"0".repeat(64),
+            &*https(),
+            &DEFAULT_POLICY,
+        )
+        .expect_err("refused");
         assert_eq!(wrong.code, codes::HASH_MISMATCH);
         let missing = manifest(
             dir.join("none.json").to_str().expect("utf-8"),
             &pinned,
             &*https(),
+            &DEFAULT_POLICY,
         )
         .expect_err("refused");
         assert_eq!(missing.code, codes::FETCH_FAILED);

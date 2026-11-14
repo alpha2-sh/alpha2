@@ -530,7 +530,7 @@ fn manifests_of_other_abis_are_refused_by_code() {
         parse_manifest("{}").expect_err("invalid").code,
         codes::LOAD_FAILED
     );
-    assert_eq!(PLUGIN_CODES.len(), 10);
+    assert_eq!(PLUGIN_CODES.len(), 11);
     let digest: Descriptor = serde_json::from_value(descriptor_of(0)).expect("descriptor");
     assert_eq!(
         digest,

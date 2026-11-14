@@ -294,6 +294,7 @@ pub fn classify_failure(
         | "PLUGIN_ABI_UNSUPPORTED"
         | "PLUGIN_NO_ARTIFACT"
         | "PLUGIN_NATIVE_REFUSED"
+        | "PLUGIN_REFUSED"
         | "PLUGIN_DESCRIPTOR_MISMATCH"
         | "PLUGIN_UNSUPPORTED_FEATURE"
         | "PLUGIN_LOAD_FAILED"

@@ -158,10 +158,13 @@ fn a_wasm_plugin_records_the_bytes_the_rust_reader_pins() {
     .expect("json");
     let mut serving = ServeChild::start(
         SERVE_CHILD,
-        &[(
-            "ALPHA2_PLUGIN_CACHE",
-            dir.join("cache").to_str().expect("utf-8"),
-        )],
+        &[
+            (
+                "ALPHA2_PLUGIN_CACHE",
+                dir.join("cache").to_str().expect("utf-8"),
+            ),
+            ("ALPHA2_TEST_SERVE_ARGS", "--plugins native"),
+        ],
     );
     for (id, plugin) in [
         ("wasm", json!({})),
@@ -292,6 +295,156 @@ fn plugins_the_policy_or_the_pins_refuse_end_with_their_codes() {
         "PLUGIN_HASH_MISMATCH"
     );
     assert_eq!(serving.finish(), Some(0));
+}
+
+/// The SHA-256 of the artifact of `kind` in the manifest at `path`.
+fn artifact_sha(path: &Path, kind: &str) -> Value {
+    let manifest: Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("manifest")).expect("json");
+    manifest["artifacts"]
+        .as_array()
+        .expect("artifacts")
+        .iter()
+        .find(|artifact| artifact["type"] == kind)
+        .expect("artifact")["sha256"]
+        .clone()
+}
+
+fn digest_request(id: &str, manifest: &Path, sha256: &str, plugin: &Value) -> String {
+    extract(
+        id,
+        "alpha2.test.digest",
+        manifest,
+        sha256,
+        plugin,
+        &json!({}),
+    )
+}
+
+/// Answers `requests` in order on a host started with `flags`.
+fn run_with_flags(flags: &str, requests: &[(&str, String)]) -> Vec<Value> {
+    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SERVE_ARGS", flags)]);
+    let answers = requests
+        .iter()
+        .map(|(id, request)| {
+            serving.write(request);
+            answer(&serving, id)
+        })
+        .collect();
+    assert_eq!(serving.finish(), Some(0));
+    answers
+}
+
+fn ran_artifact(response: &Value) -> Value {
+    assert_eq!(response["ok"], true, "{response}");
+    response["result"]["dataSets"][0]["made_by"]["plugin"]["artifact_sha256"].clone()
+}
+
+#[test]
+fn the_plugins_flag_decides_whether_plugins_and_native_code_run() {
+    let _gpu = gpu_test_lock();
+    let both = scratch_directory("plugin-policy-both");
+    let (manifest, sha256) = plugin_dir(&both, "digest", true, true);
+    let native_only = scratch_directory("plugin-policy-native");
+    let (native_manifest, native_sha) = plugin_dir(&native_only, "digest", false, true);
+    let native = json!({ "allow_native": true });
+
+    let off = run_with_flags(
+        "--plugins off",
+        &[(
+            "off",
+            digest_request("off", &both.join("none.json"), &sha256, &json!({})),
+        )],
+    );
+    assert_eq!(off[0]["error"]["code"], "PLUGIN_REFUSED", "{}", off[0]);
+
+    let default = run_with_flags(
+        "",
+        &[
+            (
+                "native-only",
+                digest_request("native-only", &native_manifest, &native_sha, &native),
+            ),
+            ("both", digest_request("both", &manifest, &sha256, &native)),
+        ],
+    );
+    assert_eq!(default[0]["error"]["code"], "PLUGIN_NATIVE_REFUSED");
+    assert!(
+        default[0]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("--plugins native")),
+        "{}",
+        default[0]
+    );
+    assert_eq!(ran_artifact(&default[1]), artifact_sha(&manifest, "wasm"));
+
+    let allowed = run_with_flags(
+        "--plugins native",
+        &[(
+            "native",
+            digest_request("native", &manifest, &sha256, &native),
+        )],
+    );
+    assert_eq!(ran_artifact(&allowed[0]), artifact_sha(&manifest, "cdylib"));
+}
+
+#[test]
+fn local_manifests_and_origins_stay_where_the_operator_allows() {
+    let _gpu = gpu_test_lock();
+    let root = scratch_directory("plugin-policy-root");
+    let (manifest, sha256) = plugin_dir(&root, "digest", true, false);
+    let outside = scratch_directory("plugin-policy-outside");
+    let (outside_manifest, outside_sha) = plugin_dir(&outside, "digest", true, false);
+    #[cfg(unix)]
+    let link = {
+        let link = root.join("link.json");
+        std::os::unix::fs::symlink(&outside_manifest, &link).expect("link");
+        Some((
+            "link",
+            digest_request("link", &link, &outside_sha, &json!({})),
+        ))
+    };
+    #[cfg(not(unix))]
+    let link = None;
+    let requests: Vec<_> = [
+        (
+            "inside",
+            digest_request("inside", &manifest, &sha256, &json!({})),
+        ),
+        (
+            "outside",
+            digest_request("outside", &outside_manifest, &outside_sha, &json!({})),
+        ),
+    ]
+    .into_iter()
+    .chain(link)
+    .collect();
+    let rooted = run_with_flags(&format!("--plugin-root {}", root.display()), &requests);
+    ran_artifact(&rooted[0]);
+    for refused in &rooted[1..] {
+        assert_eq!(refused["error"]["code"], "PLUGIN_REFUSED", "{refused}");
+    }
+
+    let no_local = run_with_flags(
+        "--plugin-root none",
+        &[(
+            "local",
+            digest_request("local", &manifest, &sha256, &json!({})),
+        )],
+    );
+    assert_eq!(no_local[0]["error"]["code"], "PLUGIN_REFUSED");
+
+    // A reserved name that never resolves: a refusal here is not a failed connection.
+    let remote = digest_request("remote", &manifest, &sha256, &json!({})).replace(
+        &serde_json::to_string(&manifest).expect("json"),
+        "\"https://plugins.invalid/manifest.json\"",
+    );
+    let no_network = run_with_flags("--plugin-origins none", &[("remote", remote)]);
+    assert_eq!(
+        no_network[0]["error"]["code"], "PLUGIN_REFUSED",
+        "{}",
+        no_network[0]
+    );
 }
 
 #[test]

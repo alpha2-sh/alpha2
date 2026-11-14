@@ -37,6 +37,8 @@ pub struct ExtractOptions {
     pub plugin_memory_bytes: u64,
     /// The longest one wasm plugin call may run.
     pub plugin_call_deadline: Duration,
+    /// What the operator allows plugins, read once at start.
+    pub plugins: &'static crate::plugin_policy::PluginPolicy,
 }
 
 impl ExtractOptions {
@@ -45,6 +47,7 @@ impl ExtractOptions {
         step_timeout: Some(DEFAULT_STEP_TIMEOUT),
         plugin_memory_bytes: alpha2_host_core::plugins::DEFAULT_MEMORY_BYTES,
         plugin_call_deadline: alpha2_host_core::plugins::DEFAULT_CALL_DEADLINE,
+        plugins: &crate::plugin_policy::DEFAULT_POLICY,
     };
 }
 
@@ -662,26 +665,49 @@ fn plugin_error(error: alpha2_host_core::plugins::PluginError) -> HostError {
     HostError::new(error.code, error.message)
 }
 
-/// Fetches and checks the manifest, then loads the artifact the request's policy picks.
+/// Fetches and checks the manifest, then loads the artifact the request picks within the
+/// operator's policy.
 fn load_plugin(
     plugin: &PluginRequest,
     request: &ExtractRequest,
     options: ExtractOptions,
 ) -> Result<alpha2_host_core::plugins::PluginExtractor, HostError> {
     use alpha2_host_core::plugins;
+    let operator = options.plugins;
+    operator.allows_plugins().map_err(plugin_error)?;
     let download = crate::plugin_fetch::https();
-    let (text, base) = crate::plugin_fetch::manifest(&plugin.manifest, &plugin.sha256, &*download)
-        .map_err(plugin_error)?;
+    let (text, base) =
+        crate::plugin_fetch::manifest(&plugin.manifest, &plugin.sha256, &*download, operator)
+            .map_err(plugin_error)?;
     let manifest = plugins::parse_manifest(&text).map_err(plugin_error)?;
     let policy = plugins::Policy {
-        allow_native: plugin.allow_native,
+        allow_native: plugin.allow_native && operator.allows_native(),
         force_wasm: plugin.force_wasm,
         memory_bytes: options.plugin_memory_bytes,
         call_deadline: options.plugin_call_deadline,
     };
-    let mut fetcher =
-        crate::plugin_fetch::Fetcher::new(base, crate::plugin_fetch::cache_directory(), download);
-    plugins::load(&manifest, request.params.clone(), &policy, &mut fetcher).map_err(plugin_error)
+    let mut fetcher = crate::plugin_fetch::Fetcher::new(
+        base,
+        crate::plugin_fetch::cache_directory(),
+        download,
+        operator,
+    );
+    plugins::load(&manifest, request.params.clone(), &policy, &mut fetcher)
+        .map_err(|error| {
+            if error.code == plugins::codes::NATIVE_REFUSED && plugin.allow_native {
+                plugins::PluginError::new(
+                    error.code,
+                    format!(
+                        "{} runs here only as native code, and this host was not started with \
+                         --plugins native",
+                        manifest.id
+                    ),
+                )
+            } else {
+                error
+            }
+        })
+        .map_err(plugin_error)
 }
 
 fn extract_media_step() {

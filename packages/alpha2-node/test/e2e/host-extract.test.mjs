@@ -503,6 +503,10 @@ test("a native plugin that ends the host fails the request and the pool starts a
     words: "w",
     quiet: "q",
   };
+  const native = new Alpha2NodeClient({
+    hostPath,
+    plugins: { mode: "native" },
+  });
   try {
     await assert.rejects(
       client.extract(
@@ -512,8 +516,19 @@ test("a native plugin that ends the host fails the request and the pool starts a
       ),
       (error) => error.code === "PLUGIN_NATIVE_REFUSED",
     );
+    // A host started without `--plugins native` ignores `allowNative`.
     await assert.rejects(
       client.extract(
+        pluginRequest(
+          { manifest, sha256, allowNative: true },
+          "alpha2.test.scripted",
+          outputs,
+        ),
+      ),
+      (error) => error.code === "PLUGIN_NATIVE_REFUSED",
+    );
+    await assert.rejects(
+      native.extract(
         pluginRequest(
           { manifest, sha256, allowNative: true },
           "alpha2.test.scripted",
@@ -526,7 +541,7 @@ test("a native plugin that ends the host fails the request and the pool starts a
         return true;
       },
     );
-    const after = await client.extract(
+    const after = await native.extract(
       pluginRequest(
         { manifest, sha256, allowNative: true },
         "alpha2.test.scripted",
@@ -535,6 +550,7 @@ test("a native plugin that ends the host fails the request and the pool starts a
     );
     assert.equal(after.dataSets.length, 5);
   } finally {
+    await native.close();
     await rm(dir, { recursive: true, force: true });
   }
 });

@@ -144,6 +144,81 @@ export interface Alpha2NodeOptions extends ResolveHostBinaryOptions {
    * Values not above zero are `INVALID_INPUT`.
    */
   readonly hostStartTimeoutMs?: number;
+  /**
+   * What this client's hosts allow plugins, passed to each as `serve` flags. Unset passes no flag:
+   * wasm plugins only, from a local manifest or one on any `https:` origin.
+   */
+  readonly plugins?: PluginHostPolicy;
+}
+
+/** The plugin policy of a client's hosts, as the host protocol's Plugins section describes. */
+export interface PluginHostPolicy {
+  /**
+   * `off` runs no plugin, `wasm` (the default) only wasm artifacts, `native` also a native artifact
+   * for a request that sets `allowNative`.
+   */
+  readonly mode?: "off" | "wasm" | "native";
+  /**
+   * `"none"` fetches nothing over the network; a list of `https://host[:port]` origins allows
+   * manifests, files and redirects only there. Unset: a manifest from any `https:` origin, with its
+   * files and redirects on that origin.
+   */
+  readonly origins?: "none" | readonly string[];
+  /**
+   * `"any"` (the default), `"none"` for no local manifest, or the directory local manifests must
+   * lie under, resolved against `cwd` when relative.
+   */
+  readonly root?: string;
+}
+
+const PLUGIN_MODES = ["off", "wasm", "native"];
+
+/** The `serve` flags of `policy`; throws `INVALID_INPUT` for a malformed one. */
+function pluginFlags(
+  policy: PluginHostPolicy | undefined,
+  cwd: string,
+): string[] {
+  if (policy === undefined) return [];
+  const invalid = (message: string) =>
+    new Alpha2HostError("INVALID_INPUT", `plugins.${message}`);
+  if (typeof policy !== "object" || policy === null)
+    throw invalid("must be an object");
+  const flags: string[] = [];
+  const { mode, origins, root } = policy;
+  if (mode !== undefined) {
+    if (!PLUGIN_MODES.includes(mode))
+      throw invalid("mode must be off, wasm or native");
+    flags.push("--plugins", mode);
+  }
+  if (origins !== undefined) {
+    const list =
+      origins === "none"
+        ? "none"
+        : Array.isArray(origins) &&
+            origins.length > 0 &&
+            origins.every(
+              (origin) =>
+                typeof origin === "string" &&
+                origin.startsWith("https://") &&
+                !origin.includes(","),
+            )
+          ? origins.join(",")
+          : undefined;
+    if (list === undefined)
+      throw invalid(
+        'origins must be "none" or a non-empty list of https:// origins',
+      );
+    flags.push("--plugin-origins", list);
+  }
+  if (root !== undefined) {
+    if (typeof root !== "string" || root === "")
+      throw invalid('root must be "any", "none" or a directory');
+    flags.push(
+      "--plugin-root",
+      root === "any" || root === "none" ? root : resolve(cwd, root),
+    );
+  }
+  return flags;
 }
 
 /** Video decode path requested from the native host. */
@@ -1372,10 +1447,15 @@ export class Alpha2NodeClient {
     }
     checkVideoDecode("videoDecode", options.videoDecode);
     checkRenderer("renderer", options.renderer);
+    const serveFlags = pluginFlags(
+      options.plugins,
+      options.cwd ?? process.cwd(),
+    );
     this.#pool = new HostPool(
       resolveHostBinary(options),
       concurrency,
       checkHostStartTimeout(options.hostStartTimeoutMs),
+      serveFlags,
     );
     this.#videoDecode = options.videoDecode;
     this.#renderer = options.renderer;
@@ -2610,15 +2690,23 @@ interface ActiveRun {
 class HostPool {
   readonly binary: string;
   readonly startTimeoutMs: number;
+  /** Flags after `serve`, the same for every host of the pool. */
+  readonly serveFlags: readonly string[];
   readonly #limit: number;
   /** Every host until its process exits, which is what the limit counts. */
   readonly #hosts = new Set<Host>();
   readonly #waiting: HostWaiter[] = [];
 
-  constructor(binary: string, limit: number, startTimeoutMs: number) {
+  constructor(
+    binary: string,
+    limit: number,
+    startTimeoutMs: number,
+    serveFlags: readonly string[],
+  ) {
     this.binary = binary;
     this.#limit = limit;
     this.startTimeoutMs = startTimeoutMs;
+    this.serveFlags = serveFlags;
   }
 
   async request(
@@ -3086,7 +3174,7 @@ class Host {
     this.#oomKillsAtStart = oomKillCount();
     let child: ChildProcess;
     try {
-      child = spawn(binary, ["serve"], {
+      child = spawn(binary, ["serve", ...this.#pool.serveFlags], {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
         env: this.#environment,

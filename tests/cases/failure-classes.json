@@ -33,6 +33,7 @@
     "PLUGIN_ABI_UNSUPPORTED": { "code": "INVALID_INPUT", "resource": "unknown" },
     "PLUGIN_NO_ARTIFACT": { "code": "INVALID_INPUT", "resource": "unknown" },
     "PLUGIN_NATIVE_REFUSED": { "code": "INVALID_INPUT", "resource": "unknown" },
+    "PLUGIN_REFUSED": { "code": "INVALID_INPUT", "resource": "unknown" },
     "PLUGIN_DESCRIPTOR_MISMATCH": { "code": "INVALID_INPUT", "resource": "unknown" },
     "PLUGIN_UNSUPPORTED_FEATURE": { "code": "INVALID_INPUT", "resource": "unknown" },
     "PLUGIN_LOAD_FAILED": { "code": "INVALID_INPUT", "resource": "unknown" },

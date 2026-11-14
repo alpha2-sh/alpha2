@@ -1486,6 +1486,66 @@ test("a decode mode that is not one is refused before a host starts", async () =
   assert.deepEqual(await startsIn(starts), []);
 });
 
+test("the plugins option becomes the serve flags of every host, and a malformed one starts none", async () => {
+  const root = await scratch("alpha2-node-plugin-flags-");
+  const starts = join(root, "starts");
+  const hostPath = await fakeHost(
+    root,
+    `import { appendFileSync } from "node:fs";
+import { respond, serve } from ${IO};
+appendFileSync(${JSON.stringify(starts)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+serve((request) => respond(request, { ok: true, result: { status: "ready", capabilities: {}, effectCatalog: {} } }));
+`,
+  );
+  const flagsOf = async (plugins) => {
+    await rm(starts, { force: true });
+    const client = new Alpha2NodeClient({ hostPath, plugins, cwd: root });
+    try {
+      await client.getCapabilities();
+    } finally {
+      await client.close();
+    }
+    return (await startsIn(starts)).map((line) => JSON.parse(line));
+  };
+  assert.deepEqual(await flagsOf(undefined), [[]]);
+  assert.deepEqual(
+    await flagsOf({
+      mode: "native",
+      origins: ["https://a.example", "https://b.example:8443"],
+      root: "plugins",
+    }),
+    [
+      [
+        "--plugins",
+        "native",
+        "--plugin-origins",
+        "https://a.example,https://b.example:8443",
+        "--plugin-root",
+        join(root, "plugins"),
+      ],
+    ],
+  );
+  assert.deepEqual(await flagsOf({ origins: "none", root: "none" }), [
+    ["--plugin-origins", "none", "--plugin-root", "none"],
+  ]);
+  await rm(starts, { force: true });
+  for (const plugins of [
+    { mode: "all" },
+    { origins: [] },
+    { origins: ["http://a.example"] },
+    { origins: "https://a.example" },
+    { root: "" },
+    "native",
+  ])
+    assert.throws(
+      () => new Alpha2NodeClient({ hostPath, plugins }),
+      (error) =>
+        error.code === "INVALID_INPUT" && /^plugins/.test(error.message),
+      JSON.stringify(plugins),
+    );
+  assert.deepEqual(await startsIn(starts), []);
+});
+
 /** Logs `<operation> <decode mode>`; fails the first capabilities probe if `failFirst`. */
 const PROBED_HOST = (
   log,

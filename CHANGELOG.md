@@ -27,6 +27,13 @@ All notable changes to this project are documented in this file.
 - `alpha2-gpu`: `Capabilities::half_float_blendable` is removed; a half-float
   `intermediate_format` now implies blending. `Renderer::render_quad` is removed (it had no use
   outside the renderer's tests).
+- Host: whoever starts `serve` decides what plugins may do. `--plugins off|wasm|native` (default
+  `wasm`: a request's `allow_native` takes effect only under `native`), `--plugin-origins
+  none|<https origins>` (default: a manifest from any `https:` origin, its files and redirects only
+  on that origin; an `https:` file named by a local manifest needs a listed origin) and
+  `--plugin-root any|none|<dir>` for local manifests. Refusals are the new `PLUGIN_REFUSED`, before
+  anything is read or contacted. Redirects are followed for at most five hops. The Node and Python
+  clients take a `plugins` option (`mode`, `origins`, `root`) that becomes these flags.
 - Editor: the browser bridge's `resourceLimit` counts only imported media files. Titles and
   adopted proxies no longer count, so a project with many titles or proxies previews and exports;
   media removed from the document still counts while undo can bring it back, and the import refusal

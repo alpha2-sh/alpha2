@@ -121,6 +121,58 @@ def wire_to_python(fields: dict[str, Any]) -> dict[str, Any]:
     return arguments
 
 
+def test_the_plugins_option_becomes_the_serve_flags_and_a_malformed_one_starts_no_host(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    starts = tmp_path / "starts"
+    host_path = fake_host(
+        tmp_path,
+        f"""
+    record({str(starts)!r}, json.dumps(sys.argv[1:]))
+    request, _ = read_request()
+    send(request, ok=True, result={{"status": "ready", "capabilities": {{}}, "effectCatalog": {{}}}})
+    """,
+    )
+
+    def flags(plugins: Any) -> list[list[str]]:
+        starts.unlink(missing_ok=True)
+        with HostClient(host_path=host_path, plugins=plugins) as client:
+            client.capabilities()
+        return [json.loads(line) for line in lines_in(starts)]
+
+    assert flags(None) == [[]]
+    assert flags(
+        {"mode": "native", "origins": ["https://a.example", "https://b.example:8443"], "root": "p"}
+    ) == [
+        [
+            "--plugins",
+            "native",
+            "--plugin-origins",
+            "https://a.example,https://b.example:8443",
+            "--plugin-root",
+            str(tmp_path / "p"),
+        ]
+    ]
+    assert flags({"origins": "none", "root": "none"}) == [
+        ["--plugin-origins", "none", "--plugin-root", "none"]
+    ]
+    starts.unlink(missing_ok=True)
+    for refused in [
+        {"mode": "all"},
+        {"origins": []},
+        {"origins": ["http://a.example"]},
+        {"origins": "https://a.example"},
+        {"root": ""},
+        {"allow": True},
+        "native",
+    ]:
+        with pytest.raises(Alpha2HostError) as caught:
+            HostClient(host_path=host_path, plugins=refused)  # type: ignore[arg-type]
+        assert caught.value.code == "INVALID_INPUT"
+        assert caught.value.message.startswith("plugins"), caught.value.message
+    assert lines_in(starts) == []
+
+
 def test_the_client_refuses_every_invalid_export_request_of_the_corpus_before_a_host_starts(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:

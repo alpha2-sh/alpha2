@@ -152,6 +152,21 @@ class ExtractPlugin(TypedDict, total=False):
     """The wasm artifact even where a native one is allowed."""
 
 
+class PluginHostPolicy(TypedDict, total=False):
+    """What a :class:`HostClient`'s hosts allow plugins, passed to each as ``serve`` flags."""
+
+    mode: Literal["off", "wasm", "native"]
+    """``off`` runs no plugin, ``wasm`` (the default) only wasm artifacts, ``native`` also a native
+    artifact for a request that sets ``allow_native``."""
+    origins: Literal["none"] | Sequence[str]
+    """``"none"`` fetches nothing over the network; a list of ``https://host[:port]`` origins allows
+    manifests, files and redirects only there. Unset: a manifest from any ``https:`` origin, with
+    its files and redirects on that origin."""
+    root: str | os.PathLike[str]
+    """``"any"`` (the default), ``"none"`` for no local manifest, or the directory local manifests
+    must lie under, resolved against the working directory when relative."""
+
+
 class LoudnessTarget(TypedDict):
     """Normalizes an export's audio to an integrated loudness under a true-peak ceiling."""
 
@@ -246,6 +261,46 @@ def _check_video_decode(field: str, value: object) -> None:
 def _check_renderer(field: str, value: object) -> None:
     if value is not None and value not in _RENDERER_MODES:
         raise _invalid(f"{field} must be auto, gpu, or cpu")
+
+
+def _plugin_flags(policy: object) -> list[str]:
+    """The ``serve`` flags of a :class:`PluginHostPolicy`; ``INVALID_INPUT`` for a malformed one."""
+    if policy is None:
+        return []
+    if not isinstance(policy, Mapping):
+        raise _invalid("plugins must be a mapping")
+    unknown = set(policy) - {"mode", "origins", "root"}
+    if unknown:
+        raise _invalid(f"plugins has unknown keys: {', '.join(sorted(map(str, unknown)))}")
+    flags: list[str] = []
+    mode = policy.get("mode")
+    if mode is not None:
+        if mode not in ("off", "wasm", "native"):
+            raise _invalid("plugins.mode must be off, wasm or native")
+        flags += ["--plugins", mode]
+    origins = policy.get("origins")
+    if origins is not None:
+        if origins == "none":
+            flags += ["--plugin-origins", "none"]
+        elif (
+            isinstance(origins, Sequence)
+            and not isinstance(origins, (str, bytes))
+            and len(origins) > 0
+            and all(
+                isinstance(origin, str) and origin.startswith("https://") and "," not in origin
+                for origin in origins
+            )
+        ):
+            flags += ["--plugin-origins", ",".join(origins)]
+        else:
+            raise _invalid('plugins.origins must be "none" or a non-empty list of https:// origins')
+    root = policy.get("root")
+    if root is not None:
+        if not isinstance(root, (str, os.PathLike)) or os.fspath(root) == "":
+            raise _invalid('plugins.root must be "any", "none" or a directory')
+        text = os.fspath(root)
+        flags += ["--plugin-root", text if text in ("any", "none") else os.path.abspath(text)]
+    return flags
 
 
 def _is_file(path: Path) -> bool:
@@ -643,14 +698,17 @@ class HostClient:
     :func:`resolve_host_binary`). ``video_decode`` and ``renderer`` (see :data:`RendererMode`) apply
     to every request unless it names its own. A client is safe to share between threads.
 
+    ``plugins`` (a :class:`PluginHostPolicy`) is what the client's hosts allow plugins; unset, a
+    host runs wasm plugins only, from a local manifest or one on any ``https:`` origin.
+
     ``host_start_timeout`` is how many seconds a started host has to report that it is ready
     (``None`` waits forever). A host held before it runs (Gatekeeper, antivirus, App Control) is
     killed and the request fails with ``HOST_START_TIMEOUT``.
 
     Raises ``ValueError`` for a ``concurrency`` that is not a positive integer or a
     ``host_start_timeout`` that is not above zero, and :class:`~alpha2.Alpha2HostError` when
-    ``video_decode`` or ``renderer`` is not a mode (``INVALID_INPUT``) or the binary cannot be
-    found.
+    ``video_decode`` or ``renderer`` is not a mode or ``plugins`` is malformed (``INVALID_INPUT``),
+    or the binary cannot be found.
     """
 
     def __init__(
@@ -662,6 +720,7 @@ class HostClient:
         video_decode: VideoDecodeMode | None = None,
         renderer: RendererMode | None = None,
         host_start_timeout: float | None = _host_start.DEFAULT_HOST_START_TIMEOUT,
+        plugins: PluginHostPolicy | None = None,
     ) -> None:
         if not _safe_integer(concurrency) or concurrency < 1:
             raise ValueError("concurrency must be a positive integer")
@@ -673,6 +732,7 @@ class HostClient:
             raise ValueError("host_start_timeout must be a number of seconds above zero, or None")
         _check_video_decode("video_decode", video_decode)
         _check_renderer("renderer", renderer)
+        serve_flags = _plugin_flags(plugins)
         self.host_path: Path = resolve_host_binary(host_path, cache_directory=cache_directory)
         # Hosts get it as ALPHA2_HOST_CACHE_DIR, so they find an OpenH264 installed there.
         self.cache_directory: str | None = (
@@ -682,7 +742,7 @@ class HostClient:
         self.video_decode: VideoDecodeMode | None = video_decode
         self.renderer: RendererMode | None = renderer
         self.host_start_timeout: float | None = host_start_timeout
-        self._pool = _Pool(self.host_path, concurrency, self.cache_directory)
+        self._pool = _Pool(self.host_path, concurrency, self.cache_directory, serve_flags)
         self._probes: dict[str, _Probe] = {}
         self._probes_lock = threading.Lock()
         _clients.add(self)
@@ -1324,7 +1384,7 @@ class _Host:
         self._waiter = threading.Thread(target=self._wait, daemon=True)
         self.started_at = time.monotonic()
         self.process = subprocess.Popen(
-            [str(binary), "serve"],
+            [str(binary), "serve", *pool.serve_flags],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1528,10 +1588,17 @@ class _Pool:
     the pool's view of each host current; the request's own thread reads its events from a queue.
     """
 
-    def __init__(self, binary: Path, limit: int, cache_directory: str | None = None) -> None:
+    def __init__(
+        self,
+        binary: Path,
+        limit: int,
+        cache_directory: str | None = None,
+        serve_flags: Sequence[str] = (),
+    ) -> None:
         self.binary = binary
         self.limit = limit
         self.cache_directory = cache_directory
+        self.serve_flags = tuple(serve_flags)
         self._condition = threading.Condition()
         self._hosts: list[_Host] = []
         self._starting = 0

@@ -72,6 +72,7 @@ mod metrics;
 mod packet_copy;
 mod paths;
 mod plugin_fetch;
+mod plugin_policy;
 mod protocol;
 mod providers;
 mod recovery;

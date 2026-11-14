@@ -871,7 +871,7 @@ pub const HARDWARE_DECODE_STALL_MARKER: &str = "holding hardware decode sessions
 /// evidence, not from these words.
 pub const HARDWARE_ENCODE_STALL_MARKER: &str = "holding a hardware encode session";
 
-pub const PROTOCOL_CODES: [&str; 39] = [
+pub const PROTOCOL_CODES: [&str; 40] = [
     "UNSUPPORTED_PROTOCOL",
     "INVALID_REQUEST",
     "INVALID_INPUT",
@@ -904,6 +904,7 @@ pub const PROTOCOL_CODES: [&str; 39] = [
     "PLUGIN_ABI_UNSUPPORTED",
     "PLUGIN_NO_ARTIFACT",
     "PLUGIN_NATIVE_REFUSED",
+    "PLUGIN_REFUSED",
     "PLUGIN_DESCRIPTOR_MISMATCH",
     "PLUGIN_UNSUPPORTED_FEATURE",
     "PLUGIN_LOAD_FAILED",

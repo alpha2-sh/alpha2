@@ -423,20 +423,30 @@ def test_a_native_plugin_that_ends_the_host_fails_and_the_pool_starts_another(
         )
     assert refused.value.code == "PLUGIN_NATIVE_REFUSED"
     allowed: ExtractPlugin = {"manifest": manifest, "sha256": sha256, "allow_native": True}
-    with pytest.raises(Alpha2HostError) as ended:
+    # A host started without `--plugins native` ignores `allow_native`.
+    with pytest.raises(Alpha2HostError) as ignored:
         client.extract(
             PROJECT,
-            plugin_request("alpha2.test.scripted", outputs, {"abort_at": 1}),
+            plugin_request("alpha2.test.scripted", outputs, {}),
             plugin=allowed,
             assets=video(),
         )
-    assert ended.value.code == "HOST_EXITED"
-    after = client.extract(
-        PROJECT,
-        plugin_request("alpha2.test.scripted", outputs, {}),
-        plugin=allowed,
-        assets=video(),
-    )
+    assert ignored.value.code == "PLUGIN_NATIVE_REFUSED"
+    with HostClient(host_path=HOST, plugins={"mode": "native"}) as native:
+        with pytest.raises(Alpha2HostError) as ended:
+            native.extract(
+                PROJECT,
+                plugin_request("alpha2.test.scripted", outputs, {"abort_at": 1}),
+                plugin=allowed,
+                assets=video(),
+            )
+        assert ended.value.code == "HOST_EXITED"
+        after = native.extract(
+            PROJECT,
+            plugin_request("alpha2.test.scripted", outputs, {}),
+            plugin=allowed,
+            assets=video(),
+        )
     assert len(after["dataSets"]) == 5
 
 

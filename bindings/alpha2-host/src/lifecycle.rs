@@ -41,6 +41,7 @@ impl ServeOptions {
     pub(crate) fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut max_running = DEFAULT_MAX_RUNNING;
         let mut extract = crate::extract_request::ExtractOptions::default();
+        let mut plugins = crate::plugin_policy::PluginPolicy::DEFAULT;
         let mut rest = Vec::new();
         let mut args = args.into_iter();
         while let Some(flag) = args.next() {
@@ -66,6 +67,16 @@ impl ServeOptions {
                     return Err(format!("{flag} takes bytes from 1 to {most}"));
                 }
                 extract.plugin_memory_bytes = bytes;
+            } else if matches!(
+                flag.as_str(),
+                "--plugins" | "--plugin-origins" | "--plugin-root"
+            ) {
+                let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
+                match flag.as_str() {
+                    "--plugins" => plugins.set_mode(&value)?,
+                    "--plugin-origins" => plugins.set_origins(&value)?,
+                    _ => plugins.set_root(&value)?,
+                }
             } else if flag == "--max-running" {
                 let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
                 max_running = value
@@ -76,6 +87,10 @@ impl ServeOptions {
             } else {
                 rest.push(flag);
             }
+        }
+        if plugins != crate::plugin_policy::DEFAULT_POLICY {
+            // Read once per process; the leak keeps the options `Copy`.
+            extract.plugins = Box::leak(Box::new(plugins));
         }
         Ok(Self {
             limits: SoftLimits::from_args(rest)?,
@@ -530,6 +545,56 @@ mod tests {
             "--restart-often 1",
         ] {
             assert!(SoftLimits::from_args(args(refused)).is_err(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn the_plugin_policy_flags_set_mode_origins_and_root() {
+        use crate::plugin_policy::{Origin, Origins, PluginMode, Root};
+        let policy = |flags: &str| ServeOptions::from_args(args(flags)).map(|o| o.extract.plugins);
+        let default = policy("").expect("none");
+        assert_eq!(*default, crate::plugin_policy::PluginPolicy::DEFAULT);
+        assert_eq!(default.mode, PluginMode::Wasm);
+        assert_eq!(default.origins, Origins::ManifestOnly);
+        assert_eq!(default.root, Root::Any);
+        for (flag, mode) in [
+            ("off", PluginMode::Off),
+            ("wasm", PluginMode::Wasm),
+            ("native", PluginMode::Native),
+        ] {
+            assert_eq!(policy(&format!("--plugins {flag}")).expect(flag).mode, mode);
+        }
+        assert_eq!(
+            policy("--plugin-origins none").expect("none").origins,
+            Origins::None
+        );
+        let listed =
+            policy("--plugin-origins https://A.example,https://b.example:8443/").expect("list");
+        assert_eq!(
+            listed.origins,
+            Origins::List(vec![
+                Origin::of_url("https://a.example").expect("origin"),
+                Origin::of_url("https://b.example:8443").expect("origin"),
+            ])
+        );
+        assert_eq!(policy("--plugin-root any").expect("any").root, Root::Any);
+        assert_eq!(policy("--plugin-root none").expect("none").root, Root::None);
+        let here = std::env::current_dir().expect("cwd");
+        assert_eq!(
+            policy("--plugin-root .").expect("relative").root,
+            Root::Dir(std::fs::canonicalize(&here).expect("canonical"))
+        );
+        for refused in [
+            "--plugins all",
+            "--plugins",
+            "--plugin-origins http://a.example",
+            "--plugin-origins https://a.example/path",
+            "--plugin-origins https://user@a.example",
+            "--plugin-origins https://a.example:port",
+            "--plugin-origins https://a.example,",
+            "--plugin-root /a/directory/that/does/not/exist",
+        ] {
+            assert!(policy(refused).is_err(), "{refused}");
         }
     }
 
