@@ -310,14 +310,64 @@ fn read_verified(
 
 /// The longest plugin log line written; the rest is cut.
 const MAX_LOG_BYTES: usize = 2048;
+/// Log text one run may write; later lines are dropped after one notice.
+const LOG_BUDGET_BYTES: usize = 64 * 1024;
+/// The longest `fail` message kept; the rest is cut.
+const MAX_FAIL_BYTES: usize = 4096;
 
-/// Writes a plugin's diagnostic to standard error, where host diagnostics go.
-fn log_line(message: &str) {
-    let mut end = message.len().min(MAX_LOG_BYTES);
-    while !message.is_char_boundary(end) {
-        end -= 1;
+/// UTF-8 text of at most `max` of `bytes`, a sequence the cut splits dropped.
+fn bounded_text(bytes: &[u8], max: usize) -> String {
+    let mut kept = &bytes[..bytes.len().min(max)];
+    if kept.len() < bytes.len()
+        && let Err(error) = std::str::from_utf8(kept)
+        && error.error_len().is_none()
+    {
+        kept = &kept[..error.valid_up_to()];
     }
-    eprintln!("plugin: {}", &message[..end]);
+    String::from_utf8_lossy(kept).into_owned()
+}
+
+/// What is left of a run's log budget.
+#[derive(Debug)]
+struct LogBudget {
+    remaining: usize,
+    exhausted: bool,
+}
+
+impl Default for LogBudget {
+    fn default() -> Self {
+        Self {
+            remaining: LOG_BUDGET_BYTES,
+            exhausted: false,
+        }
+    }
+}
+
+impl LogBudget {
+    /// The line to write for a plugin's `message`, cut to [`MAX_LOG_BYTES`]; once the budget is
+    /// spent, one notice and then nothing.
+    fn line(&mut self, message: &[u8]) -> Option<String> {
+        if self.exhausted {
+            return None;
+        }
+        let text = bounded_text(message, MAX_LOG_BYTES);
+        if text.len() > self.remaining {
+            self.exhausted = true;
+            return Some(format!(
+                "the plugin logged more than {LOG_BUDGET_BYTES} bytes; its further lines are dropped"
+            ));
+        }
+        self.remaining -= text.len();
+        Some(text)
+    }
+
+    /// Writes a plugin's diagnostic to standard error, where host diagnostics go; a closed stream
+    /// drops it.
+    fn log(&mut self, message: &[u8]) {
+        if let Some(line) = self.line(message) {
+            alpha2_os::diagnostic!("plugin: {line}");
+        }
+    }
 }
 
 /// What one plugin call emitted, or why it failed.

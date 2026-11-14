@@ -347,6 +347,18 @@ interface Exports {
   alpha2_end(): number;
 }
 
+const MAX_LOG_BYTES = 2048;
+const LOG_BUDGET_BYTES = 64 * 1024;
+const MAX_FAIL_BYTES = 4096;
+
+/** How many of `bytes` to keep for at most `max`, not splitting a UTF-8 sequence. */
+function utf8Cut(bytes: Uint8Array, max: number): number {
+  let end = Math.min(bytes.length, max);
+  if (end < bytes.length)
+    while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
+  return end;
+}
+
 /**
  * One run of the module, with an instance, its host functions and what they collected. It is
  * instantiated asynchronously because browsers refuse large synchronous instantiation.
@@ -358,6 +370,8 @@ class Run {
   #records: PluginRecord[] = [];
   #undecodable: PluginError | undefined;
   #failure: string | undefined;
+  #logLeft = LOG_BUDGET_BYTES;
+  #logExhausted = false;
 
   private constructor(descriptor: ExtractorDescriptor, memoryBytes: number) {
     this.#descriptor = descriptor;
@@ -389,6 +403,11 @@ class Run {
       new Uint8Array(this.#exports.memory.buffer, ptr, len);
     const utf8 = (ptr: number, len: number): string =>
       new TextDecoder().decode(bytes(ptr, len));
+    // Mirrors host-core: at most `max` bytes are decoded, one more read to see a split sequence.
+    const bounded = (ptr: number, len: number, max: number): Uint8Array => {
+      const read = bytes(ptr, Math.max(0, Math.min(len, max + 1)));
+      return read.subarray(0, utf8Cut(read, max));
+    };
     return {
       alpha2: {
         emit: (ptr: number, len: number): number => {
@@ -419,10 +438,22 @@ class Run {
           return 0;
         },
         fail: (ptr: number, len: number): void => {
-          this.#failure = utf8(ptr, len);
+          this.#failure = new TextDecoder().decode(
+            bounded(ptr, len, MAX_FAIL_BYTES),
+          );
         },
         log: (_level: number, ptr: number, len: number): void => {
-          console.warn(`plugin: ${utf8(ptr, len).slice(0, 2048)}`);
+          if (this.#logExhausted) return;
+          const line = bounded(ptr, len, MAX_LOG_BYTES);
+          if (line.byteLength > this.#logLeft) {
+            this.#logExhausted = true;
+            console.warn(
+              `plugin: the plugin logged more than ${LOG_BUDGET_BYTES} bytes; its further lines are dropped`,
+            );
+            return;
+          }
+          this.#logLeft -= line.byteLength;
+          console.warn(`plugin: ${new TextDecoder().decode(line)}`);
         },
       },
     };

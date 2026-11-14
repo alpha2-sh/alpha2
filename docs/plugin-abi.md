@@ -82,8 +82,8 @@ The host gives the plugin these functions:
 | --- | --- | --- |
 | `emit` | records | A batch of [emit records](#emit-records). Returns `0`, or `1` once the session has refused an emit; the plugin then returns `1` from the call it is in. |
 | `resource` | name | The bytes of a resource the manifest declares. |
-| `fail` | message | Why the call about to return `1` failed (UTF-8). |
-| `log` | level (0 debug, 1 info, 2 warn), message | A diagnostic (UTF-8). |
+| `fail` | message | Why the call about to return `1` failed (UTF-8); loaders keep the first 4096 bytes. |
+| `log` | level (0 debug, 1 info, 2 warn), message | A diagnostic (UTF-8); loaders write the first 2048 bytes of a line and 64 KiB per run, then one notice that further lines are dropped. |
 
 Within a pass, a value is emitted no further along the pass than what the pass has delivered; `end` may emit anywhere in the range. The session's other rules (finite values in range, one sample per time, words and intervals inside the range) are those of the extraction contract.
 

@@ -16,7 +16,10 @@ use wasmtime::{
     TypedFunc, UpdateDeadline,
 };
 
-use super::{Call, Collected, MAX_MEMORY_BYTES, OutputCap, PluginError, Policy, Transport, codes};
+use super::{
+    Call, Collected, LogBudget, MAX_FAIL_BYTES, MAX_LOG_BYTES, MAX_MEMORY_BYTES, OutputCap,
+    PluginError, Policy, Transport, bounded_text, codes,
+};
 
 /// How often the engine's epoch advances.
 const EPOCH_TICK: Duration = Duration::from_millis(10);
@@ -198,6 +201,7 @@ struct State {
     collected: Collected,
     caps: Vec<OutputCap>,
     resources: HashMap<String, Vec<u8>>,
+    log: LogBudget,
     cancel: CancelToken,
     /// When the running call must have returned.
     ends: Instant,
@@ -309,9 +313,11 @@ fn linker() -> Result<Linker<State>, PluginError> {
             "alpha2",
             "fail",
             |mut caller: Caller<'_, State>, ptr: i32, len: i32| {
-                if let Some(message) = read(&mut caller, ptr, len) {
+                // One byte past the bound tells a cut message from one of exactly that length.
+                let kept = len.min(i32::try_from(MAX_FAIL_BYTES + 1).unwrap_or(i32::MAX));
+                if let Some(message) = read(&mut caller, ptr, kept) {
                     caller.data_mut().collected.failure =
-                        Some(String::from_utf8_lossy(&message).into_owned());
+                        Some(bounded_text(&message, MAX_FAIL_BYTES));
                 }
             },
         )
@@ -321,8 +327,9 @@ fn linker() -> Result<Linker<State>, PluginError> {
             "alpha2",
             "log",
             |mut caller: Caller<'_, State>, _level: i32, ptr: i32, len: i32| {
-                if let Some(message) = read(&mut caller, ptr, len) {
-                    super::log_line(&String::from_utf8_lossy(&message));
+                let kept = len.min(i32::try_from(MAX_LOG_BYTES + 1).unwrap_or(i32::MAX));
+                if let Some(message) = read(&mut caller, ptr, kept) {
+                    caller.data_mut().log.log(&message);
                 }
             },
         )
@@ -391,6 +398,7 @@ impl WasmTransport {
                 collected: Collected::default(),
                 caps,
                 resources,
+                log: LogBudget::default(),
                 cancel,
                 ends: deadline_from_now(policy.call_deadline),
                 cancelled: false,

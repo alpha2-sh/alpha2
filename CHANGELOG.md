@@ -147,6 +147,10 @@ All notable changes to this project are documented in this file.
 - GPU renderer: a layer whose pixels are transparent leaves the picture below it unchanged. Before,
   each such layer re-stored the colors under it, so a stack of transparent overlays darkened the
   picture by up to a few code values and the GPU differed from the CPU renderer.
+- Plugins: a plugin's `log` never ends the host when standard error is closed (a native plugin's
+  log callback aborted the process, a wasm plugin's ended it with a panic). Every loader writes at
+  most 64 KiB of log text per run, then one notice, and keeps the first 4096 bytes of a `fail`
+  message; the native callbacks catch a panic at the boundary.
 - Host: a `cancel` of a plugin extraction stops a running wasm call within about 50 ms and a
   plugin download between chunks, instead of waiting for the call's deadline or the download's end
   while the request held its slot. The wasm call deadline is measured in wall-clock time.

@@ -1063,3 +1063,132 @@ fn a_cancel_stops_a_wasm_call_before_its_deadline_and_the_deadline_is_wall_clock
     .expect_err("cancelled before a file is read");
     assert_eq!(refused.code, CANCELLED);
 }
+
+/// Runs the scripted fixture as wasm and as a native library with `params`.
+fn run_both(params: &Value) -> Vec<Result<Vec<DataSet>, alpha2_engine::extract::DriveError>> {
+    [Policy::default(), native_allowed()]
+        .iter()
+        .map(|policy| {
+            let manifest = manifest(1, true, true);
+            let mut plugin = loaded(&manifest, params, policy).expect("loads");
+            run(&mut plugin, params)
+        })
+        .collect()
+}
+
+/// Logs 100,000 lines through both transports, as a child of the tests below.
+#[test]
+#[ignore = "run as a child of the plugin log tests"]
+fn log_a_hundred_thousand_lines_through_both_transports() {
+    if std::env::var_os("ALPHA2_TEST_PLUGIN_LOG").is_none() {
+        return;
+    }
+    // The parent closes or drains standard error before this ends.
+    std::io::copy(&mut std::io::stdin(), &mut std::io::sink()).expect("read standard input");
+    let params = json!({ "log": { "text": "a plugin line", "lines": 100_000 } });
+    for outcome in run_both(&params) {
+        outcome.expect("the run ends");
+    }
+}
+
+/// Runs the logging child; `keep_stderr` reads its standard error, else it is closed first.
+#[cfg(unix)]
+fn logging_child(keep_stderr: bool) -> (std::process::ExitStatus, String, Vec<u8>) {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    let mut child = Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "plugins::tests::log_a_hundred_thousand_lines_through_both_transports",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("ALPHA2_TEST_PLUGIN_LOG", "1")
+        // The fixture build writes nothing to standard error then.
+        .env("CARGO_TERM_QUIET", "true")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("child");
+    let stderr = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if keep_stderr && let Some(mut stderr) = stderr {
+            stderr.read_to_end(&mut bytes).expect("stderr");
+        }
+        bytes
+    });
+    if !keep_stderr {
+        // The reader dropped its end; wait until it has.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("child");
+    let stderr = reader.join().expect("reader");
+    (
+        output.status,
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr,
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn a_plugin_logging_to_a_closed_standard_error_neither_panics_nor_aborts() {
+    let (status, stdout, _) = logging_child(false);
+    assert!(
+        status.success() && stdout.contains("1 passed"),
+        "{status}\n{stdout}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_run_writes_at_most_its_log_budget_and_one_notice() {
+    let (status, stdout, stderr) = logging_child(true);
+    assert!(status.success(), "{status}\n{stdout}");
+    let text = String::from_utf8_lossy(&stderr);
+    let notices = text.matches("further lines are dropped").count();
+    assert_eq!(notices, 2, "one notice per transport");
+    // Two runs, each at most the budget plus its line prefixes and one notice.
+    let lines = text.lines().count();
+    let budget = 2 * (LOG_BUDGET_BYTES + 100) + lines * "plugin: \n".len();
+    assert!(
+        stderr.len() <= budget,
+        "{} bytes, {lines} lines",
+        stderr.len()
+    );
+}
+
+#[test]
+fn a_long_fail_message_arrives_cut_to_its_bound() {
+    let message = format!(
+        "{}\u{e9}{}",
+        "x".repeat(MAX_FAIL_BYTES - 1),
+        "y".repeat(1 << 20)
+    );
+    let params = json!({ "fail_at": 1, "fail_message": message });
+    for outcome in run_both(&params) {
+        match outcome {
+            Err(alpha2_engine::extract::DriveError::Extractor(error)) => {
+                // The two-byte character the bound splits is dropped whole.
+                assert_eq!(error.message, "x".repeat(MAX_FAIL_BYTES - 1));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[test]
+fn bounded_text_cuts_at_a_character_boundary() {
+    assert_eq!(bounded_text("ab\u{e9}".as_bytes(), 3), "ab");
+    assert_eq!(bounded_text("ab\u{e9}".as_bytes(), 4), "ab\u{e9}");
+    assert_eq!(bounded_text(b"a\xffb", 8), "a\u{fffd}b");
+    let mut budget = LogBudget::default();
+    let line = vec![b'z'; MAX_LOG_BYTES * 2];
+    assert_eq!(
+        budget.line(&line).map(|line| line.len()),
+        Some(MAX_LOG_BYTES)
+    );
+}
