@@ -495,3 +495,53 @@ pub(crate) fn pdf_content_bomb(bytes: usize) -> Vec<u8> {
     );
     pdf_one_page("<< /XObject << /F1 5 0 R >> >>", b"/F1 Do", &[form])
 }
+
+/// A lossless 16 x 16 gray JPEG 2000 codestream whose SIZ marker declares `side` x `side` in one
+/// tile, so its data is too short for the size it declares.
+#[cfg(feature = "pdf")]
+pub(crate) fn j2k_codestream(side: u32) -> Vec<u8> {
+    let mut codestream = vec![
+        0xff, 0x4f, 0xff, 0x51, 0x00, 0x29, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00,
+        0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x01,
+        0xff, 0x52, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x04, 0x04, 0x00, 0x01, 0xff,
+        0x5c, 0x00, 0x04, 0x40, 0x40, 0xff, 0x90, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f,
+        0x00, 0x01, 0xff, 0x93, 0x80, 0xff, 0xd9,
+    ];
+    // SOC, the SIZ marker and length, capabilities, then image and tile sizes.
+    for at in [8, 24] {
+        codestream[at..at + 4].copy_from_slice(&side.to_be_bytes());
+        codestream[at + 4..at + 8].copy_from_slice(&side.to_be_bytes());
+    }
+    codestream
+}
+
+/// An embedded JBIG2 stream of one page information segment of `side` x `side`.
+#[cfg(feature = "pdf")]
+pub(crate) fn jbig2_page(side: u32) -> Vec<u8> {
+    let mut info = Vec::new();
+    for word in [side, side, 0, 0] {
+        info.extend_from_slice(&word.to_be_bytes());
+    }
+    info.extend_from_slice(&[0, 0, 0]);
+    // Segment number, type 48 (page information), no referred segments, page 1, data length.
+    let mut segment = 0_u32.to_be_bytes().to_vec();
+    segment.extend_from_slice(&[48, 0, 1]);
+    segment.extend_from_slice(&u32::try_from(info.len()).expect("small").to_be_bytes());
+    segment.extend_from_slice(&info);
+    segment
+}
+
+/// A page that draws a one-pixel image of `data` `draws` times; `entries` name its filter.
+#[cfg(feature = "pdf")]
+pub(crate) fn pdf_coded_image(entries: &str, data: &[u8], draws: usize) -> Vec<u8> {
+    let image = pdf_stream(
+        &format!("/Type /XObject /Subtype /Image /Width 1 {entries} /ColorSpace /DeviceGray"),
+        data,
+    );
+    pdf_one_page(
+        "<< /XObject << /Im 5 0 R >> >>",
+        &b"q 60 0 0 30 0 0 cm /Im Do Q\n".repeat(draws),
+        &[image],
+    )
+}

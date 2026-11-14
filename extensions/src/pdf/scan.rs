@@ -9,7 +9,9 @@ use alpha2_model::MAX_SVG_DOCUMENT_BYTES;
 use hayro_svg::hayro_syntax::Filter;
 use hayro_svg::hayro_syntax::content::TypedIter;
 use hayro_svg::hayro_syntax::content::ops::TypedInstruction;
-use hayro_svg::hayro_syntax::object::{Dict, MaybeRef, Name, Object, ObjectIdentifier, Stream};
+use hayro_svg::hayro_syntax::object::{
+    Array, Dict, MaybeRef, Name, Object, ObjectIdentifier, Stream,
+};
 use hayro_svg::hayro_syntax::page::{Page, Resources};
 use hayro_svg::hayro_syntax::xref::XRef;
 
@@ -536,10 +538,13 @@ impl Walk<'_> {
         Ok(())
     }
 
-    /// Counts an image's pixels by its declared size and, for a JPEG, by its coded size, which
-    /// the decoder uses, and answers what one draw of it costs.
+    /// Counts an image's pixels and decode memory as [`image_size`] sizes it, and answers what one
+    /// draw of it costs.
     fn image(&mut self, dict: &Dict<'_>, stream: &Stream<'_>) -> Result<Cost, ExtensionError> {
-        let pixels = image_pixels(dict, stream);
+        let Sized {
+            pixels,
+            codec_bytes,
+        } = image_size(dict, stream)?;
         self.pixels = self.pixels.saturating_add(pixels);
         if self.pixels > MAX_SOURCE_IMAGE_PIXELS {
             return Err(ExtensionError::Budget(format!(
@@ -547,7 +552,7 @@ impl Walk<'_> {
             )));
         }
         // Decoded samples take at most 8 bytes a pixel (four 16-bit components).
-        self.add_decoded(pixels.saturating_mul(8))?;
+        self.add_decoded(pixels.saturating_mul(8).saturating_add(codec_bytes))?;
         // hayro-svg writes an RGB PNG, with alpha when the image is masked, and a soft mask of
         // another size as a gray image of its own.
         let masked = dict.contains_key(b"SMask")
@@ -557,7 +562,7 @@ impl Walk<'_> {
                 .is_some_and(|value| value != 0);
         let mut draw = Cost::image(pixels, if masked { 4 } else { 3 });
         if let Some(mask) = dict.get::<Stream<'_>>(b"SMask") {
-            draw = draw.add(Cost::image(image_pixels(mask.dict(), &mask), 1));
+            draw = draw.add(Cost::image(image_size(mask.dict(), &mask)?.pixels, 1));
         }
         Ok(draw)
     }
@@ -808,22 +813,117 @@ fn lookup<'n>(
     map.get(name).map_or(&[], Vec::as_slice)
 }
 
-/// An image's pixels by its declared size and, for a JPEG, by its coded size, which the decoder
-/// uses.
-fn image_pixels(dict: &Dict<'_>, stream: &Stream<'_>) -> u64 {
+/// What decoding an image allocates: its pixels by the larger of its dictionary and its own coded
+/// size, and the bytes its codec allocates for them.
+struct Sized {
+    pixels: u64,
+    /// Codec buffers besides the 8 bytes a pixel of decoded samples.
+    codec_bytes: u64,
+}
+
+/// Sizes an image the way hayro's decoders do: JPEG and JPEG 2000 from the codestream, JBIG2 from
+/// the embedded page, CCITT from `/Columns` and the height or `/Rows`, others from the
+/// dictionary. A coded size the codec's own parser cannot read fails decoding the same way, so
+/// the dictionary size stands.
+///
+/// # Errors
+/// [`ExtensionError::Budget`] for a CCITT image without a row count, whose output hayro grows per
+/// decoded row.
+fn image_size(dict: &Dict<'_>, stream: &Stream<'_>) -> Result<Sized, ExtensionError> {
     let side = |short: &[u8], long: &[u8]| {
         dict.get::<u32>(short)
             .or_else(|| dict.get::<u32>(long))
             .unwrap_or(0)
     };
-    let mut pixels = u64::from(side(b"W", b"Width")) * u64::from(side(b"H", b"Height"));
-    if stream.filters().contains(&Filter::DctDecode)
-        && let Ok(coded) = imagesize::blob_size(&stream.raw_data())
-    {
-        let coded = u64::try_from(coded.width.saturating_mul(coded.height)).unwrap_or(u64::MAX);
-        pixels = pixels.max(coded);
+    let (width, height) = (side(b"W", b"Width"), side(b"H", b"Height"));
+    let declared = u64::from(width) * u64::from(height);
+    let filters = stream.filters();
+    let Some((position, &last)) = filters.iter().enumerate().next_back() else {
+        return Ok(Sized {
+            pixels: declared,
+            codec_bytes: 0,
+        });
+    };
+    let data = || stream.raw_data();
+    let area = |width: u32, height: u32| u64::from(width) * u64::from(height);
+    let (coded, per_pixel) = match last {
+        // A codec after another filter reads decoded bytes, which the scan does not hold here.
+        _ if position > 0 => (0, 0),
+        Filter::DctDecode => (
+            imagesize::blob_size(&data()).map_or(0, |coded| {
+                u64::try_from(coded.width.saturating_mul(coded.height)).unwrap_or(u64::MAX)
+            }),
+            0,
+        ),
+        Filter::JpxDecode => {
+            let settings = hayro_jpeg2000::DecodeSettings {
+                resolve_palette_indices: false,
+                strict: false,
+                target_resolution: None,
+            };
+            let data = data();
+            match hayro_jpeg2000::Image::new(&data, &settings) {
+                Ok(image) => {
+                    let components = u64::from(image.color_space().num_channels())
+                        + u64::from(image.has_alpha());
+                    // One 32-bit sample per pixel and component.
+                    (area(image.width(), image.height()), 4 * components)
+                }
+                Err(_) => (0, 0),
+            }
+        }
+        Filter::Jbig2Decode => {
+            let data = data();
+            match hayro_jbig2::Page::new_embedded(
+                &data,
+                None,
+                &hayro_jbig2::DecodeSettings::default(),
+            ) {
+                Ok(page) => (area(page.width(), page.height()), 1),
+                Err(_) => (0, 0),
+            }
+        }
+        Filter::CcittFaxDecode => {
+            let params = decode_params(dict, position);
+            let columns = params
+                .as_ref()
+                .and_then(|params| params.get::<u32>(b"Columns"))
+                .unwrap_or(1728);
+            let rows = if height > 0 {
+                height
+            } else {
+                params
+                    .as_ref()
+                    .and_then(|params| params.get::<u32>(b"Rows"))
+                    .unwrap_or(0)
+            };
+            if rows == 0 {
+                return Err(ExtensionError::Budget(
+                    "the page holds a CCITT image whose row count is not given".into(),
+                ));
+            }
+            (area(columns, rows), 1)
+        }
+        _ => (0, 0),
+    };
+    let pixels = declared.max(coded);
+    Ok(Sized {
+        pixels,
+        codec_bytes: coded.saturating_mul(per_pixel),
+    })
+}
+
+/// The decode parameters of the filter at `position`, from a dictionary or an array of them.
+fn decode_params<'o>(dict: &Dict<'o>, position: usize) -> Option<Dict<'o>> {
+    for key in [b"DecodeParms".as_slice(), b"DP"] {
+        if let Some(params) = dict.get::<Dict<'o>>(key) {
+            return Some(params);
+        }
+        if let Some(params) = dict.get::<Array<'o>>(key) {
+            return params.iter::<Dict<'o>>().nth(position);
+        }
     }
-    pixels
+    None
 }
 
 fn too_much_content() -> ExtensionError {

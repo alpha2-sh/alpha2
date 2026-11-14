@@ -356,6 +356,42 @@ fn a_pdf_page_whose_streams_or_images_decode_past_the_limit_is_refused_holding_l
 
 #[cfg(feature = "pdf")]
 #[test]
+fn a_pdf_image_whose_codestream_declares_billions_of_pixels_is_refused_holding_little() {
+    // A 16 x 16 gray JPEG 2000 codestream whose SIZ marker says 60000 x 60000.
+    let mut codestream = vec![
+        0xff, 0x4f, 0xff, 0x51, 0x00, 0x29, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00,
+        0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x01,
+        0xff, 0x52, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x04, 0x04, 0x00, 0x01, 0xff,
+        0x5c, 0x00, 0x04, 0x40, 0x40, 0xff, 0x90, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f,
+        0x00, 0x01, 0xff, 0x93, 0x80, 0xff, 0xd9,
+    ];
+    for at in [8, 24] {
+        codestream[at..at + 4].copy_from_slice(&60_000_u32.to_be_bytes());
+        codestream[at + 4..at + 8].copy_from_slice(&60_000_u32.to_be_bytes());
+    }
+    let image = pdf_stream(
+        "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode",
+        &codestream,
+    );
+    let bytes = pdf(
+        "<< /XObject << /Im 5 0 R >> >>",
+        b"q 60 0 0 30 0 0 cm /Im Do Q",
+        &[image],
+    );
+    let (opened, held) = peak_ratio(&bytes, || open_pdf(&bytes));
+    assert!(
+        matches!(opened, Err(ExtensionError::Budget(_))),
+        "{opened:?}"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let held = held * bytes.len() as f64;
+    eprintln!("held {held:.0} bytes");
+    assert!(held < 16.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
+}
+
+#[cfg(feature = "pdf")]
+#[test]
 fn a_pdf_page_of_a_billion_form_invocations_is_refused_holding_little() {
     // The page invokes a form 1000 times, it the next 1000 times, and that one a rectangle.
     let invoke = |form: usize| format!("/F{form} Do\n").repeat(1000).into_bytes();

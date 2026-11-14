@@ -184,6 +184,9 @@ All notable changes to this project are documented in this file.
   images, decode four canvases of image pixels and write 256 MiB of image data, its content streams
   may decode to 32 MiB together, a form that invokes itself is refused, and resources a page
   inherits are checked too.
+- A PDF image is sized from its own data as its decoder sizes it: JPEG 2000 from the codestream,
+  JBIG2 from the embedded page, CCITT from `/Columns`, so a small dictionary size no longer hides a
+  multi-gigabyte decode. A CCITT image without a row count is refused.
 
 ## [0.6.0] - 2026-11-08
 

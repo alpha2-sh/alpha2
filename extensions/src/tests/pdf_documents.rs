@@ -3,8 +3,8 @@ use alpha2_model::Rgba;
 use std::io::Write as _;
 
 use super::hostile::{
-    pdf_content_bomb, pdf_forms, pdf_image_draws, pdf_one_page, pdf_self_invoking_form,
-    pdf_stream as stream, pdf_type3_glyphs,
+    j2k_codestream, jbig2_page, pdf_coded_image, pdf_content_bomb, pdf_forms, pdf_image_draws,
+    pdf_one_page, pdf_self_invoking_form, pdf_stream as stream, pdf_type3_glyphs,
 };
 use super::*;
 
@@ -202,6 +202,76 @@ fn a_page_is_held_to_what_its_content_streams_decode_to_together() {
     refused_saying(
         pdf_content_bomb(250 << 20),
         "content streams decode to more than 33554432",
+    );
+}
+
+#[test]
+fn an_image_is_sized_from_its_own_coded_data() {
+    // One pixel by the dictionary; 3.6 and 4.3 billion by their codecs.
+    let jpx = |side, draws| {
+        pdf_coded_image(
+            "/Height 1 /BitsPerComponent 8 /Filter /JPXDecode",
+            &j2k_codestream(side),
+            draws,
+        )
+    };
+    refused_saying(jpx(60_000, 1), "decode to more than");
+    refused_saying(
+        pdf_coded_image(
+            "/Height 1 /BitsPerComponent 1 /Filter /JBIG2Decode",
+            &jbig2_page(65_535),
+            1,
+        ),
+        "decode to more than",
+    );
+    refused_saying(
+        pdf_coded_image(
+            "/Height 30000 /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 1000000 >>",
+            &[0, 0x10, 1, 0, 0x10, 1],
+            1,
+        ),
+        "decode to more than",
+    );
+    refused_saying(
+        pdf_coded_image(
+            "/Height 0 /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 >>",
+            &[0, 0x10, 1, 0, 0x10, 1],
+            1,
+        ),
+        "row count is not given",
+    );
+    // A 4000 x 4000 codestream counts as 16 MP: ten draws are past four canvases.
+    open(jpx(4000, 1).into(), &pdf_source(1, WHITE)).expect("one draw opens");
+    refused_saying(jpx(4000, 10), "image draws decode more than");
+    let inline = pdf_one_page(
+        "<< >>",
+        b"q 60 0 0 30 0 0 cm BI /W 1 /H 30000 /CS /G /BPC 1 /F /CCF /DP << /K -1 /Columns 1000000 >> ID \x00\x10\x01 EI Q",
+        &[],
+    );
+    refused_saying(inline, "decode to more than");
+}
+
+#[test]
+fn an_image_whose_codestream_does_not_parse_is_reported_unreadable() {
+    let truncated = j2k_codestream(16)[..20].to_vec();
+    let source = open(
+        pdf_coded_image(
+            "/Height 1 /BitsPerComponent 8 /Filter /JPXDecode",
+            &truncated,
+            1,
+        )
+        .into(),
+        &pdf_source(1, WHITE),
+    )
+    .expect("open");
+    assert!(
+        source
+            .report()
+            .diagnostics
+            .iter()
+            .any(|diagnostic| matches!(diagnostic, Diagnostic::UnreadableImage { .. })),
+        "{:?}",
+        source.report().diagnostics
     );
 }
 
