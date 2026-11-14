@@ -17,8 +17,11 @@ const MAX_PREAMBLE_BYTES = 1024 * 1024;
 /** A first preamble line longer than this is not a host's announcement. */
 const MAX_FIRST_LINE_BYTES = 4096;
 
-/** A larger header length from the host is a broken frame, not a message. */
-const MAX_HEADER_BYTES = 128 * 1024 * 1024;
+/**
+ * A larger header length from the host is a broken frame, not a message. Must match the host's
+ * `MAX_RESPONSE_HEADER_BYTES`.
+ */
+export const MAX_HEADER_BYTES = 256 * 1024 * 1024;
 
 /** The header length and the attachments length, each a little-endian u32. */
 const PREFIX_BYTES = 8;

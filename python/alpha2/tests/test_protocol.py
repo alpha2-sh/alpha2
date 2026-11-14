@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import ast
+import io
 import json
+import struct
 from pathlib import Path
 
 import pytest
 from conftest import corpus
 
 import alpha2
-from alpha2 import _native
+from alpha2 import _native, _wire
 from alpha2.errors import Alpha2HostError, failure_class_of_code
 from alpha2.protocol import (
     create_cancel,
@@ -35,6 +37,22 @@ def test_the_shared_protocol_corpus_parses_as_the_host_and_node_read_it() -> Non
             )
         for message in fixture["messages"]:
             assert parse_host_message(json.dumps(message)) == message, fixture["name"]
+            # As the host frames it: UTF-8 JSON, nothing escaped.
+            header = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode()
+            stream = io.BytesIO(_wire.MAGIC + _wire.frame(header))
+            assert list(_wire.read(stream)) == [("message", message)], fixture["name"]
+
+
+def test_a_header_at_the_hosts_response_limit_is_awaited_and_one_byte_more_is_refused() -> None:
+    assert _wire.MAX_HEADER_BYTES == 256 * 1024 * 1024
+    for size in (_wire.MAX_HEADER_BYTES, _wire.MAX_HEADER_BYTES + 1):
+        stream = io.BytesIO(_wire.MAGIC + struct.pack("<II", size, 0))
+        read = list(_wire.read(stream))
+        assert read == (
+            [("invalid", f"alpha2-host wrote a {size}-byte header")]
+            if size > _wire.MAX_HEADER_BYTES
+            else []
+        )
 
 
 @pytest.mark.parametrize(

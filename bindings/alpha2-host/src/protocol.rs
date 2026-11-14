@@ -23,6 +23,10 @@ pub const MAX_REQUEST_HEADER_BYTES: u32 = 2 * alpha2_model::MAX_PROJECT_JSON_BYT
 /// All the attachments of one request together.
 pub const MAX_REQUEST_ATTACHMENT_BYTES: u32 = 256 * 1024 * 1024;
 
+/// The longest header a response may have. A longer one is not written: the request is answered
+/// `RESOURCE_LIMIT` instead.
+pub const MAX_RESPONSE_HEADER_BYTES: u32 = 256 * 1024 * 1024;
+
 /// The small settings `parse_request` reads into a JSON tree for checking (`videoQuality`,
 /// `audioQuality`, `renderCache`, `loudness`, `memory`) may be at most this long.
 pub const MAX_REQUEST_SETTING_BYTES: usize = 4 * 1024;

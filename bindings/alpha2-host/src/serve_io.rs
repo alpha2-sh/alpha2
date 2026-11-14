@@ -3,7 +3,7 @@
 //! The `alpha2-requests` thread owns stdin: it answers each `cancel` and `status` request at once
 //! and queues every other frame for the request thread, so a cancel reaches a running export
 //! without waiting. Every frame `serve` writes goes through one [`Responder`], which writes it
-//! whole.
+//! whole, its header as UTF-8 JSON.
 
 use std::io::{Read, Write};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -20,7 +20,7 @@ use crate::PROTOCOL_VERSION;
 use crate::lifecycle::Lifecycle;
 use crate::protocol::{
     HostError, MAX_CONTROL_HEADER_BYTES, MAX_REQUEST_ATTACHMENT_BYTES, MAX_REQUEST_HEADER_BYTES,
-    parse_cancel, parse_status,
+    MAX_RESPONSE_HEADER_BYTES, parse_cancel, parse_status,
 };
 
 /// Past this the reader stops reading until a request is taken, so a cancel behind that much
@@ -69,11 +69,42 @@ impl serde_json::ser::Formatter for AsciiFormatter {
 }
 
 /// The protocol stream, or a test's stand-in, shared by every thread that writes a frame.
-pub(crate) struct Responder(Mutex<Box<dyn Write + Send>>);
+pub(crate) struct Responder {
+    output: Mutex<Box<dyn Write + Send>>,
+    header_limit: usize,
+}
 
 impl Responder {
     pub(crate) fn new(output: Box<dyn Write + Send>) -> Self {
-        Self(Mutex::new(output))
+        Self::with_header_limit(output, MAX_RESPONSE_HEADER_BYTES as usize)
+    }
+
+    pub(crate) const fn with_header_limit(
+        output: Box<dyn Write + Send>,
+        header_limit: usize,
+    ) -> Self {
+        Self {
+            output: Mutex::new(output),
+            header_limit,
+        }
+    }
+
+    /// `header` as UTF-8 JSON, or `RESOURCE_LIMIT` when it is longer than a response header may
+    /// be.
+    fn header_bytes(&self, header: &Value) -> Result<Vec<u8>, HostError> {
+        let line = serde_json::to_vec(header).map_err(HostError::json)?;
+        if line.len() > self.header_limit {
+            return Err(HostError::new(
+                "RESOURCE_LIMIT",
+                format!(
+                    "the response header is {} bytes, more than the {} a response header may be",
+                    line.len(),
+                    self.header_limit
+                ),
+            )
+            .with_details(json!({"headerBytes": line.len(), "limit": self.header_limit})));
+        }
+        Ok(line)
     }
 
     /// Standard output, taken over so that nothing else this process prints reaches it
@@ -108,14 +139,15 @@ impl Responder {
     /// frame never lands inside it.
     ///
     /// # Errors
-    /// When the output refuses the frame, or the attachments exceed a frame.
+    /// When the output refuses the frame, or the attachments exceed a frame. `RESOURCE_LIMIT`,
+    /// with nothing written, when the header is longer than a response header may be.
     pub(crate) fn send_with(
         &self,
         header: &Value,
         attachments: &[Attachment],
     ) -> Result<(), HostError> {
         let frame = if attachments.is_empty() {
-            frame_bytes(&json_line(header), &[])
+            frame_bytes(&self.header_bytes(header)?, &[])
         } else {
             let mut header = header.clone();
             header["attachments"] = attachments
@@ -126,21 +158,25 @@ impl Responder {
                 .iter()
                 .map(|attachment| attachment.bytes.as_slice())
                 .collect::<Vec<_>>();
-            frame_bytes(&json_line(&header), &parts)
+            frame_bytes(&self.header_bytes(&header)?, &parts)
         };
         self.write(&frame.map_err(HostError::io)?)
     }
 
     /// [`Self::send`], or `None` without writing when another thread holds the output.
     pub(crate) fn try_send(&self, header: &Value) -> Option<Result<(), HostError>> {
-        let mut output = match self.0.try_lock() {
+        let mut output = match self.output.try_lock() {
             Ok(output) => output,
             Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
             Err(std::sync::TryLockError::WouldBlock) => return None,
         };
-        let frame = match frame_bytes(&json_line(header), &[]) {
+        let frame = match self.header_bytes(header) {
+            Ok(line) => frame_bytes(&line, &[]).map_err(HostError::io),
+            Err(error) => Err(error),
+        };
+        let frame = match frame {
             Ok(frame) => frame,
-            Err(error) => return Some(Err(HostError::io(error))),
+            Err(error) => return Some(Err(error)),
         };
         Some(
             output
@@ -151,7 +187,7 @@ impl Responder {
     }
 
     fn write(&self, bytes: &[u8]) -> Result<(), HostError> {
-        let mut output = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut output = self.output.lock().unwrap_or_else(PoisonError::into_inner);
         output.write_all(bytes).map_err(HostError::io)?;
         output.flush().map_err(HostError::io)
     }
@@ -446,7 +482,6 @@ pub(crate) fn messages_of(mut output: &[u8]) -> Vec<(Value, Vec<Attachment>)> {
     let mut messages = Vec::new();
     while let ReadFrame::Frame(frame) = read_frame(&mut output, limits).expect("a slice reads") {
         let header: Value = serde_json::from_slice(&frame.header).expect("a header is JSON");
-        assert!(frame.header.is_ascii(), "{header}");
         let attachments = split_attachments(&header, frame.attachments).expect("attachments");
         messages.push((header, attachments));
     }
@@ -466,6 +501,10 @@ pub(crate) struct Captured(Arc<Mutex<Vec<u8>>>);
 impl Captured {
     pub(crate) fn responder(&self) -> Responder {
         Responder::new(Box::new(self.clone()))
+    }
+
+    pub(crate) fn responder_with_header_limit(&self, limit: usize) -> Responder {
+        Responder::with_header_limit(Box::new(self.clone()), limit)
     }
 
     pub(crate) fn bytes(&self) -> Vec<u8> {

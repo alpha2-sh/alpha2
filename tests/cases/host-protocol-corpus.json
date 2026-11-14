@@ -2544,5 +2544,28 @@
       "includeaudio": false
     },
     "messages": []
+  },
+  {
+    "name": "an answer with text in many scripts is framed as UTF-8",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 2,
+      "operation": "compose",
+      "requestId": "utf8-1",
+      "action": "templates"
+    },
+    "messages": [
+      {
+        "protocolVersion": 2,
+        "requestId": "utf8-1",
+        "ok": true,
+        "result": {
+          "templates": [
+            { "template": { "id": "acme/café", "title": "Café 한국어 日本語 العربية 🎬" } }
+          ]
+        },
+        "hostState": "ready"
+      }
+    ]
   }
 ]

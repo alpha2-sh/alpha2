@@ -2048,7 +2048,17 @@ fn write_answer(
             "hostState": host_state,
         }),
     };
-    out.send_with(&header, attachments)
+    match out.send_with(&header, attachments) {
+        // Only the header check answers this, and it wrote nothing.
+        Err(error) if error.code == "RESOURCE_LIMIT" => out.send(&json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "requestId": request_id,
+            "ok": false,
+            "error": error,
+            "hostState": host_state,
+        })),
+        sent => sent,
+    }
 }
 
 /// An export's answer carries the failure report every failed export has.

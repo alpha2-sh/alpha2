@@ -11,6 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { readdirSync, readFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -26,6 +27,12 @@ import {
   hostExecutableName,
   resolveHostBinary,
 } from "../dist/index.js";
+import {
+  encodeMessage,
+  HOST_MAGIC,
+  HostWire,
+  MAX_HEADER_BYTES,
+} from "../dist/host-wire.js";
 import {
   createRequest,
   describeExit,
@@ -106,7 +113,41 @@ test("shared Rust and Node protocol corpus agrees", async () => {
         message,
         fixture.name,
       );
+      assert.deepEqual(await readFrames(encodeMessage(message).data), {
+        messages: [message],
+        invalid: [],
+      });
     }
+  }
+});
+
+/** What a wire reads from `frames` written after the magic. */
+async function readFrames(frames) {
+  const output = new PassThrough();
+  const read = { messages: [], invalid: [] };
+  const wire = new HostWire(new PassThrough(), output, {
+    message: (message) => read.messages.push(message),
+    invalid: (cause) => read.invalid.push(cause.message),
+    diagnostic: () => {},
+    foreign: () => {},
+  });
+  output.write(Buffer.concat([HOST_MAGIC, frames]));
+  await new Promise((resolve) => setImmediate(resolve));
+  wire.close();
+  return read;
+}
+
+test("a header at the host's response limit is awaited and one byte more is refused", async () => {
+  assert.equal(MAX_HEADER_BYTES, 256 * 1024 * 1024);
+  for (const bytes of [MAX_HEADER_BYTES, MAX_HEADER_BYTES + 1]) {
+    const prefix = Buffer.alloc(8);
+    prefix.writeUInt32LE(bytes, 0);
+    const read = await readFrames(prefix);
+    assert.deepEqual(read.messages, []);
+    assert.deepEqual(
+      read.invalid,
+      bytes > MAX_HEADER_BYTES ? [`a frame header of ${bytes} bytes`] : [],
+    );
   }
 });
 

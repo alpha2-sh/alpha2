@@ -60,6 +60,11 @@ All notable changes to this project are documented in this file.
   argument must be a regular file no larger than a project document, `render_frame` writes only a
   `.png` file, `--read-only` leaves out the writing tools, and `--max-seconds` and `--max-pixels`
   bound what one call renders. Caption files compose reads are bounded the same way.
+- `alpha2-host serve` writes frame headers as UTF-8 instead of escaping every non-ASCII character,
+  and checks each response header against `MAX_RESPONSE_HEADER_BYTES` (256 MiB): a longer answer
+  (a large `extract` or `edit` result) is answered `RESOURCE_LIMIT` with `details.headerBytes` and
+  `details.limit`, and the host keeps serving. `@alpha2-sh/node` reads headers up to the same size
+  (128 MiB before), so such answers no longer kill the host after the work is done.
 
 ### Fixed
 

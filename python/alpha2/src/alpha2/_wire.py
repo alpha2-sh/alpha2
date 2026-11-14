@@ -21,7 +21,8 @@ MAGIC = b"\x89A2HOST\n"
 MAX_REQUEST_BYTES = 2 * _native.MAX_PROJECT_JSON_BYTES
 
 # A host header past this is not one the host would write, so the stream is not trusted further.
-_MAX_HEADER_BYTES = 2 * MAX_REQUEST_BYTES
+# Must match the host's MAX_RESPONSE_HEADER_BYTES.
+MAX_HEADER_BYTES = 256 * 1024 * 1024
 
 # Bytes a library may print before the magic; past this the stream is not the host's.
 MAX_PREAMBLE_BYTES = 1 << 20
@@ -118,7 +119,7 @@ def read(stream: IO[bytes]) -> Iterator[Received]:
         yield "diagnostic", _line(bytes(seen[: -len(MAGIC)]))
     while (lengths := _exactly(stream, _LENGTHS.size)) is not None:
         header_bytes, attachment_bytes = _LENGTHS.unpack(lengths)
-        if header_bytes > _MAX_HEADER_BYTES:
+        if header_bytes > MAX_HEADER_BYTES:
             yield "invalid", f"alpha2-host wrote a {header_bytes}-byte header"
             return
         header = _exactly(stream, header_bytes)

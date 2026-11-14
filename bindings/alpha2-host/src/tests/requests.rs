@@ -2307,9 +2307,74 @@ fn a_command_runs_on_a_thread_with_room_for_deep_recursion() {
     assert_eq!(on_command_thread(|| deep(48)).expect("no overflow"), 152);
 }
 
+#[test]
+fn an_answer_whose_header_is_over_the_limit_is_refused_and_the_host_serves_the_next() {
+    let input = format!(
+        "{}\n{}\n",
+        r#"{"protocolVersion":2,"requestId":"templates","operation":"compose","action":"templates"}"#,
+        json!({
+            "protocolVersion": 2, "requestId": "conform", "operation": "conform",
+            "project": conform_project(&json!({})),
+            "assets": {"video": corpus("parity-rgb.mov")}
+        })
+    );
+    let captured = crate::serve_io::Captured::default();
+    let out = captured.responder_with_header_limit(4096);
+    let mut serving = Serving::new(VideoDecodePolicy::Software);
+    serving.create = no_gpu;
+    let frames = crate::serve_io::frames_of_lines(input.as_bytes());
+    let requests = crate::serve_io::requests_of(&frames, &out, &serving.lifecycle);
+    serve_requests(&mut serving, &requests, &out, &|_| None).expect("serve");
+    let answers = answers_of(&captured.bytes());
+    assert_eq!(answers.len(), 2, "{answers:?}");
+    assert_eq!(answers[0]["requestId"], "templates");
+    assert_eq!(
+        answers[0]["error"]["code"], "RESOURCE_LIMIT",
+        "{}",
+        answers[0]
+    );
+    assert_eq!(answers[0]["error"]["details"]["limit"], 4096);
+    assert!(
+        answers[0]["error"]["details"]["headerBytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > 4096),
+        "{}",
+        answers[0]
+    );
+    assert_eq!(answers[0]["hostState"], "ready");
+    assert_eq!(answers[1]["requestId"], "conform");
+    assert_eq!(answers[1]["ok"], true, "{}", answers[1]);
+}
+
+#[test]
+fn every_corpus_answer_is_framed_as_its_utf8_json() {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../../../tests/cases/host-protocol-corpus.json"
+    ))
+    .expect("protocol corpus is JSON");
+    let mut unescaped = 0;
+    for fixture in fixtures.as_array().expect("protocol corpus is an array") {
+        for message in fixture["messages"].as_array().expect("fixture messages") {
+            let captured = crate::serve_io::Captured::default();
+            captured.responder().send(message).expect("sent");
+            let written = captured.bytes();
+            let expected = serde_json::to_vec(message).expect("JSON");
+            assert_eq!(&written[8..], expected.as_slice(), "{}", fixture["name"]);
+            assert_eq!(crate::serve_io::messages_of(&written)[0].0, *message);
+            if !expected.is_ascii() {
+                unescaped += 1;
+            }
+        }
+    }
+    assert!(
+        unescaped > 0,
+        "the corpus has an answer with non-ASCII text"
+    );
+}
+
 /// A reader that decodes the output in a legacy code page reads the same characters back.
 #[test]
-fn every_line_the_host_writes_is_ascii_and_reads_back_the_same() {
+fn every_line_a_command_writes_is_ascii_and_reads_back_the_same() {
     let value = json!({
         "output": "C:\\exports\\\u{d55c}\u{ad6d}\u{c5b4}-\u{1f3ac}.mp4",
         "message": "caf\u{e9} \"quoted\"\n\u{7f}",
