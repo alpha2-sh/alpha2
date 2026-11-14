@@ -394,6 +394,10 @@ All notable changes to this project are documented in this file.
 - A runtime effect or effect resource whose registration panicked no longer stays held for the
   life of the host, and one the renderer refused is registered again by the next request that
   wants it instead of handing every later request the same refusal.
+- The Linux memory watchdog keeps watching after it stopped an export, stops an export that was
+  still setting up when the limit was reached (before, nothing was stopped and the kernel could
+  kill the host), and records the cause only on the export it stopped. It reads the page cache
+  figures only near the limit.
 
 ## [0.6.0] - 2026-11-08
 

@@ -58,6 +58,8 @@ enum Stop {
     Client,
     /// The host retires for this drain reason ([`Terminations::retire`]).
     Retiring(&'static str),
+    /// Its cause is recorded as the export's failure ([`Terminations::stop_for_recorded_cause`]).
+    Recorded,
 }
 
 thread_local! {
@@ -171,15 +173,28 @@ impl Terminations {
         "pending"
     }
 
-    /// For a cause the caller already recorded as the failure (the Linux memory watchdog), so the
-    /// export reports that cause, not a cancel. Cancels every export when `request` is unknown.
+    /// Stops `request` for a cause the caller recorded as its failure (the Linux memory watchdog),
+    /// so the export reports that cause, not a cancel: its running exports are cancelled and
+    /// those it starts later begin cancelled. Cancels every running export when `request` is
+    /// unknown.
     #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
-    pub(crate) fn cancel_running_request(&self, request: Option<u64>) {
-        let state = self.lock();
+    pub(crate) fn stop_for_recorded_cause(&self, request: Option<u64>) {
+        let mut state = self.lock();
+        let State {
+            active, running, ..
+        } = &mut *state;
         match request {
-            Some(_) => cancel_tokens_of(&state.running, request),
+            Some(_) => {
+                for entry in active
+                    .iter_mut()
+                    .filter(|entry| Some(entry.sequence) == request)
+                {
+                    entry.stop.get_or_insert(Stop::Recorded);
+                }
+                cancel_tokens_of(running, request);
+            }
             None => {
-                for (_, _, token) in &state.running {
+                for (_, _, token) in running.iter() {
                     token.cancel();
                 }
             }

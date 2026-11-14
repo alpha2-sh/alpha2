@@ -26,7 +26,9 @@ pub use lifetime::{
     KillOnCloseJob, claim_stdout, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
 };
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub use memory::{CgroupMemory, cgroup_memory, cgroup_memory_at, memory_capacity_at};
+pub use memory::{
+    CgroupMemory, CgroupMemoryWatch, cgroup_memory, cgroup_memory_at, memory_capacity_at,
+};
 pub use memory::{MemoryCapacity, memory_capacity};
 pub use os_version::os_version;
 

@@ -560,7 +560,7 @@ impl MemoryWatchdog {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     const LIMIT_PERCENT: u64 = 95;
     /// Startup working sets have grown about 100 MiB per 50 ms, which a slower look misses between
-    /// 90 % and the kill. A look reads three small files.
+    /// 90 % and the kill. A look reads two small files, and `memory.stat` near the limit.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     const INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
@@ -571,34 +571,12 @@ impl MemoryWatchdog {
     pub fn start(failure: crate::encode::PipelineFailure) -> Self {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
-            let watched = NEXT_WATCHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if Self::usage().is_none() {
-                return Self {
-                    stop: None,
-                    watched,
-                };
-            }
-            watchdogs().push(watched);
-            let request = crate::termination::current_request();
-            let (sender, receiver) = std::sync::mpsc::channel::<()>();
-            let spawned = std::thread::Builder::new()
-                .name("alpha2 memory watchdog".to_owned())
-                .spawn(move || {
-                    while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
-                        receiver.recv_timeout(Self::INTERVAL)
-                    {
-                        let newest = watchdogs().last() == Some(&watched);
-                        if newest && let Some(reached) = Self::reached(Self::usage()) {
-                            failure.record(&reached);
-                            crate::termination::terminations().cancel_running_request(request);
-                            return;
-                        }
-                    }
-                });
-            Self {
-                stop: spawned.ok().map(|handle| (sender, handle)),
-                watched,
-            }
+            let mut watch = alpha2_os::CgroupMemoryWatch::new();
+            Self::start_with(failure, move || {
+                watch
+                    .read()
+                    .and_then(|memory| Some((memory.working_set_bytes?, memory.limit_bytes)))
+            })
         }
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
@@ -607,11 +585,47 @@ impl MemoryWatchdog {
         }
     }
 
-    /// `(working set, limit)` of the lowest cgroup limit, the figure admission uses too.
+    /// [`Self::start`] over `usage`, which returns the working set and the limit.
+    ///
+    /// While this is the newest watchdog and the set is over the limit, every look stops the
+    /// request that started it: its running exports are cancelled and those it starts later
+    /// begin cancelled. The cause is recorded once.
     #[cfg(any(target_os = "linux", target_os = "android"))]
-    fn usage() -> Option<(u64, u64)> {
-        alpha2_os::cgroup_memory()
-            .and_then(|memory| Some((memory.working_set_bytes?, memory.limit_bytes)))
+    pub fn start_with(
+        failure: crate::encode::PipelineFailure,
+        mut usage: impl FnMut() -> Option<(u64, u64)> + Send + 'static,
+    ) -> Self {
+        let watched = NEXT_WATCHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if usage().is_none() {
+            return Self {
+                stop: None,
+                watched,
+            };
+        }
+        watchdogs().push(watched);
+        let request = crate::termination::current_request();
+        let (sender, receiver) = std::sync::mpsc::channel::<()>();
+        let spawned = std::thread::Builder::new()
+            .name("alpha2 memory watchdog".to_owned())
+            .spawn(move || {
+                let mut recorded = false;
+                while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                    receiver.recv_timeout(Self::INTERVAL)
+                {
+                    let newest = watchdogs().last() == Some(&watched);
+                    if newest && let Some(reached) = Self::reached(usage()) {
+                        if !recorded {
+                            failure.record(&reached);
+                            recorded = true;
+                        }
+                        crate::termination::terminations().stop_for_recorded_cause(request);
+                    }
+                }
+            });
+        Self {
+            stop: spawned.ok().map(|handle| (sender, handle)),
+            watched,
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -667,6 +681,68 @@ pub fn take_stage(message: &str) -> Option<RefusalStage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn a_watchdog_that_fires_before_its_export_has_a_token_stops_it_and_keeps_watching() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{Duration, Instant};
+        let percent = std::sync::Arc::new(AtomicU64::new(50));
+        let reader = |percent: &std::sync::Arc<AtomicU64>| {
+            let percent = std::sync::Arc::clone(percent);
+            move || Some((percent.load(Ordering::Relaxed), 100))
+        };
+        let wait_for = |what: &str, done: &dyn Fn() -> bool| {
+            let started = Instant::now();
+            while !done() {
+                assert!(started.elapsed() < Duration::from_secs(10), "{what}");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let older_failure = crate::encode::PipelineFailure::default();
+        let (older_token, older_end) = {
+            let (started, token) = std::sync::mpsc::channel();
+            let (end, ended) = std::sync::mpsc::channel::<()>();
+            let failure = older_failure.clone();
+            let usage = reader(&percent);
+            std::thread::spawn(move || {
+                let _request = crate::termination::terminations().begin_request("watch-older");
+                let cancel = crate::termination::export_cancel();
+                let _watchdog = MemoryWatchdog::start_with(failure, usage);
+                started.send((*cancel).clone()).expect("send");
+                let _ = ended.recv();
+            });
+            (token.recv().expect("older started"), end)
+        };
+        let newer_failure = crate::encode::PipelineFailure::default();
+        let newer = crate::termination::terminations().begin_request("watch-newer");
+        let watchdog = MemoryWatchdog::start_with(newer_failure.clone(), reader(&percent));
+        percent.store(96, Ordering::Relaxed);
+        wait_for("the newest watchdog fired", &|| {
+            newer_failure.cause_or("").contains("memory limit")
+        });
+        std::thread::sleep(MemoryWatchdog::INTERVAL * 4);
+        assert!(!older_token.is_cancelled(), "the older export runs on");
+        assert_eq!(older_failure.cause_or("none"), "none");
+        let token = crate::termination::export_cancel();
+        assert!(
+            token.is_cancelled(),
+            "a token made after the watchdog fired"
+        );
+        assert_eq!(
+            crate::termination::cancelled_by_request_or_termination("export stopped".to_owned()),
+            "export stopped",
+            "the recorded cause is reported, not a cancel"
+        );
+        drop(token);
+        drop(watchdog);
+        drop(newer);
+        wait_for("the older export stops once the newer has gone", &|| {
+            older_token.is_cancelled()
+        });
+        assert!(older_failure.cause_or("").contains("memory limit"));
+        drop(older_end);
+    }
 
     #[test]
     fn a_requested_budget_wins_and_says_so() {

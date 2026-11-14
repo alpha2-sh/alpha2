@@ -137,77 +137,178 @@ pub fn cgroup_memory() -> Option<CgroupMemory> {
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[must_use]
 pub fn cgroup_memory_at(root: &Path) -> Option<CgroupMemory> {
-    let membership = std::fs::read_to_string(root.join("proc/self/cgroup")).ok()?;
-    let read = |path: &Path| {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|text| text.trim().parse::<u64>().ok())
-    };
-    let lowest = |mount: &Path, relative: &str, files: [&str; 2], cache: [&str; 2], source| {
-        let mut best: Option<CgroupMemory> = None;
-        let mut path = Some(Path::new(relative.trim_start_matches('/')));
-        while let Some(level) = path {
-            let directory = mount.join(level);
-            if let Some(limit) = read(&directory.join(files[0]))
-                && limit < (1_u64 << 60)
-                && best.is_none_or(|known| limit < known.limit_bytes)
-            {
-                let charged = read(&directory.join(files[1]));
-                let cached = std::fs::read_to_string(directory.join("memory.stat"))
-                    .ok()
-                    .and_then(|stat| {
-                        cache.iter().try_fold(0_u64, |sum, key| {
-                            let value = stat.lines().find_map(|line| {
-                                line.strip_prefix(key)?
-                                    .strip_prefix(' ')?
-                                    .trim()
-                                    .parse()
-                                    .ok()
-                            })?;
-                            Some(sum.saturating_add(value))
-                        })
-                    });
-                best = Some(CgroupMemory {
-                    limit_bytes: limit,
-                    charged_bytes: charged,
-                    working_set_bytes: charged.map(|charged| {
-                        cached.map_or(charged, |cached| charged.saturating_sub(cached))
-                    }),
-                    source,
-                });
-            }
-            path = level.parent();
-        }
-        best
-    };
-    if let Some(relative) = membership.lines().find_map(|line| line.strip_prefix("0::"))
-        && let Some(memory) = lowest(
-            &root.join("sys/fs/cgroup"),
-            relative,
-            ["memory.max", "memory.current"],
-            ["inactive_file", "active_file"],
-            "cgroup-v2",
-        )
-    {
-        return Some(memory);
+    let level = Level::lowest(root)?;
+    level.read(0)
+}
+
+/// Reads [`CgroupMemory`] again and again for a watch. The level of the lowest limit is found
+/// once, and again after a read at it fails; `memory.stat` is parsed only from
+/// [`Self::STAT_FROM_PERCENT`] of the limit, below which the working set is the charge.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[derive(Debug)]
+pub struct CgroupMemoryWatch {
+    root: std::path::PathBuf,
+    level: Option<Level>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+impl CgroupMemoryWatch {
+    /// Below this share of the limit the page cache is not worth parsing.
+    pub const STAT_FROM_PERCENT: u64 = 90;
+
+    /// This process's cgroup path.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::at(Path::new("/"))
     }
-    let relative = membership.lines().find_map(|line| {
-        let mut fields = line.splitn(3, ':');
-        let _ = fields.next()?;
-        let controllers = fields.next()?;
-        controllers
-            .split(',')
-            .any(|controller| controller == "memory")
-            .then(|| fields.next())
-            .flatten()
-    })?;
-    lowest(
-        &root.join("sys/fs/cgroup/memory"),
-        relative,
+
+    /// With `root` standing in for `/`.
+    #[must_use]
+    pub fn at(root: &Path) -> Self {
+        Self {
+            root: root.to_owned(),
+            level: None,
+        }
+    }
+
+    /// `None` without a limit, or when the level just stopped answering.
+    pub fn read(&mut self) -> Option<CgroupMemory> {
+        if self.level.is_none() {
+            self.level = Level::lowest(&self.root);
+        }
+        let memory = self
+            .level
+            .as_ref()?
+            .read(Self::STAT_FROM_PERCENT)
+            .filter(|memory| memory.charged_bytes.is_some());
+        if memory.is_none() {
+            self.level = None;
+        }
+        memory
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+impl Default for CgroupMemoryWatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The cgroup directory whose memory limit is the lowest on the process's path.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[derive(Clone, Debug)]
+struct Level {
+    directory: std::path::PathBuf,
+    /// The limit file, then the charge file.
+    files: [&'static str; 2],
+    /// The `memory.stat` keys of reclaimable page cache.
+    cache: [&'static str; 2],
+    source: &'static str,
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+impl Level {
+    const V2: ([&'static str; 2], [&'static str; 2], &'static str) = (
+        ["memory.max", "memory.current"],
+        ["inactive_file", "active_file"],
+        "cgroup-v2",
+    );
+    const V1: ([&'static str; 2], [&'static str; 2], &'static str) = (
         ["memory.limit_in_bytes", "memory.usage_in_bytes"],
         ["total_inactive_file", "total_active_file"],
         "cgroup-v1",
-    )
+    );
+
+    fn lowest(root: &Path) -> Option<Self> {
+        let membership = std::fs::read_to_string(root.join("proc/self/cgroup")).ok()?;
+        if let Some(relative) = membership.lines().find_map(|line| line.strip_prefix("0::"))
+            && let Some(level) = Self::lowest_under(&root.join("sys/fs/cgroup"), relative, Self::V2)
+        {
+            return Some(level);
+        }
+        let relative = membership.lines().find_map(|line| {
+            let mut fields = line.splitn(3, ':');
+            let _ = fields.next()?;
+            let controllers = fields.next()?;
+            controllers
+                .split(',')
+                .any(|controller| controller == "memory")
+                .then(|| fields.next())
+                .flatten()
+        })?;
+        Self::lowest_under(&root.join("sys/fs/cgroup/memory"), relative, Self::V1)
+    }
+
+    fn lowest_under(
+        mount: &Path,
+        relative: &str,
+        (files, cache, source): ([&'static str; 2], [&'static str; 2], &'static str),
+    ) -> Option<Self> {
+        let mut best: Option<(u64, std::path::PathBuf)> = None;
+        let mut path = Some(Path::new(relative.trim_start_matches('/')));
+        while let Some(level) = path {
+            let directory = mount.join(level);
+            if let Some(limit) = read_limit(&directory.join(files[0]))
+                && best.as_ref().is_none_or(|(known, _)| limit < *known)
+            {
+                best = Some((limit, directory));
+            }
+            path = level.parent();
+        }
+        best.map(|(_, directory)| Self {
+            directory,
+            files,
+            cache,
+            source,
+        })
+    }
+
+    /// `None` when the limit is gone. `memory.stat` is parsed from `stat_from_percent` of the
+    /// limit.
+    fn read(&self, stat_from_percent: u64) -> Option<CgroupMemory> {
+        let limit = read_limit(&self.directory.join(self.files[0]))?;
+        let charged = read_number(&self.directory.join(self.files[1]));
+        let cached = charged
+            .filter(|charged| {
+                charged.saturating_mul(100) >= limit.saturating_mul(stat_from_percent)
+            })
+            .and_then(|_| self.cached());
+        Some(CgroupMemory {
+            limit_bytes: limit,
+            charged_bytes: charged,
+            working_set_bytes: charged
+                .map(|charged| cached.map_or(charged, |cached| charged.saturating_sub(cached))),
+            source: self.source,
+        })
+    }
+
+    fn cached(&self) -> Option<u64> {
+        let stat = std::fs::read_to_string(self.directory.join("memory.stat")).ok()?;
+        self.cache.iter().try_fold(0_u64, |sum, key| {
+            let value = stat.lines().find_map(|line| {
+                line.strip_prefix(key)?
+                    .strip_prefix(' ')?
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            })?;
+            Some(sum.saturating_add(value))
+        })
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn read_number(path: &Path) -> Option<u64> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.trim().parse::<u64>().ok())
+}
+
+/// A limit, or `None` for `max` and v1's near-`u64::MAX` default.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn read_limit(path: &Path) -> Option<u64> {
+    read_number(path).filter(|limit| *limit < (1_u64 << 60))
 }
 
 #[cfg(test)]
