@@ -1058,3 +1058,62 @@ fn a_watched_body_that_panics_is_reported_with_its_message() {
     );
     assert_eq!(HostError::classify(error).code, "INTERNAL");
 }
+
+/// Each sync takes time in proportion to what it flushes, as on a slow destination: the whole
+/// output's sync would outlast the stall limit, the syncs made while writing do not.
+#[test]
+fn an_output_synced_while_written_publishes_although_one_whole_sync_would_stall() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("periodic-sync");
+    let output = directory.join("out.mov");
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut project = image_and_tone_project(2 * alpha2_time::TICKS_PER_SECOND, 48_000);
+    project["settings"]["width"] = json!(1280);
+    project["settings"]["height"] = json!(720);
+    project["sources"] = json!([{"id": "image", "locator": "fixture://image", "kind": "image"}]);
+    project["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks")
+        .truncate(1);
+    let request = json!({
+        "protocolVersion": 2, "operation": "export", "requestId": "periodic-sync",
+        "project": project,
+        "assets": {"image": Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/corpus/cross_topology_parity.png")},
+        "startTicks": 0, "endTicks": 2 * alpha2_time::TICKS_PER_SECOND,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "prores",
+        "inputPolicy": "cpu-readback",
+        "output": output,
+    });
+    // 1 MiB between syncs, 100 ms per MiB flushed, under a 400 ms encoder stall limit.
+    *alpha2_host_core::partial::hooks::SLOW_SYNC
+        .lock()
+        .expect("hook") = Some((output.clone(), 1 << 20, 100_000_000 / 1024));
+    crate::encode::INJECT_ENCODE_STALL.set(Some((
+        crate::heartbeat::InjectedStall::SlowProgress(Duration::ZERO),
+        Duration::from_millis(400),
+    )));
+    let result = within(
+        Duration::from_secs(120),
+        "an export with slow syncs",
+        || {
+            host.handle(
+                parse_request(&request.to_string()).expect("request"),
+                &mut |_| Ok(()),
+            )
+        },
+    );
+    *alpha2_host_core::partial::hooks::SLOW_SYNC
+        .lock()
+        .expect("hook") = None;
+    let result = result.unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    let bytes = std::fs::metadata(&output).expect("published").len();
+    assert!(
+        bytes > 8 << 20,
+        "{bytes} bytes: too small for one whole sync to outlast the limit"
+    );
+    assert_eq!(result["frames"], 60);
+    std::fs::remove_dir_all(&directory).ok();
+}

@@ -302,10 +302,12 @@ impl NativeVideoEncodeSink {
                         .output
                         .as_mut()
                         .ok_or_else(|| EncodeError::Adapter("muxer is already closed".into()))?;
+                    let bytes = u64::try_from(packet.size).unwrap_or(0);
                     timed(&mut self.stages.video_mux_write, || {
                         output.interleaved_write_frame(&mut packet)
                     })
                     .map_err(|error| encode_adapter_error_at("packet write failed", error))?;
+                    self.partial.wrote(bytes)?;
                 }
                 Err(RsmpegError::EncoderDrainError) if !flushing => return Ok(()),
                 Err(RsmpegError::EncoderFlushedError | RsmpegError::EncoderDrainError)

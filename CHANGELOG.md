@@ -424,6 +424,9 @@ All notable changes to this project are documented in this file.
   set alone instead of failing with `RESOURCE_LIMIT` at that frame, after it had decoded the set and
   written part of the file; `performance.decodeQueueOversizedSets` counts such sets. Admission counts
   one decoded frame set, so a machine that cannot hold it refuses before any output opens.
+- An output is synced after every 256 MiB written, so the final sync of a large export to a slow
+  disk or share no longer outlasts the encoder's stall limit, answering `ENCODE_STALLED` and leaving
+  the finished file as a partial; each step of the publish (sync, rename, folder sync) beats.
 
 ## [0.6.0] - 2026-11-08
 
