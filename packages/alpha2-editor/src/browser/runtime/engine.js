@@ -361,7 +361,12 @@ export class Engine {
     if (this.canvas.width === width && this.canvas.height === height) return;
     this.canvas.width = width;
     this.canvas.height = height;
-    this.#registry.resizeSurface?.(width, height);
+    try {
+      this.#registry.resizeSurface?.(width, height);
+    } catch (error) {
+      // A lost renderer has no surface to size; the next render recovers and rebuilds it.
+      if (error?.code !== "GPU_DEVICE_LOST") throw error;
+    }
     this.#sizeResultCache();
     this.#revision += 1;
   }
