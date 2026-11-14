@@ -11,6 +11,27 @@ export const LUMA_AT = `async function lumaAt(frame, x, y) {
   return Math.round(16 + (65.481 * r + 128.553 * g + 24.966 * b) / 255);
 }`;
 
+// The skip for the engine's DECODE_UNAVAILABLE when WebCodecs, asked on its own, refuses the track's
+// codec too; null otherwise, so a refusal of a codec this browser decodes fails the case. The
+// sample rate is not in the facts and rarely decides support. Kept as source for a Node test.
+export const DECODE_REFUSAL_SKIP = `async function decodeRefusalSkip(error) {
+  const facts = error?.code === "DECODE_UNAVAILABLE" ? error.facts : undefined;
+  if (!facts?.kind || !facts.codec) return null;
+  const decoder = facts.kind === "audio" ? globalThis.AudioDecoder : globalThis.VideoDecoder;
+  const config = facts.kind === "audio"
+    ? { codec: facts.codec, sampleRate: 48000, numberOfChannels: facts.channels ?? 2 }
+    : { codec: facts.codec };
+  const decodes = decoder
+    ? await decoder.isConfigSupported(config).then(({ supported }) => supported === true, () => false)
+    : false;
+  if (decodes) return null;
+  return {
+    skipped: "this browser does not decode the case's source (WebCodecs refuses " + facts.codec + "): "
+      + String(error.message ?? error),
+    capability: facts.kind === "audio" ? "webcodecs-audio" : "webcodecs-video",
+  };
+}`;
+
 // Also resolves the "alpha2/..." imports of packages/alpha2-editor/dist.
 export function page(body, videoImport = false) {
   return `<!doctype html>
@@ -111,6 +132,7 @@ const webgpuAdapter = (engine) => {
     skip("webgpu", "the engine runs on " + (backend || "no backend") + ", not WebGPU", { adapter: { name, backend } });
   return { name, backend };
 };
+${DECODE_REFUSAL_SKIP}
 const offersGpu = async () =>
   Boolean(await navigator.gpu?.requestAdapter().catch(() => null)) ||
   Boolean(new OffscreenCanvas(1, 1).getContext("webgl2"));
@@ -118,15 +140,12 @@ try {
 ${body}
 } catch (error) {
   const message = String(error?.message ?? error);
+  let refusal;
   if (error instanceof CaseSkip)
     report({ skipped: error.message, capability: error.capability, ...error.details });
   else if (/the canvas takes no GPU surface/.test(message) && !(await offersGpu()))
     report({ skipped: "this browser offers no WebGPU adapter and no WebGL2 context", capability: "webgl2" });
-  else if (error?.code === "DECODE_UNAVAILABLE" && error.facts?.kind)
-    report({
-      skipped: "this browser does not decode the case's source: " + message,
-      capability: error.facts.kind === "audio" ? "webcodecs-audio" : "webcodecs-video",
-    });
+  else if ((refusal = await decodeRefusalSkip(error)) !== null) report(refusal);
   else if (VIDEO_IMPORT && !error?.beforeImport && importUnavailable(error))
     report({
       skipped: "this browser lost WebGPU importing a VideoFrame (" + String(error?.message ?? error) + ")",

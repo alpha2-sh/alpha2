@@ -1572,7 +1572,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      ALPHA2_REQUIRE: browser,wasm,webgpu,webgl2,webcodecs-audio,webcodecs-video
+      ALPHA2_REQUIRE: browser,wasm,webgpu,webgl2,webcodecs-audio,webcodecs-video,browser-gpu-process
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
       ALPHA2_CHROME_GPU: swiftshader
     steps:
