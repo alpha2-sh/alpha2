@@ -30,8 +30,18 @@ fn parsed(text: &str) -> Result<Value, HostError> {
 pub static INJECT_REQUEST_PANIC: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Parks the next `compose` or `edit` request's thread for good, as a call that never returns.
+#[cfg(test)]
+pub static INJECT_REQUEST_PARK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[cfg(test)]
 pub(crate) fn injected_panic(operation: &str) {
+    if INJECT_REQUEST_PARK.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        loop {
+            std::thread::park();
+        }
+    }
     assert!(
         !INJECT_REQUEST_PANIC.swap(false, std::sync::atomic::Ordering::Relaxed),
         "injected panic in {operation}"

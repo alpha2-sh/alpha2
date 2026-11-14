@@ -437,11 +437,18 @@ pub(crate) fn install(lifecycle: &Arc<Lifecycle>, out: &Arc<Responder>) {
     let _ = ANNOUNCED.set((Arc::clone(lifecycle), Arc::clone(out)));
 }
 
-/// Writes the `terminating` state message, when `serve` installed one. Nothing may depend on it:
-/// the client may have closed the pipe.
+/// Writes the `terminating` state message, when `serve` installed one and no other thread holds
+/// the output. Nothing may depend on it: the client may have closed the pipe or stopped reading.
 pub(crate) fn announce_termination() {
     if let Some((lifecycle, out)) = ANNOUNCED.get() {
-        let _ = lifecycle.drain(DrainReason::Terminating, out);
+        {
+            let mut life = lifecycle.lock();
+            if life.draining.is_some() {
+                return;
+            }
+            life.draining = Some((DrainReason::Terminating, Instant::now()));
+        }
+        let _ = out.try_send(&lifecycle.state_message());
     }
 }
 

@@ -310,7 +310,7 @@ It is answered at once, whatever the host is doing, with `{"protocolVersion":2,"
 
 A `cancel` without a `target` is answered `INVALID_REQUEST`. The host reads cancels while it holds at most 256 MiB of requests it has not started; past that it reads, and answers, a cancel only once it starts the next request.
 
-`SIGTERM`, `SIGINT` and `SIGHUP` (a console control event on Windows) cancel the running export the same way; the process then exits, with the status the signal would have given it. An idle process exits at once. When the process that started `serve` exits, the host cancels what it runs and exits too (status 143), so a client that is killed does not leave its export running. A second signal, or `SIGKILL`, ends the process immediately; an export ended that way leaves its partial file and gets no response.
+`SIGTERM`, `SIGINT` and `SIGHUP` (a console control event on Windows) cancel the running export the same way; the process then exits, with the status the signal would have given it. An idle process exits at once. When the process that started `serve` exits, the host cancels what it runs and exits too (status 143), so a client that is killed does not leave its export running. A request that cannot stop in time does not hold the exit: the process ends anyway, without writing more, once the stall limit plus 5 seconds have passed after a signal (45 seconds by default), or 5 seconds after its parent's exit, and an export ended that way leaves its partial file. When the input ends, an extraction waiting for an acknowledgement is answered `CANCELLED`. A second signal, or `SIGKILL`, ends the process immediately; an export ended that way leaves its partial file and gets no response.
 
 ## Errors
 

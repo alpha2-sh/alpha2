@@ -122,6 +122,10 @@ All notable changes to this project are documented in this file.
   cache filled its limit refused every export until the cache was dropped. Admission and the
   memory watchdog read one working set (the charge less reclaimable file cache) of the lowest limit
   on the cgroup path, so a limit set on a parent cgroup also arms the watchdog.
+- A terminated host whose request cannot stop, or whose output nobody reads, exits anyway after
+  the stall limit plus 5 seconds (5 seconds after its parent's exit) instead of living on with the
+  GPU device and the partial file. An extraction waiting for an acknowledgement when the input ends
+  is answered `CANCELLED`.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

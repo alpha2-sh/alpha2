@@ -1599,6 +1599,30 @@ impl ServeChild {
         stdin.flush().expect("flush");
     }
 
+    /// The exit status if the child ends within `limit`.
+    pub(super) fn exited_within(&mut self, limit: Duration) -> Option<std::process::ExitStatus> {
+        let started = Instant::now();
+        loop {
+            if let Some(status) = self.child.try_wait().expect("child status") {
+                return Some(status);
+            }
+            if started.elapsed() > limit {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    pub(super) fn terminate(&self) {
+        let killed = std::process::Command::new("kill")
+            .args(["-TERM", &self.child.id().to_string()])
+            .status()
+            .expect("kill");
+        assert!(killed.success());
+    }
+
     pub(super) fn finish(mut self) -> Option<i32> {
         drop(self.stdin.take());
         let started = Instant::now();
@@ -1630,6 +1654,14 @@ fn serve_standard_input() {
             }
         });
         std::thread::sleep(Duration::from_millis(20));
+    }
+    if std::env::var_os("ALPHA2_TEST_REQUEST_PARK").is_some() {
+        crate::compose_request::INJECT_REQUEST_PARK
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_TERMINATION_GRACE_MS") {
+        *crate::termination::TEST_GRACE.lock().expect("grace") =
+            Some(Duration::from_millis(milliseconds.parse().expect("ms")));
     }
     if std::env::var_os("ALPHA2_TEST_REQUEST_PANIC").is_some() {
         crate::compose_request::INJECT_REQUEST_PANIC
@@ -2334,4 +2366,81 @@ fn every_operation_refuses_an_unknown_field_and_takes_an_attachment_list() {
             .map(|error| error.code),
         Some("INVALID_REQUEST")
     );
+}
+
+/// A request thread that never returns cannot keep a terminated host alive past its grace.
+#[cfg(unix)]
+#[test]
+fn a_terminated_host_whose_request_never_returns_exits_at_its_deadline() {
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_REQUEST_PARK", "1"),
+            ("ALPHA2_TEST_TERMINATION_GRACE_MS", "1000"),
+        ],
+    );
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    serving.write(&templates("parked"));
+    std::thread::sleep(Duration::from_millis(300));
+    serving.terminate();
+    let status = serving
+        .exited_within(Duration::from_secs(10))
+        .expect("the host outlived its deadline");
+    assert_eq!(status.code(), Some(143));
+}
+
+/// A client that stops reading cannot hold the exit: the deadline writes nothing.
+#[cfg(unix)]
+#[test]
+fn a_terminated_host_whose_output_nobody_reads_exits_at_its_deadline() {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            SERVE_CHILD,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("ALPHA2_TEST_TERMINATION_GRACE_MS", "1000")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("child");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let frame = alpha2_host_core::host_frames::frame_bytes(
+        br#"{"protocolVersion":2,"requestId":"st","operation":"status"}"#,
+        &[],
+    )
+    .expect("frame");
+    // Under a pipe's worth of requests, whose answers are far more than a pipe holds.
+    for _ in 0..800 {
+        if stdin.write_all(&frame).is_err() {
+            break;
+        }
+    }
+    let _ = stdin.flush();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status()
+            .expect("kill")
+            .success()
+    );
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("child status") {
+            break Some(status);
+        }
+        if started.elapsed() > Duration::from_secs(10) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    drop(stdin);
+    assert_eq!(status.and_then(|status| status.code()), Some(143));
 }

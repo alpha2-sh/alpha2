@@ -355,6 +355,12 @@ impl Termination {
     pub const fn closing(self) -> bool {
         self.closing
     }
+
+    /// Whether the process that started this one exited ([`crate::watch_parent`]).
+    #[must_use]
+    pub fn parent_exited(self) -> bool {
+        self.name == crate::lifetime::PARENT_EXITED_NAME
+    }
 }
 
 /// Calls `handler` on its own thread when the process is asked to terminate, instead of ending

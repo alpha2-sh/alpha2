@@ -22,6 +22,9 @@ pub(crate) struct Terminations {
     state: Mutex<State>,
     /// Called when a termination was requested and the last request being handled is answered.
     on_idle: fn(Termination),
+    /// Called when a termination's grace runs out, whatever still runs.
+    on_deadline: fn(Termination),
+    deadline_started: std::sync::atomic::AtomicBool,
 }
 
 struct State {
@@ -46,7 +49,7 @@ thread_local! {
 }
 
 impl Terminations {
-    pub(crate) const fn new(on_idle: fn(Termination)) -> Self {
+    pub(crate) const fn new(on_idle: fn(Termination), on_deadline: fn(Termination)) -> Self {
         Self {
             state: Mutex::new(State {
                 requested: None,
@@ -57,6 +60,29 @@ impl Terminations {
                 pending: VecDeque::new(),
             }),
             on_idle,
+            on_deadline,
+            deadline_started: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Once per process: calls `on_deadline` after `grace` on a thread of its own, so a request
+    /// that cannot stop, or an output nobody reads, cannot keep the process alive.
+    pub(crate) fn start_deadline(&'static self, termination: Termination, grace: Duration) {
+        if self
+            .deadline_started
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        let spawned = std::thread::Builder::new()
+            .name("alpha2-termination-deadline".to_owned())
+            .spawn(move || {
+                std::thread::sleep(grace);
+                (self.on_deadline)(termination);
+            });
+        if spawned.is_err() {
+            self.deadline_started
+                .store(false, std::sync::atomic::Ordering::Release);
         }
     }
 
@@ -257,12 +283,38 @@ impl Drop for ExportCancel {
     }
 }
 
-static TERMINATIONS: Terminations = Terminations::new(exit_on_termination);
+static TERMINATIONS: Terminations = Terminations::new(exit_on_termination, exit_at_deadline);
 
 fn exit_on_termination(termination: Termination) {
     crate::lifecycle::announce_termination();
     crate::exit_unflushed(termination.exit_code());
 }
+
+/// Writes and flushes nothing: a blocked writer may hold either stream.
+fn exit_at_deadline(termination: Termination) {
+    alpha2_os::exit_without_handlers(termination.exit_code());
+}
+
+/// How long a termination waits for running requests: past the stall limit the host itself calls a
+/// step stuck. After the parent's exit nobody reads the answers, so only a healthy stop is awaited.
+fn grace(termination: Termination) -> Duration {
+    #[cfg(test)]
+    if let Some(grace) = *TEST_GRACE.lock().unwrap_or_else(PoisonError::into_inner) {
+        return grace;
+    }
+    if termination.parent_exited() {
+        PARENT_EXIT_GRACE
+    } else {
+        crate::config::configured_stall_timeout().saturating_add(SIGNAL_GRACE_MARGIN)
+    }
+}
+
+const PARENT_EXIT_GRACE: Duration = Duration::from_secs(5);
+const SIGNAL_GRACE_MARGIN: Duration = Duration::from_secs(5);
+
+/// A short grace for the serve children of the tests.
+#[cfg(test)]
+pub(crate) static TEST_GRACE: Mutex<Option<Duration>> = Mutex::new(None);
 
 pub(crate) fn terminations() -> &'static Terminations {
     &TERMINATIONS
@@ -306,6 +358,7 @@ pub(crate) fn cancelled_by_request_or_termination(message: String) -> String {
 /// When the operating system refuses the handler.
 pub(crate) fn install() -> std::io::Result<()> {
     alpha2_os::on_termination(|termination| {
+        TERMINATIONS.start_deadline(termination, grace(termination));
         // A client may have closed the pipe already, so nothing may depend on this line.
         let _ = writeln!(
             std::io::stderr(),
@@ -333,8 +386,17 @@ mod tests {
         IDLE.lock().expect("idle").push(termination.name());
     }
 
+    static DEADLINES: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+    fn record_deadline(termination: Termination) {
+        DEADLINES
+            .lock()
+            .expect("deadlines")
+            .push(termination.exit_code());
+    }
+
     fn leaked() -> &'static Terminations {
-        Box::leak(Box::new(Terminations::new(record_idle)))
+        Box::leak(Box::new(Terminations::new(record_idle, record_deadline)))
     }
 
     fn sigterm() -> Termination {
@@ -401,6 +463,34 @@ mod tests {
         }
         assert!(!terminations.take_pending_cancel("0"), "the oldest goes");
         assert!(terminations.take_pending_cancel("1"));
+    }
+
+    #[test]
+    fn a_deadline_ends_a_busy_process_once_whatever_runs() {
+        let terminations = leaked();
+        let _request = terminations.begin_request("stuck");
+        assert!(!terminations.request(sigterm()));
+        terminations.start_deadline(sigterm(), Duration::from_millis(50));
+        terminations.start_deadline(sigterm(), Duration::from_millis(50));
+        let started = Instant::now();
+        while DEADLINES.lock().expect("deadlines").is_empty() {
+            assert!(started.elapsed() < Duration::from_secs(10), "no deadline");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(*DEADLINES.lock().expect("deadlines"), [143]);
+    }
+
+    #[test]
+    fn the_parent_exit_takes_the_short_grace() {
+        let parent = Termination::new("PARENT_EXITED", 143, false);
+        assert!(parent.parent_exited());
+        assert_eq!(grace(parent), PARENT_EXIT_GRACE);
+        assert!(!sigterm().parent_exited());
+        assert_eq!(
+            grace(sigterm()),
+            crate::config::configured_stall_timeout() + SIGNAL_GRACE_MARGIN
+        );
     }
 
     #[test]
