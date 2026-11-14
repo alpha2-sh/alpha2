@@ -397,6 +397,49 @@ fn a_canvas_cycle_fails_to_index() {
     ));
 }
 
+/// `links + 1` clips of `v1`, each on its own track; each follows the next in canvas space with
+/// its position and its scale.
+fn double_follow_chain(links: usize) -> Result<Project, alpha2_model::ProjectLoadError> {
+    let follow = |clip: usize| {
+        json!({ "mode": "data", "data": "face", "channel": "nose",
+        "via": { "clip": format!("c{clip}") }, "space": "canvas" })
+    };
+    let tracks: Vec<Value> = (0..=links)
+        .map(|index| {
+            let mut clip = json!({ "id": format!("c{index}"), "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 240_000 },
+                "source_range": { "start": 0, "end": 240_000 } });
+            if index < links {
+                clip["visual"] =
+                    json!({ "position": follow(index + 1), "scale": follow(index + 1) });
+            }
+            json!({ "id": format!("t{index}"), "name": "V", "kind": "video", "clips": [clip] })
+        })
+        .collect();
+    let document = json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": { "width": 1920, "height": 1080, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+        "sources": [{ "id": "v1", "kind": "video", "locator": "v1.mp4" }],
+        "timeline": { "tracks": tracks },
+        "data": points_on_v1()
+    });
+    Project::from_json(&document.to_string())
+}
+
+#[test]
+fn a_double_follow_chain_at_the_depth_limit_evaluates() {
+    let project = double_follow_chain(alpha2_model::MAX_FOLLOW_DEPTH).expect("eight links");
+    let index = ActiveIndex::build(&project).expect("index");
+    let frame = crate::evaluate(&project, &index, MediaTime(1_000)).expect("frame");
+    assert_eq!(frame.visual.len(), alpha2_model::MAX_FOLLOW_DEPTH + 1);
+    assert!(frame.visual.iter().all(|layer| {
+        layer
+            .visual
+            .is_some_and(|visual| visual.position.x.is_finite() && visual.scale.x.is_finite())
+    }));
+    assert!(double_follow_chain(alpha2_model::MAX_FOLLOW_DEPTH + 1).is_err());
+}
+
 #[test]
 fn a_gain_bound_to_data_changes_only_at_sample_times() {
     let project = project((30, 1), &frame_numbers("hold"), |document| {

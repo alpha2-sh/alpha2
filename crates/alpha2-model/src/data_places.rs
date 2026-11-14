@@ -111,7 +111,7 @@ pub(crate) fn validate_data(
     places.walk_timeline(project)?;
     places.walk_compositions(project)?;
     places.walk_sources(project)?;
-    places.ensure_follows_are_acyclic()
+    places.check_follow_graph()
 }
 
 /// The slot of a visited value; effect parameters are resolved by the caller.
@@ -555,58 +555,136 @@ impl<'a> Places<'a> {
         Ok(())
     }
 
-    /// Refuses a cycle of canvas-space follows, naming the first follow on it in document order.
-    fn ensure_follows_are_acyclic(&self) -> Result<(), ModelError> {
-        let mut next: HashMap<&ClipId, Vec<&ClipId>> = HashMap::new();
-        for follow in &self.follows {
-            next.entry(follow.follower).or_default().push(follow.via);
+    /// Refuses a cycle of canvas-space follows, then a clip that follows more than
+    /// [`crate::MAX_FOLLOW_DEPTH`] links deep, naming the first such follow in document order.
+    fn check_follow_graph(&self) -> Result<(), ModelError> {
+        let graph = FollowGraph::new(&self.follows);
+        let (component, depth) = graph.components_and_depths();
+        let refuse = |follow: &Follow<'_>, problem| ModelError::InvalidDataBinding {
+            owner: DataOwner::Clip(follow.follower.clone()),
+            at: follow.at.clone(),
+            problem,
+        };
+        let on_cycle = graph
+            .edges
+            .iter()
+            .position(|&(from, to)| component[from] == component[to]);
+        if let Some(at) = on_cycle {
+            return Err(refuse(&self.follows[at], BindingProblem::Cycle));
         }
-        // Colors: absent unvisited, false on the walk, true finished.
-        let mut state: HashMap<&ClipId, bool> = HashMap::new();
-        let mut on_cycle = std::collections::HashSet::new();
-        for follow in &self.follows {
-            let mut stack = vec![(follow.follower, 0_usize)];
-            if state.contains_key(follow.follower) {
+        let too_deep = graph
+            .edges
+            .iter()
+            .position(|&(from, _)| depth[from] > crate::MAX_FOLLOW_DEPTH);
+        if let Some(at) = too_deep {
+            return Err(refuse(&self.follows[at], BindingProblem::TooDeep));
+        }
+        Ok(())
+    }
+}
+
+/// The follows as edges from follower to `via` between dense clip indices, in document order.
+struct FollowGraph {
+    edges: Vec<(usize, usize)>,
+    /// `targets[first[node]..first[node + 1]]` are the clips `node` follows.
+    first: Vec<usize>,
+    targets: Vec<usize>,
+}
+
+impl FollowGraph {
+    fn new(follows: &[Follow<'_>]) -> Self {
+        let mut nodes: HashMap<&ClipId, usize> = HashMap::new();
+        let mut node = |clip| {
+            let next = nodes.len();
+            *nodes.entry(clip).or_insert(next)
+        };
+        let edges: Vec<(usize, usize)> = follows
+            .iter()
+            .map(|follow| (node(follow.follower), node(follow.via)))
+            .collect();
+        let mut first = vec![0; nodes.len() + 1];
+        for &(from, _) in &edges {
+            first[from + 1] += 1;
+        }
+        for at in 1..first.len() {
+            first[at] += first[at - 1];
+        }
+        let mut fill = first.clone();
+        let mut targets = vec![0; edges.len()];
+        for &(from, to) in &edges {
+            targets[fill[from]] = to;
+            fill[from] += 1;
+        }
+        Self {
+            edges,
+            first,
+            targets,
+        }
+    }
+
+    fn successors(&self, node: usize) -> &[usize] {
+        &self.targets[self.first[node]..self.first[node + 1]]
+    }
+
+    /// Each clip's strongly connected component and its follow depth, in one iterative Tarjan
+    /// pass. A depth is the longest chain of links from the clip and is meaningful only when no
+    /// component holds an edge.
+    fn components_and_depths(&self) -> (Vec<usize>, Vec<usize>) {
+        const UNSEEN: usize = usize::MAX;
+        let count = self.first.len() - 1;
+        let mut order = vec![UNSEEN; count];
+        let mut low = vec![0; count];
+        let mut component = vec![UNSEEN; count];
+        let mut depth = vec![0_usize; count];
+        let mut open = Vec::new();
+        let mut calls: Vec<(usize, usize)> = Vec::new();
+        let mut visited = 0;
+        let mut components = 0;
+        for root in 0..count {
+            if order[root] != UNSEEN {
                 continue;
             }
-            state.insert(follow.follower, false);
-            while let Some((clip, index)) = stack.pop() {
-                let targets = next.get(clip).map_or(&[][..], Vec::as_slice);
-                if let Some(target) = targets.get(index) {
-                    stack.push((clip, index + 1));
-                    match state.get(target) {
-                        None => {
-                            state.insert(target, false);
-                            stack.push((target, 0));
-                        }
-                        Some(false) => {
-                            // Every clip on the walk from `target` to here is on a cycle.
-                            on_cycle.insert(*target);
-                            for (member, _) in stack.iter().rev() {
-                                on_cycle.insert(*member);
-                                if member == target {
-                                    break;
-                                }
-                            }
-                        }
-                        Some(true) => {}
+            order[root] = visited;
+            low[root] = visited;
+            visited += 1;
+            open.push(root);
+            calls.push((root, 0));
+            while let Some((node, next)) = calls.last_mut() {
+                let node = *node;
+                if let Some(&target) = self.successors(node).get(*next) {
+                    *next += 1;
+                    if order[target] == UNSEEN {
+                        order[target] = visited;
+                        low[target] = visited;
+                        visited += 1;
+                        open.push(target);
+                        calls.push((target, 0));
+                    } else if component[target] == UNSEEN {
+                        low[node] = low[node].min(order[target]);
                     }
-                } else {
-                    state.insert(clip, true);
+                    continue;
+                }
+                calls.pop();
+                if let Some(&(parent, _)) = calls.last() {
+                    low[parent] = low[parent].min(low[node]);
+                }
+                depth[node] = self
+                    .successors(node)
+                    .iter()
+                    .map(|&target| depth[target].saturating_add(1))
+                    .max()
+                    .unwrap_or(0);
+                if low[node] == order[node] {
+                    while let Some(member) = open.pop() {
+                        component[member] = components;
+                        if member == node {
+                            break;
+                        }
+                    }
+                    components += 1;
                 }
             }
         }
-        if let Some(follow) = self
-            .follows
-            .iter()
-            .find(|follow| on_cycle.contains(follow.follower) && on_cycle.contains(follow.via))
-        {
-            return Err(ModelError::InvalidDataBinding {
-                owner: DataOwner::Clip(follow.follower.clone()),
-                at: follow.at.clone(),
-                problem: BindingProblem::Cycle,
-            });
-        }
-        Ok(())
+        (component, depth)
     }
 }

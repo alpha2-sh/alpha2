@@ -12,6 +12,7 @@ import {
   MAX_DATA_SETS,
   MAX_DATA_VALUES,
   MAX_DATA_WORDS,
+  MAX_FOLLOW_DEPTH,
 } from "./generated/project-schema.js";
 
 type Json = Record<string, unknown>;
@@ -850,33 +851,95 @@ export function dataProblems(
     else if (!trackOk || words.max_chars === 0)
       report(owner, place.at, "has an invalid words track or max_chars");
   });
-  const cycle = followCycle(follows);
-  if (cycle)
+  const graph = followProblem(follows);
+  if (graph)
     problems.push(
-      `clip ${cycle.follower} ${cycle.at} follows clips in canvas space in a cycle`,
+      `clip ${graph.follow.follower} ${graph.follow.at} ${graph.problem}`,
     );
   return problems;
 }
 
-/** The first canvas follow, in document order, whose two clips lie on a cycle. */
-function followCycle(follows: readonly Follow[]): Follow | undefined {
-  const next = new Map<string, string[]>();
-  for (const follow of follows) {
-    const list = next.get(follow.follower) ?? [];
-    list.push(follow.via);
-    next.set(follow.follower, list);
-  }
-  const reaches = (from: string, target: string): boolean => {
-    const seen = new Set<string>();
-    const stack = [from];
-    while (stack.length > 0) {
-      const clip = stack.pop() as string;
-      if (clip === target) return true;
-      if (seen.has(clip)) continue;
-      seen.add(clip);
-      stack.push(...(next.get(clip) ?? []));
+/**
+ * The first canvas follow, in document order, that lies on a cycle; else the first whose
+ * follower follows more than `MAX_FOLLOW_DEPTH` links deep. Mirrors `check_follow_graph`.
+ */
+function followProblem(
+  follows: readonly Follow[],
+): { follow: Follow; problem: string } | undefined {
+  const index = new Map<string, number>();
+  const node = (clip: string): number => {
+    let found = index.get(clip);
+    if (found === undefined) {
+      found = index.size;
+      index.set(clip, found);
     }
-    return false;
+    return found;
   };
-  return follows.find((follow) => reaches(follow.via, follow.follower));
+  const edges = follows.map((follow) => [
+    node(follow.follower),
+    node(follow.via),
+  ]);
+  const next: number[][] = Array.from({ length: index.size }, () => []);
+  for (const [from, to] of edges) next[from].push(to);
+  const unseen = -1;
+  const order = new Array<number>(index.size).fill(unseen);
+  const low = new Array<number>(index.size).fill(0);
+  const component = new Array<number>(index.size).fill(unseen);
+  const depth = new Array<number>(index.size).fill(0);
+  const open: number[] = [];
+  let visited = 0;
+  let components = 0;
+  for (let root = 0; root < index.size; root++) {
+    if (order[root] !== unseen) continue;
+    order[root] = low[root] = visited++;
+    open.push(root);
+    const calls: [number, number][] = [[root, 0]];
+    while (calls.length > 0) {
+      const call = calls[calls.length - 1];
+      const at = call[0];
+      if (call[1] < next[at].length) {
+        const target = next[at][call[1]++];
+        if (order[target] === unseen) {
+          order[target] = low[target] = visited++;
+          open.push(target);
+          calls.push([target, 0]);
+        } else if (component[target] === unseen) {
+          low[at] = Math.min(low[at], order[target]);
+        }
+        continue;
+      }
+      calls.pop();
+      if (calls.length > 0) {
+        const parent = calls[calls.length - 1][0];
+        low[parent] = Math.min(low[parent], low[at]);
+      }
+      depth[at] = next[at].reduce(
+        (most, target) => Math.max(most, depth[target] + 1),
+        0,
+      );
+      if (low[at] === order[at]) {
+        for (;;) {
+          const member = open.pop() as number;
+          component[member] = components;
+          if (member === at) break;
+        }
+        components++;
+      }
+    }
+  }
+  const cycle = edges.findIndex(
+    ([from, to]) => component[from] === component[to],
+  );
+  if (cycle >= 0)
+    return {
+      follow: follows[cycle],
+      problem: "follows clips in canvas space in a cycle",
+    };
+  const deep = edges.findIndex(([from]) => depth[from] > MAX_FOLLOW_DEPTH);
+  if (deep >= 0)
+    return {
+      follow: follows[deep],
+      problem: `follows clips in canvas space more than ${MAX_FOLLOW_DEPTH} deep`,
+    };
+  return undefined;
 }

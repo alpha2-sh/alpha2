@@ -34637,6 +34637,467 @@
     }
   },
   {
+    "name": "data-canvas-follow-at-depth-limit",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "v1", "kind": "video", "locator": "a.mp4" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c0",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c2" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v1",
+                "timeline_range": { "start": 240000, "end": 360000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c3" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c3",
+                "source_id": "v1",
+                "timeline_range": { "start": 360000, "end": 480000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c4" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c4",
+                "source_id": "v1",
+                "timeline_range": { "start": 480000, "end": 600000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c5" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c5",
+                "source_id": "v1",
+                "timeline_range": { "start": 600000, "end": 720000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c6" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c6",
+                "source_id": "v1",
+                "timeline_range": { "start": 720000, "end": 840000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c7" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c7",
+                "source_id": "v1",
+                "timeline_range": { "start": 840000, "end": 960000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c8" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c8",
+                "source_id": "v1",
+                "timeline_range": { "start": 960000, "end": 1080000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "a",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-canvas-follow-over-depth-limit",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c0 visual.position follows clips in canvas space more than 8 deep"
+    ],
+    "error": "clip c0 visual.position follows clips in canvas space more than 8 deep",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "v1", "kind": "video", "locator": "a.mp4" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c0",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c2" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v1",
+                "timeline_range": { "start": 240000, "end": 360000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c3" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c3",
+                "source_id": "v1",
+                "timeline_range": { "start": 360000, "end": 480000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c4" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c4",
+                "source_id": "v1",
+                "timeline_range": { "start": 480000, "end": 600000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c5" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c5",
+                "source_id": "v1",
+                "timeline_range": { "start": 600000, "end": 720000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c6" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c6",
+                "source_id": "v1",
+                "timeline_range": { "start": 720000, "end": 840000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c7" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c7",
+                "source_id": "v1",
+                "timeline_range": { "start": 840000, "end": 960000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c8" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c8",
+                "source_id": "v1",
+                "timeline_range": { "start": 960000, "end": 1080000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c9" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c9",
+                "source_id": "v1",
+                "timeline_range": { "start": 1080000, "end": 1200000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "a",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
+    "name": "data-canvas-follow-joins-two-cycles",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c1 visual.scale follows clips in canvas space in a cycle"
+    ],
+    "error": "clip c1 visual.scale follows clips in canvas space in a cycle",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "v1", "kind": "video", "locator": "a.mp4" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c3" },
+                    "space": "canvas"
+                  },
+                  "scale": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c2" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v1",
+                "timeline_range": { "start": 240000, "end": 360000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c1" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c3",
+                "source_id": "v1",
+                "timeline_range": { "start": 360000, "end": 480000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c4" },
+                    "space": "canvas"
+                  }
+                }
+              },
+              {
+                "id": "c4",
+                "source_id": "v1",
+                "timeline_range": { "start": 480000, "end": 600000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "data",
+                    "data": "a",
+                    "channel": "nose",
+                    "via": { "clip": "c3" },
+                    "space": "canvas"
+                  }
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "data": [
+        {
+          "id": "a",
+          "anchor": { "type": "source", "source_id": "v1" },
+          "kind": "points",
+          "interpolation": "hold",
+          "channels": ["nose"],
+          "times": [0, 4000],
+          "values": [0.4, 0.3, null, null]
+        }
+      ]
+    }
+  },
+  {
     "name": "data-correction",
     "valid": true,
     "project": {

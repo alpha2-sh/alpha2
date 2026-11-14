@@ -306,6 +306,7 @@ pub fn project_limits_json() -> Value {
             json!(crate::MAX_DATA_ROTATION_DEGREES),
         ),
         ("MAX_DATA_SCALE", json!(crate::MAX_DATA_SCALE)),
+        ("MAX_FOLLOW_DEPTH", json!(crate::MAX_FOLLOW_DEPTH)),
     ];
     let mut value = Value::Object(
         limits

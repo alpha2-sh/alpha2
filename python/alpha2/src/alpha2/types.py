@@ -133,6 +133,9 @@ MAX_EQ_GAIN_DB = 36
 MAX_EQ_Q = 50
 """Mirrors `alpha2_model::MAX_EQ_Q`."""
 
+MAX_FOLLOW_DEPTH = 8
+"""Mirrors `alpha2_model::MAX_FOLLOW_DEPTH`."""
+
 MAX_FONT_FAMILY_BYTES = 256
 """Mirrors `alpha2_model::MAX_FONT_FAMILY_BYTES`."""
 

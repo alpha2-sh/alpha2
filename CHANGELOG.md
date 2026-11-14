@@ -187,6 +187,9 @@ All notable changes to this project are documented in this file.
   cache is pruned past `ALPHA2_PLUGIN_CACHE_QUOTA` (4 GiB by default). A plugin manifest pins an
   artifact of at most 256 MiB and resources of at most 2 GiB each and 4 GiB together, and a local
   manifest must be a regular file. Fetch messages show URLs without user info or query.
+- Projects: a clip may follow other clips in canvas space at most 8 links deep; a deeper chain is
+  refused when the project loads. Before, a long or doubly followed chain validated and then hung
+  evaluation or overflowed the stack, and the cycle check took quadratic time.
 - Editor: an import, relink or caption import that finishes after another project was opened is
   refused with `stale_import` and changes nothing; before, a relink waiting for the engine module
   could add its asset and an undo step to the new project.

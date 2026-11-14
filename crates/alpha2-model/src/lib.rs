@@ -72,8 +72,8 @@ pub use data::{
     DataInterval, DataKind, DataProblem, DataRemap, DataSamples, DataSet, DataSpace, DataValues,
     DataVia, DataWord, MAX_DATA_CHANNELS, MAX_DATA_COORDINATE, MAX_DATA_ID_BYTES,
     MAX_DATA_INTERVALS, MAX_DATA_LABEL_BYTES, MAX_DATA_ROTATION_DEGREES, MAX_DATA_SCALAR,
-    MAX_DATA_SCALE, MAX_DATA_SETS, MAX_DATA_VALUES, MAX_DATA_WORDS, MadeBy, MadeByPlugin,
-    SIMILARITY_ARITY, valid_interval, valid_word, value_in_bounds,
+    MAX_DATA_SCALE, MAX_DATA_SETS, MAX_DATA_VALUES, MAX_DATA_WORDS, MAX_FOLLOW_DEPTH, MadeBy,
+    MadeByPlugin, SIMILARITY_ARITY, valid_interval, valid_word, value_in_bounds,
 };
 pub use domain::Domain;
 pub use easing::{CubicBezier, Easing};

@@ -125,6 +125,9 @@ export const MAX_EQ_GAIN_DB = 36;
 /** Mirrors `alpha2_model::MAX_EQ_Q`. */
 export const MAX_EQ_Q = 50;
 
+/** Mirrors `alpha2_model::MAX_FOLLOW_DEPTH`. */
+export const MAX_FOLLOW_DEPTH = 8;
+
 /** Mirrors `alpha2_model::MAX_FONT_FAMILY_BYTES`. */
 export const MAX_FONT_FAMILY_BYTES = 256;
 

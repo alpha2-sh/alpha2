@@ -37,6 +37,8 @@ pub const MAX_DATA_SCALAR: f32 = 1e9;
 pub const MAX_DATA_ROTATION_DEGREES: f32 = 36_000.0;
 /// Largest similarity scale; the smallest is just above zero.
 pub const MAX_DATA_SCALE: f32 = 1_000.0;
+/// Longest chain of canvas-space follows from one clip, counted in links.
+pub const MAX_FOLLOW_DEPTH: usize = 8;
 
 /// The clock a data set's times are on.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
@@ -816,6 +818,8 @@ pub enum BindingProblem {
     InvalidRemap,
     /// Following clips in canvas space forms a cycle.
     Cycle,
+    /// The clip follows clips in canvas space through more than [`MAX_FOLLOW_DEPTH`] links.
+    TooDeep,
     /// A correction's data set is not anchored to the clip's own source.
     NotOwnSource,
     /// A caption track's `track` is missing for a source anchor, given for a timeline anchor,
@@ -855,6 +859,10 @@ impl fmt::Display for BindingProblem {
             Self::InvalidRemap => formatter
                 .write_str("has a non-finite offset or remap, or a remap with equal inputs"),
             Self::Cycle => formatter.write_str("follows clips in canvas space in a cycle"),
+            Self::TooDeep => write!(
+                formatter,
+                "follows clips in canvas space more than {MAX_FOLLOW_DEPTH} deep"
+            ),
             Self::NotOwnSource => {
                 formatter.write_str("corrects with data anchored to another source")
             }
