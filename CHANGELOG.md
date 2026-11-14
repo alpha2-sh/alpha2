@@ -331,6 +331,9 @@ All notable changes to this project are documented in this file.
 - Python: `seconds_to_ticks` rounds halves away from zero without adding 0.5 first, so a value just
   below a half tick (such as `0.49999999999999994` ticks) no longer rounds up; it now agrees with
   the engine and both TypeScript packages, whose shared time-rules corpus the Python tests replay.
+- `alpha2-host` no longer repeats a plugin URL's user info, query or fragment (where a signed URL
+  carries its token) in fetch failure messages; the scheme, host, port and path are kept, and file
+  paths are shown whole.
 
 ## [0.6.0] - 2026-11-08
 

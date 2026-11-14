@@ -33,15 +33,34 @@ fn fetch_failed(message: impl Into<String>) -> PluginError {
     PluginError::new(codes::FETCH_FAILED, message)
 }
 
+/// `url` as a message shows it: scheme, host, port and path. User info, query and fragment are
+/// left out, since they may carry credentials (a signed URL's token). A path is shown whole.
+fn shown_url(url: &str) -> String {
+    if has_scheme(url).is_none() {
+        return url.to_owned();
+    }
+    let url = url.split(['?', '#']).next().unwrap_or_default();
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let (authority, path) = rest.find('/').map_or((rest, ""), |at| rest.split_at(at));
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{path}")
+}
+
 /// A `file:` URL's path, percent-decoded, without the slash before a Windows drive letter.
 fn file_url_path(url: &str) -> Result<PathBuf, PluginError> {
+    let shown = || shown_url(url);
     let rest = url
         .strip_prefix("file://")
-        .ok_or_else(|| fetch_failed(format!("{url}: not a file URL")))?;
+        .ok_or_else(|| fetch_failed(format!("{}: not a file URL", shown())))?;
     let path = rest.strip_prefix("localhost").unwrap_or(rest);
     if !path.starts_with('/') {
         return Err(fetch_failed(format!(
-            "{url}: a file URL names a local absolute path"
+            "{}: a file URL names a local absolute path",
+            shown()
         )));
     }
     let mut bytes = Vec::with_capacity(path.len());
@@ -52,13 +71,19 @@ fn file_url_path(url: &str) -> Result<PathBuf, PluginError> {
             let digit = |b: Option<u8>| b.and_then(|b| char::from(b).to_digit(16));
             match (digit(hex[0]), digit(hex[1])) {
                 (Some(high), Some(low)) => bytes.push(u8::try_from(high * 16 + low).unwrap_or(0)),
-                _ => return Err(fetch_failed(format!("{url}: a malformed percent escape"))),
+                _ => {
+                    return Err(fetch_failed(format!(
+                        "{}: a malformed percent escape",
+                        shown()
+                    )));
+                }
             }
         } else {
             bytes.push(byte);
         }
     }
-    let path = String::from_utf8(bytes).map_err(|_| fetch_failed(format!("{url}: not UTF-8")))?;
+    let path =
+        String::from_utf8(bytes).map_err(|_| fetch_failed(format!("{}: not UTF-8", shown())))?;
     let windows_drive = path.len() > 2 && path.as_bytes()[2] == b':' && cfg!(windows);
     Ok(PathBuf::from(if windows_drive {
         &path[1..]
@@ -122,7 +147,8 @@ fn manifest_location(location: &str) -> Result<Location, PluginError> {
         Some("file") => file_url_path(location).map(Location::Path),
         // A drive letter, `C:\...`, is a path.
         Some(scheme) if scheme.len() > 1 => Err(fetch_failed(format!(
-            "{location}: only https: and file: URLs are fetched"
+            "{}: only https: and file: URLs are fetched",
+            shown_url(location)
         ))),
         _ => Ok(Location::Path(PathBuf::from(location))),
     }
@@ -161,13 +187,13 @@ fn download(url: &str, limit: u64) -> Result<Vec<u8>, PluginError> {
     let mut response = agent()
         .get(url)
         .call()
-        .map_err(|error| fetch_failed(format!("{url}: {error}")))?;
+        .map_err(|error| fetch_failed(format!("{}: {error}", shown_url(url))))?;
     response
         .body_mut()
         .with_config()
         .limit(limit)
         .read_to_vec()
-        .map_err(|error| fetch_failed(format!("{url}: {error}")))
+        .map_err(|error| fetch_failed(format!("{}: {error}", shown_url(url))))
 }
 
 /// The manifest at `location` (an `https:` URL, a `file:` URL or a path), checked against
@@ -192,9 +218,10 @@ pub fn manifest(location: &str, sha256: &str) -> Result<(String, Base), PluginEr
             Base::Directory(_) => {
                 format!("the manifest has SHA-256 {found}; the request pins {sha256}")
             }
-            Base::Url(_) => {
-                format!("the manifest at {location} does not match the SHA-256 the request pins")
-            }
+            Base::Url(_) => format!(
+                "the manifest at {} does not match the SHA-256 the request pins",
+                shown_url(location)
+            ),
         };
         return Err(PluginError::new(codes::HASH_MISMATCH, message));
     }
@@ -396,6 +423,44 @@ mod tests {
                 codes::FETCH_FAILED
             );
         }
+    }
+
+    #[test]
+    fn a_url_in_a_message_has_no_user_info_query_or_fragment() {
+        for (url, shown) in [
+            (
+                "https://user:secret@cdn.example.com:8443/p/manifest.json?token=abc#part",
+                "https://cdn.example.com:8443/p/manifest.json",
+            ),
+            (
+                "https://example.com/m.json?X-Amz-Signature=abc",
+                "https://example.com/m.json",
+            ),
+            ("https://token@example.com", "https://example.com"),
+            (
+                "file:///tmp/a%20b/manifest.json#x",
+                "file:///tmp/a%20b/manifest.json",
+            ),
+            ("ftp://user:pw@example.com/m", "ftp://example.com/m"),
+            ("/plugins/p?/manifest.json", "/plugins/p?/manifest.json"),
+            (r"C:\plugins\manifest.json", r"C:\plugins\manifest.json"),
+        ] {
+            assert_eq!(shown_url(url), shown, "{url}");
+        }
+        let refused = manifest_location("ftp://user:pw@example.com/m?token=abc").expect_err("ftp");
+        assert!(!refused.message.contains("pw") && !refused.message.contains("abc"));
+        // Port 1 refuses the connection; the failure must not repeat the credentials.
+        let failed = manifest(
+            "https://user:pw@127.0.0.1:1/m.json?token=abc",
+            &"0".repeat(64),
+        )
+        .expect_err("nothing listens");
+        assert_eq!(failed.code, codes::FETCH_FAILED);
+        assert!(
+            !failed.message.contains("pw") && !failed.message.contains("abc"),
+            "{}",
+            failed.message
+        );
     }
 
     #[test]
