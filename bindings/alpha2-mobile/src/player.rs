@@ -5,7 +5,8 @@
 //! later one of its kind replaces before the thread reaches it is skipped, and a newer seek stops
 //! the frame an older one is drawing. The window is attached and detached with the app's surface
 //! lifecycle; nothing is drawn while none is attached or while the session is paused for the
-//! background.
+//! background. A window attached, a resize or a seek while paused takes effect, with one frame
+//! drawn, when the session resumes.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -38,7 +39,8 @@ use crate::zero_copy::GpuFrames;
 /// How [`Player::last_error`] begins when the GPU refuses the attached window.
 pub(crate) const PRESENT_REFUSED: &str = "the GPU cannot present to this window";
 
-/// How often a preview held in the background checks whether the app returned.
+/// How often a preview held in the background with a frame to draw checks whether the app
+/// returned.
 const PAUSED_POLL: Duration = Duration::from_millis(50);
 
 /// Most bytes of decoded source frames a preview keeps.
@@ -478,17 +480,27 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
         if shared.stop.is_cancelled() {
             return;
         }
-        let command = if state.playing() && state.output.is_some() {
-            match commands.recv_timeout(Duration::ZERO) {
+        let paused = session.paused.is_paused();
+        if !paused {
+            state.resume(&session, shared);
+        }
+        // In the background nothing touches the GPU, but commands are still carried out: an end
+        // or a detach must not wait for the app to return to the foreground.
+        let wait = if paused {
+            (state.deferred.is_some() || state.playing()).then_some(PAUSED_POLL)
+        } else {
+            (state.playing() && state.output.is_some()).then_some(Duration::ZERO)
+        };
+        let command = match wait {
+            Some(wait) => match commands.recv_timeout(wait) {
                 Ok(command) => Some(command),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => return,
-            }
-        } else {
-            match commands.recv() {
+            },
+            None => match commands.recv() {
                 Ok(command) => Some(command),
                 Err(_) => return,
-            }
+            },
         };
         if let Some(command) = command {
             if !apply_queued(command, commands, &mut state, &session, shared) {
@@ -496,18 +508,7 @@ fn run(session: Session, commands: &Receiver<Command>, shared: &Arc<Shared>) {
             }
             continue;
         }
-        // In the background nothing renders, but commands are still carried out: an end or a
-        // detach must not wait for the app to return to the foreground.
-        if session.paused.is_paused() {
-            match commands.recv_timeout(PAUSED_POLL) {
-                Ok(command) => {
-                    if !apply_queued(command, commands, &mut state, &session, shared) {
-                        return;
-                    }
-                }
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => return,
-            }
+        if paused {
             continue;
         }
         let time = state.clock_time();
@@ -599,6 +600,16 @@ struct State {
     sound: Sound,
     /// Audio playing with the picture, whose heard position is the clock.
     audio: Option<PreviewAudio>,
+    /// What the session's pause held back, done when it resumes.
+    deferred: Option<Deferred>,
+}
+
+/// GPU work a paused session held back: a window to attach, a size to configure, and a frame to
+/// draw.
+#[derive(Default)]
+struct Deferred {
+    window: Option<(NativeWindow, u32, u32)>,
+    size: Option<(u32, u32)>,
 }
 
 impl State {
@@ -642,6 +653,71 @@ impl State {
             index: 0,
             sound: Sound::Unread,
             audio: None,
+            deferred: None,
+        }
+    }
+
+    /// Does what the pause held back: attaches the window, configures the size and draws the frame
+    /// at the position.
+    fn resume(&mut self, session: &Session, shared: &Arc<Shared>) {
+        let Some(deferred) = self.deferred.take() else {
+            return;
+        };
+        if let Some((window, width, height)) = deferred.window {
+            self.attach(window, (width, height), session, shared);
+            return;
+        }
+        if let Some((width, height)) = deferred.size
+            && let Some(output) = self.output.as_mut()
+        {
+            output.resize(width, height);
+        }
+        self.frames.reset();
+        self.show(session, shared, &shared.stop);
+    }
+
+    /// The work held back for the resume while the session is paused, `None` when it is not.
+    fn defer(&mut self, session: &Session) -> Option<&mut Deferred> {
+        session
+            .paused
+            .is_paused()
+            .then(|| self.deferred.get_or_insert_with(Deferred::default))
+    }
+
+    fn attach(
+        &mut self,
+        window: NativeWindow,
+        (width, height): (u32, u32),
+        session: &Session,
+        shared: &Arc<Shared>,
+    ) {
+        let attached = match self.output.as_mut() {
+            Some(output) => output.attach(window, width, height),
+            None => Output::open(
+                window,
+                (width, height),
+                session.gpu_frames,
+                Arc::clone(shared),
+            )
+            .map(|output| {
+                self.cache = Some(SourceFrameCache::for_renderer(
+                    ExportRenderer::Gpu(&output.renderer),
+                    session.budget.bytes(),
+                ));
+                // No stream is open before the first window: sources decode for this device
+                // from the start.
+                self.sources =
+                    sources(session, Arc::clone(&self.providers), output.frames.as_ref());
+                self.output = Some(output);
+            }),
+        };
+        match attached {
+            Ok(()) => {
+                // A new window shows the frame at the position at once.
+                self.frames.reset();
+                self.show(session, shared, &shared.stop);
+            }
+            Err(error) => record(shared, error),
         }
     }
 
@@ -694,37 +770,17 @@ impl State {
                 window,
                 width,
                 height,
-            } => {
-                let attached = match self.output.as_mut() {
-                    Some(output) => output.attach(window, width, height),
-                    None => Output::open(
-                        window,
-                        (width, height),
-                        session.gpu_frames,
-                        Arc::clone(shared),
-                    )
-                    .map(|output| {
-                        self.cache = Some(SourceFrameCache::for_renderer(
-                            ExportRenderer::Gpu(&output.renderer),
-                            session.budget.bytes(),
-                        ));
-                        // No stream is open before the first window: sources decode for this
-                        // device from the start.
-                        self.sources =
-                            sources(session, Arc::clone(&self.providers), output.frames.as_ref());
-                        self.output = Some(output);
-                    }),
-                };
-                match attached {
-                    Ok(()) => {
-                        // A new window shows the frame at the position at once.
-                        self.frames.reset();
-                        self.show(session, shared, &shared.stop);
-                    }
-                    Err(error) => record(shared, error),
+            } => match self.defer(session) {
+                Some(deferred) => {
+                    deferred.window = Some((window, width, height));
+                    deferred.size = None;
                 }
-            }
+                None => self.attach(window, (width, height), session, shared),
+            },
             Command::Detach => {
+                if let Some(deferred) = self.deferred.as_mut() {
+                    deferred.window = None;
+                }
                 if let Some(output) = self.output.as_mut() {
                     output.surface = None;
                 }
@@ -736,13 +792,20 @@ impl State {
                 shared.sounding.store(false, Ordering::Release);
                 shared.playing.store(false, Ordering::Release);
             }
-            Command::Resize { width, height } => {
-                if let Some(output) = self.output.as_mut() {
-                    output.resize(width, height);
+            Command::Resize { width, height } => match self.defer(session) {
+                Some(Deferred {
+                    window: Some((_, window_width, window_height)),
+                    ..
+                }) => (*window_width, *window_height) = (width, height),
+                Some(deferred) => deferred.size = Some((width, height)),
+                None => {
+                    if let Some(output) = self.output.as_mut() {
+                        output.resize(width, height);
+                    }
+                    self.frames.reset();
+                    self.show(session, shared, &shared.stop);
                 }
-                self.frames.reset();
-                self.show(session, shared, &shared.stop);
-            }
+            },
             Command::Seek(ticks, token) => {
                 let time = MediaTime::from_ticks(ticks.clamp(0, self.end.ticks()));
                 self.position = time;
@@ -799,8 +862,12 @@ impl State {
     }
 
     /// Renders and presents the frame at the position, unless `cancel` stops it first; a stopped
-    /// frame is neither counted nor an error.
+    /// frame is neither counted nor an error. While the session is paused the frame is drawn when
+    /// it resumes.
     fn show(&mut self, session: &Session, shared: &Shared, cancel: &CancelToken) {
+        if self.defer(session).is_some() {
+            return;
+        }
         match self.render(session, shared, cancel) {
             Ok(()) => {}
             Err(_) if cancel.is_cancelled() => {

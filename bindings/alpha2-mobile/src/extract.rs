@@ -245,6 +245,7 @@ impl TimelineFrames {
         project: &Project,
         assets: HashMap<String, String>,
         (width, height): (u32, u32),
+        cancel: CancelToken,
     ) -> Result<Self, Alpha2Error> {
         let mut resized = project.clone();
         resized.settings.width = width;
@@ -265,11 +266,12 @@ impl TimelineFrames {
         let video = session.video_backends();
         let preference = session.decode_preference();
         let budget = session.frame_budget(alpha2_engine::frame_store::DEFAULT_VIDEO_FRAME_BYTES);
+        let gate = session.pause_gate();
         Self::start_with(move |times, sink| {
             crate::stills::render_each(
                 &request,
-                &config,
-                &fonts,
+                (&gate, &cancel),
+                (&config, &fonts),
                 (video, preference),
                 &budget,
                 times,
@@ -469,6 +471,7 @@ fn extract(
                 &project,
                 request.assets.clone(),
                 delivered,
+                cancel.clone(),
             )?)
         }
         _ => None,
@@ -539,6 +542,7 @@ impl Alpha2 {
         }
         let handle = Arc::new(ExtractionHandle {
             job: Job::new("extraction"),
+            gate: self.pause_gate(),
         });
         let cancel = handle.job.cancel_token().clone();
         handle.job.spawn("alpha2-extract", move || {
@@ -562,6 +566,7 @@ impl Alpha2 {
 #[derive(uniffi::Object)]
 pub struct ExtractionHandle {
     job: Arc<Job<String>>,
+    gate: Arc<crate::session::PauseGate>,
 }
 
 #[uniffi::export]
@@ -570,6 +575,7 @@ impl ExtractionHandle {
     /// [`Alpha2Error::Aborted`] for the caller.
     pub fn cancel(&self) {
         self.job.cancel_token().cancel();
+        self.gate.wake();
     }
 
     /// Whether the extraction has finished, succeeded or not.

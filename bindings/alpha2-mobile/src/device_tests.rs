@@ -706,6 +706,88 @@ fn an_export_holds_in_the_background_and_finishes_after_a_memory_warning() {
     let _ = std::fs::remove_file(output);
 }
 
+/// Counts the progress events of an export.
+struct Events(std::sync::atomic::AtomicU64);
+
+impl ExportProgress for Events {
+    fn on_progress(&self, _event: ExportProgressEvent) -> Result<(), ProgressFailure> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Ok(())
+    }
+}
+
+/// An export of 60 s of audio paused right after it starts holds before its audio phase or its
+/// first frame, reports nothing while held, and finishes after the resume.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[test]
+fn an_export_paused_as_it_starts_holds_before_any_frame() {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    let tests = tests_dir();
+    let wav = std::env::temp_dir().join("alpha2-minute-silence.wav");
+    write_silence(&wav, 8_000, 60);
+    let mut project: Value = serde_json::from_str(
+        &std::fs::read_to_string(tests.join("cases/host-audio-export-project.json"))
+            .expect("project"),
+    )
+    .expect("JSON");
+    for track in project["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks")
+    {
+        for clip in track["clips"].as_array_mut().expect("clips") {
+            clip["timeline_range"]["end"] = 7_200_000.into();
+            clip["source_range"]["end"] = 7_200_000.into();
+        }
+    }
+    let output = std::env::temp_dir().join("alpha2-paused-start.mp4");
+    let engine = Alpha2::new(EngineConfig::default());
+    let events = Arc::new(Events(std::sync::atomic::AtomicU64::new(0)));
+    let request = ExportRequest {
+        project_json: project.to_string(),
+        assets: HashMap::from([
+            (
+                "image-source".to_owned(),
+                tests
+                    .join("corpus/cross_topology_parity.png")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "audio-source".to_owned(),
+                wav.to_string_lossy().into_owned(),
+            ),
+        ]),
+        output_path: output.to_string_lossy().into_owned(),
+        overwrite: true,
+        ..ExportRequest::default()
+    };
+    let handle = engine
+        .export(request, Arc::clone(&events) as Arc<dyn ExportProgress>)
+        .expect("export starts");
+    engine.pause();
+    let until = Instant::now() + Duration::from_secs(30);
+    while !handle.is_held() && !handle.is_finished() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(handle.is_held(), "the export did not hold");
+    assert_eq!(
+        events.0.load(Ordering::Acquire),
+        0,
+        "progress before the hold"
+    );
+    std::thread::sleep(Duration::from_millis(700));
+    assert_eq!(events.0.load(Ordering::Acquire), 0, "progress while held");
+    assert!(!handle.is_finished());
+    engine.resume();
+    let outcome = pollster::block_on(handle.outcome()).expect("export");
+    let report: Value = serde_json::from_str(&outcome.report_json).expect("report");
+    check(&output, &report, true);
+    let _ = std::fs::remove_file(output);
+    let _ = std::fs::remove_file(wav);
+}
+
 /// Plays `player` through its timeline of `frames` frames lasting `seconds` and checks it kept
 /// time: each frame is drawn or, where it came due before the previous one was drawn, counted as
 /// dropped, the first and the last are always drawn, and playing by the clock takes no less than
@@ -778,6 +860,61 @@ fn scrub(player: &crate::Player, wait: &dyn Fn(u64, &dyn Fn() -> bool) -> bool) 
          (one seek takes {single:?})"
     );
     assert!(reached < bound, "{reached:?}");
+    assert_eq!(player.last_error(), None);
+}
+
+/// The video project's player on `engine`.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn video_player(engine: Arc<Alpha2>) -> Arc<crate::Player> {
+    let tests = tests_dir();
+    crate::Player::new(
+        engine,
+        crate::PlayerRequest {
+            project_json: std::fs::read_to_string(
+                tests.join("cases/host-video-export-project.json"),
+            )
+            .expect("project"),
+            assets: HashMap::from([(
+                "video-source".to_owned(),
+                tests
+                    .join("corpus/h264-bt709-copy.mp4")
+                    .to_string_lossy()
+                    .into_owned(),
+            )]),
+            ..crate::PlayerRequest::default()
+        },
+    )
+    .expect("player")
+}
+
+/// Seeks `player`, which shows a frame on a window, while `engine` is paused: nothing is drawn
+/// until the session resumes, and then one frame at the new position.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn seek_while_paused(
+    engine: &Alpha2,
+    player: &crate::Player,
+    wait: &dyn Fn(u64, &dyn Fn() -> bool) -> bool,
+) {
+    let shown = || player.frames_presented() + player.frames_dropped();
+    assert!(wait(10, &|| shown() >= 1), "{:?}", player.last_error());
+    engine.pause();
+    let before = (shown(), player.position_ticks());
+    player.seek(108_000);
+    player.resize(80, 60);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(
+        (shown(), player.position_ticks()),
+        before,
+        "drawn while paused"
+    );
+    engine.resume();
+    assert!(
+        wait(10, &|| player.position_ticks() == 108_000),
+        "{:?}",
+        player.last_error()
+    );
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(shown(), before.0 + 1, "frames drawn after the resume");
     assert_eq!(player.last_error(), None);
 }
 
@@ -1160,6 +1297,20 @@ mod reader_window {
     }
 
     #[test]
+    fn a_seek_on_a_window_while_paused_draws_once_after_the_resume() {
+        let engine = Alpha2::new(EngineConfig::default());
+        let player = super::video_player(Arc::clone(&engine));
+        let reader = WindowReader::new(64, 48);
+        if !attached(&player, &reader, 64, 48) {
+            return;
+        }
+        super::seek_while_paused(&engine, &player, &|seconds, done| {
+            wait_for(Some(&reader), seconds, done)
+        });
+        player.end();
+    }
+
+    #[test]
     fn preview_of_a_video_presents_its_frames() {
         use crate::{Player, PlayerRequest};
 
@@ -1296,6 +1447,18 @@ mod metal_layer {
             player.last_error()
         );
         super::scrub(&player, &|seconds, done| wait_for(seconds, done));
+        player.end();
+    }
+
+    #[test]
+    fn a_seek_on_a_metal_layer_while_paused_draws_once_after_the_resume() {
+        let engine = Alpha2::new(EngineConfig::default());
+        let player = super::video_player(Arc::clone(&engine));
+        let layer = objc2_quartz_core::CAMetalLayer::new();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&layer) as u64, 64, 48)
+            .expect("attach");
+        super::seek_while_paused(&engine, &player, &|seconds, done| wait_for(seconds, done));
         player.end();
     }
 

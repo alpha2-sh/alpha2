@@ -21,8 +21,8 @@ use alpha2_host_core::stills::{decode_still, still_format};
 use alpha2_host_core::video_stream::{DecodePreference, StreamOptions, VideoBackends, VideoStream};
 use alpha2_host_core::{DecodePolicy, DecodedAudioSources, ProjectAudioRequest};
 use alpha2_media::{
-    AudioBlock, CancelToken, ColorMetadata, Container, DecodeError, DecodeEvent, Decoder,
-    EncodeError, OutputPixels, QualityLevel, SourceId, SpeakerLayout,
+    AudioBlock, AudioBlockSink, CancelToken, ColorMetadata, Container, DecodeError, DecodeEvent,
+    Decoder, EncodeError, OutputPixels, QualityLevel, SourceId, SpeakerLayout,
 };
 use alpha2_model::{MediaKind, MediaSource, Project};
 use alpha2_render::{CpuRenderer, Renderer};
@@ -53,19 +53,11 @@ const PROVIDER_SOURCE_BYTES: u64 = 512 << 20;
 /// Exports `job`, once more on the software video encoder when the hardware video encoder is
 /// what failed.
 pub(crate) fn export(job: &ExportJob, media: &MediaBackends) -> Result<ExportOutcome, Alpha2Error> {
-    job.paused.wait_while_paused(&job.cancel, &job.held);
-    if job.cancel.is_cancelled() {
-        return Err(Alpha2Error::Aborted);
-    }
     match attempt(job, media, false) {
         Err(Failure::HardwareEncoder(error)) if !job.cancel.is_cancelled() => {
             alpha2_os::diagnostic!(
                 "alpha2 mobile export: the hardware video encoder failed ({error}); exporting again in software"
             );
-            job.paused.wait_while_paused(&job.cancel, &job.held);
-            if job.cancel.is_cancelled() {
-                return Err(Alpha2Error::Aborted);
-            }
             attempt(job, media, true).map_err(Failure::into_error)
         }
         outcome => outcome.map_err(Failure::into_error),
@@ -270,6 +262,7 @@ fn attempt(
         .map(|(id, path)| (id.clone(), PathBuf::from(path)))
         .collect::<HashMap<_, _>>();
 
+    hold(job)?;
     let mut drawing = Drawing::open(job.config.renderer, job.config.video_frames)?;
     register_resources(&project, &assets, &mut drawing)?;
     let mut texts = text_textures(&job.fonts)?;
@@ -362,7 +355,10 @@ fn attempt(
                 block_sizes: &[AUDIO_BLOCK],
             },
             sources,
-            &mut sink,
+            &mut Held {
+                sink: &mut sink,
+                job,
+            },
             &job.cancel,
         )
         .map_err(|error| match error {
@@ -462,6 +458,38 @@ fn attempt(
         output_path: request.output_path.clone(),
         report_json: report.to_string(),
     })
+}
+
+/// Waits while the session is paused; [`Alpha2Error::Aborted`] once the export is cancelled.
+fn hold(job: &ExportJob) -> Result<(), Alpha2Error> {
+    job.paused.wait_while_paused(&job.cancel, &job.held);
+    if job.cancel.is_cancelled() {
+        return Err(Alpha2Error::Aborted);
+    }
+    Ok(())
+}
+
+/// The sink of the audio phase, which waits while the session is paused before each block.
+struct Held<'a> {
+    sink: &'a mut EncodeSink,
+    job: &'a ExportJob,
+}
+
+impl AudioBlockSink for Held<'_> {
+    fn write_audio(&mut self, block: &AudioBlock, cancel: &CancelToken) -> Result<(), EncodeError> {
+        self.job
+            .paused
+            .wait_while_paused(&self.job.cancel, &self.job.held);
+        self.sink.write_audio(block, cancel)
+    }
+
+    fn finish_audio(&mut self, cancel: &CancelToken) -> Result<(), EncodeError> {
+        self.sink.finish_audio(cancel)
+    }
+
+    fn abort_audio(&mut self) -> Result<(), EncodeError> {
+        self.sink.abort_audio()
+    }
 }
 
 /// The files the request names for the extension sources.

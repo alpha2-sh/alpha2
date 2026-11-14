@@ -434,6 +434,10 @@ All notable changes to this project are documented in this file.
   background) goes on in a new session from a keyframe instead of starting over in software (H.264)
   or failing (HEVC). A paused export lets the encoder finish the frames it holds first, and a
   dropped encoder completes its frames before the session goes.
+- Mobile: `Alpha2.pause()` holds an export before it opens the GPU, between audio blocks and
+  before every frame, also on the software retry; `stills()` and timeline frames of an extraction
+  wait before each frame; a preview attaches a window, resizes and draws a seek only when the
+  session resumes. A cancel ends a held export or extraction at once.
 - A browser export cancelled while its sink is finishing rejects at once with `cancelled` and
   commits nothing, also when `finish` never settles; before, the export waited for `finish` and
   then reported a committed file as cancelled. `MediabunnySink.finish` rejects with

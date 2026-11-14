@@ -383,7 +383,8 @@ impl Alpha2 {
     }
 
     /// Renders frames to 8-bit sRGB RGBA PNG files, as an export draws them before encoding,
-    /// and returns the stills result JSON. Runs on the calling thread: call it off the main one.
+    /// and returns the stills result JSON. Runs on the calling thread, and blocks there while the
+    /// session is paused: call it off the main one.
     ///
     /// # Errors
     /// [`Alpha2Error::InvalidInput`] for an invalid project or request, else what rendering or
@@ -398,6 +399,7 @@ impl Alpha2 {
         }
         crate::stills::render(
             &request,
+            &self.paused,
             &self.config,
             &self.fonts(),
             self.video_backends(),
@@ -427,6 +429,7 @@ impl Alpha2 {
         let handle = Arc::new(ExportHandle {
             job: Job::new("export"),
             held: Arc::new(AtomicBool::new(false)),
+            gate: Arc::clone(&self.paused),
         });
         let progress = Arc::new(Progress::new(progress));
         let job = ExportJob {
@@ -447,8 +450,9 @@ impl Alpha2 {
         Ok(handle)
     }
 
-    /// Holds exports at their next frame boundary until [`Self::resume`]; call when the app leaves
-    /// the foreground, since iOS does not run GPU work in the background.
+    /// Holds exports, stills, extractions and previews before their next GPU work until
+    /// [`Self::resume`]; call when the app leaves the foreground, since iOS does not run GPU work
+    /// in the background.
     pub fn pause(&self) {
         self.paused.set(true);
     }
@@ -478,6 +482,7 @@ impl Alpha2 {
 pub struct ExportHandle {
     job: Arc<Job<ExportOutcome>>,
     held: Arc<AtomicBool>,
+    gate: Arc<PauseGate>,
 }
 
 #[uniffi::export]
@@ -486,6 +491,7 @@ impl ExportHandle {
     /// left behind.
     pub fn cancel(&self) {
         self.job.cancel_token().cancel();
+        self.gate.wake();
     }
 
     /// Whether the export is held at a frame boundary by [`Alpha2::pause`].
@@ -535,7 +541,19 @@ impl PauseGate {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Wakes the waits so they see a token cancelled before this call.
+    pub(crate) fn wake(&self) {
+        // Taking the lock orders the cancel before a waiter's check or its wait.
+        drop(
+            self.paused
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        self.changed.notify_all();
+    }
+
     /// Blocks while paused, returning early on cancellation; `held` is set while it blocks.
+    /// Whoever cancels `cancel` calls [`Self::wake`].
     pub(crate) fn wait_while_paused(&self, cancel: &CancelToken, held: &AtomicBool) {
         let mut paused = self
             .paused
@@ -545,11 +563,15 @@ impl PauseGate {
         while *paused && !cancel.is_cancelled() {
             paused = self
                 .changed
-                .wait_timeout(paused, std::time::Duration::from_millis(100))
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .0;
+                .wait(paused)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         held.store(false, Ordering::Release);
+    }
+
+    /// [`Self::wait_while_paused`] for work nobody watches the hold of.
+    pub(crate) fn wait(&self, cancel: &CancelToken) {
+        self.wait_while_paused(cancel, &AtomicBool::new(false));
     }
 }
 
@@ -659,6 +681,41 @@ mod tests {
             video_decode: VideoDecodeMode::Auto,
             video_frames: VideoFrameMode::Auto,
         })
+    }
+
+    #[test]
+    fn a_cancel_ends_a_held_export_at_once() {
+        use std::time::{Duration, Instant};
+
+        let engine = cpu();
+        engine.pause();
+        let request = ExportRequest {
+            project_json: project(),
+            output_path: std::env::temp_dir()
+                .join("alpha2-held-cancel.mp4")
+                .to_string_lossy()
+                .into_owned(),
+            ..ExportRequest::default()
+        };
+        let handle = engine.export(request, Arc::new(Quiet)).expect("started");
+        let until = Instant::now() + Duration::from_secs(10);
+        while !handle.is_held() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(handle.is_held());
+        let cancelled = Instant::now();
+        handle.cancel();
+        let (done, outcome) = std::sync::mpsc::channel();
+        let waiting = Arc::clone(&handle);
+        std::thread::spawn(move || {
+            let _ = done.send(pollster::block_on(waiting.outcome()));
+        });
+        let outcome = outcome
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the held export ended");
+        let took = cancelled.elapsed();
+        assert!(matches!(outcome, Err(Alpha2Error::Aborted)), "{outcome:?}");
+        assert!(took < Duration::from_millis(50), "{took:?}");
     }
 
     #[test]

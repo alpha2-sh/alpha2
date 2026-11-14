@@ -17,15 +17,16 @@ use serde_json::{Value, json};
 
 use crate::error::Alpha2Error;
 use crate::export::{Drawing, failed, files_of, register_resources, source_opener};
-use crate::session::{EngineConfig, LoadedFont, StillsRequest};
+use crate::session::{EngineConfig, LoadedFont, PauseGate, StillsRequest};
 
 /// Bytes the open extension sources may hold while stills render.
 const PROVIDER_SOURCE_BYTES: u64 = 256 << 20;
 
 /// Renders `request`'s stills in time order, so every decoder only moves forward, and answers in
-/// request order.
+/// request order. Blocks while `gate` is closed.
 pub(crate) fn render(
     request: &StillsRequest,
+    gate: &PauseGate,
     config: &EngineConfig,
     fonts: &[LoadedFont],
     video: Option<Arc<dyn VideoBackends>>,
@@ -45,8 +46,8 @@ pub(crate) fn render(
         .map(|index| (index, request.stills[index].time_ticks));
     let renderer = render_each(
         request,
-        config,
-        fonts,
+        (gate, &CancelToken::default()),
+        (config, fonts),
         (video, preference),
         budget,
         times,
@@ -76,11 +77,13 @@ pub(crate) fn render(
 
 /// Renders the project's frame at each `(key, time)` of `times`, in that order, through the steps
 /// an export takes, and hands `sink` the key, the frame's time, its size and its premultiplied
-/// RGBA8 pixels. Returns the renderer's name. `request.stills` is not read.
+/// RGBA8 pixels. Returns the renderer's name. `request.stills` is not read. Waits while `gate` is
+/// closed before it opens the GPU and before each still, and stops with
+/// [`Alpha2Error::Aborted`] once `cancel` is set.
 pub(crate) fn render_each(
     request: &StillsRequest,
-    config: &EngineConfig,
-    fonts: &[LoadedFont],
+    (gate, cancel): (&PauseGate, &CancelToken),
+    (config, fonts): (&EngineConfig, &[LoadedFont]),
     (video, preference): (Option<Arc<dyn VideoBackends>>, DecodePreference),
     budget: &FrameBudget,
     times: impl IntoIterator<Item = (usize, i64)>,
@@ -105,6 +108,15 @@ pub(crate) fn render_each(
         .iter()
         .map(|(id, path)| (id.clone(), PathBuf::from(path)))
         .collect::<HashMap<_, _>>();
+    let held = || {
+        gate.wait(cancel);
+        if cancel.is_cancelled() {
+            Err(Alpha2Error::Aborted)
+        } else {
+            Ok(())
+        }
+    };
+    held()?;
     let mut drawing = Drawing::open(config.renderer, config.video_frames)?;
     register_resources(&project, &assets, &mut drawing)?;
     let mut texts = crate::export::text_textures(fonts)?;
@@ -123,8 +135,8 @@ pub(crate) fn render_each(
         sources = sources.with_surface_import(Arc::clone(&frames.import));
     }
     let mut cache = SourceFrameCache::for_renderer(drawing.as_export(), budget.bytes());
-    let cancel = CancelToken::default();
     for (step, (key, time)) in times.into_iter().enumerate() {
+        held()?;
         let mut exporter = Exporter::still(
             &snapshot,
             MediaTime::from_ticks(time),
@@ -151,7 +163,7 @@ pub(crate) fn render_each(
                 color,
                 (step as u64, needs),
                 &mut sources,
-                &cancel,
+                cancel,
             )
             .map_err(|error| failed("SOURCE_FAILED", error.to_string()))?;
         let pixels = draw(
