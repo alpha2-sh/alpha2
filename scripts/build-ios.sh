@@ -4,7 +4,7 @@
 # packages/alpha2-swift links, with the privacy manifest. Refuses a library that calls a
 # required-reason API the manifest does not declare. PROFILE=debug builds unoptimized libraries.
 # ALPHA2_NOTICES names the Rust crate license notices (scripts/crate-licenses.mjs) each framework
-# ships beside its privacy manifest.
+# ships beside its privacy manifest, LICENSE.md and THIRD_PARTY_NOTICES.md.
 #
 #   scripts/build-ios.sh
 set -euo pipefail
@@ -80,7 +80,7 @@ for target in "${slices[@]}"; do
 <key>MinimumOSVersion</key><string>17.0</string>
 </dict></plist>
 PLIST
-  cp "$package/PrivacyInfo.xcprivacy" "$framework/"
+  cp "$package/PrivacyInfo.xcprivacy" LICENSE.md THIRD_PARTY_NOTICES.md "$framework/"
   if [ -n "${ALPHA2_NOTICES:-}" ]; then
     cp "$ALPHA2_NOTICES" "$framework/rust-crate-licenses.md"
   fi

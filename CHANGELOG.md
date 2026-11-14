@@ -133,6 +133,9 @@ All notable changes to this project are documented in this file.
 - A text raster larger than the largest frame (67,108,864 pixels) or whose planes would take over
   1 GiB is refused as too large before anything is allocated. Before, only each side was limited,
   and the browser module aborted on the allocation.
+- The `alpha2` Python wheels carry `THIRD_PARTY_NOTICES.md` and the license texts of the Rust
+  crates compiled into them; the `alpha2-host` wheels list every license file of their archive and
+  state `License-Expression`. The Android library and the Swift package carry both notice files.
 
 ## [0.6.0] - 2026-11-08
 
