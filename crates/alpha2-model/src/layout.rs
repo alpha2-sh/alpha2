@@ -36,6 +36,10 @@ pub const MAX_LAYOUT_TEXTS: usize = 64;
 pub const MAX_LAYOUT_ISOLATED: usize = 16;
 /// Largest font size of a layout's text, as a fraction of the picture's shorter side.
 pub const MAX_LAYOUT_FONT_SIZE: f32 = 1.0;
+/// Largest flex grow or shrink factor.
+pub const MAX_FLEX_FACTOR: f32 = 1e6;
+/// The range of a layout box's `aspect_ratio`.
+pub const ASPECT_RATIO_RANGE: std::ops::RangeInclusive<f32> = 1e-4..=1e4;
 /// Most explicit tracks on one axis of a grid, `repeat()` counts expanded.
 pub const MAX_GRID_TRACKS: usize = 64;
 /// The farthest grid line a placement names, from either end.
@@ -819,6 +823,10 @@ where
     Ok(value.map_or(Ok(()), check)?)
 }
 
+fn flex_factor(value: f32) -> bool {
+    (0.0..=MAX_FLEX_FACTOR).contains(&value)
+}
+
 fn validate_fields(node: &LayoutNode, at: &str) -> LayoutChecked {
     let field = |name: &str| format!("{at}.{name}");
     for (name, gap) in [
@@ -855,7 +863,7 @@ fn validate_fields(node: &LayoutNode, at: &str) -> LayoutChecked {
     }
     if node
         .aspect_ratio
-        .is_some_and(|ratio| !ratio.is_finite() || ratio <= 0.0)
+        .is_some_and(|ratio| !ASPECT_RATIO_RANGE.contains(&ratio))
     {
         return Err(ValueIssue::new(field("aspect_ratio"), ValueProblem::OutOfRange).into());
     }
@@ -863,10 +871,10 @@ fn validate_fields(node: &LayoutNode, at: &str) -> LayoutChecked {
         insets(margin, &field("margin"), any)
     })?;
     optional(node.flex_grow.as_ref(), |grow| {
-        scalar(grow, &field("flex_grow"), non_negative)
+        scalar(grow, &field("flex_grow"), flex_factor)
     })?;
     optional(node.flex_shrink.as_ref(), |shrink| {
-        scalar(shrink, &field("flex_shrink"), non_negative)
+        scalar(shrink, &field("flex_shrink"), flex_factor)
     })?;
     optional(node.flex_basis.as_ref(), |basis| {
         length(basis, &field("flex_basis"), non_negative)
@@ -883,7 +891,7 @@ fn validate_fields(node: &LayoutNode, at: &str) -> LayoutChecked {
     })?;
     optional(node.translate.as_ref(), |translate| {
         animated(translate, &field("translate"), |offset| {
-            offset.x.value().is_finite() && offset.y.value().is_finite()
+            offset.x.in_bounds() && offset.y.in_bounds()
         })
     })?;
     optional(node.scale.as_ref(), |scale| {
@@ -927,7 +935,7 @@ fn validate_grid(node: &LayoutNode, at: &str) -> LayoutChecked {
 fn track_problem(tracks: &TrackList, explicit: bool) -> Option<LayoutProblem> {
     let lengths_valid = tracks
         .lengths()
-        .all(|length| length.value().is_finite() && length.value() >= 0.0);
+        .all(|length| length.in_bounds() && length.value() >= 0.0);
     let shares_valid = tracks
         .shares()
         .all(|share| share.is_finite() && share > 0.0);
@@ -1060,13 +1068,13 @@ fn insets(animation: &Animated<Insets>, at: &str, check: fn(f32) -> bool) -> Che
         value
             .sides()
             .iter()
-            .all(|side| side.value().is_finite() && check(side.value()))
+            .all(|side| side.in_bounds() && check(side.value()))
     })
 }
 
 fn size(animation: &Animated<LayoutSize>, at: &str, check: fn(f32) -> bool) -> Checked {
     animated(animation, at, |value| {
-        value.value().is_finite() && check(value.value())
+        value.in_bounds() && check(value.value())
     })
 }
 
@@ -1078,7 +1086,7 @@ fn length(
     check: fn(f32) -> bool,
 ) -> Result<(), GeneratorIssue> {
     animated(animation, at, |value| {
-        value.value().is_finite() && check(value.value())
+        value.in_bounds() && check(value.value())
     })?;
     if let Animated::Keyframes { keyframes } = animation {
         let kind = keyframes[0].value.is_percent();

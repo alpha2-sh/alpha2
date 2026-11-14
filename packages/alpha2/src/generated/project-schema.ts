@@ -8,8 +8,14 @@ export const AUDIO_EFFECT_STATE_MARGIN_MS = 1100;
 /** Mirrors `alpha2_model::CURRENT_SCHEMA_VERSION`. */
 export const CURRENT_SCHEMA_VERSION = 1;
 
+/** Mirrors `alpha2_model::MAX_ANIMATOR_OFFSET`. */
+export const MAX_ANIMATOR_OFFSET = 1024;
+
 /** Mirrors `alpha2_model::MAX_ANIMATOR_SCALE`. */
 export const MAX_ANIMATOR_SCALE = 10;
+
+/** Mirrors `alpha2_model::MAX_ASPECT_RATIO`. */
+export const MAX_ASPECT_RATIO = 10000;
 
 /** Mirrors `alpha2_model::MAX_AUDIO_CHANNELS`. */
 export const MAX_AUDIO_CHANNELS = 24;
@@ -131,6 +137,9 @@ export const MAX_EQ_GAIN_DB = 36;
 /** Mirrors `alpha2_model::MAX_EQ_Q`. */
 export const MAX_EQ_Q = 50;
 
+/** Mirrors `alpha2_model::MAX_FLEX_FACTOR`. */
+export const MAX_FLEX_FACTOR = 1000000;
+
 /** Mirrors `alpha2_model::MAX_FOLLOW_DEPTH`. */
 export const MAX_FOLLOW_DEPTH = 8;
 
@@ -176,11 +185,20 @@ export const MAX_LAYOUT_DEPTH = 16;
 /** Mirrors `alpha2_model::MAX_LAYOUT_FONT_SIZE`. */
 export const MAX_LAYOUT_FONT_SIZE = 1;
 
+/** Mirrors `alpha2_model::MAX_LAYOUT_FRACTION`. */
+export const MAX_LAYOUT_FRACTION = 1024;
+
 /** Mirrors `alpha2_model::MAX_LAYOUT_ISOLATED`. */
 export const MAX_LAYOUT_ISOLATED = 16;
 
 /** Mirrors `alpha2_model::MAX_LAYOUT_NODES`. */
 export const MAX_LAYOUT_NODES = 256;
+
+/** Mirrors `alpha2_model::MAX_LAYOUT_PERCENT`. */
+export const MAX_LAYOUT_PERCENT = 100000;
+
+/** Mirrors `alpha2_model::MAX_LAYOUT_PX`. */
+export const MAX_LAYOUT_PX = 16777216;
 
 /** Mirrors `alpha2_model::MAX_LAYOUT_TEXTS`. */
 export const MAX_LAYOUT_TEXTS = 64;
@@ -263,6 +281,9 @@ export const MAX_TEXT_GENERATOR_FONT_SIZE = 1;
 /** Mirrors `alpha2_model::MAX_TEXT_PADDING`. */
 export const MAX_TEXT_PADDING = 2;
 
+/** Mirrors `alpha2_model::MAX_TEXT_POSITION`. */
+export const MAX_TEXT_POSITION = 1024;
+
 /** Mirrors `alpha2_model::MAX_TEXT_RUNS`. */
 export const MAX_TEXT_RUNS = 512;
 
@@ -286,6 +307,9 @@ export const MAX_TRACKS = 256;
 
 /** Mirrors `alpha2_model::MAX_TRANSITIONS_PER_TRACK`. */
 export const MAX_TRANSITIONS_PER_TRACK = 4096;
+
+/** Mirrors `alpha2_model::MIN_ASPECT_RATIO`. */
+export const MIN_ASPECT_RATIO = 0.0001;
 
 /** Mirrors `alpha2_model::MIN_EQ_FREQUENCY_HZ`. */
 export const MIN_EQ_FREQUENCY_HZ = 10;
@@ -4031,7 +4055,7 @@ export interface TextStyle {
   readonly align?: TextAlign;
   /**
    * The point of the text, background included, placed at `position`; `(0.5, 1)` is its
-   * bottom centre.
+   * bottom centre. Each coordinate within `MAX_TEXT_POSITION`.
    *
    * @defaultValue `{"x":0.5,"y":1}`
    */
@@ -4116,7 +4140,8 @@ export interface TextStyle {
    */
   readonly max_width?: number;
   /**
-   * Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right.
+   * Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right;
+   * each coordinate within `MAX_TEXT_POSITION`.
    *
    * @defaultValue `{"x":0.5,"y":0.92}`
    */

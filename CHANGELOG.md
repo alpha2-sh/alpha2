@@ -41,6 +41,12 @@ All notable changes to this project are documented in this file.
   `--plugin-root any|none|<dir>` for local manifests. Refusals are the new `PLUGIN_REFUSED`, before
   anything is read or contacted. Redirects are followed for at most five hops. The Node and Python
   clients take a `plugins` option (`mode`, `origins`, `root`) that becomes these flags.
+- Projects: layout and text values are bounded, not only finite. A layout length is within 1,024
+  shorter sides as a fraction, 1,024 times the largest canvas side in pixels and 100,000 as a
+  percent; flex factors are at most 1,000,000; `aspect_ratio` is within 0.0001 to 10,000; a text's
+  `position` and `anchor` and a text animator's `offset` are within 1,024. Evaluation clamps an
+  eased keyframe that overshoots to the same bounds. Before, a value such as `3e38` validated and
+  laid out to infinite pixels.
 - Projects: a sequence longer than its count limit (layers, channels, tracks, clips, cues, data
   values, keyframes and the rest) is refused while the document is parsed, at the first element
   over the limit, so an over-long list no longer allocates its length first. The JSON Schema states

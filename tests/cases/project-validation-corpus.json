@@ -35170,6 +35170,622 @@
     }
   },
   {
+    "name": "layout-values-at-their-bounds",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "width": { "mode": "constant", "value": "16777216px" },
+                  "height": { "mode": "constant", "value": 1024 },
+                  "min_width": { "mode": "constant", "value": "100000%" },
+                  "margin": {
+                    "mode": "constant",
+                    "value": {
+                      "top": -1024,
+                      "right": 1024,
+                      "bottom": "-16777216px",
+                      "left": 0
+                    }
+                  },
+                  "padding": {
+                    "mode": "constant",
+                    "value": { "top": 1024, "right": 0, "bottom": 0, "left": 0 }
+                  },
+                  "flex_grow": { "mode": "constant", "value": 1000000 },
+                  "flex_shrink": { "mode": "constant", "value": 1000000 },
+                  "aspect_ratio": 10000,
+                  "translate": {
+                    "mode": "constant",
+                    "value": { "x": -1024, "y": "16777216px" }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-width-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].width has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].width has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [{ "width": { "mode": "constant", "value": 3e+38 } }]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-margin-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].margin has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].margin has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "margin": {
+                    "mode": "constant",
+                    "value": {
+                      "top": 3e+38,
+                      "right": 0,
+                      "bottom": 0,
+                      "left": 0
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-padding-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].padding has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].padding has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "padding": {
+                    "mode": "constant",
+                    "value": {
+                      "top": 3e+38,
+                      "right": 0,
+                      "bottom": 0,
+                      "left": 0
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-pixels-past-their-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].width has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].width has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                { "width": { "mode": "constant", "value": "16777218px" } }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-percent-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].min_width has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].min_width has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                { "min_width": { "mode": "constant", "value": "100001%" } }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-flex-grow-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].flex_grow has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].flex_grow has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                { "flex_grow": { "mode": "constant", "value": 1000001 } }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "layout-aspect-ratio-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].aspect_ratio has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].aspect_ratio has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": { "children": [{ "aspect_ratio": 10001 }] }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-position-at-its-bound",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "text",
+            "text": "Hi",
+            "style": {
+              "position": { "x": 1024, "y": -1024 },
+              "anchor": { "x": 0.5, "y": 1 }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "text-position-past-its-bound",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["source g1 has an invalid generator"],
+    "error": "source g1 has an invalid generator",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "text",
+            "text": "Hi",
+            "style": {
+              "position": { "x": 3e+38, "y": 0.5 },
+              "anchor": { "x": 0.5, "y": 1 }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
     "name": "data-correction",
     "valid": true,
     "project": {

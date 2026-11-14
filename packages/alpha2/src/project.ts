@@ -104,6 +104,14 @@ import {
   MAX_TEXT_ANIMATORS,
   MAX_TEXT_RUNS,
   MAX_LOOP_PASSES,
+  MAX_ANIMATOR_OFFSET,
+  MAX_ASPECT_RATIO,
+  MAX_FLEX_FACTOR,
+  MAX_LAYOUT_FRACTION,
+  MAX_LAYOUT_PERCENT,
+  MAX_LAYOUT_PX,
+  MAX_TEXT_POSITION,
+  MIN_ASPECT_RATIO,
   MIN_RANGE_PERCENT,
   MAX_TEXT_SHADOW_BLUR,
   MAX_TEXT_SHADOW_OFFSET,
@@ -2537,6 +2545,15 @@ function validRgb(value: unknown): boolean {
   );
 }
 
+/** Mirrors the `position` and `anchor` check of `TextStyle::is_valid`. */
+function textPosition(value: unknown): boolean {
+  return (
+    validVec2(value) &&
+    Math.abs((value as Vec2).x) <= MAX_TEXT_POSITION &&
+    Math.abs((value as Vec2).y) <= MAX_TEXT_POSITION
+  );
+}
+
 function validVec2(value: unknown): boolean {
   return isRecord(value) && finiteNumber(value.x) && finiteNumber(value.y);
 }
@@ -3233,8 +3250,8 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
     within(style.letter_spacing ?? 0, MIN_LETTER_SPACING, MAX_LETTER_SPACING) &&
     validFontWeight(style.font_weight ?? 400) &&
     within(style.max_width ?? 0.9, 0, 1, true) &&
-    (style.position === undefined || validVec2(style.position)) &&
-    (style.anchor === undefined || validVec2(style.anchor)) &&
+    (style.position === undefined || textPosition(style.position)) &&
+    (style.anchor === undefined || textPosition(style.anchor)) &&
     (style.strokes === undefined || validTextStrokes(style.strokes)) &&
     (style.shadows === undefined || validTextShadows(style.shadows)) &&
     (style.animators === undefined ||
@@ -3353,7 +3370,7 @@ function validAnimatorProperties(properties: unknown): boolean {
     return values !== undefined && values.every(validRgba);
   };
   return (
-    vec2(properties.offset, -Infinity, Infinity) &&
+    vec2(properties.offset, -MAX_ANIMATOR_OFFSET, MAX_ANIMATOR_OFFSET) &&
     vec2(properties.scale, 0, MAX_ANIMATOR_SCALE) &&
     validScalarAnimation(properties.rotation_degrees) &&
     validScalarAnimation(properties.opacity, 0, 1) &&
@@ -3863,6 +3880,17 @@ function layoutScalarIssue(
   );
 }
 
+/** Mirrors `LayoutLength::in_bounds`: finite and within its unit's bound. */
+function lengthInBounds(length: Length): boolean {
+  const bound =
+    length.unit === "px"
+      ? MAX_LAYOUT_PX
+      : length.unit === "percent"
+        ? MAX_LAYOUT_PERCENT
+        : MAX_LAYOUT_FRACTION;
+  return finiteNumber(length.value) && Math.abs(length.value) <= bound;
+}
+
 function layoutSizeIssue(
   animation: unknown,
   at: string,
@@ -3871,7 +3899,7 @@ function layoutSizeIssue(
   return layoutAnimatedIssue(animation, at, (value) => {
     const length = lengthOf(value);
     return (
-      length !== undefined && finiteNumber(length.value) && check(length.value)
+      length !== undefined && lengthInBounds(length) && check(length.value)
     );
   });
 }
@@ -3889,9 +3917,7 @@ function layoutInsetsIssue(
       (["top", "right", "bottom", "left"] as const).every((side) => {
         const length = lengthOf(value[side]);
         return (
-          length !== undefined &&
-          finiteNumber(length.value) &&
-          check(length.value)
+          length !== undefined && lengthInBounds(length) && check(length.value)
         );
       }),
   );
@@ -3964,18 +3990,18 @@ function layoutFieldsIssue(
   }
   if (
     present(node.aspect_ratio) &&
-    !(finiteNumber(node.aspect_ratio) && node.aspect_ratio > 0)
+    !(
+      finiteNumber(node.aspect_ratio) &&
+      node.aspect_ratio >= MIN_ASPECT_RATIO &&
+      node.aspect_ratio <= MAX_ASPECT_RATIO
+    )
   ) {
     return { at: field("aspect_ratio"), problem: LAYOUT_PROBLEM.outOfRange };
   }
   const item =
     layoutInsetsIssue(node.margin, field("margin"), anyValue) ??
-    layoutScalarIssue(node.flex_grow, field("flex_grow"), nonNegativeValue) ??
-    layoutScalarIssue(
-      node.flex_shrink,
-      field("flex_shrink"),
-      nonNegativeValue,
-    ) ??
+    layoutScalarIssue(node.flex_grow, field("flex_grow"), flexFactor) ??
+    layoutScalarIssue(node.flex_shrink, field("flex_shrink"), flexFactor) ??
     layoutLengthIssue(node.flex_basis, field("flex_basis"), nonNegativeValue);
   if (item) return item;
   if (isRecord(node.inset)) {
@@ -3990,14 +4016,16 @@ function layoutFieldsIssue(
   }
   return (
     layoutScalarIssue(node.opacity, field("opacity"), unitValue) ??
-    layoutAnimatedIssue(
-      node.translate,
-      field("translate"),
-      (value) =>
-        isRecord(value) &&
-        finiteNumber(lengthOf(value.x)?.value) &&
-        finiteNumber(lengthOf(value.y)?.value),
-    ) ??
+    layoutAnimatedIssue(node.translate, field("translate"), (value) => {
+      if (!isRecord(value)) return false;
+      const [x, y] = [lengthOf(value.x), lengthOf(value.y)];
+      return (
+        x !== undefined &&
+        y !== undefined &&
+        lengthInBounds(x) &&
+        lengthInBounds(y)
+      );
+    }) ??
     layoutAnimatedIssue(node.scale, field("scale"), validVec2) ??
     layoutScalarIssue(
       node.rotation_degrees,
@@ -4047,7 +4075,7 @@ function trackProblem(
     !parts.every(
       ({ lengths, share }) =>
         lengths.every(
-          (length) => Number.isFinite(length.value) && length.value >= 0,
+          (length) => lengthInBounds(length) && length.value >= 0,
         ) &&
         (share === undefined || (Number.isFinite(share) && share > 0)),
     )
@@ -4295,6 +4323,8 @@ function shapeItemIssue(
 
 const unitValue = (value: number): boolean => value >= 0 && value <= 1;
 const nonNegativeValue = (value: number): boolean => value >= 0;
+const flexFactor = (value: number): boolean =>
+  value >= 0 && value <= MAX_FLEX_FACTOR;
 const anyValue = (): boolean => true;
 
 // Keyframe problems first, then values. A missing value takes its (valid) default.

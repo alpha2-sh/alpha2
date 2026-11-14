@@ -39,6 +39,8 @@ pub const MAX_TEXT_SHADOW_BLUR: f32 = 1.0;
 
 /// Largest text background padding, as a fraction of the font size.
 pub const MAX_TEXT_PADDING: f32 = 2.0;
+/// Largest magnitude of a text's `position` or `anchor` coordinate, in canvas or text extents.
+pub const MAX_TEXT_POSITION: f32 = 1_024.0;
 
 /// Most bytes in a [`BlockEllipsis::String`].
 pub const MAX_BLOCK_ELLIPSIS_BYTES: usize = 64;
@@ -108,11 +110,12 @@ pub struct TextStyle {
     /// Where lines are cut and what ends a cut line, as CSS `line-clamp`. `None` cuts nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_clamp: Option<LineClamp>,
-    /// Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right.
+    /// Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right;
+    /// each coordinate within [`MAX_TEXT_POSITION`].
     #[serde(default = "default_position")]
     pub position: Vec2,
     /// The point of the text, background included, placed at `position`; `(0.5, 1)` is its
-    /// bottom centre.
+    /// bottom centre. Each coordinate within [`MAX_TEXT_POSITION`].
     #[serde(default = "default_anchor")]
     pub anchor: Vec2,
     /// Bands around the glyphs, innermost first, each outside the one before. At most
@@ -342,7 +345,8 @@ pub struct TextBackground {
 impl TextStyle {
     /// Whether every field is in range, with the font size at most `max_font_size`.
     pub(crate) fn is_valid(&self, max_font_size: f32) -> bool {
-        let finite = |value: Vec2| value.x.is_finite() && value.y.is_finite();
+        let finite =
+            |value: Vec2| value.x.abs() <= MAX_TEXT_POSITION && value.y.abs() <= MAX_TEXT_POSITION;
         self.font_family
             .as_ref()
             .is_none_or(|family| !family.is_empty() && family.len() <= MAX_FONT_FAMILY_BYTES)

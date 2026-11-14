@@ -6931,7 +6931,7 @@
             "x": 0.5,
             "y": 1.0
           },
-          "description": "The point of the text, background included, placed at `position`; `(0.5, 1)` is its\nbottom centre."
+          "description": "The point of the text, background included, placed at `position`; `(0.5, 1)` is its\nbottom centre. Each coordinate within [`MAX_TEXT_POSITION`]."
         },
         "animators": {
           "description": "Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].\nKeyframes are in the holder's time (since a caption cue's start, or a text generator's\npicture time). They never change line layout.",
@@ -7041,7 +7041,7 @@
             "x": 0.5,
             "y": 0.92
           },
-          "description": "Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right."
+          "description": "Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right;\neach coordinate within [`MAX_TEXT_POSITION`]."
         },
         "shadows": {
           "description": "Shadows of the glyphs and strokes, the first on top, as CSS `text-shadow` lists them. At\nmost [`MAX_TEXT_SHADOWS`].",

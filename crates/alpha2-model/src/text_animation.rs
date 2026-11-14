@@ -32,6 +32,8 @@ pub const MAX_RANGE_INDEX: f32 = 4_096.0;
 /// The range a percent Range selector's start, end and offset take.
 pub const RANGE_PERCENT: std::ops::RangeInclusive<f32> = -100.0..=200.0;
 
+/// Largest magnitude of a text animator's offset on each axis, in font sizes.
+pub const MAX_ANIMATOR_OFFSET: f32 = 1_024.0;
 /// The range an animator's scale takes on each axis.
 pub const ANIMATOR_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 
@@ -409,7 +411,7 @@ impl TextAnimatorProperties {
         };
         self.offset
             .as_ref()
-            .is_none_or(|offset| vec2(offset, &|value| value.is_finite()))
+            .is_none_or(|offset| vec2(offset, &|value| value.abs() <= MAX_ANIMATOR_OFFSET))
             && self.scale.as_ref().is_none_or(|scale| {
                 vec2(scale, &|value| {
                     value.is_finite() && ANIMATOR_SCALE_RANGE.contains(&value)
