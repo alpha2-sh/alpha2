@@ -28,9 +28,9 @@ use windows as platform;
 pub use lifetime::{
     KillOnCloseJob, claim_stdout, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
 };
-pub use memory::{MemoryCapacity, memory_capacity};
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub use memory::{cgroup_v2_usage, memory_capacity_at};
+pub use memory::{CgroupMemory, cgroup_memory, cgroup_memory_at, memory_capacity_at};
+pub use memory::{MemoryCapacity, memory_capacity};
 pub use os_version::os_version;
 
 /// Takes an exclusive advisory lock on `file` without waiting. Returns `Ok(false)` when another

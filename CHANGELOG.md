@@ -118,6 +118,10 @@ All notable changes to this project are documented in this file.
   protocol lists.
 - Every host request refuses a field it does not know with `INVALID_REQUEST` naming the field; a
   misspelled option such as `includeaudio` silently changed an export.
+- Under a cgroup memory limit, file page cache no longer counts as used: a container whose page
+  cache filled its limit refused every export until the cache was dropped. Admission and the
+  memory watchdog read one working set (the charge less reclaimable file cache) of the lowest limit
+  on the cgroup path, so a limit set on a parent cgroup also arms the watchdog.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

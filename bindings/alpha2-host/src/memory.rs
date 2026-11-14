@@ -518,14 +518,20 @@ pub fn admit(least: LeastWorkingSet, capacity: &alpha2_os::MemoryCapacity) -> Re
             .limit_bytes
             .zip(capacity.used_in_limit_bytes)
             .map_or_else(String::new, |(limit, used)| format!(
-                ", {} limit {limit} with {used} used",
-                capacity.limit_source
+                ", {} limit {limit} with a working set of {used}{}",
+                capacity.limit_source,
+                capacity
+                    .charged_in_limit_bytes
+                    .map_or_else(String::new, |charged| format!(
+                        " ({charged} charged with file cache)"
+                    ))
             )),
     )))
 }
 
-/// Stops an export once the cgroup v2 working set reaches 95 % of the limit, so it fails with
-/// `RESOURCE_LIMIT` (`memory-limit-reached`) instead of being silently OOM-killed. Of the exports
+/// Stops an export once the cgroup working set (the charge less reclaimable file cache) reaches 95 %
+/// of the lowest limit on the process's cgroup path, so it fails with `RESOURCE_LIMIT`
+/// (`memory-limit-reached`) instead of being silently OOM-killed. Of the exports
 /// running at once, the newest stops first; the next newest stops only if the set stays over the
 /// limit once it has gone. Best effort: an allocation that jumps past the limit between looks
 /// still gets the process killed. Linux only.
@@ -566,7 +572,7 @@ impl MemoryWatchdog {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             let watched = NEXT_WATCHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if alpha2_os::cgroup_v2_usage().is_none() {
+            if Self::usage().is_none() {
                 return Self {
                     stop: None,
                     watched,
@@ -582,8 +588,7 @@ impl MemoryWatchdog {
                         receiver.recv_timeout(Self::INTERVAL)
                     {
                         let newest = watchdogs().last() == Some(&watched);
-                        if newest && let Some(reached) = Self::reached(alpha2_os::cgroup_v2_usage())
-                        {
+                        if newest && let Some(reached) = Self::reached(Self::usage()) {
                             failure.record(&reached);
                             crate::termination::terminations().cancel_running_request(request);
                             return;
@@ -600,6 +605,13 @@ impl MemoryWatchdog {
             let _ = failure;
             Self {}
         }
+    }
+
+    /// `(working set, limit)` of the lowest cgroup limit, the figure admission uses too.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn usage() -> Option<(u64, u64)> {
+        alpha2_os::cgroup_memory()
+            .and_then(|memory| Some((memory.working_set_bytes?, memory.limit_bytes)))
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -788,6 +800,7 @@ mod tests {
             limit_bytes: Some(effective),
             limit_source: "cgroup-v2",
             used_in_limit_bytes: Some(0),
+            charged_in_limit_bytes: Some(0),
         }
     }
 
@@ -895,5 +908,36 @@ mod tests {
     #[test]
     fn unknown_fields_are_refused() {
         assert!(serde_json::from_value::<MemoryRequest>(json!({ "gpuBytes": 1 })).is_err());
+    }
+
+    #[test]
+    fn a_limit_full_of_file_cache_admits_and_a_real_refusal_names_both_figures() {
+        let least = LeastWorkingSet {
+            in_flight: 100 << 20,
+            decoder_sessions: 100 << 20,
+            renderer: 0,
+        };
+        let cached = alpha2_os::MemoryCapacity {
+            physical_bytes: Some(64 << 30),
+            available_bytes: Some(32 << 30),
+            limit_bytes: Some(2 << 30),
+            limit_source: "cgroup-v2",
+            used_in_limit_bytes: Some(1 << 20),
+            charged_in_limit_bytes: Some((2 << 30) - (1 << 20)),
+        };
+        assert_eq!(admit(least, &cached), Ok(()));
+        let full = alpha2_os::MemoryCapacity {
+            used_in_limit_bytes: Some((2 << 30) - (1 << 20)),
+            ..cached
+        };
+        let refusal = admit(least, &full).expect_err("refused");
+        assert!(
+            refusal.contains(&format!("a working set of {}", (2_u64 << 30) - (1 << 20)))
+                && refusal.contains(&format!(
+                    "({} charged with file cache)",
+                    (2_u64 << 30) - (1 << 20)
+                )),
+            "{refusal}"
+        );
     }
 }

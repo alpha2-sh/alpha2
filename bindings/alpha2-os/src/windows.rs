@@ -395,6 +395,7 @@ pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
             "physical"
         },
         used_in_limit_bytes: None,
+        charged_in_limit_bytes: None,
     }
 }
 
