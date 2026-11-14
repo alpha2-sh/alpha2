@@ -101,6 +101,10 @@ All notable changes to this project are documented in this file.
   refuses a `speed` other than 1; the speed was silently ignored.
 - Animated captions and titles that differ only in an animator or in their background box no
   longer draw with each other's pixels, in one frame or after an edit, in preview and export.
+- Opening audio whose first packet timestamps are far apart no longer hangs on every host and in
+  the browser: the frame-grid search tries at most 4,096 periods, and arithmetic that would
+  overflow gives no grid instead of a panic.
+- A layout grid line of -32768 is refused instead of panicking the validator.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.
