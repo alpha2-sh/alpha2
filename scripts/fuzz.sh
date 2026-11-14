@@ -46,13 +46,23 @@ projects() {
     }' "$1" "${2:-}"
 }
 
+hostile() {
+  cargo run --locked --quiet -p alpha2-extensions --example hostile_seeds -- "$1" "$2"
+}
+
 seed() {
   local target=$1 dir=fuzz/corpus/$1
   mkdir -p "$dir"
   case $target in
-    extension_svg) cp "$corpus"/*.svg "$dir"/ ;;
+    extension_svg)
+      cp "$corpus"/*.svg "$dir"/
+      hostile "$target" "$dir"
+      ;;
     extension_animated) cp "$corpus"/*.gif "$corpus"/*.webp "$corpus"/*.png "$dir"/ ;;
-    extension_exr) cp "$corpus"/*.exr "$dir"/ ;;
+    extension_exr)
+      cp "$corpus"/*.exr "$dir"/
+      hostile "$target" "$dir"
+      ;;
     still_decode) cp tests/corpus/*.jpg tests/corpus/*.png "$corpus"/*.webp "$dir"/ ;;
     container_mp4)
       find tests/corpus -maxdepth 1 \( -name '*.mp4' -o -name '*.mov' -o -name '*.m4a' \) -size -64k \

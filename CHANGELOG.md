@@ -130,6 +130,10 @@ All notable changes to this project are documented in this file.
   blankspace, which slipped past the effect's cost analysis, are refused at registration.
 - Layout value strings are trimmed in linear time; a long inner run of spaces no longer stalls
   `validateProject` and the Node client for seconds.
+- An SVG whose entities expand past 4,000,000 XML nodes is refused while it is parsed instead of
+  exhausting memory, and once one nested SVG image is refused no further one is parsed. An OpenEXR
+  file whose largest block in any part decompresses to more than 256 MiB (every channel counted,
+  shown or not) is refused before any chunk is read.
 - A timeline-anchored sample set without samples no longer makes `remove_ranges` fail.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.

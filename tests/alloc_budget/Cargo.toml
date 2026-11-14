@@ -9,8 +9,10 @@ repository.workspace = true
 publish = false
 
 [features]
-default = ["lottie", "pdf"]
+default = ["svg", "lottie", "exr", "pdf"]
+svg = ["dep:alpha2-extensions", "alpha2-extensions/svg"]
 lottie = ["dep:alpha2-extensions", "alpha2-extensions/lottie"]
+exr = ["dep:alpha2-extensions", "alpha2-extensions/exr"]
 pdf = ["dep:alpha2-extensions", "alpha2-extensions/pdf"]
 
 [dependencies]

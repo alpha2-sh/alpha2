@@ -171,6 +171,11 @@ pub(crate) const MAX_NESTING: usize = 256;
 /// ancestry walks at about 18 ns each). About a second natively.
 pub(crate) const MAX_READING: u64 = 1 << 27;
 
+/// Most XML nodes one SVG parses to, entities expanded. Text runs, comments, and processing
+/// instructions are nodes too, so this is four per element of [`document::MAX_ELEMENTS`].
+#[allow(clippy::cast_possible_truncation)]
+const MAX_NODES: u32 = 4 * document::MAX_ELEMENTS as u32;
+
 /// Remaining budget for one document and its nested SVG images, shared with the image resolver.
 struct Reading {
     /// Unpacked SVG text bytes allowed in all.
@@ -200,6 +205,13 @@ impl Reading {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get_or_insert(error);
+    }
+
+    fn is_refused(&self) -> bool {
+        self.refused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
     fn refusal(&self) -> Option<ExtensionError> {
@@ -242,10 +254,16 @@ fn read_document(
         text,
         roxmltree::ParsingOptions {
             allow_dtd: true,
+            nodes_limit: MAX_NODES,
             ..roxmltree::ParsingOptions::default()
         },
     )
-    .map_err(|error| malformed(usvg::Error::ParsingFailed(error)))?;
+    .map_err(|error| match error {
+        roxmltree::Error::NodesLimitReached => {
+            ExtensionError::Budget(format!("the SVG parses to more than {MAX_NODES} nodes"))
+        }
+        error => malformed(usvg::Error::ParsingFailed(error)),
+    })?;
     let steps = reading.steps.load(Ordering::Relaxed);
     let conversion = document::conversion(&xml, steps, limit)?;
     reading
@@ -371,6 +389,9 @@ fn image_resolver<'a>(
     ImageHrefResolver {
         // Nested SVG documents resolve their `data:` images through this too.
         resolve_data: Box::new(move |mime, data, options| {
+            if reading.is_refused() {
+                return None;
+            }
             // Matches usvg's own resolver: SVG type, or plain text that is not a raster image.
             let svg = mime == "image/svg+xml"
                 || (mime == "text/plain" && imagesize::image_type(&data).is_err());
@@ -381,6 +402,9 @@ fn image_resolver<'a>(
             within_canvas(kind, || format!("data:{mime}"), reports)
         }),
         resolve_string: Box::new(move |href, options| {
+            if reading.is_refused() {
+                return None;
+            }
             let unreadable = |reason: &str| {
                 report(Diagnostic::UnreadableImage {
                     href: href.to_owned(),
@@ -415,6 +439,9 @@ fn image_resolver<'a>(
 /// Reads a plain or gzipped SVG image within `reading`. Over budget refuses the outer document;
 /// a parse failure just leaves the image out.
 fn nested_svg(data: &[u8], options: &Options, reading: &Reading) -> Option<ImageKind> {
+    if reading.is_refused() {
+        return None;
+    }
     let unpacked;
     let text = if data.starts_with(&[0x1f, 0x8b]) {
         // Unpacked only as far as there is text left to read.
@@ -728,4 +755,21 @@ fn fitted(width: f32, height: f32, fit: (u32, u32)) -> (u32, u32) {
         (width * scale).round().clamp(1.0, fit.0 as f32) as u32,
         (height * scale).round().clamp(1.0, fit.1 as f32) as u32,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_reading_parses_no_more_nested_images() {
+        let image = br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>"#;
+        let reading = Reading::new(MAX_SVG_DOCUMENT_BYTES);
+        let options = Options::default();
+        assert!(nested_svg(image, &options, &reading).is_some());
+        reading.refuse(ExtensionError::Budget("refused".into()));
+        let text = reading.text.load(Ordering::Relaxed);
+        assert!(nested_svg(image, &options, &reading).is_none());
+        assert_eq!(reading.text.load(Ordering::Relaxed), text);
+    }
 }

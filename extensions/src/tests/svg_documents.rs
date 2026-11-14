@@ -739,6 +739,39 @@ fn an_svg_nested_deeper_than_its_parsers_stack_is_refused_before_it_is_parsed() 
 
 #[cfg(feature = "svg")]
 #[test]
+fn an_svg_whose_entities_expand_past_the_node_limit_is_refused_while_it_is_parsed() {
+    use super::hostile::{svg_entity_elements, svg_nested_entity_elements};
+    assert_eq!(
+        svg_drawn(&svg_entity_elements(1000, 10), (0, 0)).expect("drawn"),
+        (10, 10)
+    );
+    // Ten million elements, flat and through a nested entity.
+    for document in [
+        svg_entity_elements(1000, 10_000),
+        svg_nested_entity_elements(100, 255, 400),
+    ] {
+        refused_as(
+            svg_drawn(&document, (0, 0)),
+            "the SVG parses to more than 4000000 nodes",
+        );
+    }
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_stops_reading_its_nested_images_after_one_is_refused() {
+    use super::hostile::{svg_entity_elements, svg_nested_images};
+    refused_as(
+        svg_drawn(
+            &svg_nested_images(&svg_entity_elements(1000, 10_000), 50),
+            (0, 0),
+        ),
+        "the SVG parses to more than 4000000 nodes",
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
 fn an_svg_that_takes_too_long_to_read_is_refused_before_usvg_converts_it() {
     // Deep trees and descendant combinators make usvg backtrack through ancestors.
     let deep = |rule: &str, levels: usize, elements: usize| {

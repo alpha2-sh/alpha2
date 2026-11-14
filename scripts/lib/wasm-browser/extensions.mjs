@@ -53,6 +53,7 @@ const documents = {
   nestedAsDeepAsAllowed: nested(254),
   nestedTooDeep: nested(100000),
   entitiesTooDeep: '<!DOCTYPE svg [' + entities + ']>' + doc('&d4;'),
+  entityElements: '<!DOCTYPE svg [<!ENTITY b "' + '<g/>'.repeat(1000) + '">]>' + doc('&b;'.repeat(10000)),
   morphology400: doc('<filter id="f" x="0" y="0" width="1" height="1"><feMorphology operator="dilate" radius="400"/></filter><rect width="1920" height="1080" fill="red" filter="url(#f)"/>', 1920),
   backtrackingRule: doc('<style>x g g g g g rect{fill:red}</style>' + '<g>'.repeat(100) + '<rect width="1" height="1"/>'.repeat(10) + '</g>'.repeat(100)),
   gzipBomb: doc('<image width="8" height="8" href="data:image/svg+xml;base64,' + btoa(binary) + '"/>', 8),
@@ -73,7 +74,7 @@ for (const [name, text] of Object.entries(documents)) {
 const refused = (name) => outcomes[name].outcome.startsWith("refused: ") && outcomes[name].outcome.includes("too large");
 report({
   ok: outcomes.nestedAsDeepAsAllowed.outcome === "drawn"
-    && ["nestedTooDeep", "entitiesTooDeep", "morphology400", "backtrackingRule", "gzipBomb"].every(refused)
+    && ["nestedTooDeep", "entitiesTooDeep", "entityElements", "morphology400", "backtrackingRule", "gzipBomb"].every(refused)
     && Object.values(outcomes).every((o) => o.ms < 20000),
   outcomes,
 });
