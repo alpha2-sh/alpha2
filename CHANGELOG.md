@@ -306,6 +306,9 @@ All notable changes to this project are documented in this file.
   frames an extraction reads (and its digest) no longer depend on whether a preview was drawn
   before; it matches the native host. The `renderAt` documentation of the CPU renderer is back
   on `renderAt`.
+- `loadProject` in the browser binding drops a source's uploaded frames and audio when its kind,
+  provider (a dotLottie animation, an image sequence's frames) or fingerprint changes, not only
+  its ID or locator; before, the old media kept showing and playing under the changed source.
 
 ## [0.6.0] - 2026-11-08
 

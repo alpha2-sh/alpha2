@@ -2187,11 +2187,11 @@ impl WebEffectRegistry {
 
     /// Loads and validates a versioned project document.
     ///
-    /// Uploaded frames and audio are kept for every source whose ID and locator are unchanged,
-    /// so an edit needs no re-decode. Presentation frames are invalidated by a new canvas size
-    /// or color pipeline (`settings.color`), or per source by new declared color
-    /// (`color_metadata`). All audio is dropped when the project sample rate changes. Media
-    /// that changes under an unchanged locator needs a new source ID.
+    /// Uploaded frames and audio are kept for every source whose ID, locator, kind, provider and
+    /// fingerprint are unchanged, so an edit needs no re-decode. Presentation frames are
+    /// invalidated by a new canvas size or color pipeline (`settings.color`), or per source by
+    /// new declared color (`color_metadata`). All audio is dropped when the project sample rate
+    /// changes. Media that changes in a way the document does not show needs a new source ID.
     ///
     /// Loading ends a running export (`endExport`), so its next step is refused.
     #[wasm_bindgen(js_name = loadProject)]
