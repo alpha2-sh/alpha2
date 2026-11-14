@@ -89,6 +89,9 @@ All notable changes to this project are documented in this file.
   gradients or patterns name one another by `href` in a ring, is refused as malformed instead of
   overflowing the stack or never finishing. Each such reference counts four levels against the
   nesting limit, and a mask, clip path or filter counts once per element that names it.
+- A layout shape scaled far past the picture is projected against the canvas, so it covers what it
+  covers there. Before, it was projected against its box at the canvas origin and could draw as a
+  small rectangle in the corner.
 - A position keyframed along a curved path (spatial tangents) moves the distance its timing asks
   for in every frame. Before, the arc length was inverted to a tolerance fixed in normalized
   units, so a slow move crept and then jumped by up to two pixels at 2160 lines.

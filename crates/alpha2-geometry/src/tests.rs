@@ -668,3 +668,44 @@ fn slow_motion_along_a_curve_moves_by_the_wanted_distance_every_frame() {
         }
     }
 }
+
+#[test]
+fn a_far_shape_in_a_box_covers_the_canvas_it_covers() {
+    // A rectangle centred in its box, zoomed until its device bounds pass the far limit.
+    let zoomed = |scale: f64| {
+        [EvaluatedItem::Group {
+            items: Arc::from(vec![rectangle(0.0, 0.0, 0.5, 0.5), fill()]),
+            transform: EvaluatedTransform {
+                position: Point::new(0.5, 0.5),
+                scale: Vec2::new(scale, scale),
+                ..EvaluatedTransform::default()
+            },
+        }]
+    };
+    let canvas = CanvasSize::new(200, 100);
+    let space = CanvasSize::new(40, 30);
+    let probes = [
+        (5.0, 5.0),
+        (60.0, 30.0),
+        (90.0, 35.0),
+        (150.0, 80.0),
+        (195.0, 95.0),
+        (100.0, 90.0),
+    ];
+    let covered = |ops: &[VectorOp]| {
+        let VectorOp::Fill { path, .. } = &ops[0] else {
+            panic!("a fill");
+        };
+        probes.map(|(x, y)| kurbo::Shape::winding(&**path, Point::new(x, y)) != 0)
+    };
+    for origin in [Vec2::new(70.0, 20.0), Vec2::ZERO] {
+        for scale in [4_000.0, 10_000.0] {
+            let ops = crate::build_scene_in(&zoomed(scale), space, origin, canvas);
+            assert_eq!(covered(&ops), [true; 6], "box at {origin:?}, scale {scale}");
+        }
+    }
+    assert_eq!(
+        covered(&build_scene(&zoomed(10_000.0), canvas).ops),
+        [true; 6]
+    );
+}
