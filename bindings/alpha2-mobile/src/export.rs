@@ -270,8 +270,7 @@ fn attempt(
     register_resources(&project, &assets, &mut drawing)?;
     let mut texts = text_textures(&job.fonts)?;
 
-    // The mix is encoded first: its packets are small, and the writer then interleaves them
-    // with the video as it arrives.
+    // The mix is encoded first; the sink holds its packets and writes them in step with the video.
     let has_audio = request.include_audio && project.sources.iter().any(MediaSource::is_audible);
     let mut audio_sources = if has_audio {
         Some(audio_windows(

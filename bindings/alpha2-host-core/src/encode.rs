@@ -234,10 +234,24 @@ impl PendingTrack {
     }
 }
 
+/// How far audio written to the container may run ahead of the video written, in seconds.
+const AUDIO_LEAD: i64 = 1;
+
+/// Whether audio starting at `start` (in units of `rate` per second) is at most [`AUDIO_LEAD`]
+/// past the video packet decoded at `video` (in units of `video_rate`); never before any video.
+fn within_lead(start: i64, rate: u32, video: Option<i64>, video_rate: u32) -> bool {
+    video.is_some_and(|video| {
+        let limit = (i128::from(video) + i128::from(AUDIO_LEAD) * i128::from(video_rate))
+            * i128::from(rate);
+        i128::from(start) * i128::from(video_rate) <= limit
+    })
+}
+
 /// Turns an export's pictures and mixed audio into a container's tracks.
 ///
 /// Tracks are added once every encoder has published its configuration record; packets before
-/// that wait. The writer interleaves the tracks.
+/// that wait. Audio goes to the writer at most one second ahead of the video written, so a mix
+/// encoded before the pictures still reaches the writer interleaved with them.
 pub struct EncodeSink {
     writer: Option<Box<dyn ContainerWriter>>,
     video: Box<dyn VideoEncodeBackend>,
@@ -251,6 +265,8 @@ pub struct EncodeSink {
     audio_track: PendingTrack,
     /// Samples handed to the audio encoder, at its rate.
     audio_pts: i64,
+    /// The decode time of the last video packet written, in the video encoder's units.
+    video_written: Option<i64>,
     /// Packets taken from both encoders.
     received: u64,
     /// Every input is in: held audio packets go out.
@@ -292,6 +308,7 @@ impl EncodeSink {
             audio,
             audio_track: PendingTrack::new(),
             audio_pts: 0,
+            video_written: None,
             received: 0,
             finishing: false,
         }
@@ -444,6 +461,7 @@ impl EncodeSink {
                 data: packet.data,
                 discard: (0, 0),
             };
+            self.video_written = Some(packet.dts);
             self.writer()?.write(packet)?;
         }
         if let (Some(audio), Some((encoder, _, _))) = (self.audio_track.id, self.audio.as_ref()) {
@@ -453,9 +471,14 @@ impl EncodeSink {
             // their last frames; with the priming taken off, a packet starting at or after the
             // end decodes to padding alone.
             let end = self.audio_pts;
+            let rate = encoder.sample_rate();
+            let video_rate = self.video.timescale();
             while let Some(packet) = self.audio_track.queued.front() {
                 let start = packet.pts - i64::from(priming);
-                if !self.finishing && start + frame > end {
+                if !self.finishing
+                    && (start + frame > end
+                        || !within_lead(start, rate, self.video_written, video_rate))
+                {
                     break;
                 }
                 let Some(packet) = self.audio_track.queued.pop_front() else {

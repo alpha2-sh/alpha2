@@ -71,6 +71,9 @@ All notable changes to this project are documented in this file.
 - Mobile: a source whose video starts after the time a clip reads from (an MP4 with an empty edit,
   a Matroska file whose first video frame is not at 0) shows its first frame until that frame is
   due, instead of every later frame early.
+- Mobile: Matroska and WebM exports with more than 10 s of audio place the audio beside the video
+  it plays with, so a reader seeking in the file finds both. The encoded audio is now written at
+  most one second ahead of the video. MP4 and MOV bytes do not change.
 
 ## [0.6.0] - 2026-11-08
 

@@ -134,6 +134,8 @@ struct Audio {
     /// Where the frame after the last one submitted starts, in samples.
     next: i64,
     ended: bool,
+    /// The configuration record, when not the AAC one.
+    private: Option<Bytes>,
 }
 
 impl AudioEncodeBackend for Audio {
@@ -179,7 +181,11 @@ impl AudioEncodeBackend for Audio {
     }
 
     fn codec_private(&self) -> Option<Bytes> {
-        Some(Bytes::from_static(&[0x11, 0x90]))
+        Some(
+            self.private
+                .clone()
+                .unwrap_or(Bytes::from_static(&[0x11, 0x90])),
+        )
     }
 
     fn priming(&self) -> u32 {
@@ -358,4 +364,248 @@ fn prores_with_alpha_is_written_as_4444() {
     };
     assert_eq!(&entry(base), b"apch");
     assert_eq!(&entry(with_alpha), b"ap4h");
+}
+
+/// 30 s of audio and 900 frames at 30 fps through a sink into `writer`, the audio first when
+/// `audio_first`, as a mobile export feeds them.
+fn feed_thirty_seconds(
+    writer: Box<dyn ContainerWriter>,
+    audio_first: bool,
+    video_codec: alpha2_media::VideoCodec,
+    audio: (AudioEncodeConfig, Option<Bytes>),
+) {
+    let (config, private) = audio;
+    let encoder = Audio {
+        private,
+        ..Audio::default()
+    };
+    let mut sink = EncodeSink::new(
+        writer,
+        Box::new(Video::default()),
+        VideoEncodeConfig {
+            codec: video_codec,
+            ..video_config()
+        },
+        Some((Box::new(encoder), config)),
+    );
+    let cancel = CancelToken::default();
+    let write_audio = |sink: &mut EncodeSink| {
+        for block in 0..(30 * 48_000 / 4_800) {
+            sink.write_audio(
+                &AudioBlock {
+                    start_sample: block * 4_800,
+                    sample_rate: 48_000,
+                    speakers: SpeakerLayout::STEREO,
+                    channels: vec![vec![0.0; 4_800]; 2],
+                },
+                &cancel,
+            )
+            .expect("audio");
+        }
+    };
+    if audio_first {
+        write_audio(&mut sink);
+        write_frames(&mut sink, 900);
+    } else {
+        write_frames(&mut sink, 900);
+        write_audio(&mut sink);
+    }
+    sink.finish().expect("finish");
+}
+
+fn logged_feed(audio_first: bool) -> Vec<Event> {
+    let log = Log::default();
+    let writer = Box::new(Writer {
+        log: log.clone(),
+        tracks: 0,
+        written: false,
+    });
+    feed_thirty_seconds(
+        writer,
+        audio_first,
+        alpha2_media::VideoCodec::H264,
+        (audio_config(), None),
+    );
+    log.events()
+}
+
+#[test]
+fn audio_encoded_before_the_video_reaches_the_writer_at_most_a_second_ahead_of_it() {
+    let events = logged_feed(true);
+    let mut video = None;
+    let mut audio_packets = 0;
+    for event in &events {
+        match *event {
+            Event::Packet(TrackId(1), pts, _, _) => video = Some(pts),
+            Event::Packet(TrackId(2), pts, _, _) => {
+                audio_packets += 1;
+                let video = video.expect("no audio before the first video packet");
+                // At most one second plus one audio frame past the video, compared exactly.
+                assert!(
+                    i128::from(pts) * 90_000
+                        <= (i128::from(video) + 90_000) * 48_000 + 1_024 * 90_000,
+                    "audio at {pts} / 48000 after video at {video} / 90000"
+                );
+            }
+            _ => {}
+        }
+    }
+    assert!(audio_packets > 1_000, "{audio_packets}");
+    let by_track = |events: &[Event], track: u32| {
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::Packet(TrackId(id), ..) if *id == track))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let unpaced = logged_feed(false);
+    for track in [1, 2] {
+        assert_eq!(
+            by_track(&events, track),
+            by_track(&unpaced, track),
+            "track {track}"
+        );
+    }
+}
+
+/// The blocks of a Matroska file in file order, as (track number, milliseconds), and its cluster
+/// timestamps.
+fn matroska_blocks(bytes: &[u8]) -> (Vec<(u64, i64)>, Vec<i64>) {
+    fn vint(bytes: &[u8], at: &mut usize, keep_marker: bool) -> u64 {
+        let first = bytes[*at];
+        let length = first.leading_zeros() as usize + 1;
+        let mut value = if keep_marker {
+            u64::from(first)
+        } else {
+            u64::from(first) & ((1 << (8 - length)) - 1)
+        };
+        for index in 1..length {
+            value = (value << 8) | u64::from(bytes[*at + index]);
+        }
+        *at += length;
+        value
+    }
+    fn walk(bytes: &[u8], blocks: &mut Vec<(u64, i64)>, clusters: &mut Vec<i64>) {
+        let mut at = 0;
+        while at < bytes.len() {
+            let id = vint(bytes, &mut at, true);
+            let size = usize::try_from(vint(bytes, &mut at, false)).expect("size");
+            let body = &bytes[at..at + size];
+            match id {
+                // Segment, Cluster and BlockGroup hold the elements read here.
+                0x1853_8067 | 0x1F43_B675 | 0xA0 => walk(body, blocks, clusters),
+                0xE7 => {
+                    let time = body
+                        .iter()
+                        .fold(0_i64, |time, byte| time << 8 | i64::from(*byte));
+                    clusters.push(time);
+                }
+                // SimpleBlock and Block: track number, then a 16-bit time relative to the cluster.
+                0xA3 | 0xA1 => {
+                    let mut offset = 0;
+                    let track = vint(body, &mut offset, false);
+                    let relative = i16::from_be_bytes([body[offset], body[offset + 1]]);
+                    let cluster = *clusters.last().expect("a block inside a cluster");
+                    blocks.push((track, cluster + i64::from(relative)));
+                }
+                _ => {}
+            }
+            at += size;
+        }
+    }
+    let (mut blocks, mut clusters) = (Vec::new(), Vec::new());
+    walk(bytes, &mut blocks, &mut clusters);
+    (blocks, clusters)
+}
+
+fn opus_head() -> Bytes {
+    let mut head = b"OpusHead".to_vec();
+    head.extend([1, 2]);
+    head.extend(2_112_u16.to_le_bytes());
+    head.extend(48_000_u32.to_le_bytes());
+    head.extend([0, 0, 0]);
+    Bytes::from(head)
+}
+
+fn file_feed(
+    name: &str,
+    writer: impl FnOnce(std::fs::File) -> Box<dyn ContainerWriter>,
+    audio_first: bool,
+    video_codec: alpha2_media::VideoCodec,
+    audio: (AudioEncodeConfig, Option<Bytes>),
+) -> Vec<u8> {
+    let path = std::env::temp_dir().join(format!(
+        "alpha2-paced-{}-{name}-{audio_first}",
+        std::process::id()
+    ));
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&path)
+        .expect("file");
+    feed_thirty_seconds(writer(file), audio_first, video_codec, audio);
+    let bytes = std::fs::read(&path).expect("read");
+    let _ = std::fs::remove_file(path);
+    bytes
+}
+
+#[test]
+fn a_matroska_export_with_its_audio_encoded_first_keeps_the_tracks_together_in_the_file() {
+    use alpha2_container::{MatroskaFlavor, MatroskaWriter};
+    let opus = AudioEncodeConfig {
+        codec: alpha2_media::AudioCodec::Opus,
+        ..audio_config()
+    };
+    for flavor in [MatroskaFlavor::Matroska, MatroskaFlavor::WebM] {
+        let bytes = file_feed(
+            &format!("{flavor:?}"),
+            |file| Box::new(MatroskaWriter::create(file, flavor)),
+            true,
+            alpha2_media::VideoCodec::Vp9,
+            (opus, Some(opus_head())),
+        );
+        let (blocks, clusters) = matroska_blocks(&bytes);
+        assert!(blocks.len() > 2_000, "{flavor:?}: {} blocks", blocks.len());
+        let mut last = [None, None];
+        let mut widest = 0;
+        for (track, time) in blocks {
+            let index = usize::try_from(track - 1).expect("track");
+            last[index] = Some(time);
+            if let [Some(video), Some(audio)] = last {
+                widest = widest.max((video - audio).abs());
+            }
+        }
+        assert!(
+            widest < 2_000,
+            "{flavor:?}: the tracks are {widest} ms apart"
+        );
+        let back = clusters
+            .windows(2)
+            .map(|pair| pair[0] - pair[1])
+            .max()
+            .unwrap_or(0);
+        assert!(
+            back <= 2_000,
+            "{flavor:?}: a cluster steps back by {back} ms"
+        );
+    }
+}
+
+#[test]
+fn an_mp4_export_is_the_same_bytes_whichever_track_is_encoded_first() {
+    use alpha2_container::{Mp4Flavor, Mp4Writer};
+    let feed = |audio_first| {
+        file_feed(
+            "mp4",
+            |file| Box::new(Mp4Writer::create(file, Mp4Flavor::Mp4)),
+            audio_first,
+            alpha2_media::VideoCodec::H264,
+            (audio_config(), None),
+        )
+    };
+    let audio_first = feed(true);
+    assert!(audio_first.len() > 4_000, "{}", audio_first.len());
+    assert_eq!(audio_first, feed(false));
 }

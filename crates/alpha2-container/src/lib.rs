@@ -267,8 +267,10 @@ pub trait ContainerWriter: Send {
     /// A codec the container cannot carry, or a track added after the first packet.
     fn add_track(&mut self, track: &TrackInfo) -> Result<TrackId, MuxError>;
 
-    /// Writes `packet`. Packets of each track arrive in decode order; tracks may interleave in
-    /// any order, and the writer interleaves them itself.
+    /// Writes `packet`. Packets of each track arrive in decode order, and the writer interleaves
+    /// the tracks. A track may run ahead of the others by up to 10 s (Matroska) or 64 MiB of
+    /// packets (MP4) before the file's layout degrades: the leading track is then written in one
+    /// run, and a reader seeking in it finds the other tracks far away.
     ///
     /// # Errors
     /// Timestamps that go backward, or a write failure.
