@@ -41,6 +41,12 @@ All notable changes to this project are documented in this file.
   `--plugin-root any|none|<dir>` for local manifests. Refusals are the new `PLUGIN_REFUSED`, before
   anything is read or contacted. Redirects are followed for at most five hops. The Node and Python
   clients take a `plugins` option (`mode`, `origins`, `root`) that becomes these flags.
+- Projects: a sequence longer than its count limit (layers, channels, tracks, clips, cues, data
+  values, keyframes and the rest) is refused while the document is parsed, at the first element
+  over the limit, so an over-long list no longer allocates its length first. The JSON Schema states
+  every such limit as `maxItems` (`maxProperties` for an effect node's `inputs`), and
+  `validateProject` reports it as a shape problem. New limits: 100,000 keyframes per animated value
+  and 10,000 effect resources per project.
 - Editor: the browser bridge's `resourceLimit` counts only imported media files. Titles and
   adopted proxies no longer count, so a project with many titles or proxies previews and exports;
   media removed from the document still counts while undo can bring it back, and the import refusal

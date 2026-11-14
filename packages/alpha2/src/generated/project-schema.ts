@@ -110,6 +110,9 @@ export const MAX_DATA_WORDS = 200000;
 /** Mirrors `alpha2_model::MAX_EFFECT_INPUTS`. */
 export const MAX_EFFECT_INPUTS = 8;
 
+/** Mirrors `alpha2_model::MAX_EFFECT_RESOURCES`. */
+export const MAX_EFFECT_RESOURCES = 10000;
+
 /** Mirrors `alpha2_model::MAX_ENVELOPE_MS`. */
 export const MAX_ENVELOPE_MS = 10000;
 
@@ -154,6 +157,9 @@ export const MAX_HDR_PEAK_NITS = 10000;
 
 /** Mirrors `alpha2_model::MAX_INLINED_NODES`. */
 export const MAX_INLINED_NODES = 65536;
+
+/** Mirrors `alpha2_model::MAX_KEYFRAMES`. */
+export const MAX_KEYFRAMES = 100000;
 
 /** Mirrors `alpha2_model::MAX_LATEX_BYTES`. */
 export const MAX_LATEX_BYTES = 4096;

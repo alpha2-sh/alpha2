@@ -38,14 +38,50 @@ pub const ANIMATOR_SCALE_RANGE: std::ops::RangeInclusive<f32> = 0.0..=10.0;
 /// A text: one string, or runs whose texts joined are the text.
 ///
 /// Written as `"Hello"` or `[{ "text": "Hel" }, { "text": "lo", "class": ["key"] }]`.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum TextContent {
     /// One string; `\n` starts a line.
     Plain(String),
     /// Runs in order; their texts joined are the text.
-    Runs(Vec<TextRun>),
+    Runs(#[cfg_attr(feature = "schema", schemars(length(max = MAX_TEXT_RUNS)))] Vec<TextRun>),
+}
+
+// Read by the JSON type rather than as an untagged enum, which would buffer the whole value and
+// hide why runs were refused.
+impl<'de> Deserialize<'de> for TextContent {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Content;
+
+        impl<'de> serde::de::Visitor<'de> for Content {
+            type Value = TextContent;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a string or a sequence of runs")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<TextContent, E> {
+                Ok(TextContent::Plain(text.to_owned()))
+            }
+
+            fn visit_string<E: serde::de::Error>(self, text: String) -> Result<TextContent, E> {
+                Ok(TextContent::Plain(text))
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                seq: A,
+            ) -> Result<TextContent, A::Error> {
+                crate::bounded::seq::<_, _, MAX_TEXT_RUNS>(
+                    serde::de::value::SeqAccessDeserializer::new(seq),
+                )
+                .map(TextContent::Runs)
+            }
+        }
+
+        deserializer.deserialize_any(Content)
+    }
 }
 
 impl Default for TextContent {
@@ -135,6 +171,8 @@ pub struct TextRun {
     /// Names Class selectors match, each 1 to 64 bytes of `A-Z`, `a-z`, `0-9`, `_` and `-`; at
     /// most [`MAX_RUN_CLASSES`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_RUN_CLASSES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_RUN_CLASSES)))]
     pub class: Vec<String>,
     /// When the run is said, from the holder's start (a caption cue's start, or a text
     /// generator's picture time zero).

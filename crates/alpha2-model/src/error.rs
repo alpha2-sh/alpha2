@@ -523,6 +523,13 @@ pub enum ModelError {
         /// The transition's second clip.
         second: ClipId,
     },
+    /// The project has more than [`crate::MAX_EFFECT_RESOURCES`] effect resources.
+    TooManyEffectResources {
+        /// Number supplied by the document.
+        found: usize,
+        /// Largest supported count.
+        maximum: usize,
+    },
     /// The project contains too many compositions.
     TooManyCompositions {
         /// Number supplied by the document.
@@ -663,6 +670,7 @@ impl ModelError {
             | Self::InvalidMasterAudio
             | Self::TooManyInlinedNodes { .. }
             | Self::TooManyCompositions { .. }
+            | Self::TooManyEffectResources { .. }
             | Self::TooManySources { .. }
             | Self::TooManyTracks { .. }
             | Self::TooManyClips { .. }
@@ -993,6 +1001,10 @@ impl fmt::Display for ModelError {
             } => write!(
                 formatter,
                 "clips {first} and {second} have more than one transition on track {track}"
+            ),
+            Self::TooManyEffectResources { found, maximum } => write!(
+                formatter,
+                "project has {found} effect resources; the maximum is {maximum}"
             ),
             Self::TooManyCompositions { found, maximum } => write!(
                 formatter,

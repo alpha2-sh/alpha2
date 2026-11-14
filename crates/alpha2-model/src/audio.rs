@@ -107,6 +107,8 @@ pub enum AudioEffect {
     /// Cascaded biquad sections.
     Eq {
         /// Ordered filter sections, 1 to [`MAX_EQ_BANDS`] of them.
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_EQ_BANDS }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_EQ_BANDS)))]
         bands: Vec<EqBand>,
     },
     /// Lookahead dynamic range compression.
@@ -268,6 +270,8 @@ pub struct AudioProperties {
     pub muted: bool,
     /// Ordered single-input effects applied before the track bus, at most [`MAX_CHAIN_EFFECTS`].
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_CHAIN_EFFECTS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_CHAIN_EFFECTS)))]
     pub effects: Vec<AudioEffect>,
     /// Keeps the clip's pitch when its speed is not 1 by time-stretching instead of resampling.
     /// No effect at speed 1, on loops or on freezes.
@@ -281,6 +285,10 @@ pub struct AudioProperties {
     /// source; two play a stereo pair, left then right. Absent plays every channel, folded by
     /// speaker position. At most two distinct indices.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_SELECTED_CHANNELS }>"
+    )]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_SELECTED_CHANNELS)))]
     pub channels: Option<Vec<u32>>,
 }
 
@@ -357,6 +365,8 @@ pub struct TrackAudio {
     /// Ordered single-input effects applied to the summed clip signal, at most
     /// [`MAX_CHAIN_EFFECTS`].
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_CHAIN_EFFECTS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_CHAIN_EFFECTS)))]
     pub effects: Vec<AudioEffect>,
     /// Optional sidechain attenuation driven by another track.
     #[serde(default)]
@@ -404,6 +414,8 @@ pub struct MasterAudio {
     /// Ordered single-input effects applied to the summed track buses, at most
     /// [`MAX_CHAIN_EFFECTS`].
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_CHAIN_EFFECTS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_CHAIN_EFFECTS)))]
     pub effects: Vec<AudioEffect>,
     /// Final peak limiter. Omitted means [`Limiter::default`]; an explicit `null` leaves the mix
     /// unlimited.

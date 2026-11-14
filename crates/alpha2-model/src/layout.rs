@@ -92,6 +92,8 @@ pub struct LayoutTextStyle {
 pub struct LayoutNode {
     /// Boxes laid out in this one, in document (and paint) order. Not with `text` or `shape`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_LAYOUT_NODES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_LAYOUT_NODES)))]
     pub children: Vec<LayoutNode>,
     /// The box's text, wrapped at its content width in the inherited style; `\n` starts a line.
     /// At most [`MAX_TEXT_CONTENT_BYTES`] bytes per value; may be empty. Keyframes all `hold`.
@@ -258,10 +260,14 @@ pub struct LayoutNode {
     /// Bands around the glyphs, as a text style's `strokes`. Inherited as a whole list; the root
     /// has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_TEXT_STROKES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_STROKES)))]
     pub strokes: Option<Vec<TextStroke>>,
     /// Shadows of the glyphs and strokes, as a text style's `shadows`. Inherited as a whole list
     /// (as CSS `text-shadow`); the root has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_TEXT_SHADOWS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_SHADOWS)))]
     pub shadows: Option<Vec<TextShadow>>,
     /// The range the font size of the box's own text is fitted in so the text fits its content
     /// box, as a text style's `font_size_fit`. The box is laid out at `font_size` first, and
@@ -277,6 +283,8 @@ pub struct LayoutNode {
     /// runs). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited; never
     /// changes layout.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_TEXT_ANIMATORS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_ANIMATORS)))]
     pub text_animators: Vec<crate::TextAnimator>,
 
     /// Opacity of the box and everything in it as one group, in `0..=1`. Applied after layout.
@@ -315,6 +323,8 @@ pub struct LayoutFontSizeFit {
 #[serde(deny_unknown_fields)]
 pub struct LayoutShape {
     /// The content tree, front first.
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_SHAPE_ITEMS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_SHAPE_ITEMS)))]
     pub items: Vec<ShapeItem>,
 }
 

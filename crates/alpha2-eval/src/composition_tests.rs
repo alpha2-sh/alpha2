@@ -758,12 +758,16 @@ fn the_plans_of_one_project_hold_at_most_the_plan_budget_together() {
     // Each composition holds about 150 MiB of steps: within the budget alone, past it together.
     let keyframe = size_of::<alpha2_model::Keyframe<EffectValue>>();
     let keyframes = 150 * 1024 * 1024 / 20 / keyframe;
+    // Two effects share the keyframes, so each animation stays within its own limit.
+    let mut shared = big(keyframes / 2);
+    let mut first = keyframed_effect("fx0", "fill", keyframes - keyframes / 2);
+    first.id = node_id("fx0");
+    if let NodeOp::Effect { input, .. } = &mut shared.nodes[1].op {
+        *input = Some(node_id("fx0"));
+    }
+    shared.nodes.insert(1, first);
     let mut project = project(composition(vec![node("clip", NodeOp::Clip {})], "clip"));
-    project.compositions = vec![
-        drawing("a", "big", 20),
-        drawing("b", "big", 20),
-        big(keyframes),
-    ];
+    project.compositions = vec![drawing("a", "big", 20), drawing("b", "big", 20), shared];
     project.timeline.tracks[0].clips[0].composition =
         Some(ClipComposition::new(CompositionId::new("a").expect("id")));
     let alone = plan_composition(

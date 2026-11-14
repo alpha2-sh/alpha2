@@ -325,45 +325,37 @@ fn document_with(limit: &str, count: usize) -> String {
 #[test]
 fn count_limits_admit_their_maximum_and_refuse_one_more() {
     use crate::{ModelError, ProjectLoadError};
-    let refused = |result: Result<Project, ProjectLoadError>| match result {
-        Err(ProjectLoadError::InvalidProject(error)) => Some(error),
-        _ => None,
-    };
+    // A sequence over its own limit is the parser's refusal; a total across sequences is
+    // validation's.
     for (limit, maximum) in [
         ("sources", crate::MAX_CLIPS),
         ("clips_on_a_track", crate::MAX_CLIPS_PER_TRACK),
-        ("clips", crate::MAX_CLIPS),
         ("transitions_on_a_track", crate::MAX_TRANSITIONS_PER_TRACK),
         ("compositions", crate::MAX_COMPOSITIONS),
     ] {
-        let at = Project::from_json(&document_with(limit, maximum));
-        let over = refused(Project::from_json(&document_with(limit, maximum + 1)));
-        let over_the_limit = |error: &Option<ModelError>| {
-            matches!(
-                (limit, error),
-                ("sources", Some(ModelError::TooManySources { .. }))
-                    | (
-                        "clips_on_a_track",
-                        Some(ModelError::TooManyClipsOnTrack { .. })
-                    )
-                    | ("clips", Some(ModelError::TooManyClips { .. }))
-                    | (
-                        "transitions_on_a_track",
-                        Some(ModelError::TooManyTransitions { .. })
-                    )
-                    | ("compositions", Some(ModelError::TooManyCompositions { .. }))
-            )
-        };
+        let over = Project::from_json(&document_with(limit, maximum + 1));
         assert!(
-            over_the_limit(&over),
+            matches!(&over, Err(ProjectLoadError::Json(error))
+                if error.to_string().contains(&format!("at most {maximum} elements"))),
             "{limit} at {}: {over:?}",
             maximum + 1
         );
+        let at = Project::from_json(&document_with(limit, maximum));
         // Two clips hold one transition, so a full track of them is refused, but not for its count.
         if limit == "transitions_on_a_track" {
-            assert!(!over_the_limit(&refused(at)), "{limit} at {maximum}");
+            assert!(
+                matches!(at, Err(ProjectLoadError::InvalidProject(_))),
+                "{limit} at {maximum}"
+            );
         } else {
             assert!(at.is_ok(), "{limit} at {maximum}: {:?}", at.err());
         }
     }
+    Project::from_json(&document_with("clips", crate::MAX_CLIPS)).expect("all clips");
+    assert!(matches!(
+        Project::from_json(&document_with("clips", crate::MAX_CLIPS + 1)),
+        Err(ProjectLoadError::InvalidProject(
+            ModelError::TooManyClips { .. }
+        ))
+    ));
 }

@@ -30,6 +30,9 @@ impl Vec2 {
     }
 }
 
+/// Most keyframes of one animated value.
+pub const MAX_KEYFRAMES: usize = 100_000;
+
 /// A value that is constant, controlled by sorted keyframes, or following a data set.
 ///
 /// Only value types whose [`AnimatedValue::ACCEPTS_DATA`] is true (`f32`, [`Vec2`] and
@@ -101,6 +104,8 @@ enum AnimatedWire<T> {
     /// Values evaluated from their keyframe sequence.
     Keyframes {
         /// Strictly ascending keyframes. The evaluator clamps outside the sequence.
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_KEYFRAMES }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_KEYFRAMES)))]
         keyframes: Vec<Keyframe<T>>,
     },
     /// A channel of a data set, followed at render time.
@@ -209,6 +214,8 @@ pub enum AnimatedPoint {
     /// Values evaluated from their keyframe sequence.
     Keyframes {
         /// Strictly ascending keyframes. The evaluator clamps outside the sequence.
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_KEYFRAMES }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_KEYFRAMES)))]
         keyframes: Vec<PointKeyframe>,
     },
     /// A channel of a data set, followed at render time.
@@ -539,6 +546,7 @@ pub(crate) fn valid_point_animation(animation: &AnimatedPoint) -> bool {
         AnimatedPoint::Data(_) => true,
         AnimatedPoint::Keyframes { keyframes } => {
             !keyframes.is_empty()
+                && keyframes.len() <= MAX_KEYFRAMES
                 && keyframes.windows(2).all(|pair| pair[0].time < pair[1].time)
                 && keyframes.iter().all(|keyframe| {
                     keyframe.interpolation.is_valid()
@@ -579,9 +587,11 @@ pub(crate) fn valid_scalar_values(animation: &Animated<f32>, check: impl Fn(f32)
     }
 }
 
-/// A non-empty, strictly ascending sequence whose interpolations are usable.
+/// A non-empty, strictly ascending sequence of at most [`MAX_KEYFRAMES`] whose interpolations
+/// are usable.
 pub(crate) fn valid_keyframes<T>(keyframes: &[Keyframe<T>]) -> bool {
     !keyframes.is_empty()
+        && keyframes.len() <= MAX_KEYFRAMES
         && keyframes.windows(2).all(|pair| pair[0].time < pair[1].time)
         && keyframes
             .iter()

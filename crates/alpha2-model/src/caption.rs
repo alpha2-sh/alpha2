@@ -32,6 +32,8 @@ pub struct Captions {
     /// Cues in timeline order, none overlapping; a track shows one cue at a time. Empty when
     /// `from_words` gives the cues.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_CLIPS_PER_TRACK }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_CLIPS_PER_TRACK)))]
     pub cues: Vec<CaptionCue>,
     /// Cues built at evaluation from a `words` data set, instead of `cues`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -137,9 +139,13 @@ pub struct TextStylePatch {
     pub anchor: Option<Vec2>,
     /// See [`TextStyle::strokes`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_TEXT_STROKES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_STROKES)))]
     pub strokes: Option<Vec<TextStroke>>,
     /// See [`TextStyle::shadows`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_TEXT_SHADOWS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_SHADOWS)))]
     pub shadows: Option<Vec<TextShadow>>,
     /// The box behind each line; `null` removes the base's.
     #[serde(
@@ -151,6 +157,10 @@ pub struct TextStylePatch {
     pub background: Option<Option<TextBackground>>,
     /// See [`TextStyle::animators`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_TEXT_ANIMATORS }>"
+    )]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_ANIMATORS)))]
     pub animators: Option<Vec<TextAnimator>>,
 }
 

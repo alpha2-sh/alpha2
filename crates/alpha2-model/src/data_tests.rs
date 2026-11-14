@@ -159,10 +159,19 @@ fn ids_must_be_unique_and_short() {
 fn too_many_sets_are_refused() {
     let sets = (0..=crate::MAX_DATA_SETS)
         .map(|index| scalars(&format!("s{index}"), &timeline()))
-        .collect();
+        .collect::<Vec<_>>();
     assert!(matches!(
-        model_error(&with_data(sets)),
-        ModelError::TooManyDataSets { .. }
+        Project::from_json(&with_data(sets.clone()).to_string()),
+        Err(crate::ProjectLoadError::Json(_))
+    ));
+    let mut project =
+        Project::from_json(&with_data(sets[1..].to_vec()).to_string()).expect("at the limit");
+    project
+        .data
+        .push(serde_json::from_value(sets[0].clone()).expect("set"));
+    assert!(matches!(
+        project.validate(),
+        Err(ModelError::TooManyDataSets { .. })
     ));
 }
 
@@ -199,16 +208,25 @@ fn channels_are_counted_and_named() {
         data_problem(&with_data(vec![set])),
         DataProblem::ChannelName
     );
-    let too_many = (0..=crate::MAX_DATA_CHANNELS)
+    let all = (0..crate::MAX_DATA_CHANNELS)
         .map(|index| format!("c{index}"))
         .collect::<Vec<_>>();
     let mut set = scalars("s", &timeline());
-    set["values"] = json!(vec![0.0; too_many.len() * 3]);
-    set["channels"] = json!(too_many);
-    assert_eq!(
-        data_problem(&with_data(vec![set])),
-        DataProblem::ChannelCount
-    );
+    set["values"] = json!(vec![0.0; all.len() * 3]);
+    set["channels"] = json!(all);
+    let mut project = Project::from_json(&with_data(vec![set]).to_string()).expect("at the limit");
+    let crate::DataValues::Scalars(samples) = &mut project.data[0].values else {
+        panic!("scalars");
+    };
+    samples.channels.push("one-more".to_owned());
+    samples.values.extend([Some(0.0); 3]);
+    assert!(matches!(
+        project.validate(),
+        Err(ModelError::InvalidDataSet {
+            problem: DataProblem::ChannelCount,
+            ..
+        })
+    ));
 }
 
 #[test]

@@ -28,6 +28,8 @@ pub const MAX_CLIPS: usize = 100_000;
 pub const MAX_CLIPS_PER_TRACK: usize = 4_096;
 /// Maximum number of transitions on one track.
 pub const MAX_TRANSITIONS_PER_TRACK: usize = 4_096;
+/// Maximum number of effect resources in one project.
+pub const MAX_EFFECT_RESOURCES: usize = 10_000;
 
 /// A complete serializable project document.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -83,12 +85,18 @@ pub(crate) struct ProjectWire {
     /// Output-wide timeline settings.
     pub(crate) settings: ProjectSettings,
     /// Media resources referenced by clips.
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_CLIPS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_CLIPS)))]
     pub(crate) sources: Vec<MediaSource>,
     /// Non-media resources referenced by effect invocations.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_EFFECT_RESOURCES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_EFFECT_RESOURCES)))]
     pub(crate) effect_resources: Vec<EffectResource>,
     /// Composition graphs that clips show.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_COMPOSITIONS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_COMPOSITIONS)))]
     pub(crate) compositions: Vec<Composition>,
     /// Ordered visual and audio tracks.
     pub(crate) timeline: Timeline,
@@ -97,6 +105,8 @@ pub(crate) struct ProjectWire {
     pub(crate) audio: MasterAudio,
     /// Values derived from media, which properties and caption tracks can follow. At most 256.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_DATA_SETS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_SETS)))]
     pub(crate) data: Vec<crate::DataSet>,
 }
 
@@ -519,6 +529,12 @@ impl Project {
     }
 
     fn validate_effect_resources(&self) -> Result<HashSet<&EffectResourceId>, ModelError> {
+        if self.effect_resources.len() > MAX_EFFECT_RESOURCES {
+            return Err(ModelError::TooManyEffectResources {
+                found: self.effect_resources.len(),
+                maximum: MAX_EFFECT_RESOURCES,
+            });
+        }
         let mut ids = HashSet::new();
         for resource in &self.effect_resources {
             ensure_id(&resource.id)?;

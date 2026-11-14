@@ -6,6 +6,7 @@
 mod animation;
 mod audio;
 mod audio_load;
+mod bounded;
 mod caption;
 mod caption_import;
 mod checks;
@@ -42,8 +43,8 @@ mod timeline;
 mod timeline_values;
 
 pub use animation::{
-    Animated, AnimatedPoint, AnimatedValue, Interpolation, Keyframe, PointKeyframe, Vec2,
-    VisualProperties,
+    Animated, AnimatedPoint, AnimatedValue, Interpolation, Keyframe, MAX_KEYFRAMES, PointKeyframe,
+    Vec2, VisualProperties,
 };
 pub use audio::{
     AUDIO_EFFECT_STATE_MARGIN_MS, AudioEffect, AudioProperties, Ducking, EQ_FREQUENCY_RANGE_HZ,
@@ -105,7 +106,7 @@ pub use lint::{LintEdge, LintIssue, LintOwner, ShapeLintOwner};
 pub use mask::{MAX_CLIP_MASKS, MaskMode, Matte, MatteMode, ShapeMask};
 pub use project::{
     BlendSpace, CURRENT_SCHEMA_VERSION, ColorPipeline, HDR_PEAK_NITS_RANGE, HdrSources,
-    MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS, MAX_CLIPS, MAX_CLIPS_PER_TRACK,
+    MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS, MAX_CLIPS, MAX_CLIPS_PER_TRACK, MAX_EFFECT_RESOURCES,
     MAX_PROJECT_JSON_BYTES, MAX_TRACKS, MAX_TRANSITIONS_PER_TRACK, Project, ProjectSettings, Rgb,
     SAMPLE_RATE_RANGE,
 };

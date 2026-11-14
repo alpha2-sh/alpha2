@@ -39,6 +39,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/PointKeyframe" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -83,6 +84,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_EffectValue" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -127,6 +129,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_Vec2" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -171,6 +174,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_float" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -204,7 +208,11 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            bands: { items: { $ref: "#/$defs/EqBand" }, type: "array" },
+            bands: {
+              items: { $ref: "#/$defs/EqBand" },
+              maxItems: 16,
+              type: "array",
+            },
             type: { const: "eq", type: "string" },
           },
           required: ["type", "bands"],
@@ -252,11 +260,13 @@ export const PROJECT_SHAPE: unknown = {
             minimum: 0,
             type: "integer",
           },
+          maxItems: 2,
           type: ["array", "null"],
         },
         effects: {
           default: [],
           items: { $ref: "#/$defs/AudioEffect" },
+          maxItems: 16,
           type: "array",
         },
         fade_in: { $ref: "#/$defs/MediaTime", default: 0 },
@@ -342,6 +352,7 @@ export const PROJECT_SHAPE: unknown = {
         cues: {
           default: [],
           items: { $ref: "#/$defs/CaptionCue" },
+          maxItems: 4096,
           type: "array",
         },
         from_words: {
@@ -412,6 +423,7 @@ export const PROJECT_SHAPE: unknown = {
         masks: {
           default: [],
           items: { $ref: "#/$defs/ShapeMask" },
+          maxItems: 8,
           type: "array",
         },
         matte: {
@@ -556,13 +568,15 @@ export const PROJECT_SHAPE: unknown = {
       properties: {
         controls: {
           items: { $ref: "#/$defs/CompositionControl" },
+          maxItems: 64,
           type: "array",
         },
         id: { $ref: "#/$defs/CompositionId" },
-        inputs: { items: { type: "string" }, type: "array" },
+        inputs: { items: { type: "string" }, maxItems: 16, type: "array" },
         nodes: {
           default: [],
           items: { $ref: "#/$defs/CompositionNode" },
+          maxItems: 256,
           type: "array",
         },
         output: {
@@ -607,7 +621,11 @@ export const PROJECT_SHAPE: unknown = {
           $ref: "#/$defs/Animated_float",
           default: { mode: "constant", value: 0 },
         },
-        pattern: { items: { $ref: "#/$defs/Animated_float" }, type: "array" },
+        pattern: {
+          items: { $ref: "#/$defs/Animated_float" },
+          maxItems: 16,
+          type: "array",
+        },
       },
       required: ["pattern"],
       type: "object",
@@ -673,7 +691,11 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             anchor: { $ref: "#/$defs/DataAnchor" },
-            channels: { items: { type: "string" }, type: "array" },
+            channels: {
+              items: { type: "string" },
+              maxItems: 64,
+              type: "array",
+            },
             id: { $ref: "#/$defs/DataSetId" },
             interpolation: { $ref: "#/$defs/DataInterpolation" },
             kind: { const: "points", type: "string" },
@@ -685,9 +707,14 @@ export const PROJECT_SHAPE: unknown = {
               anyOf: [{ $ref: "#/$defs/MediaFingerprint" }, { type: "null" }],
               default: null,
             },
-            times: { items: { $ref: "#/$defs/MediaTime" }, type: "array" },
+            times: {
+              items: { $ref: "#/$defs/MediaTime" },
+              maxItems: 4000000,
+              type: "array",
+            },
             values: {
               items: { format: "float", type: ["number", "null"] },
+              maxItems: 4000000,
               type: "array",
             },
           },
@@ -706,7 +733,11 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             anchor: { $ref: "#/$defs/DataAnchor" },
-            channels: { items: { type: "string" }, type: "array" },
+            channels: {
+              items: { type: "string" },
+              maxItems: 64,
+              type: "array",
+            },
             id: { $ref: "#/$defs/DataSetId" },
             interpolation: { $ref: "#/$defs/DataInterpolation" },
             kind: { const: "scalars", type: "string" },
@@ -718,9 +749,14 @@ export const PROJECT_SHAPE: unknown = {
               anyOf: [{ $ref: "#/$defs/MediaFingerprint" }, { type: "null" }],
               default: null,
             },
-            times: { items: { $ref: "#/$defs/MediaTime" }, type: "array" },
+            times: {
+              items: { $ref: "#/$defs/MediaTime" },
+              maxItems: 4000000,
+              type: "array",
+            },
             values: {
               items: { format: "float", type: ["number", "null"] },
+              maxItems: 4000000,
               type: "array",
             },
           },
@@ -750,9 +786,14 @@ export const PROJECT_SHAPE: unknown = {
               anyOf: [{ $ref: "#/$defs/MediaFingerprint" }, { type: "null" }],
               default: null,
             },
-            times: { items: { $ref: "#/$defs/MediaTime" }, type: "array" },
+            times: {
+              items: { $ref: "#/$defs/MediaTime" },
+              maxItems: 4000000,
+              type: "array",
+            },
             values: {
               items: { format: "float", type: ["number", "null"] },
+              maxItems: 4000000,
               type: "array",
             },
           },
@@ -780,7 +821,11 @@ export const PROJECT_SHAPE: unknown = {
               anyOf: [{ $ref: "#/$defs/MediaFingerprint" }, { type: "null" }],
               default: null,
             },
-            words: { items: { $ref: "#/$defs/DataWord" }, type: "array" },
+            words: {
+              items: { $ref: "#/$defs/DataWord" },
+              maxItems: 200000,
+              type: "array",
+            },
           },
           required: ["kind", "id", "anchor", "words"],
           type: "object",
@@ -792,6 +837,7 @@ export const PROJECT_SHAPE: unknown = {
             id: { $ref: "#/$defs/DataSetId" },
             intervals: {
               items: { $ref: "#/$defs/DataInterval" },
+              maxItems: 200000,
               type: "array",
             },
             kind: { const: "intervals", type: "string" },
@@ -1071,7 +1117,11 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            items: { items: { $ref: "#/$defs/ShapeItem" }, type: "array" },
+            items: {
+              items: { $ref: "#/$defs/ShapeItem" },
+              maxItems: 1024,
+              type: "array",
+            },
             type: { const: "shapes", type: "string" },
           },
           required: ["type", "items"],
@@ -1328,6 +1378,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_Insets" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -1353,6 +1404,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_LayoutLength" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -1378,6 +1430,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_LayoutOffset" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -1403,6 +1456,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_LayoutSize" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -1428,6 +1482,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_Paint" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -1453,6 +1508,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_Path" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -1478,6 +1534,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_Rgba" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -1503,6 +1560,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_string" },
+              maxItems: 100000,
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -1574,7 +1632,11 @@ export const PROJECT_SHAPE: unknown = {
         border_radius: {
           anyOf: [{ $ref: "#/$defs/Keyframed_LayoutSize" }, { type: "null" }],
         },
-        children: { items: { $ref: "#/$defs/LayoutNode" }, type: "array" },
+        children: {
+          items: { $ref: "#/$defs/LayoutNode" },
+          maxItems: 256,
+          type: "array",
+        },
         column_gap: {
           anyOf: [{ $ref: "#/$defs/Keyframed_LayoutSize" }, { type: "null" }],
         },
@@ -1680,11 +1742,13 @@ export const PROJECT_SHAPE: unknown = {
         scale: { anyOf: [{ $ref: "#/$defs/Animated_Vec2" }, { type: "null" }] },
         shadows: {
           items: { $ref: "#/$defs/TextShadow" },
+          maxItems: 4,
           type: ["array", "null"],
         },
         shape: { anyOf: [{ $ref: "#/$defs/LayoutShape" }, { type: "null" }] },
         strokes: {
           items: { $ref: "#/$defs/TextStroke" },
+          maxItems: 4,
           type: ["array", "null"],
         },
         text: {
@@ -1695,6 +1759,7 @@ export const PROJECT_SHAPE: unknown = {
         },
         text_animators: {
           items: { $ref: "#/$defs/TextAnimator" },
+          maxItems: 8,
           type: "array",
         },
         translate: {
@@ -1727,7 +1792,11 @@ export const PROJECT_SHAPE: unknown = {
     LayoutShape: {
       additionalProperties: false,
       properties: {
-        items: { items: { $ref: "#/$defs/ShapeItem" }, type: "array" },
+        items: {
+          items: { $ref: "#/$defs/ShapeItem" },
+          maxItems: 1024,
+          type: "array",
+        },
       },
       required: ["items"],
       type: "object",
@@ -1827,6 +1896,7 @@ export const PROJECT_SHAPE: unknown = {
         effects: {
           default: [],
           items: { $ref: "#/$defs/AudioEffect" },
+          maxItems: 16,
           type: "array",
         },
         gain: {
@@ -1980,6 +2050,7 @@ export const PROJECT_SHAPE: unknown = {
               additionalProperties: {
                 anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
               },
+              maxProperties: 8,
               type: "object",
             },
             type: { const: "effect", type: "string" },
@@ -2033,6 +2104,7 @@ export const PROJECT_SHAPE: unknown = {
             layers: {
               default: [],
               items: { $ref: "#/$defs/MergeLayer" },
+              maxItems: 32,
               type: "array",
             },
             type: { const: "merge", type: "string" },
@@ -2064,7 +2136,11 @@ export const PROJECT_SHAPE: unknown = {
               anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
               default: null,
             },
-            masks: { items: { $ref: "#/$defs/ShapeMask" }, type: "array" },
+            masks: {
+              items: { $ref: "#/$defs/ShapeMask" },
+              maxItems: 8,
+              type: "array",
+            },
             type: { const: "shape_mask", type: "string" },
           },
           required: ["type", "masks"],
@@ -2081,6 +2157,7 @@ export const PROJECT_SHAPE: unknown = {
             inputs: {
               default: [],
               items: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
+              maxItems: 16,
               type: "array",
             },
             type: { const: "group", type: "string" },
@@ -2127,7 +2204,11 @@ export const PROJECT_SHAPE: unknown = {
             end: { $ref: "#/$defs/Vec2" },
             spread: { $ref: "#/$defs/Spread", default: "pad" },
             start: { $ref: "#/$defs/Vec2" },
-            stops: { items: { $ref: "#/$defs/GradientStop" }, type: "array" },
+            stops: {
+              items: { $ref: "#/$defs/GradientStop" },
+              maxItems: 8,
+              type: "array",
+            },
             type: { const: "linear_gradient", type: "string" },
           },
           required: ["type", "start", "end", "stops"],
@@ -2139,7 +2220,11 @@ export const PROJECT_SHAPE: unknown = {
             center: { $ref: "#/$defs/Vec2" },
             radius: { format: "float", type: "number" },
             spread: { $ref: "#/$defs/Spread", default: "pad" },
-            stops: { items: { $ref: "#/$defs/GradientStop" }, type: "array" },
+            stops: {
+              items: { $ref: "#/$defs/GradientStop" },
+              maxItems: 8,
+              type: "array",
+            },
             type: { const: "radial_gradient", type: "string" },
           },
           required: ["type", "center", "radius", "stops"],
@@ -2150,7 +2235,11 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             angle_degrees: { default: 0, format: "float", type: "number" },
             center: { $ref: "#/$defs/Vec2" },
-            stops: { items: { $ref: "#/$defs/GradientStop" }, type: "array" },
+            stops: {
+              items: { $ref: "#/$defs/GradientStop" },
+              maxItems: 8,
+              type: "array",
+            },
             type: { const: "conic_gradient", type: "string" },
           },
           required: ["type", "center", "stops"],
@@ -2162,7 +2251,11 @@ export const PROJECT_SHAPE: unknown = {
     Path: {
       additionalProperties: false,
       properties: {
-        subpaths: { items: { $ref: "#/$defs/Subpath" }, type: "array" },
+        subpaths: {
+          items: { $ref: "#/$defs/Subpath" },
+          maxItems: 256,
+          type: "array",
+        },
       },
       required: ["subpaths"],
       type: "object",
@@ -2265,7 +2358,11 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             format: { const: "image_sequence", type: "string" },
             frame_rate: { $ref: "#/$defs/FrameRate" },
-            frames: { items: { type: ["string", "null"] }, type: "array" },
+            frames: {
+              items: { type: ["string", "null"] },
+              maxItems: 100000,
+              type: "array",
+            },
             missing: { $ref: "#/$defs/MissingFrames", default: "reject" },
             primaries: {
               anyOf: [{ $ref: "#/$defs/LinearPrimaries" }, { type: "null" }],
@@ -2467,7 +2564,11 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            items: { items: { $ref: "#/$defs/ShapeItem" }, type: "array" },
+            items: {
+              items: { $ref: "#/$defs/ShapeItem" },
+              maxItems: 1024,
+              type: "array",
+            },
             transform: {
               $ref: "#/$defs/ShapeTransform",
               default: {
@@ -2669,7 +2770,11 @@ export const PROJECT_SHAPE: unknown = {
       additionalProperties: false,
       properties: {
         closed: { default: false, type: "boolean" },
-        vertices: { items: { $ref: "#/$defs/PathVertex" }, type: "array" },
+        vertices: {
+          items: { $ref: "#/$defs/PathVertex" },
+          maxItems: 4096,
+          type: "array",
+        },
       },
       required: ["vertices"],
       type: "object",
@@ -2725,13 +2830,13 @@ export const PROJECT_SHAPE: unknown = {
     TextContent: {
       anyOf: [
         { type: "string" },
-        { items: { $ref: "#/$defs/TextRun" }, type: "array" },
+        { items: { $ref: "#/$defs/TextRun" }, maxItems: 512, type: "array" },
       ],
     },
     TextRun: {
       additionalProperties: false,
       properties: {
-        class: { items: { type: "string" }, type: "array" },
+        class: { items: { type: "string" }, maxItems: 8, type: "array" },
         text: { type: "string" },
         time: { anyOf: [{ $ref: "#/$defs/RunTime" }, { type: "null" }] },
       },
@@ -2813,7 +2918,11 @@ export const PROJECT_SHAPE: unknown = {
       properties: {
         align: { $ref: "#/$defs/TextAlign", default: "center" },
         anchor: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 1 } },
-        animators: { items: { $ref: "#/$defs/TextAnimator" }, type: "array" },
+        animators: {
+          items: { $ref: "#/$defs/TextAnimator" },
+          maxItems: 8,
+          type: "array",
+        },
         background: {
           anyOf: [{ $ref: "#/$defs/TextBackground" }, { type: "null" }],
           default: null,
@@ -2845,8 +2954,16 @@ export const PROJECT_SHAPE: unknown = {
         max_height: { format: "float", type: ["number", "null"] },
         max_width: { default: 0.9, format: "float", type: "number" },
         position: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 0.92 } },
-        shadows: { items: { $ref: "#/$defs/TextShadow" }, type: "array" },
-        strokes: { items: { $ref: "#/$defs/TextStroke" }, type: "array" },
+        shadows: {
+          items: { $ref: "#/$defs/TextShadow" },
+          maxItems: 4,
+          type: "array",
+        },
+        strokes: {
+          items: { $ref: "#/$defs/TextStroke" },
+          maxItems: 4,
+          type: "array",
+        },
       },
       type: "object",
     },
@@ -2857,6 +2974,7 @@ export const PROJECT_SHAPE: unknown = {
         anchor: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
         animators: {
           items: { $ref: "#/$defs/TextAnimator" },
+          maxItems: 8,
           type: ["array", "null"],
         },
         background: {
@@ -2884,10 +3002,12 @@ export const PROJECT_SHAPE: unknown = {
         position: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
         shadows: {
           items: { $ref: "#/$defs/TextShadow" },
+          maxItems: 4,
           type: ["array", "null"],
         },
         strokes: {
           items: { $ref: "#/$defs/TextStroke" },
+          maxItems: 4,
           type: ["array", "null"],
         },
       },
@@ -2966,7 +3086,11 @@ export const PROJECT_SHAPE: unknown = {
     Timeline: {
       additionalProperties: false,
       properties: {
-        tracks: { items: { $ref: "#/$defs/Track" }, type: "array" },
+        tracks: {
+          items: { $ref: "#/$defs/Track" },
+          maxItems: 256,
+          type: "array",
+        },
       },
       required: ["tracks"],
       type: "object",
@@ -2989,13 +3113,19 @@ export const PROJECT_SHAPE: unknown = {
           anyOf: [{ $ref: "#/$defs/Captions" }, { type: "null" }],
           default: null,
         },
-        clips: { default: [], items: { $ref: "#/$defs/Clip" }, type: "array" },
+        clips: {
+          default: [],
+          items: { $ref: "#/$defs/Clip" },
+          maxItems: 4096,
+          type: "array",
+        },
         id: { $ref: "#/$defs/TrackId" },
         kind: { $ref: "#/$defs/TrackKind" },
         name: { type: "string" },
         transitions: {
           default: [],
           items: { $ref: "#/$defs/ClipTransition" },
+          maxItems: 4096,
           type: "array",
         },
       },
@@ -3012,6 +3142,7 @@ export const PROJECT_SHAPE: unknown = {
         effects: {
           default: [],
           items: { $ref: "#/$defs/AudioEffect" },
+          maxItems: 16,
           type: "array",
         },
         gain: {
@@ -3122,12 +3253,19 @@ export const PROJECT_SHAPE: unknown = {
     compositions: {
       default: [],
       items: { $ref: "#/$defs/Composition" },
+      maxItems: 10000,
       type: "array",
     },
-    data: { default: [], items: { $ref: "#/$defs/DataSet" }, type: "array" },
+    data: {
+      default: [],
+      items: { $ref: "#/$defs/DataSet" },
+      maxItems: 256,
+      type: "array",
+    },
     effect_resources: {
       default: [],
       items: { $ref: "#/$defs/EffectResource" },
+      maxItems: 10000,
       type: "array",
     },
     id: { $ref: "#/$defs/ProjectId" },
@@ -3140,7 +3278,11 @@ export const PROJECT_SHAPE: unknown = {
       type: "integer",
     },
     settings: { $ref: "#/$defs/ProjectSettings" },
-    sources: { items: { $ref: "#/$defs/MediaSource" }, type: "array" },
+    sources: {
+      items: { $ref: "#/$defs/MediaSource" },
+      maxItems: 100000,
+      type: "array",
+    },
     timeline: { $ref: "#/$defs/Timeline" },
   },
   required: ["schema_version", "id", "name", "settings", "sources", "timeline"],

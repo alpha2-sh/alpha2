@@ -17,6 +17,7 @@ import {
   REVERB_DELAY_MS,
   MAX_CLIPS,
   MAX_CLIPS_PER_TRACK,
+  MAX_COMPOSITION_CONTROLS,
   MAX_COMPOSITIONS,
   MAX_JSON_DEPTH,
   MAX_PROJECT_JSON_BYTES,
@@ -186,7 +187,7 @@ test("clips that all overlap are refused for their first uncovered overlap, in t
   };
   await assertValidationScales("overlapping clips", 512, withClips);
   assert.deepEqual(validateProject(withClips(8_000)), [
-    "track v1 has too many clips",
+    "project.timeline.tracks[0].clips must have at most 4096 items",
   ]);
   await assertValidationScales(
     "more clips than a track holds",
@@ -242,9 +243,9 @@ test("a document with more shape problems than a call takes arguments is reporte
 });
 
 test("group nodes are checked against their target's controls in time linear in the document", async () => {
-  const withGroups = (groups) => {
+  const withGroups = (groups, controlCount = MAX_COMPOSITION_CONTROLS) => {
     const document = project();
-    const controls = Array.from({ length: groups * 500 }, (_, index) => ({
+    const controls = Array.from({ length: controlCount }, (_, index) => ({
       name: `c${index}`,
       node: "fx",
       param: `p${index}`,
@@ -285,10 +286,16 @@ test("group nodes are checked against their target's controls in time linear in 
   };
   const problems = validateProject(withGroups(40));
   assert.ok(
-    problems.includes(
+    !problems.includes(
       "composition target has invalid group inputs or controls",
     ),
     problems.join("\n"),
+  );
+  assert.deepEqual(
+    validateProject(withGroups(1, MAX_COMPOSITION_CONTROLS + 1)),
+    [
+      `project.compositions[0].controls must have at most ${MAX_COMPOSITION_CONTROLS} items`,
+    ],
   );
   await assertValidationScales("group nodes and controls", 5, withGroups);
 });
@@ -320,7 +327,7 @@ test("more tracks than a project holds are refused before their ducking is follo
     return document;
   };
   assert.deepEqual(validateProject(withTracks(2_000)), [
-    "project must not contain more than 256 tracks",
+    "project.timeline.tracks must have at most 256 items",
   ]);
   await assertValidationScales(
     "more tracks than a project holds",
@@ -833,15 +840,23 @@ function documentWith(limit, count) {
 
 test("count limits admit their maximum and refuse one more", () => {
   for (const [limit, maximum, problem] of [
-    ["sources", MAX_CLIPS, /more than \d+ sources/],
-    ["clips_on_a_track", MAX_CLIPS_PER_TRACK, /has too many clips/],
+    ["sources", MAX_CLIPS, /^project\.sources must have at most \d+ items$/],
+    [
+      "clips_on_a_track",
+      MAX_CLIPS_PER_TRACK,
+      /^project\.timeline\.tracks\[0\]\.clips must have at most \d+ items$/,
+    ],
     ["clips", MAX_CLIPS, /more than \d+ clips/],
     [
       "transitions_on_a_track",
       MAX_TRANSITIONS_PER_TRACK,
-      /too many transitions/,
+      /^project\.timeline\.tracks\[0\]\.transitions must have at most \d+ items$/,
     ],
-    ["compositions", MAX_COMPOSITIONS, /more than \d+ compositions/],
+    [
+      "compositions",
+      MAX_COMPOSITIONS,
+      /^project\.compositions must have at most \d+ items$/,
+    ],
   ]) {
     const at = validateProjectJson(documentWith(limit, maximum));
     const over = validateProjectJson(documentWith(limit, maximum + 1));

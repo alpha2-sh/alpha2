@@ -59,6 +59,7 @@ pub enum ProviderSource {
     ImageSequence {
         /// Each frame's locator, in play order. `null` marks a missing number, allowed only when
         /// `missing` says how to show it.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_SEQUENCE_FRAMES)))]
         frames: Vec<Option<String>>,
         /// The rate the frames play at.
         frame_rate: FrameRate,
@@ -134,6 +135,8 @@ pub(crate) enum ProviderSourceWire {
     ImageSequence {
         /// Each frame's locator, in play order. `null` marks a missing number, allowed only when
         /// `missing` says how to show it.
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_SEQUENCE_FRAMES }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_SEQUENCE_FRAMES)))]
         frames: Vec<Option<String>>,
         /// The rate the frames play at.
         frame_rate: FrameRate,

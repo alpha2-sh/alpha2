@@ -2188,6 +2188,14 @@ function checkObjectShape(
   for (const name of (schema.required ?? []) as readonly string[]) {
     if (value[name] === undefined) problems.push(`${path}.${name} is required`);
   }
+  if (typeof schema.maxProperties === "number") {
+    const present = Object.values(value).filter((item) => item !== undefined);
+    if (present.length > schema.maxProperties) {
+      problems.push(
+        `${path} must have at most ${schema.maxProperties} properties`,
+      );
+    }
+  }
   const extra = schema.additionalProperties;
   const read: Record<string, unknown> = {};
   // Assigning `__proto__` would replace the copy's prototype instead of adding the key.

@@ -118,10 +118,14 @@ pub struct TextStyle {
     /// Bands around the glyphs, innermost first, each outside the one before. At most
     /// [`MAX_TEXT_STROKES`], widths summing to at most [`MAX_TEXT_STROKE_EXTENT`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_TEXT_STROKES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_STROKES)))]
     pub strokes: Vec<TextStroke>,
     /// Shadows of the glyphs and strokes, the first on top, as CSS `text-shadow` lists them. At
     /// most [`MAX_TEXT_SHADOWS`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_TEXT_SHADOWS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_SHADOWS)))]
     pub shadows: Vec<TextShadow>,
     /// A box behind each line.
     #[serde(default)]
@@ -130,6 +134,8 @@ pub struct TextStyle {
     /// Keyframes are in the holder's time (since a caption cue's start, or a text generator's
     /// picture time). They never change line layout.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_TEXT_ANIMATORS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_ANIMATORS)))]
     pub animators: Vec<TextAnimator>,
 }
 

@@ -2298,9 +2298,8 @@
   {
     "name": "too-many-composition-nodes",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["composition c1-look has too many nodes"],
-    "error": "composition c1-look has 257 nodes; the maximum is 256",
+    "rejected_by": "schema",
+    "problems": ["project.compositions[0].nodes must have at most 256 items"],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -3980,9 +3979,8 @@
   {
     "name": "too-many-tracks",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["project must not contain more than 256 tracks"],
-    "error": "project has 257 tracks; the maximum is 256",
+    "rejected_by": "schema",
+    "problems": ["project.timeline.tracks must have at most 256 items"],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -6564,9 +6562,10 @@
   {
     "name": "mask-too-many",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["clip c1 has an invalid mask"],
-    "error": "clip c1 has an invalid mask",
+    "rejected_by": "schema",
+    "problems": [
+      "project.timeline.tracks[0].clips[0].masks must have at most 8 items"
+    ],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -8047,9 +8046,10 @@
   {
     "name": "generated-too-many-stops",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["source g1 has an invalid generator"],
-    "error": "source g1 has an invalid generator",
+    "rejected_by": "schema",
+    "problems": [
+      "project.sources[4].generator.paint.stops must have at most 8 items"
+    ],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -15937,11 +15937,10 @@
   {
     "name": "audio-channels-three",
     "valid": false,
-    "rejected_by": "model",
+    "rejected_by": "schema",
     "problems": [
-      "clip clip has invalid audio properties"
+      "project.timeline.tracks[0].clips[0].audio.channels must have at most 2 items"
     ],
-    "error": "clip clip has invalid audio properties",
     "project": {
       "schema_version": 1,
       "id": "audio-channels-three",
@@ -20645,9 +20644,10 @@
   {
     "name": "track-audio-effects-too-many",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["track t2 has invalid audio bus settings"],
-    "error": "track t2 has invalid audio bus settings",
+    "rejected_by": "schema",
+    "problems": [
+      "project.timeline.tracks[1].audio.effects must have at most 16 items"
+    ],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -23845,9 +23845,10 @@
   {
     "name": "effect-too-many-named-inputs",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["node fx of composition g has an invalid setting"],
-    "error": "node fx of composition g has an invalid setting",
+    "rejected_by": "schema",
+    "problems": [
+      "project.compositions[0].nodes[1].op.inputs must have at most 8 properties"
+    ],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -24389,11 +24390,10 @@
   {
     "name": "generated-shapes-too-many-items",
     "valid": false,
-    "rejected_by": "model",
+    "rejected_by": "schema",
     "problems": [
-      "source g1 has an invalid shape: items[1024] has more items than a shapes generator may hold"
+      "project.sources[4].generator.items must have at most 1024 items"
     ],
-    "error": "source g1 has an invalid shape: items[1024] has more items than a shapes generator may hold",
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -30399,9 +30399,9 @@
       }
     }
   },
-  {"name": "text-strokes-too-many", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "Big", "style": {"strokes": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "text-strokes-too-many", "valid": false, "rejected_by": "schema", "problems": ["project.sources[4].generator.style.strokes must have at most 4 items"], "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "Big", "style": {"strokes": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-stroke-extent-too-wide", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "Big", "style": {"strokes": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.3}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.25}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
-  {"name": "text-shadows-too-many", "valid": false, "rejected_by": "model", "problems": ["track subs has invalid captions"], "error": "track subs has invalid captions", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "v2", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "subs", "name": "Subtitles", "kind": "caption", "captions": {"style": {"shadows": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}]}, "cues": [{"timeline_range": {"start": 0, "end": 1000}, "text": "Hi"}]}}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "text-shadows-too-many", "valid": false, "rejected_by": "schema", "problems": ["project.timeline.tracks[1].captions.style.shadows must have at most 4 items"], "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "v2", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "subs", "name": "Subtitles", "kind": "caption", "captions": {"style": {"shadows": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}]}, "cues": [{"timeline_range": {"start": 0, "end": 1000}, "text": "Hi"}]}}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-shadow-blur-out-of-range", "valid": false, "rejected_by": "model", "problems": ["track subs has invalid captions"], "error": "track subs has invalid captions", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "v2", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "subs", "name": "Subtitles", "kind": "caption", "captions": {"style": {"shadows": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "blur": 1.5}]}, "cues": [{"timeline_range": {"start": 0, "end": 1000}, "text": "Hi"}]}}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-fill-gradient-one-stop", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "Big", "style": {"fill": {"type": "linear_gradient", "start": {"x": 0, "y": 0}, "end": {"x": 1, "y": 0}, "stops": [{"offset": 0, "color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}}]}}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "layout-text-inherits-shadows", "valid": true, "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "g1", "kind": "generated", "generator": {"type": "layout", "root": {"shadows": [{"color": "#000000c0", "offset": {"x": 0, "y": 0.08}, "blur": 0.2}], "strokes": [{"color": "#000000", "width": 0.06}], "fill": {"type": "radial_gradient", "center": {"x": 0.5, "y": 0.5}, "radius": 0.5, "stops": [{"offset": 0, "color": "#ffffff"}, {"offset": 1, "color": "#ffb020"}]}, "children": [{"text": {"mode": "constant", "value": "Shadowed"}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
@@ -30410,7 +30410,7 @@
   {"name": "text-run-empty", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": [{"text": ""}, {"text": "a"}], "style": {}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-run-class-name-invalid", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": [{"text": "a", "class": ["no spaces"]}], "style": {}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-run-time-reversed", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": [{"text": "a", "time": {"start": 5, "end": 5}}], "style": {}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
-  {"name": "text-animators-too-many", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "a", "style": {"animators": [{"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "text-animators-too-many", "valid": false, "rejected_by": "schema", "problems": ["project.sources[4].generator.style.animators must have at most 8 items"], "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "a", "style": {"animators": [{"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}, {"selector": {"type": "class", "class": "k"}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-animator-scale-out-of-range", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "a", "style": {"animators": [{"selector": {"type": "range"}, "properties": {"scale": {"mode": "constant", "value": {"x": 11, "y": 1}}}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-animator-range-percent-out-of-range", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "a", "style": {"animators": [{"selector": {"type": "range", "start": {"mode": "constant", "value": -150}}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
   {"name": "text-animator-class-name-invalid", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "a", "style": {"animators": [{"selector": {"type": "class", "class": ""}, "properties": {"opacity": {"mode": "constant", "value": 0.5}}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
@@ -31906,9 +31906,8 @@
   {
     "name": "data-too-many-sets",
     "valid": false,
-    "rejected_by": "model",
-    "problems": ["project has 257 data sets; the maximum is 256"],
-    "error": "project has 257 data sets; the maximum is 256",
+    "rejected_by": "schema",
+    "problems": ["project.data must have at most 256 items"],
     "project": {
       "schema_version": 1,
       "id": "p1",

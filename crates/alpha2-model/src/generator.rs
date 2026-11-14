@@ -127,6 +127,8 @@ pub enum Generator {
     /// them. Every value in the tree may be keyframed in picture time.
     Shapes {
         /// The content tree, front first. See [`ShapeItem`].
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_SHAPE_ITEMS }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_SHAPE_ITEMS)))]
         items: Vec<ShapeItem>,
     },
     /// Text on a transparent picture, laid out and placed by its style as caption cues are, and
@@ -178,6 +180,8 @@ pub enum Paint {
         /// Where offset 1 lies. Distinct from `start`.
         end: Vec2,
         /// Two to [`MAX_GRADIENT_STOPS`] stops.
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_GRADIENT_STOPS }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_GRADIENT_STOPS)))]
         stops: Vec<GradientStop>,
         /// What lies beyond the first and last offsets.
         #[serde(default)]
@@ -191,6 +195,8 @@ pub enum Paint {
         /// Positive.
         radius: f32,
         /// Two to [`MAX_GRADIENT_STOPS`] stops.
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_GRADIENT_STOPS }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_GRADIENT_STOPS)))]
         stops: Vec<GradientStop>,
         /// What lies beyond the first and last offsets.
         #[serde(default)]
@@ -204,6 +210,8 @@ pub enum Paint {
         #[serde(default)]
         angle_degrees: f32,
         /// Two to [`MAX_GRADIENT_STOPS`] stops.
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_GRADIENT_STOPS }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_GRADIENT_STOPS)))]
         stops: Vec<GradientStop>,
     },
 }

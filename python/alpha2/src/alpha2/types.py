@@ -118,6 +118,9 @@ MAX_DATA_WORDS = 200000
 MAX_EFFECT_INPUTS = 8
 """Mirrors `alpha2_model::MAX_EFFECT_INPUTS`."""
 
+MAX_EFFECT_RESOURCES = 10000
+"""Mirrors `alpha2_model::MAX_EFFECT_RESOURCES`."""
+
 MAX_ENVELOPE_MS = 10000
 """Mirrors `alpha2_model::MAX_ENVELOPE_MS`."""
 
@@ -162,6 +165,9 @@ MAX_HDR_PEAK_NITS = 10000
 
 MAX_INLINED_NODES = 65536
 """Mirrors `alpha2_model::MAX_INLINED_NODES`."""
+
+MAX_KEYFRAMES = 100000
+"""Mirrors `alpha2_model::MAX_KEYFRAMES`."""
 
 MAX_LATEX_BYTES = 4096
 """Mirrors `alpha2_model::MAX_LATEX_BYTES`."""

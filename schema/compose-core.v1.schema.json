@@ -122,6 +122,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_EffectValue"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {

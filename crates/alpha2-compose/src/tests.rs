@@ -2004,7 +2004,10 @@ fn limits_the_compiler_can_count_are_named_where_the_node_is() {
     let leaves = vec![json!({"text": {"mode": "constant", "value": "x"}}); 300];
     let error = compile_error(&json!({"duration": 1, "body": {"type": "layout",
         "root": {"children": leaves}}}));
-    assert!(error.starts_with("spec.body.root: "), "{error}");
+    assert!(
+        error.starts_with("spec.body.root.children: invalid length 257"),
+        "{error}"
+    );
 
     let boxed = |count: usize| {
         json!({"canvas": {"width": 1000, "height": 500}, "duration": 2,
@@ -2014,7 +2017,7 @@ fn limits_the_compiler_can_count_are_named_where_the_node_is() {
     };
     let error = compile_error(&boxed(300));
     assert!(
-        error.starts_with("spec.body: its layout is invalid: "),
+        error.starts_with("spec.body: a box field is invalid: invalid length 257"),
         "{error}"
     );
 }

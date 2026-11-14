@@ -330,10 +330,13 @@ enum DataSetSchema {
         /// How the values read between samples.
         interpolation: DataInterpolation,
         /// Channel names, unique, 1 to 256 bytes each.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_CHANNELS)))]
         channels: Vec<String>,
         /// Sample times in ticks on the anchor's clock, strictly ascending.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         times: Vec<MediaTime>,
         /// `times.len() * channels.len() * 2` numbers, sample after sample, channel after channel.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         values: Vec<Option<f32>>,
         /// Which extractor made it.
         #[serde(default)]
@@ -351,10 +354,13 @@ enum DataSetSchema {
         /// How the values read between samples.
         interpolation: DataInterpolation,
         /// Channel names, unique, 1 to 256 bytes each.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_CHANNELS)))]
         channels: Vec<String>,
         /// Sample times in ticks on the anchor's clock, strictly ascending.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         times: Vec<MediaTime>,
         /// `times.len() * channels.len()` numbers, sample after sample, channel after channel.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         values: Vec<Option<f32>>,
         /// Which extractor made it.
         #[serde(default)]
@@ -373,8 +379,10 @@ enum DataSetSchema {
         /// How the values read between samples.
         interpolation: DataInterpolation,
         /// Sample times in ticks on the anchor's clock, strictly ascending.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         times: Vec<MediaTime>,
         /// `times.len() * 4` numbers: `tx`, `ty`, rotation, scale per sample.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_VALUES)))]
         values: Vec<Option<f32>>,
         /// Which extractor made it.
         #[serde(default)]
@@ -390,6 +398,7 @@ enum DataSetSchema {
         /// The clock the times are on.
         anchor: DataAnchor,
         /// Words sorted by `(start, end)`.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_WORDS)))]
         words: Vec<DataWord>,
         /// Which extractor made it.
         #[serde(default)]
@@ -405,6 +414,7 @@ enum DataSetSchema {
         /// The clock the times are on.
         anchor: DataAnchor,
         /// Intervals sorted by `(start, end)`.
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DATA_INTERVALS)))]
         intervals: Vec<DataInterval>,
         /// Which extractor made it.
         #[serde(default)]
@@ -436,14 +446,21 @@ struct DataSetFlat {
     #[serde(default)]
     interpolation: Option<DataInterpolation>,
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_DATA_CHANNELS }>")]
     channels: Option<Vec<String>>,
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_DATA_VALUES }>")]
     times: Option<Vec<MediaTime>>,
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_DATA_VALUES }>")]
     values: Option<Vec<Option<f32>>>,
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_DATA_WORDS }>")]
     words: Option<Vec<DataWord>>,
     #[serde(default)]
+    #[serde(
+        deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_DATA_INTERVALS }>"
+    )]
     intervals: Option<Vec<DataInterval>>,
     #[serde(default)]
     made_by: Option<MadeBy>,

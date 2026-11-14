@@ -153,6 +153,8 @@ pub fn project_limits_json() -> Value {
         ("MAX_CLIPS", json!(crate::MAX_CLIPS)),
         ("MAX_CLIPS_PER_TRACK", json!(crate::MAX_CLIPS_PER_TRACK)),
         ("MAX_COMPOSITIONS", json!(crate::MAX_COMPOSITIONS)),
+        ("MAX_EFFECT_RESOURCES", json!(crate::MAX_EFFECT_RESOURCES)),
+        ("MAX_KEYFRAMES", json!(crate::MAX_KEYFRAMES)),
         ("MAX_COMPOSITION_NODES", json!(crate::MAX_COMPOSITION_NODES)),
         ("MAX_GROUP_INPUTS", json!(crate::MAX_GROUP_INPUTS)),
         ("MAX_EFFECT_INPUTS", json!(crate::MAX_EFFECT_INPUTS)),
