@@ -9,12 +9,17 @@
 //! (frames at most 16384 pixels per side and 2^26 pixels in all, as the engine refuses larger).
 //! Arithmetic with an operand from the file uses the `checked_`, `saturating_` or `wrapping_`
 //! method that says what an out-of-range result means, since release builds panic on overflow.
+//! Memory is bounded per file, not only per allocation: at most [`MAX_TRACKS`] tracks and 2^23
+//! MP4 index entries over all tracks.
 
 use std::path::Path;
 
 use alpha2_media::{ColorMetadata, Orientation, Rect, SampleAspectRatio, SpeakerLayout};
 use alpha2_time::FrameRate;
 use bytes::Bytes;
+
+/// The most tracks a file may have.
+pub(crate) const MAX_TRACKS: usize = 256;
 
 mod audio;
 mod error;

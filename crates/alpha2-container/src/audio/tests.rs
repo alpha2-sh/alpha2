@@ -590,3 +590,18 @@ fn exercise_to(reader: &mut dyn ContainerReader, target: i64) {
         let _ = reader.next_packet(TRACK);
     }
 }
+
+#[test]
+fn the_read_window_returns_to_its_size_after_a_large_read() {
+    let large = 16 << 20;
+    let mut input =
+        Input::new(Box::new(std::io::Cursor::new(vec![0_u8; 2 * large]))).expect("input");
+    assert_eq!(input.peek(0, large).expect("read").len(), large);
+    assert!(input.window.capacity() >= large);
+    input.peek(3 << 23, 16).expect("read");
+    assert!(
+        input.window.capacity() <= WINDOW,
+        "{}",
+        input.window.capacity()
+    );
+}

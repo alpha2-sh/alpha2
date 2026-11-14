@@ -95,6 +95,10 @@ impl Input {
             let size = (behind + count)
                 .max(WINDOW)
                 .min(usize::try_from(self.len - start).unwrap_or(usize::MAX));
+            // A window grown for one large read goes back to its usual size for the next.
+            if self.window.capacity() > size.max(WINDOW) {
+                self.window = Vec::new();
+            }
             self.window.clear();
             self.window.resize(size, 0);
             self.source.seek(SeekFrom::Start(start))?;

@@ -23,6 +23,8 @@ const MAX_PAGE: u64 = 65_307;
 const MAX_PACKET: usize = 1 << 25;
 /// The largest `codec_private` this reader assembles from header packets.
 const MAX_HEADERS: usize = 1 << 24;
+/// The most header packets read before the first data packet.
+const MAX_HEADER_PACKETS: usize = 65_536;
 
 /// One Ogg page whose CRC holds.
 #[derive(Clone)]
@@ -838,7 +840,7 @@ fn header_packets(framer: &mut OggFramer, input: &mut Input) -> Result<Vec<Vec<u
             return Ok(packets);
         }
         total += raw.data.len();
-        if total > MAX_HEADERS {
+        if total > MAX_HEADERS || packets.len() == MAX_HEADER_PACKETS {
             return Err(DemuxError::Invalid(
                 "Ogg header packets are too large".into(),
             ));

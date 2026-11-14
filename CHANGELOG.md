@@ -199,6 +199,12 @@ All notable changes to this project are documented in this file.
   cache is pruned past `ALPHA2_PLUGIN_CACHE_QUOTA` (4 GiB by default). A plugin manifest pins an
   artifact of at most 256 MiB and resources of at most 2 GiB each and 4 GiB together, and a local
   manifest must be a regular file. Fetch messages show URLs without user info or query.
+- Container layer: memory is bounded per file, not only per allocation. An MP4 file indexes at
+  most 2^23 samples over all its tracks and fragments, and may have at most 256 tracks and 2^21
+  fragments; a Matroska file at most 256 track entries, and at most 2^20 cue positions are kept.
+  Edit lists no longer hold the old and the new index side by side when no sample repeats, WAV
+  formats, FLAC metadata and Ogg header packets are bounded, and the read window shrinks after a
+  large read. Before, an 8 MB file could hold gigabytes after open.
 - Caption import: reading SRT and WebVTT is linear in the file, and memory is bounded per cue. A
   block over 65,536 bytes or 1,024 lines is skipped, a cue with more than 32 tags open, 64 classes
   or 512 runs is imported as plain text (`notes.flattened`), and a WebVTT `<` with no `>` after it

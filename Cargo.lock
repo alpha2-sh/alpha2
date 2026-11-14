@@ -78,6 +78,7 @@ version = "0.6.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-build-support",
+ "alpha2-container",
  "alpha2-engine",
  "alpha2-eval",
  "alpha2-extensions",

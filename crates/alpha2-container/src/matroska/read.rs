@@ -10,7 +10,9 @@ use super::describe::{self, Described, Encoding, Entry, Timing, rescale};
 use super::ebml::{self, Children, Header, Span, Step, header_at, id, is_level1};
 use super::timing::{Clock, Raw};
 use crate::audio::Input;
-use crate::{ContainerReader, DemuxError, Packet, Source, TrackId, TrackInfo, VideoCodec};
+use crate::{
+    ContainerReader, DemuxError, MAX_TRACKS, Packet, Source, TrackId, TrackInfo, VideoCodec,
+};
 
 /// The largest level-1 element other than a Cluster read into memory.
 const MAX_HEADER_ELEMENT: u64 = 64 << 20;
@@ -258,6 +260,8 @@ fn open_segment(input: &mut Input) -> Result<(u64, u64), DemuxError> {
 struct Headers {
     scale: Option<u64>,
     entries: Option<Vec<Entry>>,
+    /// The Tracks element holds more than [`MAX_TRACKS`] entries.
+    too_many_tracks: bool,
     cues: Option<Vec<(u64, u64)>>,
     seeks: Vec<(u32, u64)>,
 }
@@ -275,12 +279,18 @@ impl Headers {
                 self.scale = Some(if scale == 0 { 1_000_000 } else { scale });
             }
             id::TRACKS if self.entries.is_none() => {
-                self.entries = Some(
-                    Children::new(body)
-                        .filter(|(child, _)| *child == id::TRACK_ENTRY)
-                        .map(|(_, entry)| describe::entry(entry))
-                        .collect(),
-                );
+                let mut entries = Vec::new();
+                let mut within = true;
+                for (_, entry) in Children::new(body).filter(|(child, _)| *child == id::TRACK_ENTRY)
+                {
+                    if entries.len() == MAX_TRACKS {
+                        within = false;
+                        break;
+                    }
+                    entries.push(describe::entry(entry));
+                }
+                self.too_many_tracks = !within;
+                self.entries = Some(entries);
             }
             id::CUES if self.cues.is_none() => self.cues = Some(cues(body, start)),
             id::SEEK_HEAD => self.seeks.extend(seeks(body)),
@@ -356,9 +366,15 @@ fn seeks(body: &[u8]) -> Vec<(u32, u64)> {
         .collect()
 }
 
+/// The most cue positions kept; later ones are ignored, since cues only shorten seeks.
+const MAX_CUE_POSITIONS: usize = 1 << 20;
+
 fn cues(body: &[u8], start: u64) -> Vec<(u64, u64)> {
     let mut found = Vec::new();
     for (element, point) in Children::new(body) {
+        if found.len() >= MAX_CUE_POSITIONS {
+            break;
+        }
         if element != id::CUE_POINT {
             continue;
         }
@@ -379,7 +395,13 @@ fn cues(body: &[u8], start: u64) -> Vec<(u64, u64)> {
                 _ => {}
             }
         }
-        found.extend(positions.into_iter().map(|position| (position, time)));
+        let room = MAX_CUE_POSITIONS - found.len();
+        found.extend(
+            positions
+                .into_iter()
+                .take(room)
+                .map(|position| (position, time)),
+        );
     }
     found
 }
@@ -409,6 +431,11 @@ impl MatroskaReader {
         };
         let mut tracks = Vec::new();
         let mut states = Vec::new();
+        if headers.too_many_tracks {
+            return Err(DemuxError::Invalid(
+                "the file has more tracks than this layer reads".into(),
+            ));
+        }
         for entry in headers.entries.unwrap_or_default() {
             if !describe::listed(&entry) {
                 continue;

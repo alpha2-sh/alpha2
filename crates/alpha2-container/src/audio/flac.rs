@@ -14,6 +14,8 @@ const VORBIS_COMMENT: u8 = 4;
 const PICTURE: u8 = 6;
 /// The largest `codec_private` this reader builds from metadata blocks.
 const MAX_PRIVATE: usize = 1 << 24;
+/// The most metadata blocks kept; padding and pictures are skipped, not kept.
+const MAX_METADATA_BLOCKS: usize = 65_536;
 /// The largest frame this reader hands out; 65535 samples of 8 channels at 32 bits fit.
 const MAX_FRAME: u64 = 1 << 25;
 /// Bytes a frame header and the first subframe header take at most.
@@ -262,6 +264,11 @@ pub(super) fn open(mut input: Input, start: u64) -> Result<Box<dyn ContainerRead
         let kind = header[0] & 0x7f;
         let size =
             (usize::from(header[1]) << 16) | (usize::from(header[2]) << 8) | usize::from(header[3]);
+        if blocks.len() == MAX_METADATA_BLOCKS {
+            return Err(DemuxError::Invalid(
+                "FLAC has more metadata blocks than this layer reads".into(),
+            ));
+        }
         if blocks.is_empty() && kind != STREAMINFO {
             return Err(DemuxError::Invalid(
                 "FLAC STREAMINFO is not the first block".into(),
@@ -276,8 +283,6 @@ pub(super) fn open(mut input: Input, start: u64) -> Result<Box<dyn ContainerRead
                 return Err(DemuxError::Invalid("FLAC metadata is too large".into()));
             }
             blocks.push((kind, input.exact(pos + 4, size)?.to_vec()));
-        } else {
-            blocks.push((kind, Vec::new()));
         }
         pos += 4 + size as u64;
         if last {
