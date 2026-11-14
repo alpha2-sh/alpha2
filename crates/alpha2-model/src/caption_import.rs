@@ -71,7 +71,7 @@ pub struct ImportNotes {
     /// [`MAX_RUN_CLASSES`]).
     pub dropped_classes: usize,
     /// Cues imported as plain text because their markup had more than [`MAX_TEXT_RUNS`] runs,
-    /// [`MAX_OPEN_TAGS`] tags open or [`MAX_HELD_CLASSES`] classes held.
+    /// 32 tags open or 64 classes held.
     pub flattened: usize,
 }
 

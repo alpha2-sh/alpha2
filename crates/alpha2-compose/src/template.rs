@@ -17,8 +17,7 @@ use crate::ComposeError;
 /// Template nodes nest at most this deep.
 const MAX_DEPTH: usize = 16;
 
-/// Values one binding may make in template bodies, a string counting one per
-/// [`STRING_BYTES_PER_VALUE`] bytes.
+/// Values one binding may make in template bodies, a string counting one per 64 bytes.
 pub const MAX_BOUND_VALUES: usize = 100_000;
 
 /// Bytes of a string that count as one bound value.
