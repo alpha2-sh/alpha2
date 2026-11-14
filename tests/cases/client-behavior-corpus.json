@@ -248,5 +248,22 @@
       "thenKeepPending": { "videoDecode": "software", "depth": 2, "total": 12 }
     },
     "expect": { "secondCompletes": 2 }
+  },
+  {
+    "id": "cache-directory-reaches-the-host",
+    "kind": "cache-directory",
+    "given": { "option": "option/cache", "environment": "environment/cache" },
+    "expect": { "hostVariable": "ALPHA2_HOST_CACHE_DIR", "absoluteUnder": "the calling directory" }
+  },
+  {
+    "id": "install-starts-a-new-generation",
+    "kind": "install-generation",
+    "given": {
+      "calls": ["capabilities", "install OpenH264", "capabilities", "export"]
+    },
+    "expect": {
+      "hosts": 2,
+      "afterInstall": "capabilities and the export run on the second host"
+    }
   }
 ]

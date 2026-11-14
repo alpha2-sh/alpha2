@@ -400,7 +400,10 @@ This downloads Cisco's OpenH264 2.7.0 binary for the platform from
 SHA-256s, and puts the library in the shared cache, in `openh264-2.7.0-<target>/`, where
 `alpha2-host` finds it. It installs only the library, not `alpha2-host`. `--force` downloads again,
 `alpha2.install_openh264()` does the same from code, and `ALPHA2_OPENH264_DOWNLOAD_URL` (or the
-`download_url` argument) names a mirror. Every run prints Cisco's notice:
+`download_url` argument) names a mirror. A `HostClient` made with `cache_directory` gives its hosts
+that directory, so they find a library installed there. After `install_openh264()` downloads, the
+clients of this process start new hosts and probe capabilities again; an install made by another
+process is not seen by a running client. Every run prints Cisco's notice:
 
 ```text
 OpenH264 Video Codec provided by Cisco Systems, Inc.

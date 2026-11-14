@@ -457,6 +457,15 @@ class OpenH264InstallResult:
     """:data:`OPENH264_NOTICE`, which Cisco's licence requires be shown to the user."""
 
 
+_openh264_installs = 0
+
+
+def openh264_install_generation() -> int:
+    """How many times :func:`install_openh264` downloaded in this process. A host looks for the
+    library once, so clients start new hosts after it changes."""
+    return _openh264_installs
+
+
 def install_openh264(
     *,
     cache_directory: str | os.PathLike[str] | None = None,
@@ -537,7 +546,11 @@ def install_openh264(
         staged.mkdir()
         (staged / entry.library).write_bytes(library)
 
-        return result(_replace_directory(staged, directory, force=force, is_installed=installed))
+        downloaded = _replace_directory(staged, directory, force=force, is_installed=installed)
+        if downloaded:
+            global _openh264_installs
+            _openh264_installs += 1
+        return result(downloaded)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 

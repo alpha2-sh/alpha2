@@ -2698,6 +2698,90 @@ def run_arrival_order(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeH
     assert completed.index("second") + 1 == scenario["expect"]["secondCompletes"], completed
 
 
+CACHE_HOST = """
+served = 0
+def answer(request):
+    global served
+    served += 1
+    report = {"pid": os.getpid(), "served": served, "cache": os.environ.get("ALPHA2_HOST_CACHE_DIR")}
+    if request["operation"] == "capabilities":
+        report = {"status": "ready", **report}
+    send(request, ok=True, result=report)
+serve(answer)
+"""
+
+
+def run_cache_directory(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    given = scenario["given"]
+    # The fake host starts from the calling directory, so that is where relative paths point.
+    host_path = fake_host(tmp_path, CACHE_HOST)
+    named = HostClient(host_path=host_path, cache_directory=given["option"])
+    assert named.export(**export_args("out.mp4"))["cache"] == str(tmp_path / given["option"])
+    saved = os.environ.get("ALPHA2_HOST_CACHE_DIR")
+    os.environ["ALPHA2_HOST_CACHE_DIR"] = given["environment"]
+    try:
+        inherited = HostClient(host_path=host_path)
+        cache = inherited.export(**export_args("out.mp4"))["cache"]
+        assert cache == str(tmp_path / given["environment"])
+    finally:
+        if saved is None:
+            del os.environ["ALPHA2_HOST_CACHE_DIR"]
+        else:
+            os.environ["ALPHA2_HOST_CACHE_DIR"] = saved
+
+
+def run_install_generation(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
+    import bz2
+    import dataclasses
+    import hashlib
+    import http.server
+
+    from alpha2 import install as install_module
+
+    client = HostClient(host_path=fake_host(tmp_path, CACHE_HOST))
+    before = client.capabilities()
+    target = alpha2.host_target()
+    assert target is not None
+    library = b"abracadabra"
+    archive = bz2.compress(library)
+    original = install_module._OPENH264_TARGETS[target]
+    entry = dataclasses.replace(
+        original,
+        archive_sha256=hashlib.sha256(archive).hexdigest(),
+        library_sha256=hashlib.sha256(library).hexdigest(),
+    )
+
+    class Mirror(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            found = self.path == f"/{entry.archive}"
+            self.send_response(200 if found else 404)
+            self.send_header("Content-Length", str(len(archive) if found else 0))
+            self.end_headers()
+            if found:
+                self.wfile.write(archive)
+
+        def log_message(self, *_: Any) -> None:
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Mirror)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    install_module._OPENH264_TARGETS[target] = entry
+    try:
+        installed = alpha2.install_openh264(
+            cache_directory=tmp_path / "cache",
+            download_url=f"http://127.0.0.1:{server.server_address[1]}",
+        )
+        assert installed.downloaded
+    finally:
+        install_module._OPENH264_TARGETS[target] = original
+        server.shutdown()
+    after = client.capabilities()
+    exported = client.export(**export_args("out.mp4"))
+    assert after["pid"] != before["pid"]
+    assert exported["pid"] == after["pid"]
+    assert len({before["pid"], after["pid"]}) == scenario["expect"]["hosts"]
+
+
 def run_foreign_host(scenario: dict[str, Any], tmp_path: Path, fake_host: FakeHost) -> None:
     given, expect = scenario["given"], scenario["expect"]
     pids = tmp_path / "pids"
@@ -2809,6 +2893,8 @@ SCENARIO_DRIVERS: dict[str, Callable[[dict[str, Any], Path, FakeHost], None]] = 
     "dies-reading": run_dies_reading,
     "grandchild-holds-the-pipes": run_grandchild_holds_the_pipes,
     "arrival-order": run_arrival_order,
+    "cache-directory": run_cache_directory,
+    "install-generation": run_install_generation,
     "host-version": run_host_version,
     "start-timeout": run_start_timeout,
 }

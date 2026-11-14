@@ -585,6 +585,16 @@ export interface InstallOpenH264Result {
  *
  * Throws an {@link Alpha2HostInstallError}.
  */
+let openH264Installs = 0;
+
+/**
+ * How many times {@link installOpenH264} downloaded in this process. A host looks for the library
+ * once, so clients start new hosts after it changes.
+ */
+export function openH264InstallGeneration(): number {
+  return openH264Installs;
+}
+
 export async function installOpenH264(
   options: InstallOpenH264Options = {},
 ): Promise<InstallOpenH264Result> {
@@ -659,12 +669,12 @@ export async function installOpenH264(
     await mkdir(staged);
     await writeFile(join(staged, entry.library), library);
 
-    return result(
-      await replaceDirectory(staged, directory, {
-        force: options.force === true,
-        isInstalled: installed,
-      }),
-    );
+    const downloaded = await replaceDirectory(staged, directory, {
+      force: options.force === true,
+      isInstalled: installed,
+    });
+    if (downloaded) openH264Installs += 1;
+    return result(downloaded);
   } finally {
     await rm(staging, { recursive: true, force: true });
   }

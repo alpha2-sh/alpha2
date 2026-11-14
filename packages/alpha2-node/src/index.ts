@@ -80,6 +80,7 @@ import {
   cachedHostBinary,
   hostCacheDirectory,
   hostExecutableName,
+  openH264InstallGeneration,
   packageVersion,
 } from "./install.js";
 
@@ -119,7 +120,10 @@ export interface ResolveHostBinaryOptions {
   readonly resourcesPath?: string;
   /** Base directory for relative explicit paths. Defaults to `process.cwd()`. */
   readonly cwd?: string;
-  /** The cache `installHost` installs into. Defaults to {@link hostCacheDirectory}. */
+  /**
+   * The cache `installHost` installs into. Defaults to {@link hostCacheDirectory}. A client's hosts
+   * get it as `ALPHA2_HOST_CACHE_DIR`, so they find an OpenH264 installed there.
+   */
   readonly cacheDirectory?: string;
 }
 
@@ -1351,7 +1355,8 @@ export class Alpha2NodeClient {
   readonly #pool: HostPool;
   readonly #videoDecode: VideoDecodeMode | undefined;
   readonly #renderer: RendererMode | undefined;
-  /** Capability probes, running or answered, keyed by decode mode and renderer. */
+  readonly #cacheDirectory: string | undefined;
+  /** Capability probes, running or answered, keyed by host environment and install generation. */
   readonly #probes = new Map<string, CapabilityProbe>();
 
   /**
@@ -1372,6 +1377,10 @@ export class Alpha2NodeClient {
     );
     this.#videoDecode = options.videoDecode;
     this.#renderer = options.renderer;
+    this.#cacheDirectory =
+      options.cacheDirectory === undefined
+        ? undefined
+        : resolve(options.cwd ?? process.cwd(), options.cacheDirectory);
   }
 
   /**
@@ -1391,16 +1400,23 @@ export class Alpha2NodeClient {
     if (signal?.aborted) throw new Alpha2AbortError();
     const videoDecode = options.videoDecode ?? this.#videoDecode;
     const renderer = options.renderer ?? this.#renderer;
-    const key = environmentKey(hostEnvironment({ videoDecode, renderer }));
+    const cacheDirectory = this.#cacheDirectory;
+    const key = hostKey(
+      hostEnvironment({ videoDecode, renderer, cacheDirectory }),
+    );
     let probe = this.#probes.get(key);
     if (probe === undefined) {
       const controller = new AbortController();
       const result = this.#request(
         "capabilities",
         {},
-        { videoDecode, renderer },
+        { videoDecode, renderer, cacheDirectory },
         controller.signal,
       ).then((answer) => answer.result as HostCapabilities);
+      // A report from before an OpenH264 install is not kept once a newer one is asked for.
+      const generation = `:${openH264InstallGeneration()}`;
+      for (const stale of this.#probes.keys())
+        if (!stale.endsWith(generation)) this.#probes.delete(stale);
       const started: CapabilityProbe = {
         result,
         controller,
@@ -1797,7 +1813,7 @@ export class Alpha2NodeClient {
     return this.#pool.request(
       frame,
       requestId,
-      modes,
+      { ...modes, cacheDirectory: this.#cacheDirectory },
       signal,
       onProgress,
       extraction,
@@ -1982,13 +1998,18 @@ function sharedClient(options: Alpha2NodeOptions): Alpha2NodeClient {
   checkRenderer("renderer", options.renderer);
   const hostStartTimeoutMs = checkHostStartTimeout(options.hostStartTimeoutMs);
   const binary = resolveHostBinary(options);
-  const key = `${concurrency}\0${hostStartTimeoutMs}\0${binary}`;
+  const cacheDirectory =
+    options.cacheDirectory === undefined
+      ? undefined
+      : resolve(options.cwd ?? process.cwd(), options.cacheDirectory);
+  const key = `${concurrency}\0${hostStartTimeoutMs}\0${binary}\0${cacheDirectory ?? ""}`;
   let client = convenienceClients.get(key);
   if (client === undefined) {
     client = new Alpha2NodeClient({
       hostPath: binary,
       concurrency,
       hostStartTimeoutMs,
+      ...(cacheDirectory === undefined ? {} : { cacheDirectory }),
     });
     convenienceClients.set(key, client);
   }
@@ -2466,6 +2487,8 @@ export type ComposeAction =
 interface HostModes {
   readonly videoDecode?: VideoDecodeMode | undefined;
   readonly renderer?: RendererMode | undefined;
+  /** The client's absolute cache directory, when it names one. */
+  readonly cacheDirectory?: string | undefined;
 }
 
 /**
@@ -2473,8 +2496,11 @@ interface HostModes {
  * setting at startup, so the modes go in the environment.
  */
 function hostEnvironment(modes: HostModes): NodeJS.ProcessEnv {
+  // A host resolves a relative cache directory against its own working directory.
+  const cache = modes.cacheDirectory ?? process.env.ALPHA2_HOST_CACHE_DIR;
   return {
     ...process.env,
+    ...(cache?.trim() ? { ALPHA2_HOST_CACHE_DIR: resolve(cache) } : {}),
     ...(modes.videoDecode === undefined
       ? {}
       : { ALPHA2_VIDEO_DECODE: modes.videoDecode }),
@@ -2484,12 +2510,16 @@ function hostEnvironment(modes: HostModes): NodeJS.ProcessEnv {
   };
 }
 
-/** Hosts started with one environment are interchangeable, so the whole of it is their key. */
-function environmentKey(environment: NodeJS.ProcessEnv): string {
+/**
+ * Hosts started with one environment are interchangeable, so the whole of it is their key, with the
+ * OpenH264 install generation, since a host looks for the library once.
+ */
+function hostKey(environment: NodeJS.ProcessEnv): string {
   const entries = Object.entries(environment)
     .filter(([, value]) => value !== undefined)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
+  const digest = createHash("sha256").update(JSON.stringify(entries));
+  return `${digest.digest("hex")}:${openH264InstallGeneration()}`;
 }
 
 /**
@@ -2668,7 +2698,7 @@ class HostPool {
       };
       const environment = hostEnvironment(modes);
       const waiter: HostWaiter = {
-        key: environmentKey(environment),
+        key: hostKey(environment),
         environment,
         grant: (host) => {
           if (leave()) resolveRun(run(host));

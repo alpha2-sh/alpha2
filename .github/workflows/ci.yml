@@ -359,7 +359,7 @@ jobs:
           - target: linux-arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       ALPHA2_REQUIRE: openh264,c-compiler
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
@@ -442,6 +442,18 @@ jobs:
           assert not any(f["encoder"].endswith(("_vulkan", "_nvenc")) for f in result["videoEncoderFallbacks"])
           EOF
           cmp "$RUNNER_TEMP/first.mp4" "$RUNNER_TEMP/second.mp4"
+      - name: Each client uses an OpenH264 it installs into its cache, in the same process
+        run: |
+          archive="$(ls "$RUNNER_TEMP"/openh264/*.bz2)"
+          ALPHA2_HOST_BINARY="$PWD/target/release/alpha2-host" ALPHA2_TEST_OPENH264_ARCHIVE="$archive" \
+            node --test --test-name-pattern 'OpenH264 installed' packages/alpha2-node/test/e2e/host-export.test.mjs
+          pipx install uv==0.13.3
+          cd python/alpha2
+          uv venv -q -p 3.11 .venv
+          uv pip install -q --group dev
+          uv pip install -q --no-deps -e .
+          ALPHA2_HOST_BINARY="$GITHUB_WORKSPACE/target/release/alpha2-host" ALPHA2_TEST_OPENH264_ARCHIVE="$archive" \
+            .venv/bin/pytest tests/test_e2e.py -k openh264
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"

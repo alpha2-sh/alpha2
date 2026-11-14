@@ -33,7 +33,11 @@ import {
   parseHostMessage,
   windowsPolicyBlocked,
 } from "../dist/protocol.js";
+import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { failureOf } from "alpha2/export-failure";
+import { hostTarget, installOpenH264 } from "../dist/index.js";
+import { OPENH264_TARGETS } from "../dist/install.js";
 import { assertScalesBelow } from "../../../scripts/lib/timing.mjs";
 import { decideRetry, RETRY_PROFILES } from "alpha2/export-retry";
 
@@ -3169,7 +3173,97 @@ const SLOW_HOST = `import { respond, serve } from ${IO};
 serve((request) => setTimeout(() => respond(request, { ok: true, result: { pid: process.pid } }), 20));
 `;
 
+/** Answers with its pid and the cache directory it was started with, counting its requests. */
+const CACHE_HOST = `import { respond, serve } from ${IO};
+let served = 0;
+serve((request) => {
+  served += 1;
+  const report = { pid: process.pid, served, cache: process.env.ALPHA2_HOST_CACHE_DIR ?? null };
+  respond(request, { ok: true, result: request.operation === "capabilities" ? { status: "ready", ...report } : report });
+});
+`;
+
+/** `printf abracadabra | bzip2 -9`, a stand-in for Cisco's archive (as in install.test.mjs). */
+const STAND_IN_OPENH264 = Buffer.from(
+  "425a6839314159265359236d4bd800000101803c001000200030cd00947a" +
+    "9ea52c8478bb9229c284811b6a5ec0",
+  "hex",
+);
+
+/** Serves the stand-in OpenH264 archive and points this platform's table entry at it. */
+async function serveStandInOpenH264() {
+  const target = hostTarget();
+  const original = OPENH264_TARGETS[target];
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  OPENH264_TARGETS[target] = {
+    ...original,
+    archiveSha256: digest(STAND_IN_OPENH264),
+    librarySha256: digest("abracadabra"),
+  };
+  const server = createServer((request, response) => {
+    const found = request.url === `/${OPENH264_TARGETS[target].archive}`;
+    response.writeHead(found ? 200 : 404);
+    response.end(found ? STAND_IN_OPENH264 : undefined);
+  });
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  return {
+    downloadUrl: `http://127.0.0.1:${server.address().port}`,
+    restore: () => {
+      OPENH264_TARGETS[target] = original;
+      server.close();
+    },
+  };
+}
+
 const SCENARIO_DRIVERS = {
+  async "cache-directory"(scenario) {
+    const root = await scratch("alpha2-node-cache-directory-");
+    // The fake host starts from the calling directory, so that is where relative paths point.
+    const hostPath = await fakeHost(root, CACHE_HOST);
+    const caller = process.cwd();
+    const named = new Alpha2NodeClient({
+      hostPath,
+      cacheDirectory: scenario.given.option,
+    });
+    assert.equal(
+      (await exported(named)).cache,
+      resolve(caller, scenario.given.option),
+    );
+    const saved = process.env.ALPHA2_HOST_CACHE_DIR;
+    process.env.ALPHA2_HOST_CACHE_DIR = scenario.given.environment;
+    try {
+      const inherited = new Alpha2NodeClient({ hostPath });
+      assert.equal(
+        (await exported(inherited)).cache,
+        resolve(caller, scenario.given.environment),
+      );
+    } finally {
+      if (saved === undefined) delete process.env.ALPHA2_HOST_CACHE_DIR;
+      else process.env.ALPHA2_HOST_CACHE_DIR = saved;
+    }
+  },
+  async "install-generation"(scenario) {
+    const root = await scratch("alpha2-node-install-generation-");
+    const client = new Alpha2NodeClient({
+      hostPath: await fakeHost(root, CACHE_HOST),
+    });
+    const before = await client.getCapabilities();
+    const served = await serveStandInOpenH264();
+    try {
+      const installed = await installOpenH264({
+        cacheDirectory: join(root, "cache"),
+        downloadUrl: served.downloadUrl,
+      });
+      assert.equal(installed.downloaded, true);
+    } finally {
+      served.restore();
+    }
+    const after = await client.getCapabilities();
+    const exportedAfter = await exported(client);
+    assert.notEqual(after.pid, before.pid);
+    assert.equal(exportedAfter.pid, after.pid);
+    assert.equal(new Set([before.pid, after.pid]).size, scenario.expect.hosts);
+  },
   async "arrival-order"(scenario) {
     const { given } = scenario;
     const root = await scratch("alpha2-node-arrival-order-");

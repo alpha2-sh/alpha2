@@ -13,8 +13,9 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
 import { inflateSync } from "node:zlib";
 
@@ -23,6 +24,7 @@ import {
   Alpha2GpuInitializationError,
   Alpha2NodeClient,
   Alpha2ProjectValidationError,
+  installOpenH264,
 } from "../../dist/index.js";
 import {
   missingCapability,
@@ -1665,5 +1667,71 @@ createInterface({ input: process.stdin }).once("line", () => process.kill(proces
     } finally {
       await rm(scratch, { recursive: true, force: true });
     }
+  },
+);
+
+const openh264Archive = process.env.ALPHA2_TEST_OPENH264_ARCHIVE?.trim();
+
+test(
+  "an OpenH264 installed into the client's cache reaches the next capabilities and export",
+  {
+    // ALPHA2_REQUIRE=openh264 fails instead of skipping when the archive was not fetched.
+    skip:
+      !openh264Archive &&
+      missingCapability(
+        "openh264",
+        suiteOf(import.meta.url),
+        "ALPHA2_TEST_OPENH264_ARCHIVE names no Cisco .bz2 file",
+      ),
+  },
+  async (t) => {
+    const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-openh264-"));
+    const cacheDirectory = join(scratch, "cache");
+    const archive = await readFile(openh264Archive);
+    const server = createServer((request, response) => {
+      const found = request.url === `/${basename(openh264Archive)}`;
+      response.writeHead(found ? 200 : 404);
+      response.end(found ? archive : undefined);
+    });
+    await new Promise((done) => server.listen(0, "127.0.0.1", done));
+    // Only the cache this client names may hold the library.
+    const library = process.env.ALPHA2_OPENH264_LIBRARY;
+    delete process.env.ALPHA2_OPENH264_LIBRARY;
+    const local = new Alpha2NodeClient({
+      hostPath,
+      cacheDirectory,
+      renderer: "cpu",
+    });
+    t.after(async () => {
+      await local.close();
+      server.close();
+      if (library !== undefined) process.env.ALPHA2_OPENH264_LIBRARY = library;
+      await rm(scratch, { recursive: true, force: true });
+    });
+    const before = await local.getCapabilities();
+    assert.notEqual(before.capabilities.encode.openh264.status, "available");
+    const installed = await installOpenH264({
+      cacheDirectory,
+      downloadUrl: `http://127.0.0.1:${server.address().port}`,
+    });
+    assert.equal(installed.downloaded, true);
+    const after = await local.getCapabilities();
+    const openh264 = after.capabilities.encode.openh264;
+    assert.equal(openh264.status, "available", JSON.stringify(openh264));
+    let result;
+    await local.exportProject({
+      project,
+      output: join(scratch, "out.mp4"),
+      assets: { "image-source": assetPath },
+      startTicks: 0,
+      endTicks: 5_000,
+      frameRate: { num: 24, den: 1 },
+      includeAudio: false,
+      videoCodec: "h264",
+      videoEncoder: openh264.encoder,
+      onResult: (value) => (result = value),
+    });
+    assert.equal(result.videoEncoder, openh264.encoder);
+    assert.ok((await stat(join(scratch, "out.mp4"))).size > 0);
   },
 );

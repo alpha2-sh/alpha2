@@ -43,7 +43,13 @@ from .errors import (
     ExportPhase,
 )
 from .extract import ExtractProgress, schema_problem, take_step
-from .install import cached_host_binary, host_cache_directory, host_executable_name, package_version
+from .install import (
+    cached_host_binary,
+    host_cache_directory,
+    host_executable_name,
+    openh264_install_generation,
+    package_version,
+)
 from .protocol import (
     PROTOCOL_VERSION,
     UNREAD_REQUEST_ID,
@@ -645,11 +651,15 @@ class HostClient:
         _check_video_decode("video_decode", video_decode)
         _check_renderer("renderer", renderer)
         self.host_path: Path = resolve_host_binary(host_path, cache_directory=cache_directory)
+        # Hosts get it as ALPHA2_HOST_CACHE_DIR, so they find an OpenH264 installed there.
+        self.cache_directory: str | None = (
+            None if cache_directory is None else os.path.abspath(os.fspath(cache_directory))
+        )
         self.concurrency = concurrency
         self.video_decode: VideoDecodeMode | None = video_decode
         self.renderer: RendererMode | None = renderer
         self.host_start_timeout: float | None = host_start_timeout
-        self._pool = _Pool(self.host_path, concurrency)
+        self._pool = _Pool(self.host_path, concurrency, self.cache_directory)
         self._probes: dict[str, _Probe] = {}
         self._probes_lock = threading.Lock()
         _clients.add(self)
@@ -673,10 +683,14 @@ class HostClient:
             raise Alpha2AbortError()
         mode = video_decode if video_decode is not None else self.video_decode
         drawn_by = renderer if renderer is not None else self.renderer
-        key = _HostModes(mode, drawn_by).key()
+        key = _HostModes(mode, drawn_by).key(self.cache_directory)
         with self._probes_lock:
             probe = self._probes.get(key)
             if probe is None:
+                # Reports from before an OpenH264 install go once a newer one is asked for.
+                generation = ":" + key.rsplit(":", 1)[1]
+                for stale in [known for known in self._probes if not known.endswith(generation)]:
+                    del self._probes[stale]
                 probe = _Probe()
                 self._probes[key] = probe
                 threading.Thread(
@@ -1214,9 +1228,10 @@ class _HostModes:
     renderer: str | None
     start_timeout: float | None = _host_start.DEFAULT_HOST_START_TIMEOUT
 
-    def environment(self) -> dict[str, str]:
+    def environment(self, cache_directory: str | None = None) -> dict[str, str]:
         """The environment a host started now would get. The host reads its renderer and decode
-        path at startup, so the modes go in it."""
+        path at startup, so the modes go in it, and the client's cache directory, else the
+        environment's, made absolute, since a host resolves it against its own directory."""
         named = {
             variable: value
             for variable, value in (
@@ -1225,18 +1240,23 @@ class _HostModes:
             )
             if value is not None
         }
-        return {**os.environ, **named}
+        environment = {**os.environ, **named}
+        cache = cache_directory or environment.get("ALPHA2_HOST_CACHE_DIR", "")
+        if cache.strip():
+            environment["ALPHA2_HOST_CACHE_DIR"] = os.path.abspath(cache)
+        return environment
 
-    def key(self) -> str:
-        return _environment_key(self.environment())
+    def key(self, cache_directory: str | None = None) -> str:
+        return _environment_key(self.environment(cache_directory))
 
 
 def _environment_key(environment: Mapping[str, str]) -> str:
-    """A host reads its whole environment when it starts, so hosts are kept apart by it."""
+    """A host reads its whole environment when it starts, so hosts are kept apart by it, and by the
+    OpenH264 install generation, since a host looks for the library once."""
     digest = hashlib.sha256()
     for name, value in sorted(environment.items()):
         digest.update(f"{name}={value}".encode("utf-8", "surrogateescape") + b"\0")
-    return digest.hexdigest()
+    return f"{digest.hexdigest()}:{openh264_install_generation()}"
 
 
 class _Host:
@@ -1485,9 +1505,10 @@ class _Pool:
     the pool's view of each host current; the request's own thread reads its events from a queue.
     """
 
-    def __init__(self, binary: Path, limit: int) -> None:
+    def __init__(self, binary: Path, limit: int, cache_directory: str | None = None) -> None:
         self.binary = binary
         self.limit = limit
+        self.cache_directory = cache_directory
         self._condition = threading.Condition()
         self._hosts: list[_Host] = []
         self._starting = 0
@@ -1572,7 +1593,7 @@ class _Pool:
         one, ending an idle host of another environment to make room. Requests wait first come,
         first served. Yields the host and whether it is new (not yet ``ready``). Leaving releases
         the host, or ends it when its threads did not all start, whatever interrupted the lease."""
-        environment = modes.environment()
+        environment = modes.environment(self.cache_directory)
         key = _environment_key(environment)
         ticket = object()
         host: _Host | None = None
@@ -2163,7 +2184,7 @@ def _quarantine_check(binary: Path, *, again: bool = False) -> str | None:
     return refusal
 
 
-_shared_clients: dict[tuple[int, str], HostClient] = {}
+_shared_clients: dict[tuple[int, str, str | None], HostClient] = {}
 _shared_lock = threading.Lock()
 
 _clients: weakref.WeakSet[HostClient] = weakref.WeakSet()
@@ -2200,15 +2221,17 @@ if hasattr(os, "register_at_fork"):
 def _shared_client(
     host_path: PathLike | None, cache_directory: PathLike | None, concurrency: int
 ) -> HostClient:
-    """Keyed by binary and ``concurrency`` only, so calls with different modes share the bound."""
+    """Keyed by binary, cache directory and ``concurrency``, so calls with different modes share
+    the bound."""
     if not _safe_integer(concurrency) or concurrency < 1:
         raise ValueError("concurrency must be a positive integer")
     binary = resolve_host_binary(host_path, cache_directory=cache_directory)
-    key = (concurrency, str(binary))
+    cache = None if cache_directory is None else os.path.abspath(os.fspath(cache_directory))
+    key = (concurrency, str(binary), cache)
     with _shared_lock:
         client = _shared_clients.get(key)
         if client is None:
-            client = HostClient(host_path=binary, concurrency=concurrency)
+            client = HostClient(host_path=binary, concurrency=concurrency, cache_directory=cache)
             _shared_clients[key] = client
         return client
 

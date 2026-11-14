@@ -146,6 +146,10 @@ All notable changes to this project are documented in this file.
 - A text raster larger than the largest frame (67,108,864 pixels) or whose planes would take over
   1 GiB is refused as too large before anything is allocated. Before, only each side was limited,
   and the browser module aborted on the allocation.
+- Both clients start their hosts with the client's cache directory (`cacheDirectory`,
+  `cache_directory`) as `ALPHA2_HOST_CACHE_DIR`, in absolute form, also when it comes relative from
+  the environment, so a host finds an OpenH264 installed there. An OpenH264 install from this
+  process starts new hosts and a new capability probe, so the next export can use it.
 - The Python client keeps no thread or pipe of a host that exited during a request (one of each
   leaked per exit, until host starts failed for want of descriptors), and a Ctrl-C while a host
   starts ends that host and frees its place in the pool.

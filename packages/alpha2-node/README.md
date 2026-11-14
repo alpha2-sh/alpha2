@@ -124,7 +124,7 @@ Where no hardware H.264 encoder is available, `alpha2-host` can encode H.264 in 
 npx @alpha2-sh/node install --openh264
 ```
 
-This downloads Cisco's OpenH264 2.7.0 binary for the platform from `https://ciscobinary.openh264.org`, checks the download and the library in it against their SHA-256s, and puts the library in the cache beside the host archives, in `openh264-2.7.0-<target>/`, where `alpha2-host` finds it. It installs only the library, not `alpha2-host`. `--force` downloads again, `installOpenH264(options)` does the same from code, and `ALPHA2_OPENH264_DOWNLOAD_URL` (or the `downloadUrl` option) names a mirror. Every run prints Cisco's notice:
+This downloads Cisco's OpenH264 2.7.0 binary for the platform from `https://ciscobinary.openh264.org`, checks the download and the library in it against their SHA-256s, and puts the library in the cache beside the host archives, in `openh264-2.7.0-<target>/`, where `alpha2-host` finds it. It installs only the library, not `alpha2-host`. `--force` downloads again, `installOpenH264(options)` does the same from code, and `ALPHA2_OPENH264_DOWNLOAD_URL` (or the `downloadUrl` option) names a mirror. A client made with `cacheDirectory` gives its hosts that directory, so they find a library installed there. After `installOpenH264` downloads, the clients of this process start new hosts and probe capabilities again; an install made by another process is not seen by a running client. Every run prints Cisco's notice:
 
 ```text
 OpenH264 Video Codec provided by Cisco Systems, Inc.
