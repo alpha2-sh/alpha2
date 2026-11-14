@@ -394,6 +394,22 @@ fn storage_exhausted(message: &str) -> bool {
         || lower.contains("disc quota exceeded")
 }
 
+thread_local! {
+    static CAUGHT_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`panic_message`] of a panic a request boundary caught; the request's thread then reports it
+/// ([`take_caught_panic`]) and the host retires, since shared state may be as the unwind left it.
+pub fn caught_panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    CAUGHT_PANIC.with(|caught| caught.set(true));
+    panic_message(payload)
+}
+
+/// Whether a boundary on this thread caught a panic since the last call.
+pub fn take_caught_panic() -> bool {
+    CAUGHT_PANIC.with(std::cell::Cell::take)
+}
+
 pub fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
     payload
         .downcast_ref::<&str>()

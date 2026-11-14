@@ -833,6 +833,8 @@ pub static SERVE_EXPORT_HOOKS: std::sync::Mutex<Vec<ServeExportHooks>> =
 pub struct ServeExportHooks {
     pub slow: Option<Duration>,
     pub stall: Option<(InjectedStall, Duration)>,
+    /// Panics in the export's conform ([`crate::host::PANIC_IN_CONFORM`]).
+    pub panic: bool,
 }
 
 #[cfg(test)]

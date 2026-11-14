@@ -1614,6 +1614,7 @@ fn dispatch<'scope>(
             lifecycle: Arc::clone(&lifecycle),
             extract: serving.extract,
         };
+        let request_lifecycle = Arc::clone(&lifecycle);
         let spawned = std::thread::Builder::new()
             .name("alpha2-request".to_owned())
             .stack_size(COMMAND_STACK_BYTES)
@@ -1623,6 +1624,7 @@ fn dispatch<'scope>(
                     work.run(out, unusable)
                 }))
                 .unwrap_or_else(|payload| {
+                    request_lifecycle.record_defect();
                     Err(HostError::new(
                         "INTERNAL",
                         format!(
@@ -1731,11 +1733,14 @@ impl RequestWork {
                 "INTERNAL",
                 format!(
                     "the host panicked handling the request: {}",
-                    crate::failure::panic_message(&*payload)
+                    crate::failure::caught_panic_message(&*payload)
                 ),
             );
             Err(if is_export { fatal_error(error) } else { error })
         });
+        if crate::failure::take_caught_panic() {
+            lifecycle.record_defect();
+        }
         let response = match (response, guard.retired()) {
             (Err(error), Some(reason)) => Err(stopped_by_retiring(error, reason, is_export)),
             (response, _) => response,
@@ -1870,6 +1875,7 @@ fn arm_serve_encode_hooks() {
     drop(hooks);
     crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(next.slow));
     crate::encode::INJECT_ENCODE_STALL.with(|injected| injected.set(next.stall));
+    crate::host::PANIC_IN_CONFORM.with(|injected| injected.set(next.panic));
 }
 
 /// Counts a request as ended when its thread unwinds before [`answer`] does.
@@ -2049,6 +2055,7 @@ fn answer(
     let over_limit = lifecycle.end_request();
     let reason = unusable(device)
         .or_else(|| termination::requested().map(|_| DrainReason::Terminating))
+        .or_else(|| lifecycle.defect().then_some(DrainReason::Defect))
         .or(over_limit);
     if let Some(reason) = reason {
         lifecycle.drain(reason, out)?;

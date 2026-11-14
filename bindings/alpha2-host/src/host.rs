@@ -631,8 +631,9 @@ impl Host {
             )
     }
 
-    /// A panic while handling a request fails that request alone with `INTERNAL`; the unwind has
-    /// dropped what it held (decoders, encoders, partial output) and the host answers the next.
+    /// A panic while handling a request fails that request with `INTERNAL`; the unwind has dropped
+    /// what it held (decoders, encoders, partial output). `serve` then retires the host
+    /// ([`crate::failure::caught_panic_message`]).
     pub fn handle(
         &mut self,
         request: Request,
@@ -647,7 +648,7 @@ impl Host {
                     "INTERNAL",
                     format!(
                         "the host panicked handling the request: {}",
-                        crate::failure::panic_message(&*payload)
+                        crate::failure::caught_panic_message(&*payload)
                     ),
                 );
                 if !export {
@@ -3844,7 +3845,7 @@ pub fn conform_media(
             "INTERNAL",
             format!(
                 "the host panicked handling the request: {}",
-                crate::failure::panic_message(&*payload)
+                crate::failure::caught_panic_message(&*payload)
             ),
         ))
     })

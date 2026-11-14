@@ -246,6 +246,8 @@ pub(crate) enum DrainReason {
     ThreadsAbandoned,
     Terminating,
     InputClosed,
+    /// A request panicked; shared state may be as the unwind left it.
+    Defect,
 }
 
 impl DrainReason {
@@ -261,6 +263,7 @@ impl DrainReason {
             Self::ThreadsAbandoned => "threads-abandoned",
             Self::Terminating => "terminating",
             Self::InputClosed => "input-closed",
+            Self::Defect => "defect",
         }
     }
 
@@ -284,6 +287,8 @@ struct Life {
     running: usize,
     /// Taken at the first answer after which nothing runs, and again after the renderer is made.
     baseline_footprint: Option<u64>,
+    /// A request's panic was caught.
+    defect: bool,
     renderer: Option<RendererFacts>,
 }
 
@@ -327,6 +332,14 @@ impl Lifecycle {
         let mut life = self.lock();
         life.renderer = Some(facts);
         life.baseline_footprint = None;
+    }
+
+    pub(crate) fn record_defect(&self) {
+        self.lock().defect = true;
+    }
+
+    pub(crate) fn defect(&self) -> bool {
+        self.lock().defect
     }
 
     pub(crate) fn begin_request(&self) {

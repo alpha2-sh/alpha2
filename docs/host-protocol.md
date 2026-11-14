@@ -69,7 +69,7 @@ The host decides when a new process would serve better than itself and drains; t
 | `degraded` | none | | it has a degradation a new process would not have, such as a hardware encoder it turned off for the rest of its life, or a render cache directory it stopped using because a thread got stuck in its file system; `details.degradations` names it |
 | `idle` | `--idle-timeout <ms>` | `120000` | it has run nothing for this long |
 
-It also drains, with no limit to compare, when its GPU device is lost (`device-lost`), when a decoder or encoder thread is stuck and abandoned (`threads-abandoned`), when it is asked to terminate (`terminating`) and when its input ends (`input-closed`). The memory watchdog of `export` still stops an export that runs out of memory while it runs; the soft limits are only compared between requests.
+It also drains, with no limit to compare, when its GPU device is lost (`device-lost`), when a decoder or encoder thread is stuck and abandoned (`threads-abandoned`), when it is asked to terminate (`terminating`), when its input ends (`input-closed`) and after a request panicked (`defect`: its locks and caches may hold what the unwind left, so running requests finish and new ones go to a new process). The memory watchdog of `export` still stops an export that runs out of memory while it runs; the soft limits are only compared between requests.
 
 The response of the request that moved the host to `draining` carries `"hostState": "draining"` and comes after the `state` message; a response another running request writes at that moment can carry `"hostState": "draining"` before the `state` message arrives. A request the host reads while `draining`, or has read but not started when it drains, is answered `HOST_RETIRING` without running; send it to another host. A draining host exits once no request runs and either its input has ended or 5 seconds have passed since it started draining; it waits for running requests without a time limit. After `device-lost` and `threads-abandoned` it answers what it has read first, then stops the requests it runs, answers them `CANCELLED` with `details.hostRetiring`, and exits once they have answered or the stall limit plus 5 seconds have passed, when a request still running gets no response.
 
@@ -362,7 +362,7 @@ A `cancel` without a `target` is answered `INVALID_REQUEST`. The answer to a `ca
 | `PLUGIN_TRAPPED` | The wasm module trapped, or the native plugin caught a panic at its boundary. |
 | `PLUGIN_LIMIT` | A wasm plugin ran past its memory cap or table bound, or a call past its deadline, or a native plugin call did not return within three stall limits. |
 | `HOST_RETIRING` | The host is `draining` and did not start the request; send it to another host. |
-| `INTERNAL` | A defect in the host failed the request. The host answers the requests after it. |
+| `INTERNAL` | A defect in the host failed the request. When the request panicked, the host drains with reason `defect`: requests running finish, and those it has read but not started and later ones are answered `HOST_RETIRING`. |
 | `ALPHA2_ERROR` | A failure no other code describes. |
 
 The codes the engine itself reports (`INVALID_INPUT`, `MISSING_INPUT`, `INCOMPLETE_COMPOSITION`, `EFFECT_ERROR`, `ENCODE_ERROR`, `GPU_DEVICE_LOST`, `GPU_DEVICE_HUNG`, `GPU_TIMEOUT`, `ALPHA2_ERROR`) are the ones the browser engine reports too.

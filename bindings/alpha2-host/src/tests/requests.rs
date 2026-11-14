@@ -1800,14 +1800,15 @@ fn serve_standard_input() {
             milliseconds.parse().expect("milliseconds"),
         ));
     }
+    first.panic = std::env::var_os("ALPHA2_TEST_EXPORT_PANIC").is_some();
     let mut hooks = vec![first];
     if std::env::var_os("ALPHA2_TEST_SECOND_EXPORT_STALLS").is_some() {
         hooks.push(crate::encode::ServeExportHooks {
-            slow: None,
             stall: Some((
                 crate::heartbeat::InjectedStall::AfterOperations(2),
                 Duration::from_millis(500),
             )),
+            ..crate::encode::ServeExportHooks::default()
         });
     }
     *crate::encode::SERVE_EXPORT_HOOKS.lock().expect("hooks") = hooks;
@@ -2579,7 +2580,17 @@ fn every_line_a_command_writes_is_ascii_and_reads_back_the_same() {
 }
 
 #[test]
-fn a_request_that_panics_is_answered_and_the_host_serves_the_next() {
+fn a_request_that_panics_is_answered_and_the_host_retires() {
+    let directory = scratch_directory("panic-retires");
+    let export = json!({
+        "protocolVersion": 2, "requestId": "P", "operation": "export",
+        "project": conform_project(&json!({})),
+        "assets": {"video": corpus("parity-rgb.mov")},
+        "startTicks": 0, "endTicks": 30_000,
+        "frameRate": {"num": 12, "den": 1},
+        "videoCodec": "mpeg4-part2",
+        "output": directory.join("out.mp4")
+    });
     let edit = json!({
         "protocolVersion": 2, "requestId": "P", "operation": "edit",
         "project": {
@@ -2591,17 +2602,26 @@ fn a_request_that_panics_is_answered_and_the_host_serves_the_next() {
     });
     let compose =
         r#"{"protocolVersion":2,"requestId":"P","operation":"compose","action":"templates"}"#;
-    for first in [compose.to_owned(), edit.to_string()] {
-        let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_REQUEST_PANIC", "1")]);
+    for (first, hook) in [
+        (compose.to_owned(), "ALPHA2_TEST_REQUEST_PANIC"),
+        (edit.to_string(), "ALPHA2_TEST_REQUEST_PANIC"),
+        (export.to_string(), "ALPHA2_TEST_EXPORT_PANIC"),
+    ] {
+        let _gpu = gpu_test_lock();
+        let mut serving = ServeChild::start(SERVE_CHILD, &[(hook, "1")]);
         assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
         serving.write(&first);
+        let state = serving.message(Duration::from_secs(60));
+        assert_eq!(state["state"], "draining", "{state}");
+        assert_eq!(state["reason"], "defect", "{state}");
         let answer = serving.message(Duration::from_secs(10));
         assert_eq!(answer["requestId"], "P", "{answer}");
         assert_eq!(answer["error"]["code"], "INTERNAL", "{answer}");
+        assert_eq!(answer["hostState"], "draining", "{answer}");
         assert!(
             answer["error"]["message"]
                 .as_str()
-                .is_some_and(|message| message.contains("injected panic")),
+                .is_some_and(|message| message.contains("injected")),
             "{answer}"
         );
         serving.write(r#"{"protocolVersion":2,"requestId":"st","operation":"status"}"#);
@@ -2610,13 +2630,36 @@ fn a_request_that_panics_is_answered_and_the_host_serves_the_next() {
             status["result"]["details"]["runningRequests"], 0,
             "{status}"
         );
-        assert_eq!(status["result"]["details"]["activity"], "idle", "{status}");
         serving.write(&templates("next"));
         let next = serving.message(Duration::from_secs(10));
         assert_eq!(next["requestId"], "next", "{next}");
-        assert_eq!(next["ok"], true, "{next}");
+        assert_eq!(next["error"]["code"], "HOST_RETIRING", "{next}");
         assert_eq!(serving.finish(), Some(0));
     }
+}
+
+#[test]
+fn only_a_caught_panic_retires_the_host_not_a_returned_internal_error() {
+    let lifecycle = Lifecycle::new(SoftLimits::OFF);
+    let output = crate::serve_io::Captured::default();
+    let out = output.responder();
+    let internal = || Err(HostError::new("INTERNAL", "returned as a value"));
+    lifecycle.begin_request();
+    answer(&lifecycle, None, &out, "returned", internal(), &[], &|_| {
+        None
+    })
+    .expect("answer");
+    assert_eq!(lifecycle.state(), crate::lifecycle::HostState::Ready);
+    lifecycle.begin_request();
+    lifecycle.record_defect();
+    answer(&lifecycle, None, &out, "panicked", internal(), &[], &|_| {
+        None
+    })
+    .expect("answer");
+    assert_eq!(
+        lifecycle.draining_since().map(|(reason, _)| reason),
+        Some(DrainReason::Defect)
+    );
 }
 
 #[test]

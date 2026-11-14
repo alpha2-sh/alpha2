@@ -403,6 +403,9 @@ All notable changes to this project are documented in this file.
   times the stall limit is answered with the code of that step's side (`DECODE_STALLED`,
   `GPU_TIMEOUT`, `ENCODE_STALLED`, `PLUGIN_LIMIT` or `INTERNAL`) naming the step, and the host
   retires. Before, a read that never returned left the request unanswered and the host alive.
+- A host whose request panicked answers it `INTERNAL` and drains with the new reason `defect`:
+  running requests finish and new ones are answered `HOST_RETIRING`. Before, it went on serving
+  with whatever shared state the unwind left.
 
 ## [0.6.0] - 2026-11-08
 
