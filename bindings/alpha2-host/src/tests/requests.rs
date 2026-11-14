@@ -1102,7 +1102,7 @@ fn a_cli_export_is_checked_as_the_protocol_checks_it() {
         for (key, value) in fields.as_object().expect("fields") {
             request[key] = value.clone();
         }
-        crate::protocol::parse_request(&request.to_string()).map(|_| ())
+        parse_request(&request.to_string()).map(|_| ())
     };
     let loudness = json!({"targetLufs": -14, "truePeakCeilingDbtp": -1});
     assert_eq!(
@@ -1368,7 +1368,7 @@ fn format_line(fields: &Value) -> String {
 
 fn resolved_format(fields: &Value) -> Result<crate::protocol::ResolvedFormat, HostError> {
     match parse_request(&format_line(fields))? {
-        Request::Export(export) => export.format(),
+        Request::Export(export) => export.format().map_err(HostError::from),
         Request::Capabilities { .. }
         | Request::Conform(_)
         | Request::Still(_)
@@ -1496,7 +1496,7 @@ fn a_cli_export_resolves_its_container_as_the_protocol_does() {
         crate::cli::parse_export_args(args)
             .and_then(crate::cli::export_request)
             .and_then(|(request, _)| match request {
-                Request::Export(export) => export.format(),
+                Request::Export(export) => export.format().map_err(HostError::from),
                 Request::Capabilities { .. }
                 | Request::Conform(_)
                 | Request::Still(_)
@@ -2835,6 +2835,7 @@ fn every_operation_refuses_an_unknown_field_and_takes_an_attachment_list() {
             } else {
                 crate::protocol::parse_status(line).map(|_| ())
             }
+            .map_err(HostError::from)
         };
         let mut with_attachments = request.clone();
         with_attachments["attachments"] = json!([]);

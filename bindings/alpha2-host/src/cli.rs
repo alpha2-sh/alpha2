@@ -3,8 +3,8 @@ use std::path::PathBuf;
 
 use crate::assets::{ProxyRequest, RequestMedia, resolve_media};
 use crate::config::VideoDecodePolicy;
-use crate::effect_request::EffectRequest;
 use crate::host::Host;
+use crate::protocol::EffectRequest;
 use crate::protocol::{
     AudioQualityRequest, ExportMedia, ExportRequest, HostError, LoudnessRequest, ProjectJson,
     RateRequest, Request, VideoQualityRequest,
@@ -166,11 +166,11 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
         None => Vec::new(),
     };
     let request = ExportRequest {
-        _operation: serde::de::IgnoredAny,
-        _attachments: serde::de::IgnoredAny,
+        operation: serde::de::IgnoredAny,
+        attachments: serde::de::IgnoredAny,
         protocol_version: PROTOCOL_VERSION,
         request_id: "cli-export".to_owned(),
-        project: ProjectJson::from_value(&project)?,
+        project: ProjectJson::from_value(&project).map_err(HostError::json)?,
         assets: options.assets,
         proxies: options.proxies,
         frames: options.frames,
@@ -258,7 +258,7 @@ fn render_cache_request(
     match (directory, quota, backlog) {
         (Some(directory), quota, backlog) => crate::render_cache::RenderCacheRequest::new(
             directory,
-            quota.unwrap_or(crate::render_cache::DEFAULT_QUOTA_BYTES),
+            quota.unwrap_or(alpha2_host_core::requests::DEFAULT_RENDER_CACHE_QUOTA_BYTES),
             backlog.unwrap_or_default(),
         )
         .map(Some)

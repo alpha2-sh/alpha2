@@ -51,7 +51,6 @@ mod d3d12va_probe;
 mod decode;
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 mod dx12_adapters;
-mod effect_request;
 mod encode;
 mod encoder_refusal;
 mod export_decode;
@@ -113,7 +112,7 @@ use alpha2_native::ffmpeg_runtime_identity;
 use alpha2_render::Renderer;
 use serde_json::{Value, json};
 
-const PROTOCOL_VERSION: u32 = 2;
+use alpha2_host_core::requests::PROTOCOL_VERSION;
 const GPU_INIT_EXIT_CODE: u8 = 70;
 const DEFAULT_EXPORT_IN_FLIGHT_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_IN_FLIGHT_VIDEO_FRAMES: usize = 2;
@@ -1750,7 +1749,9 @@ impl RequestWork {
             Ok(crate::protocol::Request::Compose(request)) => {
                 crate::compose_request::answer(&request)
             }
-            Ok(crate::protocol::Request::Edit(request)) => request.answer(),
+            Ok(crate::protocol::Request::Edit(request)) => {
+                crate::compose_request::answer_edit(&request)
+            }
             Ok(crate::protocol::Request::Extract(request)) => match host.as_mut() {
                 Some(host) => crate::extract_request::handle(host, *request, out, extract),
                 None => Err(missing()),
@@ -2037,7 +2038,7 @@ fn envelope_of(input: InputFrame) -> Envelope {
             });
             let envelope = envelope
                 .map_err(|reason| HostError::new("INVALID_REQUEST", reason))
-                .and_then(|()| parse_request(&header));
+                .and_then(|()| parse_request(&header).map_err(HostError::from));
             let request_id = match &envelope {
                 Ok(request) => request.request_id().to_owned(),
                 Err(_) => request_id_from_header(&header),

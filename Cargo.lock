@@ -438,11 +438,14 @@ dependencies = [
 name = "alpha2-host-core"
 version = "0.6.0"
 dependencies = [
+ "alpha2-assets",
  "alpha2-audio",
+ "alpha2-compose",
  "alpha2-container",
  "alpha2-engine",
  "alpha2-eval",
  "alpha2-extensions",
+ "alpha2-gpu",
  "alpha2-media",
  "alpha2-model",
  "alpha2-os",
@@ -456,8 +459,10 @@ dependencies = [
  "image-webp",
  "libloading",
  "png",
+ "serde",
  "serde_json",
  "sha2 0.11.0",
+ "unicode-normalization",
  "wasmtime",
  "wgpu",
  "zune-core",

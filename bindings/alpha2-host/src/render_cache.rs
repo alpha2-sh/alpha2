@@ -61,6 +61,8 @@ use alpha2_time::{FrameRate, MediaTime};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+pub use alpha2_host_core::requests::{Backlog, RenderCacheRequest};
+
 const MAGIC: &[u8; 4] = b"A2RC";
 /// A new frame format alone keeps it: older frames stay counted and evicted by the quota, and are
 /// never taken because their header names another format.
@@ -72,7 +74,6 @@ const HEADER_BYTES: usize = 4 + 4 + 4 + 4 + ENCODING_BYTES + 8 + 32;
 const ENCODING_BYTES: usize = 8;
 /// A temporary file this old belongs to a writer that is gone.
 const STALE_TEMPORARY: Duration = Duration::from_hours(1);
-pub const DEFAULT_QUOTA_BYTES: u64 = 4 << 30;
 /// Includes the frame being stored. Two frames of output planes plus one compressed copy, beyond
 /// what the export's memory budgets bound.
 pub const BACKLOG_FRAMES: usize = 2;
@@ -130,95 +131,6 @@ thread_local! {
 
 #[cfg(test)]
 pub static FRAMES_READ: Mutex<Vec<(PathBuf, Option<String>)>> = Mutex::new(Vec::new());
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Backlog {
-    /// Reported as `busySkips`.
-    #[default]
-    Skip,
-    Wait,
-}
-
-impl Backlog {
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "skip" => Some(Self::Skip),
-            "wait" => Some(Self::Wait),
-            _ => None,
-        }
-    }
-
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Skip => "skip",
-            Self::Wait => "wait",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RenderCacheRequest {
-    pub directory: PathBuf,
-    pub quota_bytes: u64,
-    pub backlog: Backlog,
-}
-
-impl RenderCacheRequest {
-    /// The only constructor, so the protocol and the CLI refuse the same values.
-    ///
-    /// # Errors
-    /// An empty directory, which would bake into the working directory, or a zero quota.
-    pub fn new(directory: PathBuf, quota_bytes: u64, backlog: Backlog) -> Result<Self, String> {
-        if directory.as_os_str().is_empty() {
-            return Err("renderCache.directory must be a non-empty path".to_owned());
-        }
-        if quota_bytes == 0 {
-            return Err("renderCache.quotaBytes must be a positive integer".to_owned());
-        }
-        Ok(Self {
-            directory,
-            quota_bytes,
-            backlog,
-        })
-    }
-
-    /// # Errors
-    /// Describes the first malformed field.
-    pub fn from_json(value: &Value) -> Result<Self, String> {
-        let object = value.as_object().ok_or_else(|| {
-            format!(
-                "renderCache must be an object {{ directory, quotaBytes?, backlog? }}, received {value}"
-            )
-        })?;
-        for key in object.keys() {
-            if !["directory", "quotaBytes", "backlog"].contains(&key.as_str()) {
-                return Err(format!(
-                    "renderCache has an unknown key \"{key}\"; it takes directory, quotaBytes, and backlog"
-                ));
-            }
-        }
-        let directory = object
-            .get("directory")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "renderCache.directory must be a non-empty path".to_owned())?;
-        let quota_bytes = match object.get("quotaBytes") {
-            None | Some(Value::Null) => DEFAULT_QUOTA_BYTES,
-            Some(quota) => quota
-                .as_u64()
-                .ok_or_else(|| "renderCache.quotaBytes must be a positive integer".to_owned())?,
-        };
-        let backlog = match object.get("backlog") {
-            None | Some(Value::Null) => Backlog::default(),
-            Some(backlog) => backlog
-                .as_str()
-                .and_then(Backlog::parse)
-                .ok_or_else(|| "renderCache.backlog must be \"skip\" or \"wait\"".to_owned())?,
-        };
-        Self::new(PathBuf::from(directory), quota_bytes, backlog)
-    }
-}
 
 /// Everything an export's frames depend on besides their time, hashed.
 #[derive(Default)]

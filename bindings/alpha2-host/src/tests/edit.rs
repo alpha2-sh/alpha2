@@ -36,7 +36,7 @@ fn each_corpus_case_answers_as_the_engine() {
             panic!("{name}: an edit request");
         };
         let expected = &case["expected"];
-        match request.answer() {
+        match crate::compose_request::answer_edit(&request) {
             Ok(answer) => {
                 let text = answer["projectJson"].as_str().expect("projectJson");
                 assert_eq!(
@@ -154,7 +154,7 @@ fn an_edit_that_grows_the_project_past_the_document_cap_is_refused() {
     let Ok(Request::Edit(request)) = parse_request(&line) else {
         panic!("an edit request");
     };
-    let Err(error) = request.answer() else {
+    let Err(error) = crate::compose_request::answer_edit(&request) else {
         panic!("the edit applied");
     };
     assert_eq!(error.code, "INVALID_INPUT");

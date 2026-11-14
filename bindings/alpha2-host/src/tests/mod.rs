@@ -13,14 +13,13 @@ use crate::decode::{
     backward_run, unique_decoded_frame_bytes,
 };
 use crate::decode::{DecodeBudget, DecodeJob, DecodedSourceFrame};
-use crate::effect_request::EffectRequest;
 use crate::encode::EncodeWorker;
 use crate::encode::{EncodeChannelDepth, EncodeCommand, PipelineFailure};
 use crate::memory::InFlightBudget;
 use crate::metrics::{ExportMetrics, add_stage_split_metrics, export_pipeline_limits};
+use crate::protocol::EffectRequest;
 use crate::protocol::{
     AudioQualityRequest, HostError, LoudnessRequest, RateRequest, Request, VideoQualityRequest,
-    parse_request,
 };
 use crate::trace::{AudioBlockTrace, ExportTrace, VideoFrameTrace};
 use alpha2_engine::{ExportFrameNeeds, ExportStepTimings};
@@ -36,6 +35,11 @@ use alpha2_native::{NativeAudioCodec, NativeVideoCodec};
 use alpha2_render::{FrameSubmitTimings, InputSpec, RenderSize};
 use alpha2_time::{MediaTime, TimeRange};
 use serde_json::{Value, json};
+
+/// A refusal as the host answers it.
+fn parse_request(line: &str) -> Result<Request, HostError> {
+    crate::protocol::parse_request(line).map_err(HostError::from)
+}
 
 mod alpha_sources;
 mod audio;

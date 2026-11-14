@@ -9,7 +9,6 @@
 //! their defaults shrink together to half of what the process may use
 //! ([`MemoryPolicy::resolve_on`]); explicitly set budgets are never shrunk.
 
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
@@ -17,25 +16,7 @@ use crate::{
     DEFAULT_EXPORT_IN_FLIGHT_BYTES, DEFAULT_PROVIDER_SOURCE_BYTES, DEFAULT_REVERSE_CACHE_BYTES,
 };
 
-#[allow(clippy::struct_field_names)] // Named as the protocol names them.
-#[derive(Copy, Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MemoryRequest {
-    /// Readback staging and packed encoder frames, or on the GPU-resident path the plane ring and
-    /// encoder surfaces.
-    pub in_flight_bytes: Option<u64>,
-    pub decode_queue_bytes: Option<u64>,
-    /// Frames a reversed clip keeps decoded.
-    pub reverse_cache_bytes: Option<u64>,
-    pub audio_window_bytes: Option<u64>,
-    /// Kept frames and images of SVG, animated image, Lottie, OpenEXR and image sequence sources.
-    pub provider_source_bytes: Option<u64>,
-    /// By the host's per-session estimate; bounds how many sessions an export opens.
-    pub decoder_session_bytes: Option<u64>,
-    /// In (0, 1], applied to every budget after resolution, so a retry can ask for less without
-    /// knowing the host's defaults.
-    pub scale: Option<f64>,
-}
+pub use alpha2_host_core::requests::MemoryRequest;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BudgetSource {

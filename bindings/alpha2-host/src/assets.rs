@@ -21,8 +21,9 @@ use alpha2_model::{
     VideoStreamShape,
 };
 use alpha2_time::MediaTime;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+pub use alpha2_host_core::requests::ProxyRequest;
 
 /// A stream only a hardware session decodes (AV1 without libdav1d) is reported `unsupported` by
 /// conform on a software-decode host, rather than failing the export at its first frame.
@@ -48,27 +49,6 @@ impl HardwareVideoDecode {
             Self::None => false,
             Self::Codecs(codecs) => codecs.contains(&codec),
             Self::PerStream => true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProxyRequest {
-    pub path: PathBuf,
-    #[serde(default)]
-    pub made_from: Option<MediaFingerprint>,
-    /// Set when the proxy was tone-mapped.
-    #[serde(default)]
-    pub color_pipeline: Option<String>,
-}
-
-impl ProxyRequest {
-    pub const fn at(path: PathBuf) -> Self {
-        Self {
-            path,
-            made_from: None,
-            color_pipeline: None,
         }
     }
 }

@@ -8,8 +8,8 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use alpha2_engine::extract::{
-    AudioInput, Delivery, Descriptor, Direction, Emit, ExtractRequest, ExtractSession, Need,
-    PassProgress, SessionError, Step, SuppliedAudio, SuppliedFrame, Supplier, VideoInput,
+    AudioInput, Delivery, Direction, Emit, ExtractRequest, ExtractSession, Need, PassProgress,
+    SessionError, Step, SuppliedAudio, SuppliedFrame, Supplier, VideoInput,
 };
 use alpha2_host_core::host_frames::Attachment;
 use alpha2_media::CancelToken;
@@ -20,10 +20,9 @@ use serde_json::{Value, json};
 
 use crate::HostError;
 use crate::PROTOCOL_VERSION;
-use crate::assets::ProxyRequest;
 use crate::host::Host;
-use crate::protocol::{ExportMedia, ProjectJson};
 use crate::serve_io::Responder;
+pub use alpha2_host_core::requests::{ExtractHostRequest, PluginRequest};
 
 /// How long a client may take to acknowledge a `pass`, `video` or `audio` step by default.
 pub const DEFAULT_STEP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -54,79 +53,6 @@ impl ExtractOptions {
 impl Default for ExtractOptions {
     fn default() -> Self {
         Self::DEFAULT
-    }
-}
-
-/// The `plugin` of an `extract` request, a manifest the host fetches and runs.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PluginRequest {
-    /// An `https:` URL, a `file:` URL or a local path.
-    pub manifest: String,
-    /// SHA-256 of the manifest's bytes.
-    pub sha256: String,
-    /// Native artifacts run with the host's rights; refused unless allowed.
-    #[serde(default)]
-    pub allow_native: bool,
-    /// The wasm artifact even where a native one is allowed.
-    #[serde(default)]
-    pub force_wasm: bool,
-}
-
-/// An `extract` request.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ExtractHostRequest {
-    pub protocol_version: u32,
-    pub request_id: String,
-    pub operation: String,
-    /// The frame's attachment list, read with the frame.
-    #[serde(default, rename = "attachments")]
-    pub(crate) _attachments: serde::de::IgnoredAny,
-    pub project: ProjectJson,
-    pub assets: HashMap<String, PathBuf>,
-    #[serde(default)]
-    pub proxies: HashMap<String, Vec<ProxyRequest>>,
-    #[serde(default)]
-    pub frames: HashMap<String, Vec<Option<PathBuf>>>,
-    #[serde(default)]
-    pub resources: HashMap<String, HashMap<String, PathBuf>>,
-    #[serde(default)]
-    pub media: ExportMedia,
-    #[serde(default)]
-    pub effect_assets: HashMap<String, PathBuf>,
-    #[serde(rename = "fonts", default)]
-    pub font_files: Vec<PathBuf>,
-    #[serde(default)]
-    pub effects: Vec<crate::effect_request::EffectRequest>,
-    /// The run, as `alpha2_engine::extract::ExtractRequest` writes it.
-    pub request: ExtractRequest,
-    /// The client-side extractor's descriptor.
-    #[serde(default)]
-    pub descriptor: Option<Descriptor>,
-    /// A plugin the host runs itself.
-    #[serde(default)]
-    pub plugin: Option<PluginRequest>,
-}
-
-impl ExtractHostRequest {
-    /// # Errors
-    /// `INVALID_REQUEST` for another operation, or unless exactly one of `descriptor` and `plugin`
-    /// is given.
-    pub fn check(&self) -> Result<(), HostError> {
-        if self.operation != "extract" {
-            return Err(HostError::new(
-                "INVALID_REQUEST",
-                "invalid request: the operation is not `extract`",
-            ));
-        }
-        if self.descriptor.is_some() == self.plugin.is_some() {
-            return Err(HostError::new(
-                "INVALID_REQUEST",
-                "an extract request has exactly one of `descriptor` and `plugin`",
-            ));
-        }
-        Ok(())
     }
 }
 
@@ -445,7 +371,7 @@ struct TimelineFrames<'a> {
     project: String,
     assets: HashMap<String, PathBuf>,
     effect_assets: HashMap<String, PathBuf>,
-    effects: Vec<crate::effect_request::EffectRequest>,
+    effects: Vec<crate::protocol::EffectRequest>,
     canvas: (u32, u32),
 }
 

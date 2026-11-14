@@ -11,6 +11,8 @@ use crate::{
     MAX_IN_FLIGHT_VIDEO_FRAMES, MAX_REVERSE_HARDWARE_SURFACES,
 };
 
+pub use alpha2_host_core::requests::{ExportStrategy, VideoInputPolicy};
+
 /// `ALPHA2_GPU_TIMEOUT_MS` (default 30 s, enough for slow GPUs rendering large frames).
 pub fn configured_gpu_wait_timeout() -> std::time::Duration {
     env::var("ALPHA2_GPU_TIMEOUT_MS")
@@ -79,82 +81,6 @@ pub fn configured_yuv_transcode() -> Result<(), String> {
     match env::var("ALPHA2_YUV_TRANSCODE").ok().as_deref() {
         Some("0" | "false" | "off") => Err("ALPHA2_YUV_TRANSCODE is off".to_owned()),
         _ => Ok(()),
-    }
-}
-
-/// Whether frames may, must, or must not reach the encoder without a CPU readback. Every export
-/// reports the path as `videoPipeline` and why the GPU path was not taken as
-/// `gpuOutputPathUnavailable`.
-#[derive(Copy, Clone, Debug, Default, serde::Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum VideoInputPolicy {
-    /// The GPU-resident path when device, codec, size and pinned encoder allow it; otherwise
-    /// readback, with the reason.
-    #[default]
-    Auto,
-    /// The GPU-resident path or an error naming what it lacks; nothing falls back silently.
-    GpuRequired,
-    CpuReadback,
-}
-
-impl VideoInputPolicy {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::GpuRequired => "gpu-required",
-            Self::CpuReadback => "cpu-readback",
-        }
-    }
-
-    /// # Errors
-    /// Names the accepted values.
-    pub fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "auto" => Ok(Self::Auto),
-            "gpu-required" => Ok(Self::GpuRequired),
-            "cpu-readback" => Ok(Self::CpuReadback),
-            other => Err(format!(
-                "input policy must be auto, gpu-required, or cpu-readback, not {other}"
-            )),
-        }
-    }
-}
-
-/// Copying keeps the source's own encoding (bitrate, profile, GOP), so it answers a different
-/// request than a render and is only taken when asked for.
-#[derive(Copy, Clone, Debug, Default, serde::Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ExportStrategy {
-    #[default]
-    Render,
-    /// Copy where the range is one source untouched and its packets decode into exactly the
-    /// rendered frames; render otherwise, with the reason.
-    PreferCopy,
-    RequireCopy,
-}
-
-impl ExportStrategy {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Render => "render",
-            Self::PreferCopy => "prefer-copy",
-            Self::RequireCopy => "require-copy",
-        }
-    }
-
-    /// # Errors
-    /// Names the accepted values.
-    pub fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "render" => Ok(Self::Render),
-            "prefer-copy" => Ok(Self::PreferCopy),
-            "require-copy" => Ok(Self::RequireCopy),
-            other => Err(format!(
-                "strategy must be render, prefer-copy, or require-copy, not {other}"
-            )),
-        }
     }
 }
 

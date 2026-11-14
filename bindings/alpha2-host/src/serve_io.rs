@@ -424,7 +424,7 @@ fn cancel_answer(header: &str) -> Value {
             "protocolVersion": PROTOCOL_VERSION,
             "requestId": crate::protocol::request_id_from_header(header),
             "ok": false,
-            "error": error,
+            "error": HostError::from(error),
         }),
     }
 }
@@ -441,7 +441,7 @@ fn status_answer(header: &str, lifecycle: &Lifecycle) -> Value {
             "protocolVersion": PROTOCOL_VERSION,
             "requestId": crate::protocol::request_id_from_header(header),
             "ok": false,
-            "error": error,
+            "error": HostError::from(error),
         }),
     }
 }

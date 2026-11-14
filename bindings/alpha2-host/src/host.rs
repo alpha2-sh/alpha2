@@ -17,7 +17,6 @@ use crate::config::{
     configured_pipeline_enabled, decoder_thread_policy, resolve_video_rate_control,
 };
 use crate::decode::{DecodeScheduler, DecodeWorker};
-use crate::effect_request::EffectRequest;
 use crate::encode::{
     EncodeCommand, EncodeProgressState, EncodeWorker, FramePool, NativeExportSink, PipelineFailure,
     PooledFrame, drain_encode_worker, encode_event_bytes, handle_encode_worker_event,
@@ -30,6 +29,7 @@ use crate::media::{PendingMedia, PendingVideoReadback, ready_pending_media, unpa
 use crate::metrics::{
     ExportMetrics, VideoPipeline, export_metrics_json, export_pipeline_limits, frames_per_second,
 };
+use crate::protocol::EffectRequest;
 use crate::protocol::LoudnessRequest;
 use crate::protocol::{
     AudioQualityRequest, HostError, RateRequest, Request, ResolvedFormat, VideoQualityRequest,
@@ -699,7 +699,7 @@ impl Host {
             Request::Export(export) => return self.handle_export(*export, progress),
             Request::Still(still) => return self.handle_still(*still),
             Request::Compose(compose) => return crate::compose_request::answer(&compose),
-            Request::Edit(edit) => return edit.answer(),
+            Request::Edit(edit) => return crate::compose_request::answer_edit(&edit),
             Request::Extract(_) => {
                 return Err(HostError::new(
                     "INTERNAL",
