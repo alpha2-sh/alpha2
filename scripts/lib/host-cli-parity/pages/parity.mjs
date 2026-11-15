@@ -12,6 +12,8 @@ try {
   document.title = "stage-project";
   const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.json());
   const golden = await pixels("/tests/corpus/cross_topology_parity.png");
+  // A 2D canvas that reads back blank would compare blank against blank.
+  if (golden.every((value) => value === 0)) throw new Error("the golden PNG read back blank");
   document.title = "stage-engine";
   const surface = document.createElement("canvas");
   surface.width = 64;

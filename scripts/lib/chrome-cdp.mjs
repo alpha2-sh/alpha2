@@ -193,11 +193,13 @@ export function chromeGpuMode({
         `DISPLAY ${env.DISPLAY} has no DRI3 (Xvfb): Chrome's GPU process hangs on Mesa Vulkan there; use scripts/run-with-gpu-display.sh`,
       );
   }
+  // Without VulkanFromANGLE, some Vulkan drivers under Xwayland give ANGLE no context: no WebGL2,
+  // and accelerated 2D canvases read back transparent black.
   return {
     mode,
     flags: [
       "--use-angle=vulkan",
-      "--enable-features=Vulkan",
+      "--enable-features=Vulkan,VulkanFromANGLE",
       "--ignore-gpu-blocklist",
     ],
   };

@@ -57,8 +57,8 @@ const { default: init, WebEffectRegistry, setGpuWatchdogMs } = await import("/pa
 await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
 GPUAdapter.prototype.requestDevice = requestDevice;
-if (device === null) throw new Error("the binding's device was not seen");
 const adapter = webgpuAdapter(engine);
+if (device === null) throw new Error("the binding's device was not seen");
 const described = JSON.parse(engine.diagnostics()).adapter ?? {};
 if (described.isFallbackAdapter || described.architecture === "swiftshader")
   skip("hardware-webgpu", "a software WebGPU adapter draws a 4K heavy frame in minutes", { adapter });

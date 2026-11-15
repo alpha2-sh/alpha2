@@ -206,7 +206,7 @@ test("chrome picks the machine GPU on macOS and Windows and SwiftShader on Linux
       mode: "machine",
       flags: [
         "--use-angle=vulkan",
-        "--enable-features=Vulkan",
+        "--enable-features=Vulkan,VulkanFromANGLE",
         "--ignore-gpu-blocklist",
       ],
     },

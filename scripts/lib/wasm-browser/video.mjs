@@ -637,7 +637,16 @@ globalThis.VideoDecoder = class extends Native {
         };
         init.output(frame);
       },
+      // A decode error closes the decoder without a close() call.
+      error: (error) => {
+        this.#release();
+        init.error(error);
+      },
     });
+  }
+  #release() {
+    if (this.#counted) counts.live -= 1;
+    this.#counted = false;
   }
   configure(config) {
     if (!this.#counted) {
@@ -648,8 +657,7 @@ globalThis.VideoDecoder = class extends Native {
     return super.configure(config);
   }
   close() {
-    if (this.#counted) counts.live -= 1;
-    this.#counted = false;
+    this.#release();
     return super.close();
   }
 };
