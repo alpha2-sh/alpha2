@@ -3098,5 +3098,5 @@ def test_extract_sends_the_render_inputs_and_only_a_timeline_input_needs_every_e
     ]
     assert len(requests) == 2
     assert requests[0]["effectAssets"] == {}
-    assert requests[1]["effectAssets"] == {"grade": "/media/grade.cube"}
+    assert requests[1]["effectAssets"] == {"grade": os.path.abspath("/media/grade.cube")}
     assert {"frames", "resources", "effects", "fonts"} <= requests[1].keys()
