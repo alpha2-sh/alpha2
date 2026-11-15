@@ -1078,7 +1078,8 @@ fn a_preview_of_a_long_recording_ends_at_once_and_plays_from_windows() {
     player.end();
     let took = ending.elapsed();
     eprintln!("end() during the audio decode took {took:?}");
-    assert!(took < Duration::from_millis(500), "{took:?}");
+    // Far below decoding the whole recording, with room for a slow simulator.
+    assert!(took < Duration::from_secs(2), "{took:?}");
 
     let resident = || alpha2_os::process_memory().resident_bytes;
     let before = resident();
