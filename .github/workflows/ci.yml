@@ -1378,7 +1378,8 @@ jobs:
           pipx install uv==0.13.3
           uv venv -p ${{ matrix.python }} .venv
           uv pip install --group dev
-          uv pip install --no-deps -e .
+          # A dev build carries the native test hooks that ALPHA2_REQUIRE asks for.
+          MATURIN_PEP517_ARGS="--profile dev" uv pip install --no-deps -e .
           if [ -d .venv/Scripts ]; then echo "PY=.venv/Scripts" >> "$GITHUB_ENV"; else echo "PY=.venv/bin" >> "$GITHUB_ENV"; fi
       - if: runner.os == 'Linux' && matrix.python == '3.11'
         run: |
