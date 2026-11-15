@@ -632,13 +632,20 @@ test("presenting on every tick keeps one backend presentation in flight and show
   const backend = new FakeBackend();
   let inFlight = 0;
   let mostInFlight = 0;
+  let tick = 0;
+  // Counted in the caller's ticks, not wall time: timers are coarse on some systems.
+  const held = [];
+  const release = (all) => {
+    for (const entry of held.splice(0))
+      if (all || entry.until <= tick) entry.resolve();
+      else held.push(entry);
+  };
   const present = backend.present.bind(backend);
   backend.present = async (timeTicks) => {
     inFlight += 1;
     mostInFlight = Math.max(mostInFlight, inFlight);
     try {
-      // Three ticks of the caller's.
-      await new Promise((resolve) => setTimeout(resolve, 12));
+      await new Promise((resolve) => held.push({ resolve, until: tick + 3 }));
       return await present(timeTicks);
     } finally {
       inFlight -= 1;
@@ -647,11 +654,20 @@ test("presenting on every tick keeps one backend presentation in flight and show
   const player = new Alpha2Player(backend);
   await player.initialize({});
   const results = [];
-  for (let tick = 0; tick < 30; tick += 1) {
+  for (tick = 0; tick < 30; tick += 1) {
     results.push(player.present(BigInt(tick) * 4_000n));
-    await new Promise((resolve) => setTimeout(resolve, 4));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release(false);
   }
-  const settled = await Promise.all(results);
+  let done = false;
+  const all = Promise.all(results).finally(() => {
+    done = true;
+  });
+  while (!done) {
+    release(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  const settled = await all;
   const posted = backend.calls.filter(([name]) => name === "present");
   assert.equal(mostInFlight, 1);
   assert.ok(posted.length <= 16, `${posted.length} presentations posted`);
