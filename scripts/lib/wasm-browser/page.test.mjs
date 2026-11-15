@@ -62,6 +62,14 @@ test("the engine's DECODE_UNAVAILABLE skips only when WebCodecs refuses the code
     });
   const only = skipWith(decoders((codec) => codec === "avc1.64001f"));
   assert.equal(await only(refusal("video", "avc1.64001f")), null);
+  const trialFailed = Object.assign(refusal("audio", "avc1.64001f"), {
+    cause: new Error("EncodingError"),
+  });
+  assert.equal(
+    (await only(trialFailed)).capability,
+    "webcodecs-audio",
+    "the browser's own decoder threw",
+  );
   assert.deepEqual(await only(refusal("video", "hvc1.1.6.L93.B0")), {
     skipped:
       "this browser does not decode the case's source (WebCodecs refuses hvc1.1.6.L93.B0): cannot decode hvc1.1.6.L93.B0",

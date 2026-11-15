@@ -1187,8 +1187,12 @@ const outcome = (work) => {
 let result;
 try {
   const canvas = new OffscreenCanvas(64, 48);
-  const engine = await wasm.WebEffectRegistry.createForCanvas(canvas);
-  if (engine.backend !== "webgl2") result = { skipped: "the worker renderer is " + engine.backend };
+  const engine = await wasm.WebEffectRegistry.createForCanvas(canvas).catch((error) => {
+    if (error?.code === "GPU_INIT_FAILED" || error?.code === "INVALID_INPUT") return null;
+    throw error;
+  });
+  if (engine === null) result = { skipped: "no WebGL2 in the worker" };
+  else if (engine.backend !== "webgl2") result = { skipped: "the worker renderer is " + engine.backend };
   else {
     engine.loadProject(project);
     engine.uploadRgbaImage("image-source", 64, 48, new Uint8Array(64 * 48 * 4).fill(255));

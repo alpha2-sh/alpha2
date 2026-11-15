@@ -12,8 +12,9 @@ export const LUMA_AT = `async function lumaAt(frame, x, y) {
 }`;
 
 // The skip for the engine's DECODE_UNAVAILABLE when WebCodecs, asked on its own, refuses the
-// track's codec too; null otherwise, so a refusal of a codec this browser decodes fails the case.
-// The sample rate is not in the facts and rarely decides support. Kept as source for a Node test.
+// track's codec too, or when the refusal's cause is the browser decoder's own exception (a failed
+// trial decode); null otherwise, so a refusal of a codec this browser decodes fails the case. The
+// sample rate is not in the facts and rarely decides support. Kept as source for a Node test.
 export const DECODE_REFUSAL_SKIP = `async function decodeRefusalSkip(error) {
   const facts = error?.code === "DECODE_UNAVAILABLE" ? error.facts : undefined;
   if (!facts?.kind || !facts.codec) return null;
@@ -21,9 +22,9 @@ export const DECODE_REFUSAL_SKIP = `async function decodeRefusalSkip(error) {
   const config = facts.kind === "audio"
     ? { codec: facts.codec, sampleRate: 48000, numberOfChannels: facts.channels ?? 2 }
     : { codec: facts.codec };
-  const decodes = decoder
+  const decodes = error.cause === undefined && (decoder
     ? await decoder.isConfigSupported(config).then(({ supported }) => supported === true, () => false)
-    : false;
+    : false);
   if (decodes) return null;
   return {
     skipped: "this browser does not decode the case's source (WebCodecs refuses " + facts.codec + "): "
