@@ -2662,7 +2662,9 @@ def run_dead_idle_host(scenario: dict[str, Any], tmp_path: Path, fake_host: Fake
         answer = 'send(request, ok=True, result={"pid": os.getpid()})'
         if exits:
             answer += "\n        time.sleep(0.05)\n        os._exit(0)"
-        client = HostClient(host_path=fake_host(tmp_path / str(index), pooled_host(log, answer)))
+        fake_host(tmp_path / str(index), pooled_host(log, answer))
+        # A venv interpreter on Windows is a launcher that holds the pipes after the host ends.
+        client = HostClient(host_path=sys._base_executable)
         first = client.export(**export_args("out.mp4"))["pid"]
         for _ in range(scenario["given"]["requestsAfterEach"]):
             if not exits:

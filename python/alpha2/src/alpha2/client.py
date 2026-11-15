@@ -1508,6 +1508,8 @@ class _Host:
         assert stdin is not None
         try:
             while (framed := self._writes.get()) is not None:
+                if self._ended_unseen():
+                    raise BrokenPipeError("alpha2-host has ended")
                 _wire.write(stdin, framed)
                 self._written += 1
         except (OSError, ValueError) as error:
@@ -1516,6 +1518,15 @@ class _Host:
             stdin.close()
         except (OSError, ValueError):
             pass
+
+    def _ended_unseen(self) -> bool:
+        """Mirrors ``#endedUnseen`` of the Node client."""
+        if sys.platform != "win32":
+            return False
+        import _winapi
+
+        handle = self.process._handle  # type: ignore[attr-defined,unused-ignore]
+        return _winapi.GetExitCodeProcess(handle) != _winapi.STILL_ACTIVE
 
     def _wait(self) -> None:
         self.process.wait()

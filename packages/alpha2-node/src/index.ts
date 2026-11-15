@@ -3160,6 +3160,8 @@ class Host {
           }),
       };
       signal?.addEventListener("abort", abort, { once: true });
+      // A host that has ended never reads the frame; its exit settles the request as unsent.
+      if (this.#endedUnseen()) return;
       wire.write(frame, (error) => {
         if (!error) {
           written = true;
@@ -3441,6 +3443,21 @@ class Host {
       child.exitCode === null &&
       child.signalCode === null
     );
+  }
+
+  /**
+   * Whether Windows reports the process ended before its exit event. Its pipe still takes writes
+   * until its handles close, though nothing reads them.
+   */
+  #endedUnseen(): boolean {
+    const pid = this.#child?.pid;
+    if (process.platform !== "win32" || pid === undefined) return false;
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ESRCH";
+    }
   }
 
   /** Only an idle host lets this process exit; the host exits when its stdin closes with it. */
