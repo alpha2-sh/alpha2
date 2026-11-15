@@ -591,7 +591,8 @@ fn the_steady_rate_follows_the_encoder_and_leaves_out_set_up_and_finish() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("steady-rate");
     let end = 2 * alpha2_time::TICKS_PER_SECOND;
-    let slow = Duration::from_millis(40);
+    // Slower than a frame renders under GPU validation on a virtual GPU: the encoder sets the pace.
+    let slow = Duration::from_millis(250);
     crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(Some(slow)));
     let request = json!({
         "protocolVersion": 2, "operation": "export", "requestId": "steady-rate",
