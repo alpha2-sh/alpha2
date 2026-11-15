@@ -701,6 +701,8 @@ mod tests {
     fn a_watchdog_that_fires_before_its_export_has_a_token_stops_it_and_keeps_watching() {
         use std::sync::atomic::{AtomicU64, Ordering};
         use std::time::{Duration, Instant};
+        // A firing watchdog stops the newest request of the process; exports hold this lock.
+        let _exports = crate::tests::gpu_test_lock();
         let percent = std::sync::Arc::new(AtomicU64::new(50));
         let reader = |percent: &std::sync::Arc<AtomicU64>| {
             let percent = std::sync::Arc::clone(percent);

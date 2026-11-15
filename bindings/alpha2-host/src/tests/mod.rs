@@ -75,7 +75,8 @@ mod stills;
 
 /// Devices created and named from many threads at once crash inside the Vulkan loader
 /// (`vkSetDebugUtilsObjectNameEXT`).
-fn gpu_test_lock() -> alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard<'static, ()>> {
+pub(crate) fn gpu_test_lock()
+-> alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard<'static, ()>> {
     static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
     alpha2_native::require_pinned_ffmpeg_for_tests();
     alpha2_gpu::validation_log::TestTurn::new(
