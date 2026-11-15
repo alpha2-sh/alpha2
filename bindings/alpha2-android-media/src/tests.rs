@@ -57,6 +57,8 @@ fn first_picture_decodes(name: &str) -> bool {
 /// The suite's video sessions. The emulator's Codec2 host-backed decoders (`c2.goldfish`) keep
 /// the left columns of a picture whose stream crops columns off the left, and nothing in their
 /// output format tells it apart from a correct crop, so those sessions decode in software here.
+/// Some platform software H.264 decoders take High 4:4:4 Predictive and deliver a wrong picture
+/// without an error, so the suite refuses that profile on them.
 #[derive(Clone, Copy, Debug, Default)]
 struct SuiteVideo;
 
@@ -67,6 +69,19 @@ impl VideoBackends for SuiteVideo {
         kind: BackendKind,
     ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
         let session = MediaCodecVideo::open(track, kind, VideoOutput::ByteBuffers)?;
+        let high_444 = track.video.as_ref().is_some_and(|video| {
+            video.codec == alpha2_container::VideoCodec::H264
+                && video.codec_private.get(1) == Some(&244)
+        });
+        let software = ["c2.android.", "OMX.google."]
+            .iter()
+            .any(|prefix| session.component().starts_with(prefix));
+        if high_444 && software {
+            return Err(BackendError::Unsupported(format!(
+                "{} decodes H.264 High 4:4:4 Predictive to a wrong picture",
+                session.component()
+            )));
+        }
         if session.component().starts_with("c2.goldfish.") {
             return Err(BackendError::Unsupported(format!(
                 "{} crops leading columns off the wrong edge",
