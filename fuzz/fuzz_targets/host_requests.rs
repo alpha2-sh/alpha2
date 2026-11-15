@@ -19,23 +19,35 @@ fuzz_target!(|bytes: &[u8]| {
     match parse_request(line) {
         Ok(request) => {
             assert_eq!(request.protocol_version(), PROTOCOL_VERSION);
-            assert_eq!(request.request_id(), id, "the reader names the request it answers");
+            assert_eq!(
+                request.request_id(),
+                id,
+                "the reader names the request it answers"
+            );
             let name = match &request {
                 Request::Capabilities { .. } => "capabilities",
                 Request::Export(export) => {
-                    export.check().expect("an accepted export passes its check again");
-                    export.format().expect("an accepted export resolves its format");
+                    export
+                        .check()
+                        .expect("an accepted export passes its check again");
+                    export
+                        .format()
+                        .expect("an accepted export resolves its format");
                     "export"
                 }
                 Request::Conform(_) => "conform",
                 Request::Still(still) => {
-                    still.check().expect("an accepted still passes its check again");
+                    still
+                        .check()
+                        .expect("an accepted still passes its check again");
                     "still"
                 }
                 Request::Compose(_) => "compose",
                 Request::Edit(_) => "edit",
                 Request::Extract(extract) => {
-                    extract.check().expect("an accepted extract passes its check again");
+                    extract
+                        .check()
+                        .expect("an accepted extract passes its check again");
                     "extract"
                 }
             };
