@@ -3372,9 +3372,15 @@ function requestsOf(lines, pid) {
   return lines.filter((line) => line === `request ${pid}`).length;
 }
 
-/** Answers, starts a sleeper that inherits its stdout and stderr, and exits. */
-const ABANDONING_HOST = (log) => `import { spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
+/**
+ * Answers, starts a sleeper that inherits its stdout and stderr, and exits, first closing its
+ * stdin and waiting `exitsAfterInputClosesMs` when that is given.
+ */
+const ABANDONING_HOST = (
+  log,
+  exitsAfterInputClosesMs,
+) => `import { spawn } from "node:child_process";
+import { appendFileSync, closeSync } from "node:fs";
 import { respond, serve } from ${IO};
 const record = (line) => appendFileSync(${JSON.stringify(log)}, line + "\\n");
 record("start " + process.pid);
@@ -3386,7 +3392,14 @@ serve((request) => {
     });
     record("sleeper " + sleeper.pid);
     sleeper.unref();
-    process.exit(0);
+    ${
+      exitsAfterInputClosesMs === undefined
+        ? "process.exit(0);"
+        : `process.stdin.destroy();
+    closeSync(0);
+    record("input closed");
+    setTimeout(() => process.exit(0), ${exitsAfterInputClosesMs});`
+    }
   });
 });
 `;
@@ -3518,8 +3531,9 @@ const SCENARIO_DRIVERS = {
   async "grandchild-holds-the-pipes"(scenario) {
     const root = await scratch("alpha2-node-grandchild-");
     const log = join(root, "log");
+    const lingers = scenario.given.exitsAfterInputClosesMs;
     const client = new Alpha2NodeClient({
-      hostPath: await fakeHost(root, ABANDONING_HOST(log)),
+      hostPath: await fakeHost(root, ABANDONING_HOST(log, lingers)),
       concurrency: scenario.given.concurrency,
     });
     const sleepers = async () =>
@@ -3528,7 +3542,13 @@ const SCENARIO_DRIVERS = {
         .map((line) => Number(line.split(" ")[1]));
     try {
       const first = await exported(client);
-      await waitUntil(() => !alive(first.pid), "the host to exit");
+      if (lingers === undefined)
+        await waitUntil(() => !alive(first.pid), "the host to exit");
+      else
+        await waitUntil(
+          () => readFileSync(log, "utf8").includes("input closed\n"),
+          "the host to close its input",
+        );
       let started = Date.now();
       const next = await exported(client);
       assert.notEqual(next.pid, first.pid);

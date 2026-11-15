@@ -1967,12 +1967,20 @@ class _Pool:
                         ),
                     )
                     break
-                if (
-                    write_failed_at is not None
-                    and time.monotonic() - write_failed_at > _HOST_SHUTDOWN_TIMEOUT
-                ):
-                    outcome = (False, Alpha2HostError("HOST_WRITE_FAILED", str(write_error)))
-                    break
+                if write_failed_at is not None:
+                    # A process the host started may keep its stdout open, so the exit event that
+                    # waits for stdout can come late; the process itself says it has ended.
+                    returncode = host.process.poll()
+                    if returncode is not None and not host.wrote(sent):
+                        exit_status = _ended(returncode)
+                        host.running = False
+                        break
+                    if (
+                        returncode is None
+                        and time.monotonic() - write_failed_at > _HOST_SHUTDOWN_TIMEOUT
+                    ):
+                        outcome = (False, Alpha2HostError("HOST_WRITE_FAILED", str(write_error)))
+                        break
                 try:
                     kind, value = events.get(timeout=_POLL_SECONDS)
                 except queue.Empty:

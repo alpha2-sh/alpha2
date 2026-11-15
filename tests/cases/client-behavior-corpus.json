@@ -273,6 +273,21 @@
     }
   },
   {
+    "id": "grandchild-holds-the-pipes-of-a-host-that-stops-reading",
+    "kind": "grandchild-holds-the-pipes",
+    "platforms": ["posix"],
+    "given": {
+      "host": "answers, starts a sleeper that inherits its stdout and stderr, closes its stdin, exits",
+      "exitsAfterInputClosesMs": 500,
+      "concurrency": 1
+    },
+    "expect": {
+      "nextRequest": "ok on another host",
+      "withinMs": 9000,
+      "closeWithinMs": 9000
+    }
+  },
+  {
     "id": "another-environment-is-not-starved",
     "kind": "arrival-order",
     "given": {

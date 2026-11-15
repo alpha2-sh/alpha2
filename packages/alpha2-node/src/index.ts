@@ -2697,6 +2697,8 @@ interface ActiveRun {
   ) => void;
   /** The host is ending; the request settles with this error when it exits. */
   readonly fail: (error: FailureBuilder) => void;
+  /** The process ended; its output may still be open. */
+  readonly ended: (code: number | null, signal: string | null) => void;
   readonly exited: (code: number | null, signal: string | null) => void;
   readonly phase: () => ExportPhase;
 }
@@ -2979,6 +2981,7 @@ class Host {
       let answerAttachments: readonly Attachment[] = [];
       let failure: FailureBuilder | undefined;
       let written = false;
+      let writeFailed = false;
       let settled = false;
       let cancelTimer: NodeJS.Timeout | undefined;
       let writeFailedTimer: NodeJS.Timeout | undefined;
@@ -3007,6 +3010,25 @@ class Host {
           else if (callbackFailure !== undefined) rejectRun(callbackFailure);
           else resolveRun(decided);
         });
+      };
+      // A process the host started may keep its stdout open, so a frame that could not be written
+      // settles as unsent when the process ends, not when its output does.
+      const endedUnwritten = (
+        code: number | null,
+        exitSignal: string | null,
+      ): void => {
+        if (!writeFailed || answer !== undefined || failure !== undefined)
+          return;
+        settle(() => ({
+          kind: "unsent",
+          error: exitError(
+            code,
+            exitSignal,
+            stderrTail(),
+            oomKillsBefore,
+            phase(),
+          ),
+        }));
       };
       const fromAnswer = (message: ResponseMessage): RunOutcome | Error => {
         if (failure !== undefined) return failure(stderrTail(), phase());
@@ -3144,6 +3166,7 @@ class Host {
         fail: (error) => {
           failure ??= error;
         },
+        ended: endedUnwritten,
         exited: (code, exitSignal) =>
           settle(() => {
             if (answer !== undefined) return fromAnswer(answer);
@@ -3161,10 +3184,19 @@ class Host {
       };
       signal?.addEventListener("abort", abort, { once: true });
       // A host that has ended never reads the frame; its exit settles the request as unsent.
-      if (this.#endedUnseen()) return;
+      if (this.#endedUnseen()) {
+        writeFailed = true;
+        return;
+      }
       wire.write(frame, (error) => {
         if (!error) {
           written = true;
+          return;
+        }
+        writeFailed = true;
+        const child = this.#child;
+        if (child !== undefined && !this.#alive()) {
+          endedUnwritten(child.exitCode, child.signalCode);
           return;
         }
         // Give the host's fatal message or exit time to name the cause first.
@@ -3412,6 +3444,7 @@ class Host {
       this.#child?.stderr?.destroy();
       this.#exit(code, exitSignal);
     }, HOST_SHUTDOWN_TIMEOUT_MS);
+    this.#run?.ended(code, exitSignal);
   }
 
   async #startFailure(
