@@ -97,7 +97,7 @@ mod tests {
         let lines = kept.0.lock().expect("lines").clone();
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert_eq!(lines[0], "listener-test line");
-        let at = format!("src/diagnostics.rs:{line}:");
+        let at = format!("diagnostics.rs:{line}:");
         assert!(
             lines[1].starts_with("alpha2: panic at ")
                 && lines[1].contains(&at)

@@ -89,7 +89,7 @@ fn a_slow_step_that_keeps_beating_is_not_stalled() {
     header[40..44].copy_from_slice(&data.to_le_bytes());
     std::fs::write(&path, &header).expect("header");
     std::fs::File::options()
-        .append(true)
+        .write(true)
         .open(&path)
         .and_then(|file| file.set_len(44 + u64::from(data)))
         .expect("length");

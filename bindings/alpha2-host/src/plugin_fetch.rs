@@ -964,6 +964,17 @@ mod tests {
 
     #[test]
     fn the_cache_lives_under_the_named_or_home_cache_and_never_in_temp() {
+        // Absolute on the platform, so neither directory is resolved against the working one.
+        const PLUGINS: &str = if cfg!(windows) {
+            r"C:\srv\plugins"
+        } else {
+            "/srv/plugins"
+        };
+        const HOST: &str = if cfg!(windows) {
+            r"C:\srv\alpha2"
+        } else {
+            "/srv/alpha2"
+        };
         let environment = |pairs: &'static [(&'static str, &'static str)]| {
             move |name: &str| {
                 pairs
@@ -974,12 +985,12 @@ mod tests {
         };
         assert_eq!(cache_directory_from(environment(&[])), None);
         assert_eq!(
-            cache_directory_from(environment(&[("ALPHA2_PLUGIN_CACHE", "/srv/plugins")])),
-            Some(PathBuf::from("/srv/plugins"))
+            cache_directory_from(environment(&[("ALPHA2_PLUGIN_CACHE", PLUGINS)])),
+            Some(PathBuf::from(PLUGINS))
         );
         assert_eq!(
-            cache_directory_from(environment(&[("ALPHA2_HOST_CACHE_DIR", "/srv/alpha2")])),
-            Some(PathBuf::from("/srv/alpha2/plugins"))
+            cache_directory_from(environment(&[("ALPHA2_HOST_CACHE_DIR", HOST)])),
+            Some(Path::new(HOST).join("plugins"))
         );
         if cfg!(target_os = "linux") {
             assert_eq!(
