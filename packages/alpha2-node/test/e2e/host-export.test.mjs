@@ -1665,7 +1665,8 @@ createInterface({ input: process.stdin }).once("line", () => process.kill(proces
         output,
       );
     } finally {
-      await rm(scratch, { recursive: true, force: true });
+      // Windows can hold a file just written for a moment (a scanner), so removal retries.
+      await rm(scratch, { recursive: true, force: true, maxRetries: 10 });
     }
   },
 );
