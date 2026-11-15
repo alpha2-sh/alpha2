@@ -342,7 +342,7 @@ impl Lifecycle {
         self.lock().draining
     }
 
-    /// Making the renderer grows the process, so the memory baseline is taken again after it.
+    /// Records the renderer. Making it grows the process, so the memory baseline is taken again.
     pub(crate) fn set_renderer(&self, facts: RendererFacts) {
         let mut life = self.lock();
         life.renderer = Some(facts);

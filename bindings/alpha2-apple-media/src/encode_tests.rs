@@ -397,8 +397,7 @@ fn h264_config(width: u32, height: u32, software: bool) -> VideoEncodeConfig {
     }
 }
 
-/// Drops `rounds` encoders, hardware or software, each with up to 16 frames submitted and none
-/// received: every frame's callback has run when the drop returns.
+/// Drops `rounds` encoders, each with up to 16 frames submitted and none received.
 fn drop_with_frames_in_flight(software: bool, rounds: usize) {
     let config = h264_config(WIDTH, HEIGHT, software);
     let pictures = (0..4)
@@ -433,7 +432,7 @@ fn a_hardware_encoder_dropped_with_frames_in_flight_completes_them_first() {
 
 #[test]
 fn a_software_encoder_dropped_with_frames_in_flight_completes_them_first() {
-    // A software drop takes about 0.2 s on a phone; 60 keep the test within iOS's 20 s launch limit.
+    // A software drop takes about 0.2 s on a phone, so 60 rounds fit iOS's 20 s launch limit.
     drop_with_frames_in_flight(true, 60);
 }
 

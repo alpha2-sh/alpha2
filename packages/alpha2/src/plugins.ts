@@ -412,7 +412,7 @@ class Run {
       alpha2: {
         emit: (ptr: number, len: number): number => {
           try {
-            // A loop: spreading a large batch into arguments passes the engine's argument limit.
+            // A loop, since spreading a large batch into arguments can pass the argument limit.
             for (const record of decodeRecords(bytes(ptr, len).slice()))
               this.#records.push(record);
             return 0;

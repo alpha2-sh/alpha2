@@ -325,8 +325,7 @@ fn document_with(limit: &str, count: usize) -> String {
 #[test]
 fn count_limits_admit_their_maximum_and_refuse_one_more() {
     use crate::{ModelError, ProjectLoadError};
-    // A sequence over its own limit is the parser's refusal; a total across sequences is
-    // validation's.
+    // The parser refuses a sequence over its own limit, validation a total across sequences.
     for (limit, maximum) in [
         ("sources", crate::MAX_CLIPS),
         ("clips_on_a_track", crate::MAX_CLIPS_PER_TRACK),

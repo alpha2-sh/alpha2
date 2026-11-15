@@ -632,7 +632,7 @@ test("an extraction reads a project with a LUT: a source input without it, the t
         request: {
           extractor: "alpha2.test.digest",
           version: 1,
-          // The LUT clip.
+          // The range covers the LUT clip.
           input: {
             from,
             ...(from === "source" ? { source_id: "video" } : {}),

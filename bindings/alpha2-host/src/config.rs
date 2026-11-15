@@ -530,7 +530,7 @@ impl DecoderSessionLimit {
 pub struct DecoderSessionCount {
     pub sessions: usize,
     pub limit: DecoderSessionLimit,
-    /// ([`alpha2_host_core::cursor::visual_decode_reads`]).
+    /// Peak decoder cursors reading at once ([`alpha2_host_core::cursor::visual_decode_reads`]).
     pub peak: usize,
 }
 

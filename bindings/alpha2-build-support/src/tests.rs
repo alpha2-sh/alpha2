@@ -344,8 +344,7 @@ fn the_android_api_level_comes_from_the_toolchain() {
     );
 }
 
-/// The `include` directory of each SDK release under the SDK cache whose tag starts with
-/// `prefix`.
+/// The `include` directory of each cached SDK release whose tag starts with `prefix`.
 fn cached_sdk_includes(prefix: &str) -> Vec<PathBuf> {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let cache = std::env::var_os("ALPHA2_FFMPEG_CACHE")

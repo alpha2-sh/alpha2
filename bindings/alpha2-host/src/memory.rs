@@ -344,7 +344,7 @@ impl InFlightBudget {
         .holding(least)
     }
 
-    /// A budget neither the request nor the environment set reaches at least `least`: only an
+    /// Raises a budget neither the request nor the environment set to at least `least`, so only an
     /// explicit budget refuses an export as too small.
     #[must_use]
     pub fn at_least_unless_asked(mut self, least: u64) -> Self {
@@ -535,12 +535,12 @@ pub fn admit(least: LeastWorkingSet, capacity: &alpha2_os::MemoryCapacity) -> Re
     )))
 }
 
-/// Stops an export once the cgroup working set (the charge less reclaimable file cache) reaches 95 %
-/// of the lowest limit on the process's cgroup path, so it fails with `RESOURCE_LIMIT`
-/// (`memory-limit-reached`) instead of being silently OOM-killed. Of the exports
+/// Stops an export once the cgroup working set (the charge less reclaimable file cache) reaches
+/// 95 % of the lowest limit on the process's cgroup path, so it fails with `RESOURCE_LIMIT`
+/// (`memory-limit-reached`) instead of being silently OOM-killed. Linux only. Of the exports
 /// running at once, the newest stops first; the next newest stops only if the set stays over the
 /// limit once it has gone. Best effort: an allocation that jumps past the limit between looks
-/// still gets the process killed. Linux only.
+/// still gets the process killed.
 pub struct MemoryWatchdog {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     stop: Option<(std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>)>,
@@ -565,8 +565,8 @@ fn watchdogs() -> std::sync::MutexGuard<'static, Vec<u64>> {
 impl MemoryWatchdog {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     const LIMIT_PERCENT: u64 = 95;
-    /// Startup working sets have grown about 100 MiB per 50 ms, which a slower look misses between
-    /// 90 % and the kill. A look reads two small files, and `memory.stat` near the limit.
+    /// A working set can grow about 100 MiB per 50 ms at startup, which a slower look misses
+    /// between 90 % and the kill. A look reads two small files, and `memory.stat` near the limit.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     const INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 

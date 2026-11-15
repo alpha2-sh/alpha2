@@ -817,7 +817,7 @@ impl<'a> Context<'a> {
                 ..slot.clone()
             };
             self.emit(child, &child_slot, &mut fresh)?;
-            // Compose owns the sound at a join: the two sides cross over the transition.
+            // Compose crosses the two sides' sound over the transition at a join.
             let followed = overlap > 0
                 && index + 1 < sequence.children.len()
                 && start + length - overlap < end;
@@ -849,8 +849,8 @@ impl<'a> Context<'a> {
                 lanes.share(fresh);
                 vec![from.lane]
             } else if joined {
-                // A crossfade over what is not one picture, or into or out of a part shorter than
-                // it: the incoming node fades in over the outgoing one, in lanes above it.
+                // A crossfade (not one picture, or a part shorter than the transition) fades the
+                // incoming node in over the outgoing one, in lanes above it.
                 let first = lanes.visual.len();
                 let count = fresh.visual.len();
                 lanes.stack(fresh);

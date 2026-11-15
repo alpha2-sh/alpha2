@@ -452,8 +452,7 @@ impl Alpha2 {
     }
 
     /// Holds exports, stills, extractions and previews before their next GPU work until
-    /// [`Self::resume`]; call when the app leaves the foreground, since iOS does not run GPU work
-    /// in the background.
+    /// [`Self::resume`]. Call it when the app leaves the foreground, where iOS runs no GPU work.
     pub fn pause(&self) {
         self.paused.set(true);
     }

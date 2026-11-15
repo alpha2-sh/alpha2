@@ -246,7 +246,7 @@ impl CpuImage {
         bits
     }
 
-    /// Pixel at `(x, y)` inside the picture; transparent outside the content.
+    /// [`Texels::texel`] of this picture.
     #[inline(always)]
     #[allow(clippy::inline_always)]
     pub(crate) fn texel(&self, x: u32, y: u32) -> [f32; 4] {
@@ -305,15 +305,14 @@ impl CpuImage {
         }
     }
 
-    /// Pixel at `(x, y)` with clamp-to-edge addressing.
+    /// [`Texels::texel_clamped`] of this picture.
     #[inline(always)]
     #[allow(clippy::inline_always)]
     pub(crate) fn texel_clamped(&self, x: i64, y: i64) -> [f32; 4] {
         self.texels().texel_clamped(x, y)
     }
 
-    /// Bilinear sample at normalized `(u, v)` with clamp-to-edge, as `textureSampleLevel` reads
-    /// level 0.
+    /// [`Texels::sample`] of this picture.
     #[inline(always)]
     #[allow(clippy::inline_always)]
     pub(crate) fn sample(&self, u: f32, v: f32) -> [f32; 4] {
@@ -367,8 +366,7 @@ impl Texels<'_> {
         )
     }
 
-    /// Bilinear sample at normalized `(u, v)` with clamp-to-edge, as `textureSampleLevel` reads
-    /// level 0.
+    /// Bilinear sample at normalized `(u, v)`, clamped to the edge, as `textureSampleLevel` at 0.
     #[inline(always)]
     pub(crate) fn sample(&self, u: f32, v: f32) -> [f32; 4] {
         // Every position outside [-1, size] reads the edge texel, so clamping changes no sample

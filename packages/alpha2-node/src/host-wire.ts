@@ -80,7 +80,7 @@ export class HostWire {
   #pendingBytes = 0;
   #magicSeen = false;
   #preambleBytes = 0;
-  /** The reported start of the preamble's first line; `undefined` once it was decided. */
+  /** Bytes of the preamble's first line seen so far; `undefined` once the line was decided. */
   #firstLine: Buffer | undefined = Buffer.alloc(0);
   #closed = false;
 

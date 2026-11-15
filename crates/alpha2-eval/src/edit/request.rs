@@ -180,8 +180,7 @@ pub struct Created {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkipReason {
-    /// The cut, or a part boundary it makes in a loop, falls inside one of the clip's
-    /// transitions.
+    /// The cut, or a loop part boundary it makes, falls inside one of the clip's transitions.
     InTransition,
     /// The cut falls inside one of the clip's fades.
     InFade,
@@ -280,8 +279,7 @@ pub enum EditError {
         maximum: usize,
     },
     /// A caption bake's cues do not fit a track: more than it holds, or words past the limits of
-    /// cues from words ([`alpha2_model::MAX_DERIVED_CUES`] cues or
-    /// [`alpha2_model::MAX_DATA_WORDS`] mapped words), which derive no cues to count.
+    /// cues from words ([`alpha2_model::MAX_DERIVED_CUES`], [`alpha2_model::MAX_DATA_WORDS`]).
     TooManyCues {
         /// The track.
         track: TrackId,

@@ -1139,9 +1139,8 @@ pub mod hooks {
         });
     }
 
-    /// A slow destination for one output, process-wide since syncs run on the writer's thread:
-    /// the final path, the bytes between periodic syncs, and nanoseconds each sync takes per KiB
-    /// it flushes.
+    /// A slow destination for one output as (final path, bytes between periodic syncs, nanoseconds
+    /// each sync takes per KiB it flushes). Process-wide, since syncs run on the writer's thread.
     pub static SLOW_SYNC: std::sync::Mutex<Option<(PathBuf, u64, u64)>> =
         std::sync::Mutex::new(None);
 

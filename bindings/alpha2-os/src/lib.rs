@@ -585,10 +585,11 @@ pub fn process_cpu_time() -> Option<std::time::Duration> {
     }
 }
 
-/// The host's cache directory, as the Node and Python clients name it: `ALPHA2_HOST_CACHE_DIR`
-/// (relative to the working directory), else `alpha2` under `$XDG_CACHE_HOME` (when absolute) or
-/// `~/.cache` on Linux, `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows. `None` without
-/// a home directory.
+/// The host's cache directory, as the Node and Python clients name it, or `None` without a home.
+///
+/// That is `ALPHA2_HOST_CACHE_DIR` (relative to the working directory), else `alpha2` under
+/// `$XDG_CACHE_HOME` (when absolute) or `~/.cache` on Linux, `~/Library/Caches` on macOS, and
+/// `%LOCALAPPDATA%` on Windows.
 #[must_use]
 pub fn host_cache_directory() -> Option<PathBuf> {
     host_cache_directory_from(|name| std::env::var_os(name))
@@ -626,9 +627,10 @@ pub fn host_cache_directory_from(
     Some(base.join("alpha2"))
 }
 
-/// Creates `path` and its missing parents for files only this user may change. On Unix new
-/// directories get mode 0700, and a directory that another user owns or that group or others can
-/// write is refused.
+/// Creates `path` and its missing parents for files only this user may change.
+///
+/// On Unix new directories get mode 0700, and a directory is refused when another user owns it or
+/// group or others can write it.
 ///
 /// # Errors
 /// When a directory cannot be created, or the existing one is refused (`PermissionDenied`).
@@ -648,9 +650,8 @@ pub type DiagnosticSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
 static DIAGNOSTIC_SINK: std::sync::RwLock<Option<DiagnosticSink>> = std::sync::RwLock::new(None);
 
-/// Sends every later diagnostic line of the process to `sink`, or with `None` back to the default
-/// output: standard error, and on Android, which discards an app's standard error, the system log
-/// under the tag `alpha2`.
+/// Sends every later diagnostic line of the process to `sink`, or with `None` back to standard
+/// error, or on Android, which discards an app's standard error, to the system log as `alpha2`.
 pub fn set_diagnostic_sink(sink: Option<DiagnosticSink>) {
     *DIAGNOSTIC_SINK
         .write()

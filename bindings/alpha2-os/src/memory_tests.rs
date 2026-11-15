@@ -129,7 +129,6 @@ const PAGE_CACHE_STAT: &str =
     "anon 761856\nfile 2146484224\nactive_file 8228864\ninactive_file 2138255360\n";
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-/// A limit full of file page cache leaves the limit less the working set as headroom.
 #[test]
 fn page_cache_under_a_cgroup_v2_limit_is_not_counted_as_used() {
     let dir = root(
@@ -179,7 +178,6 @@ fn page_cache_under_a_cgroup_v1_limit_is_not_counted_as_used() {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-/// A limit one level up is what admission and the watchdog both read.
 #[test]
 fn a_limit_on_an_ancestor_gives_the_same_working_set_to_admission_and_the_watchdog() {
     let dir = root(

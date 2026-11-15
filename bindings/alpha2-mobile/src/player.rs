@@ -1,12 +1,10 @@
-//! Real-time preview of a project on a window: a library thread decodes, renders and presents
-//! frames at the project's rate while playing, and the frame at the position when paused.
+//! Real-time preview of a project on a window, decoded, rendered and presented on a library thread.
 //!
-//! Every call returns at once and is carried out on that thread in order; a seek or a resize that a
-//! later one of its kind replaces before the thread reaches it is skipped, and a newer seek stops
-//! the frame an older one is drawing. The window is attached and detached with the app's surface
-//! lifecycle; nothing is drawn while none is attached or while the session is paused for the
-//! background. A window attached, a resize or a seek while paused takes effect, with one frame
-//! drawn, when the session resumes.
+//! Calls return at once and run on that thread in order. A seek or resize that a later one of its
+//! kind replaces before the thread reaches it is skipped, and a newer seek stops the frame an older
+//! one draws. Nothing is drawn without an attached window or while the session is paused for the
+//! background. A window, resize or seek sent while paused takes effect, with one frame drawn, when
+//! the session resumes.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -38,8 +36,7 @@ use crate::zero_copy::GpuFrames;
 /// How [`Player::last_error`] begins when the GPU refuses the attached window.
 pub(crate) const PRESENT_REFUSED: &str = "the GPU cannot present to this window";
 
-/// How often a preview held in the background with a frame to draw checks whether the app
-/// returned.
+/// How often a preview held in the background with a frame to draw checks for the app's return.
 const PAUSED_POLL: Duration = Duration::from_millis(50);
 
 /// How long the heard audio may stand still, with samples waiting for the device, before the
@@ -458,8 +455,7 @@ impl Output {
     }
 }
 
-/// Carries out `first` and the commands queued behind it, coalesced; `false` once the player
-/// ended.
+/// Carries out `first` and the commands queued behind it, coalesced. Returns `false` once ended.
 fn apply_queued(
     first: Command,
     commands: &Receiver<Command>,
@@ -609,7 +605,7 @@ struct State {
     audio: Option<PreviewAudio>,
     /// What the session's pause held back, done when it resumes.
     deferred: Option<Deferred>,
-    /// Playing stopped by the session's pause, at the position, to go on when it resumes.
+    /// Whether the session's pause stopped playing, which goes on when the session resumes.
     held: bool,
     /// When the heard audio last moved.
     heard: HeardClock,
@@ -636,8 +632,7 @@ impl HeardClock {
     }
 }
 
-/// GPU work a paused session held back: a window to attach, a size to configure, and a frame to
-/// draw.
+/// The window and size a paused session held back, applied with one frame drawn on resume.
 #[derive(Default)]
 struct Deferred {
     window: Option<(NativeWindow, u32, u32)>,
@@ -745,8 +740,7 @@ impl State {
         self.started = Some((Instant::now(), from));
     }
 
-    /// Does what the pause held back: attaches the window, configures the size and draws the frame
-    /// at the position.
+    /// Restarts playing the pause held, then applies the deferred window or size and draws a frame.
     fn resume(&mut self, session: &Session, shared: &Arc<Shared>) {
         if std::mem::take(&mut self.held) {
             self.start_playing(self.position, session, shared);
@@ -795,8 +789,7 @@ impl State {
                     ExportRenderer::Gpu(&output.renderer),
                     session.budget.bytes(),
                 ));
-                // No stream is open before the first window: sources decode for this device
-                // from the start.
+                // No stream opens before the first window, so sources decode for this device.
                 self.sources =
                     sources(session, Arc::clone(&self.providers), output.frames.as_ref());
                 self.output = Some(output);
@@ -956,9 +949,8 @@ impl State {
         self.started = Some((Instant::now(), from));
     }
 
-    /// Renders and presents the frame at the position, unless `cancel` stops it first; a stopped
-    /// frame is neither counted nor an error. While the session is paused the frame is drawn when
-    /// it resumes.
+    /// Renders and presents the frame at the position unless `cancel` stops it first, which is
+    /// neither counted nor an error. While the session is paused, the frame waits for the resume.
     fn show(&mut self, session: &Session, shared: &Shared, cancel: &CancelToken) {
         if self.defer(session).is_some() {
             return;

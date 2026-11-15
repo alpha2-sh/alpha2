@@ -7,8 +7,7 @@ use crate::{
 };
 use alpha2_time::{MediaTime, TimeRange};
 
-/// What holds a value keyed in timeline time or a reference to a clip. `track` is a position in
-/// `timeline.tracks`.
+/// What holds a timeline-keyed value or a clip reference; `track` indexes `timeline.tracks`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TimelineOwner<'a> {
     /// A clip's visual, masks, audio or matte.

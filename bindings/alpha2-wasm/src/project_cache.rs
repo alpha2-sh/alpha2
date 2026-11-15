@@ -8,8 +8,7 @@ use alpha2_model::Project;
 ///
 /// A source keeps its media while its ID, locator, kind, provider and fingerprint are unchanged;
 /// clip edits and effects do not matter. Presentation frames also depend on project settings and
-/// are handled by [`stale_presentations`]. A host whose media changes in a way the document does
-/// not show must give the source a new ID.
+/// are handled by [`stale_presentations`].
 pub(crate) fn stale_sources(previous: &Project, next: &Project) -> HashSet<String> {
     let kept = next
         .sources

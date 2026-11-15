@@ -141,9 +141,8 @@ pub fn cgroup_memory_at(root: &Path) -> Option<CgroupMemory> {
     level.read(0)
 }
 
-/// Reads [`CgroupMemory`] again and again for a watch. The level of the lowest limit is found
-/// once, and again after a read at it fails; `memory.stat` is parsed only from
-/// [`Self::STAT_FROM_PERCENT`] of the limit, below which the working set is the charge.
+/// Reads [`CgroupMemory`] repeatedly for a watch, finding the lowest limit's level again after a
+/// failed read. Below [`Self::STAT_FROM_PERCENT`] of the limit the working set is the charge.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 #[derive(Debug)]
 pub struct CgroupMemoryWatch {
@@ -156,13 +155,13 @@ impl CgroupMemoryWatch {
     /// Below this share of the limit the page cache is not worth parsing.
     pub const STAT_FROM_PERCENT: u64 = 90;
 
-    /// This process's cgroup path.
+    /// A watch of this process's cgroup path.
     #[must_use]
     pub fn new() -> Self {
         Self::at(Path::new("/"))
     }
 
-    /// With `root` standing in for `/`.
+    /// A watch with `root` standing in for `/`.
     #[must_use]
     pub fn at(root: &Path) -> Self {
         Self {
@@ -264,8 +263,7 @@ impl Level {
         })
     }
 
-    /// `None` when the limit is gone. `memory.stat` is parsed from `stat_from_percent` of the
-    /// limit.
+    /// `None` when the limit is gone. Parses `memory.stat` only from `stat_from_percent` of it.
     fn read(&self, stat_from_percent: u64) -> Option<CgroupMemory> {
         let limit = read_limit(&self.directory.join(self.files[0]))?;
         let charged = read_number(&self.directory.join(self.files[1]));

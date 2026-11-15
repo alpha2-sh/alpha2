@@ -44,8 +44,8 @@ pub const PROTOCOL_VERSION: u32 = 2;
 /// `audioQuality`, `renderCache`, `loudness`, `memory`) may be at most this long.
 pub const MAX_REQUEST_SETTING_BYTES: usize = 4 * 1024;
 
-/// A longer header goes to the server, which refuses it. A cancel names two ids and nothing else,
-/// a status one.
+/// The longest `cancel` or `status` header the input reader answers at once; a longer one is
+/// refused as a request. A cancel names two ids and nothing else, a status one.
 pub const MAX_CONTROL_HEADER_BYTES: usize = 64 * 1024;
 
 /// A refused request: the protocol code and the message of the answer.

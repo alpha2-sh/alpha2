@@ -1,7 +1,7 @@
 // Protocol I/O for the fake alpha2-host processes the tests run; the fake hosts import it.
 import { readFileSync } from "node:fs";
 
-/** The release the client under test refuses any other of. */
+/** The release the client under test requires of a host. */
 export const HOST_VERSION = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 ).version;

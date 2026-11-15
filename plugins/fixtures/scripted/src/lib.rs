@@ -4,12 +4,11 @@
 //!
 //! For loader tests, a delivery index in `fail_at`, `panic_at`, `spin_at`, `hog_at` or `abort_at`
 //! makes that delivery fail, panic, never return, allocate without bound, or end the process; and
-//! `resource` names a resource whose UTF-8 text `end` emits as a word of `words`. As wasm,
-//! `flood` (`calls`, 0 for no end, and `ignore_refusal`) makes the second delivery call the host's
-//! `emit` that many times with one interval of `quiet`. As a native library, `park_thread: true`
-//! starts a thread at `begin` that runs the library's code until the process exits. `log`
-//! (`text`, `lines`) makes `begin` log `text` that many times, and `fail_message` replaces the
-//! message of `fail_at`.
+//! `resource` names a resource whose UTF-8 text `end` emits as a word of `words`. As wasm, `flood`
+//! (`calls`, 0 for no end, and `ignore_refusal`) makes the second delivery call the host's `emit`
+//! that many times with one interval of `quiet`. As a native library, `park_thread: true` starts a
+//! thread at `begin` that runs the library's code until the process exits. `log` (`text`, `lines`)
+//! makes `begin` log `text` that many times, and `fail_message` sets the `fail_at` message.
 
 use alpha2_plugin_sdk::{Context, Emitter, Error, Extractor, Frame, Host};
 use serde_json::Value;

@@ -593,9 +593,8 @@ export function createBrowserBridge(options) {
     );
   }
   /**
-   * Decodes a trial of each shown source's audio that the import found undecodable again, so
-   * `startExport` decides by facts taken when the export is prepared (the import probe has a 2 s
-   * limit). The runtime is updated in place, as `analyze` does for peaks.
+   * Decodes a trial again of each shown source's audio the import found undecodable (its probe has
+   * a 2 s limit), so `startExport` decides by facts taken at export time. Updates the runtimes.
    */
   async function reprobeAudio(document, project, purpose) {
     const used = shownSources(project);
@@ -1840,7 +1839,7 @@ export function createBrowserBridge(options) {
             height: canvas.height,
             videoConversion,
             opaqueEngineFrames,
-            // Match the main renderer: the CPU once recovery or `auto` moved there.
+            // The main renderer's mode, which is the CPU once recovery or `auto` moved there.
             renderer: onCpu() ? "cpu" : rendererMode,
             ...(workerRequestTimeoutMs === undefined
               ? {}
@@ -2452,10 +2451,7 @@ export function createBrowserBridge(options) {
         facts: map.get(source.id).audioDecodeFacts ?? null,
       }));
   }
-  /**
-   * Refuses an export whose audible audio this browser cannot decode, unless `undecodableAudio` is
-   * `silence`: the file would lack those sources' sound.
-   */
+  /** Throws the refusal of an export whose audible audio this browser cannot decode. */
   function refuseUndecodableAudio(undecodable) {
     const [first] = undecodable;
     const names = undecodable.map((source) => source.name).join(", ");

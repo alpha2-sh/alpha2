@@ -98,12 +98,12 @@ pub fn cached_probe(
 /// How long a hardware encoder probe answer is kept for this process.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Keep {
-    /// The encoder ran or the device refused, or the probe timed out: its thread or child may never
-    /// return, so the path stays off.
+    /// Until the process exits. For a success, a refusal by the device, or a timed-out probe, whose
+    /// thread or child may never return.
     Process,
-    /// Busy, did not start, or lost: asked again next time.
+    /// Not kept, so a busy, unstarted or lost probe is asked again next time.
     Never,
-    /// Unclassified: kept after [`UNCLASSIFIED_FAILURES_KEPT`] of them in a row.
+    /// Kept after [`UNCLASSIFIED_FAILURES_KEPT`] unclassified failures in a row.
     AfterRepeats,
 }
 

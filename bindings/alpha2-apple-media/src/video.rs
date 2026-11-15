@@ -432,8 +432,8 @@ fn region(size: (usize, usize), extended: Extended, window: Option<Window>) -> R
     }
 }
 
-/// Copies a picture out of `buffer`, rows of each plane `stride` bytes apart. The last row's padding
-/// is not read, since the buffer may end before it, and is zero in the copy.
+/// Copies a picture out of `buffer`, rows of each plane `stride` bytes apart. The last row's
+/// padding is not read, since the buffer may end before it, and is zero in the copy.
 fn copy_picture(buffer: &CVPixelBuffer, outputs: &Outputs) -> Result<Copied, String> {
     let actual = CVPixelBufferGetPixelFormatType(buffer);
     if actual != outputs.pixel_format {

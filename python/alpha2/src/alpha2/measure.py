@@ -65,8 +65,7 @@ class NodeBounds(TypedDict):
     content: Rect
     overflow: bool
     """Text taller than its content box or splitting a word, or an in-flow child past its padding
-    box. Rendering draws it anyway, except a text box over 16,384 pixels a side, which frames
-    fail on."""
+    box. Rendering draws it anyway, but frames fail on a text box over 16,384 pixels a side."""
     lineCount: int | None
     """A text node's line count; ``None`` for other nodes."""
     baselines: Baselines | None

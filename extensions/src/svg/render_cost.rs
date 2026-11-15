@@ -119,8 +119,7 @@ pub(super) fn check(
 }
 
 /// What scan converting a path costs at one transform: its edges that are not horizontal, the sum
-/// over device rows of the square of the edges active in each row, and its length in device
-/// pixels.
+/// over device rows of the square of the edges active in each row, and its length in pixels.
 struct Geometry {
     segments: f64,
     row_pairs: f64,

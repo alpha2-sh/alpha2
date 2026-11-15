@@ -1591,8 +1591,7 @@ fn an_nvenc_capability_refusal_is_unsuitable_not_absent() {
     }
 }
 
-/// A device limit below the B-frames asked for, emulated by asking for more than any NVENC
-/// device has.
+/// Asking for more B-frames than any NVENC device has stands in for a device limit.
 #[test]
 fn an_nvenc_device_with_fewer_b_frames_opens_without_them() {
     crate::require_pinned_ffmpeg_for_tests();

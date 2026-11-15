@@ -58,8 +58,7 @@ impl Renderer {
     /// Initializes all pipelines referenced by one graph.
     ///
     /// # Errors
-    /// Returns graph validation errors, or diagnostics for an unknown effect or a pipeline whose
-    /// creation failed.
+    /// Returns graph validation errors, or diagnostics for an unknown effect or a failed pipeline.
     pub fn warmup_graph(&self, graph: &RenderGraph<'_>) -> Result<WarmupReport, ShaderDiagnostics> {
         self.warmup_graphs(&[graph])
     }
@@ -67,8 +66,7 @@ impl Renderer {
     /// Initializes the deduplicated pipeline set referenced by project graphs.
     ///
     /// # Errors
-    /// Returns diagnostics for a malformed graph, an unknown effect or a pipeline whose creation
-    /// failed.
+    /// Returns diagnostics for a malformed graph, an unknown effect or a failed pipeline.
     pub fn warmup_graphs(
         &self,
         graphs: &[&RenderGraph<'_>],

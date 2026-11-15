@@ -3319,8 +3319,7 @@ pub(crate) fn frame_shows_hdr(
     )
 }
 
-/// The refusal of an HDR source's frame offered as a `kind` upload, which would show the
-/// browser's own conversion.
+/// The refusal of an HDR source's `kind` upload, which would show the browser's own conversion.
 pub(crate) fn hdr_upload_refusal(source_id: &str, kind: &str) -> JsValue {
     invalid_input(format!(
         "source {source_id} is HDR (PQ or HLG): upload its frames' planes with uploadYuvFrame, \

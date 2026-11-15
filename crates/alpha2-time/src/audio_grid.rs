@@ -141,8 +141,7 @@ enum Fit {
     Window(i128, i128),
 }
 
-/// The starts for a `period` grid within `rounding` of every timestamp, or `None` when the
-/// arithmetic overflows.
+/// The starts for a `period` grid within `rounding` of every timestamp; `None` on overflow.
 fn fit(sorted: &[i64], unit: i128, rounding: i128, den: i128, period: i128) -> Option<Fit> {
     let (mut low, mut high) = (i128::MIN, i128::MAX);
     for (index, &timestamp) in sorted.iter().enumerate() {

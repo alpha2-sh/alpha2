@@ -52,8 +52,7 @@ const AUDIO_BLOCK: usize = 4096;
 /// Bytes the open extension sources may hold, as the desktop host's default.
 const PROVIDER_SOURCE_BYTES: u64 = 512 << 20;
 
-/// Exports `job`, once more on the software video encoder when the hardware video encoder is
-/// what failed.
+/// Exports `job`, again on the software video encoder when the hardware video encoder failed.
 pub(crate) fn export(job: &ExportJob, media: &MediaBackends) -> Result<ExportOutcome, Alpha2Error> {
     match attempt(job, media, false) {
         Err(Failure::HardwareEncoder(error)) if !job.cancel.is_cancelled() => {
@@ -602,8 +601,7 @@ fn parse_audio(name: &str) -> Result<alpha2_media::AudioCodec, Alpha2Error> {
         .map_err(|_| Alpha2Error::invalid(format!("audioCodec: unknown codec {name}")))
 }
 
-/// The timeline range to export: the request's ticks, each unset end from the project's default
-/// export range.
+/// The request's ticks to export, each unset end taken from the project's default export range.
 fn export_range(
     snapshot: &EngineProject,
     start: Option<i64>,
@@ -1041,8 +1039,7 @@ mod tests {
         }
     }
 
-    /// Exports the audio test project (a still and `audio`) to `name`.mkv on this thread with
-    /// `encoders` and the CPU renderer.
+    /// Exports a still and `audio` to `name`.mkv with `encoders` and the CPU renderer.
     fn export_with(
         encoders: &Arc<Encoders>,
         name: &str,

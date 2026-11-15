@@ -72,8 +72,7 @@ pub fn length_between(segment: &PathSeg, t0: f64, t1: f64) -> f64 {
     length_within(segment, t0, t1, ACCURACY)
 }
 
-/// The length of `segment` between parameters `t0` and `t1`, within `tolerance` in the
-/// segment's units.
+/// The length of `segment` between parameters `t0` and `t1`, within `tolerance` (segment units).
 #[must_use]
 pub fn length_within(segment: &PathSeg, t0: f64, t1: f64, tolerance: f64) -> f64 {
     if t1 <= t0 {

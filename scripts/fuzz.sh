@@ -229,7 +229,7 @@ seed() {
       ;;
     lut_cube) cp tests/corpus/*.cube "$dir"/ ;;
     text_raster)
-      # Header: 16 parameter bytes (size, width, spacing, align, one stroke, a state), then the text.
+      # 16 parameter bytes (size, width, spacing, align, one stroke, a state), then the text.
       node -e '
         const [golden, dir] = process.argv.slice(1);
         const fs = require("fs");

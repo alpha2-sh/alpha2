@@ -120,8 +120,8 @@ impl LottieSource {
             .map_err(|error| ExtensionError::Malformed(format!("{error:?}")))?;
         let composition_bytes = text.len();
         drop(text);
-        // Assets are read one at a time, sized from their headers before they are decoded, and
-        // decoded at once; assets naming one file share its decode and count once.
+        // Each asset is sized from its header and counted before it is decoded; assets naming one
+        // file share one decode and count once.
         let mut images = HashMap::new();
         let mut decoded = HashMap::<String, Option<Arc<Pixmap>>>::new();
         let mut pixels = 0_u64;

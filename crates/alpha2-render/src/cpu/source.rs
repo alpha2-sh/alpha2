@@ -1189,8 +1189,7 @@ struct AxisTable {
 }
 
 impl AxisTable {
-    /// Taps `tap(axis, position)` for positions `first..first + count` on output `axis`, with
-    /// `filtered`'s offsets.
+    /// `tap` at each of `offsets` from the centre of each position `first..first + count`.
     fn new(
         geometry: &Geometry,
         axis: usize,
@@ -1267,8 +1266,7 @@ impl Lines {
         }
     }
 
-    /// `Plane::sample` from rows decoded by [`Self::rows`], at column tap `across` and row
-    /// weight `weight`.
+    /// `Plane::sample` from rows decoded by [`Self::rows`], at column tap `across` and `weight`.
     #[inline]
     fn between_rows(&self, across: Tap, weight: f32) -> f32 {
         let (left, right) = (
@@ -1991,7 +1989,7 @@ mod tests {
         }
     }
 
-    /// `premultiplied_linear` before transparent neighbourhoods returned early.
+    /// `premultiplied_linear` without its early return for transparent neighbourhoods.
     fn premultiplied_linear_reference(
         conversion: &YuvConversion,
         planes: &Planes<'_>,

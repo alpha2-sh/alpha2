@@ -356,7 +356,6 @@ test(
         const result = editor.applyEdit(applied, { read, request });
         assert.ok(result.ok, `${result.error?.code}: ${result.error?.message}`);
         const after = editor.document.project;
-        // What the edit did not touch is the committed document's own objects.
         assert.equal(after.timeline.tracks[0], before.timeline.tracks[0]);
         assert.equal(after.data[0], before.data[0]);
         assert.equal(after.sources, before.sources);
@@ -483,7 +482,7 @@ test(
       );
       assert.notEqual(composition(right), composition("a"));
       assert.deepEqual(stack(editor, right), ["fx"]);
-      // A clip that owns its graph already is left as it is.
+      // Clip `b` draws no composition, so detaching it changes nothing.
       const before = editor.document;
       assert.equal(
         editor.dispatch({ type: "clip.detachComposition", id: "b" }).value,

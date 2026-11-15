@@ -98,8 +98,7 @@ pub(crate) fn open_document(
 }
 
 /// [`open_document`] reading at most `text` bytes of SVG text and holding at most `images` bytes
-/// of raster images, for a provider that bounds the markup and the embedded image data of its
-/// documents itself.
+/// of raster images, for a provider that bounds its documents' markup and embedded images itself.
 ///
 /// # Errors
 /// [`ExtensionError::Malformed`] or [`ExtensionError::Budget`].

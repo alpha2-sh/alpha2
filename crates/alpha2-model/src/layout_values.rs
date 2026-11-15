@@ -31,8 +31,7 @@ pub(crate) fn parse_number(text: &str) -> Option<f32> {
 
 /// Largest magnitude of a layout length written as a fraction of the picture's shorter side.
 pub const MAX_LAYOUT_FRACTION: f32 = 1_024.0;
-/// Largest magnitude of a layout length written in canvas pixels: 1,024 times the largest
-/// canvas side.
+/// Largest magnitude of a layout length in canvas pixels: 1,024 times the largest canvas side.
 #[allow(clippy::cast_precision_loss)]
 pub const MAX_LAYOUT_PX: f32 = 1_024.0 * crate::MAX_CANVAS_DIMENSION as f32;
 /// Largest magnitude of a layout length written as a percent.

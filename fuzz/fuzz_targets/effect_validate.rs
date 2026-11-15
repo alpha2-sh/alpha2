@@ -49,7 +49,7 @@ fn calls_in(block: &naga::Block, weight: u64, out: &mut Vec<(naga::Handle<naga::
     }
 }
 
-// A body registration's checks accept either fails naga's own checks or is the module the
+// Any body the registration checks accept either fails naga's own checks or is the module the
 // analysis priced: no more functions than it declared, no more inlined bodies than it counted.
 // A miscount here is how text-level analysis is fooled into pricing an unbounded shader cheaply.
 fuzz_target!(|data: &[u8]| {

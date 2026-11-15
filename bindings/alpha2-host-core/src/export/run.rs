@@ -181,10 +181,9 @@ impl SourceFrameCache {
         }
     }
 
-    /// Takes `budget`'s bytes less the `held` bytes the sources keep as the cache's budget,
-    /// evicting at once to fit, but never less than the last output frame's working set: a budget
-    /// lowered under memory pressure evicts every other frame and still lets the next frame of
-    /// the same shape render.
+    /// Sets the cache's budget to `budget` less the `held` bytes the sources keep, evicting at once
+    /// to fit. It never goes below the last output frame's working set, so a budget lowered under
+    /// memory pressure still lets the next frame of the same shape render.
     pub fn follow(&mut self, budget: &FrameBudget, held: u64) {
         let bytes = budget.bytes().saturating_sub(held);
         match self {

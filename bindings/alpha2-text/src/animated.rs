@@ -867,8 +867,7 @@ impl PlannedCluster {
     }
 }
 
-/// The tile box [`draw_cluster`] draws `glyphs` into through `affine`, and whether one is a
-/// color glyph.
+/// The tile box [`draw_cluster`] draws `glyphs` into through `affine`, and whether any has color.
 fn cluster_box(
     drawings: &HashMap<(usize, u16), Drawing>,
     glyphs: &[Placed],

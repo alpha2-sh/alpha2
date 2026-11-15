@@ -727,8 +727,7 @@ mod tests {
                     var a: array<vec4f, 100>; var b: array<vec4f, 100>; \
                     for (var i = 0u; i < n; i++) { b = a; } return b[0]; }";
         let worst = cost(copy);
-        // Two zeroed declarations, the copy (both names) per iteration, the read of `b[0]`
-        // indexes one element.
+        // Two zeroed declarations and the copy (both names) per iteration; `b[0]` reads one.
         assert!(worst.arithmetic >= 200 + 1024 * 200, "{worst:?}");
         let private = "var<private> big: array<vec4f, 100>;\n\
                        fn effect(uv: vec2f, src: vec4f) -> vec4f { return big[0] + src; }";

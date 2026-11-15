@@ -218,8 +218,7 @@ class ExportProgress:
     """``frames`` while encoding, ``finalizing`` while the output is flushed. The export is complete
     only when the call returns."""
     completed: int
-    """Frames encoded so far; at most ``total``. It goes back to 0 only in a report marked
-    ``restarted``."""
+    """Frames encoded so far, at most ``total``; back to 0 only in a report marked ``restarted``."""
     total: int
     """Frames in the export."""
     restarted: bool = False
@@ -1337,9 +1336,9 @@ class _HostModes:
     start_timeout: float | None = _host_start.DEFAULT_HOST_START_TIMEOUT
 
     def environment(self, cache_directory: str | None = None) -> dict[str, str]:
-        """The environment a host started now would get. The host reads its renderer and decode
-        path at startup, so the modes go in it, and the client's cache directory, else the
-        environment's, made absolute, since a host resolves it against its own directory."""
+        """The environment a host started now would get, with the modes and an absolute cache
+        directory (the client's, else the environment's). A host reads both at startup and would
+        resolve a relative directory against its own."""
         named = {
             variable: value
             for variable, value in (
@@ -1359,8 +1358,8 @@ class _HostModes:
 
 
 def _environment_key(environment: Mapping[str, str]) -> str:
-    """A host reads its whole environment when it starts, so hosts are kept apart by it, and by the
-    OpenH264 install generation, since a host looks for the library once."""
+    """Keys a host by its whole environment and the OpenH264 install generation, since a host reads
+    its environment and looks for the library only once."""
     digest = hashlib.sha256()
     for name, value in sorted(environment.items()):
         digest.update(f"{name}={value}".encode("utf-8", "surrogateescape") + b"\0")
@@ -1631,8 +1630,8 @@ class _Pool:
         _pools.add(self)
 
     def forget_after_fork(self, null: int) -> None:
-        """Drops what a forked child inherited: no thread feeds its hosts and a parent thread may
-        have held the lock, so the child starts its own hosts."""
+        """Gives a forked child a new lock and no hosts, since no thread feeds the inherited hosts
+        and a parent thread may have held the lock."""
         self._condition = threading.Condition()
         for host in self._hosts:
             host.release_inherited(null)
@@ -2337,8 +2336,8 @@ if hasattr(os, "register_at_fork"):
 def _shared_client(
     host_path: PathLike | None, cache_directory: PathLike | None, concurrency: int
 ) -> HostClient:
-    """Keyed by binary, cache directory and ``concurrency``, so calls with different modes share
-    the bound."""
+    """The shared client of a binary, cache directory and ``concurrency``; calls with different
+    modes share its bound."""
     if not _safe_integer(concurrency) or concurrency < 1:
         raise ValueError("concurrency must be a positive integer")
     binary = resolve_host_binary(host_path, cache_directory=cache_directory)

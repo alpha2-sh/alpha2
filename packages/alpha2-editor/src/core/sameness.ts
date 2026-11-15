@@ -8,8 +8,8 @@ function serializedKeys(value: object): string[] {
 
 /**
  * Whether `a` and `b` serialize to the same JSON text: arrays item by item, objects key by key in
- * order. Shared parts compare by identity, so the cost is the unshared part, and the walk stops at
- * the first difference.
+ * order. Shared parts compare by identity, so the cost is the unshared part up to the first
+ * difference.
  */
 export function sameJson(a: unknown, b: unknown): boolean {
   if (a === b) return true;

@@ -252,8 +252,7 @@ fn packet(sample: &CMSampleBuffer, shared: &Shared) -> Result<EncodedPacket, Str
     })
 }
 
-/// Takes the first configuration record, and fails a replaced session whose record differs from
-/// the one already published.
+/// Takes the first configuration record and fails a replaced session whose record differs.
 fn check_record(outputs: &mut Outputs, sample: &CMSampleBuffer, record: &str) {
     if outputs.codec_private.is_none() {
         outputs.codec_private = configuration_record(sample, record);
@@ -345,8 +344,7 @@ struct Pool(CFRetained<CVPixelBufferPool>);
 // SAFETY: pixel buffer pools are thread-safe.
 unsafe impl Send for Pool {}
 
-/// A frame submitted to the session and not finished yet, kept to encode it again if the session
-/// is lost.
+/// A submitted, unfinished frame, kept to encode it again if the session is lost.
 struct Kept {
     pts: i64,
     buffer: CFRetained<CVPixelBuffer>,
@@ -443,8 +441,7 @@ fn configure(
             return Err(format!("{key} was refused ({})", sys::status(status)));
         }
     }
-    // An encoder that refuses the bound still emits by `MAX_IN_FLIGHT`, or the sink's stall
-    // bound fails it.
+    // An encoder refusing the bound must emit by `MAX_IN_FLIGHT` or fail the sink's stall bound.
     // SAFETY: a framework constant.
     let delay = unsafe { kVTCompressionPropertyKey_MaxFrameDelayCount };
     #[cfg(test)]
@@ -490,9 +487,8 @@ fn create(
         ])
     };
     let mut session: *mut VTCompressionSession = ptr::null_mut();
-    // SAFETY: the dictionaries hold the documented value types, the refcon outlives the session
-    // (the encoder declares the session before its callback state), and `session` is a valid out
-    // pointer.
+    // SAFETY: the dictionaries hold the documented value types, `session` is a valid out pointer,
+    // and the refcon outlives the session, which the encoder drops before its callback state.
     let status = unsafe {
         VTCompressionSession::create(
             None,
@@ -546,7 +542,7 @@ pub struct VideoToolboxEncoder {
     released: u64,
     /// Sessions replaced since a frame last finished.
     replacements: u32,
-    /// The next frame is a keyframe: the session was replaced with no frame to encode again.
+    /// Whether the next frame is a keyframe because a replaced session had no frame to re-encode.
     key_next: bool,
     ended: bool,
     /// Answers the encode call of this frame (counted from 0) as a lost session, and whether the

@@ -428,8 +428,7 @@ pub(crate) fn copy_out_bytes(bytes: &[u8]) -> Result<web_sys::js_sys::Uint8Array
     copy_out_bytes_js(bytes)
 }
 
-/// A coded readback failure (`OUT_OF_MEMORY` at stage `copy-out`) for an error of
-/// [`copy_out_bytes`].
+/// The coded readback failure (`OUT_OF_MEMORY` at stage `copy-out`) for a [`copy_out_bytes`] error.
 pub(crate) fn copy_out_failure(error: &JsValue) -> JsValue {
     let message = format!(
         "the browser could not copy the frame out: {}",

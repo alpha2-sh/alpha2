@@ -47,7 +47,7 @@ pub struct StillRequest {
     /// Runtime effects the project's clips name.
     #[serde(default)]
     pub effects: Vec<EffectRequest>,
-    /// Absent: the project's canvas.
+    /// The still size; the project's canvas when absent.
     #[serde(default)]
     pub size: Option<StillSize>,
     /// 1 to [`MAX_STILLS`], each to its own file.

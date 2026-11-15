@@ -3754,14 +3754,8 @@ pub(crate) fn encoder_teardown(worker: &mut EncodeWorker, output: &Path) -> Opti
 }
 
 impl Host {
-    /// Waits on the GPU work that read the inputs and releases what it held. Returns the decoder
-    /// surfaces still parked, or 0 when it failed.
-    ///
-    /// The file is already in place, so a failure is reported but does not fail the export: a
-    /// retry would be refused by the existing output. A device that stopped is retired after the
-    /// answer ([`Renderer::gpu_lost`]); a slow one fails the next export's bounded wait.
-    /// Strict mode must not pass a run that silently decoded in software; an open hardware
-    /// session is no evidence any frame came from it. Checked before the output is finished.
+    /// Refuses a strict-mode run that decoded any frame in software; an open hardware session is
+    /// no evidence any frame came from it. Checked before the output is finished.
     #[cfg_attr(
         not(all(
             any(target_os = "linux", target_os = "macos", target_os = "windows"),
@@ -3791,6 +3785,12 @@ impl Host {
         Ok(())
     }
 
+    /// Waits on the GPU work that read the inputs and releases what it held. Returns the decoder
+    /// surfaces still parked, or 0 when it failed.
+    ///
+    /// The file is already in place, so a failure is reported but does not fail the export: a
+    /// retry would be refused by the existing output. A device that stopped is retired after the
+    /// answer ([`Renderer::gpu_lost`]); a slow one fails the next export's bounded wait.
     pub(crate) fn clean_up_after_output(
         &self,
         output: &Path,

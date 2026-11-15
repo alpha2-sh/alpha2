@@ -1380,17 +1380,14 @@ fn configure_colorspace(
     }
 }
 
-/// Row alignment of every `sws_scale` destination: 16 RGBA pixels, the widest block a SIMD
-/// converter stores per iteration.
+/// Row alignment in bytes of every `sws_scale` destination, the widest SIMD store (16 RGBA pixels).
 const SCALER_DESTINATION_ALIGN: i32 = 64;
 
 /// Converts frames of one size and pixel format into another pixel format at the same size.
 ///
-/// The destination of `sws_scale` is always a frame this type allocates with
-/// `av_frame_get_buffer(.., 64)` for its own format and size, zero filled before use. Some
-/// converters write whole blocks past a row's last pixel or skip the last columns, so a caller's
-/// slice is never a destination: rows padded to 64 bytes keep every block inside the frame, and
-/// zero fill leaves defined bytes where a converter writes nothing.
+/// `sws_scale` writes only into this type's own frame, with rows padded to 64 bytes and zero
+/// filled, because some converters write whole blocks past a row's last pixel or skip the last
+/// columns.
 pub struct PackedScaler {
     context: SwsContext,
     width: i32,
@@ -3466,8 +3463,7 @@ unsafe fn writable_plane<'a>(
     Ok(unsafe { slice::from_raw_parts_mut(data, len) })
 }
 
-/// Whether `len` bytes from address `start` lie inside one of `frame`'s reference-counted
-/// buffers.
+/// Whether `len` bytes from address `start` lie inside one of `frame`'s buffers.
 fn in_frame_buffer(frame: &AVFrame, start: usize, len: usize) -> bool {
     let Some(end) = start.checked_add(len) else {
         return false;

@@ -15,9 +15,8 @@ class UserTextError(ValueError):
 def read_user_text(path: str | os.PathLike[str], what: str, limit: int | None = None) -> str:
     """The text of the file at ``path``, which a message calls ``what``.
 
-    Raises :class:`OSError` when the file cannot be read and :class:`UserTextError` naming the
-    first offending byte when it is not text by the rule, or when it is longer than ``limit``
-    bytes.
+    Raises :class:`OSError` when the file cannot be read, and :class:`UserTextError` when it is
+    longer than ``limit`` bytes or is not text by the rule (naming the first offending byte).
     """
     with open(path, "rb") as file:
         data = file.read() if limit is None else file.read(limit + 1)

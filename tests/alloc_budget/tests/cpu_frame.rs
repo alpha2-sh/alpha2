@@ -1,5 +1,4 @@
-//! What one CPU renderer frame allocates on the calling thread, which draws every band when the
-//! renderer has one thread.
+//! What one CPU frame allocates on the calling thread, which draws every band with one thread.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
@@ -221,8 +220,7 @@ fn frame(case: &str) -> (u64, u64) {
     counted(draw)
 }
 
-/// Bands, scratch and node lists: a few hundred per frame, none per pixel (a 640x360 frame has
-/// 230,400 pixels).
+/// Allocations of a YUVA frame for bands, scratch and node lists; none are per pixel.
 const YUVA_FRAME: u64 = 400;
 
 #[test]

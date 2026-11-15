@@ -123,8 +123,7 @@ pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
     })
 }
 
-/// Creates `path` and its missing parents with mode 0700, then refuses a directory that another
-/// user owns or that group or others can write.
+/// The Unix side of [`crate::create_private_directory`].
 pub(crate) fn create_private_directory(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     fs::DirBuilder::new()

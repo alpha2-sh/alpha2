@@ -89,8 +89,7 @@ impl Responder {
         }
     }
 
-    /// `header` as UTF-8 JSON, or `RESOURCE_LIMIT` when it is longer than a response header may
-    /// be.
+    /// `header` as UTF-8 JSON, or `RESOURCE_LIMIT` when it is longer than the header limit.
     fn header_bytes(&self, header: &Value) -> Result<Vec<u8>, HostError> {
         let line = serde_json::to_vec(header).map_err(HostError::json)?;
         if line.len() > self.header_limit {

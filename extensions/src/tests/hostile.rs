@@ -599,7 +599,7 @@ pub(crate) fn pdf_coded_image(entries: &str, data: &[u8], draws: usize) -> Vec<u
     )
 }
 
-/// A one-pixel-wide OpenEXR file of B44 blocks whose deltas wrap below zero, found by fuzzing.
+/// A one-pixel-wide OpenEXR file of B44 blocks whose deltas wrap below zero.
 #[cfg(feature = "exr")]
 pub(crate) fn exr_wrapping_b44() -> Vec<u8> {
     vec![
@@ -631,8 +631,7 @@ pub(crate) fn exr_wrapping_b44() -> Vec<u8> {
     ]
 }
 
-/// A damaged PDF whose first page draws a path far past its canvas once converted, found by
-/// fuzzing.
+/// A damaged PDF whose first page draws a path far past its canvas once converted.
 #[cfg(feature = "pdf")]
 pub(crate) fn pdf_far_path() -> Vec<u8> {
     vec![

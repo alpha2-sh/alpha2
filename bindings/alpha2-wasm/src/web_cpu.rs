@@ -1672,9 +1672,8 @@ impl WebCpuRenderer {
     }
 
     /// The project's frame at `time_ticks`, drawn at export quality at `width` x `height` from the
-    /// frames uploaded so far, as straight-alpha sRGB RGBA8; nothing is shown on the canvas. Only
-    /// the CPU renderer has it; an extraction reads timeline frames through it, so what was
-    /// rendered before does not change them.
+    /// frames uploaded so far, as straight-alpha sRGB RGBA8, without touching the canvas. Only the
+    /// CPU renderer has it, and earlier renders do not change its result.
     ///
     /// # Errors
     /// `INVALID_STATE` without a project, `MISSING_INPUT` when a source frame it shows has not

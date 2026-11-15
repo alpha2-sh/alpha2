@@ -326,7 +326,6 @@ impl CpuRenderer {
         ))
     }
 
-    /// Result-cache lookups, as the GPU executor's `cached_results`.
     /// Stores drawn results unless the cache was cleared since `clears` was read with the lookups;
     /// mirrors `Renderer::complete_graph_work`.
     pub(crate) fn keep_results(
@@ -345,6 +344,7 @@ impl CpuRenderer {
         }
     }
 
+    /// Result-cache lookups, as the GPU executor's `cached_results`.
     fn cached_results(
         &self,
         graph: &RenderGraph<'_>,

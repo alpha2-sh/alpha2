@@ -810,9 +810,8 @@ pub(crate) fn classify_open_failure(
 }
 
 /// The first parenthesized number in an `nvenc_print_error` line.
-/// Whether NVENC's capability check refused a setting of the request (`nvenc.c`
-/// `nvenc_check_capabilities`: "... not supported", "Width 8192 exceeds 4096", "Max B-frames 2
-/// exceed 0").
+/// Whether NVENC's capability check (`nvenc_check_capabilities`) refused a setting of the request,
+/// as in "... not supported", "Width 8192 exceeds 4096" or "Max B-frames 2 exceed 0".
 fn nvenc_capability_refusal(lines: &[LogLine]) -> bool {
     lines
         .iter()
@@ -821,8 +820,8 @@ fn nvenc_capability_refusal(lines: &[LogLine]) -> bool {
 
 /// Whether an NVENC open may have been refused for asking more B-frames than the device has.
 ///
-/// The capability check says so in a warning, but a full log ring can lose that line, so a refusal
-/// without an NVENC status or a library load failure (how every capability refusal ends) counts too.
+/// The capability check warns so, but a full log ring can lose that line. Every capability refusal
+/// ends without an NVENC status or a library load failure, so such a refusal counts too.
 pub(crate) fn nvenc_may_refuse_b_frames(encoder: &str, error: &str, lines: &[LogLine]) -> bool {
     let said =
         |words: &str| error.contains(words) || lines.iter().any(|line| line.text.contains(words));
@@ -1494,8 +1493,7 @@ fn open_one_video_encoder(
         .map(|encoder| (encoder, crate::AppliedRateControl::Bitrate, refused, pixels))
 }
 
-/// Opens `candidate` with [`encoder_max_b_frames`], and once more without B-frames when an NVENC
-/// device has fewer than that.
+/// Opens `candidate` asking [`encoder_max_b_frames`], again without B-frames when NVENC has fewer.
 fn open_video_encoder_context(
     request: &VideoEncoderOpenRequest<'_>,
     candidate: &VideoEncoderCandidate,

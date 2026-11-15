@@ -7,7 +7,7 @@ const siblingRequirement =
 /** What `version:set` writes in the workspace `Cargo.toml`, by section. */
 export const workspaceSections = (version) => ({
   "workspace.package": [workspaceVersion, version],
-  // Siblings require each other exactly: only one set of versions is built and tested together.
+  // Siblings require each other exactly, as only one set of versions is built and tested together.
   "workspace.dependencies": [siblingRequirement, `=${version}`],
 });
 

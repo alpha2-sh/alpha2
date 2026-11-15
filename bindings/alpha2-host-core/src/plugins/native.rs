@@ -1,8 +1,7 @@
 //! Runs native plugins, C-ABI libraries loaded by the platform loader, through their
 //! `alpha2_plugin_v1` table and the host table they call back through. A library runs with the
 //! process's rights, as allowed by the caller. Each library is loaded once per process, keyed by
-//! its artifact's SHA-256, and never unloaded: the host cannot tell whether threads it started still
-//! run its code.
+//! its artifact's SHA-256, and never unloaded, since threads it started may still run its code.
 
 #![allow(unsafe_code)]
 

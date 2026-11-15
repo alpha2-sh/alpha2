@@ -587,8 +587,7 @@ pub(crate) fn valid_scalar_values(animation: &Animated<f32>, check: impl Fn(f32)
     }
 }
 
-/// A non-empty, strictly ascending sequence of at most [`MAX_KEYFRAMES`] whose interpolations
-/// are usable.
+/// A non-empty, strictly ascending run of at most [`MAX_KEYFRAMES`] with usable interpolations.
 pub(crate) fn valid_keyframes<T>(keyframes: &[Keyframe<T>]) -> bool {
     !keyframes.is_empty()
         && keyframes.len() <= MAX_KEYFRAMES

@@ -827,8 +827,7 @@ struct Sized {
 /// the dictionary size stands.
 ///
 /// # Errors
-/// [`ExtensionError::Budget`] for a CCITT image without a row count, whose output hayro grows per
-/// decoded row.
+/// [`ExtensionError::Budget`] for a CCITT image without a row count, which hayro grows per row.
 fn image_size(dict: &Dict<'_>, stream: &Stream<'_>) -> Result<Sized, ExtensionError> {
     let side = |short: &[u8], long: &[u8]| {
         dict.get::<u32>(short)

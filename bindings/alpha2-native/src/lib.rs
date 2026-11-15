@@ -121,8 +121,8 @@ pub struct FfmpegRuntimeIdentity {
     pub configuration: String,
     /// SDK release used by alpha2 release builds.
     pub pinned_sdk_release: &'static str,
-    /// Why hardware decode and encode interop is off: the loaded libavutil is another minor
-    /// release than the one the `FFmpeg` shims were compiled for.
+    /// Why hardware decode and encode interop is off, set when the loaded libavutil is another
+    /// minor release than the one the `FFmpeg` shims were compiled for.
     pub interop_refusal: Option<&'static str>,
 }
 

@@ -1001,7 +1001,6 @@ fn an_svg_text_is_charged_for_its_layout_with_or_without_a_font() {
             )
             .map(|mut source| source.render(ms(0), (0, 0)).map(drop))
     };
-    // A paragraph draws.
     let paragraph = text(2000);
     assert!(matches!(
         open(&paragraph, vec![Arc::clone(&font)]),

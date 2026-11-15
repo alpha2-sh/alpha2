@@ -316,10 +316,10 @@ export class Alpha2Exporter {
  * Resolves after `sink.finish()` with timing and memory metrics. Aborting `signal` before
  * `finish()` resolves, even while it is pending, rejects immediately; late results are closed. An
  * abort after `finish()` resolved is ignored. On other failures, held frames are closed and pending
- * writes awaited. In both cases `sink.abort` is called once and the promise
- * rejects with an {@link ExportAbortedError}, a `RESOURCE_LIMIT` `ExportFailureError`, a
- * `RangeError` for an invalid option, or the error from the backend, `refill` or sink. An error
- * thrown by `sink.abort` does not replace it.
+ * writes awaited. In both cases `sink.abort` is called once and the promise rejects with an
+ * {@link ExportAbortedError}, a `RESOURCE_LIMIT` `ExportFailureError`, a `RangeError` for an
+ * invalid option, or the error from the backend, `refill` or sink. An error thrown by
+ * `sink.abort` does not replace it.
  */
 export async function exportToSink(
   exporter: Alpha2Exporter,

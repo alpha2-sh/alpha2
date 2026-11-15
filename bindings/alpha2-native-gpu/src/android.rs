@@ -688,8 +688,7 @@ impl AhbImporter {
         })
     }
 
-    /// Frees the conversions that completed, releasing their decoder buffers, without waiting for
-    /// any that did not.
+    /// Frees completed conversions and their decoder buffers without waiting for the others.
     ///
     /// # Errors
     /// A failed Vulkan call.

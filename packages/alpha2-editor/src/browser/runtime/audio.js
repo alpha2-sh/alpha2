@@ -83,7 +83,7 @@ export function audibleSources(project, library) {
 export class AudioWindowSupplier {
   #library;
   #onError;
-  /** Streams that play silent, by `laneKey`: the file found unplayable and the planes uploaded. */
+  /** Silent streams by `laneKey`, each with the file found unplayable and the planes uploaded. */
   #silentLanes = new Map();
   #engine = null;
   #sampleRate = 48_000;

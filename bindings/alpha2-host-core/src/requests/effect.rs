@@ -29,7 +29,7 @@ pub struct EffectRequest {
     pub resources: Vec<ResourceRequest>,
     /// The WGSL body the engine wraps into a shader.
     pub wgsl_body: String,
-    /// Defaults to tier B when omitted.
+    /// The least capable GPU tier the effect runs on; B when omitted.
     #[serde(default = "default_tier")]
     pub tier_min: TierRequest,
     /// The license the author ships the effect under.

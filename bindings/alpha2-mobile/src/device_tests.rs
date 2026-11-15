@@ -165,8 +165,7 @@ type Frame = Vec<Vec<u8>>;
 /// their default rate stay above it on the parity project's 64x48 frames.
 const EXPORT_PSNR_FLOOR_DB: f64 = 30.0;
 
-/// The frames at output indices `wanted` of the export at `path`, decoded by this device's
-/// decoders.
+/// The frames at output indices `wanted` of the export at `path`, decoded on this device.
 fn decoded_frames(
     path: &std::path::Path,
     wanted: &[u64],
@@ -295,8 +294,7 @@ fn rendered_frames(project: &str, assets: &[(&str, &str)], wanted: &[u64]) -> Ve
     sink.1
 }
 
-/// The first and the middle frame of the export at `path` against the CPU renderer's frames of
-/// the same project.
+/// Compares the first and middle frames of the export at `path` with the CPU renderer's.
 fn check_pictures(path: &std::path::Path, report: &Value, project: &str, assets: &[(&str, &str)]) {
     let frames = report["frames"].as_u64().expect("frames");
     let size = (
@@ -629,8 +627,8 @@ fn the_surface_table_source_digests_hash_as_pinned() {
                 failures.push(format!("{name}: {found}, pinned {pinned}"));
             }
             Ok(_) => {}
-            // H.264 High 4:4:4 Predictive: a device without a decoder for it refuses it as
-            // unsupported, in its own words (VideoToolbox names the format, MediaCodec the decoder).
+            // H.264 High 4:4:4 Predictive. A device without its decoder refuses it as unsupported
+            // in its own words (VideoToolbox names the format, MediaCodec the decoder).
             Err(error @ crate::Alpha2Error::Unsupported { .. })
                 if name == "digest-source-hdr-pq" =>
             {
@@ -908,11 +906,8 @@ fn play_through(
     );
 }
 
-/// Seeks 240 times over 2 s between two distant times of the video project's player, which shows
-/// it on a window: the position reaches the last target within 500 ms of the last call (three
-/// single seeks' time on a device slower than that), so no backlog of stale seeks built up. How
-/// many were drawn is printed; a device that draws a cached frame faster than the seeks arrive
-/// draws them all.
+/// Seeks 240 times in 2 s between two distant times of a player shown on a window. The last
+/// target must be reached within 500 ms, or three single seeks on a slower device.
 #[cfg(any(target_os = "android", target_os = "ios"))]
 fn scrub(player: &crate::Player, wait: &dyn Fn(u64, &dyn Fn() -> bool) -> bool) {
     use std::time::{Duration, Instant};
@@ -1032,9 +1027,7 @@ fn write_silence(path: &std::path::Path, rate: u32, seconds: u32) {
     file.flush().expect("flush");
 }
 
-/// A preview reads 5 s of a 60 minute recording, which decodes whole to about 690 MB at 48 kHz:
-/// ending it 100 ms into its first play returns within 500 ms, and left alone it plays from
-/// windows (sounding where the process has an output) without that memory.
+/// The 60 minute recording decodes whole to about 690 MB at 48 kHz, which a preview must not hold.
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[test]
 fn a_preview_of_a_long_recording_ends_at_once_and_plays_from_windows() {

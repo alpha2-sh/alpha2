@@ -67,9 +67,8 @@ fn software_decoders(codec: VideoCodec) -> &'static [&'static str] {
     }
 }
 
-/// The parameter sets of an `avcC` or `hvcC` record, each with an Annex B start code, split as
-/// `MediaCodec` takes them: `csd-0` (SPS, or VPS+SPS+PPS of the base layer for HEVC) and `csd-1`
-/// (PPS for H.264).
+/// An `avcC` or `hvcC` record's parameter sets with Annex B start codes, split as `MediaCodec`
+/// takes them: `csd-0` (SPS, or the base layer's VPS+SPS+PPS for HEVC) and `csd-1` (H.264 PPS).
 fn codec_specific_data(codec: VideoCodec, record: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut first = Vec::new();
     let mut second = Vec::new();

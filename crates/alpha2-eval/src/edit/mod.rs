@@ -4,12 +4,11 @@
 //! request in, a project and a report out, with no I/O. Clips are split so each part continues its
 //! source and time map, keyframes move with their clip or transition, timeline-anchored data and
 //! caption cues are cut and shifted, transitions whose cut point is removed are removed, and mattes
-//! and `via` bindings follow the part beside them or the edit is refused. Every value keyed in
-//! timeline time is reached through the model's walkers, and bus curves keep their shape across a
-//! cut. Before editing, `split_at` leaves out cuts it cannot make exactly and `remove_ranges`
-//! refuses them, so a valid request never ends as an invalid result. Kept moments render as before
-//! except for reversed parts off the frame grid and the sound at a loop wrap a cut turns into a
-//! part boundary. The result validates and is canonical.
+//! and `via` bindings follow the part beside them or the edit is refused. Bus curves keep their
+//! shape across a cut. Before editing, `split_at` leaves out cuts it cannot make exactly and
+//! `remove_ranges` refuses them, so a valid request never ends as an invalid result. Kept moments
+//! render as before except for reversed parts off the frame grid and the sound at a loop wrap a cut
+//! turns into a part boundary. The result validates and is canonical.
 
 mod bake;
 #[cfg(test)]

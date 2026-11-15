@@ -139,8 +139,7 @@ static void alpha2_free_vulkan_device(AVHWDeviceContext *context) {
 /*
  * Fills a Vulkan device context from the renderer's device and installs this shim's queue locks.
  * Returns AVERROR(EINVAL) for a missing handle or queue, a family without a lock or no timeline
- * semaphores, AVERROR(ENOSYS) without a Vulkan loader,
- * AVERROR(ENOMEM) when allocation fails.
+ * semaphores, AVERROR(ENOSYS) without a Vulkan loader, and AVERROR(ENOMEM) when allocation fails.
  */
 int alpha2_vulkan_device_init(AVHWDeviceContext *context,
                               const Alpha2VulkanDeviceInfo *info) {

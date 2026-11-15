@@ -523,8 +523,8 @@ impl Drop for DecodeProgressWatch {
     }
 }
 
-/// Time since one decoder operation started or last stepped forward, and loop steps since it started
-/// or last produced a frame, checked against [`DECODE_WORK_LIMIT`] and a bound of 65,536 loop steps.
+/// Time since a decoder operation started or last stepped forward, and loop steps since it started
+/// or last produced a frame, checked against [`DECODE_WORK_LIMIT`] and a bound of 65,536 steps.
 pub struct WorkBudget {
     /// On the awake clock, so system sleep does not count.
     started: alpha2_os::AwakeInstant,

@@ -2,8 +2,8 @@
 //! callback drains, and the samples the device took drive the preview's clock.
 //!
 //! The callback only copies from the ring, so it never allocates or waits; when the mix falls
-//! behind it plays silence and counts the shortfall. The mix thread makes ready the audio each block
-//! reads before it renders the block, so sources are decoded in windows as the mix reaches them.
+//! behind it plays silence and counts the shortfall. Before rendering a block the mix thread makes
+//! ready the audio it reads, so sources are decoded in windows as the mix reaches them.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};

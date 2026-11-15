@@ -106,8 +106,7 @@ fn a_failed_copy_reports_its_step_and_a_finished_one_its_file() {
         "{failure}"
     );
     assert_eq!(failure["diagnostics"]["audioStrategy"], json!("copy"));
-    // After the last packet the publish follows, and a progress message that fails no longer
-    // stops it.
+    // The publish follows the last packet, and a progress message that fails then does not stop it.
     let finished = host
         .handle(request(&directory.join("b.mp4")), &mut |event| {
             if event.completed == event.total {

@@ -119,8 +119,7 @@ fn video_plane_copy_normalizes_positive_and_negative_stride() {
     );
     // A negative-stride frame points at its first logical row and walks backwards.
     assert_eq!(
-        // SAFETY: index six is the first byte of the final stored row, and the rows before it
-        // are in `bytes`.
+        // SAFETY: index six starts the last stored row, and the rows before it are in `bytes`.
         unsafe { copy_plane_rows(bytes.as_ptr().add(6), -3, 2, 3, "plane") }
             .expect("negative stride"),
         vec![7, 8, 4, 5, 1, 2]

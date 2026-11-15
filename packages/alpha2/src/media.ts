@@ -11,13 +11,9 @@ export const ROUNDING_SCAN_FRAMES = 64;
 export const ROUNDING_SCAN_BYTES = 16 * 1024 * 1024;
 
 /**
- * The unit a stream's timestamps are rounded to, in units of its time resolution, or 0 when none
- * shows. A frame interval that is not a whole number of units rounds to two lengths a unit apart
- * (29.97 fps in ms gives 33 and 34), so the unit is the GCD of the interval differences. The unit
- * counts only when every timestamp lies on the first's grid of units and one constant period,
- * frames skipped allowed, places each within a unit of it. Returns 0 for uniform or variable frame
- * rates, for gaps the unit does not explain and for fewer than three distinct timestamps.
- * Throws `RangeError` for a timestamp that is not a safe integer.
+ * The unit a stream's timestamps are rounded to, in units of its time resolution (1 for 29.97 fps
+ * in ms, whose frames last 33 and 34), or 0 when none shows. Mirrors the engine's
+ * `rounding_quantum`. Throws `RangeError` for a timestamp that is not a safe integer.
  */
 export function roundingQuantum(timestamps: readonly number[]): number {
   for (const timestamp of timestamps)
@@ -619,8 +615,7 @@ async function matroskaOrientation(
 
 /**
  * The `CodecDelay` a Matroska or WebM file declares for track `trackId` (mediabunny's
- * `InputTrack.id`), in nanoseconds; 0 when none or malformed. Readers should subtract it; mediabunny
- * does not.
+ * `InputTrack.id`), in nanoseconds, or 0 when none or malformed. mediabunny does not subtract it.
  */
 export async function readMatroskaCodecDelay(
   container: ContainerBytes,

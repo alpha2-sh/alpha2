@@ -234,13 +234,13 @@ pub(super) fn vorbis_comments(block: &[u8]) -> Vec<String> {
     comments
 }
 
-/// Builds `codec_private` from metadata blocks: `fLaC` and every block but padding and pictures,
-/// the last flagged as last.
 /// The length of `from..to` as a read size.
 fn span(from: u64, to: u64) -> usize {
     usize::try_from(to - from).unwrap_or(usize::MAX)
 }
 
+/// Builds `codec_private` from metadata blocks: `fLaC` and every block but padding and pictures,
+/// the last flagged as last.
 pub(super) fn codec_private(blocks: &[(u8, Vec<u8>)]) -> Bytes {
     let kept = blocks
         .iter()

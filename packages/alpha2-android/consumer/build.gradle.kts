@@ -1,5 +1,5 @@
-// An app that uses the library through a release build shrunk by R8 with only the rules the AAR
-// ships, as an integrator's app is; its instrumentation test runs against that build.
+// An app whose release build R8 shrinks with only the rules the library's AAR ships; its
+// instrumentation test runs against that build.
 plugins {
     id("com.android.application")
     kotlin("android")

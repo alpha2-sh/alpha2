@@ -194,7 +194,7 @@ fn a_lottie_animation_of_a_thousand_assets_naming_one_file_holds_one_decode() {
     #[allow(clippy::cast_precision_loss)]
     let held = held * bytes.len() as f64;
     eprintln!("held {held:.0} bytes");
-    // The decoded picture, 1 MiB, and the parsed document; 1000 copies were 2 GB.
+    // The decoded picture, 1 MiB, and the parsed document; 1000 decoded copies would be 2 GB.
     assert!(held < 17.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
 }
 
@@ -619,8 +619,8 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// A ZIP-compressed EXR file of one 3840 by 2160 tile with B, G, R and `extra` float channels, whose only
-/// chunk holds a 9-byte zlib stream.
+/// A ZIP-compressed EXR file of one 3840 by 2160 tile with B, G, R and `extra` float channels,
+/// whose only chunk holds a 9-byte zlib stream.
 #[cfg(feature = "exr")]
 fn exr_one_tile(extra: usize) -> Arc<[u8]> {
     fn attribute(out: &mut Vec<u8>, name: &str, kind: &str, value: &[u8]) {

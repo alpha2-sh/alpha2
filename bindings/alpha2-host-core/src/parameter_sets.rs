@@ -746,7 +746,7 @@ fn skip_short_term_ref_pic_sets(bits: &mut Bits<'_>) -> Option<()> {
 /// (VP9 bitstream 6.2).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Vp9Format {
-    /// `Profile`, 0 to 3.
+    /// The profile, 0 to 3.
     pub profile: u8,
     /// Bits per sample: 8 for profiles 0 and 1, 10 or 12 for profiles 2 and 3.
     pub bit_depth: u8,

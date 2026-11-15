@@ -80,8 +80,7 @@ pub enum LoopMode {
 /// Most passes a looping clip makes over its timeline range. A longer loop is several clips.
 pub const MAX_LOOP_PASSES: u64 = 65_536;
 
-/// Passes a loop of `source` ticks makes over `timeline` ticks, rounded up; zero for an empty
-/// source.
+/// Passes a `source`-tick loop makes over `timeline` ticks, rounded up; zero for an empty source.
 #[must_use]
 pub fn loop_passes(timeline: i64, source: i64) -> u64 {
     if source <= 0 || timeline <= 0 {

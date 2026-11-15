@@ -21,8 +21,7 @@ use alpha2_gpu::GpuErrorKind;
 use crate::Shared;
 use crate::retire::Retirement;
 
-/// Internal, out-of-memory and validation scopes of one renderer encoder, from creation to
-/// submission.
+/// Internal, out-of-memory and validation scopes of one renderer encoder, open until submission.
 ///
 /// Scopes are per thread and close in reverse order, so this is neither `Send` nor `Sync`, and
 /// a nested encoder must be submitted or dropped first.
@@ -186,8 +185,7 @@ pub(crate) fn create_checked<T>(
     }
 }
 
-/// `cell`'s value, created by `create` under [`create_checked`] when empty. A failed creation
-/// stores nothing.
+/// `cell`'s value, created under [`create_checked`] when empty; a failed creation stores nothing.
 pub(crate) fn checked_cell<'a, T>(
     cell: &'a std::sync::OnceLock<T>,
     device: &wgpu::Device,

@@ -2,8 +2,7 @@
 
 use super::*;
 
-/// Writes a one-colour PNG of `width` x `height` RGBA pixels, a file of about 2 KB per
-/// megapixel.
+/// Writes a one-colour PNG of `width` x `height` RGBA pixels, about 2 KB per megapixel.
 fn write_blank_png(path: &Path, width: u32, height: u32) {
     let file = fs::File::create(path).expect("create");
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);

@@ -24,18 +24,16 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for ListenerFailure {
 /// Receives the library's diagnostic lines.
 #[uniffi::export(with_foreign)]
 pub trait DiagnosticListener: Send + Sync {
-    /// Called with one line on the thread that wrote it, which may be any library thread; keep it
-    /// short.
+    /// Called with one line on whichever library thread wrote it, so it should return quickly.
     ///
     /// # Errors
     /// A failure, or anything the listener throws, drops the line and nothing else.
     fn on_diagnostic(&self, line: String) -> Result<(), ListenerFailure>;
 }
 
-/// Sends the library's diagnostic lines (a GPU device's errors, why an export draws on the CPU, a
-/// panic and where it happened) to `listener`, or with `None` back to the default output: the
-/// system log under the tag `alpha2` on Android, standard error elsewhere. One listener serves
-/// the whole process.
+/// Sends the library's diagnostic lines (GPU errors, CPU fallback reasons, panics) to `listener`,
+/// or with `None` to the default output, which is the system log under the tag `alpha2` on Android
+/// and standard error elsewhere. One listener serves the whole process.
 #[uniffi::export]
 pub fn set_diagnostic_listener(listener: Option<Arc<dyn DiagnosticListener>>) {
     alpha2_os::set_diagnostic_sink(listener.map(|listener| -> alpha2_os::DiagnosticSink {
@@ -45,8 +43,7 @@ pub fn set_diagnostic_listener(listener: Option<Arc<dyn DiagnosticListener>>) {
     }));
 }
 
-/// Sends every panic's message and location to the diagnostic output before the hook that was
-/// installed, once per process.
+/// Sends every panic's message and location to the diagnostic output, then to the previous hook.
 pub(crate) fn report_panics() {
     static HOOK: Once = Once::new();
     HOOK.call_once(|| {

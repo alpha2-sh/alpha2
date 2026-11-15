@@ -1054,8 +1054,7 @@ def running(pid: int) -> bool:
 
 
 def test_killing_the_client_process_ends_its_host(client: HostClient, tmp_path: Path) -> None:
-    """The host exits when its parent is killed (TerminateProcess on Windows), releasing its
-    output."""
+    """The host exits when its parent is killed (TerminateProcess on Windows), freeing the file."""
     output = tmp_path / "orphaned.mp4"
     request = held_image_export(output, LONG_FRAMES)
     script = tmp_path / "client.py"

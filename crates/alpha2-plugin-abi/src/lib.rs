@@ -58,8 +58,7 @@ pub const NATIVE_ENTRY: &[u8] = b"alpha2_plugin_v1\0";
 /// What a host gives a native plugin instance. Every function takes `context` first.
 ///
 /// Pointers passed to these functions are borrowed for the call alone. `/1` grows only by fields
-/// appended here; a plugin reads `abi` and `size` first and uses a later field only when `size`
-/// covers it.
+/// appended here; a plugin reads `abi` and `size` first and uses only the fields `size` covers.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct HostV1 {

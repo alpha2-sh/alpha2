@@ -317,7 +317,7 @@ export interface ExportProgress {
    * complete only when `exportProject` resolves.
    */
   readonly phase: ProgressPhase;
-  /** Frames encoded so far; at most `total`. It goes back to 0 only in a report with `restarted`. */
+  /** Frames encoded so far, at most `total`; back to 0 only in a report with `restarted`. */
   readonly completed: number;
   /** Frames in the export. */
   readonly total: number;
@@ -565,8 +565,7 @@ export interface GpuSubmissions {
 
 /**
  * Timing and pipeline counters (see the host protocol). Undeclared counters are numbers, flags or
- * names. A copy reports its own few counters, the timing split, and none of the other declared
- * ones.
+ * names. A copy reports its own few counters and the timing split, no other declared counter.
  */
 export interface ExportPerformance {
   /** Milliseconds from the start of the export to the first turn of its frame loop. */
@@ -2019,8 +2018,7 @@ function recordDecodeStall(
 
 /**
  * Shape and serialized size (`MAX_PROJECT_JSON_BYTES`) problems the engine would refuse. The object
- * is validated as it is: its own `JSON.stringify` text cannot repeat a key or spell an integer as
- * a float, so reading that text again would only cost time and memory.
+ * itself is validated, since its JSON text cannot repeat a key or spell an integer as a float.
  */
 function projectProblems(project: Project): string[] {
   // `undefined` does not serialize; let the object validator report it.
@@ -2628,8 +2626,8 @@ function hostEnvironment(modes: HostModes): NodeJS.ProcessEnv {
 }
 
 /**
- * Hosts started with one environment are interchangeable, so the whole of it is their key, with the
- * OpenH264 install generation, since a host looks for the library once.
+ * Keys a host by its whole environment and the OpenH264 install generation, since a host reads its
+ * environment and looks for the library only once.
  */
 function hostKey(environment: NodeJS.ProcessEnv): string {
   const entries = Object.entries(environment)
@@ -2667,8 +2665,8 @@ interface HostAnswer {
 }
 
 /**
- * `unsent` with an `error`: the host exited before the request was written in full, so it never
- * ran; the error is what the exit says, for when the resends run out.
+ * `unsent` means the host exited before the request was written in full, so it never ran. Its
+ * `error` is what the exit says, for when the resends run out.
  */
 type RunOutcome =
   | { readonly kind: "result"; readonly answer: HostAnswer }
@@ -2756,9 +2754,9 @@ class HostPool {
   }
 
   /**
-   * Serves requests in the order they were made: only the oldest waiting one is considered. It gets
-   * an idle host of its modes, else a new host while there is room, else one idle host of other
-   * modes is ended for it and nothing more happens until that host is gone.
+   * Serves waiting requests strictly in order. The oldest gets an idle host of its modes, else a
+   * new host while there is room, else one idle host of other modes is ended for it and nothing
+   * more happens until that host is gone.
    */
   dispatch(): void {
     for (;;) {

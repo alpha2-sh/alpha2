@@ -16,8 +16,8 @@ pub struct RateRequest {
     pub den: u32,
 }
 
-/// AV1 on NVENC and Vulkan runs to 255. A value past the chosen codec's scale is the encoder's to
-/// refuse, and the bitrate fallback runs.
+/// The largest quantizer a request may name, the top of AV1's scale on NVENC and Vulkan. A value
+/// past the chosen codec's scale is the encoder's to refuse, and the bitrate fallback runs.
 pub const MAX_QUANTIZER: u32 = 255;
 
 /// One of the engine's five levels or an explicit rate. A level is resolved into a
@@ -123,14 +123,15 @@ impl<'de> Deserialize<'de> for VideoQualityRequest {
     }
 }
 
-/// EBU R128 / ITU-R BS.1770-4: `{ "targetLufs": <LUFS>, "truePeakCeilingDbtp"?: <dBTP> }`, the
-/// ceiling [`alpha2_compose::DEFAULT_TRUE_PEAK_CEILING_DBTP`] when absent.
+/// A loudness target (EBU R128, ITU-R BS.1770-4), read from
+/// `{ "targetLufs": <LUFS>, "truePeakCeilingDbtp"?: <dBTP> }`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct LoudnessRequest {
     /// Integrated loudness, in `-60..=0` LUFS.
     pub target_lufs: f64,
-    /// In `-20..=0` dBTP. When the target would pass it, the gain is lowered and the export left
-    /// quieter than the target.
+    /// The true-peak ceiling in `-20..=0` dBTP, by default
+    /// [`alpha2_compose::DEFAULT_TRUE_PEAK_CEILING_DBTP`]. When the target would pass it, the gain
+    /// is lowered and the export left quieter than the target.
     pub true_peak_ceiling_dbtp: f64,
 }
 
@@ -370,10 +371,11 @@ pub struct MemoryRequest {
     pub audio_window_bytes: Option<u64>,
     /// Kept frames and images of SVG, animated image, Lottie, `OpenEXR` and image sequence sources.
     pub provider_source_bytes: Option<u64>,
-    /// By the host's per-session estimate; bounds how many sessions an export opens.
+    /// Decoder sessions, counted by the host's per-session estimate, which bounds how many an
+    /// export opens.
     pub decoder_session_bytes: Option<u64>,
-    /// In (0, 1], applied to every budget after resolution, so a retry can ask for less without
-    /// knowing the host's defaults.
+    /// A factor in (0, 1] applied to every budget after resolution, so a retry can ask for less
+    /// without knowing the host's defaults.
     pub scale: Option<f64>,
 }
 
@@ -383,7 +385,7 @@ pub const DEFAULT_RENDER_CACHE_QUOTA_BYTES: u64 = 4 << 30;
 /// What a render cache's writer does when it falls behind.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Backlog {
-    /// Reported as `busySkips`.
+    /// Skips the frame, counted as `busySkips`.
     #[default]
     Skip,
     /// Waits for the writer.
@@ -391,7 +393,7 @@ pub enum Backlog {
 }
 
 impl Backlog {
-    /// The value of the protocol's name.
+    /// The value the protocol's name stands for; `None` for an unknown name.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {

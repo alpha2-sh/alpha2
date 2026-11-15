@@ -652,10 +652,9 @@ impl Fetch for Fetcher {
         })
     }
 
-    /// Loads from `<cache>/native/<sha256>.<extension>`, written from the checked bytes, so the
-    /// file the loader read cannot be swapped before the load. An existing copy is never opened
-    /// for writing: Windows refuses that while another host has it loaded, and a mapped file must
-    /// not change.
+    /// Loads from `<cache>/native/<sha256>.<extension>`, written from the checked bytes. An existing
+    /// copy is never opened for writing: Windows refuses that while another host has it loaded, and
+    /// a mapped file must not change.
     fn prepare_native(
         &mut self,
         verified: &Path,

@@ -8,8 +8,7 @@ fn bake_request(targets: &Value) -> EditRequest {
     serde_json::from_value(json!({ "op": "bake", "targets": targets })).expect("request")
 }
 
-/// The edit corpus with an out-of-range scalar set bound to clip opacity, clip and track gain and
-/// pan.
+/// The edit corpus with an out-of-range scalar set bound to an opacity and to audio gains and pans.
 fn out_of_range(interpolation: &str) -> Project {
     let mut document = corpus();
     document["data"].as_array_mut().expect("data").push(json!({

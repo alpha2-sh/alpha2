@@ -150,8 +150,8 @@ enum Direction {
 }
 
 /// The stretches of `timeline` over which `time_map` moves the shown source time one way: the
-/// whole clip, or one per loop pass, made as they are read. `None` when a pass would end beyond
-/// ticks.
+/// whole clip, or one per loop pass, made as they are read. `None` when a pass would end past
+/// the `i64` tick range.
 fn monotone_stretches(
     timeline: TimeRange,
     source: TimeRange,

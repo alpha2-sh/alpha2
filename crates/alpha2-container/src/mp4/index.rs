@@ -605,8 +605,7 @@ fn fix_index(
     let vorbis = layout.family == Family::Vorbis;
     let timescale = i64::from(trak.timescale);
     let dts_shift = i64::from(index.dts_shift);
-    // The kept samples by position in `old`, so the result does not hold a second index while it
-    // is built.
+    // Kept samples by position in `old`, so building the result never holds a second index.
     let mut entries: Vec<Kept> = Vec::new();
     // Edits may show samples more than once, but not without bound.
     let most = old.len().saturating_mul(8).min(budget);
@@ -780,8 +779,7 @@ struct Kept {
 }
 
 /// The index `kept` describes over `old`. When every sample is kept at most once and in order,
-/// `old` is rewritten in place (each position is at or after its slot), so the peak stays one
-/// index.
+/// `old` is rewritten in place, each position at or after its slot, so the peak is one index.
 fn apply_kept(mut old: Vec<Entry>, kept: &[Kept]) -> Vec<Entry> {
     let entry = |old: &[Entry], kept: &Kept| Entry {
         dts: kept.dts,

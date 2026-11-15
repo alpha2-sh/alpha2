@@ -46,8 +46,7 @@ extern "C" {
 #define ALPHA2_RECORD_ABSENT 0xFFFFFFFFu
 
 /* Both tables grow within /1 only by fields appended at their end. Each side sets size to the
- * bytes of the table as it knows it; read abi and size before using a field added after the
- * first /1. */
+ * bytes of the table it knows; check abi and size before using a field added after the first /1. */
 
 /* What a host gives a native plugin instance; valid until destroy. Pointers passed to these
  * functions are borrowed for the call alone. */

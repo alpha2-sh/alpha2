@@ -1,7 +1,6 @@
 //! Builds a plugin crate for wasm32 and native targets and writes an upload-ready directory: the
-//! artifacts, the resources and `manifest.json` with relative URLs, SHA-256 hashes and sizes, and
-//! beside them the licence files under `licenses/` and `THIRD_PARTY_NOTICES.txt`, which the
-//! manifest does not list.
+//! artifacts, the resources, `manifest.json` with relative URLs, SHA-256 hashes and sizes, and the
+//! unlisted licence files under `licenses/` and `THIRD_PARTY_NOTICES.txt`.
 //!
 //! ```text
 //! cargo run -p alpha2-plugin-pack -- <plugin-dir> --out <dir> [--target <triple>]... [--no-native]

@@ -3,8 +3,7 @@
 //! A backend instantiates the cases with [`reader_conformance_tests!`] over its
 //! [`alpha2_backend_conformance::Backend`]. Frames are presented on the CPU renderer, so the
 //! delivered bytes are the same on every machine and pinned in `tests/golden/extract-recipe.json`.
-//! A fixture the backend refuses ([`Backend::refuses`]) must be refused as unsupported and is left
-//! out of the case.
+//! A fixture the backend refuses ([`Backend::refuses`]) must fail as unsupported and is skipped.
 
 #![allow(clippy::missing_panics_doc)]
 

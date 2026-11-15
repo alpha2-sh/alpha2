@@ -20,7 +20,7 @@ use crate::video_stream::{
 
 const SIZE: u32 = 16;
 
-/// Intra frames presented at `first..end` in the track's units; frame `i` has luma `16 + 6 i % 216`.
+/// Intra frames presented at `first..end` in track units; the one at `t` has luma `16 + 6 t % 216`.
 struct Frames {
     tracks: Vec<TrackInfo>,
     next: i64,

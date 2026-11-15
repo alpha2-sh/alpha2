@@ -4,11 +4,9 @@
 //! combinators backtrack, so cost grows as a power of depth), resolves properties through
 //! ancestors, splits arcs into cubics ([`super::path_data`]), copies marker content at every
 //! vertex after its own node limit check, and converts the patterns, masks, clip paths, and
-//! filters an element names by recursing into them. Its own limits do not bound this: a 400-byte
-//! selector over 100 nested groups does not finish in a minute, a large marker on a long path can
-//! use tens of GB, and three patterns that fill each other overflow any stack. Documents over
-//! their share of [`super::MAX_READING`] or [`super::MAX_NESTING`], or whose references form a
-//! ring, are refused.
+//! filters an element names by recursing into them. Its own limits do not bound this cost, so
+//! documents over their share of [`super::MAX_READING`] or [`super::MAX_NESTING`], or whose
+//! references form a ring, are refused.
 
 use std::collections::{HashMap, HashSet};
 

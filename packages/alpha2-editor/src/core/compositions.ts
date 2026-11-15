@@ -336,7 +336,7 @@ export function detachComposition<P extends Project>(
     clip ??= (track.clips ?? []).find((c) => c.id === clipId) as
       ClipOf<P> | undefined;
   if (clip?.composition == null) return unchanged;
-  // The clip not drawing its composition, so ownComposition sees only the other users.
+  // Drops this clip's own use, so `ownComposition` sees only the other users.
   const without = setClipComposition(project, clipId, undefined) as P;
   const owned = ownComposition(without, clip);
   if (!owned.copies.size) return unchanged;

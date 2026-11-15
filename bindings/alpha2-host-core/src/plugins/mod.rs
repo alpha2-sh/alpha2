@@ -315,7 +315,7 @@ const LOG_BUDGET_BYTES: usize = 64 * 1024;
 /// The longest `fail` message kept; the rest is cut.
 const MAX_FAIL_BYTES: usize = 4096;
 
-/// UTF-8 text of at most `max` of `bytes`, a sequence the cut splits dropped.
+/// The first `max` of `bytes` as UTF-8 text, without a character the cut splits.
 fn bounded_text(bytes: &[u8], max: usize) -> String {
     let mut kept = &bytes[..bytes.len().min(max)];
     if kept.len() < bytes.len()
@@ -582,8 +582,8 @@ pub fn load(
 }
 
 impl PluginExtractor {
-    /// A native library runs in the process with no deadline of its own; a wasm module's calls
-    /// end at the policy's call deadline.
+    /// Whether the plugin is a native library, which runs in the process with no deadline of its
+    /// own; a wasm module's calls end at the policy's call deadline.
     #[must_use]
     pub const fn is_native(&self) -> bool {
         self.native

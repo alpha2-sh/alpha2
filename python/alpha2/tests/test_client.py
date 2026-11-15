@@ -2077,7 +2077,6 @@ def test_an_interrupt_while_a_new_host_starts_ends_it_and_frees_its_slot(
             client.export(**export_args("out.mp4"))
         assert client._pool._starting == 0
         client.export(**export_args("out.mp4"))
-    # The hosts the interrupts hit were ended; one host serves both later requests.
     assert len(client._pool._hosts) == 1
     started = client._pool._hosts[0].process.pid
     for host_pid in starts_in(log):
@@ -2253,8 +2252,7 @@ QUIET_FORK = pytest.mark.filterwarnings(
 
 
 def fork_host(log: Path) -> str:
-    """Records its start, each request and the end of its input; an output named ``slow`` takes a
-    second."""
+    """Records its start, each request and the end of its input; output ``slow`` takes 1 s."""
     return f"""
     pid = str(os.getpid())
     record({str(log)!r}, "start " + pid)
@@ -2615,7 +2613,7 @@ def preamble_host(pids: Path, stdout: str = "", stderr: str = "") -> str:
 
 
 def versioned_host(pids: Path, host_version: str | None) -> str:
-    """Records its pid, then reports ready naming ``host_version`` (none when ``None``) and serves."""
+    """Records its pid, reports ready naming ``host_version`` (none when ``None``), then serves."""
     details = {} if host_version is None else {"hostVersion": host_version}
     return f"""
     record({str(pids)!r}, str(os.getpid()))

@@ -273,8 +273,8 @@ pub struct EvaluatedText {
     pub line_clamp: Option<alpha2_model::LineClamp>,
 }
 
-/// Largest magnitude of a sampled fraction: the fraction a valid pixel length converts to on a
-/// one-pixel picture. Eased keyframes can overshoot their values; sampling clamps them here.
+/// Largest magnitude of a sampled fraction, which a valid pixel length reaches on a one-pixel
+/// picture. Eased keyframes can overshoot their values; sampling clamps them here.
 const MOST_FRACTION: f32 = alpha2_model::MAX_LAYOUT_PX;
 
 fn fraction(value: f32) -> f32 {

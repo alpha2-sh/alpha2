@@ -380,9 +380,8 @@ pub const MAX_DERIVED_CUES: usize = crate::MAX_CAPTION_FILE_CUES;
 /// (with the separator that follows it), timed from the cue's start, so Timing selectors follow
 /// the speech. A word whose text trims to nothing is skipped.
 ///
-/// Words are joined by a space, except where both neighbouring characters belong to scripts
-/// written without spaces between words: the Unicode line breaking classes ID, CJ and SA (UAX
-/// #14), which cover Han, kana, CJK punctuation, fullwidth forms, Thai, Lao, Khmer and Myanmar.
+/// Words are joined by a space, except between two characters of scripts written without word
+/// spaces (line breaking classes ID, CJ and SA of UAX #14).
 ///
 /// `words` are in start order, each ending after it starts. Every cue is a valid explicit cue,
 /// and the cues are ordered and disjoint: where words overlap, each cue ends where the next

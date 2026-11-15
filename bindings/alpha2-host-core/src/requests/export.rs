@@ -36,10 +36,10 @@ pub struct ExportRequest {
     pub project: ProjectJson,
     /// Originals by source ID.
     pub assets: HashMap<String, PathBuf>,
-    /// By source ID.
+    /// Proxies by source ID.
     #[serde(default)]
     pub proxies: HashMap<String, Vec<ProxyRequest>>,
-    /// In project order, by source ID; `null` where the sequence has a gap.
+    /// Image sequence frames by source ID, in project order; `null` where the sequence has a gap.
     #[serde(default)]
     pub frames: HashMap<String, Vec<Option<PathBuf>>>,
     /// Files an SVG's `<image href>` or a Lottie file's image assets name, by source ID and then by
@@ -52,7 +52,7 @@ pub struct ExportRequest {
     /// Lookup tables of runtime effects, by name.
     #[serde(rename = "effectAssets", default)]
     pub effect_assets: HashMap<String, PathBuf>,
-    /// In fallback order.
+    /// Font files, in fallback order.
     #[serde(rename = "fonts", default)]
     pub font_files: Vec<PathBuf>,
     /// Runtime effects the project's clips name.
@@ -67,20 +67,21 @@ pub struct ExportRequest {
     /// The output's frame rate.
     #[serde(rename = "frameRate")]
     pub frame_rate: RateRequest,
-    /// Defaults to true, as the CLI, @alpha2-sh/node and the browser exporter do.
+    /// Whether the export has sound; true by default, as in the CLI, `@alpha2-sh/node` and the
+    /// browser exporter.
     #[serde(rename = "includeAudio", default = "include_audio_by_default")]
     pub include_audio: bool,
-    /// Absent: the one `output`'s extension names.
+    /// The container; the one `output`'s extension names when absent.
     #[serde(default)]
     pub container: Option<Container>,
-    /// Absent: the container's default.
+    /// The video codec; the container's default when absent.
     #[serde(rename = "videoCodec", default)]
     pub video_codec: Option<VideoCodec>,
     /// Draw without the project background and write an alpha plane (VP9 in `WebM` or Matroska,
     /// `ProRes` 4444).
     #[serde(default)]
     pub alpha: bool,
-    /// 8 or 10; absent: the codec's own (10 for `ProRes`, else 8).
+    /// 8 or 10; the codec's own when absent (10 for `ProRes`, else 8).
     #[serde(rename = "bitDepth", default)]
     pub bit_depth: Option<u8>,
     /// An encoder by `FFmpeg` name instead of the host's choice.
@@ -95,19 +96,19 @@ pub struct ExportRequest {
     /// The video rate.
     #[serde(rename = "videoQuality", default)]
     pub video_quality: VideoQualityRequest,
-    /// Absent: the container's default.
+    /// The audio codec; the container's default when absent.
     #[serde(rename = "audioCodec", default)]
     pub audio_codec: Option<AudioCodec>,
     /// The audio rate.
     #[serde(rename = "audioQuality", default)]
     pub audio_quality: AudioQualityRequest,
-    /// Absent: the mix keeps its own loudness.
+    /// A loudness target; without one the mix keeps its own loudness.
     #[serde(default)]
     pub loudness: Option<LoudnessRequest>,
     /// Frames baked in an earlier export, reused where they match.
     #[serde(rename = "renderCache", default, deserialize_with = "render_cache")]
     pub render_cache: Option<RenderCacheRequest>,
-    /// Absent fields fall back to the environment, then the host's defaults.
+    /// Byte budgets; absent ones fall back to the environment, then the host's defaults.
     #[serde(default)]
     pub memory: MemoryRequest,
     /// The file written.
@@ -161,8 +162,8 @@ impl ExportRequest {
     }
 }
 
-/// Resolved once at the host's edge from the engine's policy
-/// ([`alpha2_media::resolve_export_format`]).
+/// The container, codecs and pixel layout an export writes, resolved once at the host's edge from
+/// the engine's policy ([`alpha2_media::resolve_export_format`]).
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedFormat {
     /// The output container.
@@ -171,7 +172,7 @@ pub struct ResolvedFormat {
     pub video: NativeVideoCodec,
     /// The audio encoder family.
     pub audio: NativeAudioCodec,
-    /// ([`alpha2_media::resolve_pixels`]).
+    /// The output pixel layout ([`alpha2_media::resolve_pixels`]).
     pub pixels: alpha2_media::PixelLayout,
 }
 

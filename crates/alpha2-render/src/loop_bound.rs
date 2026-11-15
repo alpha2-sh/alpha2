@@ -136,8 +136,7 @@ fn integer_literal(text: &str) -> Option<u64> {
         .ok()
 }
 
-/// Whether `code` may write `name`: assignment, increment, address-of, or a shadowing
-/// declaration.
+/// Whether `code` may write `name` by assignment, increment, address-of or a shadowing declaration.
 fn writes(code: &str, name: &str) -> bool {
     let mut from = 0;
     while let Some(start) = find_keyword(code, from, name) {
@@ -213,8 +212,7 @@ pub(crate) fn matching(code: &str, open: usize) -> Result<usize, ShaderDiagnosti
     Err(malformed())
 }
 
-/// The init, condition and update of a `for` header, split at the semicolons outside any nested
-/// delimiter.
+/// The init, condition and update of a `for` header, split at semicolons outside nested delimiters.
 pub(crate) fn header_parts(header: &str) -> Option<[&str; 3]> {
     let mut parts = Vec::new();
     let mut depth = 0_usize;

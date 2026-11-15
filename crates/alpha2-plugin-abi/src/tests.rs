@@ -226,7 +226,7 @@ fn the_native_tables_carry_their_size_after_the_abi() {
     assert_eq!(offset_of!(HostV1, size), 4);
     assert_eq!(offset_of!(PluginV1, abi), 0);
     assert_eq!(offset_of!(PluginV1, size), 4);
-    // The size takes what was the padding before the first pointer on 64-bit targets.
+    // On 64-bit targets the size fills the padding before the first pointer.
     #[cfg(target_pointer_width = "64")]
     {
         assert_eq!(offset_of!(HostV1, context), 8);

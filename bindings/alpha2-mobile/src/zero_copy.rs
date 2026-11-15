@@ -94,9 +94,7 @@ mod android {
         imported: Arc<AtomicU64>,
     }
 
-    /// Keeps a frame's plane textures until the renderer's work on them completes. The renderer
-    /// drops it after its sampling finished, so the conversion is done and its decoder buffer is
-    /// let go then.
+    /// Keeps a frame's planes and decoder buffer until the renderer drops it after sampling.
     struct PlaneLease(Arc<AhbPlanes>, Arc<AhbImporter>);
 
     impl std::fmt::Debug for PlaneLease {

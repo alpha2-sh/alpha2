@@ -171,8 +171,7 @@ export interface BrowserBridgeOptions {
    * The most imported media files (videos, images, audio, fonts, LUTs) this session holds at
    * once, default 128. Media removed from the document still counts while undo or redo can bring
    * it back. Rasterized text and adopted proxies are not counted. An import past the limit is
-   * refused with `EditorError` `resource_budget` and changes nothing; the media already held is
-   * unaffected.
+   * refused with `EditorError` `resource_budget` and changes nothing.
    */
   readonly resourceLimit?: number;
   /** `false` renders picture only: no AudioContext opens and playback runs on the wall clock. */
@@ -561,8 +560,7 @@ export interface BrowserBridge {
    * hears why (`audio_unavailable`). A source whose stream this browser cannot decode, or which
    * the file it reads (a proxy, say) does not have, plays silent and is reported once; so is a
    * source whose sound does not arrive for a few mixes in a row, until playback starts again.
-   * Rejects for a zero or non-finite rate (`invalid_rate`) and an unknown policy
-   * (`invalid_policy`).
+   * Rejects a zero or non-finite rate (`invalid_rate`) and an unknown policy (`invalid_policy`).
    */
   play(
     rate?: number,
@@ -819,8 +817,7 @@ export interface WorkerPreviewOptions {
   /**
    * Milliseconds of active time (a hidden or frozen page does not count) any request waits for
    * its reply. Default 60000 for `init` and `replaceProject`, 30000 for every other call. Past it
-   * the call rejects with a fatal `worker_timeout` and every later call fails: the worker must be
-   * replaced.
+   * the call and every later one reject with a fatal `worker_timeout`.
    */
   readonly requestTimeoutMs?: number;
 }

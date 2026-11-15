@@ -225,7 +225,7 @@ fn fixture_requests_match_the_pinned_rasters() {
         if update {
             case["expected"] = actual;
         } else {
-            // The product's parser may read a pinned f32 back one f64 step off, so both sides take it.
+            // The product's parser may read a pinned f32 one f64 step off, so both sides take it.
             let actual: serde_json::Value =
                 serde_json::from_str(&actual.to_string()).expect("JSON");
             assert_eq!(case["expected"], actual, "{}", case["name"]);

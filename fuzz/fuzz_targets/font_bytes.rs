@@ -6,9 +6,8 @@ use alpha2_media::{EmojiPolicy, TextAlign};
 use alpha2_text::{TextFill, TextFont, TextRasterRequest, TextRasterizer, check_font, face_count};
 use libfuzzer_sys::fuzz_target;
 
-// Any bytes register as a font or are refused, never panic, and a registered font draws a line of
-// text within the time and memory limits `scripts/fuzz.sh` holds a run to. Registration and
-// `check_font` agree.
+// Any bytes register as a font or are refused, as `check_font` predicts, never panicking. A
+// registered font draws a line of text within the time and memory limits of `scripts/fuzz.sh`.
 fuzz_target!(|data: &[u8]| {
     let bytes: Arc<[u8]> = data.into();
     let faces = face_count(&bytes).min(4);

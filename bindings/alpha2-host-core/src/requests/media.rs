@@ -9,8 +9,7 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 use unicode_normalization::UnicodeNormalization;
 
-/// Kept as text so the engine checks its size before parsing; the host never holds a tree of a
-/// document the engine would refuse.
+/// A request's project, kept as text so the engine checks its size before anything parses it.
 #[derive(Deserialize)]
 #[serde(transparent)]
 pub struct ProjectJson(Box<RawValue>);

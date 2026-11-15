@@ -33,9 +33,8 @@ fn plane_sad(exported: &[u8], original: &[u8], width: usize, row_offset: usize) 
 }
 
 /// Compares frames of packed I420 planes (`[frame][plane][sample]`, `width` luma columns) with
-/// their sources: every plane at `floor_db` or above, and each chroma plane closer to its own
-/// source plane than to the other one or to itself one row down, which catches swaps and shifts
-/// that pass the floor.
+/// their sources. Every plane must reach `floor_db`, and each chroma plane must be closer to its
+/// own source plane than to the other one or to itself one row down, to catch swaps and shifts.
 ///
 /// # Errors
 /// What differs, by frame and plane.
@@ -86,8 +85,7 @@ pub fn plane_check(
     Ok(())
 }
 
-/// The blocks of a Matroska file in file order, as (track number, milliseconds), and its cluster
-/// timestamps.
+/// A Matroska file's blocks in file order, as (track number, milliseconds), and its cluster times.
 ///
 /// # Panics
 /// For bytes that are not a Matroska file with clusters.

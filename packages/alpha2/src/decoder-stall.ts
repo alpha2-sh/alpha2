@@ -1,7 +1,7 @@
 // Stall limits shared by the video and audio decoder adapters.
 import { activeTimeout } from "./active-clock.js";
 
-/** A decoder stall: `DECODE_STALLED`, classed as a GPU timeout in the decode phase. */
+/** A `DECODE_STALLED` error, classed as a GPU timeout in the decode phase. */
 export function decoderStalled(message: string, stage: string): Error {
   return Object.assign(new Error(message), {
     code: "DECODE_STALLED",

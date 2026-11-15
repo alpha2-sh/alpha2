@@ -213,8 +213,7 @@ impl ActiveIndex {
         found.into_iter().map(|(_, _, error)| error).collect()
     }
 
-    /// Whether the project's compositions together exceed [`crate::MAX_PLAN_BYTES`], so no clip's
-    /// composition draws: an issue of the whole document.
+    /// Whether the project's compositions together exceed [`crate::MAX_PLAN_BYTES`], so none draws.
     #[must_use]
     pub const fn plans_too_large(&self) -> bool {
         self.plans_too_large

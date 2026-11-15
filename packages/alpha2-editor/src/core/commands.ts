@@ -640,8 +640,8 @@ function shiftMarkers(
   return { ...document, metadata: { ...document.metadata, markers } };
 }
 /**
- * `document` with its markers moved as `result`'s ripple moved time, which happens only when the
- * ripple reached every track: markers annotate the timeline clock as timeline-anchored data does.
+ * `document` with its markers moved as `result`'s ripple moved time. Like timeline-anchored data,
+ * markers move only when the ripple reached every track.
  */
 function followTimeline(
   document: DraftDocument,
@@ -1837,9 +1837,9 @@ function assertLocksKept(
   }
 }
 /**
- * `next` without the editor metadata of the clips and tracks `before` has and `next` lost: their
- * metadata entries and instance id lists. A clip that moved keeps its id and its metadata. Costs the
- * tracks that are not the same objects in both.
+ * `next` without the editor metadata (entries and instance id lists) of the clips and tracks
+ * `before` has and `next` lost. A clip that moved keeps its id and its metadata. Only tracks that
+ * are not the same objects in both are walked.
  */
 function withoutRemovedMetadata(
   before: DraftDocument,

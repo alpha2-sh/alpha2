@@ -64,9 +64,8 @@ fn raster_pixels(width: u32, height: u32, bytes_per_pixel: u64) -> Result<usize,
     usize::try_from(pixels).map_err(|_| TextRasterError::TooLarge)
 }
 
-/// Bytes per pixel every raster holds: coverage and the RGBA8 result, the split background plane
-/// when used, color glyph RGBA and the ink plane strokes dilate when color glyphs are placed, and
-/// one band per stroke.
+/// Bytes per pixel of a raster's planes: coverage (1), RGBA8 result (4), split background (4),
+/// color glyph RGBA (4) with its stroke ink plane (1), and one band per stroke (1 each).
 fn raster_bytes_per_pixel(request: &TextRasterRequest, colors: bool) -> u64 {
     let split = request.split_background && request.background.is_some();
     let strokes = request.strokes.len() as u64;

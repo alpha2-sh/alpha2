@@ -123,8 +123,7 @@ pub(crate) fn settled(handle: Arc<ExtractionHandle>, seconds: u64) -> Result<Str
         .expect("the extraction settled in time")
 }
 
-/// Runs the client-extractor case `name` on `engine`: the table's hash of its data and the hash
-/// pinned there.
+/// Runs the client-extractor case `name` on `engine`, returning its data hash and the pinned one.
 ///
 /// # Errors
 /// The extraction's failure.

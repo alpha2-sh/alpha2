@@ -85,8 +85,7 @@ pub fn yuv420p_staging_bytes(size: RenderSize) -> Result<u64, RenderError> {
 /// `format` takes, canary included: one aligned row of texels per row.
 ///
 /// # Errors
-/// Returns [`RenderError::TextureReadback`] for a format the readback does not copy, or a size
-/// that overflows.
+/// [`RenderError::TextureReadback`] for a format the readback does not copy or an overflowing size.
 pub fn layout_staging_bytes(
     size: RenderSize,
     format: wgpu::TextureFormat,

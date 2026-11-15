@@ -102,9 +102,8 @@ fn first_frame_vp9_record(path: &Path, color: Option<ColorMetadata>) -> Option<V
     Some(vp9_format(&packet.data)?.vpcc_record(color).to_vec())
 }
 
-/// Whether a `VideoToolbox` session, a hardware one when `hardware` asks, opens for the default
-/// video track of `path`, from the track's sample description, or for VP9 without one, from the
-/// first key frame.
+/// Whether a `VideoToolbox` session, hardware when `hardware` asks, opens for the default video
+/// track of `path`, from its sample description or, for VP9 without one, its first key frame.
 fn system_decodes_video(path: &Path, hardware: bool) -> bool {
     let Some(video) = track(path, TrackKind::Video).and_then(|track| track.video) else {
         return false;

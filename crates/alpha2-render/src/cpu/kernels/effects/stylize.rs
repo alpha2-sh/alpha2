@@ -101,7 +101,7 @@ impl CpuKernel for FilmGrain {
     }
 }
 
-/// film-grain.wgsl `film_grain_scaled`: `size` times the 16.16 `scale`, at least 1.
+/// Mirrors `film_grain_scaled` in film-grain.wgsl.
 fn film_grain_scaled(size: u32, scale: u32) -> u32 {
     let scaled = size
         .wrapping_mul(scale >> 16)

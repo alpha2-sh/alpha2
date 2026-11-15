@@ -6,8 +6,7 @@
  * render as before for clip picture and sound, clip keyframes, captions, timeline-anchored data and
  * track and master automation; a matte or a `via` binding follows the part beside it or the edit is
  * refused (`matte_source`, `read_through`). `split_at` leaves out cuts it cannot make exactly
- * (`report.skipped`); `remove_ranges` refuses them. The result is the same canonical document
- * everywhere.
+ * (`report.skipped`); `remove_ranges` refuses them. The result is canonical on every runtime.
  *
  * ```ts
  * const { project: tight } = applyEdit(wasm, project, {

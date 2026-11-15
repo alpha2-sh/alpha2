@@ -81,9 +81,8 @@ pub enum EncodePoll {
 
 /// One video encoder session, used from one thread at a time.
 ///
-/// A session the platform takes away fails the encoder, unless the backend can resume in place
-/// with the same configuration record (`VideoToolbox` does); a reclaimed Android `MediaCodec`
-/// fails.
+/// A session the platform takes away fails the encoder unless the backend can resume it in place
+/// with the same configuration record, as `VideoToolbox` can and Android `MediaCodec` cannot.
 pub trait VideoEncodeBackend: Send {
     /// The encoder's name, for reports.
     fn name(&self) -> &str;

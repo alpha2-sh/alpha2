@@ -14,8 +14,7 @@ const MAX_PAINT_VISITS: u64 = 16_384;
 /// Most faces one collection may hold.
 pub(crate) const MAX_COLLECTION_FACES: u32 = 256;
 
-/// Refuses a face whose composite glyphs or color paint graph expand past a budget or refer to
-/// themselves.
+/// Refuses a face whose composite glyphs or color paint graph pass a budget or refer to themselves.
 pub(crate) fn check_face(face: &ttf_parser::Face<'_>) -> Result<(), String> {
     let raw = face.raw_face();
     if let (Some(glyf), Some(loca)) = (

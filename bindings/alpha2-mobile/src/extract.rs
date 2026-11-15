@@ -227,8 +227,7 @@ impl Engine for Foreign {
     }
 }
 
-/// What the timeline thread hands each rendered frame to: its key, time, size and premultiplied
-/// RGBA8 pixels.
+/// Receives each rendered frame's key, time, size and premultiplied RGBA8 pixels.
 type FrameSink<'a> =
     &'a mut dyn FnMut(usize, MediaTime, RenderSize, Vec<u8>) -> Result<(), Alpha2Error>;
 

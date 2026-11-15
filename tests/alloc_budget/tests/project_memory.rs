@@ -1,5 +1,4 @@
-//! Peak heap held while a project document over a count limit, or a hostile subtitle file, is
-//! read.
+//! Peak heap held while reading a project document over a count limit or a hostile subtitle file.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]

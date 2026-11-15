@@ -951,9 +951,8 @@ pub fn valid_interval(interval: &DataInterval) -> bool {
 
 impl DataSet {
     /// Checks the set on its own against the model's rules (everything but its anchor's
-    /// existence). A time past its source's recorded duration is stale data, which
-    /// [`crate::Project::lint`] reports, not an invalid set: the duration is evidence a host may
-    /// replace.
+    /// existence). A time past its source's recorded duration is not an invalid set but stale
+    /// data, which [`crate::Project::lint`] reports, since a host may replace the duration.
     ///
     /// # Errors
     /// The first [`DataProblem`] found.
