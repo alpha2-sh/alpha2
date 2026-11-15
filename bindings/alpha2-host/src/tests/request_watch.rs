@@ -80,8 +80,8 @@ fn a_request_stuck_in_a_step_is_answered_by_its_side_and_retires_the_host() {
 fn a_slow_step_that_keeps_beating_is_not_stalled() {
     let directory = scratch_directory("request-beats");
     let path = directory.join("long.wav");
-    // A sparse silent WAV of 2 GiB: hashing it takes several times the limit.
-    let samples: u64 = 512 << 20;
+    // A sparse silent WAV near the format's 4 GiB limit: hashing it takes many times the limit.
+    let samples: u64 = 1000 << 20;
     write_float_wav(&path, 48_000, &[]);
     let mut header = std::fs::read(&path).expect("header");
     let data = u32::try_from(samples * 4).expect("fits");
@@ -93,7 +93,8 @@ fn a_slow_step_that_keeps_beating_is_not_stalled() {
         .open(&path)
         .and_then(|file| file.set_len(44 + u64::from(data)))
         .expect("length");
-    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_REQUEST_STALL_MS", "200")]);
+    let stall = Duration::from_millis(100);
+    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_REQUEST_STALL_MS", "100")]);
     assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
     let mut project = image_and_tone_project(alpha2_time::TICKS_PER_SECOND, 48_000);
     project["sources"][1]["fingerprint"] = json!({"content_sha256": "0".repeat(64)});
@@ -111,7 +112,7 @@ fn a_slow_step_that_keeps_beating_is_not_stalled() {
     assert_eq!(answer["ok"], true, "{answer}");
     assert_eq!(answer["hostState"], "ready", "{answer}");
     assert!(
-        took > Duration::from_secs(1),
+        took > stall * 5,
         "hashing took {took:?}, too short to prove the step beats"
     );
     assert_eq!(serving.finish(), Some(0));
