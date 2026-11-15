@@ -2050,7 +2050,9 @@ def test_an_interrupt_while_a_new_host_starts_ends_it_and_frees_its_slot(
     from alpha2 import client as client_module
 
     log = tmp_path / "log"
-    client = HostClient(host_path=fake_host(tmp_path, pooled_host(log)))
+    fake_host(tmp_path, pooled_host(log))
+    # A venv interpreter on Windows is a launcher, whose pid is not the one the host logs.
+    client = HostClient(host_path=sys._base_executable)
     start, spawn = client_module._Host.start, client_module._Pool._spawn
     armed = {"start": False, "spawn": False}
 
