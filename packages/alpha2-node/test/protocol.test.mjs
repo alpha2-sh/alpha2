@@ -3874,7 +3874,9 @@ test("extract sends the render inputs, and only a timeline input needs every eff
     .map((line) => line.request);
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[0].effectAssets, {});
-  assert.deepEqual(requests[1].effectAssets, { grade: "/media/grade.cube" });
+  assert.deepEqual(requests[1].effectAssets, {
+    grade: resolve("/media/grade.cube"),
+  });
   for (const field of ["frames", "resources", "effects", "fonts"])
     assert.ok(field in requests[1], field);
 });
