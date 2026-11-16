@@ -80,8 +80,9 @@ fn a_request_stuck_in_a_step_is_answered_by_its_side_and_retires_the_host() {
 fn a_slow_step_that_keeps_beating_is_not_stalled() {
     let directory = scratch_directory("request-beats");
     let path = directory.join("long.wav");
-    // A sparse silent WAV near the format's 4 GiB limit: hashing it takes many times the limit.
-    let samples: u64 = 1000 << 20;
+    // A sparse silent WAV of 128 MiB, each MiB hashed 50 ms slower: a step of over 6 s that beats
+    // every 50 ms, against a limit no scheduling delay of a loaded machine reaches.
+    let samples: u64 = 32 << 20;
     write_float_wav(&path, 48_000, &[]);
     let mut header = std::fs::read(&path).expect("header");
     let data = u32::try_from(samples * 4).expect("fits");
@@ -93,9 +94,14 @@ fn a_slow_step_that_keeps_beating_is_not_stalled() {
         .open(&path)
         .and_then(|file| file.set_len(44 + u64::from(data)))
         .expect("length");
-    // Longer than the step's beat interval on a slow machine under GPU validation.
-    let stall = Duration::from_millis(300);
-    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_REQUEST_STALL_MS", "300")]);
+    let stall = Duration::from_secs(2);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_REQUEST_STALL_MS", "2000"),
+            ("ALPHA2_TEST_HASH_CHUNK_DELAY_MS", "50"),
+        ],
+    );
     assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
     let mut project = image_and_tone_project(alpha2_time::TICKS_PER_SECOND, 48_000);
     project["sources"][1]["fingerprint"] = json!({"content_sha256": "0".repeat(64)});

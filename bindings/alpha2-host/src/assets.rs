@@ -594,12 +594,21 @@ fn measured_rate(path: &Path, index: usize) -> Option<alpha2_time::FrameRate> {
     evidence.rate()
 }
 
+/// Milliseconds each 1 MiB of hashing takes on top of its work, for a step whose length is known.
+#[cfg(test)]
+pub static INJECT_HASH_CHUNK_DELAY_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 fn sha256(path: &Path) -> Result<String, String> {
     let mut file = File::open(path).map_err(|error| error.to_string())?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0; 1 << 20];
     loop {
         crate::heartbeat::beat_request();
+        #[cfg(test)]
+        std::thread::sleep(std::time::Duration::from_millis(
+            INJECT_HASH_CHUNK_DELAY_MS.load(std::sync::atomic::Ordering::Relaxed),
+        ));
         let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
         if read == 0 {
             break;

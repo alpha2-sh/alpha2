@@ -1839,6 +1839,12 @@ fn serve_standard_input() {
             .lock()
             .expect("limit") = Some(Duration::from_millis(milliseconds.parse().expect("ms")));
     }
+    if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_HASH_CHUNK_DELAY_MS") {
+        crate::assets::INJECT_HASH_CHUNK_DELAY_MS.store(
+            milliseconds.parse().expect("ms"),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
     if let Ok(step) = std::env::var("ALPHA2_TEST_REQUEST_STALL_AT") {
         *crate::heartbeat::INJECT_REQUEST_STALL
             .lock()
