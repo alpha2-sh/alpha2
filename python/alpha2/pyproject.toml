@@ -54,6 +54,8 @@ include = [{ path = "src/alpha2/_host_archives.json", format = "wheel" }]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 timeout = 180
+# The timeout's signal only lands when the main thread runs Python; past it, dump every thread.
+faulthandler_timeout = 200
 
 [tool.ruff]
 line-length = 100
