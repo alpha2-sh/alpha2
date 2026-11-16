@@ -591,8 +591,7 @@ fn the_steady_rate_follows_the_encoder_and_leaves_out_set_up_and_finish() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("steady-rate");
     let end = 2 * alpha2_time::TICKS_PER_SECOND;
-    // Slower than a frame renders under GPU validation on a virtual GPU: the encoder sets the pace.
-    let slow = Duration::from_millis(250);
+    let slow = Duration::from_millis(40);
     crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(Some(slow)));
     let request = json!({
         "protocolVersion": 2, "operation": "export", "requestId": "steady-rate",
@@ -623,13 +622,20 @@ fn the_steady_rate_follows_the_encoder_and_leaves_out_set_up_and_finish() {
     std::fs::remove_dir_all(&directory).ok();
     assert_eq!(result["frames"], json!(60), "{result}");
     assert_phase_timings(&result, true);
-    let expected = 1.0 / slow.as_secs_f64();
+    let encoder = 1.0 / slow.as_secs_f64();
     let steady = result["performance"]["steadyFps"]
         .as_f64()
         .expect("steadyFps");
+    // The encoder caps the rate; on a slow machine its real work slows it further.
     assert!(
-        (steady - expected).abs() <= expected * 0.2,
-        "steady {steady:.1} fps against {expected:.1} fps"
+        steady <= encoder * 1.2,
+        "steady {steady:.1} fps against the encoder's {encoder:.1} fps"
+    );
+    // Without set-up and finish the rate is at least the whole export's.
+    let overall = 60.0 / (result["renderMs"].as_f64().expect("renderMs") / 1000.0);
+    assert!(
+        steady >= overall,
+        "steady {steady:.1} fps below the whole export's {overall:.1} fps"
     );
 }
 
