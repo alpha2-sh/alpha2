@@ -48,32 +48,27 @@ export async function assertScalesBelow(
   const count = (size, repeats) =>
     fresh ? repeats : size === small ? growth : 1;
   let repeats = 1;
-  let leastSmall;
-  for (;;) {
-    const reading = await measure(
-      small,
-      repeats,
-      setup,
-      run,
-      count(small, repeats),
-    );
-    if (reading.ms >= LEAST_RUN_MS || repeats >= 1 << 16) {
-      leastSmall = reading.work;
-      break;
-    }
+  while (
+    (await measure(small, repeats, setup, run, count(small, repeats))).ms <
+      LEAST_RUN_MS &&
+    repeats < 1 << 16
+  )
     repeats *= 2;
-  }
+  // The JIT recompiles code on background threads when the large input first reaches it, and how
+  // soon depends on the machine's load. Running the large input once first and taking both sizes
+  // only from the readings after it compares them in the same compiled state.
+  await measure(large, 1, setup, run, 1);
+  let leastSmall = Infinity;
   let leastLarge = Infinity;
   for (let reading = 0; reading < READINGS; reading += 1) {
+    leastSmall = Math.min(
+      leastSmall,
+      (await measure(small, repeats, setup, run, count(small, repeats))).work,
+    );
     leastLarge = Math.min(
       leastLarge,
       (await measure(large, repeats, setup, run, count(large, repeats))).work,
     );
-    if (reading + 1 < READINGS)
-      leastSmall = Math.min(
-        leastSmall,
-        (await measure(small, repeats, setup, run, count(small, repeats))).work,
-      );
   }
   const ratio = leastLarge / Math.max(leastSmall, 1);
   if (!(leastLarge < Math.max(leastSmall, 1) * bound))
