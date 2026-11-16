@@ -1544,15 +1544,11 @@ test("a gesture step on a 10,000-clip document costs a small part of validating 
     timeline: { tracks },
   };
   const copies = Array.from({ length: 5 }, () => structuredClone(project));
-  const median = (times) => times.sort((a, b) => a - b)[times.length >> 1];
-  const timed = (count, run) =>
-    median(
-      Array.from({ length: count }, (_, i) => {
-        const started = performance.now();
-        run(i);
-        return performance.now() - started;
-      }),
-    );
+  // The least of the runs: a busy machine only adds time to some of them.
+  const timed = (count, run) => {
+    let index = 0;
+    return minOf(count, () => run(index++));
+  };
   const whole = timed(5, (i) => validateProject(copies[i]));
   const e = createEditor({ document: createDocument(project) });
   for (const step of [
