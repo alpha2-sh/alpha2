@@ -2555,7 +2555,7 @@ test("parseHostMessage reads state messages and a response's host state", () => 
 
 test(
   "a host that never writes is HOST_START_TIMEOUT and is killed",
-  { timeout: 15_000 },
+  { timeout: 20_000 },
   async () => {
     const root = await scratch("alpha2-node-start-timeout-");
     const pidFile = join(root, "host.pid");
@@ -2566,19 +2566,20 @@ writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
 setTimeout(() => {}, 60_000);
 `,
     );
+    // Long enough for a slow machine to start the host and let it write its pid.
     const started = Date.now();
     const error = await new Alpha2NodeClient({
       hostPath,
-      hostStartTimeoutMs: 300,
+      hostStartTimeoutMs: 3_000,
     })
       .exportProject(exportRequest(join(root, "out.mp4")))
       .then(
         () => assert.fail("the export resolved"),
         (cause) => cause,
       );
-    assert.ok(Date.now() - started < 3_000, `${Date.now() - started} ms`);
+    assert.ok(Date.now() - started < 8_000, `${Date.now() - started} ms`);
     assert.equal(error.code, "HOST_START_TIMEOUT", error.message);
-    assert.match(error.message, /did not start within 300 ms/);
+    assert.match(error.message, /did not start within 3000 ms/);
     assert.equal(failureOf(error)?.code, "UNKNOWN");
     assertExited(Number(await readFile(pidFile, "utf8")));
   },
@@ -2586,19 +2587,20 @@ setTimeout(() => {}, 60_000);
 
 test("a slow host that writes ready in time is not timed out", async () => {
   const root = await scratch("alpha2-node-start-ready-");
+  // The answer comes after the start limit; the limit leaves a slow machine room to start the host.
   const hostPath = await fakeHost(
     root,
     `import { ready, requests, respond } from ${IO};
 setTimeout(ready, 200);
 requests((request) => {
-  setTimeout(() => respond(request, { ok: true, result: { output: request.output } }), 1_500);
+  setTimeout(() => respond(request, { ok: true, result: { output: request.output } }), 3_500);
 });
 `,
   );
   assert.equal(
     await new Alpha2NodeClient({
       hostPath,
-      hostStartTimeoutMs: 500,
+      hostStartTimeoutMs: 3_000,
     }).exportProject(exportRequest("slow.mp4")),
     "slow.mp4",
   );
