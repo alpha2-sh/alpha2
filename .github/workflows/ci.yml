@@ -508,8 +508,8 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',cpu-renderer,') }}
     name: CPU renderer
     runs-on: ubuntu-24.04
-    # About twice the slowest of ten green runs (21 min).
-    timeout-minutes: 45
+    # About twice the slowest green run (21 min) with the suite without extensions (13 min) added.
+    timeout-minutes: 70
     env:
       ALPHA2_REQUIRE: ""
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
@@ -580,6 +580,11 @@ jobs:
           assert result["frames"] == 36, result["frames"]
           EOF
           done
+      # On its own: under --workspace another package turns the extensions' providers on.
+      - name: The host suite without extensions or hardware video, on the CPU renderer
+        env:
+          ALPHA2_RENDERER: cpu
+        run: cargo test --release -p alpha2-host --no-default-features --no-fail-fast
       - name: Skips this run recorded
         if: always()
         shell: bash
