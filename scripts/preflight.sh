@@ -209,7 +209,13 @@ for check in "${checks[@]}"; do
   took=$((SECONDS - started))
   case $status in
     0) report+=("ok    $check (${took}s)") ;;
-    "$SKIPPED") skipped+=("$check") && report+=("skip  $check") ;;
+    "$SKIPPED")
+      if [ -n "${GITHUB_ACTIONS:-}" ]; then
+        failed+=("$check") && report+=("FAIL  $check (skipped in CI)")
+      else
+        skipped+=("$check") && report+=("skip  $check")
+      fi
+      ;;
     *) failed+=("$check") && report+=("FAIL  $check (${took}s)") ;;
   esac
 done

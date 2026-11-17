@@ -248,7 +248,7 @@ jobs:
   host:
     if: >-
       ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',host,')) &&
-      needs.changes.outputs.js == 'true' }}
+      (needs.changes.outputs.js == 'true' || needs.changes.outputs.e2e == 'true') }}
     needs: [changes, release-wasm]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -322,7 +322,7 @@ jobs:
   openh264:
     if: >-
       ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',openh264,')) &&
-      needs.changes.outputs.native == 'true' }}
+      (needs.changes.outputs.native == 'true' || needs.changes.outputs.packaging == 'true') }}
     needs: changes
     name: OpenH264 (${{ matrix.target }})
     strategy:
@@ -1009,7 +1009,9 @@ jobs:
           -p alpha2-gpu -p alpha2-host 2>&1 | tee target/test-logs/release.log
       - name: H.264 goes through OpenH264, the same bytes twice
         id: openh264
-        if: ${{ !cancelled() && steps.ready.outcome == 'success' && matrix.profile == 'release' }}
+        if: >-
+          ${{ !cancelled() && steps.ready.outcome == 'success' &&
+          (matrix.profile == 'release' || github.event_name == 'pull_request') }}
         run: |
           cargo build --release -p alpha2-host
           node -e '
@@ -1121,7 +1123,7 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         env:
           ALPHA2_HOST_BINARY: ${{ github.workspace }}/target/debug/alpha2-host${{ runner.os == 'Windows' && '.exe' || '' }}
-          PYTEST_ADDOPTS: --junitxml=${{ github.workspace }}/target/test-results/pytest-e2e.xml
+          PYTEST_ADDOPTS: --junitxml=target/test-results/pytest-e2e.xml
         run: '"$PY/pytest" python/alpha2/tests/e2e'
       - if: always()
         uses: ./.github/actions/test-report
@@ -1148,7 +1150,7 @@ jobs:
         working-directory: python/alpha2
     env:
       ALPHA2_REQUIRE: native-test-hooks
-      PYTEST_ADDOPTS: --junitxml=${{ github.workspace }}/target/test-results/pytest.xml
+      PYTEST_ADDOPTS: --junitxml=../../target/test-results/pytest.xml
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-rust

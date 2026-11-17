@@ -41,14 +41,17 @@ runs:
         everything() { native=true js=true e2e=true packaging=true; }
         changed=()
         if [ "$EVENT" = pull_request ]; then
-          mapfile -t changed < <(git diff --name-only "$BASE...HEAD")
+          diff="$(git diff --no-renames --name-only "$BASE...HEAD")"
+          mapfile -t changed <<< "$diff"
         elif [ "$EVENT" = push ] && [[ "$REF" == refs/heads/* ]] &&
           [[ -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]] && git cat-file -e "$BEFORE^{commit}" 2> /dev/null; then
-          mapfile -t changed < <(git diff --name-only "$BEFORE" "$SHA")
+          diff="$(git diff --no-renames --name-only "$BEFORE" "$SHA")"
+          mapfile -t changed <<< "$diff"
         else
           everything
         fi
         for path in "${changed[@]}"; do
+          [ -n "$path" ] || continue
           case $path in
             docs/* | README.md | CHANGELOG.md | SECURITY.md) continue ;;
             .github/* | scripts/test-report-summary.mjs | scripts/lib/test-report.mjs | \
@@ -61,7 +64,9 @@ runs:
             Cargo.toml | Cargo.lock | rust-toolchain.toml | .cargo/* | clippy.toml | deny.toml | \
               crates/* | bindings/* | extensions/* | fuzz/* | plugins/* | tests/* | schema/* | \
               release/ffmpeg-lgpl/* | release/ffmpeg-tools/* | release/openh264/* | release/dxc/* | \
-              scripts/*.sh | scripts/test-gpu-validation.mjs | scripts/lib/gpu-validation-summary.mjs)
+              scripts/*.sh | scripts/test-gpu-validation.mjs | scripts/lib/gpu-validation-summary.mjs | \
+              scripts/test-audio-determinism.mjs | scripts/lib/cargo-target.mjs | scripts/run-node-tests.mjs | \
+              packages/alpha2-android/* | packages/alpha2-swift/*)
               native=true known=true ;;
           esac
           case $path in
@@ -85,12 +90,17 @@ runs:
         done
         [ "$native" = true ] && js=true && e2e=true
         if [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ] && [ "$STANDALONE" = true ]; then
-          green="$(gh api "repos/$REPO/actions/workflows/$WORKFLOW/runs?head_sha=$SHA&status=success" \
-            --jq '[.workflow_runs[] | select(.head_branch != "main" and .event == "push")] | length')"
-          if [ "$green" -gt 0 ]; then
-            echo "$WORKFLOW already passed at $SHA on another branch"
-            native=false js=false e2e=false packaging=false
-          fi
+          runs="$(gh api "repos/$REPO/actions/workflows/$WORKFLOW/runs?head_sha=$SHA&status=success" \
+            --jq '.workflow_runs[] | select(.head_branch != "main" and .event == "push") | .id')"
+          for run in $runs; do
+            unfinished="$(gh api "repos/$REPO/actions/runs/$run/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.conclusion != "success")] | length')"
+            if [ "$unfinished" -eq 0 ]; then
+              echo "$WORKFLOW already passed every job at $SHA in run $run"
+              native=false js=false e2e=false packaging=false
+              break
+            fi
+          done
         fi
         {
           echo "native=$native"

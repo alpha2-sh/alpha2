@@ -139,8 +139,10 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' && runner.os == 'Windows' }}
         continue-on-error: true
         run: |
-          node scripts/test-wgsl-browser.mjs --browser edge 2>&1 | tee target/test-logs/edge.log
-          node scripts/test-wasm-browser.mjs --browser edge 2>&1 | tee -a target/test-logs/edge.log
+          status=0
+          node scripts/test-wgsl-browser.mjs --browser edge 2>&1 | tee target/test-logs/edge.log || status=1
+          node scripts/test-wasm-browser.mjs --browser edge 2>&1 | tee -a target/test-logs/edge.log || status=1
+          exit "$status"
       - name: With no GPU in the browser, auto renders on the CPU (page and worker)
         id: cpu-auto
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
@@ -148,8 +150,11 @@ jobs:
         env:
           ALPHA2_CHROME_GPU: none
         run: |
-          node scripts/test-wasm-browser.mjs --case renderer-auto 2>&1 | tee target/test-logs/cpu-auto.log
-          node scripts/test-wasm-browser.mjs --case renderer-auto-worker 2>&1 | tee -a target/test-logs/cpu-auto.log
+          status=0
+          node scripts/test-wasm-browser.mjs --case renderer-auto 2>&1 | tee target/test-logs/cpu-auto.log || status=1
+          node scripts/test-wasm-browser.mjs --case renderer-auto-worker 2>&1 |
+            tee -a target/test-logs/cpu-auto.log || status=1
+          exit "$status"
       - if: always()
         uses: ./.github/actions/test-report
         with:
@@ -230,9 +235,10 @@ jobs:
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           disable-animations: true
           script: |
-            scripts/android-device-tests.sh target/test-logs/emulator.device.log target/mobile-tests/*
-            if [ -n "${ALPHA2_TEST_APK:-}" ]; then adb install -r -t "$ALPHA2_TEST_APK" && adb shell am instrument -w sh.alpha2.test/androidx.test.runner.AndroidJUnitRunner | tee target/test-logs/emulator.instrumentation.log && grep -q '^OK (' target/test-logs/emulator.instrumentation.log; fi
-            if [ -n "${ALPHA2_CONSUMER_APKS:-}" ]; then adb install -r "$ALPHA2_CONSUMER_APKS/release/consumer-release.apk" && adb install -r -t "$ALPHA2_CONSUMER_APKS/androidTest/release/consumer-release-androidTest.apk" && adb shell am instrument -w sh.alpha2.consumer.test/androidx.test.runner.AndroidJUnitRunner | tee target/test-logs/emulator.consumer.log && grep -q '^OK (' target/test-logs/emulator.consumer.log; fi
+            scripts/android-device-tests.sh target/test-logs/emulator.device.log target/mobile-tests/* || touch target/emulator-failed
+            if [ -n "${ALPHA2_TEST_APK:-}" ]; then adb install -r -t "$ALPHA2_TEST_APK" && adb shell am instrument -w sh.alpha2.test/androidx.test.runner.AndroidJUnitRunner | tee target/test-logs/emulator.instrumentation.log && grep -q '^OK (' target/test-logs/emulator.instrumentation.log; fi || touch target/emulator-failed
+            if [ -n "${ALPHA2_CONSUMER_APKS:-}" ]; then adb install -r "$ALPHA2_CONSUMER_APKS/release/consumer-release.apk" && adb install -r -t "$ALPHA2_CONSUMER_APKS/androidTest/release/consumer-release-androidTest.apk" && adb shell am instrument -w sh.alpha2.consumer.test/androidx.test.runner.AndroidJUnitRunner | tee target/test-logs/emulator.consumer.log && grep -q '^OK (' target/test-logs/emulator.consumer.log; fi || touch target/emulator-failed
+            test ! -e target/emulator-failed
       - if: always()
         uses: ./.github/actions/test-report
         with:
@@ -264,17 +270,18 @@ jobs:
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         continue-on-error: true
         run: |
+          cargo test --locked --no-run --target aarch64-apple-ios-sim \
+            -p alpha2-apple-media -p alpha2-mobile --lib --message-format=json |
+            jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' \
+            > "$RUNNER_TEMP/simulator-tests"
+          test -s "$RUNNER_TEMP/simulator-tests"
           status=0
           while read -r binary; do
             echo "     Running $binary" | tee -a target/test-logs/simulator.log
             SIMCTL_CHILD_ALPHA2_TESTS_DIR="$PWD/tests" SIMCTL_CHILD_ALPHA2_SKIP_LOG="$ALPHA2_SKIP_LOG" \
               xcrun simctl spawn "$SIMULATOR" "$binary" --test-threads 1 2>&1 |
               tee -a target/test-logs/simulator.log || status=1
-          done < <(
-            cargo test --locked --no-run --target aarch64-apple-ios-sim \
-              -p alpha2-apple-media -p alpha2-mobile --lib --message-format=json |
-              jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable'
-          )
+          done < "$RUNNER_TEMP/simulator-tests"
           exit "$status"
       - name: The Swift package in the simulator
         id: swift
