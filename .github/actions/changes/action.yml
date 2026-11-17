@@ -1,0 +1,65 @@
+name: Change areas
+description: Which areas of the repository the change touches; every area outside pull requests.
+outputs:
+  native:
+    description: Rust crates, bindings, tests and their pins
+    value: ${{ steps.areas.outputs.native }}
+  js:
+    description: The npm packages and the scripts
+    value: ${{ steps.areas.outputs.js }}
+  e2e:
+    description: The Node and Python clients
+    value: ${{ steps.areas.outputs.e2e }}
+  packaging:
+    description: Release archives, wheels and their pins
+    value: ${{ steps.areas.outputs.packaging }}
+  browser:
+    description: The browser lanes
+    value: ${{ steps.areas.outputs.browser }}
+runs:
+  using: composite
+  steps:
+    - name: Areas this change touches
+      id: areas
+      env:
+        EVENT: ${{ github.event_name }}
+        BASE: ${{ github.event.pull_request.base.sha }}
+      shell: bash
+      run: |
+        native=false js=false e2e=false packaging=false
+        if [ "$EVENT" != pull_request ]; then
+          native=true js=true e2e=true packaging=true
+        else
+          while IFS= read -r path; do
+            case $path in
+              Cargo.toml | Cargo.lock | rust-toolchain.toml | crates/* | bindings/* | extensions/* | \
+                tests/* | release/ffmpeg-lgpl/* | release/openh264/* | scripts/fetch-*.sh | \
+                .github/workflows/ci.yml)
+                native=true ;;
+            esac
+            case $path in
+              packages/* | scripts/* | package.json | package-lock.json) js=true ;;
+            esac
+            case $path in
+              python/* | packages/alpha2-node/* | scripts/run-node-e2e.mjs) e2e=true ;;
+            esac
+            case $path in
+              release/* | scripts/build-native-release.sh | scripts/fetch-ffmpeg-sdk.sh | \
+                scripts/fetch-ffmpeg-tools.sh | scripts/lib/pinned-download.sh | \
+                scripts/packaging/* | scripts/release/* | python/alpha2-host/* | \
+                python/alpha2/pyproject.toml | python/alpha2/src/alpha2/install.py | \
+                packages/alpha2-node/src/install.ts | packages/alpha2-node/src/archive.ts | \
+                packages/alpha2-node/src/http.ts | Cargo.lock | rust-toolchain.toml | \
+                .github/workflows/package.yml | .github/workflows/release.yml)
+                packaging=true ;;
+            esac
+          done < <(git diff --name-only "$BASE...HEAD")
+          [ "$native" = true ] && js=true && e2e=true
+        fi
+        {
+          echo "native=$native"
+          echo "js=$js"
+          echo "e2e=$e2e"
+          echo "packaging=$packaging"
+          echo "browser=$js"
+        } | tee -a "$GITHUB_OUTPUT"

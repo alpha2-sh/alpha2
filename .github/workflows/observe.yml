@@ -1,0 +1,411 @@
+name: observe
+
+on:
+  push:
+    branches: [main, "prerelease-v*"]
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: Job ids to run, comma-separated (empty runs every job)
+        type: string
+        default: ""
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  MACOSX_DEPLOYMENT_TARGET: "11.0"
+  ALPHA2_RENDERER: gpu
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
+  LEDGER: .github/known-failures.json
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: observe-run-${{ github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.areas.outputs.native }}
+      browser: ${{ steps.areas.outputs.browser }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: areas
+        uses: ./.github/actions/changes
+
+  build-wasm:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser-platforms,')) &&
+      needs.changes.outputs.browser == 'true' }}
+    needs: changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
+        with:
+          tool: wasm-bindgen-cli@0.2.128
+      - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
+        with:
+          tool: cargo-about@0.9.2
+          features: cli
+      - run: npm run build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: alpha2-build-observe
+          if-no-files-found: error
+          path: |
+            packages/*/dist
+            packages/*/wasm
+
+  browser-platforms:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser-platforms,')) &&
+      needs.changes.outputs.browser == 'true' }}
+    name: ${{ matrix.name }}
+    needs: [changes, build-wasm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Browser (macOS VM Metal, software adapter)
+            runner: macos-26
+            key: macos
+          - name: Browser (Windows WARP, software adapter)
+            runner: windows-2025
+            key: windows
+    env:
+      ALPHA2_CHROME_GPU: machine
+      ALPHA2_REQUIRE: browser,wasm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ${{ matrix.key }}
+          cache-workspaces: plugins -> target
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: alpha2-build-observe
+          path: packages
+      - name: Build the plugins the browser cases load
+        id: ready
+        run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins" --no-native
+      - id: wgsl
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        continue-on-error: true
+        run: npm run test:wgsl-browser 2>&1 | tee target/test-logs/wgsl.log
+      - name: The wasm-browser cases in Chrome
+        id: chrome
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        continue-on-error: true
+        run: node scripts/test-wasm-browser.mjs 2>&1 | tee target/test-logs/chrome.log
+      - id: editor
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        continue-on-error: true
+        run: npm run test:editor:package 2>&1 | tee target/test-logs/editor.log
+      - name: The same in Edge
+        id: edge
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' && runner.os == 'Windows' }}
+        continue-on-error: true
+        run: |
+          node scripts/test-wgsl-browser.mjs --browser edge 2>&1 | tee target/test-logs/edge.log
+          node scripts/test-wasm-browser.mjs --browser edge 2>&1 | tee -a target/test-logs/edge.log
+      - name: With no GPU in the browser, auto renders on the CPU (page and worker)
+        id: cpu-auto
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          ALPHA2_CHROME_GPU: none
+        run: |
+          node scripts/test-wasm-browser.mjs --case renderer-auto 2>&1 | tee target/test-logs/cpu-auto.log
+          node scripts/test-wasm-browser.mjs --case renderer-auto-worker 2>&1 | tee -a target/test-logs/cpu-auto.log
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: browser-platforms-${{ matrix.key }}
+          group: observe
+          steps: ${{ toJSON(steps) }}
+          ledger: ${{ env.LEDGER }}
+
+  mobile-test:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',mobile-test,')) &&
+      needs.changes.outputs.native == 'true' }}
+    name: Mobile tests (Android ${{ matrix.api }} emulator)
+    needs: changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 29
+            test-env: ""
+          # Debug builds name GPU objects, which this image's Vulkan driver crashes on.
+          - api: 36
+            test-env: WGPU_DEBUG=0
+            instrumentation: true
+    env:
+      ALPHA2_ANDROID_API: ${{ matrix.api }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: x86_64-linux-android
+          cache-key: mobile-test
+      - name: Point Cargo at the NDK toolchain (API 29)
+        run: |
+          ndk="${ANDROID_NDK_LATEST_HOME:?}"
+          echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            echo "CC_x86_64_linux_android=$bin/x86_64-linux-android29-clang"
+            echo "CXX_x86_64_linux_android=$bin/x86_64-linux-android29-clang++"
+            echo "AR_x86_64_linux_android=$bin/llvm-ar"
+            echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$bin/x86_64-linux-android29-clang"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android=--sysroot=$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          } >> "$GITHUB_ENV"
+      - name: Build the test binaries
+        run: |
+          mkdir -p target/mobile-tests
+          cargo test --locked --no-run --target x86_64-linux-android \
+            -p alpha2-android-media -p alpha2-mobile --lib --message-format=json |
+            jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
+            xargs -I{} cp {} target/mobile-tests/
+          ls -la target/mobile-tests
+      - name: Install Gradle 8.11 and cargo-ndk for the library's instrumentation tests
+        if: matrix.instrumentation
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-8.11-bin.zip
+          echo "57dafb5c2622c6cc08b993c85b7c06956a2f53536432a30ead46166dbca0f1e9  $RUNNER_TEMP/gradle.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-8.11/bin" >> "$GITHUB_PATH"
+          cargo install cargo-ndk --version 4.1.2 --locked
+      - name: Build the library's instrumentation tests
+        if: matrix.instrumentation
+        run: |
+          export JAVA_HOME="${JAVA_HOME_17_X64:?}"
+          ALPHA2_ANDROID_ABIS=x86_64 scripts/build-android.sh :lib:assembleDebugAndroidTest \
+            :consumer:assembleRelease :consumer:assembleReleaseAndroidTest
+          echo "ALPHA2_TEST_APK=$PWD/packages/alpha2-android/lib/build/outputs/apk/androidTest/debug/lib-debug-androidTest.apk" >> "$GITHUB_ENV"
+          echo "ALPHA2_CONSUMER_APKS=$PWD/packages/alpha2-android/consumer/build/outputs/apk" >> "$GITHUB_ENV"
+      - name: Let the emulator use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Tests in the emulator
+        id: emulator
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        env:
+          ALPHA2_DEVICE_TEST_ENV: ${{ matrix.test-env }}
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          disable-animations: true
+          script: |
+            scripts/android-device-tests.sh target/test-logs/emulator.device.log target/mobile-tests/*
+            if [ -n "${ALPHA2_TEST_APK:-}" ]; then adb install -r -t "$ALPHA2_TEST_APK" && adb shell am instrument -w sh.alpha2.test/androidx.test.runner.AndroidJUnitRunner | tee target/test-logs/emulator.instrumentation.log && grep -q '^OK (' target/test-logs/emulator.instrumentation.log; fi
+            if [ -n "${ALPHA2_CONSUMER_APKS:-}" ]; then adb install -r "$ALPHA2_CONSUMER_APKS/release/consumer-release.apk" && adb install -r -t "$ALPHA2_CONSUMER_APKS/androidTest/release/consumer-release-androidTest.apk" && adb shell am instrument -w sh.alpha2.consumer.test/androidx.test.runner.AndroidJUnitRunner | tee target/test-logs/emulator.consumer.log && grep -q '^OK (' target/test-logs/emulator.consumer.log; fi
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: mobile-test-android-${{ matrix.api }}
+          group: observe
+          steps: ${{ toJSON(steps) }}
+          ledger: ${{ env.LEDGER }}
+
+  mobile-test-ios:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',mobile-test-ios,')) &&
+      needs.changes.outputs.native == 'true' }}
+    name: Mobile tests (iOS simulator)
+    needs: changes
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: aarch64-apple-ios aarch64-apple-ios-sim
+          cache-key: mobile-test-ios
+      - name: Boot a simulator
+        id: ready
+        run: |
+          device=$(xcrun simctl list devices available -j |
+            jq -r '[.devices | to_entries[] | select(.key | test("iOS")) | .value[] | select(.name | test("iPhone"))][0].udid')
+          echo "SIMULATOR=$device" >> "$GITHUB_ENV"
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device"
+      - name: The Apple media and session suites in the simulator
+        id: simulator
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          status=0
+          while read -r binary; do
+            echo "     Running $binary" | tee -a target/test-logs/simulator.log
+            SIMCTL_CHILD_ALPHA2_TESTS_DIR="$PWD/tests" SIMCTL_CHILD_ALPHA2_SKIP_LOG="$ALPHA2_SKIP_LOG" \
+              xcrun simctl spawn "$SIMULATOR" "$binary" --test-threads 1 2>&1 |
+              tee -a target/test-logs/simulator.log || status=1
+          done < <(
+            cargo test --locked --no-run --target aarch64-apple-ios-sim \
+              -p alpha2-apple-media -p alpha2-mobile --lib --message-format=json |
+              jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable'
+          )
+          exit "$status"
+      - name: The Swift package in the simulator
+        id: swift
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          scripts/build-ios.sh
+          cd packages/alpha2-swift
+          xcodebuild test -scheme Alpha2 -destination "platform=iOS Simulator,id=$SIMULATOR" 2>&1 |
+            tee "$GITHUB_WORKSPACE/target/test-logs/swift.log"
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: mobile-test-ios
+          group: observe
+          steps: ${{ toJSON(steps) }}
+          ledger: ${{ env.LEDGER }}
+
+  gpu-validation:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',gpu-validation,')) &&
+      needs.changes.outputs.native == 'true' }}
+    name: GPU validation (${{ matrix.backend }})
+    needs: changes
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: vulkan
+            runner: ubuntu-24.04
+            target: linux-x64
+            crates: -p alpha2-render -p alpha2-engine
+          - backend: metal
+            runner: macos-26
+            target: macos-arm64
+            crates: -p alpha2-render -p alpha2-engine -p alpha2-native-gpu -p alpha2-host
+          - backend: dx12
+            runner: windows-2025
+            target: win-x64
+            crates: -p alpha2-render -p alpha2-engine -p alpha2-native-gpu -p alpha2-host
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-workspaces: |
+            . -> target
+            plugins -> target
+      - name: Install Mesa software GPU drivers and the Khronos validation layer
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install --yes mesa-vulkan-drivers
+          layers="$(scripts/fetch-vulkan-validation-layer.sh)"
+          set -- /usr/share/vulkan/icd.d/lvp_icd*.json
+          {
+            echo "VK_LAYER_PATH=$layers"
+            echo "VK_ICD_FILENAMES=$1"
+          } >> "$GITHUB_ENV"
+      - name: Install the D3D12 debug layer
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: pwsh
+        run: Add-WindowsCapability -Online -Name "Tools.Graphics.DirectX~~~~0.0.1.0"
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        run: brew install pkg-config
+      - uses: ./.github/actions/ffmpeg-sdk
+        with:
+          target: ${{ matrix.target }}
+      - if: runner.os == 'Windows'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/dxc
+          key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
+      - name: Fetch the pinned DXC
+        if: runner.os == 'Windows'
+        run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
+      - name: Adapters
+        run: cargo run -q -p alpha2-gpu --example adapters
+      - name: Build the plugins the host tests pack
+        if: contains(matrix.crates, 'alpha2-host')
+        run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
+      - name: GPU suites under ${{ matrix.backend }} validation
+        id: validation
+        continue-on-error: true
+        env:
+          BACKEND: ${{ matrix.backend }}
+          CRATES: ${{ matrix.crates }}
+        run: |
+          status=0
+          node scripts/test-gpu-validation.mjs --backend "$BACKEND" $CRATES 2>&1 |
+            tee target/test-logs/validation.log || status=1
+          for log in target/gpu-validation/*.log; do
+            [ -f "$log" ] && cp "$log" "target/test-logs/validation.$(basename "$log")"
+          done
+          exit "$status"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: gpu-validation-${{ matrix.backend }}
+          path: target/gpu-validation
+          if-no-files-found: ignore
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: gpu-validation-${{ matrix.backend }}
+          group: observe
+          steps: ${{ toJSON(steps) }}
+          ledger: ${{ env.LEDGER }}
+
+  test-reports:
+    if: always()
+    needs: [browser-platforms, mobile-test, mobile-test-ios, gpu-validation]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/upload-artifact/merge@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: test-reports-observe-attempt-${{ github.run_attempt }}
+          pattern: test-report-observe-*-attempt-${{ github.run_attempt }}
+          separate-directories: true

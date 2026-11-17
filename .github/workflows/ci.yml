@@ -21,9 +21,13 @@ env:
   # Runners have no GPU, so `auto` would pick the CPU renderer; GPU jobs run on lavapipe.
   ALPHA2_RENDERER: gpu
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
-  SAVE_RUST_CACHE: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/prerelease-v') }}
+  ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
   # Jobs cannot read env in their own `if`, so job conditions repeat this.
   HEAVY: ${{ github.event_name != 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
@@ -43,49 +47,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Areas this change touches
-        id: areas
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha }}
-        run: |
-          native=false js=false e2e=false packaging=false
-          if [ "$EVENT" != pull_request ]; then
-            native=true js=true e2e=true packaging=true
-          else
-            while IFS= read -r path; do
-              case $path in
-                Cargo.toml | Cargo.lock | rust-toolchain.toml | crates/* | bindings/* | extensions/* | \
-                  tests/* | release/ffmpeg-lgpl/* | release/openh264/* | scripts/fetch-*.sh | \
-                  .github/workflows/ci.yml)
-                  native=true ;;
-              esac
-              case $path in
-                packages/* | scripts/* | package.json | package-lock.json) js=true ;;
-              esac
-              case $path in
-                python/* | packages/alpha2-node/* | scripts/run-node-e2e.mjs) e2e=true ;;
-              esac
-              case $path in
-                release/* | scripts/build-native-release.sh | scripts/fetch-ffmpeg-sdk.sh | \
-                  scripts/fetch-ffmpeg-tools.sh | scripts/lib/pinned-download.sh | \
-                  scripts/packaging/* | scripts/release/* | python/alpha2-host/* | \
-                  python/alpha2/pyproject.toml | python/alpha2/src/alpha2/install.py | \
-                  packages/alpha2-node/src/install.ts | packages/alpha2-node/src/archive.ts | \
-                  packages/alpha2-node/src/http.ts | Cargo.lock | rust-toolchain.toml | \
-                  .github/workflows/package.yml | .github/workflows/release.yml)
-                  packaging=true ;;
-              esac
-            done < <(git diff --name-only "$BASE...HEAD")
-            [ "$native" = true ] && js=true && e2e=true
-          fi
-          {
-            echo "native=$native"
-            echo "js=$js"
-            echo "e2e=$e2e"
-            echo "packaging=$packaging"
-            echo "browser=$js"
-          } | tee -a "$GITHUB_OUTPUT"
+      - id: areas
+        uses: ./.github/actions/changes
 
   rust-checks:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',rust-checks,') }}
@@ -93,56 +56,60 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
             /usr/local/share/boost
           df -h /
       - name: Install native media build dependencies
+        timeout-minutes: 5
         run: >-
-          sudo apt-get update && sudo apt-get install --yes
+          sudo apt-get -o Acquire::Retries=3 update &&
+          sudo apt-get -o Acquire::Retries=3 install --yes
           libasound2-dev pkg-config clang mesa-vulkan-drivers
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
+      - uses: ./.github/actions/ffmpeg-sdk
         with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK that the hardware decode shim builds against
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          {
-            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_LINK_MODE=dynamic"
-            echo "LD_LIBRARY_PATH=$sdk_root/lib"
-          } >> "$GITHUB_ENV"
+          target: linux-x64
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - run: cargo fmt --check
-      - run: cargo metadata --locked --format-version 1 > /dev/null
-      - run: npm run lint:rust
-      - run: cargo clippy -p alpha2-native --all-targets -- -D warnings
-      - run: scripts/check-schema-fresh.sh
-      - run: scripts/check-extension-features.sh
-      - run: scripts/check-native-features.sh
-      - run: cargo bench -p alpha2-eval --bench timeline_evaluation
-      - run: cargo bench --workspace --all-features --no-run
+      - id: ready
+        run: npm ci
+      - id: fmt
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: cargo fmt --check
+      - id: metadata
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: cargo metadata --locked --format-version 1 > /dev/null
+      - id: clippy
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: npm run lint:rust
+      - id: clippy-native
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: cargo clippy -p alpha2-native --all-targets -- -D warnings
+      - id: schema
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: scripts/check-schema-fresh.sh
+      - id: extension-features
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: scripts/check-extension-features.sh
+      - id: native-features
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: scripts/check-native-features.sh
+      - id: bench-timeline
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: cargo bench -p alpha2-eval --bench timeline_evaluation
+      - id: benches-build
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: cargo bench --workspace --all-features --no-run
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: rust-checks
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   rust-tests:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',rust-tests,') }}
@@ -155,49 +122,28 @@ jobs:
     timeout-minutes: 45
     env:
       ALPHA2_REQUIRE: c-compiler,ffmpeg-tools
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
             /usr/local/share/boost
           df -h /
       - name: Install native media build dependencies
+        timeout-minutes: 5
         run: >-
-          sudo apt-get update && sudo apt-get install --yes
+          sudo apt-get -o Acquire::Retries=3 update &&
+          sudo apt-get -o Acquire::Retries=3 install --yes
           libasound2-dev pkg-config clang mesa-vulkan-drivers
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
         with:
-          workspaces: |
+          cache-key: ${{ matrix.features }}
+          cache-workspaces: |
             . -> target
             plugins -> target
-          key: ${{ matrix.features }}
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/ffmpeg-sdk
         with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK that the hardware decode shim builds against
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          {
-            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_LINK_MODE=dynamic"
-            echo "LD_LIBRARY_PATH=$sdk_root/lib"
-          } >> "$GITHUB_ENV"
+          target: linux-x64
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/ffmpeg-tools
@@ -213,16 +159,16 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Build the plugins the tests pack
         run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
-      - run: cargo test --workspace --${{ matrix.features }} --no-fail-fast
-      - name: Skips this run recorded
-        if: always()
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+      - id: rust
+        run: >-
+          cargo test --workspace --${{ matrix.features }} --no-fail-fast 2>&1
+          | tee target/test-logs/rust.log
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-rust-tests-${{ matrix.features }}
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          lane: rust-tests-${{ matrix.features }}
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   js:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',js,') }}
@@ -231,69 +177,61 @@ jobs:
     timeout-minutes: 25
     env:
       ALPHA2_REQUIRE: wasm
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
       - name: Install native media build dependencies
+        timeout-minutes: 5
         run: >-
-          sudo apt-get update && sudo apt-get install --yes
+          sudo apt-get -o Acquire::Retries=3 update &&
+          sudo apt-get -o Acquire::Retries=3 install --yes
           libasound2-dev pkg-config clang mesa-vulkan-drivers
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
+      - uses: ./.github/actions/ffmpeg-sdk
         with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK that the hardware decode shim builds against
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          {
-            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_LINK_MODE=dynamic"
-            echo "LD_LIBRARY_PATH=$sdk_root/lib"
-          } >> "$GITHUB_ENV"
+          target: linux-x64
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run format:check
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: alpha2-build
-          path: packages
-      - run: npm run test:js
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run test:wasm-parity
       - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
         with:
           tool: wasm-bindgen-cli@0.2.128
-      - run: npm run test:render-determinism
-      - run: npm run test:package
-      - run: scripts/test-clean-consumers.sh
-      - name: Skips this run recorded
-        if: always()
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+      - id: ready
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: skip-log-js
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          name: alpha2-build
+          path: packages
+      - id: format
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: npm run format:check
+      - id: test-js
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: npm run test:js
+      - id: lint
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: npm run lint
+      - id: typecheck
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: npm run typecheck
+      - id: wasm-parity
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: npm run test:wasm-parity
+      - id: render-determinism
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: npm run test:render-determinism
+      - id: package
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: npm run test:package
+      - id: clean-consumers
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: scripts/test-clean-consumers.sh
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: js
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   host:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',host,') }}
@@ -302,40 +240,18 @@ jobs:
     timeout-minutes: 45
     env:
       ALPHA2_REQUIRE: wasm,browser,python,host
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
       - name: Install native media build dependencies
+        timeout-minutes: 5
         run: >-
-          sudo apt-get update && sudo apt-get install --yes
+          sudo apt-get -o Acquire::Retries=3 update &&
+          sudo apt-get -o Acquire::Retries=3 install --yes
           libasound2-dev pkg-config clang mesa-vulkan-drivers
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
+      - uses: ./.github/actions/ffmpeg-sdk
         with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK that the hardware decode shim builds against
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          {
-            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_LINK_MODE=dynamic"
-            echo "LD_LIBRARY_PATH=$sdk_root/lib"
-          } >> "$GITHUB_ENV"
+          target: linux-x64
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -346,6 +262,7 @@ jobs:
           name: alpha2-build
           path: packages
       - name: Build the Python package the parity and end-to-end checks run
+        id: ready
         working-directory: python/alpha2
         # --no-deps: the pinned alpha2-host wheel is not published yet; these checks use the host
         # built here.
@@ -354,11 +271,16 @@ jobs:
           uv venv -p 3.11 .venv
           uv pip install --group dev
           uv pip install --no-deps -e .
-      - run: npm run test:host-parity
+      - id: host-parity
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         env:
           ALPHA2_CHROME_GPU: swiftshader
+        run: npm run test:host-parity 2>&1 | tee target/test-logs/host-parity.log
       - name: A Vulkan device without Vulkan Video falls back to software
+        id: lavapipe-fallback
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: |
+          cargo build -p alpha2-host
           set -- /usr/share/vulkan/icd.d/lvp_icd*.json
           icd="$1"
           test -f "$icd"
@@ -369,15 +291,12 @@ jobs:
             --out "$RUNNER_TEMP/lavapipe.mp4" --no-audio --video-codec mpeg4-part2 \
             2> "$RUNNER_TEMP/lavapipe.log" || { cat "$RUNNER_TEMP/lavapipe.log"; exit 1; }
           grep "hardware decode unavailable, using software" "$RUNNER_TEMP/lavapipe.log"
-      - name: Skips this run recorded
-        if: always()
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-host
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          lane: host
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   openh264:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',openh264,') }}
@@ -394,78 +313,72 @@ jobs:
     timeout-minutes: 30
     env:
       ALPHA2_REQUIRE: openh264,c-compiler
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
       - name: Install native media build dependencies
+        timeout-minutes: 5
         run: >-
-          sudo apt-get update && sudo apt-get install --yes
+          sudo apt-get -o Acquire::Retries=3 update &&
+          sudo apt-get -o Acquire::Retries=3 install --yes
           libasound2-dev pkg-config clang mesa-vulkan-drivers bzip2
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
         with:
-          key: openh264
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+          cache-key: openh264
+      - uses: ./.github/actions/ffmpeg-sdk
         with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          {
-            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_LINK_MODE=dynamic"
-            echo "LD_LIBRARY_PATH=$sdk_root/lib"
-          } >> "$GITHUB_ENV"
+          target: ${{ matrix.target }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
       # Downloaded from Cisco for tests only; never bundled into uploaded artifacts.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/openh264
           key: openh264-${{ matrix.target }}-${{ hashFiles('release/openh264/manifest.toml') }}
       - name: Fetch Cisco's OpenH264 binary
+        id: ready
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          library="$(scripts/fetch-openh264.sh ${{ matrix.target }} "$RUNNER_TEMP/openh264")"
+          library="$(scripts/fetch-openh264.sh "$TARGET" "$RUNNER_TEMP/openh264")"
           echo "ALPHA2_OPENH264_LIBRARY=$library" >> "$GITHUB_ENV"
       - name: Loader, encoder and sink tests
-        run: cargo test --release -p alpha2-native --lib openh264 --no-fail-fast
+        id: native
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: >-
+          cargo test --release -p alpha2-native --lib openh264 --no-fail-fast 2>&1
+          | tee target/test-logs/native.log
       - name: Host tests
-        run: cargo test --release -p alpha2-host openh264 --no-fail-fast
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
+        id: host
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: >-
+          cargo test --release -p alpha2-host openh264 --no-fail-fast 2>&1
+          | tee target/test-logs/host.log
       - name: The Node client decompresses Cisco's archive to the library the manifest pins
+        id: node-bzip2
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: |
           npm run build:js --workspace alpha2
           npm run build --workspace @alpha2-sh/node
           ALPHA2_TEST_OPENH264_ARCHIVE="$(ls "$RUNNER_TEMP"/openh264/*.bz2)" \
-            node --test packages/alpha2-node/test/bzip2.test.mjs
+            node scripts/run-node-tests.mjs node-bzip2 packages/alpha2-node/test/bzip2.test.mjs
       - name: A GPU without an H.264 encoder exports H.264 through OpenH264, the same bytes twice
+        id: export-twice
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: |
           cargo build --release -p alpha2-host
           set -- /usr/share/vulkan/icd.d/lvp_icd*.json
-          python3 - <<'EOF'
-          import json
+          python3 - "$RUNNER_TEMP/openh264-project.json" <<'EOF'
+          import json, sys
           project = json.load(open("tests/cases/host-parity-complex-project.json"))
           project["settings"].update(width=1920, height=1080)
-          json.dump(project, open("/tmp/openh264-project.json", "w"))
+          json.dump(project, open(sys.argv[1], "w"))
           EOF
           for run in first second; do
             VK_ICD_FILENAMES="$1" target/release/alpha2-host export \
-              --project /tmp/openh264-project.json \
+              --project "$RUNNER_TEMP/openh264-project.json" \
               --asset video=tests/corpus/parity-rgb.mov --asset still=tests/corpus/parity-image.png \
               --out "$RUNNER_TEMP/$run.mp4" > "$RUNNER_TEMP/$run.json" 2> "$RUNNER_TEMP/$run.log" \
               || { cat "$RUNNER_TEMP/$run.log"; exit 1; }
@@ -482,10 +395,16 @@ jobs:
           EOF
           cmp "$RUNNER_TEMP/first.mp4" "$RUNNER_TEMP/second.mp4"
       - name: Each client uses an OpenH264 it installs into its cache, in the same process
+        id: clients
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        env:
+          PYTEST_ADDOPTS: --junitxml=${{ github.workspace }}/target/test-results/pytest-openh264.xml
         run: |
+          cargo build --release -p alpha2-host
           archive="$(ls "$RUNNER_TEMP"/openh264/*.bz2)"
           ALPHA2_HOST_BINARY="$PWD/target/release/alpha2-host" ALPHA2_TEST_OPENH264_ARCHIVE="$archive" \
-            node --test --test-name-pattern 'OpenH264 installed' packages/alpha2-node/test/e2e/host-export.test.mjs
+            node scripts/run-node-tests.mjs node-openh264 --test-name-pattern 'OpenH264 installed' \
+            packages/alpha2-node/test/e2e/host-export.test.mjs
           pipx install uv==0.13.3
           cd python/alpha2
           uv venv -q -p 3.11 .venv
@@ -493,15 +412,12 @@ jobs:
           uv pip install -q --no-deps -e .
           ALPHA2_HOST_BINARY="$GITHUB_WORKSPACE/target/release/alpha2-host" ALPHA2_TEST_OPENH264_ARCHIVE="$archive" \
             .venv/bin/pytest tests/e2e/test_e2e.py -k openh264
-      - name: Skips this run recorded
-        if: always()
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-openh264-${{ matrix.target }}
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          lane: openh264-${{ matrix.target }}
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   cpu-renderer:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',cpu-renderer,') }}
@@ -510,54 +426,42 @@ jobs:
     timeout-minutes: 70
     env:
       ALPHA2_REQUIRE: ""
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
       - name: Install native media build dependencies and the distro FFmpeg
+        timeout-minutes: 5
         run: >-
-          sudo apt-get update && sudo apt-get install --yes
+          sudo apt-get -o Acquire::Retries=3 update &&
+          sudo apt-get -o Acquire::Retries=3 install --yes
           libasound2-dev pkg-config clang mesa-vulkan-drivers
           libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
         with:
-          workspaces: |
+          cache-key: cpu-renderer
+          cache-workspaces: |
             . -> target
             plugins -> target
-          key: cpu-renderer
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/ffmpeg-sdk
         with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          {
-            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_LINK_MODE=dynamic"
-            echo "LD_LIBRARY_PATH=$sdk_root/lib"
-          } >> "$GITHUB_ENV"
-      - name: Every CPU pass against the GPU's on lavapipe
-        run: cargo test --release -p alpha2-render --lib cpu_ --no-fail-fast
+          target: linux-x64
       - name: Build the plugins the tests pack
+        id: ready
         run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
+      - name: Every CPU pass against the GPU's on lavapipe
+        id: parity
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: >-
+          cargo test --release -p alpha2-render --lib cpu_ --no-fail-fast 2>&1
+          | tee target/test-logs/parity.log
       - name: The host suite on the CPU renderer
+        id: host
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         env:
           ALPHA2_RENDERER: cpu
-        run: cargo test --release -p alpha2-host --no-fail-fast
+        run: cargo test --release -p alpha2-host --no-fail-fast 2>&1 | tee target/test-logs/host.log
       - name: Without any graphics driver, and with only lavapipe, auto renders on the CPU
+        id: auto-cpu
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         env:
           ALPHA2_RENDERER: auto
         run: |
@@ -580,8 +484,11 @@ jobs:
           EOF
           done
       - name: The host links the pinned FFmpeg, not the distro's
+        id: pinned-ffmpeg
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: |
           shopt -s inherit_errexit
+          cargo build --release -p alpha2-host
           linked="$(ldd target/release/alpha2-host | grep -E 'libav(codec|format|util)|libsw(resample|scale)')"
           echo "$linked"
           if grep -v "=> $LD_LIBRARY_PATH/" <<< "$linked"; then
@@ -589,19 +496,19 @@ jobs:
             exit 1
           fi
       - name: The host suite without extensions or hardware video, on the CPU renderer
+        id: host-minimal
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         env:
           ALPHA2_RENDERER: cpu
-        run: cargo test --release -p alpha2-host --no-default-features --no-fail-fast
-      - name: Skips this run recorded
-        if: always()
-        shell: bash
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+        run: >-
+          cargo test --release -p alpha2-host --no-default-features --no-fail-fast 2>&1
+          | tee target/test-logs/host-minimal.log
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-cpu-renderer
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          lane: cpu-renderer
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   wasm-audio:
     if: >-
@@ -611,23 +518,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: ./.github/actions/setup-rust
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - run: cargo build -p alpha2-wasm --target wasm32-unknown-unknown
       - run: cargo build -p alpha2-audio-worklet --target wasm32-unknown-unknown
-      - run: npm run test:audio-determinism
+      - id: audio-determinism
+        run: npm run test:audio-determinism
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: wasm-audio
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   msrv:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',msrv,') }}
@@ -635,14 +539,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
       - name: Install native media build dependencies
+        timeout-minutes: 5
         run: >-
-          sudo apt-get update && sudo apt-get install --yes
+          sudo apt-get -o Acquire::Retries=3 update &&
+          sudo apt-get -o Acquire::Retries=3 install --yes
           libasound2-dev pkg-config clang
       - name: Install the rust-version toolchain
         run: |
@@ -650,27 +551,18 @@ jobs:
           test -n "$msrv"
           rustup toolchain install "$msrv" --profile minimal
           echo "MSRV=$msrv" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
+      - uses: ./.github/actions/ffmpeg-sdk
         with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+          target: linux-x64
+      - id: check
+        run: cargo "+$MSRV" check --workspace --all-targets --all-features
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK that the hardware decode shim builds against
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          {
-            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_LINK_MODE=dynamic"
-            echo "LD_LIBRARY_PATH=$sdk_root/lib"
-          } >> "$GITHUB_ENV"
-      - run: cargo "+$MSRV" check --workspace --all-targets --all-features
+          lane: msrv
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   valgrind:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',valgrind,') }}
@@ -678,59 +570,40 @@ jobs:
     timeout-minutes: 30
     env:
       ALPHA2_REQUIRE: ""
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
       - name: Install native media build dependencies
+        timeout-minutes: 5
         run: >-
-          sudo apt-get update && sudo apt-get install --yes
+          sudo apt-get -o Acquire::Retries=3 update &&
+          sudo apt-get -o Acquire::Retries=3 install --yes
           libasound2-dev pkg-config clang valgrind libvulkan-dev
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
+      - id: ready
+        uses: ./.github/actions/ffmpeg-sdk
         with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK the bridge builds against
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          {
-            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-            echo "FFMPEG_LINK_MODE=dynamic"
-            echo "LD_LIBRARY_PATH=$sdk_root/lib"
-          } >> "$GITHUB_ENV"
+          target: linux-x64
       - name: Bridge and native binding tests under valgrind
+        id: valgrind
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: valgrind --error-exitcode=9 --quiet
           ALPHA2_TEST_DECODE_WORK_LIMIT_MS: "600000"
           # SVT-AV1 in the SDK's libavcodec reads uninitialized memory in its own threads.
           ALPHA2_TEST_SKIP_ENCODERS: libsvtav1
-        run: cargo test -p alpha2-ffmpeg-bridge -p alpha2-native --features alpha2-ffmpeg-bridge/hwdevice --lib --bins --tests --no-fail-fast
+        run: >-
+          cargo test -p alpha2-ffmpeg-bridge -p alpha2-native --features alpha2-ffmpeg-bridge/hwdevice
+          --lib --bins --tests --no-fail-fast 2>&1 | tee target/test-logs/valgrind.log
       - name: GPU timeout configuration under ThreadSanitizer
-        run: bash scripts/test-gpu-timeout-race.sh
-      - name: Skips this run recorded
-        if: always()
-        shell: bash
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+        id: tsan
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: bash scripts/test-gpu-timeout-race.sh 2>&1 | tee target/test-logs/tsan.log
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-valgrind
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          lane: valgrind
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   wasm-lint:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',wasm-lint,') }}
@@ -738,20 +611,17 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - run: >-
+      - uses: ./.github/actions/setup-rust
+      - id: clippy
+        run: >-
           cargo clippy -p alpha2-wasm -p alpha2-audio-worklet
           --target wasm32-unknown-unknown -- -D warnings
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: wasm-lint
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   fuzz-check:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',fuzz-check,') }}
@@ -759,24 +629,24 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - id: ready
+        uses: ./.github/actions/setup-rust
         with:
-          workspaces: fuzz
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
-      - run: cargo clippy --manifest-path fuzz/Cargo.toml --locked --bins -- -D warnings
+          cache-workspaces: fuzz
+      - id: fmt
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: cargo fmt --manifest-path fuzz/Cargo.toml --check
+      - id: clippy
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: cargo clippy --manifest-path fuzz/Cargo.toml --locked --bins -- -D warnings
       - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
+        id: cargo-fuzz
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         with:
           tool: cargo-fuzz@0.12.0
       - name: Build and briefly run one fuzz target
+        id: fuzz
+        if: ${{ !cancelled() && steps.cargo-fuzz.outcome == 'success' }}
         run: scripts/fuzz.sh 60 evaluate
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
@@ -786,6 +656,12 @@ jobs:
             fuzz/artifacts/evaluate
             fuzz/logs/evaluate.log
           if-no-files-found: ignore
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: fuzz-check
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   plugins-check:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',plugins-check,') }}
@@ -793,27 +669,35 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - id: ready
+        uses: ./.github/actions/setup-rust
         with:
-          workspaces: plugins
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - run: cargo fmt --manifest-path plugins/Cargo.toml --all --check
-      - run: cargo clippy --manifest-path plugins/Cargo.toml --locked --all-targets -- -D warnings
-      - run: >-
+          cache-workspaces: plugins
+      - id: fmt
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: cargo fmt --manifest-path plugins/Cargo.toml --all --check
+      - id: clippy
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: cargo clippy --manifest-path plugins/Cargo.toml --locked --all-targets -- -D warnings
+      - id: clippy-wasm
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: >-
           cargo clippy --manifest-path plugins/Cargo.toml --locked --target wasm32-unknown-unknown
           -p alpha2-plugin-sdk -p alpha2-plugin-fixture-digest -p alpha2-plugin-fixture-scripted
           -- -D warnings
-      - run: cargo test --manifest-path plugins/Cargo.toml --locked
+      - id: test
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: cargo test --manifest-path plugins/Cargo.toml --locked 2>&1 | tee target/test-logs/test.log
       - name: Pack the plugins (wasm32 and the host triple; the wasm modules are checked)
+        id: pack
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: plugins-check
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   platform-lint:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-lint,') }}
@@ -828,53 +712,16 @@ jobs:
             runner: macos-26
           - target: win-x64
             runner: windows-2025
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: ./.github/actions/setup-rust
       - name: Install macOS build tools
         if: runner.os == 'macOS'
+        timeout-minutes: 5
         run: brew install pkg-config
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/ffmpeg-sdk
         with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          if [ "${{ runner.os }}" = Windows ]; then
-            sdk_root="$(cygpath -m "$sdk_root")"
-            {
-              echo "FFMPEG_INCLUDE_DIR=$sdk_root/include"
-              echo "FFMPEG_LIBS_DIR=$sdk_root/lib"
-              echo "FFMPEG_LINK_MODE=dynamic"
-            } >> "$GITHUB_ENV"
-            echo "$sdk_root/bin" >> "$GITHUB_PATH"
-          else
-            {
-              echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-              echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-              echo "FFMPEG_LINK_MODE=dynamic"
-            } >> "$GITHUB_ENV"
-            if [ "${{ runner.os }}" = Linux ]; then
-              echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
-            fi
-          fi
+          target: ${{ matrix.target }}
       - if: runner.os == 'Windows'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -883,30 +730,43 @@ jobs:
       - name: Fetch the pinned DXC
         if: runner.os == 'Windows'
         run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
-      - name: Clippy of the native crates
-        run: >-
-          cargo clippy -p alpha2-native -p alpha2-native-gpu -p alpha2-host -p alpha2-ffmpeg-bridge
-          -p alpha2-os -p alpha2-build-support --all-features --all-targets -- -D warnings
-      - run: scripts/check-native-features.sh
       - name: Install the rust-version toolchain
+        id: ready
         run: |
           msrv="$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)"
           test -n "$msrv"
           rustup toolchain install "$msrv" --profile minimal
           echo "MSRV=$msrv" >> "$GITHUB_ENV"
+      - name: Clippy of the native crates
+        id: clippy
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: >-
+          cargo clippy -p alpha2-native -p alpha2-native-gpu -p alpha2-host -p alpha2-ffmpeg-bridge
+          -p alpha2-os -p alpha2-build-support --all-features --all-targets -- -D warnings
+      - id: native-features
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: scripts/check-native-features.sh
       - name: The native crates build with the rust-version toolchain
+        id: msrv
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: >-
           cargo "+$MSRV" check -p alpha2-native -p alpha2-native-gpu -p alpha2-host
           -p alpha2-ffmpeg-bridge -p alpha2-os -p alpha2-build-support --all-targets --all-features
       - name: The benches build
+        id: benches
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: cargo bench --no-run -p alpha2-render -p alpha2-native
       - name: Link and start the host
+        id: host-starts
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: |
           cargo build -p alpha2-host
           { target/debug/alpha2-host 2>&1 || true; } | grep "usage: alpha2-host"
       - name: The Windows host reports DXC
-        if: runner.os == 'Windows'
+        id: host-dxc
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' && runner.os == 'Windows' }}
         run: |
+          cargo build -p alpha2-host
           python - <<'PY'
           import json, os, struct, subprocess
           header = json.dumps({"protocolVersion": 2, "requestId": "c", "operation": "capabilities"})
@@ -926,6 +786,12 @@ jobs:
           assert compiler.startswith("DXC"), compiler
           print(compiler)
           PY
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: platform-lint-${{ matrix.target }}
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   mobile-lint:
     if: >-
@@ -946,9 +812,6 @@ jobs:
           - platform: ios
             runner: macos-26
             targets: aarch64-apple-ios aarch64-apple-ios-sim
-    defaults:
-      run:
-        shell: bash
     env:
       # The mobile crate set: everything an app links. FFmpeg-linked crates are desktop only.
       MOBILE_PACKAGES: -p alpha2-os -p alpha2-native-gpu -p alpha2-extensions -p alpha2-text
@@ -957,28 +820,22 @@ jobs:
       MOBILE_ALL_FEATURE_PACKAGES: -p alpha2 -p alpha2-compose -p alpha2-host-core
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-          if [ "${{ matrix.platform }}" = ios ]; then xcodebuild -version; fi
-      - name: Install the pinned Rust toolchain and the mobile targets
-        run: |
-          rustup toolchain install
-          rustup target add ${{ matrix.targets }}
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - id: ready
+        uses: ./.github/actions/setup-rust
         with:
-          key: ${{ matrix.platform }}
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
+          targets: ${{ matrix.targets }}
+          cache-key: ${{ matrix.platform }}
       - name: Point Cargo at the NDK toolchain (API 29)
         if: matrix.platform == 'android'
+        env:
+          TARGETS: ${{ matrix.targets }}
         run: |
           ndk="${ANDROID_NDK_LATEST_HOME:?}"
           cat "$ndk/source.properties"
+          echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
           bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
           sysroot="$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          for target in ${{ matrix.targets }}; do
+          for target in $TARGETS; do
             var="${target//-/_}"
             upper="${var^^}"
             {
@@ -990,162 +847,26 @@ jobs:
             } >> "$GITHUB_ENV"
           done
       - name: Clippy of the mobile crate set
+        id: clippy
+        env:
+          TARGETS: ${{ matrix.targets }}
         run: |
-          for target in ${{ matrix.targets }}; do
+          status=0
+          for target in $TARGETS; do
             echo "::group::$target"
-            cargo clippy --locked $MOBILE_PACKAGES --all-targets --target "$target" -- -D warnings
+            cargo clippy --locked $MOBILE_PACKAGES --all-targets --target "$target" -- -D warnings ||
+              status=1
             cargo clippy --locked $MOBILE_ALL_FEATURE_PACKAGES --all-features --all-targets \
-              --target "$target" -- -D warnings
+              --target "$target" -- -D warnings || status=1
             echo "::endgroup::"
           done
-
-  mobile-test:
-    if: >-
-      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',mobile-test,')) &&
-      needs.changes.outputs.native == 'true' }}
-    name: Mobile tests (Android ${{ matrix.api }} emulator)
-    needs: changes
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - api: 29
-            test-env: ""
-          # Debug builds name GPU objects, which this image's Vulkan driver crashes on.
-          - api: 36
-            test-env: WGPU_DEBUG=0
-            instrumentation: true
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain and the emulator target
-        run: |
-          rustup toolchain install
-          rustup target add x86_64-linux-android
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+          exit "$status"
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          key: mobile-test
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - name: Point Cargo at the NDK toolchain (API 29)
-        run: |
-          ndk="${ANDROID_NDK_LATEST_HOME:?}"
-          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          {
-            echo "CC_x86_64_linux_android=$bin/x86_64-linux-android29-clang"
-            echo "CXX_x86_64_linux_android=$bin/x86_64-linux-android29-clang++"
-            echo "AR_x86_64_linux_android=$bin/llvm-ar"
-            echo "CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER=$bin/x86_64-linux-android29-clang"
-            echo "BINDGEN_EXTRA_CLANG_ARGS_x86_64_linux_android=--sysroot=$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          } >> "$GITHUB_ENV"
-      - name: Build the test binaries
-        run: |
-          mkdir -p target/mobile-tests
-          cargo test --locked --no-run --target x86_64-linux-android \
-            -p alpha2-android-media -p alpha2-mobile --lib --message-format=json |
-            jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
-            xargs -I{} cp {} target/mobile-tests/
-          ls -la target/mobile-tests
-      - name: Install Gradle 8.11 and cargo-ndk for the library's instrumentation tests
-        if: matrix.instrumentation
-        run: |
-          curl -sSfL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-8.11-bin.zip
-          echo "57dafb5c2622c6cc08b993c85b7c06956a2f53536432a30ead46166dbca0f1e9  $RUNNER_TEMP/gradle.zip" | sha256sum -c -
-          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/gradle-8.11/bin" >> "$GITHUB_PATH"
-          cargo install cargo-ndk --version 4.1.2 --locked
-      - name: Build the library's instrumentation tests
-        if: matrix.instrumentation
-        run: |
-          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:?}" JAVA_HOME="${JAVA_HOME_17_X64:?}"
-          ALPHA2_ANDROID_ABIS=x86_64 scripts/build-android.sh :lib:assembleDebugAndroidTest \
-            :consumer:assembleRelease :consumer:assembleReleaseAndroidTest
-          echo "ALPHA2_TEST_APK=$PWD/packages/alpha2-android/lib/build/outputs/apk/androidTest/debug/lib-debug-androidTest.apk" >> "$GITHUB_ENV"
-          echo "ALPHA2_CONSUMER_APKS=$PWD/packages/alpha2-android/consumer/build/outputs/apk" >> "$GITHUB_ENV"
-      - name: Let the emulator use KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
-            sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
-        with:
-          api-level: ${{ matrix.api }}
-          target: google_apis
-          arch: x86_64
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
-          disable-animations: true
-          script: |
-            adb shell mkdir -p /data/local/tmp/alpha2-test/tests
-            adb push tests/corpus tests/cases tests/fonts tests/golden /data/local/tmp/alpha2-test/tests/ > /dev/null
-            adb push target/mobile-tests/. /data/local/tmp/alpha2-test/ > /dev/null
-            for binary in target/mobile-tests/*; do name=$(basename "$binary"); adb shell "cd /data/local/tmp/alpha2-test && chmod 755 $name && ALPHA2_TESTS_DIR=/data/local/tmp/alpha2-test/tests TMPDIR=/data/local/tmp/alpha2-test ALPHA2_SKIP_LOG=/data/local/tmp/alpha2-test/skip-log.jsonl ${{ matrix.test-env }} ./$name --test-threads 1" || status=1; done; adb pull /data/local/tmp/alpha2-test/skip-log.jsonl "$ALPHA2_SKIP_LOG" > /dev/null 2>&1; node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"; [ -z "${status:-}" ]
-            if [ -n "${ALPHA2_TEST_APK:-}" ]; then adb install -r -t "$ALPHA2_TEST_APK" && adb shell am instrument -w sh.alpha2.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/instrumentation.txt" && grep -q '^OK (' "$RUNNER_TEMP/instrumentation.txt"; fi
-            if [ -n "${ALPHA2_CONSUMER_APKS:-}" ]; then adb install -r "$ALPHA2_CONSUMER_APKS/release/consumer-release.apk" && adb install -r -t "$ALPHA2_CONSUMER_APKS/androidTest/release/consumer-release-androidTest.apk" && adb shell am instrument -w sh.alpha2.consumer.test/androidx.test.runner.AndroidJUnitRunner | tee "$RUNNER_TEMP/shrunk.txt" && grep -q '^OK (' "$RUNNER_TEMP/shrunk.txt"; fi
-
-  mobile-test-ios:
-    if: >-
-      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',mobile-test-ios,')) &&
-      needs.changes.outputs.native == 'true' }}
-    name: Mobile tests (iOS simulator)
-    needs: changes
-    runs-on: macos-26
-    timeout-minutes: 60
-    env:
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-          xcodebuild -version
-      - name: Install the pinned Rust toolchain and the simulator target
-        run: |
-          rustup toolchain install
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: mobile-test-ios
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - name: Boot a simulator
-        run: |
-          device=$(xcrun simctl list devices available -j |
-            jq -r '[.devices | to_entries[] | select(.key | test("iOS")) | .value[] | select(.name | test("iPhone"))][0].udid')
-          echo "SIMULATOR=$device" >> "$GITHUB_ENV"
-          xcrun simctl boot "$device"
-          xcrun simctl bootstatus "$device"
-      - name: The Apple media and session suites in the simulator
-        run: |
-          cargo test --locked --no-run --target aarch64-apple-ios-sim \
-            -p alpha2-apple-media -p alpha2-mobile --lib --message-format=json |
-            jq -r 'select(.reason == "compiler-artifact" and .executable != null) | .executable' |
-            while read -r binary; do
-              SIMCTL_CHILD_ALPHA2_TESTS_DIR="$PWD/tests" SIMCTL_CHILD_ALPHA2_SKIP_LOG="$ALPHA2_SKIP_LOG" \
-                xcrun simctl spawn "$SIMULATOR" "$binary" --test-threads 1
-            done
-      - name: Skips this run recorded
-        if: always()
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - name: The Swift package in the simulator
-        run: |
-          scripts/build-ios.sh
-          cd packages/alpha2-swift
-          xcodebuild test -scheme Alpha2 -destination "platform=iOS Simulator,id=$SIMULATOR"
+          lane: mobile-lint-${{ matrix.platform }}
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   platform-js:
     if: >-
@@ -1159,21 +880,13 @@ jobs:
       fail-fast: false
       matrix:
         runner: [macos-26, windows-2025]
-    defaults:
-      run:
-        shell: bash
     env:
       ALPHA2_REQUIRE: wasm
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache: "false"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -1183,16 +896,14 @@ jobs:
         with:
           name: alpha2-build
           path: packages
-      - run: npm run test:js
-      - name: Skips this run recorded
-        if: always()
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+      - id: test-js
+        run: npm run test:js
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-platform-js-${{ matrix.runner }}
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          lane: platform-js-${{ matrix.runner }}
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   platform-native:
     if: >-
@@ -1212,56 +923,18 @@ jobs:
           - target: win-x64
             runner: windows-2025
             require: openh264,dxc
-    defaults:
-      run:
-        shell: bash
     env:
       ALPHA2_REQUIRE: ${{ matrix.require }}
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: ./.github/actions/setup-rust
       - name: Install macOS build tools
         if: runner.os == 'macOS'
+        timeout-minutes: 5
         run: brew install pkg-config
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/ffmpeg-sdk
         with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          if [ "${{ runner.os }}" = Windows ]; then
-            sdk_root="$(cygpath -m "$sdk_root")"
-            {
-              echo "FFMPEG_INCLUDE_DIR=$sdk_root/include"
-              echo "FFMPEG_LIBS_DIR=$sdk_root/lib"
-              echo "FFMPEG_LINK_MODE=dynamic"
-            } >> "$GITHUB_ENV"
-            echo "$sdk_root/bin" >> "$GITHUB_PATH"
-          else
-            {
-              echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-              echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-              echo "FFMPEG_LINK_MODE=dynamic"
-            } >> "$GITHUB_ENV"
-            if [ "${{ runner.os }}" = Linux ]; then
-              echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
-            fi
-          fi
+          target: ${{ matrix.target }}
       - if: runner.os == 'Windows'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1275,25 +948,33 @@ jobs:
           path: ${{ runner.temp }}/openh264
           key: openh264-${{ matrix.target }}-${{ hashFiles('release/openh264/manifest.toml') }}
       - name: Fetch Cisco's OpenH264 binary
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          library="$(scripts/fetch-openh264.sh ${{ matrix.target }} "$RUNNER_TEMP/openh264")"
+          library="$(scripts/fetch-openh264.sh "$TARGET" "$RUNNER_TEMP/openh264")"
           echo "ALPHA2_OPENH264_LIBRARY=$library" >> "$GITHUB_ENV"
       - name: Adapters
+        id: ready
         run: cargo run -q -p alpha2-gpu --example adapters
       - name: Native and host tests (debug)
+        id: debug
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: >-
           cargo test --locked --all-features --no-fail-fast -p alpha2-os -p alpha2-build-support
           -p alpha2-ffmpeg-bridge -p alpha2-native -p alpha2-native-gpu -p alpha2-gpu -p alpha2-host
+          2>&1 | tee target/test-logs/debug.log
       - name: Native and host tests (release, strict GPU errors)
-        if: ${{ !cancelled() && env.HEAVY == 'true' }}
+        id: release
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' && env.HEAVY == 'true' }}
         env:
           ALPHA2_GPU_STRICT: "1"
         run: >-
           cargo test --locked --release --all-features --no-fail-fast -p alpha2-os
           -p alpha2-build-support -p alpha2-ffmpeg-bridge -p alpha2-native -p alpha2-native-gpu
-          -p alpha2-gpu -p alpha2-host
+          -p alpha2-gpu -p alpha2-host 2>&1 | tee target/test-logs/release.log
       - name: H.264 goes through OpenH264, the same bytes twice
-        if: ${{ !cancelled() }}
+        id: openh264
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: |
           cargo build --release -p alpha2-host
           node -e '
@@ -1319,15 +1000,12 @@ jobs:
             check(result.videoEncoderLibrary.provider === "cisco-openh264", "provider");
           ' "$RUNNER_TEMP/first.json"
           cmp "$RUNNER_TEMP/first.mp4" "$RUNNER_TEMP/second.mp4"
-      - name: Skips this run recorded
-        if: always()
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-platform-native-${{ matrix.target }}
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          lane: platform-native-${{ matrix.target }}
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   platform-e2e:
     if: >-
@@ -1347,65 +1025,30 @@ jobs:
             runner: macos-26
           - target: win-x64
             runner: windows-2025
-    defaults:
-      run:
-        shell: bash
     env:
       ALPHA2_RENDERER: cpu
       ALPHA2_REQUIRE: python,host
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
       - name: Install native media build dependencies
         if: runner.os == 'Linux'
+        timeout-minutes: 5
         run: >-
-          sudo apt-get update && sudo apt-get install --yes
+          sudo apt-get -o Acquire::Retries=3 update &&
+          sudo apt-get -o Acquire::Retries=3 install --yes
           libasound2-dev pkg-config clang
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
         with:
-          workspaces: |
+          cache-workspaces: |
             . -> target
             plugins -> target
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Install macOS build tools
         if: runner.os == 'macOS'
+        timeout-minutes: 5
         run: brew install pkg-config
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/ffmpeg-sdk
         with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          if [ "${{ runner.os }}" = Windows ]; then
-            sdk_root="$(cygpath -m "$sdk_root")"
-            {
-              echo "FFMPEG_INCLUDE_DIR=$sdk_root/include"
-              echo "FFMPEG_LIBS_DIR=$sdk_root/lib"
-              echo "FFMPEG_LINK_MODE=dynamic"
-            } >> "$GITHUB_ENV"
-            echo "$sdk_root/bin" >> "$GITHUB_PATH"
-          else
-            {
-              echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-              echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-              echo "FFMPEG_LINK_MODE=dynamic"
-            } >> "$GITHUB_ENV"
-            if [ "${{ runner.os }}" = Linux ]; then
-              echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
-            fi
-          fi
+          target: ${{ matrix.target }}
       - if: runner.os == 'Windows'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1433,22 +1076,24 @@ jobs:
           uv pip install --no-deps -e .
           if [ -d .venv/Scripts ]; then echo "PY=$PWD/.venv/Scripts" >> "$GITHUB_ENV"; else echo "PY=$PWD/.venv/bin" >> "$GITHUB_ENV"; fi
       - name: Build the plugins the tests pack
+        id: ready
         run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
-      - run: npm run test:node-e2e
+      - id: node-e2e
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: npm run test:node-e2e
       - name: Python end-to-end tests
-        if: ${{ !cancelled() }}
+        id: python-e2e
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         env:
           ALPHA2_HOST_BINARY: ${{ github.workspace }}/target/debug/alpha2-host${{ runner.os == 'Windows' && '.exe' || '' }}
+          PYTEST_ADDOPTS: --junitxml=${{ github.workspace }}/target/test-results/pytest-e2e.xml
         run: '"$PY/pytest" python/alpha2/tests/e2e'
-      - name: Skips this run recorded
-        if: always()
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-platform-e2e-${{ matrix.target }}
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          lane: platform-e2e-${{ matrix.target }}
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   python:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',python,') }}
@@ -1462,51 +1107,43 @@ jobs:
         python: ["3.11", "3.15"]
     defaults:
       run:
-        shell: bash
         working-directory: python/alpha2
     env:
       ALPHA2_REQUIRE: native-test-hooks
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
+      PYTEST_ADDOPTS: --junitxml=${{ github.workspace }}/target/test-results/pytest.xml
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: ./.github/actions/setup-rust
       # uv 0.13.3 is the first uv that installs CPython 3.15.0.
       - name: Build the package into a Python ${{ matrix.python }} environment
+        id: ready
+        env:
+          PYTHON: ${{ matrix.python }}
         run: |
           pipx install uv==0.13.3
-          uv venv -p ${{ matrix.python }} .venv
+          uv venv -p "$PYTHON" .venv
           uv pip install --group dev
           # A dev build carries the native test hooks that ALPHA2_REQUIRE asks for.
           MATURIN_PEP517_ARGS="--profile dev" uv pip install --no-deps -e .
           if [ -d .venv/Scripts ]; then echo "PY=.venv/Scripts" >> "$GITHUB_ENV"; else echo "PY=.venv/bin" >> "$GITHUB_ENV"; fi
-      - if: runner.os == 'Linux' && matrix.python == '3.11'
+      - name: Lint and type checks
+        id: lint
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' && runner.os == 'Linux' && matrix.python == '3.11' }}
         run: |
           "$PY/ruff" check src tests ../alpha2-host
           "$PY/ruff" format --check src tests ../alpha2-host
           "$PY/mypy"
           "$PY/mypy" --platform win32
           "$PY/mypy" --platform darwin
-      - run: '"$PY/pytest"'
-      - name: Skips this run recorded
-        if: always()
-        working-directory: ${{ github.workspace }}
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+      - id: pytest
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: '"$PY/pytest"'
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-python-${{ matrix.runner }}-${{ matrix.python }}
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          lane: python-${{ matrix.runner }}-${{ matrix.python }}
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   determinism:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',determinism,') }}
@@ -1527,35 +1164,33 @@ jobs:
             runner: windows-2025
     env:
       ALPHA2_REQUIRE: ""
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - run: cargo test -p alpha2-audio -p alpha2-audio-determinism -p alpha2-eval -p alpha2-text --no-fail-fast
+      - id: ready
+        uses: ./.github/actions/setup-rust
+      - id: pins
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: >-
+          cargo test -p alpha2-audio -p alpha2-audio-determinism -p alpha2-eval -p alpha2-text
+          --no-fail-fast 2>&1 | tee target/test-logs/pins.log
       - name: CPU renderer frames (no GPU needed)
-        run: cargo test -p alpha2-render --lib cpu_determinism --no-fail-fast
+        id: cpu-frames
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: >-
+          cargo test -p alpha2-render --lib cpu_determinism --no-fail-fast 2>&1
+          | tee target/test-logs/cpu-frames.log
       - name: CPU renderer pins and extension rasters
-        run: cargo test -p alpha2-render-determinism -p alpha2-extension-raster-pins --no-fail-fast
-      - name: Skips this run recorded
-        if: always()
-        shell: bash
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+        id: cpu-pins
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: >-
+          cargo test -p alpha2-render-determinism -p alpha2-extension-raster-pins --no-fail-fast 2>&1
+          | tee target/test-logs/cpu-pins.log
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-determinism-${{ matrix.target }}
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          lane: determinism-${{ matrix.target }}
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   security:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',security,') }}
@@ -1563,18 +1198,22 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        id: deny
         with:
           command: check
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        id: deny-plugins
+        if: ${{ !cancelled() }}
         with:
           manifest-path: plugins/Cargo.toml
           command: check
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: security
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   release-wasm:
     if: >-
@@ -1582,25 +1221,15 @@ jobs:
       contains(format(',{0},', inputs.jobs), ',js,') || contains(format(',{0},', inputs.jobs), ',host,') ||
       contains(format(',{0},', inputs.jobs), ',browser,') ||
       contains(format(',{0},', inputs.jobs), ',platform-js,') ||
-      contains(format(',{0},', inputs.jobs), ',platform-e2e,') ||
-      contains(format(',{0},', inputs.jobs), ',browser-platforms,') }}
+      contains(format(',{0},', inputs.jobs), ',platform-e2e,') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
       # A release tag publishes the npm packages built here, so tags build without caches.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - uses: ./.github/actions/setup-rust
         with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -1619,7 +1248,8 @@ jobs:
         run: |
           cargo install wasm-bindgen-cli --version 0.2.128 --locked
           cargo install cargo-about --version 0.9.2 --locked --features cli
-      - run: npm run build
+      - id: build
+        run: npm run build
       - name: Pack the npm packages
         run: |
           mkdir -p target/npm-release
@@ -1636,6 +1266,12 @@ jobs:
           path: |
             packages/*/dist
             packages/*/wasm
+      - if: always()
+        uses: ./.github/actions/test-report
+        with:
+          lane: release-wasm
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   render-goldens:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',render-goldens,') }}
@@ -1663,25 +1299,18 @@ jobs:
       ALPHA2_GPU_STRICT: ${{ matrix.strict || '0' }}
       ALPHA2_VALIDATION_REPORT: ${{ github.workspace }}/target/validation-report.jsonl
       ALPHA2_REQUIRE: ""
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: ./.github/actions/setup-rust
       - name: Install Mesa software GPU drivers
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes libegl1 libegl-mesa0 mesa-vulkan-drivers
+        timeout-minutes: 5
+        run: >-
+          sudo apt-get -o Acquire::Retries=3 update &&
+          sudo apt-get -o Acquire::Retries=3 install --yes libegl1 libegl-mesa0 mesa-vulkan-drivers
       - name: Install the D3D12 debug layer
         if: runner.os == 'Windows'
+        timeout-minutes: 10
         shell: pwsh
         run: Add-WindowsCapability -Online -Name "Tools.Graphics.DirectX~~~~0.0.1.0"
       - if: runner.os == 'Windows'
@@ -1691,21 +1320,27 @@ jobs:
           key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
       - name: Fetch the pinned DXC
         if: runner.os == 'Windows'
-        shell: bash
         run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
       - name: Adapters
-        shell: bash
+        id: ready
         run: cargo run -q -p alpha2-gpu --example adapters
       - name: Run render goldens and engine frame tests on ${{ matrix.backend }}
+        id: f16
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         env:
           ALPHA2_GOLDEN_ACTUAL_DIR: ${{ github.workspace }}/target/golden-actual/f16
-        run: cargo test -p alpha2-render -p alpha2-engine --no-fail-fast -- --test-threads=1
+        run: >-
+          cargo test -p alpha2-render -p alpha2-engine --no-fail-fast -- --test-threads=1 2>&1
+          | tee target/test-logs/f16.log
       - name: Run render goldens and engine frame tests on the 8-bit intermediate on ${{ matrix.backend }}
-        if: ${{ !cancelled() }}
+        id: rgba8
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         env:
           ALPHA2_TEST_INTERMEDIATE: rgba8unorm
           ALPHA2_GOLDEN_ACTUAL_DIR: ${{ github.workspace }}/target/golden-actual/rgba8
-        run: cargo test -p alpha2-render --lib -p alpha2-engine --no-fail-fast -- --test-threads=1
+        run: >-
+          cargo test -p alpha2-render --lib -p alpha2-engine --no-fail-fast -- --test-threads=1 2>&1
+          | tee target/test-logs/rgba8.log
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
@@ -1718,16 +1353,12 @@ jobs:
           name: validation-report-${{ matrix.backend }}
           path: target/validation-report.jsonl
           if-no-files-found: ignore
-      - name: Skips this run recorded
-        if: always()
-        shell: bash
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-render-goldens-${{ matrix.backend }}
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
+          lane: render-goldens-${{ matrix.backend }}
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   browser:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser,') }}
@@ -1736,260 +1367,59 @@ jobs:
     timeout-minutes: 40
     env:
       ALPHA2_REQUIRE: browser,wasm,webgpu,webgl2,webcodecs-audio,webcodecs-video,browser-gpu-process
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
       ALPHA2_CHROME_GPU: swiftshader
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/setup-rust
         with:
-          workspaces: |
+          cache-workspaces: |
             . -> target
             plugins -> target
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - id: ready
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: alpha2-build
           path: packages
-      - run: npm run test:wgsl-browser
+      - id: wgsl
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: npm run test:wgsl-browser 2>&1 | tee target/test-logs/wgsl.log
       - name: Build the plugins the browser cases load
+        id: plugins
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins" --no-native
-      - run: node scripts/test-wasm-browser.mjs
-      - run: npm run test:editor:package
+      - name: The wasm-browser cases in Chrome
+        id: chrome
+        if: ${{ !cancelled() && steps.plugins.outcome == 'success' }}
+        run: node scripts/test-wasm-browser.mjs 2>&1 | tee target/test-logs/chrome.log
+      - id: editor
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: npm run test:editor:package 2>&1 | tee target/test-logs/editor.log
       - name: The wasm-browser cases in Firefox (the image's Firefox and geckodriver)
-        if: ${{ !cancelled() }}
+        id: firefox
+        if: ${{ !cancelled() && steps.plugins.outcome == 'success' }}
         env:
           ALPHA2_REQUIRE: browser,wasm
-        run: node scripts/test-wasm-browser.mjs --browser firefox
+        run: node scripts/test-wasm-browser.mjs --browser firefox 2>&1 | tee target/test-logs/firefox.log
       - name: With no GPU in the browser, auto renders on the CPU (page and worker)
-        if: ${{ !cancelled() }}
+        id: cpu-auto
+        if: ${{ !cancelled() && steps.plugins.outcome == 'success' }}
         env:
           ALPHA2_CHROME_GPU: none
           ALPHA2_REQUIRE: browser,wasm
         run: |
-          node scripts/test-wasm-browser.mjs --case renderer-auto
-          node scripts/test-wasm-browser.mjs --case renderer-auto-worker
-      - name: Skips this run recorded
-        if: always()
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+          node scripts/test-wasm-browser.mjs --case renderer-auto 2>&1 | tee target/test-logs/cpu-auto.log
+          node scripts/test-wasm-browser.mjs --case renderer-auto-worker 2>&1 | tee -a target/test-logs/cpu-auto.log
+      - if: always()
+        uses: ./.github/actions/test-report
         with:
-          name: skip-log-browser
-          path: ${{ github.workspace }}/target/skip-log.jsonl
-          if-no-files-found: ignore
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: browser-reports-linux
-          path: |
-            target/browser-reports
-            target/editor-reports
-          if-no-files-found: ignore
-
-  browser-platforms:
-    if: >-
-      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser-platforms,')) &&
-      github.event_name != 'pull_request' }}
-    name: ${{ matrix.name }}
-    needs: release-wasm
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Browser (macOS VM Metal, software adapter)
-            runner: macos-26
-            key: macos
-          - name: Browser (Windows WARP, software adapter)
-            runner: windows-2025
-            key: windows
-    defaults:
-      run:
-        shell: bash
-    env:
-      ALPHA2_CHROME_GPU: machine
-      ALPHA2_REQUIRE: browser,wasm
-      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: plugins -> target
-          key: ${{ matrix.key }}
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: alpha2-build
-          path: packages
-      - run: npm run test:wgsl-browser
-      - name: Build the plugins the browser cases load
-        run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins" --no-native
-      - run: node scripts/test-wasm-browser.mjs
-        if: ${{ !cancelled() }}
-      - run: npm run test:editor:package
-        if: ${{ !cancelled() }}
-      - name: The same in Edge
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
-        run: |
-          node scripts/test-wgsl-browser.mjs --browser edge
-          node scripts/test-wasm-browser.mjs --browser edge
-      - name: With no GPU in the browser, auto renders on the CPU (page and worker)
-        if: ${{ !cancelled() }}
-        env:
-          ALPHA2_CHROME_GPU: none
-          ALPHA2_REQUIRE: browser,wasm
-        run: |
-          node scripts/test-wasm-browser.mjs --case renderer-auto
-          node scripts/test-wasm-browser.mjs --case renderer-auto-worker
-      - name: Skips this run recorded
-        if: always()
-        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: browser-records-${{ matrix.key }}
-          path: |
-            target/skip-log.jsonl
-            target/browser-reports
-            target/editor-reports
-          if-no-files-found: ignore
-
-  gpu-validation:
-    if: >-
-      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',gpu-validation,')) &&
-      github.event_name != 'pull_request' }}
-    name: GPU validation (${{ matrix.backend }})
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
-    continue-on-error: true
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - backend: vulkan
-            runner: ubuntu-24.04
-            target: linux-x64
-            crates: -p alpha2-render -p alpha2-engine
-          - backend: metal
-            runner: macos-26
-            target: macos-arm64
-            crates: -p alpha2-render -p alpha2-engine -p alpha2-native-gpu -p alpha2-host
-          - backend: dx12
-            runner: windows-2025
-            target: win-x64
-            crates: -p alpha2-render -p alpha2-engine -p alpha2-native-gpu -p alpha2-host
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Provenance
-        shell: bash
-        run: |
-          echo "image: $ImageOS $ImageVersion"
-          rustc --version
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: |
-            . -> target
-            plugins -> target
-          cache-bin: false
-          save-if: ${{ env.SAVE_RUST_CACHE }}
-      - name: Install Mesa software GPU drivers and the Khronos validation layer
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update && sudo apt-get install --yes mesa-vulkan-drivers
-          layers="$(scripts/fetch-vulkan-validation-layer.sh)"
-          set -- /usr/share/vulkan/icd.d/lvp_icd*.json
-          {
-            echo "VK_LAYER_PATH=$layers"
-            echo "VK_ICD_FILENAMES=$1"
-          } >> "$GITHUB_ENV"
-      - name: Install the D3D12 debug layer
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Add-WindowsCapability -Online -Name "Tools.Graphics.DirectX~~~~0.0.1.0"
-      - name: Install macOS build tools
-        if: runner.os == 'macOS'
-        run: brew install pkg-config
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/ffmpeg-sdk
-          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
-      - name: Pin the FFmpeg SDK
-        env:
-          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
-        run: |
-          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
-          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
-          if [ "${{ runner.os }}" = Windows ]; then
-            sdk_root="$(cygpath -m "$sdk_root")"
-            {
-              echo "FFMPEG_INCLUDE_DIR=$sdk_root/include"
-              echo "FFMPEG_LIBS_DIR=$sdk_root/lib"
-              echo "FFMPEG_LINK_MODE=dynamic"
-            } >> "$GITHUB_ENV"
-            echo "$sdk_root/bin" >> "$GITHUB_PATH"
-          else
-            {
-              echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-              echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
-              echo "FFMPEG_LINK_MODE=dynamic"
-            } >> "$GITHUB_ENV"
-            if [ "${{ runner.os }}" = Linux ]; then
-              echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
-            fi
-          fi
-      - if: runner.os == 'Windows'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/dxc
-          key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
-      - name: Fetch the pinned DXC
-        if: runner.os == 'Windows'
-        run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
-      - name: Adapters
-        run: cargo run -q -p alpha2-gpu --example adapters
-      - name: Build the plugins the host tests pack
-        if: contains(matrix.crates, 'alpha2-host')
-        run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
-      - name: GPU suites under ${{ matrix.backend }} validation
-        run: node scripts/test-gpu-validation.mjs --backend ${{ matrix.backend }} ${{ matrix.crates }}
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: gpu-validation-${{ matrix.backend }}
-          path: target/gpu-validation
-          if-no-files-found: ignore
+          lane: browser
+          group: ci
+          steps: ${{ toJSON(steps) }}
 
   package:
     # Skipped under release.yml, which runs package.yml itself.
@@ -2003,3 +1433,39 @@ jobs:
         ${{ github.event_name == 'pull_request' && '["linux-x64","macos-arm64","win-x64"]' ||
         '["linux-x64","linux-arm64","macos-arm64","win-x64"]' }}
       upload-name-prefix: ci-
+
+  test-reports:
+    if: always()
+    needs:
+      - rust-checks
+      - rust-tests
+      - js
+      - host
+      - openh264
+      - cpu-renderer
+      - wasm-audio
+      - msrv
+      - valgrind
+      - wasm-lint
+      - fuzz-check
+      - plugins-check
+      - platform-lint
+      - mobile-lint
+      - platform-js
+      - platform-native
+      - platform-e2e
+      - python
+      - determinism
+      - security
+      - release-wasm
+      - render-goldens
+      - browser
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/upload-artifact/merge@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: test-reports-ci-attempt-${{ github.run_attempt }}
+          pattern: test-report-ci-*-attempt-${{ github.run_attempt }}
+          separate-directories: true

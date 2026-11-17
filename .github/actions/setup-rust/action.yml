@@ -1,0 +1,35 @@
+name: Set up Rust
+description: Installs the pinned toolchain and restores the Rust cache.
+inputs:
+  targets:
+    description: Extra rustup targets, space-separated
+    default: ""
+  cache:
+    description: Restore and save the Rust cache
+    default: "true"
+  cache-key:
+    description: Extra key for the Rust cache
+    default: ""
+  cache-workspaces:
+    description: Cargo workspaces the cache covers
+    default: ". -> target"
+runs:
+  using: composite
+  steps:
+    - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+      shell: bash
+      env:
+        TARGETS: ${{ inputs.targets }}
+      run: |
+        rustup toolchain install
+        if [ -n "$TARGETS" ]; then rustup target add $TARGETS; fi
+    - if: inputs.cache == 'true'
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      with:
+        key: ${{ inputs.cache-key }}
+        workspaces: ${{ inputs.cache-workspaces }}
+        cache-bin: false
+        save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/prerelease-v') }}
+    - name: Directories the test steps write to
+      shell: bash
+      run: mkdir -p target/test-logs target/test-results
