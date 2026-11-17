@@ -12,7 +12,8 @@ import { browserSettingsMode, stopChrome } from "./chrome-cdp.mjs";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const START_TIMEOUT_MS = 60_000;
-// A first Firefox launch on a fresh CI machine can take over 60 s.
+// Three times a first Firefox launch on a fresh CI machine (just over 60 s); a browser that never
+// starts fails here rather than at the job's timeout.
 const SESSION_TIMEOUT_MS = 180_000;
 
 const BROWSERS = {

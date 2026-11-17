@@ -508,7 +508,8 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',cpu-renderer,') }}
     name: CPU renderer
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # About twice the slowest of ten green runs (21 min).
+    timeout-minutes: 45
     env:
       ALPHA2_REQUIRE: ""
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
@@ -1190,7 +1191,8 @@ jobs:
     name: Native tests (${{ matrix.target }}, software adapter)
     needs: changes
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    # About twice the slowest of ten green runs (54 min, Windows).
+    timeout-minutes: 110
     strategy:
       fail-fast: false
       matrix:
@@ -1722,7 +1724,8 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser,') }}
     needs: release-wasm
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # About twice the slowest of ten green runs (18 min).
+    timeout-minutes: 40
     env:
       ALPHA2_REQUIRE: browser,wasm,webgpu,webgl2,webcodecs-audio,webcodecs-video,browser-gpu-process
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
