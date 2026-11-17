@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- An editor import refused because this browser decodes none of a video keeps the code
+  `unreadable_media`, and its `cause` is now a `DecodeUnavailableError` (`DECODE_UNAVAILABLE`, with
+  the track's `facts`), as extraction reports it.
+
+### Fixed
+
+- Android: 10-bit H.264 (High 10, High 4:4:4 Predictive) decodes to 10-bit pictures on Android 13
+  and later and is refused as unsupported before that, instead of decoding to 8-bit or wrong
+  pictures on decoders that accept it.
+- Building on Linux or macOS with a distribution's FFmpeg development packages installed links the
+  pinned FFmpeg SDK instead of failing with undefined `av_*` symbols.
+- `sha256Blob` hashes in pieces sized to about 2 ms at the measured rate instead of fixed 1 MiB
+  pieces, so the page stays responsive on slow machines.
+- OpenEXR sources are read with exr 1.74.3, which no longer panics on damaged B44 blocks or reserves
+  unbounded memory for damaged DWA data.
+
 ## [0.6.0] - 2026-11-16
 
 ### Added
