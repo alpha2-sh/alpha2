@@ -284,7 +284,6 @@ fn the_libdir_is_searched_through_a_link_in_out_dir() {
         std::fs::create_dir_all(directory).expect("directory");
     }
     std::fs::write(sdk.join("libavcodec.so"), "").expect("library");
-    // A link an earlier run left to another libdir, and a directory in its place.
     std::os::unix::fs::symlink(&other, out.join("ffmpeg-lib")).expect("stale link");
     for _ in 0..2 {
         let link = libdir_link(&out, &sdk).expect("link");
@@ -293,6 +292,7 @@ fn the_libdir_is_searched_through_a_link_in_out_dir() {
         std::fs::remove_file(&link).expect("link");
         std::fs::create_dir(&link).expect("directory");
     }
+    assert!(libdir_link(&out, &root.join("missing")).is_err());
     std::fs::remove_dir_all(&root).expect("cleanup");
 }
 

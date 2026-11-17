@@ -545,9 +545,15 @@ pub fn emit_ffmpeg_link_search() {
     println!("cargo:rustc-link-search=native={}", libdir.display());
 }
 
-/// A symbolic link to `libdir` at `out_dir/ffmpeg-lib`, replacing whatever an earlier run left.
 #[cfg(unix)]
 fn libdir_link(out_dir: &Path, libdir: &Path) -> std::io::Result<PathBuf> {
+    let libdir = std::path::absolute(libdir)?;
+    if !libdir.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} is not a directory", libdir.display()),
+        ));
+    }
     let link = out_dir.join("ffmpeg-lib");
     match std::fs::symlink_metadata(&link) {
         Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(&link)?,
@@ -555,7 +561,7 @@ fn libdir_link(out_dir: &Path, libdir: &Path) -> std::io::Result<PathBuf> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
-    std::os::unix::fs::symlink(libdir, &link)?;
+    std::os::unix::fs::symlink(&libdir, &link)?;
     Ok(link)
 }
 
