@@ -76,6 +76,7 @@ cargo test --workspace --no-default-features --no-fail-fast
 ```
 
 - `--no-fail-fast` keeps going after a failing test binary, so every crate reports.
+- `alpha2-test-watchdog` (`cargo build -p alpha2-test-support --bin alpha2-test-watchdog`) is a cargo test runner: with `CARGO_TARGET_<TRIPLE>_RUNNER` pointing at it, a test that runs longer than `ALPHA2_TEST_WATCHDOG_SECS` (600 by default, 0 turns it off) gets its name printed and every thread's stack (gdb or eu-stack, lldb or `sample`, cdb) before its binary is stopped, and cargo goes on with the next binary. CI runs the Rust tests through it.
 - The tests that time work are meant for release builds: run `cargo test --release --workspace --all-features` as well before trusting a timing failure or a pass.
 - `scripts/check-extension-features.sh` and `scripts/check-native-features.sh` build each extension format and each native feature alone, as a consumer that enables only one of them gets it.
 
@@ -197,6 +198,33 @@ npm run typecheck
 ```
 
 `npm run format` and `npm run lint:fix` apply the fixes. Prettier covers the JavaScript and TypeScript files only.
+
+`npm run typecheck` also checks the harnesses in `scripts/` and the code of the browser test pages against the built packages, so it needs `npm run build` first.
+
+## Before a push
+
+`scripts/preflight.sh quick` runs the checks CI's lint jobs run, under the same names, plus what this machine can check for other platforms: formatting, clippy on the workspace, `fuzz`, `plugins` and wasm, the Windows and macOS targets (`DOCS_RS=1`), Android when `ANDROID_NDK_HOME` names an NDK, `cargo check --no-default-features`, the schema and feature checks, cargo-deny, the TypeScript, ESLint and Prettier checks, the npm package check and ruff and mypy. `scripts/preflight.sh full` adds the Rust tests with both feature sets, the plugin and determinism tests, `npm run build`, `npm run test:js`, pytest and the browser cases in Chrome (SwiftShader) and Firefox, with lavapipe and `ALPHA2_RENDERER=gpu` as CI uses them. Run `full` before pushing a merge of more than a few commits. A check that needs something this machine lacks (a target, the NDK, the Python environment, a build) says so and is reported as skipped; `scripts/preflight.sh list` names the checks and `scripts/preflight.sh <check>...` runs some of them.
+
+## CI
+
+Pushes to `main` and `prerelease-v*` run two workflows on the same commit:
+
+- `ci` is the gate: the jobs whose result depends only on the code. A push runs the jobs of the areas it touches (pull requests compare with their base, a push with the commit before it); the nightly run, a dispatch and a release run every job.
+- `observe` runs the lanes that depend on their environment: the browsers on the macOS VM and Windows runners, the Android emulators, the iOS simulator and GPU validation. Its test steps keep going after a failure, and each lane is judged at the end against the known-failure ledger, `.github/known-failures.json`: the lane fails for a failure the ledger does not name, for a failed step with no failed test, and for an expired entry.
+
+A ledger entry names the lane (as the job's test report names it, for example `mobile-test-android-29`), the test as the report records it or `*` with `maxFailing`, the reason, the date it was added and `until`, the release that must ship without it. An entry counts while the workspace version is at most `until`, except in that release's own run, so a release ships only with its known failures fixed or moved to a later release. An entry whose cause is unknown says so and expires at the next release. Only observe lanes read the ledger.
+
+A release runs both workflows and requires both. No job or test is retried automatically; a rerun is a person's decision, and the flake report counts its result.
+
+Every job writes a test report: the summary lists its failed tests, and the `test-report-*` artifact holds `test-report.jsonl` (lane, suite, test, outcome, seconds), `provenance.json` (runner image, toolchains, browsers, drivers, devices) and the skip log. The nightly schedule writes the flake report of the active branch (`node scripts/ci-flake-report.mjs --branch <branch>`): green rates, lane pass rates, and the jobs and tests whose result changed at one commit with the provenance that differed. It also runs `observe` `OBSERVE_NIGHTLY_RUNS` times (3 unless that repository variable is set) to measure the observe lanes on one commit.
+
+A lane moves between the workflows by its measured record:
+
+- A new lane starts in `observe`. After 50 consecutive runs (push and nightly) without a failure the ledger does not explain, it can move to `ci`.
+- A `ci` lane whose result changes at one commit twice within 30 days is fixed within a week or moves to `observe`. `ci` has no ledger and no tolerance.
+- Widening a timeout or a margin does not fix a flaky test: inject the slow part or compare with time measured in the same process.
+
+The browser lanes on Linux use the Chrome for Testing, Firefox and geckodriver builds pinned in `release/test-browsers/manifest.toml` (`scripts/fetch-test-browsers.sh`); the Android jobs the NDK and the iOS jobs the Xcode, device and runtime pinned in `.github/actions/android-ndk` and `.github/actions/xcode`. Updating any of them is a commit of its own.
 
 ## Release archives
 

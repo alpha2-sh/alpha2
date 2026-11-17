@@ -5,7 +5,8 @@
 // `answer` is an expression for `detectBrowserCapabilities` on the rendering thread; `auto` picks
 // "cpu" with no adapter or only a software one, as the native `auto` does.
 const EXPECTED_RENDERER = (renderer, answer) => `
-const expected = ${JSON.stringify(renderer)} === "auto" ? (${answer}).renderer : ${JSON.stringify(renderer)};
+/** @type {string} */
+const expected = /** @type {string} */ (${JSON.stringify(renderer)}) === "auto" ? (${answer}).renderer : ${JSON.stringify(renderer)};
 `;
 
 const PROJECT = (width, height) => `{
@@ -43,7 +44,7 @@ const capabilities = await detectBrowserCapabilities();
 const [width, height] = [${width}, ${height}];
 const project = ${PROJECT(width, height)};
 const canvas = new OffscreenCanvas(width / 2, height / 2);
-const host = await createWasmRenderWorkerHost(WebEffectRegistry, JSON.stringify(project), {
+const host = await createWasmRenderWorkerHost(/** @type {import("/packages/alpha2/dist/effects.js").WasmEffectRegistryBinding} */ (WebEffectRegistry), JSON.stringify(project), {
   renderer: ${JSON.stringify(renderer)},
 })(canvas);
 const choice = host.rendererChoice;
@@ -126,6 +127,7 @@ if (choice?.renderer === "cpu") {
     return 16 + (219 * (0.2126 * pixels[at] + 0.7152 * pixels[at + 1] + 0.0722 * pixels[at + 2])) / 255;
   });
 }
+/** @type {{ codec: string, engine: import("/packages/alpha2/dist/rate-control.js").EngineVideoCodec, avc?: AvcEncoderConfig }[]} */
 const codecs = [
   { codec: "avc1.640028", engine: "h264", avc: { format: "annexb" } },
   { codec: "vp09.00.10.08", engine: "vp9" },
@@ -139,6 +141,7 @@ if (encoding === undefined) throw new Error("this browser encodes neither H.264 
 const chunks = [];
 const encoder = new VideoEncoder({ output: (chunk) => chunks.push(chunk), error: (error) => { throw error; } });
 encoder.configure(encoding.config);
+/** @type {[number?, number[]?]} */
 const exported = [];
 supplyMs = 0;
 let encodeMs = 0;
@@ -208,7 +211,7 @@ const decodedFormat = last.format;
 const decodedSquare = await lumaAt(last, width * 3 / 8, height * 3 / 8);
 last.close();
 const report_ = {
-  renderer: choice?.renderer, rendererReason: choice?.rendererReason, capabilities: { webgpu: capabilities.webgpu, webgl2: capabilities.webgl2, renderer: capabilities.renderer },
+  renderer: /** @type {string | undefined} */ (choice?.renderer), rendererReason: choice?.rendererReason, capabilities: { webgpu: capabilities.webgpu, webgl2: capabilities.webgl2, renderer: capabilities.renderer },
   size: [width, height], codec: encoding.codec, frames: frameTicks.length, presentedFrames, encodedChunks: chunks.length,
   decodedFrames: decodedCount, previewMsPerFrame: Number(previewMs.toFixed(1)), exportMsPerFrame: Number(exportMs.toFixed(1)),
   supplyMsPerFrame: { preview: Number(previewSupplyMs.toFixed(1)), export: Number(exportSupplyMs.toFixed(1)) },
@@ -456,9 +459,10 @@ const project = JSON.stringify({
   settings: { width: 64, height: 48, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
   sources: [], timeline: { tracks: [] },
 });
+/** @returns {Promise<Partial<import("/packages/alpha2/dist/renderer-choice.js").RendererChoice> & { error?: string, code?: unknown }>} */
 const make = async (renderer) => {
   try {
-    const host = await createWasmRenderWorkerHost(WebEffectRegistry, project, { renderer })(new OffscreenCanvas(64, 48));
+    const host = await createWasmRenderWorkerHost(/** @type {import("/packages/alpha2/dist/effects.js").WasmEffectRegistryBinding} */ (WebEffectRegistry), project, { renderer })(new OffscreenCanvas(64, 48));
     const choice = host.rendererChoice;
     host.dispose();
     return choice;
@@ -495,6 +499,7 @@ engine.loadProject(JSON.stringify({
   timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{ id: "c", source_id: "s",
     timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 } }] }] },
 }));
+// @ts-expect-error lib.dom's VideoColorPrimaries lacks the WebCodecs "bt2020" value.
 const frame = (transfer) => new VideoFrame(new Uint8Array(16 * 16 * 4).fill(128), {
   format: "RGBA", codedWidth: 16, codedHeight: 16, timestamp: 0,
   colorSpace: { primaries: transfer === "pq" ? "bt2020" : "bt709", transfer, matrix: "rgb", fullRange: true },
@@ -508,7 +513,7 @@ const attempt = (work) => {
   }
 };
 const pq = frame("pq");
-const declared = pq.colorSpace.transfer;
+const declared = /** @type {string | null} */ (pq.colorSpace.transfer);
 const refused = attempt(() => engine.uploadVideoFrame("s", 0n, pq));
 const presented = attempt(() => engine.uploadPresentedVideoFrame("s", 0n, frame("hlg"), 16, 16, 0, false));
 const sdr = attempt(() => engine.uploadVideoFrame("s", 0n, frame("bt709")));

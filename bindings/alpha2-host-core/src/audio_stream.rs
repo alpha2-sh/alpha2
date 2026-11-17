@@ -231,6 +231,12 @@ const SHARED_SEEK_PREROLL: MediaTime = MediaTime::from_ticks(TICKS_PER_SECOND / 
 /// Samples per block handed out.
 const BLOCK_FRAMES: usize = 1_024;
 
+/// Milliseconds each second of audio [`AudioStream::next_block`] hands out takes on top of its
+/// work, on every thread, for a test that needs a decode of known length. Test builds only.
+#[cfg(any(test, feature = "test-hooks"))]
+pub static INJECT_DECODE_DELAY_MS_PER_SECOND: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Input {
     Open,
@@ -607,6 +613,14 @@ impl AudioStream {
         if frames == 0 {
             return Ok(None);
         }
+        #[cfg(any(test, feature = "test-hooks"))]
+        std::thread::sleep(std::time::Duration::from_nanos(
+            INJECT_DECODE_DELAY_MS_PER_SECOND
+                .load(std::sync::atomic::Ordering::Relaxed)
+                .saturating_mul(1_000_000)
+                .saturating_mul(u64::try_from(frames).unwrap_or(u64::MAX))
+                / u64::from(self.project_rate),
+        ));
         let start_sample = self.next_sample.unwrap_or(0);
         let channels = self
             .pending

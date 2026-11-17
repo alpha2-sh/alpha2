@@ -1,0 +1,36 @@
+name: Pin Xcode
+description: Selects the pinned Xcode and, on request, creates a simulator of a pinned device and iOS runtime.
+inputs:
+  version:
+    description: The Xcode version
+    default: "26.6"
+  simulator:
+    description: Create and boot the pinned simulator
+    default: "false"
+  device:
+    description: The simulator's device type
+    default: com.apple.CoreSimulator.SimDeviceType.iPhone-17
+  runtime:
+    description: The simulator's iOS runtime
+    default: com.apple.CoreSimulator.SimRuntime.iOS-26-5
+runs:
+  using: composite
+  steps:
+    - name: Select the pinned Xcode
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      run: |
+        sudo xcode-select --switch "/Applications/Xcode_$VERSION.app"
+        xcodebuild -version
+    - name: Create and boot the pinned simulator
+      if: inputs.simulator == 'true'
+      shell: bash
+      env:
+        DEVICE: ${{ inputs.device }}
+        RUNTIME: ${{ inputs.runtime }}
+      run: |
+        device="$(xcrun simctl create alpha2-ci "$DEVICE" "$RUNTIME")"
+        echo "SIMULATOR=$device" >> "$GITHUB_ENV"
+        xcrun simctl boot "$device"
+        xcrun simctl bootstatus "$device"

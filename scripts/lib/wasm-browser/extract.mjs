@@ -4,6 +4,7 @@ const prelude = `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await wasm.default();
 const { runExtractor } = await import("alpha2/extract");
+/** @type {import("/packages/alpha2/dist/project.js").Project} */
 const project = {
   schema_version: 1, id: "p", name: "P",
   settings: { width: 320, height: 180, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
@@ -21,6 +22,7 @@ const fnv1a = (bytes) => {
   for (const byte of bytes) hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
   return hash;
 };
+/** @type {import("/packages/alpha2/dist/extractor.js").Extractor} */
 const digest = {
   describe: () => ({
     id: "alpha2.test.digest", version: 1,
@@ -54,7 +56,7 @@ for (const name of Object.keys(pinned)) {
     undecodable[name] = error.message;
     continue;
   }
-  const set = result.dataSets[0];
+  const set = /** @type {Extract<import("/packages/alpha2/dist/project.js").DataSet, { kind: "scalars" }>} */ (result.dataSets[0]);
   found[name] = set.times.map((time, index) => [
     time,
     (Math.round(set.values[index * 2] * 65536) * 65536 + Math.round(set.values[index * 2 + 1] * 65536))
@@ -69,6 +71,7 @@ report({ ok: ok && "h264-bt709-copy.mp4" in found, found, undecodable });
 // The scripted fixture emitting a value no data set can hold is refused with the session's error.
 export function extractInvalidEmit() {
   return `${prelude}
+/** @type {import("/packages/alpha2/dist/extractor.js").Extractor} */
 const scripted = {
   describe: () => ({
     id: "alpha2.test.scripted", version: 1,
@@ -104,6 +107,7 @@ report({
 // An emit the wire cannot carry (NaN) fails the step that made it, naming the value.
 export function extractUnsendableEmit() {
   return `${prelude}
+/** @type {import("/packages/alpha2/dist/extractor.js").Extractor} */
 const scripted = {
   describe: () => ({
     id: "alpha2.test.scripted", version: 1,
@@ -140,6 +144,7 @@ report({
 export function extractTimeline() {
   return `${prelude}
 const engine = wasm.WebEffectRegistry.createCpu(new OffscreenCanvas(320, 180));
+/** @type {import("/packages/alpha2/dist/project.js").Project} */
 const timeline = {
   ...project,
   sources: [{ id: "red", kind: "generated", generator: { type: "fill",
@@ -148,6 +153,7 @@ const timeline = {
     timeline_range: { start: 0, end: 40000 }, source_range: { start: 0, end: 40000 } }] }] },
 };
 engine.loadProject(JSON.stringify(timeline));
+/** @type {import("/packages/alpha2/dist/extractor.js").Extractor} */
 const mean = {
   describe: () => ({
     id: "com.example.mean", version: 1,
@@ -170,7 +176,7 @@ const { dataSets } = await runExtractor({
     outputs: { red: "redness" },
   },
 }, mean);
-const set = dataSets[0];
+const set = /** @type {Extract<import("/packages/alpha2/dist/project.js").DataSet, { kind: "scalars" }>} */ (dataSets[0]);
 report({ ok: set.times.length === 10 && set.values.every((value) => value === 1), times: set.times, values: set.values });
 `;
 }
@@ -200,7 +206,7 @@ const { dataSets } = await runExtractor({
     outputs: { digest: "frames" },
   },
 }, plugin.extractor());
-const set = dataSets[0];
+const set = /** @type {Extract<import("/packages/alpha2/dist/project.js").DataSet, { kind: "scalars" }>} */ (dataSets[0]);
 const found = set.times.map((time, index) => [
   time,
   (Math.round(set.values[index * 2] * 65536) * 65536 + Math.round(set.values[index * 2 + 1] * 65536))
@@ -235,7 +241,8 @@ const failed = [];
 for (const fixture of table.edit) {
   const { expected } = fixture;
   try {
-    const edited = applyEdit(wasm, table.projects[fixture.project], fixture.request);
+    const binding = /** @type {import("/packages/alpha2/dist/apply-edit.js").ApplyEditBinding} */ (/** @type {unknown} */ (wasm));
+    const edited = applyEdit(binding, table.projects[fixture.project], fixture.request);
     const hash = await sha256(new TextEncoder().encode(edited.projectJson));
     if (hash !== expected.project_sha256 || !same(edited.report, expected.report))
       failed.push(fixture.name);
@@ -254,6 +261,7 @@ const undecodable = {};
 let h264Unavailable;
 for (const fixture of table.extract) {
   const project = table.projects[fixture.project];
+  /** @type {Record<string, Blob>} */
   const media = {};
   for (const [id, path] of Object.entries(fixture.assets)) media[id] = await (await fetch("/" + path)).blob();
   let timelineFrame;

@@ -24,14 +24,14 @@ test("a sharp edge sampled a fraction of a texel apart on another device passes"
 
 test("more isolated samples than allowed fail", () => {
   assert.match(
-    peakExcess({ max: 5, outliers: OUTLIER_SAMPLES + 1 }),
+    peakExcess({ max: 5, outliers: OUTLIER_SAMPLES + 1 }) ?? "",
     /5 samples more than 4 codes apart \(at most 5\); allowed 4/,
   );
 });
 
 test("a larger local difference fails however few samples it touches", () => {
   assert.match(
-    peakExcess({ max: OUTLIER_PEAK_CODES + 1, outliers: 1 }),
+    peakExcess({ max: OUTLIER_PEAK_CODES + 1, outliers: 1 }) ?? "",
     /9 codes apart at most/,
   );
   // Plain `fwidth` anti-aliasing: up to 41 codes on a few rims across GPUs.

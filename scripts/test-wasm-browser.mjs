@@ -105,7 +105,12 @@ if (names.some((name) => name.startsWith("plugin-"))) {
 }
 
 const server = createServer(async (request, response) => {
-  if (!fromThisMachine(request.headers.host, server.address().port)) {
+  if (
+    !fromThisMachine(
+      request.headers.host,
+      /** @type {import("node:net").AddressInfo} */ (server.address()).port,
+    )
+  ) {
     response.writeHead(403).end();
     return;
   }
@@ -145,12 +150,16 @@ const server = createServer(async (request, response) => {
     response.writeHead(404).end();
   }
 });
-await new Promise((resolveListen) =>
-  server.listen(servePort ?? 0, "127.0.0.1", resolveListen),
+await /** @type {Promise<void>} */ (
+  new Promise((resolveListen) =>
+    server.listen(servePort ?? 0, "127.0.0.1", resolveListen),
+  )
 );
 if (servePort !== null) {
   // Cross-origin isolation (for the audio cases) requires a secure context.
-  const { port } = server.address();
+  const { port } = /** @type {import("node:net").AddressInfo} */ (
+    server.address()
+  );
   for (const name of [...Object.keys(cases), ...Object.keys(perfCases)])
     process.stdout.write(`http://localhost:${port}/${name}\n`);
   process.stdout.write("serving; stop with Ctrl-C\n");
@@ -171,7 +180,9 @@ try {
         let gpuProcess;
         try {
           const encoded = await runBrowserPage(
-            browser,
+            /** @type {import("./lib/browser-page.mjs").PageBrowser} */ (
+              browser
+            ),
             `http://127.0.0.1:${address.port}/${name}${process.env.ALPHA2_CASE_QUERY ?? ""}`,
             {
               // A perf case exports for minutes on a slow GPU.

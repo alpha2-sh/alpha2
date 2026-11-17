@@ -1,0 +1,39 @@
+name: Pin the FFmpeg SDK
+description: Fetches the pinned FFmpeg SDK and points the native builds at it.
+inputs:
+  target:
+    description: The SDK target (linux-x64, linux-arm64, macos-arm64 or win-x64)
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/ffmpeg-sdk
+        key: ffmpeg-sdk-${{ inputs.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
+    - name: Pin the FFmpeg SDK that the native crates build against
+      shell: bash
+      env:
+        ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
+        TARGET: ${{ inputs.target }}
+      run: |
+        sdk_root="$(scripts/fetch-ffmpeg-sdk.sh "$TARGET")"
+        echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
+        if [ "$RUNNER_OS" = Windows ]; then
+          sdk_root="$(cygpath -m "$sdk_root")"
+          {
+            echo "FFMPEG_INCLUDE_DIR=$sdk_root/include"
+            echo "FFMPEG_LIBS_DIR=$sdk_root/lib"
+            echo "FFMPEG_LINK_MODE=dynamic"
+          } >> "$GITHUB_ENV"
+          echo "$sdk_root/bin" >> "$GITHUB_PATH"
+        else
+          {
+            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_LINK_MODE=dynamic"
+          } >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = Linux ]; then
+            echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
+          fi
+        fi

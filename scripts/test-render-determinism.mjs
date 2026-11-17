@@ -171,9 +171,7 @@ console.log(
 );
 
 const packageRoot = join(root, "packages", "alpha2");
-const wasm = await import(
-  pathToFileURL(join(packageRoot, "wasm", "alpha2_wasm.js")).href
-);
+const wasm = await import("../packages/alpha2/wasm/alpha2_wasm.js");
 await wasm.default({
   module_or_path: await readFile(
     join(packageRoot, "wasm", "alpha2_wasm_bg.wasm"),
@@ -184,7 +182,7 @@ const projectJson = await readFile(
   "utf8",
 );
 const { width, height } = JSON.parse(projectJson).settings;
-const engine = wasm.WebEffectRegistry.createCpu();
+const engine = wasm.WebEffectRegistry.createCpu(undefined);
 assert.equal(engine.renderer, "cpu");
 engine.loadProject(projectJson);
 engine.registerLut3d(

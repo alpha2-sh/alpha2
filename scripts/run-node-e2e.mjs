@@ -8,6 +8,7 @@ import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { executable } from "./lib/cargo-target.mjs";
+import { nodeTestReporterArgs } from "./lib/test-report.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const usage =
@@ -64,7 +65,13 @@ const files = readdirSync(join(root, directory))
   .map((name) => join(directory, name));
 run(
   process.execPath,
-  ["--test", "--test-timeout=180000", ...passed, ...files],
+  [
+    "--test",
+    ...nodeTestReporterArgs("node-e2e"),
+    "--test-timeout=180000",
+    ...passed,
+    ...files,
+  ],
   {
     ...process.env,
     ALPHA2_HOST_BINARY: host ?? executable("alpha2-host", profile),

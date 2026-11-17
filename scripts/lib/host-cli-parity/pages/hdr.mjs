@@ -13,7 +13,7 @@ try {
   await init();
   const project = await fetch("/tests/cases/host-parity-hdr-project.json").then((response) => response.json());
   const { width, height } = project.settings;
-  const native = parseY4m(new Uint8Array(await fetch("/native.y4m").then((response) => response.arrayBuffer())), width, height);
+  const native = parseY4m(new Uint8Array(await (await fetch("/native.y4m")).arrayBuffer()), width, height);
   const surface = document.createElement("canvas");
   surface.width = width;
   surface.height = height;
@@ -43,6 +43,7 @@ try {
     planar[source.id] = await copyPlanarYuvFrame(frame, declared === undefined ? null : JSON.parse(declared), { chromaSiting });
     input.dispose();
   }
+  /** @type {Record<string, [number, number, number]>} */
   const totals = { y: [0, 0, 0], u: [0, 0, 0], v: [0, 0, 0] };
   const worst = {};
   let lumaMin = 255;

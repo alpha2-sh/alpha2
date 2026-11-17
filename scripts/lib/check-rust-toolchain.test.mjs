@@ -20,6 +20,7 @@ function read(path) {
 }
 
 const pin = /^channel = "(.+)"$/m.exec(read("rust-toolchain.toml"))?.[1];
+assert.ok(pin, "rust-toolchain.toml pins no channel");
 
 function check(options) {
   return onWindows

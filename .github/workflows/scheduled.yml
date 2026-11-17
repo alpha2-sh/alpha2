@@ -30,16 +30,42 @@ jobs:
       GH_REPO: ${{ github.repository }}
       BRANCH: ${{ vars.SCHEDULED_BRANCH || github.event.repository.default_branch }}
     steps:
-      - name: Nightly ci on the active branch
+      - name: Nightly ci and observe on the active branch
         if: github.event.schedule == '17 3 * * *'
+        env:
+          OBSERVE_RUNS: ${{ vars.OBSERVE_NIGHTLY_RUNS || 3 }}
         run: |
           gh workflow run ci.yml --ref "$BRANCH"
-          echo "Started ci on $BRANCH" >> "$GITHUB_STEP_SUMMARY"
+          for _ in $(seq "$OBSERVE_RUNS"); do gh workflow run observe.yml --ref "$BRANCH"; done
+          echo "Started ci and $OBSERVE_RUNS observe runs on $BRANCH" >> "$GITHUB_STEP_SUMMARY"
       - name: Weekly fuzz and Miri on the active branch
         if: github.event.schedule == '41 2 * * 1'
         run: |
           gh workflow run scheduled.yml --ref "$BRANCH"
           echo "Started scheduled on $BRANCH" >> "$GITHUB_STEP_SUMMARY"
+
+  flake-report:
+    if: github.event_name == 'schedule' && github.event.schedule == '17 3 * * *'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: ${{ vars.SCHEDULED_BRANCH || github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BRANCH }}
+      - name: Results that changed at one commit, and pass rates, over the last 30 runs
+        run: node scripts/ci-flake-report.mjs --branch "$BRANCH" --runs 30
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: flake-report
+          path: target/flake-report/flake-report.json
+          if-no-files-found: ignore
 
   fuzz-targets:
     if: github.event_name != 'schedule'

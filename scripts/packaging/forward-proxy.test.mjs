@@ -13,12 +13,14 @@ async function origin(t) {
   const server = createServer((incoming, outgoing) =>
     outgoing.end(`origin saw ${incoming.method} ${incoming.url}`),
   );
-  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  await /** @type {Promise<void>} */ (
+    new Promise((done) => server.listen(0, "127.0.0.1", done))
+  );
   t.after(() => {
     server.closeAllConnections();
     server.close();
   });
-  return server.address().port;
+  return /** @type {import("node:net").AddressInfo} */ (server.address()).port;
 }
 
 function read(stream) {

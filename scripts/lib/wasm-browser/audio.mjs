@@ -14,14 +14,14 @@ if (typeof AudioDecoder === "undefined") {
   // converges over its 400 ms pre-roll without matching bits. Matroska and WebM timestamps are
   // rounded to the millisecond, so a window must snap to the frame grid, not land up to 48 samples
   // off.
-  for (const [name, whole, later, tolerance] of [
+  for (const [name, whole, later, tolerance] of /** @type {[string, [number, number], number, number][]} */ ([
     ["audio-only-aac-priming.m4a", [0.05, 0.38], 0.2003, 1e-4],
     ["audio-opus.mp4", [0.05, 0.55], 0.3011, 1e-3],
     ["audio-seek-aac.mkv", [0.05, 1.5], 0.7771, 1e-4],
     ["audio-seek-aac-remux.mp4", [0.05, 1.5], 0.7771, 1e-4],
     ["audio-seek-opus.webm", [0.05, 1.5], 0.7771, 1e-3],
     ["audio-seek-libopus.webm", [0.05, 1.5], 0.7771, 1e-3],
-  ]) {
+  ])) {
     const bytes = new Uint8Array(await (await fetch("/tests/corpus/" + name)).arrayBuffer());
     const decoder = await MediabunnyAudioDecoder.open("a", bytes, wasm);
     const request = (start, end) => decoder.refill({ sourceId: "a", startMediaTimeTicks: ticks(start), endMediaTimeTicks: ticks(end), generation: 1 }, 48000);

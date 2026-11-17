@@ -501,7 +501,7 @@ await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
 webgpuAdapter(engine);
 const adapter = JSON.parse(engine.diagnostics()).adapter;
-const info = (await navigator.gpu.requestAdapter())?.info ?? {};
+const info = /** @type {Partial<GPUAdapterInfo>} */ ((await navigator.gpu.requestAdapter())?.info ?? {});
 const texts = ["vendor", "architecture", "device", "description"];
 const keys = texts.every((key) => typeof adapter[key] === "string") &&
   typeof adapter.isFallbackAdapter === "boolean";
@@ -618,6 +618,7 @@ console.error = (...args) => {
   if (args.some((arg) => /Alpha2Panic|panicked/.test(String(arg?.name ?? "") + String(arg?.message ?? arg)))) panics.push(String(args[0]));
   consoleError.apply(console, args);
 };
+/** @type {{ name: string | null, code: string | null, fatal: boolean | null } | null} */
 let rejection = null;
 const exportFrame = async (engine) => {
   try {
@@ -823,7 +824,7 @@ const exportFrame = async () => {
 };
 const first = await exportFrame();
 const submit = GPUQueue.prototype.submit;
-GPUQueue.prototype.submit = function () {};
+GPUQueue.prototype.submit = function () { return undefined; };
 const dropped = await exportFrame();
 GPUQueue.prototype.submit = submit;
 const lost = engine.deviceLost;
@@ -845,6 +846,7 @@ export function webgpuRejectedFrame() {
   return `
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const requestDevice = GPUAdapter.prototype.requestDevice;
+/** @type {GPUDevice | null} */
 let device = null;
 GPUAdapter.prototype.requestDevice = async function (...args) {
   device = await requestDevice.apply(this, args);

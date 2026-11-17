@@ -1,0 +1,37 @@
+name: Pin the Android NDK
+description: Selects the pinned NDK, installing it when the runner image lacks it, and points Cargo at its API 29 clang.
+inputs:
+  version:
+    description: The NDK revision
+    default: "30.0.16248370"
+  targets:
+    description: Rust targets to configure, space-separated
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Select the pinned NDK
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        TARGETS: ${{ inputs.targets }}
+      run: |
+        ndk="${ANDROID_HOME:?}/ndk/$VERSION"
+        if [ ! -f "$ndk/source.properties" ]; then
+          timeout 600 "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$VERSION" > /dev/null
+        fi
+        grep -qx "Pkg.Revision = $VERSION" "$ndk/source.properties"
+        echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
+        bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        sysroot="$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+        for target in $TARGETS; do
+          var="${target//-/_}"
+          upper="${var^^}"
+          {
+            echo "CC_$var=$bin/${target}29-clang"
+            echo "CXX_$var=$bin/${target}29-clang++"
+            echo "AR_$var=$bin/llvm-ar"
+            echo "CARGO_TARGET_${upper}_LINKER=$bin/${target}29-clang"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_$var=--sysroot=$sysroot"
+          } >> "$GITHUB_ENV"
+        done

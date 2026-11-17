@@ -20,12 +20,11 @@ export const LUMA_AT = `async function lumaAt(frame, x, y) {
 export const DECODE_REFUSAL_SKIP = `async function decodeRefusalSkip(error) {
   const facts = error?.code === "DECODE_UNAVAILABLE" ? error.facts : undefined;
   if (!facts?.kind || !facts.codec) return null;
-  const decoder = facts.kind === "audio" ? globalThis.AudioDecoder : globalThis.VideoDecoder;
-  const config = facts.kind === "audio"
-    ? { codec: facts.codec, sampleRate: 48000, numberOfChannels: facts.channels ?? 2 }
-    : { codec: facts.codec };
-  const supported = decoder
-    ? await decoder.isConfigSupported(config).then(({ supported }) => supported === true, () => false)
+  const probe = facts.kind === "audio"
+    ? globalThis.AudioDecoder?.isConfigSupported({ codec: facts.codec, sampleRate: 48000, numberOfChannels: facts.channels ?? 2 })
+    : globalThis.VideoDecoder?.isConfigSupported({ codec: facts.codec });
+  const supported = probe
+    ? await probe.then(({ supported }) => supported === true, () => false)
     : false;
   if (supported && (error.cause === undefined || (await globalThis.trialDecodes?.(facts)) !== false))
     return null;
@@ -62,6 +61,7 @@ const trialDecode = async (track, kind) => {
     error: () => { failed = true; },
   });
   try {
+    // @ts-expect-error TypeScript cannot call a union of the WebCodecs decoders' overloaded configure.
     decoder.configure(config);
     for (const packet of packets)
       decoder.decode(kind === "audio" ? packet.toEncodedAudioChunk() : packet.toEncodedVideoChunk());
@@ -83,7 +83,8 @@ globalThis.trialDecodes = async (facts) => {
       for (const track of tracks) {
         const codecs = [track.codec, await track.getCodecParameterString().catch(() => null)];
         if (!codecs.includes(facts.codec)) continue;
-        if (facts.channels !== undefined && track.numberOfChannels !== facts.channels) continue;
+        if (facts.channels !== undefined && !(track.isAudioTrack() && track.numberOfChannels === facts.channels))
+          continue;
         if (await trialDecode(track, facts.kind)) return true;
         answer = false;
       }

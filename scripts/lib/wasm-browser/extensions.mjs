@@ -14,6 +14,7 @@ const second = extensions.open({ format: "svg" }, svg);
 const render = glue.ExtensionRegistry.prototype.render;
 glue.ExtensionRegistry.prototype.render = function (...args) {
   glue.ExtensionRegistry.prototype.render = render;
+  // @ts-expect-error wasm-bindgen glue: a repeated initSync returns the live exports; __wbg_ptr is its private handle.
   glue.initSync().extensionregistry_open(this.__wbg_ptr, 0xffffff00, 200, 0, 0);
   return render.apply(this, args);
 };
@@ -123,6 +124,7 @@ const extensions = await loadExtensions("/packages/alpha2/wasm/alpha2_extensions
 const contract = await (await fetch("/tests/cases/visual-provider-contract.json")).json();
 const kind = (error) =>
   error instanceof ExtensionModuleError ? "module stopped: " + error.message : String(error?.message ?? error).split(":")[0];
+/** @returns {import("/packages/alpha2/dist/project.js").ProviderSource} */
 const sourceFor = (provider, report) =>
   provider === "svg" ? { format: "svg" }
   : provider === "lottie" ? (report?.item ? { format: "lottie", animation: report.item } : { format: "lottie" })

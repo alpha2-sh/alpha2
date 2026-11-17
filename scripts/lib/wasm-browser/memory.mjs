@@ -104,7 +104,7 @@ export function gpuMemoryRelease() {
   return `
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const destroyed = { texture: 0, buffer: 0, device: 0 };
-for (const [type, key] of [[GPUTexture, "texture"], [GPUBuffer, "buffer"], [GPUDevice, "device"]]) {
+for (const [type, key] of /** @type {[{ prototype: { destroy(): undefined } }, string][]} */ ([[GPUTexture, "texture"], [GPUBuffer, "buffer"], [GPUDevice, "device"]])) {
   const destroy = type.prototype.destroy;
   type.prototype.destroy = function (...args) {
     destroyed[key] += 1;

@@ -48,6 +48,7 @@ export function splitFrameRejectedSubmission() {
   return `
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const requestDevice = GPUAdapter.prototype.requestDevice;
+/** @type {GPUDevice | null} */
 let device = null;
 GPUAdapter.prototype.requestDevice = async function (...args) {
   device = await requestDevice.apply(this, args);

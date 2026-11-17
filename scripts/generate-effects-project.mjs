@@ -23,6 +23,12 @@ const color = (value) => ({ type: "color", value });
 const choice = (value) => ({ type: "enum", value });
 const bool = (value) => ({ type: "bool", value });
 
+/**
+ * @typedef {{ params?: Record<string, unknown>, resources?: Record<string, string>,
+ *   inputs?: Record<string, string> }} EffectSettings
+ */
+
+/** @type {[string, EffectSettings][]} */
 const EFFECTS = [
   ["gaussian-blur", { params: { radius: float(0.03) } }],
   ["chroma-key", {}],
@@ -184,6 +190,7 @@ const EFFECTS = [
   ["tile", { params: { tiles: vec2([3, 3]), mirror: bool(true) } }],
 ];
 
+/** @type {[string, EffectSettings?][]} */
 const TRANSITIONS = [
   ["fade"],
   ["directional"],
@@ -318,6 +325,10 @@ function constants(values) {
   );
 }
 
+/**
+ * @param {string} id
+ * @param {EffectSettings} [settings]
+ */
 function effect(id, { params, resources } = {}) {
   return {
     id,
