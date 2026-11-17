@@ -30,7 +30,7 @@ pub(crate) fn with_effect(mut project: Project, effect: crate::ClipEffect) -> Pr
 fn a_project_draws_text_through_a_caption_track_a_source_or_a_composition() {
     let text = || crate::Generator::Text {
         text: "Title".into(),
-        style: crate::TextStyle::default(),
+        style: Box::default(),
     };
     let fill = crate::Generator::Fill {
         paint: crate::Paint::Solid {
@@ -178,7 +178,7 @@ fn effect_parameters_animate_with_one_type_and_hold_only_discrete_values() {
         with_effect(
             project(),
             crate::ClipEffect {
-                id: "alpha2.effect.gaussian-blur".into(),
+                id: "test.blur".into(),
                 version: 1,
                 resources: BTreeMap::new(),
                 params: BTreeMap::from([("radius".into(), param)]),
@@ -566,4 +566,123 @@ fn the_color_pipeline_defaults_to_tone_mapping_from_1000_nits_and_bounds_its_pea
     }
     project.settings.color.hdr_peak_nits = 4_000;
     project.validate().expect("a 4000-nit peak");
+}
+
+/// A timeline `points` data set of `samples` samples of 64 pseudo-random coordinates.
+fn full_points(samples: usize) -> String {
+    use std::fmt::Write as _;
+    let mut json = String::from(
+        r#"{"id":"a","anchor":{"type":"timeline"},"kind":"points","interpolation":"hold","channels":["#,
+    );
+    for channel in 0..64 {
+        write!(json, "{}\"k{channel}\"", if channel > 0 { "," } else { "" }).expect("writes");
+    }
+    json.push_str(r#"],"times":["#);
+    for sample in 0..samples {
+        write!(
+            json,
+            "{}{}",
+            if sample > 0 { "," } else { "" },
+            sample * 4004
+        )
+        .expect("writes");
+    }
+    json.push_str(r#"],"values":["#);
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    for value in 0..samples * 128 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        #[allow(clippy::cast_precision_loss)]
+        let coordinate = (state >> 40) as f32 / (1_u64 << 24) as f32;
+        write!(json, "{}{coordinate}", if value > 0 { "," } else { "" }).expect("writes");
+    }
+    json.push_str("]}");
+    json
+}
+
+#[test]
+fn a_valid_project_past_the_document_cap_is_not_written() {
+    let mut document = serde_json::to_value(project()).expect("serializes");
+    // 31,250 samples of 128 values are the 4,000,000 values one set may hold.
+    let set: serde_json::Value = serde_json::from_str(&full_points(31_250)).expect("JSON");
+    let mut second = set.clone();
+    second["id"] = serde_json::json!("b");
+    document["data"] = serde_json::json!([set]);
+    let one = Project::from_json(&document.to_string()).expect("one full set loads");
+    assert!(one.to_json().is_ok());
+    document["data"].as_array_mut().expect("data").push(second);
+    let two: Project = serde_json::from_value(document).expect("two full sets parse");
+    two.validate().expect("two full sets are valid in memory");
+    assert!(matches!(
+        two.to_json(),
+        Err(crate::ProjectWriteError::TooLarge {
+            maximum: crate::MAX_PROJECT_JSON_BYTES
+        })
+    ));
+}
+
+#[test]
+fn a_written_project_is_its_serialization() {
+    let project = project();
+    assert_eq!(
+        project.to_json().expect("writes"),
+        serde_json::to_string(&project).expect("serializes")
+    );
+}
+
+#[test]
+fn a_model_error_names_the_object_it_is_about() {
+    let clip = |text: &str| crate::ClipId::new(text.to_owned()).expect("an id");
+    let track = crate::TrackId::new("t".to_owned()).expect("an id");
+    let overlap = crate::ModelError::OverlappingClips {
+        track: track.clone(),
+        first: clip("a"),
+        second: clip("b"),
+    };
+    assert_eq!(
+        overlap.subject(),
+        Some(crate::ErrorSubject::Clip(&clip("b")))
+    );
+    let cues = crate::ModelError::TooManyCaptionCues {
+        track: track.clone(),
+        found: 2,
+        maximum: 1,
+    };
+    assert_eq!(cues.subject(), Some(crate::ErrorSubject::Track(&track)));
+    assert_eq!(crate::ModelError::ZeroCanvasDimension.subject(), None);
+    let mut project = project();
+    let mut second = project.timeline.tracks[0].clips[0].clone();
+    second.id = clip("second");
+    project.timeline.tracks[0].clips.push(second);
+    let error = project.validate().expect_err("the clips overlap");
+    assert_eq!(
+        error.subject(),
+        Some(crate::ErrorSubject::Clip(&clip("second")))
+    );
+}
+
+#[test]
+fn a_time_no_document_holds_is_refused_by_validation_as_by_loading() {
+    let mut project = project();
+    let past = alpha2_time::MAX_SERIALIZED_TICKS + 1;
+    project.timeline.tracks[0].clips[0].timeline_range =
+        TimeRange::new(MediaTime(past - 120_000), MediaTime(past)).expect("range");
+    assert_eq!(
+        project.validate(),
+        Err(crate::ModelError::UnwritableTime { ticks: past })
+    );
+    let json = serde_json::to_string(&project).expect("serializes");
+    assert!(matches!(
+        Project::from_json(&json),
+        Err(crate::ProjectLoadError::Json(_))
+    ));
+    project.timeline.tracks[0].clips[0].timeline_range = TimeRange::new(
+        MediaTime(alpha2_time::MAX_SERIALIZED_TICKS - 120_000),
+        MediaTime(alpha2_time::MAX_SERIALIZED_TICKS),
+    )
+    .expect("range");
+    project
+        .validate()
+        .expect("the largest time a document holds");
 }

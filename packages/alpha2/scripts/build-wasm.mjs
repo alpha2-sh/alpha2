@@ -21,6 +21,13 @@ const modules = [
     name: "alpha2_wasm",
     bindgen: [],
   },
+  // The compose compiler, loaded only by pages that write specs.
+  {
+    crate: "alpha2-compose-wasm",
+    artifact: "alpha2_compose_wasm",
+    name: "alpha2_compose",
+    bindgen: [],
+  },
   {
     crate: "alpha2-audio-worklet",
     artifact: "alpha2_audio_worklet",

@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "checkJs": true,
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false
+  },
+  "include": ["scripts/**/*.mjs"],
+  "exclude": ["scripts/lib/wasm-browser/safari-sim.mjs"]
+}

@@ -1,6 +1,7 @@
 //! `WebEffectRegistry`, the browser GPU renderer (device, effects, uploaded frames and audio,
 //! preview, export), plus free functions that publish engine decisions to the page.
 
+use alpha2_engine::frame_store::{FrameStore, WorkingSetOverBudget};
 use alpha2_engine::{
     EngineProject, ExportStep, Exporter, FramesWithText, GpuFrameRenderer, Player, QualityProfile,
     TextTextures,
@@ -20,15 +21,13 @@ use wasm_bindgen::prelude::*;
 
 use crate::effect::EffectRequest;
 use crate::error::{BindingError, Code, EngineTyped};
-use crate::frame_store::{FrameStore, WorkingSetOverBudget};
 use crate::interop::{
     DeviceHealth, diagnostics_to_js, export_readback_promise, export_status, frame_upload_receipt,
     gpu_diagnostics_json, js_safe_integer, renderer_with_builtins, resolved, set, texture_byte_len,
     validate_texture_extent, watch_device,
 };
 use crate::present::{
-    Presenter, UploadedTexture, UploadedTextureBacking, WebMissingFrame, WebPlaybackResult,
-    present_texture,
+    UploadedTexture, UploadedTextureBacking, WebMissingFrame, WebPlaybackResult, present_texture,
 };
 use crate::project_audio::ProjectAudio;
 use crate::project_cache::StalePresentations;
@@ -237,7 +236,7 @@ pub struct WebEffectRegistry {
     health: DeviceHealth,
     surface: Option<wgpu::Surface<'static>>,
     surface_config: Option<wgpu::SurfaceConfiguration>,
-    presenter: Option<Presenter>,
+    presenter: Option<alpha2_render::SurfacePresenter>,
     browser_webgpu: bool,
     adapter_info: BrowserAdapterInfo,
     video_frame_copy: crate::interop::VideoFrameCopy,
@@ -250,7 +249,7 @@ pub struct WebEffectRegistry {
     /// Sources held only as the browser's own conversion (`uploadDegradedVideoFrame`): shown in
     /// previews, refused by every export.
     degraded_sources: std::collections::BTreeSet<String>,
-    _context_loss: Option<ContextLossListener>,
+    context_loss: Option<ContextLossListener>,
 }
 
 /// Marks the device lost when a WebGL canvas loses its context, and cancels the event so the
@@ -626,7 +625,7 @@ impl WebEffectRegistry {
             gpu: context,
             frames: FrameStore::sized(
                 UploadedTexture::retained_bytes,
-                crate::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
+                alpha2_engine::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
             ),
             project: None,
             player: Player::default(),
@@ -638,7 +637,7 @@ impl WebEffectRegistry {
             source_uploads: 0,
             physical_source_reuses: 0,
             degraded_sources: std::collections::BTreeSet::new(),
-            _context_loss: None,
+            context_loss: None,
             surface: None,
             surface_config: None,
             presenter: None,
@@ -816,7 +815,7 @@ impl WebEffectRegistry {
                 health.clone(),
             )?)
         };
-        let presenter = Presenter::new(&device, config.format);
+        let presenter = alpha2_render::SurfacePresenter::new(&device, config.format);
         let renderer = renderer_with_builtins(gpu, &health)?;
         Ok(Self {
             renderer,
@@ -824,7 +823,7 @@ impl WebEffectRegistry {
             gpu: context,
             frames: FrameStore::sized(
                 UploadedTexture::retained_bytes,
-                crate::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
+                alpha2_engine::frame_store::DEFAULT_VIDEO_FRAME_BYTES,
             ),
             project: None,
             player: Player::default(),
@@ -836,7 +835,7 @@ impl WebEffectRegistry {
             source_uploads: 0,
             physical_source_reuses: 0,
             degraded_sources: std::collections::BTreeSet::new(),
-            _context_loss: context_loss,
+            context_loss,
             surface: Some(surface),
             surface_config: Some(config),
             presenter: Some(presenter),
@@ -877,6 +876,7 @@ impl WebEffectRegistry {
     /// Throws `EFFECT_ERROR` for a definition the engine refuses before compiling.
     #[wasm_bindgen(js_name = compileEffect)]
     pub fn compile_effect(&self, json: &str) -> Result<web_sys::js_sys::Promise, JsValue> {
+        self.ensure_device()?;
         let definition =
             EffectRequest::parse(json).map_err(|error| coded_error(Code::EFFECT_ERROR, error))?;
         let pending = self
@@ -904,6 +904,7 @@ impl WebEffectRegistry {
         &mut self,
         compiled: WebCompiledEffect,
     ) -> Result<String, JsValue> {
+        self.ensure_device()?;
         let CompiledKind::Gpu(compiled) = compiled.0 else {
             return Err(coded_error(
                 Code::EFFECT_ERROR,
@@ -959,6 +960,7 @@ impl WebEffectRegistry {
     /// Parses and uploads one `.cube` 3D LUT resource.
     #[wasm_bindgen(js_name = registerLut3d)]
     pub fn register_lut_3d(&mut self, id: String, cube: &str) -> Result<(), JsValue> {
+        self.ensure_device()?;
         let data = Lut3dData::from_cube(cube).map_err(|error| typed_error(&error))?;
         self.renderer
             .register_lut3d(id, &data)
@@ -1011,6 +1013,27 @@ impl WebEffectRegistry {
             Orientation::UPRIGHT,
             false,
         )
+    }
+
+    /// Refuses work on a lost device with a fatal `GPU_DEVICE_LOST` before any GPU object is
+    /// made. A lost WebGL context is checked directly, since `webglcontextlost` is dispatched
+    /// after the loss and wgpu's GL backend panics when the context hands out no object.
+    fn ensure_device(&self) -> Result<(), JsValue> {
+        if !self.device_lost.load(Ordering::Acquire) {
+            let context_lost = self
+                .context_loss
+                .as_ref()
+                .is_some_and(|listener| webgl_context_lost(listener.target.as_ref()));
+            if !context_lost {
+                return Ok(());
+            }
+            self.health
+                .mark_lost("webglcontextlost", "the WebGL context was lost");
+        }
+        Err(coded_error(
+            Code::GPU_DEVICE_LOST,
+            "the GPU device was lost; make the renderer again before using it",
+        ))
     }
 
     /// Keeps a frame prepared for presentation under `key` and returns its upload receipt.
@@ -1174,6 +1197,37 @@ impl WebEffectRegistry {
         .to_owned()
     }
 
+    /// The size of a presented upload, or why it is refused: a lost device, an HDR source shown
+    /// through the browser's conversion (unless `degraded`), or a size the device cannot hold.
+    fn presented_source_size(
+        &self,
+        source_id: &str,
+        image: &PresentedImage,
+        degraded: bool,
+    ) -> Result<RenderSize, JsValue> {
+        self.ensure_device()?;
+        let hdr = match image {
+            PresentedImage::Frame(frame) => self.shows_hdr(source_id, frame),
+            PresentedImage::Bitmap(_) => self.hdr_source(source_id),
+        };
+        if hdr && !degraded {
+            return Err(hdr_upload_refusal(source_id, image.kind()));
+        }
+        let (width, height) = image.size();
+        if width == 0 || height == 0 {
+            return Err(invalid_input(format!(
+                "{} dimensions must be non-zero",
+                image.kind()
+            )));
+        }
+        validate_texture_extent(
+            self.renderer.limits().max_texture_dimension_2d,
+            width,
+            height,
+        )?;
+        RenderSize::new(width, height).map_err(|error| typed_error(&error))
+    }
+
     #[allow(clippy::needless_pass_by_value)] // Takes ownership and closes the image.
     fn upload_presented_inner(
         &mut self,
@@ -1184,40 +1238,12 @@ impl WebEffectRegistry {
         orientation: Orientation,
         degraded: bool,
     ) -> Result<JsValue, JsValue> {
-        let hdr = match &image {
-            PresentedImage::Frame(frame) => self.shows_hdr(&source_id, frame),
-            PresentedImage::Bitmap(_) => self.hdr_source(&source_id),
-        };
-        if hdr && !degraded {
-            image.close();
-            return Err(invalid_input(format!(
-                "source {source_id} is HDR (PQ or HLG): upload its frames' planes with \
-                 uploadYuvFrame, which converts them under the project's color pipeline; a \
-                 {} upload would show the browser's own conversion",
-                image.kind()
-            )));
-        }
         let (width, height) = image.size();
-        if width == 0 || height == 0 {
-            image.close();
-            return Err(invalid_input(format!(
-                "{} dimensions must be non-zero",
-                image.kind()
-            )));
-        }
-        if let Err(error) = validate_texture_extent(
-            self.renderer.limits().max_texture_dimension_2d,
-            width,
-            height,
-        ) {
-            image.close();
-            return Err(error);
-        }
-        let source_size = match RenderSize::new(width, height) {
+        let source_size = match self.presented_source_size(&source_id, &image, degraded) {
             Ok(size) => size,
             Err(error) => {
                 image.close();
-                return Err(typed_error(&error));
+                return Err(error);
             }
         };
         let texture = match self.renderer.acquire_rgba8_upload_texture(source_size) {
@@ -1324,6 +1350,7 @@ impl WebEffectRegistry {
         rotation_degrees: u32,
         mirror: bool,
     ) -> Result<JsValue, JsValue> {
+        self.ensure_device()?;
         let chroma_siting = chroma_siting_named(chroma_siting)?;
         let yuv_format = webcodecs_yuv_format(format)?;
         let color: ColorMetadata = serde_json::from_str(color)
@@ -1438,6 +1465,7 @@ impl WebEffectRegistry {
         output_width: u32,
         output_height: u32,
     ) -> Result<JsValue, JsValue> {
+        self.ensure_device()?;
         let texture = self.presented_rgba(
             width,
             height,
@@ -1472,6 +1500,7 @@ impl WebEffectRegistry {
         output_width: u32,
         output_height: u32,
     ) -> Result<JsValue, JsValue> {
+        self.ensure_device()?;
         let texture = self.presented_rgba(
             width,
             height,
@@ -1499,6 +1528,7 @@ impl WebEffectRegistry {
         output_width: u32,
         output_height: u32,
     ) -> Result<JsValue, JsValue> {
+        self.ensure_device()?;
         let texture = self.presented_rgba(
             width,
             height,
@@ -1528,6 +1558,7 @@ impl WebEffectRegistry {
         output_width: u32,
         output_height: u32,
     ) -> Result<JsValue, JsValue> {
+        self.ensure_device()?;
         let texture = self.presented_rgba(
             width,
             height,
@@ -1629,18 +1660,7 @@ impl WebEffectRegistry {
                 .find(|source| source.id.as_str() == source_id)
                 .and_then(|source| source.color_metadata)
         });
-        declared.map_or_else(
-            || {
-                matches!(
-                    frame.color_space().transfer(),
-                    Some(
-                        web_sys::VideoTransferCharacteristics::Pq
-                            | web_sys::VideoTransferCharacteristics::Hlg
-                    )
-                )
-            },
-            alpha2_render::is_hdr,
-        )
+        frame_shows_hdr(declared, frame)
     }
 
     /// Whether the loaded project declares `source_id` an HDR (PQ or HLG) source, whose frames
@@ -1682,6 +1702,7 @@ impl WebEffectRegistry {
         height: u32,
         pixels: &[u8],
     ) -> Result<JsValue, JsValue> {
+        self.ensure_device()?;
         let texture = self.rgba_texture(width, height, pixels)?;
         let retained_bytes = texture.retained_bytes();
         let generation = self
@@ -1701,6 +1722,7 @@ impl WebEffectRegistry {
         height: u32,
         pixels: &[u8],
     ) -> Result<JsValue, JsValue> {
+        self.ensure_device()?;
         let texture = self.rgba_texture(width, height, pixels)?;
         let retained_bytes = texture.retained_bytes();
         let generation = self
@@ -1956,6 +1978,7 @@ impl WebEffectRegistry {
     /// Reconfigures the presentation surface after the host changes its canvas size.
     #[wasm_bindgen(js_name = resizeSurface)]
     pub fn resize_surface(&mut self, width: u32, height: u32) -> Result<(), JsValue> {
+        self.ensure_device()?;
         validate_texture_extent(
             self.renderer.limits().max_texture_dimension_2d,
             width,
@@ -2136,6 +2159,7 @@ impl WebEffectRegistry {
         source_id: &str,
         media_time_ticks: i64,
     ) -> Result<(), JsValue> {
+        self.ensure_device()?;
         let source = self
             .frames
             .get(source_id, media_time_ticks)
@@ -2163,11 +2187,11 @@ impl WebEffectRegistry {
 
     /// Loads and validates a versioned project document.
     ///
-    /// Uploaded frames and audio are kept for every source whose ID and locator are unchanged,
-    /// so an edit needs no re-decode. Presentation frames are invalidated by a new canvas size
-    /// or color pipeline (`settings.color`), or per source by new declared color
-    /// (`color_metadata`). All audio is dropped when the project sample rate changes. Media
-    /// that changes under an unchanged locator needs a new source ID.
+    /// Uploaded frames and audio are kept for every source whose ID, locator, kind, provider and
+    /// fingerprint are unchanged, so an edit needs no re-decode. Presentation frames are
+    /// invalidated by a new canvas size or color pipeline (`settings.color`), or per source by
+    /// new declared color (`color_metadata`). All audio is dropped when the project sample rate
+    /// changes. Media that changes in a way the document does not show needs a new source ID.
     ///
     /// Loading ends a running export (`endExport`), so its next step is refused.
     #[wasm_bindgen(js_name = loadProject)]
@@ -2418,6 +2442,7 @@ impl WebEffectRegistry {
         rate_den: u32,
         codec: &str,
     ) -> Result<(), JsValue> {
+        self.ensure_device()?;
         let codec: VideoCodec =
             codec
                 .parse()
@@ -2505,6 +2530,7 @@ impl WebEffectRegistry {
     /// `failure` when the readback times out, the device is lost, or the mapping fails.
     #[wasm_bindgen(js_name = exportFrame)]
     pub fn export_frame(&mut self) -> Result<web_sys::js_sys::Promise, JsValue> {
+        self.ensure_device()?;
         let project = self
             .project
             .as_ref()
@@ -2572,6 +2598,7 @@ impl WebEffectRegistry {
     /// two or three readbacks in flight. Waiting results do not advance the cursor.
     #[wasm_bindgen(js_name = beginExportFrame)]
     pub fn begin_export_frame(&mut self) -> Result<JsValue, JsValue> {
+        self.ensure_device()?;
         let project = self
             .project
             .as_ref()
@@ -2659,6 +2686,7 @@ impl WebEffectRegistry {
     /// rendering or presentation fails.
     #[wasm_bindgen(js_name = beginExportPresent)]
     pub fn begin_export_present(&mut self) -> Result<JsValue, JsValue> {
+        self.ensure_device()?;
         let project = self
             .project
             .as_ref()
@@ -2754,6 +2782,7 @@ impl WebEffectRegistry {
         codec: &str,
         pixels: Option<String>,
     ) -> Result<JsValue, JsValue> {
+        self.ensure_device()?;
         let pixels = crate::interop::parse_pixels(pixels.as_deref())?;
         let codec: VideoCodec =
             codec
@@ -2982,6 +3011,7 @@ impl WebEffectRegistry {
     /// `unchanged` means the frame equals the last one, so nothing was rendered or presented.
     #[wasm_bindgen(js_name = renderAt)]
     pub fn render_at(&mut self, time_ticks: i64) -> Result<String, JsValue> {
+        self.ensure_device()?;
         let project = self
             .project
             .as_ref()
@@ -3267,4 +3297,33 @@ pub(crate) fn result_cache_json(cache: alpha2_render::ResultCacheStats) -> serde
             "gpuError": cache.invalidations[4],
         },
     })
+}
+
+/// Whether a `VideoFrame` of a source shows HDR (PQ or HLG): by the project's declared color for
+/// the source, else by the frame's own `colorSpace`.
+pub(crate) fn frame_shows_hdr(
+    declared: Option<ColorMetadata>,
+    frame: &web_sys::VideoFrame,
+) -> bool {
+    declared.map_or_else(
+        || {
+            matches!(
+                frame.color_space().transfer(),
+                Some(
+                    web_sys::VideoTransferCharacteristics::Pq
+                        | web_sys::VideoTransferCharacteristics::Hlg
+                )
+            )
+        },
+        alpha2_render::is_hdr,
+    )
+}
+
+/// The refusal of an HDR source's `kind` upload, which would show the browser's own conversion.
+pub(crate) fn hdr_upload_refusal(source_id: &str, kind: &str) -> JsValue {
+    invalid_input(format!(
+        "source {source_id} is HDR (PQ or HLG): upload its frames' planes with uploadYuvFrame, \
+         which converts them under the project's color pipeline; a {kind} upload would show \
+         the browser's own conversion"
+    ))
 }

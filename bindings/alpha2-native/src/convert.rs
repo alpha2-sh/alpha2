@@ -1,19 +1,18 @@
 //! Frame conversion, colour mapping, and codec options.
 
 use crate::capabilities::{NativeEncoderClass, encoder_class};
-use alpha2_ffmpeg_bridge::{DecodedFrame, DisplayRotation};
+use alpha2_ffmpeg_bridge::{DecodedFrame, DisplayRotation, PackedScaler};
 use std::ffi::{CStr, CString};
 
 use alpha2_media::{
     ChromaLocation, ColorMatrix, ColorMetadata, ColorPrimaries, ColorRange, Container, DecodeError,
-    DecodedVideoFrame, DynamicRange, EncodeError, Orientation, PixelFormat, Plane, Rect, Rotation,
+    DecodedVideoFrame, EncodeError, Orientation, PixelFormat, Plane, Rect, Rotation,
     SampleAspectRatio, TransferFunction, YuvFormat,
 };
 use alpha2_time::{MediaTime, TICKS_PER_SECOND};
 use rsmpeg::avcodec::AVCodec;
 use rsmpeg::avutil::{AVDictionary, AVFrame, AVRational, av_rescale_q, ra};
 use rsmpeg::ffi;
-use rsmpeg::swscale::SwsContext;
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn convert_video_frame(
@@ -40,6 +39,7 @@ pub(crate) fn convert_video_frame(
             u32::try_from(frame.crop_top.saturating_add(frame.crop_bottom)).unwrap_or(0),
         ),
     };
+    check_frame_size(width, height)?;
     // YCbCr layouts the renderer samples go as planes (shared when fully written, else copied); the
     // GPU applies subsampling, depth, crop, rotation and aspect ratio.
     if let Some(planes) = frame.yuv_planes().map_err(adapter_error)? {
@@ -72,14 +72,6 @@ pub(crate) fn convert_video_frame(
                 })
                 .collect(),
         });
-    }
-    // Converting allocates a whole frame, so refuse unsupported sizes first.
-    if !alpha2_media::frame_size_supported(width, height) {
-        return Err(DecodeError::Unsupported(format!(
-            "a {width}x{height} frame is larger than {} pixels or {} on a side",
-            alpha2_media::MAX_FRAME_PIXELS,
-            alpha2_media::MAX_FRAME_DIMENSION
-        )));
     }
     let (pixel_format, planes, color) = if converts_like_rgba8(color) {
         (
@@ -122,9 +114,10 @@ fn rgba8_plane(
     let height = u32::try_from(frame.height).map_err(|_| DecodeError::OutOfRange)?;
     let active = scaler.for_frame(frame, ffi::AV_PIX_FMT_RGBA)?;
     configure_yuv_to_rgba(active, color).map_err(adapter_error)?;
-    let mut bytes = vec![0; packed_len(width, height, 4)?];
-    alpha2_ffmpeg_bridge::scale_frame_packed(active, frame, ffi::AV_PIX_FMT_RGBA, &mut bytes)
-        .map_err(adapter_error)?;
+    let bytes = active.convert(frame).map_err(adapter_error)?;
+    if bytes.len() != packed_len(width, height, 4)? {
+        return Err(DecodeError::OutOfRange);
+    }
     Ok(Plane {
         bytes: bytes.into(),
         stride: width.saturating_mul(4),
@@ -156,15 +149,17 @@ fn full_resolution_planes(
         // Same matrix and range on both sides: swscale changes only depth, subsampling and layout.
         let coefficients = sws_coefficients(color.matrix);
         let full = color.range == ColorRange::Full;
-        alpha2_ffmpeg_bridge::configure_colorspace(active, coefficients, full, coefficients, full)
+        active
+            .configure_colorspace(coefficients, full, coefficients, full)
             .map_err(adapter_error)?;
     }
     let plane_count = if profile.has_alpha { 4 } else { 3 };
     let sample_bytes = if depth > 8 { 2 } else { 1 };
     let plane_len = packed_len(width, height, sample_bytes)?;
-    let mut bytes = vec![0; plane_len * plane_count];
-    alpha2_ffmpeg_bridge::scale_frame_packed(active, frame, target, &mut bytes)
-        .map_err(adapter_error)?;
+    let bytes = active.convert(frame).map_err(adapter_error)?;
+    if bytes.len() != plane_len * plane_count {
+        return Err(DecodeError::OutOfRange);
+    }
     let bytes = bytes::Bytes::from(bytes);
     let stride = width.saturating_mul(u32::try_from(sample_bytes).unwrap_or(2));
     let plane = |index: usize| Plane {
@@ -230,7 +225,7 @@ const fn planar_444_format(rgb: bool, alpha: bool, depth: u8) -> ffi::AVPixelFor
 /// flags and source format during init (full chroma interpolation, `RGB0`-style alpha twins).
 #[derive(Default)]
 pub(crate) struct FrameScaler {
-    context: Option<(ScalerShape, SwsContext)>,
+    context: Option<(ScalerShape, PackedScaler)>,
     made: u64,
 }
 
@@ -248,7 +243,7 @@ impl FrameScaler {
         &mut self,
         frame: &AVFrame,
         target: ffi::AVPixelFormat,
-    ) -> Result<&mut SwsContext, DecodeError> {
+    ) -> Result<&mut PackedScaler, DecodeError> {
         let shape = ScalerShape {
             width: frame.width,
             height: frame.height,
@@ -261,19 +256,8 @@ impl FrameScaler {
             .is_none_or(|(made_for, _)| *made_for != shape)
         {
             self.context = None;
-            let context = SwsContext::get_context(
-                frame.width,
-                frame.height,
-                frame.format,
-                frame.width,
-                frame.height,
-                target,
-                ffi::SWS_BILINEAR,
-                None,
-                None,
-                None,
-            )
-            .ok_or_else(|| DecodeError::Unsupported("unsupported FFmpeg pixel format".into()))?;
+            let context = PackedScaler::new(frame.width, frame.height, frame.format, target)
+                .map_err(|_| DecodeError::Unsupported("unsupported FFmpeg pixel format".into()))?;
             self.made += 1;
             self.context = Some((shape, context));
         }
@@ -309,7 +293,8 @@ fn packed_len(width: u32, height: u32, sample_bytes: usize) -> Result<usize, Dec
 /// Where the chroma of a `codec` stream or frame sits, given what `FFmpeg` reports.
 ///
 /// H.264 infers location type 0 (left) when the SPS declares none (E.2.1), but `FFmpeg` reports
-/// unspecified, which the renderer would sample centred. HEVC already reports left.
+/// unspecified, which the renderer samples centred for 4:2:0. HEVC 4:2:0 already reports left;
+/// unspecified 4:2:2 and 4:1:1 the renderer reads as left by itself.
 pub(crate) fn decoded_chroma_location(
     codec: ffi::AVCodecID,
     location: ffi::AVChromaLocation,
@@ -332,11 +317,10 @@ pub(crate) fn chroma_location(location: ffi::AVChromaLocation) -> ChromaLocation
 
 /// Sets `scaler` to convert full-range RGB into `color`'s YCbCr matrix and range.
 pub(crate) fn configure_rgba_to_yuv(
-    scaler: &mut SwsContext,
+    scaler: &mut PackedScaler,
     color: ColorMetadata,
 ) -> Result<(), alpha2_ffmpeg_bridge::BridgeError> {
-    alpha2_ffmpeg_bridge::configure_colorspace(
-        scaler,
+    scaler.configure_colorspace(
         i32::try_from(ffi::SWS_CS_ITU709).expect("color coefficient fits i32"),
         true,
         sws_coefficients(color.matrix),
@@ -346,11 +330,10 @@ pub(crate) fn configure_rgba_to_yuv(
 
 /// Sets `scaler` to convert `color`'s YCbCr matrix and range into full-range RGB.
 pub(crate) fn configure_yuv_to_rgba(
-    scaler: &mut SwsContext,
+    scaler: &mut PackedScaler,
     color: ColorMetadata,
 ) -> Result<(), alpha2_ffmpeg_bridge::BridgeError> {
-    alpha2_ffmpeg_bridge::configure_colorspace(
-        scaler,
+    scaler.configure_colorspace(
         sws_coefficients(color.matrix),
         color.range == ColorRange::Full,
         i32::try_from(ffi::SWS_CS_ITU709).expect("color coefficient fits i32"),
@@ -418,7 +401,7 @@ pub(crate) fn direct_yuv420p_frame(
 /// Alpha is dropped. One stream's frames share one scaler.
 pub(crate) struct Yuv420pConverter {
     output: ColorMetadata,
-    scaler: Option<(ffi::AVPixelFormat, u32, u32, SwsContext)>,
+    scaler: Option<(ffi::AVPixelFormat, u32, u32, PackedScaler)>,
 }
 
 impl Yuv420pConverter {
@@ -511,19 +494,13 @@ impl Yuv420pConverter {
                 i32::try_from(height)
                     .map_err(|_| EncodeError::Adapter("height overflow".into()))?,
             );
-            let mut scaler = SwsContext::get_context(
+            let mut scaler = PackedScaler::new(
                 signed_width,
                 signed_height,
                 source_format,
-                signed_width,
-                signed_height,
                 ffi::AV_PIX_FMT_YUV420P,
-                ffi::SWS_BILINEAR,
-                None,
-                None,
-                None,
             )
-            .ok_or_else(|| EncodeError::Adapter("cannot create a YUV to YUV420P scaler".into()))?;
+            .map_err(|_| EncodeError::Adapter("cannot create a YUV to YUV420P scaler".into()))?;
             if rgb {
                 configure_rgba_to_yuv(&mut scaler, self.output).map_err(encode_adapter_error)?;
             }
@@ -532,13 +509,8 @@ impl Yuv420pConverter {
         let Some((_, _, _, scaler)) = self.scaler.as_mut() else {
             unreachable!("the scaler was just made");
         };
-        let mut output = AVFrame::new();
-        output.set_format(ffi::AV_PIX_FMT_YUV420P);
-        output.set_width(source.width);
-        output.set_height(source.height);
-        output.get_buffer(1).map_err(encode_adapter_error)?;
-        scaler
-            .scale_frame(&source, 0, source.height, &mut output)
+        let output = scaler
+            .convert_to_frame(&source)
             .map_err(encode_adapter_error)?;
         Ok(Some(output))
     }
@@ -717,53 +689,20 @@ pub(crate) fn frame_color_metadata(frame: &AVFrame) -> Option<ColorMetadata> {
 
 /// The color `FFmpeg`'s tags describe, `None` when all four are unspecified.
 ///
-/// An unrecognized tag, or an unspecified one beside others, reads as its BT.709 limited-range
-/// default; PQ and HLG make the color HDR.
+/// `FFmpeg`'s primaries, transfer and matrix values are the ITU-T H.273 code points that
+/// [`ColorMetadata::from_h273`] reads; values past 255 (`FFmpeg`'s extensions) are unrecognized.
 pub(crate) fn map_color(
     primaries: ffi::AVColorPrimaries,
     transfer: ffi::AVColorTransferCharacteristic,
     matrix: ffi::AVColorSpace,
     range: ffi::AVColorRange,
 ) -> Option<ColorMetadata> {
-    if primaries == ffi::AVCOL_PRI_UNSPECIFIED
-        && transfer == ffi::AVCOL_TRC_UNSPECIFIED
-        && matrix == ffi::AVCOL_SPC_UNSPECIFIED
-        && range == ffi::AVCOL_RANGE_UNSPECIFIED
-    {
-        return None;
-    }
-    let primaries = match primaries {
-        ffi::AVCOL_PRI_BT2020 => ColorPrimaries::Bt2020,
-        ffi::AVCOL_PRI_SMPTE170M | ffi::AVCOL_PRI_BT470BG => ColorPrimaries::Bt601,
-        _ => ColorPrimaries::Bt709,
+    let code = |value| u8::try_from(value).unwrap_or(u8::MAX);
+    let full_range = match range {
+        ffi::AVCOL_RANGE_UNSPECIFIED => None,
+        range => Some(range == ffi::AVCOL_RANGE_JPEG),
     };
-    let transfer = match transfer {
-        ffi::AVCOL_TRC_SMPTE2084 => TransferFunction::Pq,
-        ffi::AVCOL_TRC_ARIB_STD_B67 => TransferFunction::Hlg,
-        ffi::AVCOL_TRC_IEC61966_2_1 => TransferFunction::Srgb,
-        _ => TransferFunction::Bt709,
-    };
-    let matrix = match matrix {
-        ffi::AVCOL_SPC_BT2020_NCL => ColorMatrix::Bt2020Ncl,
-        ffi::AVCOL_SPC_SMPTE170M | ffi::AVCOL_SPC_BT470BG => ColorMatrix::Bt601,
-        ffi::AVCOL_SPC_RGB => ColorMatrix::Rgb,
-        _ => ColorMatrix::Bt709,
-    };
-    Some(ColorMetadata {
-        primaries,
-        transfer,
-        matrix,
-        range: if range == ffi::AVCOL_RANGE_JPEG {
-            ColorRange::Full
-        } else {
-            ColorRange::Limited
-        },
-        dynamic_range: if matches!(transfer, TransferFunction::Pq | TransferFunction::Hlg) {
-            DynamicRange::Hdr
-        } else {
-            DynamicRange::Sdr
-        },
-    })
+    ColorMetadata::from_h273(code(primaries), code(transfer), code(matrix), full_range)
 }
 
 /// Options every video decoder opens with.
@@ -771,13 +710,37 @@ pub(crate) fn map_color(
 /// `flags=+unaligned` lets `FFmpeg` crop software frames exactly; without it a small left crop
 /// (under 64 columns of 8-bit 4:2:0) is dropped to keep planes aligned. Hardware frames keep their
 /// crop as the visible rectangle either way.
+/// Refuses a `width` x `height` frame larger than alpha2 renders.
+pub(crate) fn check_frame_size(width: u32, height: u32) -> Result<(), DecodeError> {
+    if alpha2_media::frame_size_supported(width, height) {
+        return Ok(());
+    }
+    Err(DecodeError::Unsupported(format!(
+        "a {width}x{height} frame is larger than {} pixels or {} on a side",
+        alpha2_media::MAX_FRAME_PIXELS,
+        alpha2_media::MAX_FRAME_DIMENSION
+    )))
+}
+
+/// `max_pixels` makes the decoder refuse a picture larger than alpha2 renders before allocating
+/// it, for sizes only the bitstream states and for a size change mid-stream.
 pub(crate) fn video_decoder_options(threads: i64) -> AVDictionary {
-    AVDictionary::new_int(c"threads", threads, 0).set(c"flags", c"+unaligned", 0)
+    let max_pixels = i64::try_from(alpha2_media::MAX_FRAME_PIXELS).unwrap_or(i64::MAX);
+    AVDictionary::new_int(c"threads", threads, 0)
+        .set(c"flags", c"+unaligned", 0)
+        .set_int(c"max_pixels", max_pixels, 0)
 }
 
 /// The `FFmpeg` pixel format of `layout`.
-pub(crate) fn pixel_format(layout: alpha2_media::PixelLayout) -> ffi::AVPixelFormat {
-    match layout.ffmpeg_name() {
+pub(crate) fn pixel_format(
+    layout: alpha2_media::PixelLayout,
+) -> Result<ffi::AVPixelFormat, EncodeError> {
+    pixel_format_named(layout.ffmpeg_name())
+}
+
+pub(crate) fn pixel_format_named(name: &str) -> Result<ffi::AVPixelFormat, EncodeError> {
+    Ok(match name {
+        "yuv420p" => ffi::AV_PIX_FMT_YUV420P,
         "yuva420p" => ffi::AV_PIX_FMT_YUVA420P,
         "yuv420p10le" => ffi::AV_PIX_FMT_YUV420P10LE,
         "yuva420p10le" => ffi::AV_PIX_FMT_YUVA420P10LE,
@@ -790,22 +753,12 @@ pub(crate) fn pixel_format(layout: alpha2_media::PixelLayout) -> ffi::AVPixelFor
         "yuv444p10le" => ffi::AV_PIX_FMT_YUV444P10LE,
         "yuva444p10le" => ffi::AV_PIX_FMT_YUVA444P10LE,
         "p010le" => ffi::AV_PIX_FMT_P010LE,
-        _ => ffi::AV_PIX_FMT_YUV420P,
-    }
-}
-
-/// Visible bytes per row and rows of each plane of `layout`, in `FFmpeg`'s plane order.
-#[must_use]
-pub(crate) fn frame_planes(
-    layout: alpha2_media::PixelLayout,
-    width: u32,
-    height: u32,
-) -> Vec<(usize, usize)> {
-    layout
-        .planes(width, height)
-        .into_iter()
-        .map(|(plane_width, rows, bytes)| ((plane_width * bytes) as usize, rows as usize))
-        .collect()
+        _ => {
+            return Err(EncodeError::Adapter(format!(
+                "pixel layout {name} has no FFmpeg pixel format"
+            )));
+        }
+    })
 }
 
 /// A reusable encoder frame for `width` x `height` pictures of `layout`, its planes in
@@ -824,15 +777,10 @@ pub fn packed_frame(
         i32::try_from(height)
             .map_err(|_| alpha2_ffmpeg_bridge::BridgeError::InvalidInput("height"))?,
     );
-    if layout.is_yuv420p() {
-        return alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::new(coded_width, coded_height);
-    }
-    alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::with_format(
-        coded_width,
-        coded_height,
-        pixel_format(layout),
-        &frame_planes(layout, width, height),
-    )
+    let format = pixel_format(layout).map_err(|_| {
+        alpha2_ffmpeg_bridge::BridgeError::InvalidInput("pixel layout has no FFmpeg format")
+    })?;
+    alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::with_format(coded_width, coded_height, format)
 }
 
 pub(crate) fn prores_options(layout: alpha2_media::PixelLayout) -> Vec<(&'static CStr, String)> {

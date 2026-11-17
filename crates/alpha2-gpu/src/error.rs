@@ -3,7 +3,7 @@ use std::fmt;
 /// Failure while acquiring a GPU context, with the platform reason as its
 /// [`source`](std::error::Error::source).
 #[derive(Debug)]
-pub struct GpuError(Cause);
+pub struct GpuError(Cause, Vec<(String, String)>);
 
 /// The step of acquiring a GPU context that failed.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -40,16 +40,16 @@ enum Cause {
 
 impl GpuError {
     pub(crate) const fn adapter(error: wgpu::RequestAdapterError) -> Self {
-        Self(Cause::Adapter(error))
+        Self(Cause::Adapter(error), Vec::new())
     }
 
     pub(crate) const fn device(error: wgpu::RequestDeviceError) -> Self {
-        Self(Cause::Device(error))
+        Self(Cause::Device(error), Vec::new())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const fn instance(backend: &'static str, compiler: String) -> Self {
-        Self(Cause::Instance { backend, compiler })
+        Self(Cause::Instance { backend, compiler }, Vec::new())
     }
 
     /// A DX12 backend that lists no adapter because its shader compiler did not load. Reported
@@ -62,7 +62,7 @@ impl GpuError {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const fn pin(reason: String) -> Self {
-        Self(Cause::Pin(reason))
+        Self(Cause::Pin(reason), Vec::new())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -70,7 +70,14 @@ impl GpuError {
         software: Vec<String>,
         refusals: Vec<(String, String)>,
     ) -> Self {
-        Self(Cause::NoHardwareAdapter { software, refusals })
+        Self(Cause::NoHardwareAdapter { software, refusals }, Vec::new())
+    }
+
+    /// This error, also naming every adapter a request tried and why each failed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn tried(mut self, attempts: Vec<(String, String)>) -> Self {
+        self.1 = attempts;
+        self
     }
 
     /// The step that failed.
@@ -98,6 +105,18 @@ impl std::error::Error for GpuError {
 
 impl fmt::Display for GpuError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_cause(formatter)?;
+        if self.1.len() > 1 {
+            for (adapter, reason) in &self.1 {
+                write!(formatter, "; tried {adapter}: {reason}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl GpuError {
+    fn fmt_cause(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0 {
             Cause::Adapter(error) => write!(formatter, "could not acquire a GPU adapter: {error}"),
             Cause::Device(error) => write!(formatter, "could not acquire a GPU device: {error}"),

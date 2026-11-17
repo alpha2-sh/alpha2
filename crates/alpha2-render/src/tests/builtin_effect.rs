@@ -1153,6 +1153,7 @@ fn builtins_that_do_not_read_the_time_draw_alike_at_any_time() {
                         time: alpha2_time::MediaTime::from_ticks(ticks),
                         progress: 0.4,
                         ratio: 1.0,
+                        scale: 1.0,
                     },
                 )
                 .expect("the transition renders");

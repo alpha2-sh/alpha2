@@ -1,0 +1,2244 @@
+//! The reference projects exported through the public API on a device or emulator, with the
+//! repository's `tests/` copied to `ALPHA2_TESTS_DIR`.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use alpha2_container::TrackKind;
+use serde_json::Value;
+
+use crate::{
+    Alpha2, EngineConfig, ExportProgress, ExportProgressEvent, ExportRequest, FontFile,
+    ProgressFailure,
+};
+
+struct Quiet;
+
+impl ExportProgress for Quiet {
+    fn on_progress(&self, _event: ExportProgressEvent) -> Result<(), ProgressFailure> {
+        Ok(())
+    }
+}
+
+fn tests_dir() -> PathBuf {
+    std::env::var_os("ALPHA2_TESTS_DIR").map_or_else(|| PathBuf::from("tests"), PathBuf::from)
+}
+
+/// Exports `project` (a `tests/cases` file) with `assets` (`tests/corpus` files by source ID)
+/// and returns the output and its report.
+fn export(
+    project: &str,
+    assets: &[(&str, &str)],
+    fonts: &[&str],
+    output: &str,
+) -> (PathBuf, Value) {
+    export_with_frames(project, assets, &[], fonts, output)
+}
+
+/// [`export`] with image sequence frames (`tests/corpus` files) by source ID.
+fn export_with_frames(
+    project: &str,
+    assets: &[(&str, &str)],
+    frames: &[(&str, &[&str])],
+    fonts: &[&str],
+    output: &str,
+) -> (PathBuf, Value) {
+    export_configured(
+        EngineConfig::default(),
+        project,
+        (assets, frames),
+        fonts,
+        output,
+    )
+}
+
+/// Files by source ID, and image sequence frames by source ID.
+type Assets<'a> = (&'a [(&'a str, &'a str)], &'a [(&'a str, &'a [&'a str])]);
+
+/// [`export_with_frames`] by a session set up with `config`.
+fn export_configured(
+    config: EngineConfig,
+    project: &str,
+    assets: Assets<'_>,
+    fonts: &[&str],
+    output: &str,
+) -> (PathBuf, Value) {
+    let (path, report) = try_export(config, project, assets, fonts, output);
+    (
+        path,
+        report.unwrap_or_else(|error| panic!("{project}: {error:?}")),
+    )
+}
+
+/// [`export_configured`], answering the export's failure instead of panicking on it.
+fn try_export(
+    config: EngineConfig,
+    project: &str,
+    (assets, frames): Assets<'_>,
+    fonts: &[&str],
+    output: &str,
+) -> (PathBuf, Result<Value, crate::Alpha2Error>) {
+    let tests = tests_dir();
+    let engine = Alpha2::new(config);
+    if !fonts.is_empty() {
+        let files = fonts
+            .iter()
+            .map(|name| FontFile {
+                bytes: std::fs::read(tests.join("fonts").join(name)).expect("font"),
+                face_index: 0,
+            })
+            .collect();
+        engine.set_fonts(files).expect("fonts");
+    }
+    let path = std::env::temp_dir().join(output);
+    let request = ExportRequest {
+        project_json: std::fs::read_to_string(tests.join("cases").join(project)).expect("project"),
+        assets: assets
+            .iter()
+            .map(|(id, name)| {
+                let file = tests.join("corpus").join(name);
+                ((*id).to_owned(), file.to_string_lossy().into_owned())
+            })
+            .collect::<HashMap<_, _>>(),
+        frames: frames
+            .iter()
+            .map(|(id, names)| {
+                let files = names
+                    .iter()
+                    .map(|name| {
+                        tests
+                            .join("corpus")
+                            .join(name)
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                    .collect();
+                ((*id).to_owned(), files)
+            })
+            .collect(),
+        resources: HashMap::new(),
+        output_path: path.to_string_lossy().into_owned(),
+        overwrite: true,
+        container: None,
+        video_codec: None,
+        audio_codec: None,
+        include_audio: true,
+        start_ticks: None,
+        end_ticks: None,
+    };
+    let handle = engine
+        .export(request, Arc::new(Quiet))
+        .expect("export starts");
+    let report = pollster::block_on(handle.outcome()).map(|outcome| {
+        let report: Value = serde_json::from_str(&outcome.report_json).expect("report");
+        eprintln!("{project}: {report}");
+        report
+    });
+    (path, report)
+}
+
+/// The output has a video track with the reported frames, and audio when `audio`.
+fn check(path: &std::path::Path, report: &Value, audio: bool) {
+    let mut reader = alpha2_container::open(path).expect("the output reads back");
+    let tracks = reader.tracks().to_vec();
+    let video = tracks
+        .iter()
+        .find(|track| track.kind == TrackKind::Video)
+        .expect("video");
+    assert_eq!(
+        tracks.iter().any(|track| track.kind == TrackKind::Audio),
+        audio,
+        "audio track"
+    );
+    let mut packets = 0;
+    while reader.next_packet(video.id).expect("packet").is_some() {
+        packets += 1;
+    }
+    assert_eq!(Some(packets), report["frames"].as_u64(), "frames");
+}
+
+/// Packed I420 planes, `width` x `height` luma samples.
+type Frame = Vec<Vec<u8>>;
+
+/// Below this the decoded export differs visibly from what was rendered; the device encoders at
+/// their default rate stay above it on the parity project's 64x48 frames.
+const EXPORT_PSNR_FLOOR_DB: f64 = 30.0;
+
+/// The frames at output indices `wanted` of the export at `path`, decoded on this device.
+fn decoded_frames(
+    path: &std::path::Path,
+    wanted: &[u64],
+    (width, height): (u32, u32),
+) -> Vec<Frame> {
+    use alpha2_host_core::video_stream::{StreamOptions, VideoStream};
+    use alpha2_media::{PixelFormat, YuvFormat};
+    let decoders = crate::platform::current()
+        .video_decoders()
+        .expect("this platform has video decoders");
+    let mut stream = VideoStream::open_file(path, decoders, StreamOptions::default())
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let cancel = alpha2_media::CancelToken::default();
+    let (width, height) = (width as usize, height as usize);
+    let mut frames = Vec::new();
+    for index in 0..=*wanted.iter().max().expect("a frame") {
+        let frame = stream.next(&cancel).expect("decodes").expect("a frame");
+        if !wanted.contains(&index) {
+            continue;
+        }
+        let frame = frame.to_cpu().expect("decoded into memory");
+        let (left, top) = (frame.visible_rect.x as usize, frame.visible_rect.y as usize);
+        let rows = |plane: &alpha2_media::Plane, x: usize, y: usize, w: usize, h: usize| {
+            (y..y + h)
+                .flat_map(|row| {
+                    let start = row * plane.stride as usize + x;
+                    plane.bytes[start..start + w].to_vec()
+                })
+                .collect::<Vec<u8>>()
+        };
+        let luma = rows(&frame.planes[0], left, top, width, height);
+        let (cw, ch, cx, cy) = (width / 2, height / 2, left / 2, top / 2);
+        let chroma = match frame.pixel_format {
+            PixelFormat::Yuv(YuvFormat::I420) => vec![
+                rows(&frame.planes[1], cx, cy, cw, ch),
+                rows(&frame.planes[2], cx, cy, cw, ch),
+            ],
+            PixelFormat::Yuv(YuvFormat::NV12) => {
+                let pairs = rows(&frame.planes[1], cx * 2, cy, cw * 2, ch);
+                vec![
+                    pairs.iter().step_by(2).copied().collect(),
+                    pairs.iter().skip(1).step_by(2).copied().collect(),
+                ]
+            }
+            other => panic!("decoded as {other:?}"),
+        };
+        frames.push([vec![luma], chroma].concat());
+    }
+    frames
+}
+
+/// The planes the CPU renderer hands the encoder at output indices `wanted` for `project` (a
+/// `tests/cases` file) with `assets`, its sources decoded by this device's decoders.
+fn rendered_frames(project: &str, assets: &[(&str, &str)], wanted: &[u64]) -> Vec<Frame> {
+    use alpha2_engine::{EngineProject, Exporter, QualityProfile, TextTextures};
+    use alpha2_host_core::encode::PlaneBuffer;
+    use alpha2_host_core::export::{ExportRenderer, FrameBudget, StreamSources, VideoSink};
+    use alpha2_host_core::video_stream::DecodePreference;
+
+    struct Collect<'a>(&'a [u64], Vec<Frame>);
+    impl VideoSink for Collect<'_> {
+        fn write_video(
+            &mut self,
+            index: u64,
+            _time: alpha2_time::MediaTime,
+            _layout: alpha2_media::PixelLayout,
+            planes: &[PlaneBuffer],
+        ) -> Result<(), alpha2_media::EncodeError> {
+            if self.0.contains(&index) {
+                self.1.push(
+                    planes
+                        .iter()
+                        .map(|plane| {
+                            plane
+                                .bytes
+                                .chunks(plane.stride)
+                                .take(plane.height as usize)
+                                .flat_map(|row| row[..plane.width as usize].to_vec())
+                                .collect()
+                        })
+                        .collect(),
+                );
+            }
+            Ok(())
+        }
+    }
+    let tests = tests_dir();
+    let project = alpha2_model::Project::from_json(
+        &std::fs::read_to_string(tests.join("cases").join(project)).expect("project"),
+    )
+    .expect("project");
+    let snapshot = EngineProject::new(project.clone()).expect("snapshot");
+    let mut exporter = Exporter::for_project(
+        &snapshot,
+        QualityProfile::export(),
+        alpha2_media::VideoCodec::H264,
+    )
+    .expect("exporter");
+    let assets = assets
+        .iter()
+        .map(|(id, name)| ((*id).to_owned(), tests.join("corpus").join(name)))
+        .collect();
+    let mut sources = StreamSources::new(crate::export::source_opener(
+        &project,
+        assets,
+        crate::platform::current().video_decoders(),
+        DecodePreference::Auto,
+    ));
+    let renderer = alpha2_render::CpuRenderer::new(2);
+    let mut sink = Collect(wanted, Vec::new());
+    alpha2_host_core::export::export_video(
+        &snapshot,
+        &mut exporter,
+        ExportRenderer::Cpu(&renderer),
+        &mut TextTextures::new(),
+        &mut sources,
+        &mut sink,
+        (
+            &FrameBudget::new(1 << 30),
+            &alpha2_media::CancelToken::default(),
+        ),
+        &mut |_| Ok(()),
+        &mut |_, _| {},
+    )
+    .expect("renders");
+    sink.1
+}
+
+/// Compares the first and middle frames of the export at `path` with the CPU renderer's.
+fn check_pictures(path: &std::path::Path, report: &Value, project: &str, assets: &[(&str, &str)]) {
+    let frames = report["frames"].as_u64().expect("frames");
+    let size = (
+        u32::try_from(report["width"].as_u64().expect("width")).expect("width"),
+        u32::try_from(report["height"].as_u64().expect("height")).expect("height"),
+    );
+    let mut wanted = vec![0, frames / 2];
+    wanted.dedup();
+    let decoded = decoded_frames(path, &wanted, size);
+    let rendered = rendered_frames(project, assets, &wanted);
+    for (index, (frame, source)) in decoded.iter().zip(&rendered).enumerate() {
+        let psnr = (0..3)
+            .map(|plane| {
+                format!(
+                    "{:.1}",
+                    alpha2_test_support::media::plane_psnr(&frame[plane], &source[plane])
+                )
+            })
+            .collect::<Vec<_>>();
+        eprintln!(
+            "{project}: frame {} of {} by {}: Y U V {} dB",
+            wanted[index],
+            report["videoEncoder"],
+            path.display(),
+            psnr.join(" ")
+        );
+    }
+    alpha2_test_support::media::plane_check(&decoded, &rendered, size.0, EXPORT_PSNR_FLOOR_DB)
+        .unwrap_or_else(|problem| panic!("{project} ({}): {problem}", report["videoEncoder"]));
+}
+
+/// The RMS of each channel of the default audio track of `path` over `[from, to)` seconds,
+/// decoded by this device's decoders at 48 kHz.
+fn channel_rms(path: &std::path::Path, (from, to): (f64, f64)) -> Vec<f64> {
+    let decoders = crate::platform::current()
+        .audio_decoders()
+        .expect("this platform has audio decoders");
+    let mut stream = alpha2_host_core::audio_stream::AudioStream::open_file(
+        path,
+        decoders.as_ref(),
+        48_000,
+        None,
+        alpha2_host_core::DecodePolicy::default(),
+    )
+    .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let cancel = alpha2_media::CancelToken::default();
+    #[allow(clippy::cast_possible_truncation)]
+    let span = ((from * 48_000.0) as i64, (to * 48_000.0) as i64);
+    let mut sums: Vec<(f64, usize)> = Vec::new();
+    while let Some(block) = stream.next_block(&cancel).expect("decodes") {
+        sums.resize(block.channels.len(), (0.0, 0));
+        for (sum, channel) in sums.iter_mut().zip(&block.channels) {
+            for (at, sample) in (block.start_sample..).zip(channel) {
+                if (span.0..span.1).contains(&at) {
+                    sum.0 += f64::from(*sample) * f64::from(*sample);
+                    sum.1 += 1;
+                }
+            }
+        }
+    }
+    #[allow(clippy::cast_precision_loss)]
+    sums.iter()
+        .map(|(sum, count)| (sum / (*count).max(1) as f64).sqrt())
+        .collect()
+}
+
+/// The audio of an export of `host-audio-export-project.json` carries the source's 0.4 s tone at
+/// its level on every channel, and silence after it.
+fn check_sound(path: &std::path::Path) {
+    let tone = (0.05, 0.35);
+    let source = channel_rms(&tests_dir().join("corpus/audio-only-aac-priming.m4a"), tone)[0];
+    let exported = channel_rms(path, tone);
+    let after = channel_rms(path, (0.6, 0.95));
+    eprintln!(
+        "{}: tone RMS {source:.4} in the source, {exported:.4?} exported, {after:.4?} after it",
+        path.display()
+    );
+    assert!(source > 0.01, "the source tone decodes: {source}");
+    assert_eq!(exported.len(), 2, "stereo");
+    for (rms, quiet) in exported.iter().zip(&after) {
+        let decibels = 20.0 * (rms / source).log10();
+        assert!(
+            decibels.abs() < 3.0,
+            "{}: the tone is {decibels:.1} dB from the source's level",
+            path.display()
+        );
+        assert!(
+            *quiet < source / 30.0,
+            "{}: {quiet} RMS where the project is silent",
+            path.display()
+        );
+    }
+}
+
+/// In a Matroska or `WebM` export the two tracks stay within 1.5 s of each other in file order:
+/// audio leads the video by at most a second, plus a packet.
+fn check_interleaving(path: &std::path::Path) {
+    let bytes = std::fs::read(path).expect("the output");
+    let (blocks, _) = alpha2_test_support::media::matroska_blocks(&bytes);
+    let widest = alpha2_test_support::media::widest_track_distance(&blocks);
+    eprintln!("{}: tracks at most {widest} ms apart", path.display());
+    assert!(
+        widest < 1_500,
+        "{}: the tracks are {widest} ms apart",
+        path.display()
+    );
+}
+
+/// A project file, its assets by source ID, its fonts, and whether its output has audio.
+type Case = (
+    &'static str,
+    &'static [(&'static str, &'static str)],
+    &'static [&'static str],
+    bool,
+);
+
+#[test]
+fn reference_projects_export_to_mp4() {
+    let cases: [Case; 6] = [
+        (
+            "host-parity-project.json",
+            &[("image-source", "cross_topology_parity.png")],
+            &[],
+            false,
+        ),
+        (
+            "host-video-export-project.json",
+            &[("video-source", "video-only.mp4")],
+            &[],
+            false,
+        ),
+        (
+            "host-audio-export-project.json",
+            &[
+                ("image-source", "cross_topology_parity.png"),
+                ("audio-source", "audio-only-aac-priming.m4a"),
+            ],
+            &[],
+            true,
+        ),
+        (
+            "host-parity-shapes-project.json",
+            &[("still", "parity-image.png")],
+            &[],
+            false,
+        ),
+        (
+            "host-parity-layout-project.json",
+            &[("still", "parity-image.png")],
+            &["Alpha2Fixture.ttf"],
+            false,
+        ),
+        (
+            "host-first-frame-small-layer-project.json",
+            &[("still", "parity-image.png")],
+            &[],
+            false,
+        ),
+    ];
+    for (project, assets, fonts, audio) in cases {
+        let output = project.replace("-project.json", ".mp4");
+        let (path, report) = export(project, assets, fonts, &output);
+        check(&path, &report, audio);
+        if ["host-parity-project.json", "host-video-export-project.json"].contains(&project) {
+            check_pictures(&path, &report, project, assets);
+        }
+        if audio {
+            check_sound(&path);
+        }
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+#[test]
+fn extension_sources_export_to_mp4() {
+    let (path, report) = export_with_frames(
+        "host-parity-extensions-project.json",
+        &[
+            ("gif", "extensions/animation.gif"),
+            ("webp", "extensions/animation.webp"),
+            ("apng", "extensions/animation.png"),
+            ("logo", "extensions/shapes.svg"),
+            ("label", "extensions/label.svg"),
+            ("lottie", "extensions/moving.json"),
+            ("dot", "extensions/pair.lottie"),
+            ("exr", "extensions/window.exr"),
+        ],
+        &[
+            (
+                "seq",
+                &[
+                    "extensions/sequence_0007.png",
+                    "extensions/sequence_0008.png",
+                    "extensions/sequence_0009.png",
+                    "extensions/sequence_0010.png",
+                ][..],
+            ),
+            (
+                "exrseq",
+                &[
+                    "extensions/sequence_0001.exr",
+                    "extensions/sequence_0002.exr",
+                ][..],
+            ),
+        ],
+        &["Alpha2Fixture.ttf"],
+        "host-parity-extensions.mp4",
+    );
+    check(&path, &report, false);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn latex_and_pdf_sources_export_to_mp4() {
+    // The small parity project with a formula and a PDF page drawn over its picture.
+    let tests = tests_dir();
+    let mut project: Value = serde_json::from_str(
+        &std::fs::read_to_string(tests.join("cases/host-parity-project.json")).expect("project"),
+    )
+    .expect("JSON");
+    project["sources"].as_array_mut().expect("sources").extend([
+        serde_json::json!({
+            "id": "formula",
+            "kind": "image",
+            "provider": { "format": "latex", "latex": "x^2 + \\frac{a}{b}", "font_size": 24 },
+        }),
+        serde_json::json!({
+            "id": "page",
+            "locator": "asset://page",
+            "kind": "image",
+            "provider": { "format": "pdf", "page": 1 },
+        }),
+    ]);
+    let tracks = project["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks");
+    for (id, source) in [("formula", "formula"), ("page", "page")] {
+        tracks.push(serde_json::json!({
+            "id": id,
+            "name": id,
+            "kind": "video",
+            "clips": [{
+                "id": format!("{id}-clip"),
+                "source_id": source,
+                "timeline_range": { "start": 0, "end": 5000 },
+                "source_range": { "start": 0, "end": 5000 },
+            }],
+        }));
+    }
+    let engine = Alpha2::new(EngineConfig::default());
+    let output = std::env::temp_dir().join("latex-pdf.mp4");
+    let request = ExportRequest {
+        project_json: project.to_string(),
+        assets: HashMap::from([
+            (
+                "image-source".to_owned(),
+                tests
+                    .join("corpus/cross_topology_parity.png")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "page".to_owned(),
+                tests
+                    .join("corpus/extensions/pages.pdf")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ]),
+        output_path: output.to_string_lossy().into_owned(),
+        overwrite: true,
+        ..ExportRequest::default()
+    };
+    let handle = engine
+        .export(request, Arc::new(Quiet))
+        .expect("export starts");
+    let outcome = pollster::block_on(handle.outcome()).expect("export");
+    let report: Value = serde_json::from_str(&outcome.report_json).expect("report");
+    eprintln!("latex and pdf: {report}");
+    check(&output, &report, false);
+    let _ = std::fs::remove_file(output);
+}
+
+#[test]
+fn a_source_with_alpha_is_reported_as_drawn_opaque() {
+    let (path, report) = try_export(
+        EngineConfig::default(),
+        "host-video-export-project.json",
+        (&[("video-source", "hevc-alpha.mov")], &[]),
+        &[],
+        "alpha-dropped.mp4",
+    );
+    match report {
+        Ok(report) => {
+            let entries = report["decodeDiagnostics"].as_array().expect("diagnostics");
+            assert_eq!(entries.len(), 1, "{report}");
+            assert_eq!(entries[0]["type"], "layerDropped");
+            assert_eq!(entries[0]["code"], "alpha-dropped");
+            assert_eq!(entries[0]["source"], "video-source");
+        }
+        // A device without an HEVC decoder refuses the source by name instead.
+        Err(error) => assert!(format!("{error:?}").contains("HEVC"), "{error:?}"),
+    }
+    let _ = std::fs::remove_file(path);
+}
+
+/// A session drawing on the CPU renderer, whose extraction bytes every device pins alike.
+fn cpu_engine() -> Arc<Alpha2> {
+    Alpha2::new(EngineConfig {
+        renderer: crate::RendererMode::Cpu,
+        ..EngineConfig::default()
+    })
+}
+
+#[test]
+fn the_surface_table_source_digests_hash_as_pinned() {
+    let engine = cpu_engine();
+    let mut failures = Vec::new();
+    // MPEG-4 Part 2 (`rotation.mp4`, `sar-16-15.mp4`) has no bit-exact inverse transform, so
+    // only that its frames arrive is checked; the reader conformance suite checks their times.
+    for (name, exact) in [
+        ("digest-source-h264-bt709-copy", true),
+        ("digest-source-hevc-hvc1", true),
+        ("digest-source-rotation", false),
+        ("digest-source-sar-16-15", false),
+        ("digest-source-hdr-pq", true),
+    ] {
+        match crate::extract_cases::client_case_hash(&engine, name) {
+            Ok((found, pinned)) if exact && found != pinned => {
+                failures.push(format!("{name}: {found}, pinned {pinned}"));
+            }
+            Ok(_) => {}
+            // 10-bit H.264 High 4:4:4 Predictive, which a device without its decoder refuses as
+            // unsupported.
+            Err(error @ crate::Alpha2Error::Unsupported { .. })
+                if name == "digest-source-hdr-pq" =>
+            {
+                eprintln!("{name}: refused: {error:?}");
+            }
+            Err(error) => failures.push(format!("{name}: {error:?}")),
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn a_cancel_during_a_source_extraction_aborts_it() {
+    use crate::extract_cases::{Digest, case, request, settled, table};
+    let table = table();
+    let case = case(&table, "digest-source-h264-bt709-copy");
+    let extractor = Arc::new(Digest::new(&case));
+    let handle = cpu_engine()
+        .extract(
+            request(&table, &case),
+            Arc::clone(&extractor) as Arc<dyn crate::Extractor>,
+        )
+        .expect("started");
+    let _ = extractor.cancel.set(Arc::clone(&handle));
+    let outcome = settled(handle, 60);
+    assert!(
+        matches!(outcome, Err(crate::Alpha2Error::Aborted)),
+        "{outcome:?}"
+    );
+}
+
+#[test]
+fn a_project_with_audio_exports_to_mkv_and_webm() {
+    let assets = [
+        ("image-source", "cross_topology_parity.png"),
+        ("audio-source", "audio-only-aac-priming.m4a"),
+    ];
+    // Twelve seconds of picture, so audio written far ahead of the video shows in the file order.
+    let mut project: Value = serde_json::from_str(
+        &std::fs::read_to_string(tests_dir().join("cases/host-audio-export-project.json"))
+            .expect("project"),
+    )
+    .expect("JSON");
+    let picture = &mut project["timeline"]["tracks"][0]["clips"][0];
+    for range in ["timeline_range", "source_range"] {
+        picture[range]["end"] = Value::from(12 * alpha2_time::TICKS_PER_SECOND);
+    }
+    let long = std::env::temp_dir().join("audio-export-long-project.json");
+    std::fs::write(&long, project.to_string()).expect("project file");
+    // An absolute path replaces the cases directory the helper joins it to.
+    let long = long.to_string_lossy().into_owned();
+    let (path, report) = export(&long, &assets, &[], "audio-export.mkv");
+    check(&path, &report, true);
+    assert_eq!(report["container"], "mkv");
+    check_sound(&path);
+    check_interleaving(&path);
+    let _ = std::fs::remove_file(path);
+    // `WebM` takes VP9 or AV1, which not every device encodes.
+    let capabilities: Value =
+        serde_json::from_str(&Alpha2::new(EngineConfig::default()).capabilities()).expect("JSON");
+    let encoders = &capabilities["media"]["videoEncoders"];
+    let webm = ["vp9", "av1"].iter().any(|codec| {
+        encoders
+            .as_array()
+            .is_some_and(|all| all.iter().any(|e| e == codec))
+    });
+    if !webm {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::WebmEncode,
+            "the device encodes {encoders}"
+        );
+        let _ = std::fs::remove_file(&long);
+        return;
+    }
+    let (path, report) = export(&long, &assets, &[], "audio-export.webm");
+    check(&path, &report, true);
+    assert_eq!(report["container"], "webm");
+    check_sound(&path);
+    check_interleaving(&path);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(&long);
+}
+
+/// Counts the frames an export reports.
+struct Counting(std::sync::atomic::AtomicU64);
+
+impl ExportProgress for Counting {
+    fn on_progress(&self, event: ExportProgressEvent) -> Result<(), ProgressFailure> {
+        self.0
+            .store(event.frames_done, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+}
+
+#[test]
+fn an_export_holds_in_the_background_and_finishes_after_a_memory_warning() {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    let tests = tests_dir();
+    let engine = Alpha2::new(EngineConfig::default());
+    let output = std::env::temp_dir().join("background-round-trip.mp4");
+    let progress = Arc::new(Counting(std::sync::atomic::AtomicU64::new(0)));
+    let request = ExportRequest {
+        project_json: std::fs::read_to_string(
+            tests.join("cases/host-first-frame-small-layer-project.json"),
+        )
+        .expect("project"),
+        assets: HashMap::from([(
+            "still".to_owned(),
+            tests
+                .join("corpus/parity-image.png")
+                .to_string_lossy()
+                .into_owned(),
+        )]),
+        output_path: output.to_string_lossy().into_owned(),
+        overwrite: true,
+        ..ExportRequest::default()
+    };
+    let handle = engine
+        .export(request, Arc::clone(&progress) as Arc<dyn ExportProgress>)
+        .expect("export starts");
+    let until = Instant::now() + Duration::from_secs(30);
+    while progress.0.load(Ordering::Acquire) < 3 && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // The app leaves the foreground, where the system warns it of memory pressure: the export
+    // finishes the frame it is drawing, if any, and holds at the next boundary, then continues
+    // on a halved frame budget.
+    engine.pause();
+    let paused_at = progress.0.load(Ordering::Acquire);
+    engine.memory_warning();
+    let until = Instant::now() + Duration::from_secs(30);
+    while !handle.is_held() && !handle.is_finished() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(handle.is_held(), "the export did not hold");
+    let held = progress.0.load(Ordering::Acquire);
+    assert!(
+        held <= paused_at + 1,
+        "paused at frame {paused_at}, then reached {held}"
+    );
+    std::thread::sleep(Duration::from_millis(700));
+    assert_eq!(
+        progress.0.load(Ordering::Acquire),
+        held,
+        "frames while held"
+    );
+    assert!(!handle.is_finished());
+    engine.resume();
+    let outcome = pollster::block_on(handle.outcome()).expect("export");
+    let report: Value = serde_json::from_str(&outcome.report_json).expect("report");
+    eprintln!("held at frame {held}; {report}");
+    check(&output, &report, false);
+    let _ = std::fs::remove_file(output);
+}
+
+/// Counts the progress events of an export.
+struct Events(std::sync::atomic::AtomicU64);
+
+impl ExportProgress for Events {
+    fn on_progress(&self, _event: ExportProgressEvent) -> Result<(), ProgressFailure> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Ok(())
+    }
+}
+
+/// An export of 60 s of audio paused right after it starts holds before its audio phase or its
+/// first frame, reports nothing while held, and finishes after the resume.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[test]
+fn an_export_paused_as_it_starts_holds_before_any_frame() {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    let tests = tests_dir();
+    let wav = std::env::temp_dir().join("alpha2-minute-silence.wav");
+    write_silence(&wav, 8_000, 60);
+    let mut project: Value = serde_json::from_str(
+        &std::fs::read_to_string(tests.join("cases/host-audio-export-project.json"))
+            .expect("project"),
+    )
+    .expect("JSON");
+    for track in project["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks")
+    {
+        for clip in track["clips"].as_array_mut().expect("clips") {
+            clip["timeline_range"]["end"] = 7_200_000.into();
+            clip["source_range"]["end"] = 7_200_000.into();
+        }
+    }
+    let output = std::env::temp_dir().join("alpha2-paused-start.mp4");
+    let engine = Alpha2::new(EngineConfig::default());
+    let events = Arc::new(Events(std::sync::atomic::AtomicU64::new(0)));
+    let request = ExportRequest {
+        project_json: project.to_string(),
+        assets: HashMap::from([
+            (
+                "image-source".to_owned(),
+                tests
+                    .join("corpus/cross_topology_parity.png")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "audio-source".to_owned(),
+                wav.to_string_lossy().into_owned(),
+            ),
+        ]),
+        output_path: output.to_string_lossy().into_owned(),
+        overwrite: true,
+        include_audio: true,
+        ..ExportRequest::default()
+    };
+    let handle = engine
+        .export(request, Arc::clone(&events) as Arc<dyn ExportProgress>)
+        .expect("export starts");
+    engine.pause();
+    let until = Instant::now() + Duration::from_secs(30);
+    while !handle.is_held() && !handle.is_finished() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(handle.is_held(), "the export did not hold");
+    assert_eq!(
+        events.0.load(Ordering::Acquire),
+        0,
+        "progress before the hold"
+    );
+    std::thread::sleep(Duration::from_millis(700));
+    assert_eq!(events.0.load(Ordering::Acquire), 0, "progress while held");
+    assert!(!handle.is_finished());
+    engine.resume();
+    let outcome = pollster::block_on(handle.outcome()).expect("export");
+    let report: Value = serde_json::from_str(&outcome.report_json).expect("report");
+    check(&output, &report, true);
+    let _ = std::fs::remove_file(output);
+    let _ = std::fs::remove_file(wav);
+}
+
+/// Plays `player` through its timeline of `frames` frames lasting `seconds` and checks it kept
+/// time: each frame is drawn or, where it came due before the previous one was drawn, counted as
+/// dropped, the first and the last are always drawn, and playing by the clock takes no less than
+/// the timeline's length. `wait(seconds, done)` waits as the platform's test window needs.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn play_through(
+    player: &crate::Player,
+    wait: &dyn Fn(u64, &dyn Fn() -> bool) -> bool,
+    frames: u64,
+    seconds: f64,
+) {
+    let (presented, dropped) = (player.frames_presented(), player.frames_dropped());
+    let started = std::time::Instant::now();
+    player.play();
+    assert!(wait(5, &|| player.is_playing()));
+    assert!(
+        wait(10, &|| !player.is_playing()),
+        "{:?}",
+        player.last_error()
+    );
+    let elapsed = started.elapsed().as_secs_f64();
+    let drawn = player.frames_presented() - presented;
+    let skipped = player.frames_dropped() - dropped;
+    eprintln!("played {frames} frames in {elapsed:.3} s: {drawn} drawn, {skipped} dropped");
+    assert_eq!(
+        drawn + skipped,
+        frames,
+        "{drawn} drawn and {skipped} dropped"
+    );
+    assert!(drawn >= 2, "only {drawn} frames drawn");
+    let frame = seconds / f64::from(u32::try_from(frames).unwrap_or(u32::MAX));
+    assert!(
+        elapsed >= seconds - frame,
+        "played {seconds} s in {elapsed:.3} s"
+    );
+}
+
+/// Seeks 240 times in 2 s between two distant times of a player shown on a window. The last
+/// target must be reached within 500 ms, or three single seeks on a slower device.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn scrub(player: &crate::Player, wait: &dyn Fn(u64, &dyn Fn() -> bool) -> bool) {
+    use std::time::{Duration, Instant};
+
+    let far = 108_000;
+    let single = Instant::now();
+    player.seek(far);
+    assert!(wait(10, &|| player.position_ticks() == far));
+    let single = single.elapsed();
+    player.seek(0);
+    assert!(wait(10, &|| player.position_ticks() == 0));
+    let bound = Duration::from_millis(500).max(single * 3);
+    let (presented, dropped) = (player.frames_presented(), player.frames_dropped());
+    for index in 0..240 {
+        player.seek(if index % 2 == 0 { 0 } else { far });
+        std::thread::sleep(Duration::from_micros(8_333));
+    }
+    let last_call = Instant::now();
+    assert!(
+        wait(5, &|| player.position_ticks() == far),
+        "{:?}",
+        player.last_error()
+    );
+    let reached = last_call.elapsed();
+    let shown = player.frames_presented() - presented + player.frames_dropped() - dropped;
+    eprintln!(
+        "240 seeks: {shown} frames shown, last target reached {reached:?} after the call \
+         (one seek takes {single:?})"
+    );
+    assert!(reached < bound, "{reached:?}");
+    assert_eq!(player.last_error(), None);
+}
+
+/// The video project's player on `engine`.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn video_player(engine: Arc<Alpha2>) -> Arc<crate::Player> {
+    let tests = tests_dir();
+    crate::Player::new(
+        engine,
+        crate::PlayerRequest {
+            project_json: std::fs::read_to_string(
+                tests.join("cases/host-video-export-project.json"),
+            )
+            .expect("project"),
+            assets: HashMap::from([(
+                "video-source".to_owned(),
+                tests
+                    .join("corpus/h264-bt709-copy.mp4")
+                    .to_string_lossy()
+                    .into_owned(),
+            )]),
+            ..crate::PlayerRequest::default()
+        },
+    )
+    .expect("player")
+}
+
+/// Seeks `player`, which shows a frame on a window, while `engine` is paused: nothing is drawn
+/// until the session resumes, and then one frame at the new position.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn seek_while_paused(
+    engine: &Alpha2,
+    player: &crate::Player,
+    wait: &dyn Fn(u64, &dyn Fn() -> bool) -> bool,
+) {
+    let shown = || player.frames_presented() + player.frames_dropped();
+    assert!(wait(10, &|| shown() >= 1), "{:?}", player.last_error());
+    engine.pause();
+    let before = (shown(), player.position_ticks());
+    player.seek(108_000);
+    player.resize(80, 60);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(
+        (shown(), player.position_ticks()),
+        before,
+        "drawn while paused"
+    );
+    engine.resume();
+    assert!(
+        wait(10, &|| player.position_ticks() == 108_000),
+        "{:?}",
+        player.last_error()
+    );
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(shown(), before.0 + 1, "frames drawn after the resume");
+    assert_eq!(player.last_error(), None);
+}
+
+/// Writes `seconds` of 16-bit mono silence at `rate` as a WAV file.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn write_silence(path: &std::path::Path, rate: u32, seconds: u32) {
+    use std::io::Write;
+
+    let bytes = rate * seconds * 2;
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path).expect("wav"));
+    let mut header = Vec::new();
+    header.extend(b"RIFF");
+    header.extend((36 + bytes).to_le_bytes());
+    header.extend(b"WAVEfmt ");
+    header.extend(16_u32.to_le_bytes());
+    header.extend(1_u16.to_le_bytes());
+    header.extend(1_u16.to_le_bytes());
+    header.extend(rate.to_le_bytes());
+    header.extend((rate * 2).to_le_bytes());
+    header.extend(2_u16.to_le_bytes());
+    header.extend(16_u16.to_le_bytes());
+    header.extend(b"data");
+    header.extend(bytes.to_le_bytes());
+    file.write_all(&header).expect("header");
+    let block = vec![0_u8; 1 << 20];
+    let mut left = bytes as usize;
+    while left > 0 {
+        let length = left.min(block.len());
+        file.write_all(&block[..length]).expect("samples");
+        left -= length;
+    }
+    file.flush().expect("flush");
+}
+
+/// The 60 minute recording decodes whole to about 690 MB at 48 kHz, which a preview must not hold.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+#[test]
+fn a_preview_of_a_long_recording_ends_at_once_and_plays_from_windows() {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+
+    use alpha2_host_core::audio_stream::INJECT_DECODE_DELAY_MS_PER_SECOND;
+
+    use crate::{Player, PlayerRequest};
+
+    const SECONDS: u32 = 3_600;
+    const DECODE_DELAY_MS_PER_SECOND: u64 = 20;
+
+    let tests = tests_dir();
+    let wav = std::env::temp_dir().join("alpha2-long-silence.wav");
+    write_silence(&wav, 8_000, SECONDS);
+    let mut project: Value = serde_json::from_str(
+        &std::fs::read_to_string(tests.join("cases/host-audio-export-project.json"))
+            .expect("project"),
+    )
+    .expect("JSON");
+    for track in project["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks")
+    {
+        for clip in track["clips"].as_array_mut().expect("clips") {
+            clip["timeline_range"]["end"] = 600_000.into();
+            clip["source_range"]["end"] = 600_000.into();
+        }
+    }
+    let request = PlayerRequest {
+        project_json: project.to_string(),
+        assets: HashMap::from([
+            (
+                "image-source".to_owned(),
+                tests
+                    .join("corpus/cross_topology_parity.png")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "audio-source".to_owned(),
+                wav.to_string_lossy().into_owned(),
+            ),
+        ]),
+        ..PlayerRequest::default()
+    };
+    let engine = Alpha2::new(EngineConfig::default());
+
+    let player = Player::new(Arc::clone(&engine), request.clone()).expect("player");
+    INJECT_DECODE_DELAY_MS_PER_SECOND.store(DECODE_DELAY_MS_PER_SECOND, Ordering::Relaxed);
+    player.play();
+    std::thread::sleep(Duration::from_millis(100));
+    let ending = Instant::now();
+    player.end();
+    let took = ending.elapsed();
+    INJECT_DECODE_DELAY_MS_PER_SECOND.store(0, Ordering::Relaxed);
+    let whole = Duration::from_millis(DECODE_DELAY_MS_PER_SECOND * u64::from(SECONDS));
+    eprintln!("end() during the audio decode took {took:?}, the whole decode {whole:?} or more");
+    // Normal: the output's open and close, under 3 s; defect: the whole decode, 72 s or more.
+    assert!(took < whole / 4, "{took:?}");
+
+    let resident = || alpha2_os::process_memory().resident_bytes;
+    let before = resident();
+    let player = Player::new(engine, request).expect("player");
+    let started = Instant::now();
+    player.play();
+    let until = started + Duration::from_secs(3);
+    while !player.is_sounding() && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let sounding = player.is_sounding().then(|| started.elapsed());
+    std::thread::sleep(Duration::from_secs(2));
+    let after = resident();
+    eprintln!(
+        "sounding {sounding:?} after play(); resident {:?} MiB before, {:?} MiB after",
+        before.map(|bytes| bytes >> 20),
+        after.map(|bytes| bytes >> 20)
+    );
+    assert_eq!(player.last_error(), None);
+    if let (Some(before), Some(after)) = (before, after) {
+        assert!(
+            after.saturating_sub(before) < 128 << 20,
+            "{} MiB more resident",
+            after.saturating_sub(before) >> 20
+        );
+    }
+    player.end();
+    let _ = std::fs::remove_file(wav);
+}
+
+/// Previews into an image reader's window, which only Android has.
+#[cfg(target_os = "android")]
+mod reader_window {
+    use super::*;
+
+    /// An image reader whose window stands in for an app's surface, so a test can read back what was
+    /// presented.
+    struct WindowReader {
+        reader: std::ptr::NonNull<ndk_sys::AImageReader>,
+        newest: std::cell::Cell<Option<[f64; 3]>>,
+    }
+
+    impl WindowReader {
+        fn new(width: i32, height: i32) -> Self {
+            /// `AIMAGE_FORMAT_RGBA_8888`, and GPU color output plus frequent CPU reads.
+            const RGBA_8888: i32 = 1;
+            const USAGE: u64 = 0x200 | 0x3;
+            let mut reader = std::ptr::null_mut();
+            // SAFETY: the out-pointer is valid; the reader is deleted on drop.
+            let status = unsafe {
+                ndk_sys::AImageReader_newWithUsage(
+                    width,
+                    height,
+                    RGBA_8888,
+                    USAGE,
+                    4,
+                    &raw mut reader,
+                )
+            };
+            assert_eq!(status.0, 0, "AImageReader_newWithUsage");
+            Self {
+                reader: std::ptr::NonNull::new(reader).expect("reader"),
+                newest: std::cell::Cell::new(None),
+            }
+        }
+
+        /// The window, with a reference of its own for the player to take over.
+        fn window(&self) -> u64 {
+            let mut window = std::ptr::null_mut();
+            // SAFETY: the reader is live; the window it returns belongs to it.
+            let status =
+                unsafe { ndk_sys::AImageReader_getWindow(self.reader.as_ptr(), &raw mut window) };
+            assert_eq!(status.0, 0, "AImageReader_getWindow");
+            // SAFETY: the window is live; the player releases this reference.
+            unsafe { ndk_sys::ANativeWindow_acquire(window) };
+            window as u64
+        }
+
+        /// The mean of the red, green and blue samples of the newest presented image, read now or
+        /// by an earlier call.
+        fn latest_mean(&self) -> Option<[f64; 3]> {
+            let mut image = std::ptr::null_mut();
+            // SAFETY: the reader is live and the image is deleted below.
+            let status = unsafe {
+                ndk_sys::AImageReader_acquireLatestImage(self.reader.as_ptr(), &raw mut image)
+            };
+            if status.0 != 0 || image.is_null() {
+                return self.newest.get();
+            }
+            let (mut data, mut length, mut stride) = (std::ptr::null_mut(), 0, 0);
+            // SAFETY: the image is live; the plane stays mapped until the image is deleted.
+            let mean = unsafe {
+                let read = ndk_sys::AImage_getPlaneData(image, 0, &raw mut data, &raw mut length);
+                ndk_sys::AImage_getPlaneRowStride(image, 0, &raw mut stride);
+                (read.0 == 0 && !data.is_null()).then(|| {
+                    let bytes =
+                        std::slice::from_raw_parts(data, usize::try_from(length).unwrap_or(0));
+                    let mut sums = [0.0; 3];
+                    let pixels = bytes.len() / 4;
+                    for pixel in bytes.as_chunks::<4>().0 {
+                        for (sum, value) in sums.iter_mut().zip(pixel) {
+                            *sum += f64::from(*value);
+                        }
+                    }
+                    let _ = stride;
+                    #[allow(clippy::cast_precision_loss)]
+                    sums.map(|sum| sum / pixels.max(1) as f64)
+                })
+            };
+            // SAFETY: the image came from this reader and is not used after.
+            unsafe { ndk_sys::AImage_delete(image) };
+            if mean.is_some() {
+                self.newest.set(mean);
+            }
+            self.newest.get()
+        }
+    }
+
+    impl Drop for WindowReader {
+        fn drop(&mut self) {
+            // SAFETY: the reader is owned and not used after.
+            unsafe { ndk_sys::AImageReader_delete(self.reader.as_ptr()) };
+        }
+    }
+
+    /// Waits up to `seconds` for `done`, consuming what `reader` was shown as a compositor would, so
+    /// its window always has a buffer free.
+    fn wait_for(reader: Option<&WindowReader>, seconds: u64, done: impl Fn() -> bool) -> bool {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        while std::time::Instant::now() < until {
+            if done() {
+                return true;
+            }
+            if let Some(reader) = reader {
+                let _ = reader.latest_mean();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        done()
+    }
+
+    /// Attaches `reader`'s window to `player` and waits for its first frame; `false`, recorded as
+    /// a skip, when the GPU refuses the window (the emulator's GL-only images refuse an image
+    /// reader's window; their export path is tested all the same). Any other failure fails.
+    fn attached(player: &crate::Player, reader: &WindowReader, width: u32, height: u32) -> bool {
+        use alpha2_test_support::{Capability, skip};
+
+        player
+            .attach_window(reader.window(), width, height)
+            .expect("attach");
+        let shown = wait_for(Some(reader), 10, || {
+            player.frames_presented() >= 1 || player.last_error().is_some()
+        });
+        match player.last_error() {
+            Some(error) if error.starts_with(crate::player::PRESENT_REFUSED) => {
+                skip!(Capability::WindowPresent, "{error}");
+                false
+            }
+            Some(error) => panic!("{error}"),
+            None => {
+                assert!(shown, "no first frame in 10 s");
+                true
+            }
+        }
+    }
+
+    #[test]
+    fn preview_presents_frames_into_a_window_and_survives_a_rebuild() {
+        use crate::{Player, PlayerRequest};
+
+        let tests = tests_dir();
+        let engine = Alpha2::new(EngineConfig::default());
+        let player = Player::new(
+            engine,
+            PlayerRequest {
+                project_json: std::fs::read_to_string(
+                    tests.join("cases/host-video-export-project.json"),
+                )
+                .expect("project"),
+                assets: HashMap::from([(
+                    "video-source".to_owned(),
+                    tests
+                        .join("corpus/h264-bt709-copy.mp4")
+                        .to_string_lossy()
+                        .into_owned(),
+                )]),
+                ..PlayerRequest::default()
+            },
+        )
+        .expect("player");
+        let reader = WindowReader::new(64, 48);
+        if !attached(&player, &reader, 64, 48) {
+            return;
+        }
+        let shown = reader.latest_mean();
+        eprintln!("first frame mean {shown:?}");
+        assert!(
+            shown.is_some_and(|mean| mean.iter().any(|value| *value > 1.0)),
+            "{shown:?}"
+        );
+
+        // One second of playing at 30 fps presents about 30 frames and stops at the end.
+        play_through(
+            &player,
+            &|seconds, done| wait_for(Some(&reader), seconds, done),
+            30,
+            1.0,
+        );
+
+        // A seek shows its frame; a new window (the app's surface rebuilt) shows it again.
+        player.seek(0);
+        assert!(
+            wait_for(Some(&reader), 10, || player.position_ticks() == 0),
+            "{:?}",
+            player.last_error()
+        );
+        player.detach_window();
+        let rebuilt = WindowReader::new(64, 48);
+        let before = player.frames_presented();
+        player
+            .attach_window(rebuilt.window(), 64, 48)
+            .expect("reattach");
+        assert!(
+            wait_for(None, 10, || player.frames_presented() > before),
+            "{:?}",
+            player.last_error()
+        );
+        assert!(rebuilt.latest_mean().is_some());
+        assert_eq!(player.last_error(), None);
+        player.end();
+    }
+
+    #[test]
+    fn preview_of_a_project_with_audio_keeps_time_without_an_output() {
+        use crate::{Player, PlayerRequest};
+
+        // A test process has no app context, so audio output cannot open; the picture keeps time by
+        // the wall clock instead.
+        let tests = tests_dir();
+        let player = Player::new(
+            Alpha2::new(EngineConfig::default()),
+            PlayerRequest {
+                project_json: std::fs::read_to_string(
+                    tests.join("cases/host-audio-export-project.json"),
+                )
+                .expect("project"),
+                assets: HashMap::from([
+                    (
+                        "image-source".to_owned(),
+                        tests
+                            .join("corpus/cross_topology_parity.png")
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+                    (
+                        "audio-source".to_owned(),
+                        tests
+                            .join("corpus/audio-only-aac-priming.m4a")
+                            .to_string_lossy()
+                            .into_owned(),
+                    ),
+                ]),
+                ..PlayerRequest::default()
+            },
+        )
+        .expect("player");
+        let reader = WindowReader::new(64, 48);
+        if !attached(&player, &reader, 64, 48) {
+            return;
+        }
+        play_through(
+            &player,
+            &|seconds, done| wait_for(Some(&reader), seconds, done),
+            12,
+            0.4,
+        );
+        assert_eq!(player.last_error(), None);
+        player.end();
+    }
+
+    #[test]
+    fn a_scrub_on_a_window_reaches_its_last_target_and_skips_stale_seeks() {
+        use crate::{Player, PlayerRequest};
+
+        let tests = tests_dir();
+        let player = Player::new(
+            Alpha2::new(EngineConfig::default()),
+            PlayerRequest {
+                project_json: std::fs::read_to_string(
+                    tests.join("cases/host-video-export-project.json"),
+                )
+                .expect("project"),
+                assets: HashMap::from([(
+                    "video-source".to_owned(),
+                    tests
+                        .join("corpus/h264-bt709-copy.mp4")
+                        .to_string_lossy()
+                        .into_owned(),
+                )]),
+                ..PlayerRequest::default()
+            },
+        )
+        .expect("player");
+        let reader = WindowReader::new(64, 48);
+        if !attached(&player, &reader, 64, 48) {
+            return;
+        }
+        super::scrub(&player, &|seconds, done| {
+            wait_for(Some(&reader), seconds, done)
+        });
+        player.end();
+    }
+
+    #[test]
+    fn a_seek_on_a_window_while_paused_draws_once_after_the_resume() {
+        let engine = Alpha2::new(EngineConfig::default());
+        let player = super::video_player(Arc::clone(&engine));
+        let reader = WindowReader::new(64, 48);
+        if !attached(&player, &reader, 64, 48) {
+            return;
+        }
+        super::seek_while_paused(&engine, &player, &|seconds, done| {
+            wait_for(Some(&reader), seconds, done)
+        });
+        player.end();
+    }
+
+    #[test]
+    fn preview_of_a_video_presents_its_frames() {
+        use crate::{Player, PlayerRequest};
+
+        let tests = super::tests_dir();
+        let player = Player::new(
+            Alpha2::new(EngineConfig::default()),
+            PlayerRequest {
+                project_json: super::gpu_frames::project(320, 180, 15),
+                assets: HashMap::from([(
+                    "v".to_owned(),
+                    tests
+                        .join("corpus/h264-padded.mp4")
+                        .to_string_lossy()
+                        .into_owned(),
+                )]),
+                ..PlayerRequest::default()
+            },
+        )
+        .expect("player");
+        let reader = WindowReader::new(320, 180);
+        if !attached(&player, &reader, 320, 180) {
+            return;
+        }
+        play_through(
+            &player,
+            &|seconds, done| wait_for(Some(&reader), seconds, done),
+            15,
+            0.5,
+        );
+        let before = player.frames_presented();
+        player.seek(alpha2_time::TICKS_PER_SECOND / 5);
+        assert!(wait_for(Some(&reader), 5, || player.position_ticks()
+            == alpha2_time::TICKS_PER_SECOND / 5));
+        assert!(
+            wait_for(Some(&reader), 5, || player.frames_presented() > before),
+            "the seek presented no frame"
+        );
+        assert_eq!(player.last_error(), None);
+        player.end();
+    }
+}
+
+/// Previews into a Metal layer, as an iOS view's.
+#[cfg(target_os = "ios")]
+mod metal_layer {
+    use super::*;
+
+    /// Waits up to `seconds` for `done`.
+    fn wait_for(seconds: u64, done: impl Fn() -> bool) -> bool {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        while std::time::Instant::now() < until {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        done()
+    }
+
+    #[test]
+    fn preview_plays_into_a_metal_layer_and_survives_a_new_one() {
+        use crate::{Player, PlayerRequest};
+
+        let tests = tests_dir();
+        let player = Player::new(
+            Alpha2::new(EngineConfig::default()),
+            PlayerRequest {
+                project_json: std::fs::read_to_string(
+                    tests.join("cases/host-video-export-project.json"),
+                )
+                .expect("project"),
+                assets: HashMap::from([(
+                    "video-source".to_owned(),
+                    tests
+                        .join("corpus/h264-bt709-copy.mp4")
+                        .to_string_lossy()
+                        .into_owned(),
+                )]),
+                ..PlayerRequest::default()
+            },
+        )
+        .expect("player");
+        let layer = objc2_quartz_core::CAMetalLayer::new();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&layer) as u64, 64, 48)
+            .expect("attach");
+        assert!(
+            wait_for(10, || player.frames_presented() >= 1),
+            "{:?}",
+            player.last_error()
+        );
+        super::play_through(&player, &|seconds, done| wait_for(seconds, done), 30, 1.0);
+        player.detach_window();
+        let rebuilt = objc2_quartz_core::CAMetalLayer::new();
+        let before = player.frames_presented();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&rebuilt) as u64, 64, 48)
+            .expect("reattach");
+        assert!(wait_for(10, || player.frames_presented() > before));
+        assert_eq!(player.last_error(), None);
+        player.end();
+    }
+
+    #[test]
+    fn a_scrub_on_a_metal_layer_reaches_its_last_target_and_skips_stale_seeks() {
+        use crate::{Player, PlayerRequest};
+
+        let tests = tests_dir();
+        let player = Player::new(
+            Alpha2::new(EngineConfig::default()),
+            PlayerRequest {
+                project_json: std::fs::read_to_string(
+                    tests.join("cases/host-video-export-project.json"),
+                )
+                .expect("project"),
+                assets: HashMap::from([(
+                    "video-source".to_owned(),
+                    tests
+                        .join("corpus/h264-bt709-copy.mp4")
+                        .to_string_lossy()
+                        .into_owned(),
+                )]),
+                ..PlayerRequest::default()
+            },
+        )
+        .expect("player");
+        let layer = objc2_quartz_core::CAMetalLayer::new();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&layer) as u64, 64, 48)
+            .expect("attach");
+        assert!(
+            wait_for(10, || player.frames_presented() >= 1),
+            "{:?}",
+            player.last_error()
+        );
+        super::scrub(&player, &|seconds, done| wait_for(seconds, done));
+        player.end();
+    }
+
+    #[test]
+    fn a_seek_on_a_metal_layer_while_paused_draws_once_after_the_resume() {
+        let engine = Alpha2::new(EngineConfig::default());
+        let player = super::video_player(Arc::clone(&engine));
+        let layer = objc2_quartz_core::CAMetalLayer::new();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&layer) as u64, 64, 48)
+            .expect("attach");
+        super::seek_while_paused(&engine, &player, &|seconds, done| wait_for(seconds, done));
+        player.end();
+    }
+
+    #[test]
+    fn a_layer_the_app_releases_right_after_attaching_it_stays_valid_for_the_player() {
+        use crate::{Player, PlayerRequest};
+
+        let tests = tests_dir();
+        let player = Player::new(
+            Alpha2::new(EngineConfig::default()),
+            PlayerRequest {
+                project_json: std::fs::read_to_string(
+                    tests.join("cases/host-video-export-project.json"),
+                )
+                .expect("project"),
+                assets: HashMap::from([(
+                    "video-source".to_owned(),
+                    tests
+                        .join("corpus/h264-bt709-copy.mp4")
+                        .to_string_lossy()
+                        .into_owned(),
+                )]),
+                ..PlayerRequest::default()
+            },
+        )
+        .expect("player");
+        let first = objc2_quartz_core::CAMetalLayer::new();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&first) as u64, 64, 48)
+            .expect("attach");
+        // Seeks on an attached window decode and draw, so the next attach waits behind them.
+        wait_for(10, || {
+            player.frames_presented() >= 1 || player.last_error().is_some()
+        });
+        for seek in 0..8 {
+            player.seek(seek * 20_000);
+        }
+        let second = objc2_quartz_core::CAMetalLayer::new();
+        player
+            .attach_window(objc2::rc::Retained::as_ptr(&second) as u64, 64, 48)
+            .expect("attach");
+        drop(second);
+        // Time for the seeks and the attach of the released layer to run before the detach.
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        player.detach_window();
+        player.end();
+        drop(first);
+    }
+}
+
+#[cfg(target_os = "android")]
+#[test]
+fn the_memory_frame_path_stays_selectable() {
+    let assets: &[(&str, &str)] = &[("v", "h264-padded.mp4")];
+    let project = std::env::temp_dir().join("gpu-frames-project.json");
+    std::fs::write(&project, gpu_frames::project(320, 180, 15)).expect("project file");
+    // An absolute path replaces the cases directory the helper joins it to.
+    let project_path = project.to_string_lossy().into_owned();
+    let imports = gpu_frames::renders_surfaces("h264-padded.mp4");
+    for (mode, surfaces) in [
+        (crate::VideoFrameMode::Cpu, false),
+        (crate::VideoFrameMode::Auto, imports),
+    ] {
+        let config = EngineConfig {
+            video_frames: mode,
+            ..EngineConfig::default()
+        };
+        let (path, report) =
+            export_configured(config, &project_path, (assets, &[]), &[], "gpu-frames.mp4");
+        check(&path, &report, false);
+        let imported = report["surfaceFrames"].as_u64().expect("surfaceFrames");
+        assert_eq!(
+            imported > 0,
+            surfaces,
+            "{mode:?}: {imported} surface frames"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+    let _ = std::fs::remove_file(project);
+}
+
+#[cfg(target_os = "android")]
+mod gpu_frames {
+    //! Frames decoded into GPU buffers and imported, against the same frames decoded into
+    //! memory.
+
+    use std::sync::Arc;
+
+    use alpha2_android_media::{AndroidSurface, AndroidVideo, VideoOutput};
+    use alpha2_engine::{EngineProject, Exporter, QualityProfile, TextTextures};
+    use alpha2_gpu::GpuContext;
+    use alpha2_host_core::encode::PlaneBuffer;
+    use alpha2_host_core::export::{ExportRenderer, StreamSources, VideoSink, export_video};
+    use alpha2_host_core::video_stream::{
+        BackendImage, DecodePreference, StreamOptions, VideoBackends, VideoStream,
+    };
+    use alpha2_media::{CancelToken, EncodeError, PixelLayout, SourceId};
+    use alpha2_native_gpu::{AhbImporter, reopen_for_ahb_import};
+    use alpha2_render::Renderer;
+    use alpha2_test_support::{Capability, skip};
+    use alpha2_time::MediaTime;
+
+    use super::tests_dir;
+
+    const CONVERSION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// A project of `width` x `height` at 30 fps showing source `v` from its start for `frames`
+    /// frames.
+    pub(super) fn project(width: u32, height: u32, frames: i64) -> String {
+        let end = frames * alpha2_time::TICKS_PER_SECOND / 30;
+        serde_json::json!({
+            "schema_version": 1,
+            "id": "gpu-frames",
+            "name": "GPU frames",
+            "settings": {
+                "width": width,
+                "height": height,
+                "frame_rate": { "num": 30, "den": 1 },
+                "sample_rate": 48000,
+            },
+            "sources": [{ "id": "v", "locator": "asset://v", "kind": "video" }],
+            "timeline": { "tracks": [{
+                "id": "video",
+                "name": "Video",
+                "kind": "video",
+                "clips": [{
+                    "id": "clip",
+                    "source_id": "v",
+                    "timeline_range": { "start": 0, "end": end },
+                    "source_range": { "start": 0, "end": end },
+                }],
+            }]},
+        })
+        .to_string()
+    }
+
+    /// Whether this device decodes `name` into surfaces it imports; skipped when not.
+    pub(super) fn renders_surfaces(name: &str) -> bool {
+        importer().is_some_and(|(_, importer)| {
+            hardware_stream(
+                name,
+                VideoOutput::Surfaces {
+                    ten_bit: importer.supports_ten_bit(),
+                },
+            )
+            .is_some()
+        })
+    }
+
+    fn importer() -> Option<(GpuContext, AhbImporter)> {
+        let gpu = match pollster::block_on(GpuContext::request_product()) {
+            Ok(gpu) => gpu,
+            Err(error) => {
+                skip!(Capability::AhbImport, "no GPU device: {error}");
+                return None;
+            }
+        };
+        match reopen_for_ahb_import(gpu) {
+            Ok(opened) => Some(opened),
+            Err((_, reason)) => {
+                skip!(Capability::AhbImport, "{reason}");
+                None
+            }
+        }
+    }
+
+    /// Whether `name` decodes on the emulator's host-backed decoder, recorded as a skip. Those
+    /// stand in for hardware but are no device's decoder: they keep the left columns of a
+    /// left-cropped picture, which nothing in their output tells apart from a correct crop, so
+    /// the comparisons of a device decoder's two paths leave them out.
+    fn emulated(name: &str) -> bool {
+        let path = tests_dir().join("corpus").join(name);
+        let reader = alpha2_container::open(&path).expect("open");
+        let Some(track) = reader
+            .tracks()
+            .iter()
+            .find(|track| track.video.is_some())
+            .cloned()
+        else {
+            return false;
+        };
+        match alpha2_android_media::MediaCodecVideo::open(
+            &track,
+            alpha2_host_core::video_stream::BackendKind::Hardware,
+            VideoOutput::ByteBuffers,
+        ) {
+            Ok(session) if session.component().starts_with("c2.goldfish.") => {
+                skip!(
+                    Capability::HardwareVideoDecode,
+                    "{name}: {} is the emulator's decoder",
+                    session.component()
+                );
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// A stream of `name`; the reference in memory may fall back to software, which decodes the
+    /// same pictures, and the surface stream stays on hardware, which alone renders surfaces.
+    fn hardware_stream(name: &str, output: VideoOutput) -> Option<VideoStream> {
+        let preference = match output {
+            VideoOutput::ByteBuffers => DecodePreference::Auto,
+            VideoOutput::Surfaces { .. } => DecodePreference::Hardware,
+        };
+        let opened = VideoStream::open_file(
+            &tests_dir().join("corpus").join(name),
+            Arc::new(AndroidVideo { output }),
+            StreamOptions {
+                preference,
+                ..StreamOptions::default()
+            },
+        );
+        match opened {
+            Ok(stream) => Some(stream),
+            Err(error) => {
+                skip!(
+                    Capability::HardwareVideoDecode,
+                    "{name} has no hardware decoder: {error}"
+                );
+                None
+            }
+        }
+    }
+
+    /// The texture's texels, rows packed, and bytes per texel.
+    fn read(gpu: &GpuContext, texture: &wgpu::Texture) -> (Vec<u8>, usize) {
+        let size = texture.size();
+        let texel = texture
+            .format()
+            .block_copy_size(None)
+            .expect("plain format") as usize;
+        let row = size.width as usize * texel;
+        let padded = row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize);
+        let buffer = gpu.device().create_buffer(&wgpu::BufferDescriptor {
+            label: Some("plane readback"),
+            size: (padded * size.height as usize) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = gpu
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(u32::try_from(padded).expect("row size")),
+                    rows_per_image: Some(size.height),
+                },
+            },
+            size,
+        );
+        gpu.submit([encoder.finish()]);
+        gpu.map_async(&buffer.slice(..), wgpu::MapMode::Read, |result| {
+            result.expect("mapped");
+        });
+        gpu.device()
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_secs(10)),
+            })
+            .expect("readback finishes");
+        let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
+        let packed = mapped
+            .chunks(padded)
+            .flat_map(|line| &line[..row])
+            .copied()
+            .collect();
+        drop(mapped);
+        buffer.unmap();
+        (packed, texel)
+    }
+
+    /// Sample `index` of a row of `bytes`, `width` bytes per sample: 8-bit as is, 16-bit as its
+    /// 10-bit code.
+    fn sample(row: &[u8], index: usize, width: usize) -> i32 {
+        if width == 1 {
+            i32::from(row[index])
+        } else {
+            i32::from(u16::from_le_bytes([row[index * 2], row[index * 2 + 1]]) >> 6)
+        }
+    }
+
+    /// The largest code difference between `cpu` (`stride` bytes per row) and `gpu` (packed,
+    /// `gpu_width` samples per row) over `area`, `(x, y, columns, rows)` in samples from each
+    /// side's own origin.
+    struct Planes<'a> {
+        cpu: &'a [u8],
+        stride: usize,
+        cpu_origin: (usize, usize),
+        gpu: &'a [u8],
+        gpu_width: usize,
+        gpu_origin: (usize, usize),
+        /// Samples per texel on the GPU side, and which of them this compares.
+        gpu_step: (usize, usize),
+        cpu_step: (usize, usize),
+        bytes: usize,
+    }
+
+    impl Planes<'_> {
+        fn max_difference(&self, columns: usize, rows: usize) -> (i32, usize) {
+            let mut most = 0;
+            let mut unpadded = 0;
+            for y in 0..rows {
+                let cpu_row = &self.cpu[(self.cpu_origin.1 + y) * self.stride..];
+                let gpu_row = &self.gpu
+                    [(self.gpu_origin.1 + y) * self.gpu_width * self.bytes * self.gpu_step.0..];
+                for x in 0..columns {
+                    let cpu = sample(
+                        cpu_row,
+                        (self.cpu_origin.0 + x) * self.cpu_step.0 + self.cpu_step.1,
+                        self.bytes,
+                    );
+                    let at = (self.gpu_origin.0 + x) * self.gpu_step.0 + self.gpu_step.1;
+                    let gpu = sample(gpu_row, at, self.bytes);
+                    if self.bytes == 2
+                        && u16::from_le_bytes([gpu_row[at * 2], gpu_row[at * 2 + 1]]) & 63 != 0
+                    {
+                        unpadded += 1;
+                    }
+                    most = most.max((cpu - gpu).abs());
+                }
+            }
+            (most, unpadded)
+        }
+    }
+
+    /// Decodes `name` into memory and into GPU buffers, imports each GPU buffer, and returns the
+    /// frame count and the largest luma and chroma code differences over the visible area.
+    #[allow(clippy::too_many_lines)]
+    fn compare(name: &str) -> Option<(usize, i32, i32)> {
+        let (gpu, decoder_buffers) = importer()?;
+        let mut memory = hardware_stream(name, VideoOutput::ByteBuffers)?;
+        let mut surfaces = hardware_stream(
+            name,
+            VideoOutput::Surfaces {
+                ten_bit: decoder_buffers.supports_ten_bit(),
+            },
+        )?;
+        let cancel = CancelToken::default();
+        let (mut frames, mut luma, mut chroma) = (0, 0, 0);
+        loop {
+            let (cpu, surface) = match (
+                memory.next(&cancel).expect("memory frame"),
+                surfaces.next(&cancel).expect("surface frame"),
+            ) {
+                (Some(cpu), Some(surface)) => (cpu, surface),
+                (None, None) => break,
+                (cpu, surface) => panic!(
+                    "{name}: frame {frames} exists in one path only ({} {})",
+                    cpu.is_some(),
+                    surface.is_some()
+                ),
+            };
+            assert_eq!(cpu.facts.pts, surface.facts.pts, "{name}: frame {frames}");
+            let (shown, gpu_shown) = (cpu.facts.visible_rect, surface.facts.visible_rect);
+            assert_eq!(
+                (shown.width, shown.height),
+                (gpu_shown.width, gpu_shown.height),
+                "{name}: visible sizes"
+            );
+            let BackendImage::Cpu { format, planes } = &cpu.image else {
+                panic!("{name}: the byte-buffer session produced a surface");
+            };
+            let BackendImage::Surface(lease) = &surface.image else {
+                panic!("{name}: the hardware session did not render into a surface");
+            };
+            let android = lease
+                .as_any()
+                .downcast_ref::<AndroidSurface>()
+                .expect("an Android surface");
+            let scope = gpu.device().push_error_scope(wgpu::ErrorFilter::Validation);
+            // SAFETY: the importer keeps the lease, so the buffer lives and is not rewritten
+            // until the conversion has read it.
+            let imported = unsafe {
+                decoder_buffers.import(
+                    android.hardware_buffer(),
+                    android.ten_bit(),
+                    Box::new(Arc::clone(lease)),
+                )
+            }
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let [y_texture, uv_texture] = imported.lease.textures();
+            let (y, bytes) = read(&gpu, y_texture);
+            let (uv, _) = read(&gpu, uv_texture);
+            assert!(
+                pollster::block_on(scope.pop()).is_none(),
+                "{name}: GPU validation error"
+            );
+            if frames == 0 {
+                eprintln!(
+                    "{name}: memory {:?} {}x{} visible {shown:?}; surface {:?} visible {gpu_shown:?}",
+                    format, planes[0].width, planes[0].height, imported.coded_size
+                );
+            }
+            let gpu_width = imported.coded_size[0] as usize;
+            let (columns, rows) = (shown.width as usize, shown.height as usize);
+            let origin = |rect: alpha2_media::Rect, shift: u32| {
+                ((rect.x >> shift) as usize, (rect.y >> shift) as usize)
+            };
+            let (difference, unpadded) = Planes {
+                cpu: &planes[0].bytes,
+                stride: planes[0].stride as usize,
+                cpu_origin: origin(shown, 0),
+                gpu: &y,
+                gpu_width,
+                gpu_origin: origin(gpu_shown, 0),
+                gpu_step: (1, 0),
+                cpu_step: (1, 0),
+                bytes,
+            }
+            .max_difference(columns, rows);
+            luma = luma.max(difference);
+            assert_eq!(unpadded, 0, "{name}: 10-bit luma not stored as code << 6");
+            let chroma_size = (columns.div_ceil(2), rows.div_ceil(2));
+            let chroma_width = gpu_width.div_ceil(2);
+            for component in 0..2 {
+                let (cpu_plane, cpu_step) = if format.interleaved_chroma {
+                    (&planes[1], (2, component))
+                } else {
+                    (&planes[1 + component], (1, 0))
+                };
+                let (difference, unpadded) = Planes {
+                    cpu: &cpu_plane.bytes,
+                    stride: cpu_plane.stride as usize,
+                    cpu_origin: origin(shown, 1),
+                    gpu: &uv,
+                    gpu_width: chroma_width,
+                    gpu_origin: origin(gpu_shown, 1),
+                    gpu_step: (2, component),
+                    cpu_step,
+                    bytes,
+                }
+                .max_difference(chroma_size.0, chroma_size.1);
+                chroma = chroma.max(difference);
+                assert_eq!(unpadded, 0, "{name}: 10-bit chroma not stored as code << 6");
+            }
+            frames += 1;
+        }
+        eprintln!("{name}: {frames} frames, largest code difference luma {luma} chroma {chroma}");
+        Some((frames, luma, chroma))
+    }
+
+    #[test]
+    fn imported_decoder_buffers_equal_the_decoded_planes() {
+        for name in [
+            "h264-padded.mp4",
+            "h264-bt709-crop-left.mp4",
+            "hevc-padded.mp4",
+            "hevc-main10-padded.mp4",
+            "h264-1080p.mp4",
+        ] {
+            // A fixture the device does not decode in hardware is skipped (recorded); the rest
+            // are still compared.
+            if emulated(name) {
+                continue;
+            }
+            let Some((frames, luma, chroma)) = compare(name) else {
+                continue;
+            };
+            assert!(frames > 0, "{name}: no frames");
+            assert!(
+                luma <= 1 && chroma <= 1,
+                "{name}: luma {luma} chroma {chroma}"
+            );
+        }
+    }
+
+    /// Every rendered plane of a project showing the fixture, decoded by `decoders` and, with
+    /// `import`, imported from GPU buffers.
+    fn render(
+        renderer: &Renderer,
+        name: &str,
+        (width, height): (u32, u32),
+        decoders: Arc<dyn VideoBackends>,
+        import: Option<Arc<dyn alpha2_host_core::export::SurfaceImport>>,
+    ) -> Vec<Vec<u8>> {
+        struct Collect(Vec<Vec<u8>>);
+        impl VideoSink for Collect {
+            fn write_video(
+                &mut self,
+                _index: u64,
+                _time: MediaTime,
+                _layout: PixelLayout,
+                planes: &[PlaneBuffer],
+            ) -> Result<(), EncodeError> {
+                self.0.push(
+                    planes
+                        .iter()
+                        .flat_map(|plane| plane.bytes.clone())
+                        .collect(),
+                );
+                Ok(())
+            }
+        }
+        let snapshot = EngineProject::new(
+            alpha2_model::Project::from_json(&project(width, height, 12)).expect("project"),
+        )
+        .expect("snapshot");
+        let mut exporter = Exporter::for_project(
+            &snapshot,
+            QualityProfile::export(),
+            alpha2_media::VideoCodec::H264,
+        )
+        .expect("exporter");
+        let path = tests_dir().join("corpus").join(name);
+        let mut sources = StreamSources::new(move |_: &SourceId| {
+            crate::export::open_source(
+                &path,
+                Arc::clone(&decoders),
+                StreamOptions {
+                    preference: DecodePreference::Hardware,
+                    ..StreamOptions::default()
+                },
+            )
+        });
+        if let Some(import) = import {
+            sources = sources.with_surface_import(import);
+        }
+        let mut sink = Collect(Vec::new());
+        export_video(
+            &snapshot,
+            &mut exporter,
+            ExportRenderer::Gpu(renderer),
+            &mut TextTextures::new(),
+            &mut sources,
+            &mut sink,
+            (
+                &alpha2_host_core::export::FrameBudget::new(1 << 30),
+                &CancelToken::default(),
+            ),
+            &mut |_| Ok(()),
+            &mut |_, _| {},
+        )
+        .unwrap_or_else(|error| panic!("{name}: {error}"));
+        sink.0
+    }
+
+    #[test]
+    fn a_dropped_plane_lease_lets_its_decoder_buffer_go_without_another_import() {
+        let gpu = match pollster::block_on(GpuContext::request_product()) {
+            Ok(gpu) => gpu,
+            Err(error) => {
+                skip!(Capability::AhbImport, "no GPU device: {error}");
+                return;
+            }
+        };
+        let (gpu, Some(frames)) = crate::zero_copy::open(gpu, true) else {
+            skip!(
+                Capability::AhbImport,
+                "the GPU device does not import decoder buffers"
+            );
+            return;
+        };
+        let name = "h264-padded.mp4";
+        if emulated(name) {
+            return;
+        }
+        let mut renderer = Renderer::new(gpu.clone());
+        renderer.register_builtins().expect("built-in effects");
+        let Ok(mut stream) = VideoStream::open_file(
+            &tests_dir().join("corpus").join(name),
+            Arc::clone(&frames.decoders),
+            StreamOptions {
+                preference: DecodePreference::Hardware,
+                ..StreamOptions::default()
+            },
+        ) else {
+            skip!(
+                Capability::HardwareVideoDecode,
+                "{name} has no hardware decoder"
+            );
+            return;
+        };
+        let size = alpha2_render::RenderSize::new(320, 180).expect("size");
+        let cancel = CancelToken::default();
+        let mut surfaces = Vec::new();
+        for index in 0..3 {
+            let frame = stream.next(&cancel).expect("decodes").expect("a frame");
+            let BackendImage::Surface(lease) = &frame.image else {
+                panic!("frame {index} is not a surface");
+            };
+            surfaces.push(Arc::downgrade(lease));
+            let prepared = frames
+                .import
+                .prepare(
+                    &renderer,
+                    size,
+                    alpha2_render::ColorPolicy::RejectHdr,
+                    &frame.facts,
+                    lease,
+                )
+                .unwrap_or_else(|error| panic!("frame {index}: {error}"));
+            gpu.device()
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(10)),
+                })
+                .expect("the renderer's work finishes");
+            drop(prepared);
+        }
+        drop(stream);
+        let alive = || {
+            surfaces
+                .iter()
+                .filter(|surface| surface.strong_count() > 0)
+                .count()
+        };
+        let deadline = std::time::Instant::now() + CONVERSION_DEADLINE;
+        while alive() > 0 && std::time::Instant::now() < deadline {
+            frames.import.collect();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(alive(), 0, "decoder buffers still held");
+    }
+
+    #[test]
+    fn rendered_frames_match_between_the_memory_and_gpu_paths() {
+        let gpu = match pollster::block_on(GpuContext::request_product()) {
+            Ok(gpu) => gpu,
+            Err(error) => {
+                skip!(Capability::AhbImport, "no GPU device: {error}");
+                return;
+            }
+        };
+        let (gpu, Some(frames)) = crate::zero_copy::open(gpu, true) else {
+            skip!(
+                Capability::AhbImport,
+                "the GPU device does not import decoder buffers"
+            );
+            return;
+        };
+        let mut renderer = Renderer::new(gpu);
+        renderer.register_builtins().expect("built-in effects");
+        for name in ["h264-padded.mp4", "hevc-main10-padded.mp4"] {
+            if emulated(name) || !renders_surfaces(name) {
+                continue;
+            }
+            let memory = render(
+                &renderer,
+                name,
+                (320, 180),
+                Arc::new(AndroidVideo::default()),
+                None,
+            );
+            let surfaces = render(
+                &renderer,
+                name,
+                (320, 180),
+                Arc::clone(&frames.decoders),
+                Some(Arc::clone(&frames.import)),
+            );
+            assert_eq!(memory.len(), surfaces.len(), "{name}: frame count");
+            let most = memory
+                .iter()
+                .zip(&surfaces)
+                .flat_map(|(a, b)| a.iter().zip(b))
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
+            let differing = memory
+                .iter()
+                .zip(&surfaces)
+                .flat_map(|(a, b)| a.iter().zip(b))
+                .filter(|(a, b)| a != b)
+                .count();
+            eprintln!(
+                "{name}: {} rendered frames, largest difference {most}, {differing} samples differ",
+                memory.len()
+            );
+            assert!(most <= 1, "{name}: largest difference {most}");
+        }
+    }
+}

@@ -3,6 +3,7 @@ export * from "./assets.js";
 export * from "./audio-worklet.js";
 export * from "./audio.js";
 export * from "./audio-timeline.js";
+export * from "./compose.js";
 export * from "./audio-worker.js";
 export * from "./containers.js";
 export * from "./effects.js";

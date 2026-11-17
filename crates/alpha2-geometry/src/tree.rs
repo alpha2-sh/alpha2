@@ -371,6 +371,13 @@ impl Builder {
         }
     }
 
+    /// `path` projected near the canvas output is clipped to, which a box placed on it may not
+    /// share an origin or size with.
+    fn project_far(&self, path: &BezPath) -> BezPath {
+        let side = |edge: i32| u32::try_from(edge).unwrap_or(0);
+        project_far(path, side(self.canvas.x1), side(self.canvas.y1))
+    }
+
     /// The pixel size of the space positions are normalized in.
     #[allow(clippy::cast_precision_loss)]
     fn space(&self) -> [f32; 2] {
@@ -493,7 +500,7 @@ impl Builder {
                                 .copied(),
                         );
                     }
-                    let device = project_far(&device, self.size.width, self.size.height);
+                    let device = self.project_far(&device);
                     self.record(&at, device.clone(), *rule, true);
                     if let Some(op) = self.fill_op(device, *rule, paint, *opacity, to_device) {
                         chunks.push(vec![(op, at)]);
@@ -528,7 +535,7 @@ impl Builder {
                         );
                     }
                     let outline = stroke_outline(&local, &style, to_device);
-                    let outline = project_far(&outline, self.size.width, self.size.height);
+                    let outline = self.project_far(&outline);
                     self.record(&at, outline.clone(), FillRule::Nonzero, true);
                     if let Some(op) =
                         self.fill_op(outline, FillRule::Nonzero, paint, *opacity, to_device)

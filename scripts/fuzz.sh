@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs fuzz targets in parallel with nightly cargo-fuzz, each for SECONDS (default 1800); all
-# targets by default. Seeds come from test files at run time; ALPHA2_FUZZ_SEEDS=<dir> adds
-# <dir>/<target>/*. ALPHA2_FUZZ_TIMEOUT (s) and ALPHA2_FUZZ_RSS_MB limits count as findings.
+# targets by default. Seeds come from test files at run time and tests/corpus/hostile/<target>/*;
+# ALPHA2_FUZZ_SEEDS=<dir> adds <dir>/<target>/*. ALPHA2_FUZZ_TIMEOUT (s) and ALPHA2_FUZZ_RSS_MB
+# limits count as findings. ALPHA2_FUZZ_TOOLCHAIN replaces the pinned nightly.
 #
 #   scripts/fuzz.sh [SECONDS] [TARGET...]
 set -euo pipefail
@@ -13,8 +14,16 @@ targets=("$@")
 if [ ${#targets[@]} -eq 0 ]; then
   mapfile -t targets < <(sed -n 's/^name = "\(.*\)"$/\1/p' fuzz/Cargo.toml | grep -vx alpha2-fuzz)
 fi
+toolchain=${ALPHA2_FUZZ_TOOLCHAIN:-nightly-2026-11-16}
 timeout=${ALPHA2_FUZZ_TIMEOUT:-20}
 rss=${ALPHA2_FUZZ_RSS_MB:-2560}
+
+timeout_of() {
+  case $1 in
+    extension_pdf) echo "${ALPHA2_FUZZ_TIMEOUT:-120}" ;;
+    *) echo "$timeout" ;;
+  esac
+}
 corpus=tests/corpus/extensions
 
 projects() {
@@ -28,6 +37,8 @@ projects() {
       const cases = expandRepeats(JSON.parse(fs.readFileSync(`tests/cases/${corpus}-corpus.json`, "utf8")));
       cases.forEach((test, index) => write(`${corpus}-${index}`, test.project ?? test.json));
     }
+    const conformance = JSON.parse(fs.readFileSync("tests/cases/surface-conformance.json", "utf8"));
+    for (const [name, project] of Object.entries(conformance.projects)) write(`conformance-${name}`, project);
     for (const file of fs.readdirSync("tests/cases").filter((name) => name.endsWith("-project.json"))) {
       fs.copyFileSync(`tests/cases/${file}`, `${dir}/${file}`);
     }
@@ -44,14 +55,47 @@ projects() {
     }' "$1" "${2:-}"
 }
 
+hostile() {
+  cargo run --locked --quiet -p alpha2-extensions --example hostile_seeds -- "$1" "$2"
+}
+
 seed() {
   local target=$1 dir=fuzz/corpus/$1
   mkdir -p "$dir"
   case $target in
-    extension_svg) cp "$corpus"/*.svg "$dir"/ ;;
+    extension_svg)
+      cp "$corpus"/*.svg "$dir"/
+      hostile "$target" "$dir"
+      ;;
     extension_animated) cp "$corpus"/*.gif "$corpus"/*.webp "$corpus"/*.png "$dir"/ ;;
-    extension_exr) cp "$corpus"/*.exr "$dir"/ ;;
-    extension_pdf) cp "$corpus"/*.pdf "$dir"/ ;;
+    extension_exr)
+      cp "$corpus"/*.exr "$dir"/
+      hostile "$target" "$dir"
+      ;;
+    still_decode) cp tests/corpus/*.jpg tests/corpus/*.png "$corpus"/*.webp "$dir"/ ;;
+    container_mp4)
+      find tests/corpus -maxdepth 1 \( -name '*.mp4' -o -name '*.mov' -o -name '*.m4a' \) -size -64k \
+        -exec cp {} "$dir"/ \;
+      cp tests/cases/container-mp4-fragmented.mp4 "$dir"/
+      ;;
+    container_matroska)
+      # Header: the seek target (i64), then the file.
+      find tests/corpus tests/cases -maxdepth 1 \( -name '*.mkv' -o -name '*.webm' \) -size -64k \
+        -print0 | while IFS= read -r -d '' file; do
+        { head -c 8 /dev/zero; cat "$file"; } >"$dir/$(basename "$file")"
+      done
+      ;;
+    container_audio)
+      # Header: the prefix selector (0, none) and the seek target (i64), then the file.
+      for file in tests/corpus/*.wav tests/corpus/*.mp3 tests/corpus/*.aac tests/corpus/*.flac \
+        tests/corpus/*.ogg; do
+        { head -c 9 /dev/zero; cat "$file"; } >"$dir/$(basename "$file")"
+      done
+      ;;
+    extension_pdf)
+      cp "$corpus"/*.pdf "$dir"/
+      hostile "$target" "$dir"
+      ;;
     extension_latex)
       # A style byte, then the formula.
       index=0
@@ -70,8 +114,70 @@ seed() {
         JSON.parse(fs.readFileSync(cases, "utf8")).forEach((test, index) => {
           if (test.animation) fs.writeFileSync(`${dir}/case-${index}.json`, JSON.stringify(test.animation));
         });' "$corpus/normalize-cases.json" "$dir"
+      hostile "$target" "$dir"
       ;;
-    project_from_json | project_lint) projects "$dir" ;;
+    project_from_json | project_lint | project_data) projects "$dir" ;;
+    edit_apply)
+      node -e '
+        const [table, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        const { projects, edit } = JSON.parse(fs.readFileSync(table, "utf8"));
+        for (const test of edit)
+          fs.writeFileSync(`${dir}/${test.name}.json`, JSON.stringify({ project: projects[test.project], request: test.request }));
+      ' tests/cases/surface-conformance.json "$dir"
+      ;;
+    plugin_manifest)
+      node -e '
+        const [cases, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        JSON.parse(fs.readFileSync(cases, "utf8")).forEach((test) =>
+          fs.writeFileSync(`${dir}/${test.name}.json`, JSON.stringify(test.manifest)));
+      ' tests/cases/plugin-manifest-corpus.json "$dir"
+      ;;
+    plugin_records)
+      # Records as docs/plugin-abi.md lays them out: a sample, a word, an interval, and all three.
+      node -e '
+        const dir = process.argv[1];
+        const fs = require("fs");
+        const record = (tag, output, body) => {
+          const head = Buffer.alloc(8);
+          head.writeUInt8(tag, 0);
+          head.writeUInt16LE(output, 2);
+          head.writeUInt32LE(body.length, 4);
+          return Buffer.concat([head, body]);
+        };
+        const i64 = (value) => { const b = Buffer.alloc(8); b.writeBigInt64LE(BigInt(value)); return b; };
+        const u32 = (value) => { const b = Buffer.alloc(4); b.writeUInt32LE(value); return b; };
+        const f32 = (value) => { const b = Buffer.alloc(4); b.writeFloatLE(value); return b; };
+        const sample = record(1, 0, Buffer.concat([i64(4000), u32(2), u32(2), f32(0.5), f32(0)]));
+        const word = record(2, 1, Buffer.concat([i64(0), i64(8000), u32(2), u32(1), Buffer.from("hiA")]));
+        const interval = record(3, 2, Buffer.concat([i64(0), i64(4000), u32(1), f32(0.5), u32(5), Buffer.from("quiet")]));
+        for (const [name, bytes] of Object.entries({ sample, word, interval, all: Buffer.concat([sample, word, interval]) }))
+          fs.writeFileSync(`${dir}/${name}`, bytes);
+      ' "$dir"
+      ;;
+    extract_emits)
+      node -e '
+        const dir = process.argv[1];
+        const fs = require("fs");
+        fs.writeFileSync(`${dir}/each-kind.json`, JSON.stringify([
+          [{ output: "s", time: 0, values: [0.5, 0.25] }, { output: "i", start: 0, end: 4000, label: "a", score: 0.5 }],
+          [{ output: "p", time: 4000, values: [0.1, 0.2] }, { output: "w", start: 0, end: 8000, text: "hi", speaker: "A" }],
+          [{ output: "m", time: 8000, values: [1, 2, 30, 1] }],
+          [{ output: "i", start: 8000, end: 12000 }],
+        ]));
+        fs.writeFileSync(`${dir}/lost.json`, JSON.stringify([[{ output: "s", time: 0, values: [null, 1] }]]));
+        const batches = [[{ output: "i", start: 0, end: 4000 }], [{ output: "s", time: 4000, values: [0, 1] }]];
+        fs.writeFileSync(`${dir}/source-video.json`, JSON.stringify({
+          input: { from: "source", source_id: "v", range: { start: 0, end: 12000 }, size: 16 }, batches }));
+        fs.writeFileSync(`${dir}/range-past-source.json`, JSON.stringify({
+          input: { from: "source", source_id: "v", range: { start: 0, end: 12001 }, size: 16 }, batches }));
+        fs.writeFileSync(`${dir}/source-audio-backward.json`, JSON.stringify({
+          audio: true, batches,
+          input: { from: "source", source_id: "v", range: { start: 0, end: 12000 }, sample_rate: 96000,
+                   passes: [{ start: 11999, direction: "backward" }] } }));
+      ' "$dir"
+      ;;
     composition_plan) projects "$dir" compositions ;;
     caption_import)
       for file in tests/corpus/captions/*; do
@@ -107,23 +213,87 @@ seed() {
         [...strings].forEach((text, index) => fs.writeFileSync(`${dir}/value-${index}`, text));
       ' tests/golden/layout_measure.json "$dir"
       ;;
+    compose_compile)
+      # The spec, a NUL, then the facts the golden cases compile with.
+      node -e '
+        const [golden, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        const { cases, facts } = JSON.parse(fs.readFileSync(golden, "utf8"));
+        cases.forEach((test, index) =>
+          fs.writeFileSync(`${dir}/spec-${index}.json`, `${JSON.stringify(test.spec)}\0${JSON.stringify(facts)}`));
+      ' crates/alpha2-compose/tests/old-specs.golden.json "$dir"
+      ;;
+    effect_validate)
+      for file in crates/alpha2-shaders/shaders/runtime/*/*.wgsl; do
+        cp "$file" "$dir/$(basename "$(dirname "$file")")-$(basename "$file")"
+      done
+      node -e '
+        const [dir, ...files] = process.argv.slice(1);
+        const fs = require("fs");
+        for (const file of files)
+          JSON.parse(fs.readFileSync(file, "utf8")).forEach((effect, index) =>
+            fs.writeFileSync(`${dir}/${file.split("/").pop()}-${index}.wgsl`, effect.wgslBody));
+      ' "$dir" tests/cases/gpu-watchdog/*-effects.json
+      ;;
+    lut_cube) cp tests/corpus/*.cube "$dir"/ ;;
+    text_raster)
+      # 16 parameter bytes (size, width, spacing, align, one stroke, a state), then the text.
+      node -e '
+        const [golden, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        const head = Buffer.from([6, 0, 40, 64, 64, 0, 0, 1, 128, 128, 128, 26, 26, 0, 255, 128]);
+        JSON.parse(fs.readFileSync(golden, "utf8")).cases.forEach((test, index) =>
+          fs.writeFileSync(`${dir}/text-${index}`, Buffer.concat([head, Buffer.from(test.request.text)])));
+      ' tests/golden/text_raster.json "$dir"
+      ;;
+    font_bytes) cp tests/fonts/*.ttf tests/fonts/*.ttc "$dir"/ ;;
+    host_frames)
+      # Frames as docs/host-protocol.md lays them out: one plain, one with an attachment, both.
+      node -e '
+        const dir = process.argv[1];
+        const fs = require("fs");
+        const frame = (header, attachments = Buffer.alloc(0)) => {
+          const json = Buffer.from(JSON.stringify(header));
+          const lengths = Buffer.alloc(8);
+          lengths.writeUInt32LE(json.length, 0);
+          lengths.writeUInt32LE(attachments.length, 4);
+          return Buffer.concat([lengths, json, attachments]);
+        };
+        const plain = frame({ id: 1, op: "probe" });
+        const attached = frame({ id: 2, attachments: [{ type: "image/png", bytes: 3 }] }, Buffer.from("png"));
+        for (const [name, bytes] of Object.entries({ plain, attached, both: Buffer.concat([plain, attached]) }))
+          fs.writeFileSync(`${dir}/${name}`, bytes);
+      ' "$dir"
+      ;;
+    host_requests)
+      node -e '
+        const [cases, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        JSON.parse(fs.readFileSync(cases, "utf8")).forEach((test, index) =>
+          fs.writeFileSync(`${dir}/request-${index}.json`, JSON.stringify(test.request)));
+      ' tests/cases/host-protocol-corpus.json "$dir"
+      ;;
     evaluate | audio_render | vector_raster) ;;
     *) echo "unknown target $target" >&2; exit 2 ;;
   esac
+  if [ -d "tests/corpus/hostile/$target" ]; then
+    cp "tests/corpus/hostile/$target"/* "$dir"/
+  fi
   if [ -n "${ALPHA2_FUZZ_SEEDS:-}" ] && [ -d "$ALPHA2_FUZZ_SEEDS/$target" ]; then
     cp "$ALPHA2_FUZZ_SEEDS/$target"/* "$dir"/
   fi
 }
 
+rustup toolchain install "$toolchain" --profile minimal
 mkdir -p fuzz/logs
 for target in "${targets[@]}"; do seed "$target"; done
-for target in "${targets[@]}"; do cargo +nightly fuzz build -O "$target"; done
+for target in "${targets[@]}"; do cargo "+$toolchain" fuzz build -O "$target"; done
 
 pids=()
 for target in "${targets[@]}"; do
   mkdir -p "fuzz/artifacts/$target"
-  cargo +nightly fuzz run -O "$target" -- \
-    -max_total_time="$seconds" -timeout="$timeout" -rss_limit_mb="$rss" -malloc_limit_mb="$rss" \
+  cargo "+$toolchain" fuzz run -O "$target" -- \
+    -max_total_time="$seconds" -timeout="$(timeout_of "$target")" -rss_limit_mb="$rss" -malloc_limit_mb="$rss" \
     -max_len=65536 -print_final_stats=1 >"fuzz/logs/$target.log" 2>&1 &
   pids+=($!)
 done

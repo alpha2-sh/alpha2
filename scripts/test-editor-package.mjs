@@ -16,7 +16,11 @@ import { tmpdir } from "node:os";
 import { resolve, join, extname } from "node:path";
 import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
 import { probeRun } from "./lib/browser-probe.mjs";
-import { recordSkip, virtualMachineEncoderStall } from "./lib/capabilities.mjs";
+import {
+  recordSkip,
+  virtualMachineEncoderStall,
+  virtualMachineWorkerDecoder,
+} from "./lib/capabilities.mjs";
 import {
   animatedGif,
   largeLottie,
@@ -171,7 +175,7 @@ try {
       res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
       res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
       const path =
-        new URL(req.url, "http://localhost").pathname.replace(
+        new URL(req.url ?? "/", "http://localhost").pathname.replace(
           /^\/editor\/?/,
           "",
         ) || "index.html";
@@ -190,11 +194,14 @@ try {
     }
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = /** @type {import("node:net").AddressInfo} */ (
+    server.address()
+  );
   const browser = JSON.parse(
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test`,
+        `http://127.0.0.1:${port}/editor/?test`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -223,7 +230,7 @@ try {
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test&fallback`,
+        `http://127.0.0.1:${port}/editor/?test&fallback`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -232,7 +239,7 @@ try {
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test&context-loss`,
+        `http://127.0.0.1:${port}/editor/?test&context-loss`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -241,7 +248,7 @@ try {
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test&gpu=none`,
+        `http://127.0.0.1:${port}/editor/?test&gpu=none`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -271,7 +278,7 @@ try {
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test&incomplete-graph`,
+        `http://127.0.0.1:${port}/editor/?test&incomplete-graph`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -280,7 +287,7 @@ try {
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test&extensions`,
+        `http://127.0.0.1:${port}/editor/?test&extensions`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -290,7 +297,7 @@ try {
       decodeURIComponent(
         await runBrowserPage(
           pageBrowser,
-          `http://127.0.0.1:${server.address().port}/editor/?test&export=${mode}`,
+          `http://127.0.0.1:${port}/editor/?test&export=${mode}`,
           { timeoutMs: 120000 },
         ),
       ),
@@ -303,12 +310,34 @@ try {
       decodeURIComponent(
         await runBrowserPage(
           pageBrowser,
-          `http://127.0.0.1:${server.address().port}/editor/?test&${query}`,
+          `http://127.0.0.1:${port}/editor/?test&${query}`,
           { timeoutMs: 120000 },
         ),
       ),
     );
   const proxyInMemory = await consumerPage("proxy=no-create-writable");
+  let proxyInMemoryOk = proxyInMemory.ok;
+  const decoderLosses = (proxyInMemory.reported ?? []).map(
+    virtualMachineWorkerDecoder,
+  );
+  if (
+    !proxyInMemoryOk &&
+    proxyInMemory.status?.available === true &&
+    decoderLosses.length > 0 &&
+    decoderLosses.every((loss) => loss !== null)
+  ) {
+    try {
+      recordSkip({
+        suite: "editor-package",
+        test: "proxyInMemory preview worker",
+        capability: "webcodecs-video",
+        reason: decoderLosses[0],
+      });
+      proxyInMemoryOk = true;
+    } catch (error) {
+      proxyInMemory.required = error.message;
+    }
+  }
   const noAudioDecoder = await consumerPage("import=no-audio-decoder");
   const exactRate = await exportPage("exact-rate");
   const exportButton = await exportPage("button");
@@ -350,7 +379,7 @@ export const app=<EditorProvider editor={editor}><Selected/><EditorPreview bridg
       webkitStorage.ok &&
       noAudioEncoder.ok &&
       noCreateWritable.ok &&
-      proxyInMemory.ok &&
+      proxyInMemoryOk &&
       noAudioDecoder.ok &&
       exactRate.ok &&
       exportButton.ok &&

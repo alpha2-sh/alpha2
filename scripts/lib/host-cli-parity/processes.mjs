@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 
 import { root } from "./fixtures.mjs";
 
+/** @returns {Promise<void>} */
 export function run(command, args, environment = {}) {
   return new Promise((resolveRun, reject) => {
     const child = spawn(command, args, {

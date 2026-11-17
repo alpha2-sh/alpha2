@@ -10,7 +10,12 @@ import {
   frameAt,
   frameStart,
 } from "../dist/index.js";
-import { exportAudioWriter } from "../dist/browser/runtime/export-audio.js";
+import { wasmSkip } from "./support/wasm.mjs";
+
+const skip = wasmSkip(import.meta.url);
+const { exportAudioWriter } = skip
+  ? {}
+  : await import("../dist/browser/runtime/export-audio.js");
 
 const corpus = JSON.parse(
   await readFile(
@@ -90,65 +95,69 @@ test("a source time is first shown at the tick the timeline clock seeks to", () 
   }
 });
 
-test("export audio is mixed from the samples the engine's export covers, not the request", async () => {
-  // A 30 fps in-point at 1 s, exported after the sequence became 29.97 fps, starts a frame earlier
-  // at tick 116116.
-  const window = corpus.exports.find(
-    (c) =>
-      c.rate.num === 30000 &&
-      c.sampleRate === 48000 &&
-      c.start === 120000 &&
-      c.end === 240000,
-  );
-  assert.equal(window.effectiveStart, 116116);
-  const mixed = [];
-  const written = [];
-  const engine = {
-    exportProgress: () =>
-      JSON.stringify({
-        completed: 0,
-        total: window.total,
-        effectiveRange: {
-          startTicks: String(window.effectiveStart),
-          endTicks: String(window.effectiveEnd),
-        },
-        audioWindow: {
-          startSample: String(window.audioStartSample),
-          frames: window.audioFrames,
-        },
-      }),
-    audioMaxBlock: 4096,
-    renderAudio(start, frames) {
-      mixed.push([Number(start), frames]);
-      return new Float32Array(frames * 2);
-    },
-    audioChannels: () => 2,
-    audioMissingSources: () => "[]",
-  };
-  const writeThrough = exportAudioWriter({
-    engine,
-    audioSupplier: { supply: async () => {} },
-    sink: {
-      writeAudio: async ({ startSample, channels }) =>
-        written.push([Number(startSample), channels[0].length]),
-    },
-    sampleRate: 48000,
-    metrics: {
-      audioDecodeMs: 0,
-      audioMixMs: 0,
-      audioEncodeMs: 0,
-      audioBlocksInterleaved: 0,
-    },
-    enter: () => {},
-  });
-  await writeThrough(Infinity);
-  assert.equal(mixed[0][0], 46446);
-  assert.equal(mixed[0][0], window.audioStartSample);
-  const frames = mixed.reduce((sum, [, count]) => sum + count, 0);
-  assert.equal(frames, window.audioFrames);
-  assert.equal(
-    mixed.at(-1)[0] + mixed.at(-1)[1],
-    window.audioStartSample + window.audioFrames,
-  );
-  assert.equal(written[0][0], 0);
-});
+test(
+  "export audio is mixed from the samples the engine's export covers, not the request",
+  { skip },
+  async () => {
+    // A 30 fps in-point at 1 s, exported after the sequence became 29.97 fps, starts a frame earlier
+    // at tick 116116.
+    const window = corpus.exports.find(
+      (c) =>
+        c.rate.num === 30000 &&
+        c.sampleRate === 48000 &&
+        c.start === 120000 &&
+        c.end === 240000,
+    );
+    assert.equal(window.effectiveStart, 116116);
+    const mixed = [];
+    const written = [];
+    const engine = {
+      exportProgress: () =>
+        JSON.stringify({
+          completed: 0,
+          total: window.total,
+          effectiveRange: {
+            startTicks: String(window.effectiveStart),
+            endTicks: String(window.effectiveEnd),
+          },
+          audioWindow: {
+            startSample: String(window.audioStartSample),
+            frames: window.audioFrames,
+          },
+        }),
+      audioMaxBlock: 4096,
+      renderAudio(start, frames) {
+        mixed.push([Number(start), frames]);
+        return new Float32Array(frames * 2);
+      },
+      audioChannels: () => 2,
+      audioMissingSources: () => "[]",
+    };
+    const writeThrough = exportAudioWriter({
+      engine,
+      audioSupplier: { supply: async () => {} },
+      sink: {
+        writeAudio: async ({ startSample, channels }) =>
+          written.push([Number(startSample), channels[0].length]),
+      },
+      sampleRate: 48000,
+      metrics: {
+        audioDecodeMs: 0,
+        audioMixMs: 0,
+        audioEncodeMs: 0,
+        audioBlocksInterleaved: 0,
+      },
+      enter: () => {},
+    });
+    await writeThrough(Infinity);
+    assert.equal(mixed[0][0], 46446);
+    assert.equal(mixed[0][0], window.audioStartSample);
+    const frames = mixed.reduce((sum, [, count]) => sum + count, 0);
+    assert.equal(frames, window.audioFrames);
+    assert.equal(
+      mixed.at(-1)[0] + mixed.at(-1)[1],
+      window.audioStartSample + window.audioFrames,
+    );
+    assert.equal(written[0][0], 0);
+  },
+);

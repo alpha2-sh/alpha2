@@ -24,6 +24,7 @@ use rsmpeg::avutil::{AVRational, av_rescale_q};
 use rsmpeg::ffi;
 
 use crate::NativeVideoCodec;
+use crate::capabilities::FfmpegCodec;
 use crate::convert::{encode_adapter_error, encode_adapter_error_at, tick_base};
 use crate::mux::{AudioStream, Muxer, VideoStream};
 

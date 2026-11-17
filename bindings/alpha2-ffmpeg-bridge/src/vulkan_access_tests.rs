@@ -143,7 +143,10 @@ fn lowered_timeline_child() {
     // With VK_EXT_host_image_copy (lavapipe) FFmpeg copies through the host and signals nothing.
     // alpha2's own devices never enable it.
     if before.semaphore_values[..planes].contains(&0) {
-        eprintln!("skipped: the transfer went through the host and left a timeline value at zero");
+        skip!(
+            Capability::VulkanQueueTransfer,
+            "the transfer went through the host and left a timeline value at zero"
+        );
         return;
     }
     {

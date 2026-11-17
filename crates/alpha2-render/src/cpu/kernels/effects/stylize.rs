@@ -76,7 +76,10 @@ impl CpuKernel for FilmGrain {
     fn row(&self, context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [[f32; 4]]) {
         let amount = context.float("amount");
         // WGSL `round` takes ties to even.
-        let size = (context.float("size").max(0.5) * 256.0).round_ties_even() as u32;
+        let size = film_grain_scaled(
+            (context.float("size").max(0.5) * 256.0).round_ties_even() as u32,
+            context.render_scale_fixed(),
+        );
         let ticks = context.time_ticks();
         let seed = pcg(ticks[0] ^ pcg(ticks[1]));
         let resolution = context.resolution();
@@ -96,6 +99,14 @@ impl CpuKernel for FilmGrain {
             premultiplied(rgb, src[3])
         });
     }
+}
+
+/// Mirrors `film_grain_scaled` in film-grain.wgsl.
+fn film_grain_scaled(size: u32, scale: u32) -> u32 {
+    let scaled = size
+        .wrapping_mul(scale >> 16)
+        .wrapping_add(size.wrapping_mul(scale & 0xffff).wrapping_add(32_768) >> 16);
+    scaled.max(1)
 }
 
 /// rgb-split.wgsl: red from one side, blue from the other.

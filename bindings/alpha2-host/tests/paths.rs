@@ -1,7 +1,9 @@
 //! The command line treats paths as files whatever their names look like.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
+
+use alpha2_test_support::{ScratchDir, corpus};
 
 const PROJECT: &str = r#"{"schema_version": 1, "id": "out", "name": "Out",
   "settings": {"width": 128, "height": 96, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
@@ -10,18 +12,8 @@ const PROJECT: &str = r#"{"schema_version": 1, "id": "out", "name": "Out",
     "source_id": "video", "timeline_range": {"start": 0, "end": 120000},
     "source_range": {"start": 0, "end": 120000}}]}]}}"#;
 
-fn corpus(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/corpus")
-        .join(name)
-}
-
-fn scratch(name: &str) -> PathBuf {
-    let directory =
-        std::env::temp_dir().join(format!("alpha2-host-paths-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).expect("scratch directory");
-    directory
+fn scratch(name: &str) -> ScratchDir {
+    alpha2_test_support::scratch_dir(&format!("host-paths-{name}"))
 }
 
 fn host(directory: &Path, args: &[&str]) -> Output {
@@ -56,7 +48,6 @@ fn a_relative_source_whose_name_looks_like_a_url_is_read_as_a_file() {
     assert!(output.status.success(), "{}", stderr(&output));
     let answer: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
     assert_eq!(answer["result"]["report"]["ready"], true, "{answer}");
-    std::fs::remove_dir_all(&directory).ok();
 }
 
 #[cfg(unix)]
@@ -85,7 +76,6 @@ fn an_output_whose_name_looks_like_a_url_is_written_as_a_file() {
     assert!(output.status.success(), "{}", stderr(&output));
     let written = std::fs::read(directory.join("out:1.mp4")).expect("the output");
     assert_eq!(&written[4..8], b"ftyp");
-    std::fs::remove_dir_all(&directory).ok();
 }
 
 #[test]
@@ -125,7 +115,6 @@ fn a_project_file_with_a_bom_or_in_utf16_is_read() {
         );
         assert!(output.status.success(), "{name}: {}", stderr(&output));
     }
-    std::fs::remove_dir_all(&directory).ok();
 }
 
 #[test]
@@ -160,7 +149,6 @@ fn a_project_file_in_a_legacy_code_page_is_invalid_input_naming_it() {
             "{command}: {text}"
         );
     }
-    std::fs::remove_dir_all(&directory).ok();
 }
 
 #[test]
@@ -186,5 +174,4 @@ fn a_missing_project_file_is_named() {
             "{command}: {text}"
         );
     }
-    std::fs::remove_dir_all(&directory).ok();
 }

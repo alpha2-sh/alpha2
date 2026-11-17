@@ -7,12 +7,20 @@ fn film_grain_hash(value: u32) -> u32 {
     return (word >> 22u) ^ word;
 }
 
+// `size` (1/256 project pixel) in render pixels: `(size * scale + 2^15) >> 16` with the 16.16
+// scale split in halves so the product cannot overflow; at least 1.
+fn film_grain_scaled(size: u32) -> u32 {
+    let scale = render_scale_fixed();
+    let scaled = size * (scale >> 16u) + ((size * (scale & 0xffffu) + 32768u) >> 16u);
+    return max(scaled, 1u);
+}
+
 fn effect(uv: vec2f, src: vec4f) -> vec4f {
     if src.a <= 0.0001 { return vec4f(0.0); }
     // Fixed-point division (1/256 pixel), since float division can land either side of a cell
     // edge.
     let pixel = vec2u(max(floor(uv * resolution()), vec2f(0.0)));
-    let size = u32(round(max(params.size, 0.5) * 256.0));
+    let size = film_grain_scaled(u32(round(max(params.size, 0.5) * 256.0)));
     let cell = (pixel * 256u + vec2u(128u)) / size;
     // Seed with exact ticks; seconds lose resolution late on a long timeline.
     let ticks = time_ticks();

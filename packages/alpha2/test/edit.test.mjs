@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
   append,
@@ -21,6 +24,11 @@ import {
 } from "../dist/edit.js";
 import * as edit from "../dist/edit.js";
 import { validateProject } from "../dist/project.js";
+import { applyEdit } from "../dist/apply-edit.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const corpus = JSON.parse(
   await readFile(
@@ -433,3 +441,76 @@ test("slide limits refuse or narrow wherever slide does", () => {
   assert.equal(late.max, 50_000);
   takes(after, "B", late);
 });
+
+const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
+// Skipped before `npm run build`; ALPHA2_REQUIRE=wasm makes that a failure.
+const noWasm =
+  !existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")) &&
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
+
+test(
+  "each case's engine request has the effect of the TypeScript operation",
+  {
+    skip: noWasm,
+  },
+  async () => {
+    const wasm = await import(
+      pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href
+    );
+    wasm.initSync({
+      module: readFileSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")),
+    });
+    const plain = (value) => JSON.parse(JSON.stringify(value));
+    const canonical = (project) =>
+      applyEdit(wasm, plain(project), { op: "bake", targets: [] }).project;
+    let checked = 0;
+    for (const fixture of corpus.filter((entry) => entry.engine)) {
+      const { name, engine } = fixture;
+      if (engine.refusal) {
+        assert.throws(
+          () => applyEdit(wasm, plain(fixture.project), engine.request),
+          (error) => error.details?.refusal === engine.refusal,
+          name,
+        );
+        checked += 1;
+        continue;
+      }
+      const applied = applyEdit(wasm, plain(fixture.project), engine.request);
+      assert.deepEqual(
+        (applied.report.skipped ?? []).map((skip) => skip.reason),
+        engine.skipped ?? [],
+        name,
+      );
+      if (fixture.expected) {
+        const mine = canonical(fixture.expected);
+        const engineProject = applied.project;
+        // The mirrored parts are byte-equal; clips compare under the id they were cut from.
+        assert.deepEqual(engineProject.data, mine.data, `${name} data`);
+        assert.deepEqual(engineProject.audio, mine.audio, `${name} master bus`);
+        const renamed = new Map(
+          applied.report.created.map((created) => [created.id, created.from]),
+        );
+        if (fixture.arguments.newId)
+          renamed.set(fixture.arguments.newId, fixture.arguments.clip);
+        const clips = (project) =>
+          project.timeline.tracks.map((track) => ({
+            id: track.id,
+            audio: track.audio,
+            clips: track.clips.map((clip) => ({
+              id: renamed.get(clip.id) ?? clip.id,
+              timeline_range: clip.timeline_range,
+              source_range: clip.source_range,
+              time_map: clip.time_map,
+            })),
+          }));
+        assert.deepEqual(clips(engineProject), clips(mine), `${name} tracks`);
+      }
+      checked += 1;
+    }
+    assert.ok(checked >= 5, `${checked}`);
+  },
+);

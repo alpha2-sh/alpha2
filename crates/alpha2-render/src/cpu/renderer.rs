@@ -22,7 +22,7 @@ impl CachedPicture for Arc<CpuImage> {
 }
 
 pub(crate) struct CatalogEntry {
-    pub(crate) definition: EffectDef,
+    pub(crate) definition: Arc<EffectDef>,
     pub(crate) reads_time: bool,
     pub(crate) kernel: &'static dyn CpuKernel,
 }
@@ -36,6 +36,16 @@ pub struct CpuRenderStats {
     pub nodes: u64,
     /// Time spent drawing graphs, in microseconds.
     pub render_micros: u64,
+    /// Part of `render_micros` spent converting decoded frames to source pictures.
+    pub present_micros: u64,
+    /// Part of `render_micros` spent in effect, transition and generator passes.
+    pub kernel_micros: u64,
+    /// Part of `render_micros` spent compositing layers.
+    pub composite_micros: u64,
+    /// Part of `render_micros` spent drawing vector scenes.
+    pub vector_micros: u64,
+    /// Part of `render_micros` spent packing pictures into encoder planes.
+    pub pack_micros: u64,
     /// Sources presented: decoded frames converted to pictures.
     pub presented_sources: u64,
     /// Bytes of the largest picture set one graph held at once.
@@ -49,8 +59,21 @@ pub(crate) struct StatCounters {
     pub(crate) graphs: AtomicU64,
     pub(crate) nodes: AtomicU64,
     pub(crate) render_micros: AtomicU64,
+    pub(crate) present_micros: AtomicU64,
+    pub(crate) kernel_micros: AtomicU64,
+    pub(crate) composite_micros: AtomicU64,
+    pub(crate) vector_micros: AtomicU64,
+    pub(crate) pack_micros: AtomicU64,
     pub(crate) presented_sources: AtomicU64,
     pub(crate) image_high_water_bytes: AtomicU64,
+}
+
+/// Adds the microseconds since `started` to `counter`.
+pub(crate) fn add_elapsed(counter: &AtomicU64, started: web_time::Instant) {
+    counter.fetch_add(
+        u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+        Ordering::Relaxed,
+    );
 }
 
 /// A renderer that draws [`RenderGraph`]s on the CPU with no GPU or driver.
@@ -66,7 +89,7 @@ pub struct CpuRenderer {
     cache: Mutex<ResultCache<Arc<CpuImage>>>,
     catalog: HashMap<EffectId, CatalogEntry>,
     internal: HashSet<EffectId>,
-    resources: HashMap<String, Arc<CpuLut>>,
+    resources: std::sync::RwLock<HashMap<String, Arc<CpuLut>>>,
     /// Vector coverage cached between frames, as on the GPU.
     pub(crate) coverage: Mutex<alpha2_geometry::raster::CoverageCache>,
     pub(crate) stats: StatCounters,
@@ -89,6 +112,16 @@ impl CpuRenderer {
     /// registered.
     #[must_use]
     pub fn new(threads: usize) -> Self {
+        Self::with_workers(Workers::new(threads))
+    }
+
+    /// As [`Self::new`], with every band `rows` rows high (`usize::MAX` for one band).
+    #[cfg(test)]
+    pub(crate) fn with_band_rows(threads: usize, rows: usize) -> Self {
+        Self::with_workers(Workers::with_band_rows(threads, rows))
+    }
+
+    fn with_workers(workers: Workers) -> Self {
         let mut catalog = HashMap::new();
         let mut internal = HashSet::new();
         for (definition, is_internal) in crate::builtins::internal_effect_definitions()
@@ -112,20 +145,20 @@ impl CpuRenderer {
                 id,
                 CatalogEntry {
                     reads_time: crate::registry::body_reads_time(&definition.wgsl_body),
-                    definition,
+                    definition: Arc::new(definition),
                     kernel,
                 },
             );
         }
         Self {
-            workers: Workers::new(threads),
+            workers,
             blend_space: BlendSpace::default(),
             frame_pool: Arc::default(),
             quality: Mutex::new(RenderQualityControls::default()),
             cache: Mutex::new(ResultCache::default()),
             catalog,
             internal,
-            resources: HashMap::new(),
+            resources: std::sync::RwLock::default(),
             coverage: Mutex::new(alpha2_geometry::raster::CoverageCache::default()),
             stats: StatCounters::default(),
             frames: AtomicU64::new(0),
@@ -189,6 +222,11 @@ impl CpuRenderer {
             graphs: self.stats.graphs.load(Ordering::Relaxed),
             nodes: self.stats.nodes.load(Ordering::Relaxed),
             render_micros: self.stats.render_micros.load(Ordering::Relaxed),
+            present_micros: self.stats.present_micros.load(Ordering::Relaxed),
+            kernel_micros: self.stats.kernel_micros.load(Ordering::Relaxed),
+            composite_micros: self.stats.composite_micros.load(Ordering::Relaxed),
+            vector_micros: self.stats.vector_micros.load(Ordering::Relaxed),
+            pack_micros: self.stats.pack_micros.load(Ordering::Relaxed),
             presented_sources: self.stats.presented_sources.load(Ordering::Relaxed),
             image_high_water_bytes: self.stats.image_high_water_bytes.load(Ordering::Relaxed),
             reused_frame_buffers: self.frame_pool.reused(),
@@ -210,7 +248,7 @@ impl CpuRenderer {
     /// # Errors
     /// [`RenderError::InvalidEffectResource`] for an empty id or an invalid cube.
     pub fn register_lut3d(
-        &mut self,
+        &self,
         id: impl Into<String>,
         data: &Lut3dData,
     ) -> Result<(), RenderError> {
@@ -224,7 +262,7 @@ impl CpuRenderer {
             .iter()
             .map(|rgb| rgb.map(|value| half::f16::from_f32(value).to_f32()))
             .collect();
-        self.resources.insert(
+        self.resources_mut().insert(
             id,
             Arc::new(CpuLut {
                 edge: data.edge_length,
@@ -238,8 +276,8 @@ impl CpuRenderer {
     }
 
     /// Removes every resource and clears the cached results.
-    pub fn clear_effect_resources(&mut self) {
-        self.resources.clear();
+    pub fn clear_effect_resources(&self) {
+        self.resources_mut().clear();
         self.lock_cache().clear(CacheInvalidation::EffectResources);
     }
 
@@ -259,16 +297,26 @@ impl CpuRenderer {
     }
 
     /// Removes the resource `id` and returns whether it existed.
-    pub fn unregister_effect_resource(&mut self, id: &str) -> bool {
-        let removed = self.resources.remove(id).is_some();
+    pub fn unregister_effect_resource(&self, id: &str) -> bool {
+        let removed = self.resources_mut().remove(id).is_some();
         if removed {
             self.lock_cache().clear(CacheInvalidation::EffectResources);
         }
         removed
     }
 
-    pub(crate) fn resource(&self, id: &str) -> Option<&Arc<CpuLut>> {
-        self.resources.get(id)
+    pub(crate) fn resource(&self, id: &str) -> Option<Arc<CpuLut>> {
+        self.resources
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(id)
+            .cloned()
+    }
+
+    fn resources_mut(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<String, Arc<CpuLut>>> {
+        self.resources
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) fn entry(&self, id: &EffectId) -> Option<&CatalogEntry> {
@@ -281,8 +329,10 @@ impl CpuRenderer {
 }
 
 impl EffectCatalog for CpuRenderer {
-    fn effect_definition(&self, id: &EffectId) -> Option<&EffectDef> {
-        self.catalog.get(id).map(|entry| &entry.definition)
+    fn effect_definition(&self, id: &EffectId) -> Option<Arc<EffectDef>> {
+        self.catalog
+            .get(id)
+            .map(|entry| Arc::clone(&entry.definition))
     }
 
     fn effect_reads_time(&self, id: &EffectId) -> bool {
@@ -294,12 +344,13 @@ impl EffectCatalog for CpuRenderer {
         self.catalog.get(id).is_none_or(|entry| entry.reads_time)
     }
 
-    fn project_effect_id(&self, id: &str, version: u32) -> Option<&EffectId> {
+    fn project_effect_id(&self, id: &str, version: u32) -> Option<EffectId> {
         let key = EffectId::new(id.to_owned(), version);
         self.catalog
             .get_key_value(&key)
             .map(|(id, _)| id)
             .filter(|id| !self.internal.contains(*id))
+            .cloned()
     }
 }
 

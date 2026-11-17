@@ -6,18 +6,17 @@
 //! the canvas's 2D context; export frames are packed into I420 planes for `WebCodecs`. Runtime
 //! WGSL effects register but cannot draw, so a project that draws one is refused.
 
+use alpha2_engine::frame_store::{FrameStore, StoredFrame};
 use alpha2_engine::{
-    EngineProject, ExportPlaneStep, Exporter, FrameProvider, FrameRenderer, FramesWithText, Player,
+    EngineProject, ExportPlaneStep, Exporter, FrameRenderer, FramesWithText, Player,
     QualityProfile, TextTextures,
 };
-use alpha2_media::{
-    ChromaLocation, ColorMetadata, Orientation, Rect, SourceId, VideoCodec, YuvEncoding,
-};
+use alpha2_media::{ChromaLocation, ColorMetadata, Orientation, Rect, VideoCodec, YuvEncoding};
 use alpha2_model::Project;
 use alpha2_render::{
-    CpuImage, CpuRenderer, CpuSource, EffectId, Lut3dData, PlaneTarget, RenderCacheKey,
-    RenderControls, RenderSize, RgbaPixels, SourceAlpha, SourcePlane, SourcePresentation,
-    SourceView, Yuv420pTargets, YuvFrame, YuvPlanes, builtin_catalog_json,
+    CpuImage, CpuRenderer, CpuSource, EffectId, Lut3dData, PlaneTarget, RenderControls, RenderSize,
+    RgbaPixels, SourceAlpha, SourcePlane, SourcePresentation, SourceView, Yuv420pTargets, YuvFrame,
+    YuvPlanes, builtin_catalog_json,
 };
 use alpha2_time::{FrameRate, MediaTime, TimeRange};
 use std::collections::HashSet;
@@ -25,11 +24,10 @@ use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 
 use crate::error::Code;
-use crate::frame_store::FrameStore;
 use crate::interop::{
     export_status, frame_upload_receipt, js_safe_integer, resolved, set, video_color_space,
 };
-use crate::present::{WebPlaybackResult, upload_source_key};
+use crate::present::WebPlaybackResult;
 use crate::project_audio::ProjectAudio;
 use crate::project_cache::StalePresentations;
 use crate::web::{
@@ -115,14 +113,9 @@ impl CpuFrame {
     }
 }
 
-impl FrameProvider for FrameStore<CpuFrame> {
-    fn texture_for(&self, source: &SourceId, time: MediaTime) -> Option<SourceView<'_>> {
-        self.get(source.as_str(), time.ticks())
-            .map(|frame| SourceView::cpu(&frame.source))
-    }
-
-    fn source_key(&self, source: &SourceId, time: MediaTime) -> Option<RenderCacheKey> {
-        upload_source_key(self, source, time)
+impl StoredFrame for CpuFrame {
+    fn view(&self) -> SourceView<'_> {
+        SourceView::cpu(&self.source)
     }
 }
 
@@ -333,14 +326,13 @@ impl WebCpuRenderer {
         output_size: RenderSize,
         orientation: Orientation,
     ) -> Result<CpuFrame, JsValue> {
-        if self
-            .declared_color(source_id)
-            .is_some_and(alpha2_render::is_hdr)
-        {
-            return Err(invalid_input(format!(
-                "source {source_id} is HDR (PQ or HLG): upload its frames' planes with \
-                 uploadYuvFrame, which converts them under the project's color pipeline"
-            )));
+        let declared = self.declared_color(source_id);
+        let (hdr, kind) = match image.dyn_ref::<web_sys::VideoFrame>() {
+            Some(frame) => (crate::web::frame_shows_hdr(declared, frame), "VideoFrame"),
+            None => (declared.is_some_and(alpha2_render::is_hdr), "ImageBitmap"),
+        };
+        if hdr {
+            return Err(crate::web::hdr_upload_refusal(source_id, kind));
         }
         let size = RenderSize::new(width, height).map_err(|error| typed_error(&error))?;
         let pixels = image_pixels(image, width, height).map_err(|error| {
@@ -410,11 +402,9 @@ impl WebCpuRenderer {
             &video_color_space(ColorMetadata::EXPORT)?,
         )?;
         set(&result, "layout", &layout)?;
-        set(
-            &result,
-            "pixels",
-            &web_sys::js_sys::Uint8Array::from(planes),
-        )?;
+        let pixels = crate::interop::copy_out_bytes(planes)
+            .map_err(|error| crate::interop::copy_out_failure(&error))?;
+        set(&result, "pixels", &pixels)?;
         Ok(result)
     }
 
@@ -1525,10 +1515,7 @@ impl WebCpuRenderer {
         let size = quality
             .export_size(&project.project().settings)
             .map_err(|error| typed_error(&error))?;
-        self.renderer
-            .set_texture_budget_bytes(quality.texture_budget_bytes);
-        self.renderer
-            .set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+        Self::use_export_quality(&self.renderer);
         self.texts
             .prepare(&self.renderer, &frame, size)
             .map_err(|error| typed_error(&error))?;
@@ -1675,6 +1662,59 @@ impl WebCpuRenderer {
     #[wasm_bindgen(js_name = clearFonts)]
     pub fn clear_fonts(&mut self) {
         self.texts = TextTextures::new();
+    }
+
+    /// Sets the export profile's texture budget and filter and motion blur sample controls.
+    fn use_export_quality(renderer: &CpuRenderer) {
+        let quality = QualityProfile::export();
+        renderer.set_texture_budget_bytes(quality.texture_budget_bytes);
+        renderer.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+    }
+
+    /// The project's frame at `time_ticks`, drawn at export quality at `width` x `height` from the
+    /// frames uploaded so far, as straight-alpha sRGB RGBA8, without touching the canvas. Only the
+    /// CPU renderer has it, and earlier renders do not change its result.
+    ///
+    /// # Errors
+    /// `INVALID_STATE` without a project, `MISSING_INPUT` when a source frame it shows has not
+    /// been uploaded, and what drawing the frame refuses.
+    #[wasm_bindgen(js_name = readRgbaAt)]
+    pub fn read_rgba_at(
+        &mut self,
+        time_ticks: i64,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, JsValue> {
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| invalid_state("no project is loaded"))?;
+        let size = RenderSize::new(width, height).map_err(|error| typed_error(&error))?;
+        let time = MediaTime(time_ticks);
+        Self::use_export_quality(&self.renderer);
+        self.texts
+            .prepare_at(&self.renderer, project, time, size)
+            .map_err(|error| typed_error(&error))?;
+        let frame = project
+            .evaluate(time)
+            .map_err(|error| typed_error(&error))?;
+        let output = self
+            .renderer
+            .render_frame(
+                size,
+                &frame,
+                &FramesWithText::new(&self.frames, &self.texts),
+            )
+            .map_err(|error| typed_error(&error))?;
+        let picture = output.texture.ok_or_else(|| {
+            coded_error(
+                Code::MISSING_INPUT,
+                format!("a source frame at {time_ticks} has not been uploaded"),
+            )
+        })?;
+        let mut pixels = picture.read_rgba8();
+        unpremultiply(&mut pixels);
+        Ok(pixels)
     }
 
     /// Draws one project frame at preview quality onto the canvas's 2D context, scaled to fit,

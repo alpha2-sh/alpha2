@@ -153,6 +153,7 @@ pub struct CpuInstalledFrame {
 
 pub struct NativeCpuFrames {
     pub size: RenderSize,
+    cache_scope: u64,
     pub color: ColorPolicy,
     generation: Option<u64>,
     frames: RequestedFrames<CpuInstalledFrame>,
@@ -164,9 +165,11 @@ pub struct NativeCpuFrames {
 }
 
 impl NativeCpuFrames {
-    pub fn new(size: RenderSize) -> Self {
+    /// Frames for one request, whose result-cache keys carry `cache_scope`.
+    pub fn new(size: RenderSize, cache_scope: u64) -> Self {
         Self {
             size,
+            cache_scope,
             color: alpha2_engine::color_policy(&alpha2_model::ColorPipeline::default()),
             generation: None,
             frames: RequestedFrames::default(),
@@ -304,6 +307,7 @@ impl FrameProvider for NativeCpuFrames {
 
     fn source_key(&self, source: &SourceId, time: MediaTime) -> Option<RenderCacheKey> {
         export_source_key(
+            self.cache_scope,
             source,
             self.frames.get(source, time).map(|frame| &frame.picture),
             self.images.contains_key(source),

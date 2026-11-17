@@ -150,7 +150,7 @@ pub enum ParamType {
 /// Semantic unit exposed to authoring hosts.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ParamUnit {
-    /// Resolution-independent fraction.
+    /// A plain or normalized number: a fraction, count, rate, seed or size.
     Normalized,
     /// Angle measured in degrees.
     Degrees,
@@ -283,6 +283,10 @@ pub struct EffectRuntime {
     pub progress: f32,
     /// Output width divided by output height.
     pub ratio: f32,
+    /// Render size over project size on the shorter side: 1 at the project's size, 0.5 for a
+    /// half-scale preview. Effects sized in project pixels scale by it (`render_scale()`).
+    /// Finite and positive.
+    pub scale: f32,
 }
 
 impl Default for EffectRuntime {
@@ -291,6 +295,7 @@ impl Default for EffectRuntime {
             time: MediaTime::ZERO,
             progress: 0.0,
             ratio: 1.0,
+            scale: 1.0,
         }
     }
 }
@@ -350,7 +355,7 @@ pub struct EffectDef {
     pub params: Vec<ParamSpec>,
     /// Ordered external resource schema.
     pub resources: Vec<ResourceSpec>,
-    /// Author function implementing the selected contract.
+    /// Author function implementing the selected contract. Code outside comments is ASCII.
     pub wgsl_body: String,
     /// Minimum required GPU capability tier.
     pub tier_min: CapabilityTier,

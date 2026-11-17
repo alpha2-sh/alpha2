@@ -1,8 +1,9 @@
 name: scheduled
 
-# Weekly checks too slow for every change. Benchmarks run only on a quiet fixed machine.
+# Weekly checks too slow for every change.
 on:
   schedule:
+    - cron: "17 3 * * *"
     - cron: "41 2 * * 1"
   workflow_dispatch:
     inputs:
@@ -18,36 +19,84 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  dispatch:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: ${{ vars.SCHEDULED_BRANCH || github.event.repository.default_branch }}
+    steps:
+      - name: Nightly ci and observe on the active branch
+        if: github.event.schedule == '17 3 * * *'
+        env:
+          OBSERVE_RUNS: ${{ vars.OBSERVE_NIGHTLY_RUNS || 3 }}
+        run: |
+          gh workflow run ci.yml --ref "$BRANCH"
+          for _ in $(seq "$OBSERVE_RUNS"); do gh workflow run observe.yml --ref "$BRANCH"; done
+          echo "Started ci and $OBSERVE_RUNS observe runs on $BRANCH" >> "$GITHUB_STEP_SUMMARY"
+      - name: Weekly fuzz and Miri on the active branch
+        if: github.event.schedule == '41 2 * * 1'
+        run: |
+          gh workflow run scheduled.yml --ref "$BRANCH"
+          echo "Started scheduled on $BRANCH" >> "$GITHUB_STEP_SUMMARY"
+
+  flake-report:
+    if: github.event_name == 'schedule' && github.event.schedule == '17 3 * * *'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: ${{ vars.SCHEDULED_BRANCH || github.event.repository.default_branch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BRANCH }}
+      - name: Results that changed at one commit, and pass rates, over the last 30 runs
+        run: node scripts/ci-flake-report.mjs --branch "$BRANCH" --runs 30
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: flake-report
+          path: target/flake-report/flake-report.json
+          if-no-files-found: ignore
+
+  fuzz-targets:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: List every fuzz target
+        id: list
+        run: |
+          shopt -s inherit_errexit
+          targets="$(sed -n 's/^name = "\(.*\)"$/\1/p' fuzz/Cargo.toml | grep -vx alpha2-fuzz | jq -Rnc '[inputs]')"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
   fuzz:
     name: Fuzz (${{ matrix.target }})
+    needs: fuzz-targets
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        # Every [[bin]] of fuzz/Cargo.toml.
-        target:
-          - project_from_json
-          - evaluate
-          - audio_render
-          - extension_svg
-          - extension_animated
-          - extension_lottie
-          - extension_exr
-          - caption_import
-          - project_lint
-          - composition_plan
-          - vector_raster
-          - layout_resolve
-          - layout_values
+        target: ${{ fromJSON(needs.fuzz-targets.outputs.targets) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
         run: |
           echo "image: $ImageOS $ImageVersion"
           rustc --version
-      - name: Install the nightly toolchain
-        run: rustup toolchain install nightly --profile minimal
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -69,6 +118,7 @@ jobs:
           if-no-files-found: ignore
 
   miri:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:

@@ -1,11 +1,12 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { createEditor } from "../dist/index.js";
-import {
-  ResourceRegistry,
-  ExportJob,
-  createBrowserBridge,
-} from "../dist/browser/index.js";
+import { testUnless, wasmSkip } from "./support/wasm.mjs";
+
+const skip = wasmSkip(import.meta.url);
+const test = testUnless(skip);
+const { ResourceRegistry, ExportJob, createBrowserBridge } = skip
+  ? {}
+  : await import("../dist/browser/index.js");
 const deferred = () => {
   let resolve;
   const promise = new Promise((r) => {
@@ -29,6 +30,25 @@ test("resource leases are bounded, idempotent and independent by revision", () =
   b.release();
   r.dispose();
   assert.equal(closed, 2);
+});
+test("uncounted resource entries are held beyond the limit and leave the counted room alone", () => {
+  const r = new ResourceRegistry(1);
+  const extra = r.put("proxy", 0, {}, () => {}, { counted: false });
+  r.put("title", 0, {}, () => {}, { counted: false });
+  const media = r.put("a", 0, {}, () => {});
+  assert.equal(r.size, 3);
+  assert.equal(r.counted, 1);
+  assert.throws(
+    () => r.put("b", 0, {}, () => {}),
+    (error) => error.code === "resource_budget",
+  );
+  extra.release();
+  assert.equal(r.counted, 1);
+  media.release();
+  assert.equal(r.counted, 0);
+  r.put("b", 0, {}, () => {});
+  assert.equal(r.counted, 1);
+  r.dispose();
 });
 test("export pins its document, waits for cancellation cleanup, and releases once", async () => {
   const e = createEditor(),

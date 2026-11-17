@@ -311,7 +311,7 @@ test("the mediabunny adapter reads the slack from no more than 16 MiB of first p
   const exact = ROUNDING_SCAN_BYTES / frameBytes;
   assert.equal(exact, 8);
   const units = Array.from({ length: exact }, (_, index) => index * 640);
-  for (const step of [528, 544, 528, 544]) units.push(units.at(-1) + step);
+  for (const step of [624, 656, 624, 656]) units.push(units.at(-1) + step);
   assert.ok(units.length < ROUNDING_SCAN_FRAMES);
   assert.notEqual(
     roundingQuantum(units.slice(0, exact)),

@@ -113,20 +113,15 @@ fn frame_display_rotation_reads_the_matrix_a_decoder_attached() {
 fn video_plane_copy_normalizes_positive_and_negative_stride() {
     let bytes = [1_u8, 2, 99, 4, 5, 99, 7, 8, 99];
     assert_eq!(
-        copy_video_plane(bytes.as_ptr(), 3, 2, 3, "plane").expect("positive stride"),
+        // SAFETY: `bytes` holds three rows of three bytes.
+        unsafe { copy_plane_rows(bytes.as_ptr(), 3, 2, 3, "plane") }.expect("positive stride"),
         vec![1, 2, 4, 5, 7, 8]
     );
     // A negative-stride frame points at its first logical row and walks backwards.
     assert_eq!(
-        copy_video_plane(
-            // SAFETY: index six is the first byte of the final stored row.
-            unsafe { bytes.as_ptr().add(6) },
-            -3,
-            2,
-            3,
-            "plane",
-        )
-        .expect("negative stride"),
+        // SAFETY: index six starts the last stored row, and the rows before it are in `bytes`.
+        unsafe { copy_plane_rows(bytes.as_ptr().add(6), -3, 2, 3, "plane") }
+            .expect("negative stride"),
         vec![7, 8, 4, 5, 1, 2]
     );
 }
@@ -723,4 +718,303 @@ fn the_runtime_has_the_libvpx_vp9_decoder() {
     let decoder = rsmpeg::avcodec::AVCodec::find_decoder_by_name(c"libvpx-vp9")
         .expect("this FFmpeg runtime has no libvpx-vp9 decoder");
     assert_eq!(decoder.id, ffi::AV_CODEC_ID_VP9);
+}
+
+/// A frame of `format` whose every sample of plane `i` is `samples[i]`, at 8 or 16 bits per sample.
+fn uniform_frame(
+    format: ffi::AVPixelFormat,
+    width: i32,
+    height: i32,
+    samples: [u16; 4],
+) -> AVFrame {
+    let mut frame = AVFrame::new();
+    frame.set_format(format);
+    frame.set_width(width);
+    frame.set_height(height);
+    frame.get_buffer(0).expect("frame");
+    let wide = sample_profile(format).expect("descriptor").bit_depth > 8;
+    for (plane, sample) in samples.iter().enumerate() {
+        let data = frame.data[plane];
+        if data.is_null() {
+            continue;
+        }
+        let rows = usize::try_from(plane_rows(format, height, plane)).expect("rows");
+        let bytes = usize::try_from(frame.linesize[plane]).expect("linesize") * rows;
+        // SAFETY: the plane holds `rows` rows at its linesize inside the frame's buffer.
+        let plane = unsafe { slice::from_raw_parts_mut(data, bytes) };
+        if wide {
+            for pair in plane.as_chunks_mut::<2>().0 {
+                *pair = sample.to_le_bytes();
+            }
+        } else {
+            plane.fill(u8::try_from(*sample).expect("8-bit sample"));
+        }
+    }
+    frame
+}
+
+fn plane_rows(format: ffi::AVPixelFormat, height: i32, plane: usize) -> i32 {
+    // SAFETY: `av_pix_fmt_desc_get` returns null or a static descriptor.
+    let descriptor = unsafe { ffi::av_pix_fmt_desc_get(format).as_ref() }.expect("descriptor");
+    let rgb = descriptor.flags & u64::from(ffi::AV_PIX_FMT_FLAG_RGB) != 0;
+    if (plane == 1 || plane == 2) && !rgb {
+        -((-height) >> descriptor.log2_chroma_h)
+    } else {
+        height
+    }
+}
+
+const TAIL_PATTERN: u8 = 0xA5;
+
+/// Fills every byte of the scaler's destination after the last row of its last plane.
+fn mark_destination_tail(scaler: &mut PackedScaler) -> (*const u8, usize) {
+    let frame = &scaler.destination;
+    // SAFETY: a frame from `av_frame_get_buffer` has one live buffer in `buf[0]`.
+    let buffer = unsafe { frame.buf[0].as_ref() }.expect("one buffer");
+    let mut end = 0;
+    for plane in 0..4 {
+        if frame.data[plane].is_null() {
+            continue;
+        }
+        let rows = usize::try_from(plane_rows(frame.format, frame.height, plane)).expect("rows");
+        let stride = usize::try_from(frame.linesize[plane]).expect("linesize");
+        let offset = frame.data[plane] as usize - buffer.data as usize;
+        end = end.max(offset + rows * stride);
+    }
+    assert!(end < buffer.size, "no slack after the last plane");
+    // SAFETY: `end..size` lies inside the frame's only buffer, which the scaler owns.
+    unsafe { ptr::write_bytes(buffer.data.add(end), TAIL_PATTERN, buffer.size - end) };
+    // SAFETY: as above.
+    (unsafe { buffer.data.add(end) }, buffer.size - end)
+}
+
+fn tail_is_untouched((start, len): (*const u8, usize)) -> bool {
+    // SAFETY: the range `mark_destination_tail` returned, in a buffer the scaler still owns.
+    unsafe { slice::from_raw_parts(start, len) }
+        .iter()
+        .all(|byte| *byte == TAIL_PATTERN)
+}
+
+fn rgba_scaler(width: i32, height: i32) -> PackedScaler {
+    let mut scaler = PackedScaler::new(
+        width,
+        height,
+        ffi::AV_PIX_FMT_YUVA420P,
+        ffi::AV_PIX_FMT_RGBA,
+    )
+    .expect("scaler");
+    let bt709 = i32::try_from(ffi::SWS_CS_ITU709).expect("coefficient");
+    scaler
+        .configure_colorspace(bt709, false, bt709, true)
+        .expect("colorspace");
+    scaler
+}
+
+#[test]
+fn alpha_420_to_rgba_writes_every_column_and_nothing_past_the_destination() {
+    let widths = (1..=70).chain([250, 500, 854, 1080]);
+    for width in widths {
+        for height in [2, 15, 16] {
+            let mut scaler = rgba_scaler(width, height);
+            let tail = mark_destination_tail(&mut scaler);
+            let frame = uniform_frame(
+                ffi::AV_PIX_FMT_YUVA420P,
+                width,
+                height,
+                [126, 128, 128, 255],
+            );
+            let bytes = scaler.convert(&frame).expect("convert");
+            let (w, h) = (
+                usize::try_from(width).expect("w"),
+                usize::try_from(height).expect("h"),
+            );
+            assert_eq!(bytes.len(), 4 * w * h, "{width}x{height}");
+            let first = &bytes[..3];
+            for (index, pixel) in bytes.as_chunks::<4>().0.iter().enumerate() {
+                // The general scaler, which odd heights take, rounds opaque alpha to 254.
+                assert!(pixel[3] >= 254, "{width}x{height} pixel {index}: {pixel:?}");
+                for channel in 0..3 {
+                    assert!(
+                        pixel[channel].abs_diff(first[channel]) <= 2,
+                        "{width}x{height} pixel {index}: {pixel:?} against {first:?}"
+                    );
+                }
+            }
+            assert!(
+                tail_is_untouched(tail),
+                "{width}x{height} wrote past its planes"
+            );
+        }
+    }
+}
+
+#[test]
+fn alpha_420_to_planar_444_keeps_alpha_opaque_and_stays_inside_the_destination() {
+    for (source, target, opaque) in [
+        (ffi::AV_PIX_FMT_YUVA420P, ffi::AV_PIX_FMT_YUVA444P, 255_u16),
+        (
+            ffi::AV_PIX_FMT_YUVA420P10LE,
+            ffi::AV_PIX_FMT_YUVA444P10LE,
+            1023,
+        ),
+    ] {
+        let wide = opaque > 255;
+        let sample_bytes = if wide { 2 } else { 1 };
+        for width in 1..=8 {
+            for height in [3, 4, 16] {
+                let mut scaler = PackedScaler::new(width, height, source, target).expect("scaler");
+                let tail = mark_destination_tail(&mut scaler);
+                let mid = if wide { 512 } else { 128 };
+                let frame = uniform_frame(source, width, height, [mid, mid, mid, opaque]);
+                let bytes = scaler.convert(&frame).expect("convert");
+                let plane = usize::try_from(width * height).expect("pixels") * sample_bytes;
+                assert_eq!(bytes.len(), 4 * plane, "{width}x{height}");
+                let alpha = &bytes[3 * plane..];
+                let samples: Vec<u16> = if wide {
+                    alpha
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|pair| u16::from_le_bytes(*pair))
+                        .collect()
+                } else {
+                    alpha.iter().map(|byte| u16::from(*byte)).collect()
+                };
+                assert!(
+                    samples.iter().all(|sample| *sample == opaque),
+                    "{source:?} {width}x{height}: {samples:?}"
+                );
+                assert!(
+                    tail_is_untouched(tail),
+                    "{width}x{height} wrote past its planes"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_scaler_refuses_a_frame_of_another_size_or_format() {
+    let mut scaler = rgba_scaler(64, 64);
+    let smaller = uniform_frame(ffi::AV_PIX_FMT_YUVA420P, 16, 16, [126, 128, 128, 255]);
+    let other_format = uniform_frame(ffi::AV_PIX_FMT_YUV420P, 64, 64, [126, 128, 128, 0]);
+    for frame in [&smaller, &other_format] {
+        assert!(matches!(
+            scaler.convert(frame),
+            Err(BridgeError::InvalidInput(_))
+        ));
+        assert!(matches!(
+            scaler.convert_to_frame(frame),
+            Err(BridgeError::InvalidInput(_))
+        ));
+    }
+    let matching = uniform_frame(ffi::AV_PIX_FMT_YUVA420P, 64, 64, [126, 128, 128, 255]);
+    let converted = scaler.convert_to_frame(&matching).expect("convert");
+    assert_eq!((converted.width, converted.height), (64, 64));
+    assert_eq!(converted.format, ffi::AV_PIX_FMT_RGBA);
+    assert_eq!(converted.linesize[0] % 64, 0);
+}
+
+#[test]
+fn a_frame_buffer_takes_each_planes_rows_from_its_pixel_format() {
+    let (width, height) = (37, 21);
+    for (format, expected) in [
+        (ffi::AV_PIX_FMT_YUV420P, vec![(37, 21), (19, 11), (19, 11)]),
+        (ffi::AV_PIX_FMT_P010LE, vec![(74, 21), (76, 11)]),
+        (
+            ffi::AV_PIX_FMT_YUV422P10LE,
+            vec![(74, 21), (38, 21), (38, 21)],
+        ),
+        (
+            ffi::AV_PIX_FMT_YUVA444P10LE,
+            vec![(74, 21), (74, 21), (74, 21), (74, 21)],
+        ),
+    ] {
+        let mut buffer = Yuv420pFrameBuffer::with_format(width, height, format).expect("buffer");
+        assert_eq!(buffer.planes(), expected, "{format}");
+        let mut ranges = Vec::new();
+        for (index, ((plane, stride), (row_bytes, rows))) in buffer
+            .begin_write_planes()
+            .expect("planes")
+            .into_iter()
+            .zip(expected)
+            .enumerate()
+        {
+            assert_eq!(
+                plane.len(),
+                stride * (rows - 1) + row_bytes,
+                "{format} {index}"
+            );
+            plane.fill(0x5A);
+            ranges.push((plane.as_ptr() as usize, plane.len()));
+        }
+        for (index, (start, len)) in ranges.into_iter().enumerate() {
+            assert!(
+                in_frame_buffer(buffer.frame(), start, len),
+                "{format} plane {index} leaves its buffer"
+            );
+        }
+    }
+}
+
+#[test]
+fn yuv_planes_refuse_rows_past_the_frames_buffer() {
+    let mut frame = AVFrame::new();
+    frame.set_format(ffi::AV_PIX_FMT_YUV420P);
+    frame.set_width(16);
+    frame.set_height(16);
+    frame.get_buffer(1).expect("buffer");
+    assert!(yuv_planes(&frame).expect("planes").is_some());
+    frame.set_height(1000);
+    assert!(
+        yuv_planes(&frame).is_err(),
+        "1000 rows were read from a 16-row buffer"
+    );
+}
+
+#[test]
+fn a_flipped_frame_inside_its_buffer_still_copies() {
+    let y = vec![1_u8, 2, 3, 4, 5, 6];
+    let chroma = vec![9_u8, 9];
+    let mut frame = yuv420p_frame(&y, 2, &chroma, 1, &chroma, 1, 2, 3).expect("frame");
+    // SAFETY: only `data` and `linesize` change, to the same rows walked from the last one.
+    let raw = unsafe { &mut *frame.as_mut_ptr() };
+    for plane in 0..3 {
+        let rows = if plane == 0 { 3 } else { 2 };
+        let linesize = raw.linesize[plane];
+        let last_row = isize::try_from(linesize * (rows - 1)).expect("offset");
+        // SAFETY: the plane's last row is inside the frame's buffer.
+        raw.data[plane] = unsafe { raw.data[plane].offset(last_row) };
+        raw.linesize[plane] = -linesize;
+    }
+    let planes = yuv_planes(&frame).expect("planes").expect("I420").planes;
+    let luma: Vec<u8> = planes[0]
+        .bytes
+        .chunks(planes[0].stride as usize)
+        .flat_map(|row| &row[..2])
+        .copied()
+        .collect();
+    assert_eq!(luma, [5, 6, 3, 4, 1, 2]);
+}
+
+#[test]
+fn hardware_interop_needs_the_libavutil_minor_the_shims_were_compiled_for() {
+    let version = |major: u32, minor: u32, micro: u32| (major << 16) | (minor << 8) | micro;
+    assert_eq!(
+        interop_version_refusal(version(60, 26, 103), version(60, 26, 103)),
+        None
+    );
+    assert_eq!(
+        interop_version_refusal(version(60, 26, 103), version(60, 26, 100)),
+        None
+    );
+    let refusal = interop_version_refusal(version(60, 26, 103), version(60, 8, 103))
+        .expect("another minor is refused");
+    assert!(
+        refusal.contains("60.26.103") && refusal.contains("60.8.103"),
+        "{refusal}"
+    );
+    assert!(interop_version_refusal(version(60, 26, 103), version(61, 0, 100)).is_some());
+    assert_eq!(hardware_interop_refusal(), None, "the pinned SDK passes");
+    check_hardware_interop().expect("the pinned SDK passes");
 }

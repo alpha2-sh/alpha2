@@ -16,6 +16,11 @@ from alpha2 import Alpha2HostError, HostClient
 from alpha2._quarantine import quarantine_refusal
 
 
+@pytest.fixture(autouse=True)
+def no_openh264_library(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ALPHA2_OPENH264_LIBRARY", raising=False)
+
+
 def archive_tree(root: Path, libraries: list[str]) -> Path:
     (root / "bin").mkdir(parents=True)
     (root / "lib").mkdir()

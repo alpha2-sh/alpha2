@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde_json::{Map, Value};
 
 use crate::api::{Diagnostic, ExtensionError};
-use crate::budget::MAX_DRAWING;
+use crate::budget::{FLOOR_CANVAS, MAX_DASHES, MAX_DRAWING, dash_geometry, fill_geometry};
 
 /// Most copies a repeater makes at any frame.
 pub(super) const MAX_REPEATER_COPIES: f64 = 1_000.0;
@@ -36,9 +36,20 @@ pub(super) const MAX_OFFSCREEN: u64 = 512;
 /// matte). Each is a frame-sized layer and a level of recursion.
 pub(super) const MAX_NESTING: u64 = 64;
 
+/// Canvases of blended fill the clip velato pushes for every image layer costs (a canvas-sized
+/// mask, about 18 us at 1080p).
+const IMAGE_CLIP: f64 = 1.0 / 64.0;
+
+/// What [`normalize`] found besides the rewritten document.
+pub(super) struct Normalized {
+    pub(super) diagnostics: Vec<Diagnostic>,
+    /// Most offscreen layers one frame holds at once, each the size of the output.
+    pub(super) depth: u64,
+}
+
 /// Rewrites the animation in place for velato and returns what it leaves out. In place because a
 /// parsed document is many times its file size.
-pub(super) fn normalize(mut json: Value) -> Result<(Vec<Diagnostic>, Value), ExtensionError> {
+pub(super) fn normalize(mut json: Value) -> Result<(Normalized, Value), ExtensionError> {
     let number = |key: &str| json.get(key).and_then(Value::as_f64).unwrap_or(0.0);
     let canvas = number("w") * number("h");
     let images = image_sizes(&json);
@@ -53,7 +64,7 @@ pub(super) fn normalize(mut json: Value) -> Result<(Vec<Diagnostic>, Value), Ext
     if let Some(error) = scan.refused {
         return Err(error);
     }
-    check_drawing(&sets)?;
+    let depth = check_drawing(&sets)?;
     let diagnostics = scan
         .found
         .into_iter()
@@ -63,7 +74,7 @@ pub(super) fn normalize(mut json: Value) -> Result<(Vec<Diagnostic>, Value), Ext
             count,
         })
         .collect();
-    Ok((diagnostics, json))
+    Ok((Normalized { diagnostics, depth }, json))
 }
 
 #[derive(Default)]
@@ -252,6 +263,18 @@ struct Paint {
     large: Draws,
     /// The others.
     small: Draws,
+    /// Edges and dashes, and the clips of image layers, in canvases of [`FLOOR_CANVAS`].
+    geometry: f64,
+}
+
+/// Geometry costs nothing per area, so it is kept apart and never capped at a canvas a draw.
+impl Paint {
+    fn geometry(canvases: f64) -> Self {
+        Self {
+            geometry: canvases,
+            ..Self::default()
+        }
+    }
 }
 
 /// A draw count and their summed bounds, in canvases.
@@ -312,6 +335,7 @@ impl Paint {
         Self {
             large: self.large.then(other.large),
             small: self.small.then(other.small),
+            geometry: self.geometry + other.geometry,
         }
     }
 
@@ -320,6 +344,7 @@ impl Paint {
         Self {
             large: self.large.grown(factor),
             small: self.small.grown(factor),
+            ..self
         }
     }
 
@@ -327,11 +352,12 @@ impl Paint {
         Self {
             large: self.large.times(copies),
             small: self.small.times(copies),
+            geometry: grown(self.geometry, copies),
         }
     }
 
     fn canvases(self) -> f64 {
-        self.large.canvases() + self.small.canvases()
+        self.large.canvases() + self.small.canvases() + self.geometry
     }
 }
 
@@ -345,13 +371,16 @@ fn grown(value: f64, factor: f64) -> f64 {
     }
 }
 
-/// Summed bounding boxes of the shapes a fill or stroke would paint.
+/// Summed bounding boxes of the shapes a fill or stroke would paint, with their vertices and
+/// the length of their control polygons, the most at any frame.
 #[derive(Clone, Copy, Default)]
 struct Outline {
     area: f64,
     /// Summed width plus height.
     sides: f64,
     count: f64,
+    vertices: f64,
+    length: f64,
 }
 
 impl Outline {
@@ -360,6 +389,17 @@ impl Outline {
             area: grown(width, height),
             sides: width + height,
             count: 1.0,
+            vertices: 4.0,
+            length: 2.0 * (width + height),
+        }
+    }
+
+    /// A shape of `vertices` vertices and control polygon `length` within these bounds.
+    fn with(self, vertices: f64, length: f64) -> Self {
+        Self {
+            vertices,
+            length,
+            ..self
         }
     }
 
@@ -373,6 +413,8 @@ impl Outline {
             area: self.area + other.area,
             sides: self.sides + other.sides,
             count: self.count + other.count,
+            vertices: self.vertices + other.vertices,
+            length: self.length + other.length,
         }
     }
 
@@ -380,7 +422,8 @@ impl Outline {
         Self {
             area: grown(self.area, scale.area),
             sides: grown(self.sides, scale.stretch),
-            count: self.count,
+            length: grown(self.length, scale.stretch),
+            ..self
         }
     }
 
@@ -390,6 +433,8 @@ impl Outline {
             area: grown(each.area, copies),
             sides: grown(each.sides, copies),
             count: each.count * copies,
+            vertices: grown(each.vertices, copies),
+            length: grown(each.length, copies),
         }
     }
 
@@ -625,7 +670,9 @@ impl Structure<'_> {
                     .and_then(|id| self.images.get(id))
                     .copied()
                     .unwrap_or((f64::INFINITY, f64::INFINITY));
-                content.paint = Paint::draw(grown(width, height) / self.canvas);
+                // velato pushes a canvas-sized clip for every image layer.
+                content.paint = Paint::draw(grown(width, height) / self.canvas)
+                    .then(Paint::geometry(IMAGE_CLIP));
             }
             Some(4) => {
                 if let Some(shapes) = layer.get_mut("shapes") {
@@ -710,7 +757,10 @@ impl Structure<'_> {
                             "a Lottie polystar has more than {MAX_POLYSTAR_POINTS} points (at {path})"
                         )));
                     }
-                    outline = outline.then(polystar_bounds(item));
+                    let points = item.get("pt").map_or(0.0, reach);
+                    let bounds = polystar_bounds(item);
+                    let length = std::f64::consts::PI * bounds.sides;
+                    outline = outline.then(bounds.with(2.0 * points, length));
                     cost.drawn = cost.drawn.saturating_add(1);
                 }
                 Some("sh") => {
@@ -771,7 +821,27 @@ impl Structure<'_> {
         } else {
             outline.area
         };
-        Paint::draw(area / self.canvas)
+        // A Lottie path has no device rows here, so its edges count as sharing one.
+        let vertices = outline.vertices;
+        let mut geometry = if stroke {
+            fill_geometry(4.0 * vertices * vertices, 2.0 * vertices)
+        } else {
+            fill_geometry(vertices * vertices, vertices)
+        };
+        if stroke && let Some(dashes) = item.get("d").and_then(Value::as_array) {
+            let period: f64 = dashes
+                .iter()
+                .filter(|dash| dash.get("n").and_then(Value::as_str) != Some("o"))
+                .map(|dash| dash.get("v").map_or(0.0, |value| magnitude(value, 0)))
+                .sum();
+            let count = if period > 0.0 {
+                (outline.length / period).min(MAX_DASHES)
+            } else {
+                MAX_DASHES
+            };
+            geometry += dash_geometry(count);
+        }
+        Paint::draw(area / self.canvas).then(Paint::geometry(geometry / FLOOR_CANVAS))
     }
 
     /// A repeater multiplies what it copies, adding an offscreen layer per shape and copy when
@@ -1136,9 +1206,11 @@ fn polystar_bounds(item: &Map<String, Value>) -> Outline {
     Outline::of(side, side)
 }
 
-/// A path's bounds over all keyframes: vertices and handles, grown by easing overshoot.
+/// A path's bounds over all keyframes (vertices and handles, grown by easing overshoot), with its
+/// most vertices and longest control polygon.
 fn path_bounds(property: &Value) -> Outline {
     let mut boxed = Bounds::default();
+    let (mut most_vertices, mut longest) = (0.0_f64, 0.0_f64);
     let mut shape = |shape: &Value| {
         let points = |key: &str| shape.get(key).and_then(Value::as_array);
         let point = |value: &Value| {
@@ -1148,6 +1220,8 @@ fn path_bounds(property: &Value) -> Outline {
         let Some(vertices) = points("v") else {
             return false;
         };
+        let mut length = 0.0;
+        let mut previous: Option<(f64, f64)> = None;
         for (index, vertex) in vertices.iter().enumerate() {
             let Some((x, y)) = point(vertex) else {
                 return false;
@@ -1156,9 +1230,19 @@ fn path_bounds(property: &Value) -> Outline {
             for handles in [points("i"), points("o")].into_iter().flatten() {
                 if let Some((dx, dy)) = handles.get(index).and_then(point) {
                     boxed.add(x + dx, y + dy);
+                    length += dx.hypot(dy);
                 }
             }
+            if let Some((px, py)) = previous {
+                length += (x - px).hypot(y - py);
+            }
+            previous = Some((x, y));
         }
+        #[allow(clippy::cast_precision_loss)]
+        let count = vertices.len() as f64;
+        most_vertices = most_vertices.max(count);
+        // The closing segment is no longer than the rest together.
+        longest = longest.max(2.0 * length);
         true
     };
     let known = match property.get("k") {
@@ -1183,8 +1267,8 @@ fn path_bounds(property: &Value) -> Outline {
         None => false,
     };
     match boxed.size() {
-        Some((width, height)) if known => Outline::of(width, height),
-        _ => Outline::unknown(),
+        Some((width, height)) if known => Outline::of(width, height).with(most_vertices, longest),
+        _ => Outline::unknown().with(most_vertices.max(4.0), f64::INFINITY),
     }
 }
 
@@ -1428,11 +1512,12 @@ impl<'a> Drawing<'a> {
     }
 }
 
-/// Refuses self-drawing layers and documents over the drawing or nesting budget. The walk uses an
-/// explicit stack because precomposition and matte chains can be arbitrarily long.
-fn check_drawing(sets: &[(Option<String>, LayerSet)]) -> Result<(), ExtensionError> {
+/// Refuses self-drawing layers and documents over the drawing or nesting budget, and answers
+/// the most offscreen layers a frame holds. The walk uses an explicit stack because
+/// precomposition and matte chains can be arbitrarily long.
+fn check_drawing(sets: &[(Option<String>, LayerSet)]) -> Result<u64, ExtensionError> {
     if sets.first().is_none_or(|(id, _)| id.is_some()) {
-        return Ok(());
+        return Ok(0);
     }
     let mut drawing = Drawing::new(sets);
     let mut stack = vec![(Node::Set(0), 0_usize)];
@@ -1492,7 +1577,7 @@ fn check_drawing(sets: &[(Option<String>, LayerSet)]) -> Result<(), ExtensionErr
             "a frame of the Lottie animation paints more than {MAX_DRAWING} times its canvas (the most at {most})"
         )));
     }
-    Ok(())
+    Ok(depth)
 }
 
 /// The most each layer's transform chain grows an area. velato follows parent loops too, so a

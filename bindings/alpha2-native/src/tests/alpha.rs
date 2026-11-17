@@ -117,3 +117,24 @@ fn an_alpha_source_never_opens_a_hardware_session() {
         );
     }
 }
+
+/// Lossy WebP with an alpha chunk decodes to `yuva420p`; the fixtures' alpha is 200 everywhere.
+#[test]
+fn lossy_webp_with_alpha_keeps_alpha_in_every_column() {
+    for name in [
+        "webp-lossy-alpha-250x100.webp",
+        "webp-lossy-alpha-37x20.webp",
+    ] {
+        let (frame, _) = first_software_frame(name);
+        assert_eq!(frame.pixel_format, PixelFormat::Rgba8, "{name}");
+        let plane = &frame.planes[0];
+        let (w, h) = (plane.width as usize, plane.height as usize);
+        assert_eq!(plane.bytes.len(), 4 * w * h, "{name}");
+        for y in 0..h {
+            for x in 0..w {
+                let alpha = plane.bytes[y * plane.stride as usize + 4 * x + 3];
+                assert_eq!(alpha, 200, "{name} at ({x}, {y})");
+            }
+        }
+    }
+}

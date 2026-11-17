@@ -174,6 +174,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
             "gre",
             vec![color("color", [0.9, 0.4, 0.2, 1.0])],
         ),
+        // Noise is per output pixel: a half-scale preview shows it twice as coarse.
         transition(
             "crosshatch",
             CROSSHATCH,
@@ -263,6 +264,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
                 float("intensity", 1.0, 0.0, 5.0),
             ],
         ),
+        // Noise is per output pixel: a half-scale preview shows it twice as coarse.
         transition(
             "luminance-melt",
             LUMINANCE_MELT,
@@ -285,6 +287,7 @@ pub(in crate::builtins) fn definitions() -> Vec<EffectDef> {
                 float("speed", 5.0, 0.0, 20.0),
             ],
         ),
+        // Noise is per output pixel: a half-scale preview shows it twice as coarse.
         transition(
             "random-noise",
             RANDOM_NOISE,

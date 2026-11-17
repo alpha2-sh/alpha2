@@ -11,11 +11,97 @@ export const LUMA_AT = `async function lumaAt(frame, x, y) {
   return Math.round(16 + (65.481 * r + 128.553 * g + 24.966 * b) / 255);
 }`;
 
+// The skip for the engine's DECODE_UNAVAILABLE when WebCodecs, asked on its own, refuses the
+// track's codec too; null otherwise, so a refusal of a codec this browser decodes fails the case.
+// A refusal after the browser's decoder threw needs more, since browsers claim layouts they then
+// reject: `globalThis.trialDecodes(facts)` must find the case's own source failing a plain
+// WebCodecs decode. The sample rate is not in the facts and rarely decides support. Kept as source
+// for a Node test.
+export const DECODE_REFUSAL_SKIP = `async function decodeRefusalSkip(error) {
+  const facts = error?.code === "DECODE_UNAVAILABLE" ? error.facts : undefined;
+  if (!facts?.kind || !facts.codec) return null;
+  const probe = facts.kind === "audio"
+    ? globalThis.AudioDecoder?.isConfigSupported({ codec: facts.codec, sampleRate: 48000, numberOfChannels: facts.channels ?? 2 })
+    : globalThis.VideoDecoder?.isConfigSupported({ codec: facts.codec });
+  const supported = probe
+    ? await probe.then(({ supported }) => supported === true, () => false)
+    : false;
+  if (supported && (error.cause === undefined || (await globalThis.trialDecodes?.(facts)) !== false))
+    return null;
+  return {
+    skipped: "this browser does not decode the case's source (WebCodecs refuses " + facts.codec + "): "
+      + String(error.message ?? error),
+    capability: facts.kind === "audio" ? "webcodecs-audio" : "webcodecs-video",
+  };
+}`;
+
+// Whether a media file the page fetched has a track matching `facts` whose first packets decode
+// with plain WebCodecs: true if one does, false if every match fails, undefined with no match.
+const TRIAL_DECODES = `const fetchedMedia = new Set();
+const pageFetch = globalThis.fetch.bind(globalThis);
+globalThis.fetch = (resource, ...rest) => {
+  const url = new URL(resource instanceof Request ? resource.url : String(resource), location.href);
+  if (/\\.(mp4|m4a|mov|mkv|webm|ogg|opus|mp3|wav|flac)$/i.test(url.pathname)) fetchedMedia.add(url.href);
+  return pageFetch(resource, ...rest);
+};
+const trialDecode = async (track, kind) => {
+  const { EncodedPacketSink } = await import("mediabunny");
+  const config = await track.getDecoderConfig();
+  if (config === null) return false;
+  const packets = [];
+  for await (const packet of new EncodedPacketSink(track).packets()) {
+    packets.push(packet);
+    if (packets.length === 4) break;
+  }
+  let decoded = false;
+  let failed = false;
+  const Decoder = kind === "audio" ? AudioDecoder : VideoDecoder;
+  const decoder = new Decoder({
+    output: (output) => { decoded = true; output.close(); },
+    error: () => { failed = true; },
+  });
+  try {
+    // @ts-expect-error TypeScript cannot call a union of the WebCodecs decoders' overloaded configure.
+    decoder.configure(config);
+    for (const packet of packets)
+      decoder.decode(kind === "audio" ? packet.toEncodedAudioChunk() : packet.toEncodedVideoChunk());
+    await decoder.flush();
+  } catch {
+    failed = true;
+  } finally {
+    if (decoder.state !== "closed") decoder.close();
+  }
+  return decoded && !failed;
+};
+globalThis.trialDecodes = async (facts) => {
+  const { ALL_FORMATS, BlobSource, Input } = await import("mediabunny");
+  let answer;
+  for (const url of fetchedMedia) {
+    const input = new Input({ source: new BlobSource(await (await pageFetch(url)).blob()), formats: ALL_FORMATS });
+    try {
+      const tracks = facts.kind === "audio" ? await input.getAudioTracks() : await input.getVideoTracks();
+      for (const track of tracks) {
+        const codecs = [track.codec, await track.getCodecParameterString().catch(() => null)];
+        if (!codecs.includes(facts.codec)) continue;
+        if (facts.channels !== undefined && !(track.isAudioTrack() && track.numberOfChannels === facts.channels))
+          continue;
+        if (await trialDecode(track, facts.kind)) return true;
+        answer = false;
+      }
+    } catch {
+      // A file mediabunny does not read is not the refused source.
+    } finally {
+      input.dispose();
+    }
+  }
+  return answer;
+};`;
+
 // Also resolves the "alpha2/..." imports of packages/alpha2-editor/dist.
 export function page(body, videoImport = false) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>pending</title>
-<script type="importmap">{"imports":{"alpha2/extensions-wasm":"/packages/alpha2/wasm/alpha2_extensions.js","alpha2/extensions-pdf-wasm":"/packages/alpha2/wasm/alpha2_extensions_pdf.js","mediabunny":"/node_modules/mediabunny/dist/bundles/mediabunny.mjs","alpha2/assets":"/packages/alpha2/dist/assets.js","alpha2/edit":"/packages/alpha2/dist/edit.js","alpha2/extensions":"/packages/alpha2/dist/extensions.js","alpha2/frame-supply":"/packages/alpha2/dist/frame-supply.js","alpha2/hdr-frames":"/packages/alpha2/dist/hdr-frames.js","alpha2/mediabunny":"/packages/alpha2/dist/mediabunny.js","alpha2/project":"/packages/alpha2/dist/project.js","alpha2/text":"/packages/alpha2/dist/text.js","alpha2/worker-error":"/packages/alpha2/dist/worker-error.js","alpha2/abort":"/packages/alpha2/dist/abort.js","alpha2/active-clock":"/packages/alpha2/dist/active-clock.js","alpha2/wasm":"/packages/alpha2/wasm/alpha2_wasm.js"}}</script>
+<script type="importmap">{"imports":{"alpha2/extensions-wasm":"/packages/alpha2/wasm/alpha2_extensions.js","alpha2/extensions-pdf-wasm":"/packages/alpha2/wasm/alpha2_extensions_pdf.js","mediabunny":"/node_modules/mediabunny/dist/bundles/mediabunny.mjs","alpha2/apply-edit":"/packages/alpha2/dist/apply-edit.js","alpha2/assets":"/packages/alpha2/dist/assets.js","alpha2/edit":"/packages/alpha2/dist/edit.js","alpha2/extract":"/packages/alpha2/dist/extract.js","alpha2/plugins":"/packages/alpha2/dist/plugins.js","alpha2/extensions":"/packages/alpha2/dist/extensions.js","alpha2/frame-supply":"/packages/alpha2/dist/frame-supply.js","alpha2/hdr-frames":"/packages/alpha2/dist/hdr-frames.js","alpha2/mediabunny":"/packages/alpha2/dist/mediabunny.js","alpha2/project":"/packages/alpha2/dist/project.js","alpha2/text":"/packages/alpha2/dist/text.js","alpha2/worker-error":"/packages/alpha2/dist/worker-error.js","alpha2/abort":"/packages/alpha2/dist/abort.js","alpha2/active-clock":"/packages/alpha2/dist/active-clock.js","alpha2/wasm":"/packages/alpha2/wasm/alpha2_wasm.js","alpha2":"/packages/alpha2/dist/index.js","alpha2/audio-timeline":"/packages/alpha2/dist/audio-timeline.js","alpha2/audio-worklet":"/packages/alpha2/dist/audio-worklet.js","alpha2/captions":"/packages/alpha2/dist/captions.js","alpha2/containers":"/packages/alpha2/dist/containers.js","alpha2/effects":"/packages/alpha2/dist/effects.js","alpha2/export-destination":"/packages/alpha2/dist/export-destination.js","alpha2/export-failure":"/packages/alpha2/dist/export-failure.js","alpha2/export-metrics":"/packages/alpha2/dist/export-metrics.js","alpha2/export-retry":"/packages/alpha2/dist/export-retry.js","alpha2/gpu-recovery":"/packages/alpha2/dist/gpu-recovery.js","alpha2/layout":"/packages/alpha2/dist/layout.js","alpha2/rate-control":"/packages/alpha2/dist/rate-control.js","alpha2/renderer-choice":"/packages/alpha2/dist/renderer-choice.js","alpha2/video-frames":"/packages/alpha2/dist/video-frames.js","alpha2/wasm-module":"/packages/alpha2/dist/wasm-module.js"}}</script>
 </head><body>
 <script type="module">
 const VIDEO_IMPORT = ${videoImport};
@@ -111,6 +197,8 @@ const webgpuAdapter = (engine) => {
     skip("webgpu", "the engine runs on " + (backend || "no backend") + ", not WebGPU", { adapter: { name, backend } });
   return { name, backend };
 };
+${TRIAL_DECODES}
+${DECODE_REFUSAL_SKIP}
 const offersGpu = async () =>
   Boolean(await navigator.gpu?.requestAdapter().catch(() => null)) ||
   Boolean(new OffscreenCanvas(1, 1).getContext("webgl2"));
@@ -118,15 +206,12 @@ try {
 ${body}
 } catch (error) {
   const message = String(error?.message ?? error);
+  let refusal;
   if (error instanceof CaseSkip)
     report({ skipped: error.message, capability: error.capability, ...error.details });
   else if (/the canvas takes no GPU surface/.test(message) && !(await offersGpu()))
     report({ skipped: "this browser offers no WebGPU adapter and no WebGL2 context", capability: "webgl2" });
-  else if (error?.code === "DECODE_UNAVAILABLE" && error.facts?.kind)
-    report({
-      skipped: "this browser does not decode the case's source: " + message,
-      capability: error.facts.kind === "audio" ? "webcodecs-audio" : "webcodecs-video",
-    });
+  else if ((refusal = await decodeRefusalSkip(error)) !== null) report(refusal);
   else if (VIDEO_IMPORT && !error?.beforeImport && importUnavailable(error))
     report({
       skipped: "this browser lost WebGPU importing a VideoFrame (" + String(error?.message ?? error) + ")",

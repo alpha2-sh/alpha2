@@ -202,7 +202,12 @@ pub(crate) fn to_path(
         .validate("geometry")
         .map_err(|issue| format!("invalid geometry: {} {}", issue.at, issue.problem))?;
     let size = canvas(width, height)?;
-    let evaluated = alpha2_eval::evaluate_geometry(&geometry, time(ticks)?, aspect(size));
+    let evaluated = alpha2_eval::evaluate_geometry(
+        &geometry,
+        time(ticks)?,
+        aspect(size),
+        &alpha2_eval::SampleContext::NONE,
+    );
     to_text(&document_path(&query::to_path(&evaluated, size)))
 }
 
@@ -234,6 +239,7 @@ pub(crate) fn motion_path(point_json: &str, width: u32, height: u32) -> Result<S
                 )
             })
             .collect(),
+        AnimatedPoint::Data(_) => Vec::new(),
     };
     let polyline: Vec<Value> = alpha2_geometry::spatial::motion_polyline(&keys, MOTION_SAMPLES)
         .into_iter()

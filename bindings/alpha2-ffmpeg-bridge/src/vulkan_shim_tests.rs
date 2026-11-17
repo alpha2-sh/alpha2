@@ -34,6 +34,17 @@ const ENCODE_CAPS: u32 = 0x1_0000;
 /// A shim device context over dummy handles: graphics on family 0, decode on `decode`, optional
 /// encode on `encode`.
 fn shim_device(decode: u32, encode: Option<u32>) -> AVHWDeviceContext {
+    let (context, status) = shim_device_status(decode, encode, true);
+    assert_eq!(status, 0, "the shim needs a Vulkan loader to resolve from");
+    context
+}
+
+/// [`shim_device`] with timeline semaphores on or off, and the shim's status.
+fn shim_device_status(
+    decode: u32,
+    encode: Option<u32>,
+    timeline: bool,
+) -> (AVHWDeviceContext, i32) {
     let instance_extensions = [
         c"VK_KHR_get_physical_device_properties2",
         c"VK_EXT_debug_utils",
@@ -57,6 +68,7 @@ fn shim_device(decode: u32, encode: Option<u32>) -> AVHWDeviceContext {
         encode_queue_family: encode.unwrap_or(0),
         encode_queue_count: u32::from(encode.is_some()),
         encode_video_caps: ENCODE_CAPS,
+        timeline_semaphore: u32::from(timeline),
         instance_extensions: instance_extensions.as_ptr(),
         instance_extension_count: 2,
         device_extensions: device_extensions.as_ptr(),
@@ -72,8 +84,19 @@ fn shim_device(decode: u32, encode: Option<u32>) -> AVHWDeviceContext {
             &raw const info,
         )
     };
-    assert_eq!(status, 0, "the shim needs a Vulkan loader to resolve from");
-    context
+    (context, status)
+}
+
+#[test]
+fn the_shim_refuses_a_family_it_has_no_lock_for_and_a_device_without_timelines() {
+    // AVERROR(EINVAL) on Linux.
+    let einval = -22;
+    let lockable = usize::try_from(interop::ALPHA2_MAX_QUEUE_FAMILIES).expect("count") - 1;
+    let lockable = u32::try_from(lockable).expect("index");
+    assert_eq!(shim_device_status(lockable, None, true).1, 0);
+    assert_eq!(shim_device_status(lockable + 1, None, true).1, einval);
+    assert_eq!(shim_device_status(1, Some(lockable + 1), true).1, einval);
+    assert_eq!(shim_device_status(1, None, false).1, einval);
 }
 
 /// (family, queues, flags, video caps) per entry.

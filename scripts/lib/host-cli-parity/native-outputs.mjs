@@ -5,8 +5,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 
+import { frameReader, encodeFrame } from "../host-frames.mjs";
 import {
   assetPath,
   executable,
@@ -116,21 +116,20 @@ export async function nativeOutputChecks(scratch, project) {
     stdio: ["pipe", "pipe", "inherit"],
   });
   const response = new Promise((resolveResponse, reject) => {
-    createInterface({ input: child.stdout }).on("line", (line) => {
-      const message = JSON.parse(line);
+    const reader = frameReader((message) => {
       if (message.type === "progress") return;
       if (message.requestId !== "parity-serve") return;
       if (message.ok) resolveResponse(message.result);
       else reject(new Error(`${message.error.code}: ${message.error.message}`));
     });
+    child.stdout.on("data", (chunk) => reader.push(chunk));
     child.once("error", reject);
     child.once("exit", (code) => {
       if (code !== 0) reject(new Error(`alpha2-host serve exited ${code}`));
     });
   });
   child.stdin.end(
-    `${JSON.stringify({
-      protocolVersion: 1,
+    encodeFrame({
       operation: "export",
       requestId: "parity-serve",
       project,
@@ -144,7 +143,7 @@ export async function nativeOutputChecks(scratch, project) {
       videoQuality: PINNED_RATE,
       audioCodec: "aac",
       output: serveOutput,
-    })}\n`,
+    }),
   );
   await response;
   assert.deepEqual(

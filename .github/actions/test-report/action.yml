@@ -1,0 +1,65 @@
+name: Test report
+description: Summarizes a job's test results and environment and uploads them.
+inputs:
+  lane:
+    description: The lane's name in reports and the ledger
+    required: true
+  group:
+    description: ci or observe
+    required: true
+  steps:
+    description: The job's steps context as JSON (observe lanes)
+    default: "{}"
+  ledger:
+    description: The known-failure ledger an observe lane is judged against
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Skips this run recorded
+      if: always()
+      shell: bash
+      run: node scripts/skip-log-summary.mjs "${ALPHA2_SKIP_LOG:-$GITHUB_WORKSPACE/target/skip-log.jsonl}"
+    - name: Provenance
+      if: always()
+      shell: bash
+      run: node scripts/provenance.mjs
+    - name: Tests
+      id: summary
+      if: always()
+      shell: bash
+      env:
+        LANE: ${{ inputs.lane }}
+        LEDGER: ${{ inputs.ledger }}
+        RELEASE: ${{ github.workflow == 'Release' }}
+        ALPHA2_CI_STEPS: ${{ inputs.steps }}
+      run: |
+        args=(--lane "$LANE")
+        if [ -n "$LEDGER" ]; then args+=(--observe "$LEDGER"); fi
+        if [ "$RELEASE" = true ]; then args+=(--release); fi
+        set +e
+        node scripts/test-report-summary.mjs "${args[@]}"
+        echo "status=$?" >> "$GITHUB_OUTPUT"
+    - if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: test-report-${{ inputs.group }}-${{ inputs.lane }}-attempt-${{ github.run_attempt }}
+        path: |
+          target/test-report.jsonl
+          target/provenance.json
+          target/skip-log.jsonl
+        if-no-files-found: ignore
+    - if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: test-logs-${{ inputs.group }}-${{ inputs.lane }}-attempt-${{ github.run_attempt }}
+        path: |
+          target/test-logs
+          target/test-results
+          target/browser-reports
+          target/editor-reports
+        if-no-files-found: ignore
+    - name: Failures the known-failure ledger does not explain
+      if: always() && steps.summary.outputs.status != '0'
+      shell: bash
+      run: exit 1

@@ -831,3 +831,207 @@ fn malformed_planes_and_presentations_are_refused_before_they_reach_the_gpu() {
         .expect("the repacks the GPU ran check out");
     assert!(pollster::block_on(scope.pop()).is_none());
 }
+
+/// Planes tagged with the identity matrix, low aligned at `depth` bits: white, red, green, blue,
+/// mid grey, black, white, white over 4x2.
+#[derive(Debug)]
+struct RgbPlanes {
+    depth: u8,
+    planes: [Vec<u8>; 3],
+}
+
+impl RgbPlanes {
+    const SHOWN: [[u8; 3]; 8] = [
+        [255, 255, 255],
+        [255, 0, 0],
+        [0, 255, 0],
+        [0, 0, 255],
+        [127, 127, 127],
+        [0, 0, 0],
+        [255, 255, 255],
+        [255, 255, 255],
+    ];
+
+    fn new(depth: u8) -> Self {
+        let max = (1_u32 << depth) - 1;
+        let code = |shown: u8| match shown {
+            255 => max,
+            127 => max / 2,
+            _ => 0,
+        };
+        let plane = |channel: usize| -> Vec<u8> {
+            Self::SHOWN
+                .iter()
+                .flat_map(|pixel| {
+                    let value = code(pixel[channel]);
+                    if depth > 8 {
+                        u16::try_from(value).expect("code").to_le_bytes().to_vec()
+                    } else {
+                        vec![u8::try_from(value).expect("code")]
+                    }
+                })
+                .collect()
+        };
+        Self {
+            depth,
+            planes: [plane(0), plane(1), plane(2)],
+        }
+    }
+}
+
+impl crate::YuvPlanes for RgbPlanes {
+    fn frame(&self) -> crate::YuvFrame<'_> {
+        let stride = if self.depth > 8 { 8 } else { 4 };
+        let plane = |bytes| crate::SourcePlane { bytes, stride };
+        crate::YuvFrame {
+            format: alpha2_media::YuvFormat::planar(0, 0, self.depth),
+            planes: [
+                plane(&self.planes[0]),
+                plane(&self.planes[1]),
+                plane(&self.planes[2]),
+            ],
+            alpha_plane: None,
+            size: RenderSize::new(4, 2).expect("size"),
+            alpha: 1.0,
+            color: Some(ColorMetadata {
+                primaries: ColorPrimaries::Bt709,
+                transfer: TransferFunction::Bt709,
+                matrix: ColorMatrix::Rgb,
+                range: ColorRange::Full,
+                dynamic_range: DynamicRange::Sdr,
+            }),
+        }
+    }
+}
+
+#[test]
+fn gpu_planes_tagged_rgb_keep_their_code_scale_at_every_depth() {
+    use crate::YuvPlanes;
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    for depth in [8, 10, 12, 16] {
+        let planes = RgbPlanes::new(depth);
+        let pixels = present_yuv(&renderer, planes.frame(), ChromaLocation::Unspecified);
+        assert_rgb_close(&pixels, &RgbPlanes::SHOWN, &format!("{depth} bits"));
+    }
+    // Without 16-bit normalized textures the planes upload as `Uint16`.
+    renderer
+        .features
+        .remove(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM);
+    for depth in [10, 12, 16] {
+        let planes = RgbPlanes::new(depth);
+        let pixels = present_yuv(&renderer, planes.frame(), ChromaLocation::Unspecified);
+        assert_rgb_close(
+            &pixels,
+            &RgbPlanes::SHOWN,
+            &format!("{depth} bits as Uint16"),
+        );
+    }
+}
+
+#[test]
+fn cpu_planes_tagged_rgb_keep_their_code_scale_at_every_depth() {
+    let cpu = crate::CpuRenderer::new(1);
+    for depth in [8, 10, 12, 16] {
+        let size = RenderSize::new(4, 2).expect("size");
+        let presentation = SourcePresentation {
+            chroma_siting: ChromaLocation::Unspecified,
+            ..SourcePresentation::identity(size)
+        };
+        let (source, _) = cpu
+            .present_yuv(
+                Arc::new(RgbPlanes::new(depth)),
+                presentation,
+                ColorPolicy::RejectHdr,
+            )
+            .expect("CPU presents");
+        let mut graph = RenderGraph::new(size);
+        let node = graph.add_source(SourceView::cpu(&source));
+        let output = graph
+            .add_composite(vec![GraphLayer {
+                source: node,
+                visual: visual([1.0, 1.0], 1.0),
+                blend_mode: BlendMode::Normal,
+            }])
+            .expect("composite");
+        graph.set_output(output).expect("output");
+        let pixels = cpu.execute_graph(&graph).expect("CPU draws").read_rgba8();
+        assert_rgb_close(&pixels, &RgbPlanes::SHOWN, &format!("CPU {depth} bits"));
+    }
+}
+
+#[test]
+fn unspecified_siting_reads_horizontally_subsampled_chroma_as_left() {
+    type Case<'a> = (&'a str, alpha2_media::YuvFormat, [&'a [u8]; 3], [u32; 3]);
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(16, 2).expect("size");
+    let sited = |format: alpha2_media::YuvFormat, planes: [&[u8]; 3], strides: [u32; 3], siting| {
+        present_yuv(
+            &renderer,
+            crate::YuvFrame {
+                format,
+                planes: [0, 1, 2].map(|index| plane(planes[index], strides[index] as usize)),
+                alpha_plane: None,
+                size,
+                alpha: 1.0,
+                color: Some(full_range_bt709()),
+            },
+            siting,
+        )
+    };
+    // 10-bit 4:2:2 and 8-bit 4:1:1 with a blue-difference step halfway across.
+    let ten = |code: u16| code.to_le_bytes();
+    let luma = (0..32).flat_map(|_| ten(512)).collect::<Vec<_>>();
+    let cb = (0..16)
+        .flat_map(|index| ten(if index % 8 < 4 { 300 } else { 700 }))
+        .collect::<Vec<_>>();
+    let cr = (0..16).flat_map(|_| ten(512)).collect::<Vec<_>>();
+    let luma8 = [128_u8; 32];
+    let cb8 = [80_u8, 80, 180, 180, 80, 80, 180, 180];
+    let cr8 = [128_u8; 8];
+    let cases: [Case<'_>; 2] = [
+        (
+            "4:2:2",
+            alpha2_media::YuvFormat::planar(1, 0, 10),
+            [&luma, &cb, &cr],
+            [32, 16, 16],
+        ),
+        (
+            "4:1:1",
+            alpha2_media::YuvFormat::planar(2, 0, 8),
+            [&luma8, &cb8, &cr8],
+            [16, 4, 4],
+        ),
+    ];
+    for (name, format, planes, strides) in cases {
+        let unspecified = sited(format, planes, strides, ChromaLocation::Unspecified);
+        assert_eq!(
+            unspecified,
+            sited(format, planes, strides, ChromaLocation::Left),
+            "{name}"
+        );
+        assert_ne!(
+            unspecified,
+            sited(format, planes, strides, ChromaLocation::Center),
+            "{name}"
+        );
+    }
+    // 4:2:0 keeps reading an unspecified siting as centred.
+    let cb = [80_u8, 80, 80, 80, 180, 180, 180, 180];
+    let unspecified = sited(
+        alpha2_media::YuvFormat::I420,
+        [&luma8, &cb, &cr8],
+        [16, 8, 8],
+        ChromaLocation::Unspecified,
+    );
+    assert_eq!(
+        unspecified,
+        sited(
+            alpha2_media::YuvFormat::I420,
+            [&luma8, &cb, &cr8],
+            [16, 8, 8],
+            ChromaLocation::Center
+        )
+    );
+}

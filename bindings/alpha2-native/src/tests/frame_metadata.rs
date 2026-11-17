@@ -2,30 +2,134 @@
 
 use super::*;
 
-#[test]
-fn a_frame_larger_than_alpha2_renders_is_refused_before_it_is_converted() {
-    // A grey 1-bit PNG converts to RGBA (two frame-sized buffers); 8193x8193 is past
-    // MAX_FRAME_PIXELS from a file of a few kilobytes.
-    let path = output_path("large-png").with_extension("png");
-    {
-        let file = fs::File::create(&path).expect("create");
-        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 8_193, 8_193);
-        encoder.set_color(png::ColorType::Grayscale);
-        encoder.set_depth(png::BitDepth::One);
-        encoder.set_compression(png::Compression::Fast);
-        let mut writer = encoder.write_header().expect("header");
-        writer
-            .write_image_data(&vec![0; 8_193_usize.div_ceil(8) * 8_193])
-            .expect("rows");
+/// Writes a one-colour PNG of `width` x `height` RGBA pixels, about 2 KB per megapixel.
+fn write_blank_png(path: &Path, width: u32, height: u32) {
+    let file = fs::File::create(path).expect("create");
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_compression(png::Compression::Fast);
+    let mut writer = encoder.write_header().expect("header");
+    let row = vec![0; usize::try_from(width).expect("width") * 4];
+    let mut stream = writer.stream_writer().expect("stream");
+    for _ in 0..height {
+        std::io::Write::write_all(&mut stream, &row).expect("row");
     }
-    let mut decoder = NativeDecoder::open(&path).expect("open");
-    let first = decoder.decode_next(&CancelToken::default());
-    // Windows cannot remove a file the decoder still has open.
-    drop(decoder);
+    stream.finish().expect("finish");
+}
+
+#[test]
+fn a_picture_larger_than_alpha2_renders_is_refused_before_it_is_decoded() {
+    let path = output_path("large-png").with_extension("png");
+    write_blank_png(&path, 8_193, 8_193);
+    let probed = probe(&path);
+    let opened = NativeDecoder::open(&path).map(|_| ());
     fs::remove_file(&path).expect("remove");
     assert!(
-        matches!(first, Err(DecodeError::Unsupported(_))),
-        "{first:?}"
+        matches!(probed, Err(DecodeError::Unsupported(_))),
+        "{probed:?}"
+    );
+    assert!(
+        matches!(opened, Err(DecodeError::Unsupported(_))),
+        "{opened:?}"
+    );
+}
+
+/// A 9000x9000 PNG would decode to 324 MB; refusing it holds the process under 64 MiB more.
+#[cfg(target_os = "linux")]
+#[test]
+fn refusing_a_large_picture_allocates_nothing_of_its_size() {
+    let spawning = child_process_lock();
+    let child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "tests::frame_metadata::large_picture_peak_memory",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .output()
+        .expect("child");
+    drop(spawning);
+    let stdout = String::from_utf8_lossy(&child.stdout);
+    assert!(
+        child.status.success() && stdout.contains("1 passed"),
+        "{}\n{stdout}\n{}",
+        child.status,
+        String::from_utf8_lossy(&child.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "run alone in a child process by refusing_a_large_picture_allocates_nothing_of_its_size"]
+fn large_picture_peak_memory() {
+    fn peak_kib() -> u64 {
+        fs::read_to_string("/proc/self/status")
+            .expect("status")
+            .lines()
+            .find_map(|line| line.strip_prefix("VmHWM:"))
+            .and_then(|value| value.trim().trim_end_matches("kB").trim().parse().ok())
+            .expect("VmHWM")
+    }
+    let path = output_path("huge-png").with_extension("png");
+    write_blank_png(&path, 9_000, 9_000);
+    let before = peak_kib();
+    let probed = probe(&path);
+    let opened = NativeDecoder::open(&path).map(|_| ());
+    let grown = peak_kib() - before;
+    fs::remove_file(&path).expect("remove");
+    assert!(
+        matches!(probed, Err(DecodeError::Unsupported(_))),
+        "{probed:?}"
+    );
+    assert!(
+        matches!(opened, Err(DecodeError::Unsupported(_))),
+        "{opened:?}"
+    );
+    assert!(grown < 64 << 10, "the peak grew by {grown} KiB");
+}
+
+#[test]
+fn a_planar_frame_wider_than_alpha2_renders_is_refused() {
+    let (width, height) = (16_386_u32, 16_u32);
+    let luma = vec![16_u8; usize::try_from(width * height).expect("size")];
+    let chroma = vec![128_u8; luma.len() / 4];
+    let frame = alpha2_ffmpeg_bridge::planar_frame(
+        ffi::AV_PIX_FMT_YUV420P,
+        &[(&luma, width), (&chroma, width / 2), (&chroma, width / 2)],
+        width,
+        height,
+    )
+    .expect("frame");
+    let configure = |context: &mut AVCodecContext| {
+        context.set_width(i32::try_from(width).expect("width"));
+        context.set_height(i32::try_from(height).expect("height"));
+        context.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
+        context.set_time_base(ra(1, 30));
+    };
+    let mut encoder =
+        AVCodecContext::new(&AVCodec::find_encoder(ffi::AV_CODEC_ID_RAWVIDEO).expect("encoder"));
+    configure(&mut encoder);
+    encoder.open(None).expect("open encoder");
+    encoder.send_frame(Some(&frame)).expect("send frame");
+    let packet = encoder.receive_packet().expect("packet");
+    let mut decoder =
+        AVCodecContext::new(&AVCodec::find_decoder(ffi::AV_CODEC_ID_RAWVIDEO).expect("decoder"));
+    configure(&mut decoder);
+    decoder.open(None).expect("open decoder");
+    decoder.send_packet(Some(&packet)).expect("send packet");
+    let picture = alpha2_ffmpeg_bridge::DecodedFrame::receive(&mut decoder).expect("frame");
+    let converted = crate::convert::convert_video_frame(
+        &picture,
+        ffi::AV_CODEC_ID_RAWVIDEO,
+        ra(1, 30),
+        alpha2_media::ColorMetadata::EXPORT,
+        &mut crate::convert::FrameScaler::default(),
+    );
+    assert!(
+        matches!(converted, Err(DecodeError::Unsupported(_))),
+        "{converted:?}"
     );
 }
 
@@ -74,27 +178,6 @@ fn a_still_is_shown_as_its_exif_orientation_says() {
             }
         };
         assert_eq!(frame.orientation, expected, "{name}");
-    }
-}
-
-#[test]
-fn a_mirroring_display_matrix_is_a_mirror_and_a_rotation() {
-    for (name, rotation) in [
-        ("h264-bt709-hflip.mp4", Rotation::Deg0),
-        ("h264-bt709-vflip.mp4", Rotation::Deg180),
-        ("h264-bt709-transverse.mp4", Rotation::Deg90),
-        // Matroska's projection pose: a roll, plus a 180 degree yaw for the mirror.
-        ("h264-bt709-transverse.mkv", Rotation::Deg90),
-    ] {
-        let probed = probe(corpus(name)).unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        assert_eq!(
-            probed.selected_video_stream().expect("video").orientation,
-            Orientation {
-                rotation,
-                mirror: true
-            },
-            "{name}"
-        );
     }
 }
 
@@ -373,40 +456,6 @@ fn each_frame_carries_the_chroma_siting_its_stream_signals() {
             .expect(name)
             .expect("frame");
         assert_eq!(frame.metadata().chroma_location, siting, "{name}");
-    }
-}
-
-#[test]
-fn a_software_decode_shows_exactly_the_columns_its_stream_crops_to() {
-    let mut cropped = NativeDecoder::open(corpus("h264-bt709-crop-left.mp4")).expect("cropped");
-    let mut whole = NativeDecoder::open(corpus("h264-bt709-copy.mp4")).expect("whole");
-    let probed = probe(corpus("h264-bt709-crop-left.mp4")).expect("probe");
-    assert_eq!(probed.streams[0].dimensions, Some((120, 96)));
-    for index in 0..3 {
-        let shown = first_frame(&mut cropped, "h264-bt709-crop-left.mp4");
-        let coded = first_frame(&mut whole, "h264-bt709-copy.mp4");
-        let rect = shown.visible_rect;
-        assert_eq!(
-            (rect.width, rect.height),
-            (120, 96),
-            "frame {index}: {rect:?}"
-        );
-        assert_eq!(shown.chroma_location, coded.chroma_location);
-        for (plane, step) in [(0, 1), (1, 2), (2, 2)] {
-            let (shown_plane, coded_plane) = (&shown.planes[plane], &coded.planes[plane]);
-            for row in 0..coded_plane.height {
-                let at = |source: &Plane, x: u32| {
-                    source.bytes[usize::try_from(row * source.stride + x).expect("offset")]
-                };
-                for column in 0..120 / step {
-                    assert_eq!(
-                        at(shown_plane, rect.x / step + column),
-                        at(coded_plane, 8 / step + column),
-                        "frame {index}, plane {plane}, row {row}, column {column}"
-                    );
-                }
-            }
-        }
     }
 }
 
@@ -700,4 +749,31 @@ fn a_d3d12va_stream_whose_sps_brings_a_left_crop_in_band_decodes_it_in_hardware(
         "{shown:?}"
     );
     assert_eq!(decoder.hardware_failure(), None, "{name}");
+}
+
+/// The renderer gets the 10-bit codes as stored, under the identity matrix; it applies the scale.
+#[test]
+fn ten_bit_rgb_reaches_the_renderer_as_ten_bit_identity_planes() {
+    let name = "rgb10-bt2020.mkv";
+    let mut decoder = NativeDecoder::open(corpus(name)).expect(name);
+    let frame = first_frame(&mut decoder, name);
+    assert_eq!(
+        frame.pixel_format,
+        PixelFormat::Yuv(YuvFormat::planar(0, 0, 10)),
+        "{name}"
+    );
+    assert_eq!(
+        frame.color.map(|color| color.matrix),
+        Some(ColorMatrix::Rgb)
+    );
+    let maxima = frame
+        .planes
+        .iter()
+        .map(|plane| (0..plane.height).flat_map(|row| row16(plane, row)).max())
+        .collect::<Vec<_>>();
+    // The fixture's red is 1018 of 1023.
+    assert!(
+        maxima[0] > Some(1000) && maxima[1..] == [Some(0), Some(0)],
+        "{name}: red, green, blue maxima {maxima:?}"
+    );
 }

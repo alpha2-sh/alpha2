@@ -1,6 +1,3 @@
-# Every wgpu call that can reach the native queue goes through `GpuContext`, which holds the lock a
-# native decoder sharing that queue also takes. The math entries keep the mix and render
-# bit-identical across platforms; `sqrt` is exact everywhere, so it stays allowed.
 disallowed-methods = [
   { path = "wgpu::Queue::submit", reason = "use `GpuContext::submit`: a native decoder may share the queue, and only the context holds its lock" },
   { path = "wgpu::Queue::on_submitted_work_done", reason = "use `GpuContext::on_submitted_work_done`: wgpu flushes pending writes there, which is a queue submission" },
@@ -57,5 +54,4 @@ disallowed-methods = [
   { path = "f64::mul_add", reason = "fused multiply-add differs from `a * b + c`; write that" },
 ]
 
-# Format names, not code.
 doc-valid-idents = ["SubRip", "WebVTT", "OpenEXR", "ACEScg", ".."]

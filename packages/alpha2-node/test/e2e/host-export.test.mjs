@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
 import {
+  mkdir,
   mkdtemp,
   readFile,
   realpath,
@@ -12,15 +13,18 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
+import { inflateSync } from "node:zlib";
 
 import {
   Alpha2ConformError,
   Alpha2GpuInitializationError,
   Alpha2NodeClient,
   Alpha2ProjectValidationError,
+  installOpenH264,
 } from "../../dist/index.js";
 import {
   missingCapability,
@@ -28,6 +32,7 @@ import {
   suiteOf,
 } from "../../../../scripts/lib/capabilities.mjs";
 import { executable } from "../../../../scripts/lib/cargo-target.mjs";
+import { encodeFrame } from "../../../../scripts/lib/host-frames.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..", "..");
 const hostPath =
@@ -106,6 +111,20 @@ function assertDeclaredPerformance(performance, path) {
   }
   for (const key of Object.keys(declared))
     assert.equal(key in performance, path !== "packet-copy", key);
+  const number = (value) => typeof value === "number";
+  const encoderTime = (value) =>
+    path === "packet-copy" ? value === null : number(value);
+  const timing = {
+    setupMs: number,
+    encoderProbeMs: encoderTime,
+    encoderOpenMs: encoderTime,
+    loudnessMs: number,
+    firstFrameMs: number,
+    finishMs: number,
+    steadyFps: (value) => value === null || number(value),
+  };
+  for (const [key, check] of Object.entries(timing))
+    assert.ok(check(performance[key]), `${key}: ${performance[key]}`);
   if (path === "readback") assert.equal(performance.gpuEncodeBudget, null);
   if (path === "gpu-resident")
     assert.notEqual(performance.gpuEncodeBudget, null);
@@ -437,54 +456,56 @@ test("an existing output is replaced only with overwrite, and an input is never 
   }
 });
 
-test("a still is the PNG of the frame of the grid that holds its time", async () => {
-  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-still-"));
-  const solid = {
-    schema_version: 1,
-    id: "solid",
-    name: "Solid",
-    settings: {
-      width: 64,
-      height: 48,
-      frame_rate: { num: 30, den: 1 },
-      sample_rate: 48000,
-    },
-    sources: [
-      {
-        id: "red",
-        kind: "generated",
-        generator: {
-          type: "fill",
-          paint: {
-            type: "solid",
-            color: { red: 1, green: 0, blue: 0, alpha: 1 },
-          },
+/** A 64x48 red project at 30 fps, one second long. */
+const SOLID_PROJECT = {
+  schema_version: 1,
+  id: "solid",
+  name: "Solid",
+  settings: {
+    width: 64,
+    height: 48,
+    frame_rate: { num: 30, den: 1 },
+    sample_rate: 48000,
+  },
+  sources: [
+    {
+      id: "red",
+      kind: "generated",
+      generator: {
+        type: "fill",
+        paint: {
+          type: "solid",
+          color: { red: 1, green: 0, blue: 0, alpha: 1 },
         },
       },
-    ],
-    timeline: {
-      tracks: [
-        {
-          id: "v",
-          name: "V",
-          kind: "video",
-          clips: [
-            {
-              id: "clip",
-              source_id: "red",
-              timeline_range: { start: 0, end: 120_000 },
-              source_range: { start: 0, end: 120_000 },
-            },
-          ],
-        },
-      ],
     },
-  };
+  ],
+  timeline: {
+    tracks: [
+      {
+        id: "v",
+        name: "V",
+        kind: "video",
+        clips: [
+          {
+            id: "clip",
+            source_id: "red",
+            timeline_range: { start: 0, end: 120_000 },
+            source_range: { start: 0, end: 120_000 },
+          },
+        ],
+      },
+    ],
+  },
+};
+
+test("a still is the PNG of the frame of the grid that holds its time", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-still-"));
   try {
     const output = join(scratch, "frame.png");
     // 61 200 ticks is between frames 15 and 16 at 30 fps.
     const result = await client.still({
-      project: solid,
+      project: SOLID_PROJECT,
       assets: {},
       time: 61_200,
       output,
@@ -500,7 +521,7 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
       [64, 48, 8, 6],
     );
     const many = await client.stills({
-      project: solid,
+      project: SOLID_PROJECT,
       assets: {},
       stills: [
         { time: 120_000, output: join(scratch, "late.png") },
@@ -516,11 +537,11 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
       ],
     );
     await assert.rejects(
-      client.still({ project: solid, assets: {}, time: 0, output }),
+      client.still({ project: SOLID_PROJECT, assets: {}, time: 0, output }),
       (error) => error.code === "IO_ERROR",
     );
     await client.still({
-      project: solid,
+      project: SOLID_PROJECT,
       assets: {},
       time: 0,
       output,
@@ -528,7 +549,7 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
     });
     await assert.rejects(
       client.stills({
-        project: solid,
+        project: SOLID_PROJECT,
         assets: {},
         stills: [
           { time: 0, output },
@@ -537,6 +558,67 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
       }),
       /two stills write/,
     );
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test("a relative output is written in the directory the call was made from", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-still-cwd-"));
+  const started = process.cwd();
+  const cpu = new Alpha2NodeClient({ hostPath, renderer: "cpu" });
+  try {
+    const written = [];
+    for (const name of ["first", "second"]) {
+      await mkdir(join(scratch, name));
+      process.chdir(join(scratch, name));
+      const result = await cpu.still({
+        project: SOLID_PROJECT,
+        assets: {},
+        time: 0,
+        output: "frame.png",
+      });
+      written.push(result.stills[0].output);
+    }
+    assert.deepEqual(written, [
+      await realpath(join(scratch, "first", "frame.png")),
+      await realpath(join(scratch, "second", "frame.png")),
+    ]);
+  } finally {
+    process.chdir(started);
+    await cpu.close();
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test("a still without an output comes back as the PNG it would have written", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-still-returned-"));
+  try {
+    const output = join(scratch, "written.png");
+    const result = await client.stills({
+      project: SOLID_PROJECT,
+      assets: {},
+      stills: [{ time: 61_200 }, { time: 61_200, output }],
+    });
+    const [returned, written] = result.stills;
+    assert.equal(returned.output, null);
+    assert.equal(returned.publish, undefined);
+    assert.equal(returned.frameTime, 60_000);
+    assert.equal(written.output, await realpath(output));
+    const png = Buffer.from(returned.png);
+    assert.deepEqual(png, await readFile(output));
+    // Inflating the image data proves the PNG decodes: a filter byte and 64 RGBA pixels a row.
+    const data = [];
+    for (let at = 8; at < png.length;) {
+      const length = png.readUInt32BE(at);
+      if (png.toString("ascii", at + 4, at + 8) === "IDAT")
+        data.push(png.subarray(at + 8, at + 8 + length));
+      at += 12 + length;
+    }
+    const pixels = inflateSync(Buffer.concat(data));
+    assert.equal(pixels.length, 48 * (1 + 64 * 4));
+    // No filter changes the first pixel of the first row.
+    assert.deepEqual([...pixels.subarray(1, 5)], [255, 0, 0, 255]);
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -1465,16 +1547,15 @@ test("an idle host asked to terminate exits as the signal would have made it", a
   });
   const closed = once(child, "close");
   const answered = new Promise((resolveAnswer) => {
-    let written = "";
-    child.stdout.setEncoding("utf8");
+    let written = Buffer.alloc(0);
     child.stdout.on("data", (chunk) => {
-      written += chunk;
+      written = Buffer.concat([written, chunk]);
       if (written.includes('"requestId":"idle"')) resolveAnswer();
     });
   });
   child.stderr.resume();
   child.stdin.write(
-    `${JSON.stringify({ protocolVersion: 1, requestId: "idle", operation: "capabilities" })}\n`,
+    encodeFrame({ requestId: "idle", operation: "capabilities" }),
   );
   await answered;
   const killer = setTimeout(() => child.kill("SIGKILL"), 5_000);
@@ -1584,7 +1665,74 @@ createInterface({ input: process.stdin }).once("line", () => process.kill(proces
         output,
       );
     } finally {
-      await rm(scratch, { recursive: true, force: true });
+      // Windows can hold a file just written for a moment (a scanner), so removal retries.
+      await rm(scratch, { recursive: true, force: true, maxRetries: 10 });
     }
+  },
+);
+
+const openh264Archive = process.env.ALPHA2_TEST_OPENH264_ARCHIVE?.trim();
+
+test(
+  "an OpenH264 installed into the client's cache reaches the next capabilities and export",
+  {
+    // ALPHA2_REQUIRE=openh264 fails instead of skipping when the archive was not fetched.
+    skip:
+      !openh264Archive &&
+      missingCapability(
+        "openh264",
+        suiteOf(import.meta.url),
+        "ALPHA2_TEST_OPENH264_ARCHIVE names no Cisco .bz2 file",
+      ),
+  },
+  async (t) => {
+    const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-openh264-"));
+    const cacheDirectory = join(scratch, "cache");
+    const archive = await readFile(openh264Archive);
+    const server = createServer((request, response) => {
+      const found = request.url === `/${basename(openh264Archive)}`;
+      response.writeHead(found ? 200 : 404);
+      response.end(found ? archive : undefined);
+    });
+    await new Promise((done) => server.listen(0, "127.0.0.1", done));
+    // Only the cache this client names may hold the library.
+    const library = process.env.ALPHA2_OPENH264_LIBRARY;
+    delete process.env.ALPHA2_OPENH264_LIBRARY;
+    const local = new Alpha2NodeClient({
+      hostPath,
+      cacheDirectory,
+      renderer: "cpu",
+    });
+    t.after(async () => {
+      await local.close();
+      server.close();
+      if (library !== undefined) process.env.ALPHA2_OPENH264_LIBRARY = library;
+      await rm(scratch, { recursive: true, force: true });
+    });
+    const before = await local.getCapabilities();
+    assert.notEqual(before.capabilities.encode.openh264.status, "available");
+    const installed = await installOpenH264({
+      cacheDirectory,
+      downloadUrl: `http://127.0.0.1:${server.address().port}`,
+    });
+    assert.equal(installed.downloaded, true);
+    const after = await local.getCapabilities();
+    const openh264 = after.capabilities.encode.openh264;
+    assert.equal(openh264.status, "available", JSON.stringify(openh264));
+    let result;
+    await local.exportProject({
+      project,
+      output: join(scratch, "out.mp4"),
+      assets: { "image-source": assetPath },
+      startTicks: 0,
+      endTicks: 5_000,
+      frameRate: { num: 24, den: 1 },
+      includeAudio: false,
+      videoCodec: "h264",
+      videoEncoder: openh264.encoder,
+      onResult: (value) => (result = value),
+    });
+    assert.equal(result.videoEncoder, openh264.encoder);
+    assert.ok((await stat(join(scratch, "out.mp4"))).size > 0);
   },
 );

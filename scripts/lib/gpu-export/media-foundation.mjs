@@ -124,9 +124,10 @@ function renderedLuma(harness, { project, assets, frame, label, lumaCodec }) {
       `the ${label} frame ${frame} export failed (${exported.status}): ${exported.stderr.slice(-1000)}`,
     );
   }
-  const frames = readdirSync(directory, { recursive: true }).filter((path) =>
-    path.endsWith(".frame"),
-  );
+  const frames = readdirSync(directory, {
+    recursive: true,
+    encoding: "utf8",
+  }).filter((path) => path.endsWith(".frame"));
   if (exported.result.renderCache?.writes !== 1 || frames.length !== 1) {
     throw new Error(
       `the ${label} frame ${frame} export baked ${frames.length} frames (renderCache ` +

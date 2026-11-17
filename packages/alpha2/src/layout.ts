@@ -24,6 +24,7 @@ import type {
   AlignContent,
   AlignItems,
   Animated,
+  Keyframed,
   Display,
   FlexDirection,
   FlexWrap,
@@ -70,14 +71,22 @@ export interface NodeBounds {
   readonly border: LayoutRect;
   readonly content: LayoutRect;
   /**
-   * Text is taller than the content box or splits a word, or an in-flow child reaches past the
-   * padding box. Rendering draws it anyway.
+   * Text (at its fitted size, once clamped) is taller than the content box or splits a word, or
+   * an in-flow child reaches past the padding box. Rendering draws it anyway, except a text box
+   * over 16,384 pixels a side, which the text host refuses and frames fail on.
    */
   readonly overflow: boolean;
   /** `null` for non-text nodes. */
   readonly lineCount: number | null;
   /** `null` for non-text nodes and empty text. */
   readonly baselines: Baselines | null;
+  /**
+   * The font size drawn, fitted by `font_size_fit`, as a fraction of the picture's shorter side.
+   * `null` for non-text nodes.
+   */
+  readonly fontSize: number | null;
+  /** `line_clamp` cut the text's lines. */
+  readonly truncated: boolean;
 }
 
 /** First and last alphabetic baselines, as fractions of the picture height. */
@@ -123,7 +132,7 @@ export function measureLayout(
   ) as LayoutBounds;
 }
 
-export type Value<T> = T | Animated<T>;
+export type Value<T> = T | Keyframed<T>;
 
 /** A fraction of the picture's shorter side, or `"12px"`. No percent. */
 export type Size = number | `${number}px`;
@@ -281,7 +290,7 @@ type ContainerField =
   | "align_content"
   | "justify_items";
 
-function isAnimated(value: unknown): value is Animated<unknown> {
+function isAnimated(value: unknown): value is Keyframed<unknown> {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -290,7 +299,7 @@ function isAnimated(value: unknown): value is Animated<unknown> {
   );
 }
 
-function animated<T>(value: Value<T>): Animated<T> {
+function animated<T>(value: Value<T>): Keyframed<T> {
   return isAnimated(value) ? value : { mode: "constant", value };
 }
 

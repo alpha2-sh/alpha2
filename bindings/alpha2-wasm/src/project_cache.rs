@@ -6,20 +6,26 @@ use alpha2_model::Project;
 
 /// Sources whose uploaded audio and frames a replacement project invalidates.
 ///
-/// A source keeps its media while its ID and locator are unchanged; clip edits and effects do
-/// not matter. Presentation frames also depend on project settings and are handled by
-/// [`stale_presentations`]. A host whose media changes under an unchanged locator must give it
-/// a new ID.
+/// A source keeps its media while its ID, locator, kind, provider and fingerprint are unchanged;
+/// clip edits and effects do not matter. Presentation frames also depend on project settings and
+/// are handled by [`stale_presentations`].
 pub(crate) fn stale_sources(previous: &Project, next: &Project) -> HashSet<String> {
     let kept = next
         .sources
         .iter()
-        .map(|source| (&source.id, source.locator.as_str()))
-        .collect::<HashSet<_>>();
+        .map(|source| (&source.id, source))
+        .collect::<HashMap<_, _>>();
     previous
         .sources
         .iter()
-        .filter(|old| !kept.contains(&(&old.id, old.locator.as_str())))
+        .filter(|old| {
+            !kept.get(&old.id).is_some_and(|new| {
+                new.locator == old.locator
+                    && new.kind == old.kind
+                    && new.provider == old.provider
+                    && new.fingerprint == old.fingerprint
+            })
+        })
         .map(|old| old.id.as_str().to_owned())
         .collect()
 }
@@ -170,6 +176,36 @@ mod tests {
             stale_presentations(&before, &after),
             StalePresentations::Sources(["b".to_owned()].into())
         );
+    }
+
+    #[test]
+    fn a_changed_kind_provider_or_fingerprint_invalidates_that_source() {
+        let lottie = |animation: Option<&str>| {
+            serde_json::from_value::<alpha2_model::ProviderSource>(
+                json!({"format": "lottie", "animation": animation}),
+            )
+            .expect("provider")
+        };
+        let mut before = project(&[("a", "file://a"), ("b", "file://b")], 0);
+        before.sources[1].kind = alpha2_model::MediaKind::Video;
+        before.sources[1].provider = Some(lottie(Some("intro")));
+        let unchanged = before.clone();
+        assert!(stale_sources(&before, &unchanged).is_empty());
+
+        let mut animation = before.clone();
+        animation.sources[1].provider = Some(lottie(Some("outro")));
+        assert_eq!(stale_sources(&before, &animation), ["b".to_owned()].into());
+
+        let mut fingerprint = before.clone();
+        fingerprint.sources[0].fingerprint = Some(alpha2_model::MediaFingerprint::default());
+        assert_eq!(
+            stale_sources(&before, &fingerprint),
+            ["a".to_owned()].into()
+        );
+
+        let mut kind = before.clone();
+        kind.sources[0].kind = alpha2_model::MediaKind::Video;
+        assert_eq!(stale_sources(&before, &kind), ["a".to_owned()].into());
     }
 
     #[test]

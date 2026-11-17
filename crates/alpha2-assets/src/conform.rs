@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 
 use alpha2_media::{ColorMetadata, SourceId};
-use alpha2_model::{ClipId, HdrSources, MediaFingerprint, MediaKind, MediaSource, Project};
+use alpha2_model::{
+    ClipId, DataSetId, HdrSources, MediaFingerprint, MediaKind, MediaSource, Project,
+};
 use serde::Serialize;
 
 use crate::catalog::{
@@ -23,6 +25,20 @@ pub struct ConformReport {
     pub ready: bool,
     /// Each host-supplied source a render reads, in project order.
     pub sources: Vec<SourceConform>,
+    /// Data sets made from other media than their source's original now is, in data order. This
+    /// never blocks, since the data still reads, but it may no longer describe the media.
+    pub stale_data: Vec<StaleData>,
+}
+
+/// A data set whose `made_from` differs from its source's current original.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct StaleData {
+    /// The data set.
+    pub data: DataSetId,
+    /// The source it is anchored to.
+    pub source: SourceId,
+    /// The parts of the fingerprint that differ.
+    pub fields: Vec<FingerprintField>,
 }
 
 impl ConformReport {
@@ -129,14 +145,24 @@ pub enum ConformIssue {
 /// dropped alpha are reported without blocking.
 #[must_use]
 pub fn conform(project: &Project, catalog: &AssetCatalog, purpose: MediaPurpose) -> ConformReport {
+    conform_sources(project, project.used_sources(), catalog, purpose)
+}
+
+/// [`conform`] over `sources` instead of those a render reads, such as an extraction's source.
+#[must_use]
+pub fn conform_sources(
+    project: &Project,
+    sources: Vec<&MediaSource>,
+    catalog: &AssetCatalog,
+    purpose: MediaPurpose,
+) -> ConformReport {
     // Index once to avoid quadratic lookups; the first entry per ID wins, as in
     // `AssetCatalog::entry`.
     let mut entries = HashMap::with_capacity(catalog.assets.len());
     for entry in &catalog.assets {
         entries.entry(&entry.source_id).or_insert(entry);
     }
-    let sources = project
-        .used_sources()
+    let sources = sources
         .into_iter()
         .filter(|source| source.is_host_supplied())
         .map(|source| {
@@ -144,12 +170,32 @@ pub fn conform(project: &Project, catalog: &AssetCatalog, purpose: MediaPurpose)
             conform_source(project, source, entry, purpose)
         })
         .collect::<Vec<_>>();
+    let stale_data = project
+        .data
+        .iter()
+        .filter_map(|set| {
+            let source = set.anchor.source()?;
+            let made_from = set.made_from.as_ref()?;
+            let OriginalState::Online { fingerprint } = &entries.get(source)?.original else {
+                return None;
+            };
+            match compare(made_from, fingerprint) {
+                FingerprintMatch::Mismatch { fields } => Some(StaleData {
+                    data: set.id.clone(),
+                    source: source.clone(),
+                    fields,
+                }),
+                _ => None,
+            }
+        })
+        .collect();
     ConformReport {
         purpose,
         ready: sources
             .iter()
             .all(|source| source.issues.iter().all(|entry| !entry.blocking)),
         sources,
+        stale_data,
     }
 }
 

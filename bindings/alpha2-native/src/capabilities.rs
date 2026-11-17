@@ -1,6 +1,5 @@
 //! Codec capability discovery and encoder selection.
 
-use std::collections::HashMap;
 use std::ffi::CString;
 use std::fmt::Write as _;
 use std::sync::{LazyLock, Mutex};
@@ -10,6 +9,9 @@ use std::{fs, path::Path};
 use crate::convert::{encode_adapter_error, reject_unused_encode_options, video_encoder_options};
 use crate::video_encode::VideoEncodeConfig;
 use alpha2_ffmpeg_bridge::{EncoderContext, LogLine};
+pub use alpha2_host_core::codecs::{NativeAudioCodec, NativeVideoCodec};
+pub(crate) use alpha2_host_core::encode_policy::keyframe_interval;
+pub(crate) use alpha2_host_core::probe_cache::{ProbeCache, cached_probe, mode_label};
 use alpha2_media::{ColorMetadata, EncodeError, EncoderRefusal, OpenFailureKind};
 use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecRef};
 use rsmpeg::avutil::AVRational;
@@ -31,80 +33,14 @@ pub struct AvEncodeConfig {
     pub audio_bit_rate: u32,
 }
 
-/// Video codecs implemented by the native encode sinks.
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
-#[non_exhaustive]
-pub enum NativeVideoCodec {
-    /// H.264/AVC, preferred for broad browser, Windows, and Apple playback.
-    H264,
-    /// H.265/HEVC.
-    Hevc,
-    /// VP9, when the linked `FFmpeg` build provides a VP9 encoder.
-    Vp9,
-    /// AV1, when the linked `FFmpeg` build provides an AV1 encoder.
-    Av1,
-    /// MPEG-4 Part 2, retained for compatibility with existing alpha2 hosts.
-    Mpeg4Part2,
-    /// Apple `ProRes`, through `prores_ks`: 422 HQ, or 4444 with alpha.
-    ProRes,
+/// `FFmpeg` identities of the host-core codec enums.
+pub(crate) trait FfmpegCodec {
+    /// The `FFmpeg` codec ID.
+    fn codec_id(self) -> ffi::AVCodecID;
 }
 
-impl NativeVideoCodec {
-    /// Stable identifier suitable for an application protocol or settings file.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::H264 => "h264",
-            Self::Hevc => "hevc",
-            Self::Vp9 => "vp9",
-            Self::Av1 => "av1",
-            Self::Mpeg4Part2 => "mpeg4-part2",
-            Self::ProRes => "prores",
-        }
-    }
-
-    /// The pictures an encoder must take to be offered: 10-bit 4:2:2 for
-    /// `ProRes`, 8-bit 4:2:0 otherwise.
-    #[must_use]
-    pub const fn base_layout(self) -> alpha2_media::PixelLayout {
-        match self {
-            Self::ProRes => alpha2_media::PixelLayout {
-                chroma: alpha2_media::Chroma::Yuv422,
-                bit_depth: alpha2_media::BitDepth::Ten,
-                alpha: false,
-                planes: alpha2_media::PlaneLayout::Planar,
-            },
-            _ => alpha2_media::PixelLayout::YUV420P,
-        }
-    }
-
-    /// The engine's codec this encoder family implements.
-    #[must_use]
-    pub const fn model(self) -> alpha2_media::VideoCodec {
-        match self {
-            Self::H264 => alpha2_media::VideoCodec::H264,
-            Self::Hevc => alpha2_media::VideoCodec::Hevc,
-            Self::Vp9 => alpha2_media::VideoCodec::Vp9,
-            Self::Av1 => alpha2_media::VideoCodec::Av1,
-            Self::Mpeg4Part2 => alpha2_media::VideoCodec::Mpeg4Part2,
-            Self::ProRes => alpha2_media::VideoCodec::ProRes,
-        }
-    }
-
-    /// The native codec for the engine's `codec`.
-    #[must_use]
-    pub const fn from_model(codec: alpha2_media::VideoCodec) -> Self {
-        match codec {
-            alpha2_media::VideoCodec::H264 => Self::H264,
-            alpha2_media::VideoCodec::Hevc => Self::Hevc,
-            alpha2_media::VideoCodec::Vp9 => Self::Vp9,
-            alpha2_media::VideoCodec::Av1 => Self::Av1,
-            alpha2_media::VideoCodec::Mpeg4Part2 => Self::Mpeg4Part2,
-            alpha2_media::VideoCodec::ProRes => Self::ProRes,
-        }
-    }
-
-    pub(crate) const fn codec_id(self) -> ffi::AVCodecID {
+impl FfmpegCodec for NativeVideoCodec {
+    fn codec_id(self) -> ffi::AVCodecID {
         match self {
             Self::H264 => ffi::AV_CODEC_ID_H264,
             Self::Hevc => ffi::AV_CODEC_ID_HEVC,
@@ -116,60 +52,18 @@ impl NativeVideoCodec {
     }
 }
 
-/// Audio codecs implemented by the native encode sinks.
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
-#[non_exhaustive]
-pub enum NativeAudioCodec {
-    /// AAC-LC compatible audio, through `FFmpeg`'s `aac`.
-    Aac,
-    /// Opus, through `libopus`.
-    Opus,
-}
-
-impl NativeAudioCodec {
-    /// Every codec, in the order the engine lists them.
-    pub const ALL: [Self; 2] = [Self::Aac, Self::Opus];
-
-    /// Stable identifier suitable for an application protocol or settings file.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Aac => "aac",
-            Self::Opus => "opus",
-        }
-    }
-
-    /// The engine's codec this encoder family implements.
-    #[must_use]
-    pub const fn model(self) -> alpha2_media::AudioCodec {
-        match self {
-            Self::Aac => alpha2_media::AudioCodec::Aac,
-            Self::Opus => alpha2_media::AudioCodec::Opus,
-        }
-    }
-
-    /// The native codec for the engine's `codec`.
-    #[must_use]
-    pub const fn from_model(codec: alpha2_media::AudioCodec) -> Self {
-        match codec {
-            alpha2_media::AudioCodec::Aac => Self::Aac,
-            alpha2_media::AudioCodec::Opus => Self::Opus,
-        }
-    }
-
-    /// The one encoder alpha2 opens: `aac`, or the reference `libopus` (`FFmpeg`'s own `opus` is
-    /// experimental and never a candidate).
-    pub(crate) const fn encoder_name(self) -> &'static std::ffi::CStr {
-        match self {
-            Self::Aac => c"aac",
-            Self::Opus => c"libopus",
-        }
+/// The one encoder alpha2 opens for `codec`: `aac`, or the reference `libopus` (`FFmpeg`'s own
+/// `opus` is experimental and never a candidate).
+pub(crate) const fn audio_encoder_name(codec: NativeAudioCodec) -> &'static std::ffi::CStr {
+    match codec {
+        NativeAudioCodec::Aac => c"aac",
+        NativeAudioCodec::Opus => c"libopus",
     }
 }
 
 /// The encoder this runtime opens for `codec`, or `None` when only an experimental one exists.
 pub(crate) fn audio_encoder(codec: NativeAudioCodec) -> Option<AVCodecRef<'static>> {
-    AVCodec::find_encoder_by_name(codec.encoder_name()).filter(|encoder| {
+    AVCodec::find_encoder_by_name(audio_encoder_name(codec)).filter(|encoder| {
         u32::try_from(encoder.capabilities).unwrap_or(0) & ffi::AV_CODEC_CAP_EXPERIMENTAL == 0
     })
 }
@@ -781,9 +675,9 @@ pub(crate) fn encoder_layout(
     let Some(formats) = encoder.pix_fmts() else {
         return Some(layout);
     };
-    [layout, layout.as_p010()]
-        .into_iter()
-        .find(|candidate| formats.contains(&crate::convert::pixel_format(*candidate)))
+    [layout, layout.as_p010()].into_iter().find(|candidate| {
+        crate::convert::pixel_format(*candidate).is_ok_and(|format| formats.contains(&format))
+    })
 }
 
 /// Whether the encoder is listed only after an open probe ([`encoder_runs_here`]).
@@ -811,30 +705,6 @@ fn encoder_runs_here(candidate: &VideoEncoderCandidate, name: &str) -> Result<()
     probe_outcome(candidate, name, true).unwrap_or(Ok(()))
 }
 
-/// A probe answer that cannot change while the process runs.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ProbeVerdict {
-    /// The encoder encoded a frame.
-    Runs,
-    /// The encoder failed in a way asking again would repeat, with the failure kind and reason.
-    Refused(OpenFailureKind, String),
-}
-
-/// Unclassified probe failures in a row after which the last one is kept as the verdict.
-///
-/// Some transforms leak resources on every failed open, so a long-lived host must stop asking.
-pub(crate) const UNCLASSIFIED_FAILURES_KEPT: u8 = 3;
-
-/// What this process knows about one encoder and way it runs.
-#[derive(Debug, Default)]
-pub(crate) struct ProbeEntry {
-    verdict: Option<ProbeVerdict>,
-    unclassified_failures: u8,
-}
-
-/// The probe outcomes kept for this process, by encoder name and way it runs.
-pub(crate) type ProbeCache = Mutex<HashMap<(String, bool), ProbeEntry>>;
-
 /// `Some(Ok)` for an encoder that needs no probe or passed one, `Some(Err)` for one that failed,
 /// and `None` for one not probed yet when `probe` is unset.
 fn probe_outcome(
@@ -854,84 +724,27 @@ fn probe_outcome(
     )
 }
 
-/// The cached verdict for `name` and mode, else `probe`'s answer (cached when it cannot change, or
-/// after [`UNCLASSIFIED_FAILURES_KEPT`] unclassified failures in a row); `None` when nothing is
-/// cached and there is no `probe`.
-pub(crate) fn cached_probe(
-    cache: &ProbeCache,
-    name: &str,
-    on_hardware: bool,
-    probe: Option<impl FnOnce() -> Result<(), (OpenFailureKind, String)>>,
-) -> Option<Result<(), EncoderRefusal>> {
-    let refusal = |kind, reason| EncoderRefusal {
-        encoder: name.to_owned(),
-        hardware_accelerated: on_hardware,
-        kind,
-        reason,
-    };
-    // Held across the probe, so two exports asking at once probe once.
-    let mut entries = cache
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let entry = entries.entry((name.to_owned(), on_hardware)).or_default();
-    match &entry.verdict {
-        Some(ProbeVerdict::Runs) => return Some(Ok(())),
-        Some(ProbeVerdict::Refused(kind, reason)) => {
-            return Some(Err(refusal(*kind, reason.clone())));
-        }
-        None => {}
-    }
-    let outcome = probe?();
-    entry.unclassified_failures = match &outcome {
-        Err((OpenFailureKind::Unknown, _)) => entry.unclassified_failures.saturating_add(1),
-        _ => 0,
-    };
-    entry.verdict = match &outcome {
-        Ok(()) => Some(ProbeVerdict::Runs),
-        Err((kind @ (OpenFailureKind::Absent | OpenFailureKind::Unsuitable), reason)) => {
-            Some(ProbeVerdict::Refused(*kind, reason.clone()))
-        }
-        Err((OpenFailureKind::Unknown, reason))
-            if entry.unclassified_failures >= UNCLASSIFIED_FAILURES_KEPT =>
-        {
-            Some(ProbeVerdict::Refused(
-                OpenFailureKind::Unknown,
-                reason.clone(),
-            ))
-        }
-        Err(_) => None,
-    };
-    if let Err((kind, error)) = &outcome {
-        alpha2_os::diagnostic!(
-            "alpha2 native: video encoder {name} {} is registered but did not encode a frame on \
-             this machine, so it is not offered that way ({}{}): {error}",
-            mode_label(on_hardware),
-            kind.as_str(),
-            if entry.verdict.is_some() {
-                ""
-            } else {
-                "; asked again at the next export"
-            }
-        );
-    }
-    Some(outcome.map_err(|(kind, reason)| refusal(kind, reason)))
-}
-
 /// Encodes one probe frame and classifies a failure from what the encoder logged.
-fn probe_open(
+pub(crate) fn probe_open(
     candidate: &VideoEncoderCandidate,
     name: &str,
 ) -> Result<(), (OpenFailureKind, String)> {
-    let mark = alpha2_ffmpeg_bridge::log_mark();
-    match probe_software_encode(candidate, name, 256, 144, None).0 {
-        None => Ok(()),
-        Some(error) => {
-            let lines = alpha2_ffmpeg_bridge::log_since(mark, &[name]);
-            Err((
-                classify_open_failure(name, &error, &lines),
-                format!("{error}{}", alpha2_ffmpeg_bridge::log_detail(&lines)),
-            ))
+    let mut b_frames = requested_b_frames(name);
+    loop {
+        let mark = alpha2_ffmpeg_bridge::log_mark();
+        let Some(error) = probe_encode_with(candidate, name, 256, 144, None, b_frames).0 else {
+            return Ok(());
+        };
+        let lines = alpha2_ffmpeg_bridge::log_since(mark, &[name]);
+        // A device without B-frames opens once they are off, as the export then opens it.
+        if b_frames > 0 && nvenc_may_refuse_b_frames(name, &error, &lines) {
+            b_frames = 0;
+            continue;
         }
+        return Err((
+            classify_open_failure(name, &error, &lines),
+            format!("{error}{}", alpha2_ffmpeg_bridge::log_detail(&lines)),
+        ));
     }
 }
 
@@ -956,6 +769,9 @@ pub(crate) fn classify_open_failure(
         return match lines.iter().find_map(|line| nvenc_status(&line.text)) {
             Some(10 | 13 | 18 | 21) => OpenFailureKind::Busy,
             Some(1..=5) => OpenFailureKind::Absent,
+            // The capability check warns about each limit the request exceeds, then logs "No
+            // capable devices found": the device is there and refused this request.
+            None if nvenc_capability_refusal(lines) => OpenFailureKind::Unsuitable,
             None if said("No capable devices found") || said("Cannot load") => {
                 OpenFailureKind::Absent
             }
@@ -994,6 +810,43 @@ pub(crate) fn classify_open_failure(
 }
 
 /// The first parenthesized number in an `nvenc_print_error` line.
+/// Whether NVENC's capability check (`nvenc_check_capabilities`) refused a setting of the request,
+/// as in "... not supported", "Width 8192 exceeds 4096" or "Max B-frames 2 exceed 0".
+fn nvenc_capability_refusal(lines: &[LogLine]) -> bool {
+    lines
+        .iter()
+        .any(|line| line.text.contains(" not supported") || line.text.contains(" exceed"))
+}
+
+/// Whether an NVENC open may have been refused for asking more B-frames than the device has.
+///
+/// The capability check warns so, but a full log ring can lose that line. Every capability refusal
+/// ends without an NVENC status or a library load failure, so such a refusal counts too.
+pub(crate) fn nvenc_may_refuse_b_frames(encoder: &str, error: &str, lines: &[LogLine]) -> bool {
+    let said =
+        |words: &str| error.contains(words) || lines.iter().any(|line| line.text.contains(words));
+    encoder.ends_with("_nvenc")
+        && (said("Max B-frames")
+            || (!said("Cannot load")
+                && lines.iter().all(|line| nvenc_status(&line.text).is_none())))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The B-frames a first open on this thread asks for in place of [`encoder_max_b_frames`].
+    pub(crate) static FORCED_B_FRAMES: std::cell::Cell<Option<i32>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The B-frames a first open of `name` asks for.
+fn requested_b_frames(name: &str) -> i32 {
+    #[cfg(test)]
+    if let Some(forced) = FORCED_B_FRAMES.with(std::cell::Cell::get) {
+        return forced;
+    }
+    encoder_max_b_frames(name)
+}
+
 fn nvenc_status(line: &str) -> Option<u32> {
     line.match_indices('(').find_map(|(start, _)| {
         let rest = &line[start + 1..];
@@ -1046,10 +899,6 @@ pub fn video_encoders_without_probing() -> (Vec<NativeVideoEncoderCapability>, V
         }
     }
     (listed, unprobed)
-}
-
-pub(crate) const fn mode_label(on_hardware: bool) -> &'static str {
-    if on_hardware { "on GPU" } else { "on CPU" }
 }
 
 /// Whether a hardware encoder's device has a node here, for families Linux knows a node
@@ -1363,17 +1212,37 @@ pub(crate) fn open_video_encoder(
 > {
     let (candidates, refused) =
         video_encoder_candidates_and_refusals(request.config.codec, request.requested_name)?;
-    open_first_video_encoder(request, candidates).map_err(|error| match error {
+    match open_first_video_encoder(request, candidates) {
+        Ok((backend, selection)) => Ok((backend, with_probe_refusals(selection, refused))),
         // Probe refusals come first; a busy one among them decides the class.
-        EncodeError::EncodersRefused {
+        Err(EncodeError::EncodersRefused {
             message,
             refusals: opened,
-        } if !refused.is_empty() => EncodeError::EncodersRefused {
+        }) if !refused.is_empty() => Err(EncodeError::EncodersRefused {
             message: format!("{}; {message}", refusal_list(&refused)),
             refusals: refused.into_iter().chain(opened).collect(),
-        },
-        error => error,
-    })
+        }),
+        Err(error) => Err(error),
+    }
+}
+
+/// `selection` with the encoders its probes passed over listed first among the rejected ones.
+pub(crate) fn with_probe_refusals(
+    mut selection: NativeVideoEncoderSelection,
+    refused: Vec<EncoderRefusal>,
+) -> NativeVideoEncoderSelection {
+    selection.rejected = refused
+        .into_iter()
+        .map(|refusal| NativeVideoEncoderFallback {
+            encoder_name: refusal.encoder,
+            hardware_accelerated: refusal.hardware_accelerated,
+            reason: NativeEncoderRejection::OpenFailed,
+            kind: refusal.kind,
+            detail: refusal.reason,
+        })
+        .chain(selection.rejected)
+        .collect();
+    selection
 }
 
 /// An opened encoder, how it runs the rate control, and its CPU workers.
@@ -1610,7 +1479,7 @@ fn open_one_video_encoder(
         Some(Ok(quantized)) => {
             match open_video_encoder_context(request, candidate, name, Some(&quantized), pixels) {
                 Ok(encoder) => {
-                    let applied = crate::AppliedRateControl::of_quantizer_request(name);
+                    let applied = crate::rate_control::applied_of_quantizer_request(name);
                     return Ok((encoder, applied, None, pixels));
                 }
                 Err((_, error)) => Some(format!("{} refused: {error}", quantized.describe())),
@@ -1624,6 +1493,7 @@ fn open_one_video_encoder(
         .map(|encoder| (encoder, crate::AppliedRateControl::Bitrate, refused, pixels))
 }
 
+/// Opens `candidate` asking [`encoder_max_b_frames`], again without B-frames when NVENC has fewer.
 fn open_video_encoder_context(
     request: &VideoEncoderOpenRequest<'_>,
     candidate: &VideoEncoderCandidate,
@@ -1631,10 +1501,38 @@ fn open_video_encoder_context(
     quantized: Option<&crate::rate_control::MechanismRequest>,
     pixels: alpha2_media::PixelLayout,
 ) -> Result<EncoderContext, (NativeEncoderRejection, EncodeError)> {
+    let b_frames = requested_b_frames(name);
+    let mark = alpha2_ffmpeg_bridge::log_mark();
+    match open_context_with(request, candidate, name, quantized, pixels, b_frames) {
+        Err((NativeEncoderRejection::OpenFailed, error))
+            if b_frames > 0
+                && nvenc_may_refuse_b_frames(
+                    name,
+                    &error.to_string(),
+                    &alpha2_ffmpeg_bridge::log_since(mark, &[name]),
+                ) =>
+        {
+            open_context_with(request, candidate, name, quantized, pixels, 0)
+        }
+        opened => opened,
+    }
+}
+
+fn open_context_with(
+    request: &VideoEncoderOpenRequest<'_>,
+    candidate: &VideoEncoderCandidate,
+    name: &str,
+    quantized: Option<&crate::rate_control::MechanismRequest>,
+    pixels: alpha2_media::PixelLayout,
+    b_frames: i32,
+) -> Result<EncoderContext, (NativeEncoderRejection, EncodeError)> {
     let mut encoder = EncoderContext::from(AVCodecContext::new(&candidate.encoder));
     encoder.set_width(request.width);
     encoder.set_height(request.height);
-    encoder.set_pix_fmt(crate::convert::pixel_format(pixels));
+    encoder.set_pix_fmt(
+        crate::convert::pixel_format(pixels)
+            .map_err(|error| (NativeEncoderRejection::PixelFormat, error))?,
+    );
     let rate = request.config.frame_rate;
     let time_base = encoder_time_base(rate, max_time_base_denominator(candidate.encoder.id))
         .map_err(|error| (NativeEncoderRejection::OpenFailed, error))?;
@@ -1656,7 +1554,7 @@ fn open_video_encoder_context(
         |quantized| quantized.bit_rate,
     ));
     encoder.set_gop_size(keyframe_interval(request.config.frame_rate));
-    encoder.set_max_b_frames(encoder_max_b_frames(name));
+    encoder.set_max_b_frames(b_frames);
     if request.global_header {
         let flags = encoder.flags | i32::try_from(ffi::AV_CODEC_FLAG_GLOBAL_HEADER).unwrap_or(0);
         encoder.set_flags(flags);
@@ -1702,18 +1600,6 @@ fn open_video_encoder_context(
     Ok(encoder)
 }
 
-/// Frames between forced keyframes: two seconds of output.
-///
-/// libavcodec's default of 12 is half a second at 24 fps. Two seconds keeps nearly all of the
-/// quality gain of longer intervals (about 0.5-0.8 dB PSNR-Y over 12 on hardware H.264) while a
-/// player can still seek within two seconds.
-pub(crate) fn keyframe_interval(frame_rate: alpha2_time::FrameRate) -> i32 {
-    let frames = (2 * u64::from(frame_rate.numerator()))
-        .div_ceil(u64::from(frame_rate.denominator()))
-        .max(1);
-    i32::try_from(frames).unwrap_or(i32::MAX)
-}
-
 /// The largest time base denominator encoders of `codec` can write, if limited. MPEG-4 Part 2 and
 /// H.263 store it in 16 bits, so 1001/120000 (119.88 fps) is refused.
 pub(crate) const fn max_time_base_denominator(codec: ffi::AVCodecID) -> Option<u32> {
@@ -1723,9 +1609,7 @@ pub(crate) const fn max_time_base_denominator(codec: ffi::AVCodecID) -> Option<u
     }
 }
 
-/// The time base for frames at `rate`: the frame length (1001/30000 for 29.97 fps) when its
-/// denominator is within `limit`, else 1/D for the D within `limit` with the smallest worst-case
-/// rounding of frame times. 119.88 fps becomes 1/64000, off by at most 7/960000 s.
+/// [`alpha2_host_core::encode_policy::encoder_time_base`] as an `FFmpeg` rational.
 ///
 /// # Errors
 /// For a rate whose terms do not fit an `FFmpeg` rational.
@@ -1733,42 +1617,8 @@ pub(crate) fn encoder_time_base(
     rate: alpha2_time::FrameRate,
     limit: Option<u32>,
 ) -> Result<AVRational, EncodeError> {
-    let out_of_range = || EncodeError::Adapter("frame rate is out of range".into());
-    let (num, den) = (u64::from(rate.numerator()), u64::from(rate.denominator()));
-    let exact = || {
-        Ok(rsmpeg::avutil::ra(
-            i32::try_from(den).map_err(|_| out_of_range())?,
-            i32::try_from(num).map_err(|_| out_of_range())?,
-        ))
-    };
-    let Some(limit) = limit.map(u64::from).filter(|limit| num > *limit) else {
-        return exact();
-    };
-    // Frame k is at k*den/num s, k*den*D/num units of 1/D. Its fractional part is a multiple of
-    // 1/q, q = num / gcd(num, den*D), so the largest rounding is floor(q/2)/q units. A unit no
-    // longer than a frame keeps every frame its own time.
-    let mut best: Option<(u64, u64, u64)> = None;
-    for units in num.div_ceil(den).max(1)..=limit {
-        let q = num / gcd_u64(num, den * units);
-        let (error, scale) = (q / 2, q * units);
-        if best.is_none_or(|(_, best_error, best_scale)| {
-            u128::from(error) * u128::from(best_scale) < u128::from(best_error) * u128::from(scale)
-        }) {
-            best = Some((units, error, scale));
-        }
-    }
-    let (units, _, _) = best.ok_or_else(out_of_range)?;
-    Ok(rsmpeg::avutil::ra(
-        1,
-        i32::try_from(units).map_err(|_| out_of_range())?,
-    ))
-}
-
-const fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
-    while b != 0 {
-        (a, b) = (b, a % b);
-    }
-    a
+    alpha2_host_core::encode_policy::encoder_time_base(rate, limit)
+        .map(|(num, den)| rsmpeg::avutil::ra(num, den))
 }
 
 pub(crate) fn encoder_max_b_frames(name: &str) -> i32 {
@@ -2062,6 +1912,25 @@ fn probe_software_encode(
     height: u32,
     request: Option<&crate::rate_control::MechanismRequest>,
 ) -> (Option<String>, u32) {
+    probe_encode_with(
+        candidate,
+        name,
+        width,
+        height,
+        request,
+        encoder_max_b_frames(name),
+    )
+}
+
+/// [`probe_software_encode`] asking for `b_frames` B-frames.
+fn probe_encode_with(
+    candidate: &VideoEncoderCandidate,
+    name: &str,
+    width: u32,
+    height: u32,
+    request: Option<&crate::rate_control::MechanismRequest>,
+    b_frames: i32,
+) -> (Option<String>, u32) {
     let Ok(coded_width) = i32::try_from(width) else {
         return (Some("width is out of range".to_owned()), 0);
     };
@@ -2073,8 +1942,9 @@ fn probe_software_encode(
     }
     let encoder = &candidate.encoder;
     let base = candidate.codec().base_layout();
-    let format =
-        encoder_layout(encoder, base).map_or(ffi::AV_PIX_FMT_YUV420P, crate::convert::pixel_format);
+    let format = encoder_layout(encoder, base)
+        .and_then(|layout| crate::convert::pixel_format(layout).ok())
+        .unwrap_or(ffi::AV_PIX_FMT_YUV420P);
     let mut context = EncoderContext::from(AVCodecContext::new(encoder));
     context.set_width(coded_width);
     context.set_height(coded_height);
@@ -2084,7 +1954,7 @@ fn probe_software_encode(
     context.set_framerate(rsmpeg::avutil::ra(30, 1));
     context.set_bit_rate(request.map_or(2_000_000, |request| request.bit_rate));
     context.set_gop_size(12);
-    context.set_max_b_frames(encoder_max_b_frames(name));
+    context.set_max_b_frames(b_frames);
     let options = video_encoder_options(
         ColorMetadata::EXPORT,
         encoder,

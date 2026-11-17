@@ -24,7 +24,9 @@ const realManifest = readFileSync(
   join(root, "release/ffmpeg-lgpl/manifest.toml"),
   "utf8",
 );
-const tag = /^release_tag = "(.*)"$/m.exec(realManifest)[1];
+const tag = /** @type {RegExpExecArray} */ (
+  /^release_tag = "(.*)"$/m.exec(realManifest)
+)[1];
 const policy = realManifest.slice(0, realManifest.indexOf("[assets."));
 
 function array(key) {
@@ -98,6 +100,12 @@ function printedPath(text) {
     : path;
 }
 
+/**
+ * @param {string} command
+ * @param {string[]} args
+ * @param {import("node:child_process").SpawnOptionsWithoutStdio & {
+ *   onStderr?: (stderr: string) => void }} [options]
+ */
 function run(command, args, { onStderr, ...options } = {}) {
   return new Promise((done) => {
     const child = spawn(command, args, options);
@@ -128,6 +136,10 @@ function workspace() {
   copyFileSync(
     join(root, "scripts/lib/windows-tools.sh"),
     join(dir, "scripts/lib/windows-tools.sh"),
+  );
+  copyFileSync(
+    join(root, "scripts/lib/pinned-download.sh"),
+    join(dir, "scripts/lib/pinned-download.sh"),
   );
   copyFileSync(
     join(root, "release/ffmpeg-lgpl/verify-runtime.sh"),
@@ -212,6 +224,12 @@ const pathKey =
   Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ??
   "PATH";
 
+/**
+ * @param {string} dir
+ * @param {string} target
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {(stderr: string) => void} [onStderr]
+ */
 function fetchSdk(dir, target, env = {}, onStderr = undefined) {
   return script(join(dir, "scripts/fetch-ffmpeg-sdk.sh"), [target], {
     env: {
@@ -672,8 +690,12 @@ test("a download that stalls times out and is retried instead of hanging", async
   server.on("connection", (socket) => sockets.add(socket));
   try {
     await release(dir, { "linux-x64": "v1" });
-    await new Promise((done) => server.listen(0, "127.0.0.1", done));
-    const { port } = server.address();
+    await /** @type {Promise<void>} */ (
+      new Promise((done) => server.listen(0, "127.0.0.1", done))
+    );
+    const { port } = /** @type {import("node:net").AddressInfo} */ (
+      server.address()
+    );
     nodeExecutable(
       join(dir, "bin/curl"),
       `const { spawnSync } = require("node:child_process");

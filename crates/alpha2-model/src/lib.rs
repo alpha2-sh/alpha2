@@ -6,12 +6,19 @@
 mod animation;
 mod audio;
 mod audio_load;
+mod bounded;
 mod caption;
 mod caption_import;
 mod checks;
 mod composition;
+mod data;
+mod data_places;
+#[cfg(test)]
+mod data_tests;
+mod domain;
 mod easing;
 mod effect;
+mod effect_spec;
 mod error;
 mod fingerprint;
 mod generator;
@@ -31,11 +38,14 @@ mod source;
 pub(crate) mod tests;
 mod text;
 mod text_animation;
+mod time_bound;
 mod time_map;
 mod timeline;
+mod timeline_values;
 
 pub use animation::{
-    Animated, AnimatedPoint, Interpolation, Keyframe, PointKeyframe, Vec2, VisualProperties,
+    Animated, AnimatedPoint, AnimatedValue, Interpolation, Keyframe, MAX_KEYFRAMES, PointKeyframe,
+    Vec2, VisualProperties,
 };
 pub use audio::{
     AUDIO_EFFECT_STATE_MARGIN_MS, AudioEffect, AudioProperties, Ducking, EQ_FREQUENCY_RANGE_HZ,
@@ -47,7 +57,8 @@ pub use audio::{
 pub use audio_load::AudioEffectLoad;
 pub use caption::{
     CaptionCue, Captions, MAX_CAPTION_FONT_SIZE, MAX_CAPTION_NAME_BYTES, MAX_CAPTION_STYLES,
-    TextStylePatch,
+    MAX_DERIVED_CUES, TextStylePatch, WORD_PAUSE_TICKS, clip_runs, end_cues_where_the_next_starts,
+    group_words,
 };
 pub use caption_import::{
     CaptionImportError, ImportNotes, ImportedCaptions, MAX_CAPTION_FILE_BYTES,
@@ -59,28 +70,46 @@ pub use composition::{
     MAX_EFFECT_INPUTS, MAX_FRAME_INLINED_NODES, MAX_GROUP_INPUTS, MAX_INLINED_NODES,
     MAX_MERGE_LAYERS, MergeLayer, NodeInput, NodeOp, TimeScale,
 };
+pub use data::{
+    BindingProblem, CaptionsFromWords, CorrectionRef, DataAnchor, DataBinding, DataInterpolation,
+    DataInterval, DataKind, DataProblem, DataRemap, DataSamples, DataSet, DataSpace, DataValues,
+    DataVia, DataWord, MAX_DATA_CHANNELS, MAX_DATA_COORDINATE, MAX_DATA_ID_BYTES,
+    MAX_DATA_INTERVALS, MAX_DATA_LABEL_BYTES, MAX_DATA_ROTATION_DEGREES, MAX_DATA_SCALAR,
+    MAX_DATA_SCALE, MAX_DATA_SETS, MAX_DATA_VALUES, MAX_DATA_WORDS, MAX_FOLLOW_DEPTH, MadeBy,
+    MadeByPlugin, SIMILARITY_ARITY, valid_interval, valid_word, value_in_bounds,
+};
+pub use domain::Domain;
 pub use easing::{CubicBezier, Easing};
 pub use effect::{ClipBlendMode, ClipEffect, EffectValue};
-pub use error::{ModelError, ProjectLoadError, ShapeOwner};
+pub use effect_spec::{
+    BUILTIN_EFFECT_PREFIX, EffectKind, EffectParamSpec, EffectParamType, EffectParamUnit,
+    EffectProblem, EffectSpec, builtin_effect, builtin_effects, builtin_effects_json,
+    check_builtin_effect,
+};
+pub use error::{
+    DataOwner, EffectOwner, ErrorSubject, ModelError, ProjectLoadError, ProjectWriteError,
+    ShapeOwner,
+};
 pub use fingerprint::{AudioStreamShape, MediaFingerprint, StreamTopology, VideoStreamShape};
 pub use generator::{Generator, GradientStop, MAX_GRADIENT_STOPS, Paint, Rgba, Spread};
-pub use ids::{ClipId, CompositionId, EffectResourceId, NodeId, ProjectId, TrackId};
+pub use ids::{ClipId, CompositionId, DataSetId, EffectResourceId, NodeId, ProjectId, TrackId};
 pub use layout::{
-    AlignContent, AlignItems, Display, FlexDirection, FlexWrap, GeneratorIssue, GridAutoFlow,
-    JustifyContent, LAYOUT_TEXT_DEFAULTS, LayoutBorder, LayoutInset, LayoutIssue, LayoutNode,
-    LayoutProblem, LayoutShape, LayoutTextStyle, MAX_GRID_TRACKS, MAX_LAYOUT_DEPTH,
-    MAX_LAYOUT_FONT_SIZE, MAX_LAYOUT_ISOLATED, MAX_LAYOUT_NODES, MAX_LAYOUT_TEXTS, Overflow,
-    Position,
+    ASPECT_RATIO_RANGE, AlignContent, AlignItems, Display, FlexDirection, FlexWrap, GeneratorIssue,
+    GridAutoFlow, JustifyContent, LAYOUT_TEXT_DEFAULTS, LayoutBorder, LayoutFontSizeFit,
+    LayoutInset, LayoutIssue, LayoutNode, LayoutProblem, LayoutShape, LayoutTextStyle,
+    MAX_FLEX_FACTOR, MAX_GRID_TRACKS, MAX_LAYOUT_DEPTH, MAX_LAYOUT_FONT_SIZE, MAX_LAYOUT_ISOLATED,
+    MAX_LAYOUT_NODES, MAX_LAYOUT_TEXTS, Overflow, Position,
 };
 pub use layout_values::{
-    GridEdge, GridPlacement, Insets, LayoutLength, LayoutOffset, LayoutSize, RepeatCount,
-    TrackBreadth, TrackComponent, TrackList, TrackSize,
+    GridEdge, GridPlacement, Insets, LayoutLength, LayoutOffset, LayoutSize, MAX_LAYOUT_FRACTION,
+    MAX_LAYOUT_PERCENT, MAX_LAYOUT_PX, RepeatCount, TrackBreadth, TrackComponent, TrackList,
+    TrackSize,
 };
 pub use lint::{LintEdge, LintIssue, LintOwner, ShapeLintOwner};
 pub use mask::{MAX_CLIP_MASKS, MaskMode, Matte, MatteMode, ShapeMask};
 pub use project::{
     BlendSpace, CURRENT_SCHEMA_VERSION, ColorPipeline, HDR_PEAK_NITS_RANGE, HdrSources,
-    MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS, MAX_CLIPS, MAX_CLIPS_PER_TRACK,
+    MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS, MAX_CLIPS, MAX_CLIPS_PER_TRACK, MAX_EFFECT_RESOURCES,
     MAX_PROJECT_JSON_BYTES, MAX_TRACKS, MAX_TRANSITIONS_PER_TRACK, Project, ProjectSettings, Rgb,
     SAMPLE_RATE_RANGE,
 };
@@ -91,7 +120,7 @@ pub use provider::{
 };
 pub use resource::{EffectResource, EffectResourceKind};
 #[cfg(feature = "schema")]
-pub use schema::{finish_json_schema, project_json_schema, project_limits_json};
+pub use schema::{PROJECT_SCHEMA_ID, finish_json_schema, project_json_schema, project_limits_json};
 pub use shapes::{
     Dash, EllipseGeometry, FillRule, LineCap, LineJoin, MAX_DASH_ENTRIES, MAX_PATH_SUBPATHS,
     MAX_PATH_VERTICES, MAX_POLYSTAR_POINTS, MAX_SHAPE_DEPTH, MAX_SHAPE_ITEMS, MIN_POLYSTAR_POINTS,
@@ -101,16 +130,18 @@ pub use shapes::{
 };
 pub use source::{MediaKind, MediaSource};
 pub use text::{
-    FONT_WEIGHT_RANGE, LETTER_SPACING_RANGE, LINE_HEIGHT_RANGE, MAX_FONT_FAMILY_BYTES,
-    MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_PADDING, MAX_TEXT_SHADOW_BLUR,
-    MAX_TEXT_SHADOW_OFFSET, MAX_TEXT_SHADOWS, MAX_TEXT_STROKE_EXTENT, MAX_TEXT_STROKES, TextAlign,
-    TextBackground, TextShadow, TextStroke, TextStyle,
+    BlockEllipsis, FONT_SIZE_FIT_STEPS, FONT_WEIGHT_RANGE, FontSizeFit, LETTER_SPACING_RANGE,
+    LINE_HEIGHT_RANGE, LineClamp, MAX_BLOCK_ELLIPSIS_BYTES, MAX_FONT_FAMILY_BYTES,
+    MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_PADDING, MAX_TEXT_POSITION,
+    MAX_TEXT_SHADOW_BLUR, MAX_TEXT_SHADOW_OFFSET, MAX_TEXT_SHADOWS, MAX_TEXT_STROKE_EXTENT,
+    MAX_TEXT_STROKES, TextAlign, TextBackground, TextShadow, TextStroke, TextStyle,
 };
 pub use text_animation::{
-    ANIMATOR_SCALE_RANGE, MAX_CLASS_NAME_BYTES, MAX_RANGE_INDEX, MAX_RUN_CLASSES,
-    MAX_TEXT_ANIMATORS, MAX_TEXT_RUNS, RANGE_PERCENT, RangeShape, RangeUnits, RunState, RunTime,
-    TextAnimator, TextAnimatorProperties, TextContent, TextRun, TextSelector, TextUnit,
-    valid_class_name,
+    ANIMATOR_SCALE_RANGE, MAX_ANIMATOR_OFFSET, MAX_CLASS_NAME_BYTES, MAX_RANGE_INDEX,
+    MAX_RUN_CLASSES, MAX_TEXT_ANIMATORS, MAX_TEXT_RUNS, RANGE_PERCENT, RangeShape, RangeUnits,
+    RunState, RunTime, TextAnimator, TextAnimatorProperties, TextContent, TextRun, TextSelector,
+    TextUnit, valid_class_name,
 };
-pub use time_map::{LOOP_FADE_SECONDS, LoopMode, TimeMap};
+pub use time_map::{LOOP_FADE_SECONDS, LoopMode, MAX_LOOP_PASSES, TimeMap, loop_passes};
 pub use timeline::{CacheIntent, Clip, ClipTransition, Timeline, Track, TrackKind};
+pub use timeline_values::{ClipReference, TimelineOwner, TimelineValue, TimelineVisit};

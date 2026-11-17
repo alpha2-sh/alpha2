@@ -1,6 +1,6 @@
 //! Flexbox and grid resolution with taffy. This is the only file that names taffy.
 
-use super::{LAYOUT_WRAP_SLACK, NodeRects, ResolvedLayout, wrap};
+use super::{NodeRects, ResolvedLayout, wrap};
 use crate::PictureSize;
 use alpha2_eval::{EvaluatedLayout, EvaluatedNode, NodeContent, NodeLayout, Sides};
 use alpha2_model::{
@@ -39,6 +39,8 @@ pub fn resolve(
     let mut tree = TaffyTree::<NodeContext>::new();
     let mut ids = Vec::new();
     let mut texts = 0;
+    let mut evaluated = Vec::new();
+    super::texts(&layout.root, &mut evaluated);
     let root = build(
         &mut tree,
         &layout.root,
@@ -58,6 +60,13 @@ pub fn resolve(
             |inputs, _, context, style| match context {
                 Some(NodeContext::Text(index)) => {
                     let text = shaped.get(*index).and_then(Option::as_deref);
+                    // The automatic height ends at the clamp point of a clamp by count.
+                    let limit = evaluated
+                        .get(*index)
+                        .copied()
+                        .flatten()
+                        .and_then(|text| text.line_clamp.as_ref())
+                        .and_then(|clamp| clamp.max_lines);
                     taffy::compute_leaf_layout(
                         inputs,
                         style,
@@ -72,9 +81,9 @@ pub fn resolve(
                                 AvailableSpace::MaxContent => max,
                                 AvailableSpace::Definite(space) => space.min(max).max(min),
                             });
-                            let height = known
-                                .height
-                                .unwrap_or_else(|| text.lines_at(wrap(width)).height);
+                            let height = known.height.unwrap_or_else(|| {
+                                text.lines_within(wrap(width), limit).lines.height
+                            });
                             Size { width, height }
                         },
                     )
@@ -99,7 +108,7 @@ pub fn resolve(
             &ids,
             [0.0, 0.0],
             &mut 0,
-            shaped,
+            (shaped, unit),
             &mut 0,
             &mut nodes,
         );
@@ -429,7 +438,7 @@ fn collect(
     ids: &[NodeId],
     origin: [f32; 2],
     index: &mut usize,
-    shaped: &[Option<Arc<ShapedText>>],
+    (shaped, unit): (&[Option<Arc<ShapedText>>], f32),
     texts: &mut usize,
     out: &mut Vec<NodeRects>,
 ) {
@@ -477,20 +486,21 @@ fn collect(
         padding,
         content,
         text_width,
-        overflow: false,
-        line_count: None,
-        baselines: None,
+        text_height,
+        ..NodeRects::default()
     });
     let mut overflow = false;
     match &node.content {
-        NodeContent::Text(_) => {
+        NodeContent::Text(evaluated) => {
             let text = shaped.get(*texts).and_then(Option::as_deref);
             *texts += 1;
+            out[slot].font_size = evaluated.font_size;
+            out[slot].font_pixels = super::pixels(evaluated.font_size, unit);
             let lines = text.map(|text| {
-                let lines = text.lines_at(wrap(text_width));
-                overflow = lines.height > text_height + LAYOUT_WRAP_SLACK
-                    || text.min_content_width() > wrap(text_width);
-                lines
+                let boxed = super::node_lines(evaluated, text, text_width, text_height);
+                overflow = boxed.overflow;
+                out[slot].truncated = boxed.truncated;
+                boxed.lines
             });
             out[slot].line_count = Some(lines.map_or(0, |lines| lines.line_count));
             out[slot].baselines = lines.map(|lines| {
@@ -503,7 +513,16 @@ fn collect(
         NodeContent::Children(children) => {
             for child in children {
                 let at = out.len();
-                collect(tree, child, ids, [left, top], index, shaped, texts, out);
+                collect(
+                    tree,
+                    child,
+                    ids,
+                    [left, top],
+                    index,
+                    (shaped, unit),
+                    texts,
+                    out,
+                );
                 if child.layout.position == Position::Relative {
                     let [l, t, r, b] = out[at].border;
                     overflow |= l < padding[0] - 0.5

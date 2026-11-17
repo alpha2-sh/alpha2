@@ -1,0 +1,22 @@
+[package]
+name = "alpha2-plugin-fixture-scripted"
+description = "The scripted test extractor as a plugin, for loader and surface tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+alpha2-plugin-sdk.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+alpha2-plugin-abi.workspace = true
+alpha2-plugin-sdk = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

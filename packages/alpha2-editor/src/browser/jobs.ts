@@ -379,3 +379,57 @@ function phaseOf(progress: ExportProgress): ExportFailure["phase"] {
       return "prepare";
   }
 }
+
+/**
+ * One extraction running on the page. It stops when `signal` aborts, on {@link cancel}, or when
+ * the bridge is disposed; a stopped run rejects with `EditorError` `cancelled`.
+ */
+export class ExtractionJob<T> {
+  /** What `run` resolves to. */
+  readonly result: Promise<T>;
+  #controller = new AbortController();
+
+  /**
+   * Starts `run` with the job's own signal.
+   *
+   * @param release Called once when the job settles.
+   */
+  constructor(
+    run: (signal: AbortSignal) => Promise<T>,
+    signal: AbortSignal | undefined,
+    release: () => void,
+  ) {
+    const own = this.#controller.signal;
+    const abort = () => this.#controller.abort(signal?.reason);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+    this.result = Promise.resolve()
+      .then(() => run(own))
+      .catch((cause: unknown) => {
+        if (!own.aborted) throw cause;
+        throw new EditorError(
+          "cancelled",
+          "Extraction cancelled",
+          "extract",
+          undefined,
+          true,
+          { cause },
+        );
+      })
+      .finally(() => {
+        signal?.removeEventListener("abort", abort);
+        release();
+      });
+    // A run cancelled before anyone awaits it is not an unhandled rejection.
+    void this.result.catch(() => {});
+  }
+
+  /** Stops the run; resolves once it has settled. */
+  cancel(): Promise<void> {
+    this.#controller.abort();
+    return this.result.then(
+      () => {},
+      () => {},
+    );
+  }
+}

@@ -151,15 +151,15 @@ test("output without the layer's status report did not load the layer", () => {
 test("a layer path without a 1.4 manifest is refused, with the reason", () => {
   const directory = mkdtempSync(join(tmpdir(), "alpha2-layer-"));
   try {
-    assert.match(findValidationLayer(undefined).problem, /VK_LAYER_PATH/);
-    assert.match(findValidationLayer(directory).problem, /VK_LAYER_PATH/);
+    assert.match(findValidationLayer(undefined).problem ?? "", /VK_LAYER_PATH/);
+    assert.match(findValidationLayer(directory).problem ?? "", /VK_LAYER_PATH/);
     const manifest = join(directory, "VkLayer_khronos_validation.json");
     writeFileSync(
       manifest,
       JSON.stringify({ layer: { api_version: "1.3.204" } }),
     );
     assert.match(
-      findValidationLayer(`/nowhere${delimiter}${directory}`).problem,
+      findValidationLayer(`/nowhere${delimiter}${directory}`).problem ?? "",
       /1\.3\.204; 1\.4/,
     );
     writeFileSync(

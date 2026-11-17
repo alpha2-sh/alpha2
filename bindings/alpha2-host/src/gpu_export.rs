@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::audio::WindowedAudioSources;
 use crate::config::{ResolvedAudioRate, configured_encode_channel_depth};
 use crate::config::{codec_thread_policy, configured_cancel_at_frame, decoder_thread_policy};
 use crate::decode::{DecodeScheduler, DecodeWorker};
@@ -179,6 +178,7 @@ impl Host {
         codec: alpha2_native::NativeVideoCodec,
         pinned: Option<&str>,
     ) -> Result<(HardwareEncodeDevice, HardwareEncodeCapability), GpuOutputRefusal> {
+        crate::heartbeat::request_step(crate::heartbeat::RequestSide::Output, "encoder probe");
         // macOS has one encoder, whose codec is checked below.
         let asked = cfg!(any(target_os = "windows", target_os = "linux")).then_some(codec);
         let device = self.hardware_encode_device();
@@ -280,7 +280,7 @@ impl Host {
         audio_rate: ResolvedAudioRate,
         loudness: Option<LoudnessRequest>,
         output: &alpha2_native::OutputTarget,
-        started: Instant,
+        (started, encoder_probe): (Instant, std::time::Duration),
         (device, capability): (&HardwareEncodeDevice, &HardwareEncodeCapability),
         transcode: &Result<TranscodePlan, String>,
         pipeline_failure: &PipelineFailure,
@@ -311,6 +311,8 @@ impl Host {
         )
         .map_err(GpuEncodeOutcome::Unavailable)?;
 
+        let open_started = Instant::now();
+        crate::heartbeat::request_step(crate::heartbeat::RequestSide::Output, "encoder open");
         let (session, mut input) = device
             .open(&HardwareEncodeRequest {
                 width: size.width,
@@ -335,6 +337,7 @@ impl Host {
                     GpuEncodeOutcome::Failed(error_message(error))
                 }
             })?;
+        let encoder_open = open_started.elapsed();
         let gpu_selection = session.selection().clone();
         self.failure.note(
             "videoPipeline",
@@ -406,12 +409,17 @@ impl Host {
             source_frame_pixels: plan.source_frame_pixels,
             source_probe: plan.source_probe,
             trace: ExportTrace::from_env(started),
+            phases: crate::metrics::PhaseTimings {
+                encoder_probe: Some(encoder_probe),
+                encoder_open: Some(encoder_open),
+                ..crate::metrics::PhaseTimings::default()
+            },
             ..ExportMetrics::default()
         };
         self.prepare_project_pipelines(snapshot, &mut metrics);
         let mut audio_sources = has_audio
             .then(|| {
-                WindowedAudioSources::new(
+                crate::audio::windowed_audio_sources(
                     project,
                     assets,
                     project.settings.sample_rate,
@@ -436,6 +444,7 @@ impl Host {
         } else {
             (0, 0)
         };
+        let loudness_started = Instant::now();
         let loudness_report = match (loudness, audio_renderer.as_mut()) {
             (Some(request), Some(renderer)) => Some(
                 normalize_export_audio(
@@ -459,6 +468,7 @@ impl Host {
             }
             (None, _) => None,
         };
+        metrics.phases.loudness = loudness_started.elapsed();
         let mut audio_produced = 0_usize;
 
         // Set when the run stopped itself, so the report names the cancel instead of the encode
@@ -466,6 +476,7 @@ impl Host {
         let mut cancelled_at = None;
         let result = (|| -> Result<(), String> {
             decode_scheduler.refill(&exporter, snapshot, &decode_worker, &mut metrics)?;
+            metrics.phases.setup = started.elapsed();
             loop {
                 let audio_ticks = (audio_produced < audio_frames).then(|| {
                     i64::try_from(audio_produced)
@@ -497,7 +508,13 @@ impl Host {
                         .audio_needs(snapshot, absolute, count)
                         .map_err(error_message)?;
                     let decode_started = Instant::now();
-                    sources.prepare(&needs, &cancel)?;
+                    crate::heartbeat::request_step(
+                        crate::heartbeat::RequestSide::Input,
+                        "audio windows",
+                    );
+                    sources
+                        .prepare(&needs, &cancel)
+                        .map_err(crate::audio::window_error_message)?;
                     metrics.audio_decode = metrics
                         .audio_decode
                         .saturating_add(decode_started.elapsed());
@@ -740,6 +757,7 @@ impl Host {
                     bytes: packed_bytes_per_frame,
                 })?;
                 metrics.encode_queue = metrics.encode_queue.saturating_add(queue_started.elapsed());
+                metrics.phases.record_handoff(index, started.elapsed());
                 metrics.encode_backpressure = metrics
                     .encode_backpressure
                     .saturating_add(u64::from(backpressured));
@@ -805,6 +823,8 @@ impl Host {
 
         metrics.record_decode_pool(&decode_worker);
         decode_worker.finish().map_err(GpuEncodeOutcome::failed)?;
+        self.refuse_software_frames(&metrics)
+            .map_err(GpuEncodeOutcome::failed)?;
         let finish_started = Instant::now();
         self.failure.enter(ExportPhase::Mux, None);
         let mut finish = || -> Result<(), String> {
@@ -821,7 +841,7 @@ impl Host {
                     &mut encode_state,
                     total_frames,
                     started,
-                    &mut crate::protocol::finalizing(progress),
+                    &mut crate::protocol::after_finish(&mut crate::protocol::finalizing(progress)),
                     &mut metrics,
                 )? {
                     break;
@@ -831,9 +851,7 @@ impl Host {
         };
         finish().map_err(GpuEncodeOutcome::failed)?;
         let mut encode_worker = encode_worker;
-        encode_worker
-            .join_success()
-            .map_err(GpuEncodeOutcome::failed)?;
+        let teardown_failure = crate::host::encoder_teardown(&mut encode_worker, &output.path);
         metrics.encode_worker_idle = encode_worker.idle.total();
         metrics.encode_channel_depth_samples = encode_worker.depth.samples();
         metrics.mux_finish = finish_started.elapsed();
@@ -861,7 +879,8 @@ impl Host {
             }
         }
 
-        let mut result = self.response_metadata(started.elapsed().as_secs_f64() * 1_000.0);
+        let elapsed = started.elapsed();
+        let mut result = self.response_metadata(elapsed.as_secs_f64() * 1_000.0);
         result["frames"] = json!(completed);
         result["audio"] = json!(has_audio);
         result["videoCodec"] = json!(capability.codec.as_str());
@@ -875,6 +894,7 @@ impl Host {
         result["gpuOutputPathUnavailable"] = Value::Null;
         result["gpuOutputPathFallback"] = Value::Null;
         result["publish"] = crate::host::publish_json(metrics.publish);
+        result["encoderTeardownFailure"] = json!(teardown_failure);
         result["videoTranscode"] = json!(transcode_plan.map(|_| "yuv-repack"));
         result["yuvTranscodeIneligible"] = json!(transcode.as_ref().err());
         result["effectiveRange"] = effective_range_json(effective_range);
@@ -895,10 +915,7 @@ impl Host {
             Value::Null
         };
         result["audioEncoder"] = json!(audio_encoder);
-        result["fps"] = json!(frames_per_second(
-            completed,
-            started.elapsed().as_secs_f64()
-        ));
+        result["fps"] = json!(frames_per_second(completed, elapsed.as_secs_f64()));
         let after = self.gpu_renderer().diagnostics();
         metrics.peak_provider_source_bytes = plan.providers.peak_bytes();
         metrics.provider_source_reopens = plan.providers.reopens();
@@ -907,6 +924,9 @@ impl Host {
             .note_decoder_sessions(plan.decoder_sessions, metrics.decoder_session_reopens);
         result["performance"] =
             export_metrics_json(&metrics, Some((&graph_before, &after)), &pipeline_limits);
+        metrics
+            .phases
+            .add_json(&mut result["performance"], elapsed, completed);
         crate::metrics::add_gpu_time_metrics(&mut result["performance"], Some(self.gpu_renderer()));
         result["performance"]["encoderInputCopyEstimated"] = json!(false);
         Ok(result)

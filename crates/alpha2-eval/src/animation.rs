@@ -1,4 +1,4 @@
-use crate::EvaluatedVisual;
+use crate::{EvaluatedVisual, SampleContext};
 use alpha2_model::{
     Animated, AnimatedPoint, EffectValue, GradientStop, Insets, Keyframe, LayoutLength,
     LayoutOffset, LayoutSize, Paint, Path, PointKeyframe, Vec2, VisualProperties,
@@ -6,7 +6,7 @@ use alpha2_model::{
 use alpha2_time::MediaTime;
 
 /// Evaluates visual properties at a timestamp. `aspect` is the canvas width over height, used
-/// to measure motion along spatial curves.
+/// to measure motion along spatial curves; `context` resolves data bindings.
 ///
 /// Opacity is clamped to `0..=1`; position, scale and rotation keep curve overshoot.
 #[must_use]
@@ -14,19 +14,23 @@ pub fn sample_visual(
     properties: &VisualProperties,
     time: MediaTime,
     aspect: f64,
+    context: &SampleContext<'_>,
 ) -> EvaluatedVisual {
     EvaluatedVisual {
-        position: sample_point(&properties.position, time, aspect),
+        position: sample_point(&properties.position, time, aspect, context),
         anchor: properties.anchor,
-        scale: evaluate_vec2(&properties.scale, time),
-        rotation_degrees: evaluate_scalar(&properties.rotation_degrees, time),
-        opacity: evaluate_scalar(&properties.opacity, time).clamp(0.0, 1.0),
+        scale: evaluate_vec2(&properties.scale, time, context),
+        rotation_degrees: evaluate_scalar(&properties.rotation_degrees, time, context),
+        opacity: evaluate_scalar(&properties.opacity, time, context).clamp(0.0, 1.0),
     }
 }
 
-fn evaluate_vec2(animation: &Animated<Vec2>, time: MediaTime) -> Vec2 {
+fn evaluate_vec2(animation: &Animated<Vec2>, time: MediaTime, context: &SampleContext<'_>) -> Vec2 {
     match animation {
         Animated::Constant { value } => *value,
+        Animated::Data(binding) => {
+            crate::data::bound_vec2(binding, time, context).unwrap_or_default()
+        }
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
             Segment::Between(left, right, amount) => Vec2::new(
                 interpolate_f32(left.value.x, right.value.x, amount),
@@ -41,23 +45,33 @@ fn evaluate_vec2(animation: &Animated<Vec2>, time: MediaTime) -> Vec2 {
 /// Samples an animated 2D value like [`sample_scalar`]. Use [`sample_point`] for positions that
 /// may follow spatial curves.
 #[must_use]
-pub fn sample_vec2(animation: &Animated<Vec2>, time: MediaTime) -> Vec2 {
-    evaluate_vec2(animation, time)
+pub fn sample_vec2(
+    animation: &Animated<Vec2>,
+    time: MediaTime,
+    context: &SampleContext<'_>,
+) -> Vec2 {
+    evaluate_vec2(animation, time, context)
 }
 
 /// Samples one animated scalar with the project's keyframe semantics.
 ///
 /// Times outside the keyframes clamp to the first or last value, and a
 /// [`alpha2_model::Interpolation::Hold`] segment keeps its left value. Interpolation is numeric,
-/// so a rotation from 0 to 720 degrees turns twice.
+/// so a rotation from 0 to 720 degrees turns twice. A data binding reads its channel through
+/// `context`, and is zero without a value.
 #[must_use]
-pub fn sample_scalar(animation: &Animated<f32>, time: MediaTime) -> f32 {
-    evaluate_scalar(animation, time)
+pub fn sample_scalar(
+    animation: &Animated<f32>,
+    time: MediaTime,
+    context: &SampleContext<'_>,
+) -> f32 {
+    evaluate_scalar(animation, time, context)
 }
 
-fn evaluate_scalar(animation: &Animated<f32>, time: MediaTime) -> f32 {
+fn evaluate_scalar(animation: &Animated<f32>, time: MediaTime, context: &SampleContext<'_>) -> f32 {
     match animation {
         Animated::Constant { value } => *value,
+        Animated::Data(binding) => crate::data::bound_scalar(binding, time, context).unwrap_or(0.0),
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
             Segment::Between(left, right, amount) => {
                 interpolate_f32(left.value, right.value, amount)
@@ -75,9 +89,17 @@ fn evaluate_scalar(animation: &Animated<f32>, time: MediaTime) -> f32 {
 /// eased amount is the fraction of arc length travelled. Overshoot continues along the end
 /// tangent.
 #[must_use]
-pub fn sample_point(animation: &AnimatedPoint, time: MediaTime, aspect: f64) -> Vec2 {
+pub fn sample_point(
+    animation: &AnimatedPoint,
+    time: MediaTime,
+    aspect: f64,
+    context: &SampleContext<'_>,
+) -> Vec2 {
     match animation {
         AnimatedPoint::Constant { value } => *value,
+        AnimatedPoint::Data(binding) => {
+            crate::data::bound_vec2(binding, time, context).unwrap_or_default()
+        }
         AnimatedPoint::Keyframes { keyframes } => match point_segment(keyframes, time) {
             PointSegment::At(value) => value,
             PointSegment::Between(left, right, amount) => {
@@ -163,6 +185,7 @@ pub fn sample_path(animation: &Animated<Path>, time: MediaTime) -> alpha2_geomet
     use alpha2_geometry::{EvaluatedPath, EvaluatedSubpath, EvaluatedVertex};
     match animation {
         Animated::Constant { value } => EvaluatedPath::from(value),
+        Animated::Data(_) => EvaluatedPath::default(),
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
             Segment::At(keyframe) => EvaluatedPath::from(&keyframe.value),
             Segment::Empty => EvaluatedPath::default(),
@@ -212,6 +235,9 @@ pub fn sample_path(animation: &Animated<Path>, time: MediaTime) -> alpha2_geomet
 pub fn sample_paint(animation: &Animated<Paint>, time: MediaTime) -> Paint {
     match animation {
         Animated::Constant { value } => value.clone(),
+        Animated::Data(_) => Paint::Solid {
+            color: alpha2_model::Rgba::new(0.0, 0.0, 0.0, 0.0),
+        },
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
             Segment::At(keyframe) => keyframe.value.clone(),
             Segment::Empty => Paint::Solid {
@@ -331,14 +357,33 @@ pub struct EffectParamValue {
 ///
 /// `Float` and `Vec2` interpolate component-wise. A straight sRGB `Color` interpolates
 /// premultiplied, as CSS does, to avoid a dark fringe when fading from transparent, then clamps
-/// to `0..=1`. `Enum` and `Bool` hold.
+/// to `0..=1`. `Enum` and `Bool` hold. A data binding gives a `Float` for scalars and a `Vec2`
+/// for points, marked interpolated so it is clamped to the parameter's range.
 #[must_use]
-pub fn sample_effect_param(animation: &Animated<EffectValue>, time: MediaTime) -> EffectParamValue {
+pub fn sample_effect_param(
+    animation: &Animated<EffectValue>,
+    time: MediaTime,
+    context: &SampleContext<'_>,
+) -> EffectParamValue {
     let authored = |value: EffectValue| EffectParamValue {
         value,
         interpolated: false,
     };
     match animation {
+        Animated::Data(binding) => {
+            let value = match crate::data::bound_vec2(binding, time, context) {
+                Some(point) if binding.remap.is_none() && is_points(binding, context) => {
+                    EffectValue::Vec2([point.x, point.y])
+                }
+                _ => EffectValue::Float(
+                    crate::data::bound_scalar(binding, time, context).unwrap_or(0.0),
+                ),
+            };
+            EffectParamValue {
+                value,
+                interpolated: true,
+            }
+        }
         Animated::Constant { value } => authored(*value),
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
             Segment::Between(left, right, amount) => {
@@ -354,6 +399,11 @@ pub fn sample_effect_param(animation: &Animated<EffectValue>, time: MediaTime) -
             Segment::Empty => authored(EffectValue::Float(0.0)),
         },
     }
+}
+
+/// Whether `binding` follows a `points` data set.
+fn is_points(binding: &alpha2_model::DataBinding, context: &SampleContext<'_>) -> bool {
+    crate::data::bound_kind(binding, context) == Some(alpha2_model::DataKind::Points)
 }
 
 fn interpolate_value(start: EffectValue, end: EffectValue, amount: f64) -> Option<EffectValue> {
@@ -382,6 +432,7 @@ pub fn sample_rgba(
     time: MediaTime,
 ) -> alpha2_model::Rgba {
     match animation {
+        Animated::Data(_) => alpha2_model::Rgba::new(0.0, 0.0, 0.0, 0.0),
         Animated::Constant { value } => *value,
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
             Segment::At(keyframe) => keyframe.value,
@@ -451,14 +502,14 @@ fn segment<T>(keyframes: &[Keyframe<T>], time: MediaTime) -> Segment<'_, T> {
 }
 
 #[allow(clippy::cast_precision_loss)]
-fn interpolation_amount(start: MediaTime, end: MediaTime, time: MediaTime) -> f64 {
+pub(crate) fn interpolation_amount(start: MediaTime, end: MediaTime, time: MediaTime) -> f64 {
     (i128::from(time.ticks()) - i128::from(start.ticks())) as f64
         / (i128::from(end.ticks()) - i128::from(start.ticks())) as f64
 }
 
 /// Linear interpolation clamped to finite `f32`, since overshoot can exceed its range.
 #[allow(clippy::cast_possible_truncation)]
-fn interpolate_f32(start: f32, end: f32, amount: f64) -> f32 {
+pub(crate) fn interpolate_f32(start: f32, end: f32, amount: f64) -> f32 {
     (f64::from(start) + (f64::from(end) - f64::from(start)) * amount)
         .clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32
 }
@@ -468,6 +519,7 @@ fn interpolate_f32(start: f32, end: f32, amount: f64) -> f32 {
 pub fn sample_insets(animation: &Animated<Insets>, time: MediaTime) -> [f32; 4] {
     match animation {
         Animated::Constant { value } => value.sides().map(LayoutSize::value),
+        Animated::Data(_) => [0.0; 4],
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
             Segment::Between(left, right, amount) => {
                 let (from, to) = (left.value.sides(), right.value.sides());
@@ -486,6 +538,7 @@ pub fn sample_insets(animation: &Animated<Insets>, time: MediaTime) -> [f32; 4] 
 pub fn sample_size(animation: &Animated<LayoutSize>, time: MediaTime) -> f32 {
     match animation {
         Animated::Constant { value } => value.value(),
+        Animated::Data(_) => 0.0,
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
             Segment::Between(left, right, amount) => {
                 interpolate_f32(left.value.value(), right.value.value(), amount)
@@ -502,6 +555,7 @@ pub fn sample_offset(animation: &Animated<LayoutOffset>, time: MediaTime) -> Vec
     let vector = |offset: &LayoutOffset| Vec2::new(offset.x.value(), offset.y.value());
     match animation {
         Animated::Constant { value } => vector(value),
+        Animated::Data(_) => Vec2::default(),
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
             Segment::Between(left, right, amount) => Vec2::new(
                 interpolate_f32(left.value.x.value(), right.value.x.value(), amount),
@@ -518,6 +572,7 @@ pub fn sample_offset(animation: &Animated<LayoutOffset>, time: MediaTime) -> Vec
 pub fn sample_length(animation: &Animated<LayoutLength>, time: MediaTime) -> LayoutLength {
     match animation {
         Animated::Constant { value } => *value,
+        Animated::Data(_) => LayoutLength::Fraction(0.0),
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
             Segment::Between(left, right, amount) => left.value.with_value(interpolate_f32(
                 left.value.value(),
@@ -535,6 +590,7 @@ pub fn sample_length(animation: &Animated<LayoutLength>, time: MediaTime) -> Lay
 pub fn sample_hold<T: Clone + Default>(animation: &Animated<T>, time: MediaTime) -> T {
     match animation {
         Animated::Constant { value } => value.clone(),
+        Animated::Data(_) => T::default(),
         Animated::Keyframes { keyframes } => {
             let next = keyframes.partition_point(|keyframe| keyframe.time <= time);
             keyframes

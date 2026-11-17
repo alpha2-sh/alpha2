@@ -44,6 +44,8 @@ pub enum ShapeItem {
     /// enclosing group's for paints and trims after the group.
     Group {
         /// The group's items, front first.
+        #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_SHAPE_ITEMS }>")]
+        #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_SHAPE_ITEMS)))]
         items: Vec<ShapeItem>,
         /// Where the group lies, and how opaque it is.
         #[serde(default)]
@@ -191,6 +193,8 @@ pub struct PathGeometry {
 pub struct Path {
     /// The subpaths, at most [`MAX_PATH_SUBPATHS`], with at most [`MAX_PATH_VERTICES`] vertices
     /// in total.
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_PATH_SUBPATHS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_PATH_SUBPATHS)))]
     pub subpaths: Vec<Subpath>,
 }
 
@@ -203,6 +207,8 @@ pub struct Subpath {
     #[serde(default)]
     pub closed: bool,
     /// The vertices, in order.
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_PATH_VERTICES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_PATH_VERTICES)))]
     pub vertices: Vec<PathVertex>,
 }
 
@@ -332,6 +338,8 @@ pub struct Dash {
     /// Alternating dash and gap lengths, as fractions of the shorter side: one to
     /// [`MAX_DASH_ENTRIES`] non-negative entries, not all zero. An odd count repeats once more to
     /// pair up.
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_DASH_ENTRIES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_DASH_ENTRIES)))]
     pub pattern: Vec<Animated<f32>>,
     /// How far into the pattern the stroke starts.
     #[serde(default = "zero")]
@@ -548,7 +556,7 @@ fn validate_ellipse(geometry: &EllipseGeometry, at: &str) -> Checked {
 fn validate_polystar(geometry: &PolystarGeometry, at: &str) -> Checked {
     point(&geometry.center, &format!("{at}.center"))?;
     scalar(&geometry.points, &format!("{at}.points"), |points| {
-        (MIN_POLYSTAR_POINTS..=MAX_POLYSTAR_POINTS).contains(&points)
+        crate::Domain::POLYSTAR_POINTS.contains(points)
     })?;
     scalar(
         &geometry.outer_radius,
@@ -617,6 +625,7 @@ fn validate_stroke(stroke: &StrokeItem, at: &str) -> Checked {
         let positive = dash.pattern.iter().any(|entry| match entry {
             Animated::Constant { value } => *value > 0.0,
             Animated::Keyframes { keyframes } => keyframes.iter().any(|key| key.value > 0.0),
+            Animated::Data(_) => true,
         });
         if !positive {
             return Err(ShapeIssue::new(
@@ -650,6 +659,7 @@ fn validate_path(path: &Animated<Path>, at: &str) -> Checked {
             .ok_or_else(|| ShapeIssue::new(at, ShapeProblem::OutOfRange))
     };
     match path {
+        Animated::Data(_) => Err(ShapeIssue::new(at, ShapeProblem::OutOfRange)),
         Animated::Constant { value } => check_one(value),
         Animated::Keyframes { keyframes } => {
             if !valid_keyframes(keyframes) {
@@ -719,7 +729,7 @@ impl ShapeItem {
 pub(crate) fn for_each_keyed_item(
     items: &[ShapeItem],
     at: &str,
-    visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+    visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>),
 ) {
     for (index, item) in items.iter().enumerate() {
         item.for_each_keyed(&format!("{at}[{index}]"), visit);
@@ -731,7 +741,7 @@ impl ShapeItem {
     pub(crate) fn for_each_keyed(
         &self,
         at: &str,
-        visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+        visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>),
     ) {
         match self {
             Self::Group { items, transform } => {
@@ -788,7 +798,7 @@ impl ShapeGeometry {
     pub(crate) fn for_each_keyed(
         &self,
         at: &str,
-        visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+        visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>),
     ) {
         match self {
             Self::Rectangle(geometry) => geometry.for_each_keyed(at, visit),
@@ -826,7 +836,7 @@ impl EllipseGeometry {
 }
 
 impl RectangleGeometry {
-    fn for_each_keyed(&self, at: &str, visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime])) {
+    fn for_each_keyed(&self, at: &str, visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>)) {
         visit_keyed_point(&format!("{at}.center"), &self.center, visit);
         visit_keyed(&format!("{at}.size"), &self.size, visit);
         visit_keyed(&format!("{at}.corner_radius"), &self.corner_radius, visit);
@@ -839,7 +849,7 @@ impl RectangleGeometry {
 }
 
 impl EllipseGeometry {
-    fn for_each_keyed(&self, at: &str, visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime])) {
+    fn for_each_keyed(&self, at: &str, visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>)) {
         visit_keyed_point(&format!("{at}.center"), &self.center, visit);
         visit_keyed(&format!("{at}.size"), &self.size, visit);
         visit_keyed(
@@ -851,7 +861,7 @@ impl EllipseGeometry {
 }
 
 impl PolystarGeometry {
-    fn for_each_keyed(&self, at: &str, visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime])) {
+    fn for_each_keyed(&self, at: &str, visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>)) {
         visit_keyed_point(&format!("{at}.center"), &self.center, visit);
         visit_keyed(&format!("{at}.points"), &self.points, visit);
         visit_keyed(&format!("{at}.outer_radius"), &self.outer_radius, visit);

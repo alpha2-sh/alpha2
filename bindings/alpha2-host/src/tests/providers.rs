@@ -62,7 +62,7 @@ fn extension_sources_export_through_their_providers() {
     let request = |frames: Value, output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "extensions", "operation": "export",
+                "protocolVersion": 2, "requestId": "extensions", "operation": "export",
                 "project": extension_project(),
                 "assets": {
                     "gif": extension_corpus("animation.gif"),
@@ -169,7 +169,7 @@ fn extension_sources_export_through_their_providers() {
     assert_unrequested(&result["memoryPolicy"]["inFlightBytes"]);
     let mut starved = parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "starved", "operation": "export",
+            "protocolVersion": 2, "requestId": "starved", "operation": "export",
             "project": extension_project(),
             "assets": {
                 "gif": extension_corpus("animation.gif"),
@@ -198,7 +198,7 @@ fn extension_sources_export_through_their_providers() {
     assert!(!directory.join("starved.mp4").exists());
     starved = parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "zero", "operation": "export",
+            "protocolVersion": 2, "requestId": "zero", "operation": "export",
             "project": extension_project(), "assets": {}, "startTicks": 0, "endTicks": 1,
             "frameRate": {"num": 10, "den": 1}, "memory": {"decodeQueueBytes": 0},
             "output": directory.join("zero.mp4")
@@ -228,7 +228,7 @@ fn a_lottie_source_conforms_for_the_animation_it_shows() {
         let output = directory.join(name);
         let request = parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "lottie-item", "operation": "export",
+                "protocolVersion": 2, "requestId": "lottie-item", "operation": "export",
                 "project": {
                     "schema_version": 1, "id": "lottie", "name": "Lottie",
                     "settings": {"width": 64, "height": 48, "frame_rate": {"num": 10, "den": 1}, "sample_rate": 48_000},
@@ -289,7 +289,7 @@ fn a_document_file_past_its_limit_is_refused_before_it_is_read() {
     ] {
         let path = directory.join(name);
         sparse_tebibyte(&path, head);
-        let error = crate::providers::read_source(&path, spec).expect_err(name);
+        let error = alpha2_host_core::providers::read_source(&path, spec).expect_err(name);
         assert!(
             matches!(&error, alpha2_extensions::ExtensionError::Budget(message)
                 if message.contains(what) && message.contains("1099511627776 bytes")),
@@ -299,7 +299,8 @@ fn a_document_file_past_its_limit_is_refused_before_it_is_read() {
     let path = directory.join("small.svg");
     std::fs::write(&path, b"<svg/>").expect("file");
     assert_eq!(
-        crate::providers::read_source(&path, &alpha2_model::ProviderSource::Svg).expect("read"),
+        alpha2_host_core::providers::read_source(&path, &alpha2_model::ProviderSource::Svg)
+            .expect("read"),
         b"<svg/>"
     );
 }
@@ -337,15 +338,26 @@ fn a_lottie_source_past_its_limit_fails_conform_unread() {
     );
 }
 
+/// Whether this build reads the format of each of [`extension_project`]'s sources. What the
+/// extensions crate was built with decides it, not this crate's `extensions` feature: another
+/// package of the same build can turn its providers on.
+fn extension_sources_read() -> [(&'static str, bool); 3] {
+    let names = alpha2_extensions::Registry::with_defaults().names();
+    [
+        ("seq", alpha2_extensions::Registry::reads_image_sequences()),
+        ("gif", names.contains(&"animated-image")),
+        ("logo", names.contains(&"svg")),
+    ]
+}
+
 #[test]
-#[cfg(not(feature = "extensions"))]
-fn a_build_without_extensions_refuses_their_sources() {
+fn sources_are_refused_exactly_when_the_build_has_no_provider_for_them() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("no-extensions");
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let request = parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "no-extensions", "operation": "export",
+            "protocolVersion": 2, "requestId": "no-extensions", "operation": "export",
             "project": extension_project(),
             "assets": {
                 "gif": extension_corpus("animation.gif"),
@@ -360,14 +372,23 @@ fn a_build_without_extensions_refuses_their_sources() {
         .to_string(),
     )
     .expect("request");
-    let error = host
-        .handle(request, &mut |_| Ok(()))
-        .expect_err("no provider reads these sources");
+    let read = extension_sources_read();
+    if cfg!(feature = "extensions") {
+        assert!(read.iter().all(|(_, read)| *read), "{read:?}");
+    }
+    let result = host.handle(request, &mut |_| Ok(()));
+    if read.iter().all(|(_, read)| *read) {
+        result.expect("every source has a provider");
+        assert!(directory.join("refused.mp4").exists());
+        return;
+    }
+    let error = result.expect_err("a source no provider reads");
     assert_eq!(error.code, "CONFORM_FAILED", "{}", error.message);
-    for source in ["seq", "gif", "logo"] {
-        assert!(
+    for (source, read) in read {
+        assert_eq!(
             error.message.contains(&format!("{source}: unsupported")),
-            "{}",
+            !read,
+            "{source}: {}",
             error.message
         );
     }
@@ -407,7 +428,7 @@ fn exr_sources_export_as_linear_light() {
     });
     let request = parse_request(
         &json!({
-            "protocolVersion": 1, "requestId": "exr", "operation": "export",
+            "protocolVersion": 2, "requestId": "exr", "operation": "export",
             "project": project,
             "assets": {"still": extension_corpus("half.exr")},
             "frames": {"seq": [extension_corpus("sequence_0001.exr"), extension_corpus("sequence_0002.exr")]},
@@ -476,9 +497,9 @@ fn an_exr_frame_is_handed_over_without_copying_its_halves() {
         .to_string(),
     )
     .expect("project");
-    let media = crate::providers::ProviderMedia::new(
+    let media = alpha2_host_core::providers::ProviderMedia::new(
         &project,
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([("still".to_owned(), extension_corpus("half.exr"))]),
             ..Default::default()
         },
@@ -541,9 +562,9 @@ fn a_sequence_reads_each_frame_file_when_the_export_shows_it() {
         })
         .collect::<Vec<_>>();
     let project = Project::from_json(&extension_project().to_string()).expect("project");
-    let media = crate::providers::ProviderMedia::new(
+    let media = alpha2_host_core::providers::ProviderMedia::new(
         &project,
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             frames: HashMap::from([("seq".to_owned(), paths.clone())]),
             ..Default::default()
         },
@@ -563,7 +584,7 @@ fn a_sequence_reads_each_frame_file_when_the_export_shows_it() {
     let error = media
         .frame(&seq, MediaTime::from_ticks(36_000), 3)
         .expect_err("frame 3 is gone");
-    assert!(error.contains("sequence_0010.png"), "{error}");
+    assert!(error.message.contains("sequence_0010.png"), "{error}");
     std::fs::remove_dir_all(&directory).ok();
 }
 
@@ -590,7 +611,7 @@ fn an_svg_draws_with_the_fonts_its_export_read_at_its_start() {
         std::fs::copy(corpus("../fonts/Alpha2Fixture.ttf"), &font).expect("font");
         let request = parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "svg-fonts", "operation": "export",
+                "protocolVersion": 2, "requestId": "svg-fonts", "operation": "export",
                 "project": project,
                 "assets": {"label": extension_corpus("label.svg")},
                 "fonts": [font],
@@ -635,7 +656,7 @@ fn provider_diagnostics_are_reported_with_the_export_and_its_failure() {
     let request = |output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "provider-diagnostics", "operation": "export",
+                "protocolVersion": 2, "requestId": "provider-diagnostics", "operation": "export",
                 "project": {
                     "schema_version": 1, "id": "label", "name": "Label",
                     "settings": {"width": 96, "height": 64, "frame_rate": {"num": 10, "den": 1}, "sample_rate": 48_000},
@@ -691,7 +712,7 @@ fn an_svg_draws_the_image_files_its_resources_give_it() {
     let request = |output: &Path, resources: Value| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "provider-resources", "operation": "export",
+                "protocolVersion": 2, "requestId": "provider-resources", "operation": "export",
                 "project": {
                     "schema_version": 1, "id": "badge", "name": "Badge",
                     "settings": {"width": 96, "height": 64, "frame_rate": {"num": 10, "den": 1}, "sample_rate": 48_000},
@@ -751,6 +772,76 @@ fn an_svg_draws_the_image_files_its_resources_give_it() {
     assert_eq!(refused.code, "INVALID_INPUT", "{}", refused.message);
     assert!(refused.message.contains("elsewhere"), "{}", refused.message);
     std::fs::remove_dir_all(&directory).ok();
+}
+
+/// The provider budget sees the images an SVG source holds, not only its last raster.
+#[cfg(feature = "extensions")]
+#[test]
+fn svg_sources_holding_images_are_closed_for_the_budget_once_off_screen() {
+    let directory = scratch_directory("svg-image-budget");
+    // A 4x4 PNG header padded to 1 MiB with a text chunk.
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x04\0\0\0\x04\x08\x06\0\0\0".to_vec();
+    png.extend_from_slice(&[0xa9, 0xf1, 0x9e, 0x7e]);
+    png.extend_from_slice(&u32::to_be_bytes(1 << 20));
+    png.extend_from_slice(b"tEXt");
+    png.resize(png.len() + (1 << 20), b'x');
+    png.extend_from_slice(&[0; 4]);
+    png.extend_from_slice(b"\0\0\0\0IEND\xaeB`\x82");
+    let photo = directory.join("photo.png");
+    std::fs::write(&photo, &png).expect("photo");
+    let mut files = alpha2_host_core::providers::ProviderFiles::default();
+    for source in ["a", "b"] {
+        let path = directory.join(format!("{source}.svg"));
+        std::fs::write(
+            &path,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="96" height="64"><image width="96" height="64" href="photo.png"/></svg>"#,
+        )
+        .expect("svg");
+        files.originals.insert(source.to_owned(), path);
+        files.resources.insert(
+            source.to_owned(),
+            HashMap::from([("photo.png".to_owned(), photo.clone())]),
+        );
+    }
+    let clip = |id: &str, source: &str| {
+        json!({"id": id, "source_id": source,
+               "timeline_range": {"start": 0, "end": 360_000},
+               "source_range": {"start": 0, "end": 360_000}})
+    };
+    let project = Project::from_json(
+        &json!({
+            "schema_version": 1, "id": "images", "name": "Images",
+            "settings": {"width": 96, "height": 64, "frame_rate": {"num": 10, "den": 1}, "sample_rate": 48_000},
+            "sources": [
+                {"id": "a", "locator": "asset://a", "kind": "image", "provider": {"format": "svg"}},
+                {"id": "b", "locator": "asset://b", "kind": "image", "provider": {"format": "svg"}}
+            ],
+            "timeline": {"tracks": [
+                {"id": "v1", "name": "V1", "kind": "video", "clips": [clip("ca", "a")]},
+                {"id": "v2", "name": "V2", "kind": "video", "clips": [clip("cb", "b")]}
+            ]}
+        })
+        .to_string(),
+    )
+    .expect("project");
+    let media = alpha2_host_core::providers::ProviderMedia::new(&project, files, (96, 64), 3 << 19);
+    media
+        .frame(&provider_reader("a", "ca"), MediaTime::ZERO, 0)
+        .expect("a");
+    assert!(
+        media.resident_bytes() > 1 << 20,
+        "{}",
+        media.resident_bytes()
+    );
+    media
+        .frame(&provider_reader("b", "cb"), MediaTime::ZERO, 5)
+        .expect("b");
+    assert_eq!(media.open_sources(), 1, "a was last shown at frame 0");
+    assert!(
+        media.resident_bytes() < 3 << 19,
+        "{}",
+        media.resident_bytes()
+    );
 }
 
 #[cfg(feature = "extensions")]
@@ -813,9 +904,9 @@ fn readers_of_one_animated_image_keep_their_own_positions() {
     let directory = scratch_directory("animation-readers");
     let path = directory.join("long.png");
     write_paced_apng(&path, 8, 60);
-    let media = crate::providers::ProviderMedia::new(
+    let media = alpha2_host_core::providers::ProviderMedia::new(
         &two_reader_project(),
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([
                 ("anim".to_owned(), path),
                 ("logo".to_owned(), extension_corpus("shapes.svg")),
@@ -856,7 +947,7 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     let directory = scratch_directory("animation-shared");
     let path = directory.join("long.png");
     write_paced_apng(&path, 32, FRAMES);
-    let files = || crate::providers::ProviderFiles {
+    let files = || alpha2_host_core::providers::ProviderFiles {
         originals: HashMap::from([
             ("anim".to_owned(), path.clone()),
             ("logo".to_owned(), extension_corpus("shapes.svg")),
@@ -868,7 +959,10 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     let _watch = alpha2_extensions::watch_progress(move || counter.set(counter.get() + 1));
     let at = |index: u64| MediaTime::from_ticks(i64::try_from(index).expect("index") * 12_000);
     let reader = |index: u64| provider_reader("anim", &format!("r{index}"));
-    let shown = |media: &crate::providers::ProviderMedia, reader_index: u64, index: u64, frame| {
+    let shown = |media: &alpha2_host_core::providers::ProviderMedia,
+                 reader_index: u64,
+                 index: u64,
+                 frame| {
         let shown = media
             .frame(&reader(reader_index), at(index), frame)
             .expect("frame");
@@ -879,8 +973,12 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
         );
     };
 
-    let one =
-        crate::providers::ProviderMedia::new(&two_reader_project(), files(), (96, 64), u64::MAX);
+    let one = alpha2_host_core::providers::ProviderMedia::new(
+        &two_reader_project(),
+        files(),
+        (96, 64),
+        u64::MAX,
+    );
     shown(&one, 0, 0, 0);
     let one_reader = one.resident_bytes();
     assert_eq!(
@@ -890,8 +988,12 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     );
 
     decoded.set(0);
-    let media =
-        crate::providers::ProviderMedia::new(&two_reader_project(), files(), (96, 64), u64::MAX);
+    let media = alpha2_host_core::providers::ProviderMedia::new(
+        &two_reader_project(),
+        files(),
+        (96, 64),
+        u64::MAX,
+    );
     for index in 0..READERS {
         shown(&media, index, index * 5, 0);
     }
@@ -917,7 +1019,12 @@ fn readers_of_one_animated_image_share_its_decode_and_kept_frames() {
     }
     assert_eq!(decoded.get(), u64::from(FRAMES));
 
-    let tight = crate::providers::ProviderMedia::new(&two_reader_project(), files(), (96, 64), 1);
+    let tight = alpha2_host_core::providers::ProviderMedia::new(
+        &two_reader_project(),
+        files(),
+        (96, 64),
+        1,
+    );
     for index in 0..READERS {
         shown(&tight, index, index, index);
     }
@@ -940,9 +1047,9 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
     let directory = scratch_directory("animation-opening");
     let path = directory.join("long.png");
     write_paced_apng(&path, 8, FRAMES);
-    let media = Arc::new(crate::providers::ProviderMedia::new(
+    let media = Arc::new(alpha2_host_core::providers::ProviderMedia::new(
         &two_reader_project(),
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([
                 ("anim".to_owned(), path),
                 ("logo".to_owned(), extension_corpus("shapes.svg")),
@@ -1023,9 +1130,9 @@ fn different_provider_sources_are_drawn_at_once() {
     let directory = scratch_directory("provider-locks");
     let path = directory.join("long.png");
     write_paced_apng(&path, 8, 4);
-    let media = Arc::new(crate::providers::ProviderMedia::new(
+    let media = Arc::new(alpha2_host_core::providers::ProviderMedia::new(
         &two_reader_project(),
-        crate::providers::ProviderFiles {
+        alpha2_host_core::providers::ProviderFiles {
             originals: HashMap::from([
                 ("anim".to_owned(), path),
                 ("logo".to_owned(), extension_corpus("shapes.svg")),
@@ -1115,7 +1222,7 @@ fn provider_succession_project() -> Value {
 #[cfg(feature = "extensions")]
 fn the_provider_sources_an_export_keeps_open_hold_at_most_their_budget() {
     let project = Project::from_json(&provider_succession_project().to_string()).expect("project");
-    let files = || crate::providers::ProviderFiles {
+    let files = || alpha2_host_core::providers::ProviderFiles {
         originals: HashMap::from([
             ("gif".to_owned(), extension_corpus("animation.gif")),
             ("gif2".to_owned(), extension_corpus("animation.gif")),
@@ -1125,15 +1232,18 @@ fn the_provider_sources_an_export_keeps_open_hold_at_most_their_budget() {
     };
     let source = |id: &str| provider_reader(id, &format!("{id}-clip"));
     let at = |ms: i64| MediaTime::from_ticks(ms * 120);
-    let unbounded = crate::providers::ProviderMedia::new(&project, files(), (96, 64), u64::MAX);
+    let unbounded =
+        alpha2_host_core::providers::ProviderMedia::new(&project, files(), (96, 64), u64::MAX);
     unbounded.frame(&source("gif"), at(0), 0).expect("gif");
     let one_gif = unbounded.resident_bytes();
     assert!(one_gif > 0);
     unbounded.frame(&source("logo"), at(0), 0).expect("logo");
     let logo = unbounded.resident_bytes() - one_gif;
     assert!(logo > 0 && logo < one_gif);
-    let media = crate::providers::ProviderMedia::new(&project, files(), (96, 64), one_gif);
-    let reference = crate::providers::ProviderMedia::new(&project, files(), (96, 64), u64::MAX);
+    let media =
+        alpha2_host_core::providers::ProviderMedia::new(&project, files(), (96, 64), one_gif);
+    let reference =
+        alpha2_host_core::providers::ProviderMedia::new(&project, files(), (96, 64), u64::MAX);
     // (output frame, the sources it shows at a source time, what stays open after it)
     let frames: [(u64, &[&str], i64, u64); 9] = [
         (0, &["gif"], 0, one_gif),
@@ -1176,7 +1286,7 @@ fn an_export_closes_provider_sources_past_its_budget_and_writes_the_same_file() 
         host.handle(
             parse_request(
                 &json!({
-                    "protocolVersion": 1, "requestId": "provider-budget", "operation": "export",
+                    "protocolVersion": 2, "requestId": "provider-budget", "operation": "export",
                     "project": provider_succession_project(),
                     "assets": {
                         "gif": extension_corpus("animation.gif"),
@@ -1291,7 +1401,7 @@ fn a_latex_source_needs_no_file_and_a_formula_that_does_not_typeset_fails_confor
     let still = |latex: &str| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "operation": "still", "requestId": "latex",
+                "protocolVersion": 2, "operation": "still", "requestId": "latex",
                 "project": project(latex), "assets": {},
                 "stills": [{"time": 0, "output": output}]
             })

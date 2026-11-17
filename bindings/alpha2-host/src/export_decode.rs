@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use crate::config::{
     DecoderSessionCount, configured_decode_concurrency, configured_decode_lookahead,
     configured_decoder_session_override, configured_reverse_hardware_surfaces,
-    decoder_session_bytes, decoder_session_count, visual_decode_reads,
+    decoder_session_bytes, decoder_session_count,
 };
 use crate::decode::{CursorReads, DecodeWorkerConfig};
 use crate::frames::NativeGpuFrames;
@@ -33,13 +33,13 @@ pub struct ExportDecodePlan {
     /// software encoder; zero otherwise.
     pub source_frame_pixels: u64,
     pub source_probe: Duration,
-    pub providers: Arc<crate::providers::ProviderMedia>,
+    pub providers: Arc<alpha2_host_core::providers::ProviderMedia>,
 }
 
 impl ExportDecodePlan {
     pub(crate) fn new(
         split: ExportCodecSplit,
-        providers: Arc<crate::providers::ProviderMedia>,
+        providers: Arc<alpha2_host_core::providers::ProviderMedia>,
     ) -> Self {
         Self {
             hardware_decode: split.hardware_decode,
@@ -140,8 +140,8 @@ impl Host {
         &self,
         project: &Project,
         size: RenderSize,
-    ) -> Arc<crate::providers::ProviderMedia> {
-        let providers = Arc::new(crate::providers::ProviderMedia::new(
+    ) -> Arc<alpha2_host_core::providers::ProviderMedia> {
+        let providers = Arc::new(alpha2_host_core::providers::ProviderMedia::new(
             project,
             self.provider_files.clone(),
             (size.width, size.height),
@@ -164,7 +164,8 @@ impl Host {
         // The synchronous comparison path decodes in software on the coordinator.
         let hardware_decode = pipeline_enabled && self.hardware_decode_ready();
         let decode_lookahead = configured_decode_lookahead(pipeline_enabled);
-        let (workload_parallelism, reads) = visual_decode_reads(project, range);
+        let (workload_parallelism, reads) =
+            alpha2_host_core::cursor::visual_decode_reads(project, range);
         let probe_started = Instant::now();
         let admitted = *self
             .largest_video_frames
@@ -244,16 +245,19 @@ impl Host {
 
     pub(crate) fn export_gpu_frames(&self, size: RenderSize, project: &Project) -> NativeGpuFrames {
         #[cfg(all(target_os = "linux", feature = "hwdecode"))]
-        let mut gpu_frames = NativeGpuFrames::with_vulkan(size, self.decode_vulkan());
+        let mut gpu_frames =
+            NativeGpuFrames::with_vulkan(size, self.cache_scope, self.decode_vulkan());
         #[cfg(all(target_os = "macos", feature = "hwdecode"))]
-        let mut gpu_frames = NativeGpuFrames::with_metal(size, self.decode_metal());
+        let mut gpu_frames =
+            NativeGpuFrames::with_metal(size, self.cache_scope, self.decode_metal());
         #[cfg(all(target_os = "windows", feature = "hwdecode"))]
-        let mut gpu_frames = NativeGpuFrames::with_d3d12(size, self.decode_d3d12());
+        let mut gpu_frames =
+            NativeGpuFrames::with_d3d12(size, self.cache_scope, self.decode_d3d12());
         #[cfg(not(all(
             any(target_os = "linux", target_os = "macos", target_os = "windows"),
             feature = "hwdecode"
         )))]
-        let mut gpu_frames = NativeGpuFrames::new(size);
+        let mut gpu_frames = NativeGpuFrames::new(size, self.cache_scope);
         gpu_frames.import_fallback = !self.decode_policy.requires_hardware();
         gpu_frames.color = alpha2_engine::color_policy(&project.settings.color);
         #[cfg(test)]

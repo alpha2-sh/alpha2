@@ -1,0 +1,791 @@
+//! Whether `serve` takes new requests, and the soft limits after which it retires.
+//!
+//! The host decides when a new process would serve better than itself and reports `draining`;
+//! a client only follows. Limits on what the whole process holds (memory, handles) are compared
+//! only at an answer after which nothing runs, so they never count a running request's share.
+
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+use crate::PROTOCOL_VERSION;
+use crate::serve_io::Responder;
+
+/// How long a draining host keeps answering `HOST_RETIRING` for a client that has not closed its
+/// input yet.
+pub(crate) const DRAIN_GRACE: Duration = Duration::from_secs(5);
+
+const DEFAULT_MAX_MEMORY_SHARE: f64 = 0.5;
+const DEFAULT_MAX_MEMORY_GROWTH_BYTES: u64 = 1 << 30;
+const DEFAULT_MAX_REQUESTS: u64 = 1000;
+const DEFAULT_MAX_HANDLES: u64 = 4096;
+const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_MAX_RUNNING: usize = 1;
+
+/// `serve`'s flags.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ServeOptions {
+    pub limits: SoftLimits,
+    /// How many requests run at once at most.
+    pub max_running: usize,
+    /// Extraction's step timeout and plugin limits.
+    pub extract: crate::extract_request::ExtractOptions,
+}
+
+impl ServeOptions {
+    /// Reads `serve`'s flags over the defaults.
+    ///
+    /// # Errors
+    /// An unknown flag, a missing value or one out of range.
+    pub(crate) fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
+        let mut max_running = DEFAULT_MAX_RUNNING;
+        let mut extract = crate::extract_request::ExtractOptions::default();
+        let mut plugins = crate::plugin_policy::PluginPolicy::DEFAULT;
+        let mut rest = Vec::new();
+        let mut args = args.into_iter();
+        while let Some(flag) = args.next() {
+            let mut number = |what: &str| -> Result<u64, String> {
+                let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
+                value
+                    .parse::<u64>()
+                    .map_err(|_| format!("{flag} takes {what}, got {value}"))
+            };
+            if flag == "--extract-step-timeout" {
+                let millis = number("milliseconds")?;
+                extract.step_timeout = (millis > 0).then(|| Duration::from_millis(millis));
+            } else if flag == "--plugin-call-timeout" {
+                let millis = number("milliseconds")?;
+                if millis == 0 {
+                    return Err(format!("{flag} takes milliseconds from 1"));
+                }
+                extract.plugin_call_deadline = Duration::from_millis(millis);
+            } else if flag == "--plugin-memory-limit" {
+                let bytes = number("bytes")?;
+                let most = alpha2_host_core::plugins::MAX_MEMORY_BYTES;
+                if bytes == 0 || bytes > most {
+                    return Err(format!("{flag} takes bytes from 1 to {most}"));
+                }
+                extract.plugin_memory_bytes = bytes;
+            } else if matches!(
+                flag.as_str(),
+                "--plugins" | "--plugin-origins" | "--plugin-root"
+            ) {
+                let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
+                match flag.as_str() {
+                    "--plugins" => plugins.set_mode(&value)?,
+                    "--plugin-origins" => plugins.set_origins(&value)?,
+                    _ => plugins.set_root(&value)?,
+                }
+            } else if flag == "--max-running" {
+                let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
+                max_running = value
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|count| *count > 0)
+                    .ok_or_else(|| format!("{flag} takes a count from 1, got {value}"))?;
+            } else {
+                rest.push(flag);
+            }
+        }
+        if plugins != crate::plugin_policy::DEFAULT_POLICY {
+            // Read once per process; the leak keeps the options `Copy`.
+            extract.plugins = Box::leak(Box::new(plugins));
+        }
+        Ok(Self {
+            limits: SoftLimits::from_args(rest)?,
+            max_running,
+            extract,
+        })
+    }
+}
+
+/// `None` turns a limit off.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SoftLimits {
+    pub max_memory_share: Option<f64>,
+    pub max_memory_growth_bytes: Option<u64>,
+    pub max_requests: Option<u64>,
+    pub max_handles: Option<u64>,
+    pub idle_timeout: Option<Duration>,
+    /// Whether a degradation a new process would not have drains the host.
+    pub drain_degraded: bool,
+}
+
+impl Default for SoftLimits {
+    fn default() -> Self {
+        // Half the descriptor limit leaves room for the request that crosses the limit.
+        let handles = alpha2_os::open_file_limit().map_or(DEFAULT_MAX_HANDLES, |limit| {
+            DEFAULT_MAX_HANDLES.min(limit / 2)
+        });
+        Self {
+            max_memory_share: Some(DEFAULT_MAX_MEMORY_SHARE),
+            max_memory_growth_bytes: Some(DEFAULT_MAX_MEMORY_GROWTH_BYTES),
+            max_requests: Some(DEFAULT_MAX_REQUESTS),
+            max_handles: Some(handles.max(1)),
+            idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
+            drain_degraded: true,
+        }
+    }
+}
+
+impl SoftLimits {
+    #[cfg(test)]
+    pub(crate) const OFF: Self = Self {
+        max_memory_share: None,
+        max_memory_growth_bytes: None,
+        max_requests: None,
+        max_handles: None,
+        idle_timeout: None,
+        drain_degraded: false,
+    };
+
+    /// Reads `serve`'s flags over the defaults; `0` turns a limit off.
+    ///
+    /// # Errors
+    /// An unknown flag, a missing value or one out of range.
+    pub(crate) fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
+        let mut limits = Self::default();
+        let mut args = args.into_iter();
+        while let Some(flag) = args.next() {
+            let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
+            let count = || {
+                value
+                    .parse::<u64>()
+                    .map_err(|_| format!("{flag} takes a whole number, got {value}"))
+            };
+            match flag.as_str() {
+                "--max-memory-share" => {
+                    let share = value
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|share| (0.0..=1.0).contains(share))
+                        .ok_or_else(|| {
+                            format!("{flag} takes a fraction from 0 to 1, got {value}")
+                        })?;
+                    limits.max_memory_share = (share > 0.0).then_some(share);
+                }
+                "--max-memory-growth" => limits.max_memory_growth_bytes = nonzero(count()?),
+                "--max-requests" => limits.max_requests = nonzero(count()?),
+                "--max-handles" => limits.max_handles = nonzero(count()?),
+                "--idle-timeout" => {
+                    limits.idle_timeout = nonzero(count()?).map(Duration::from_millis);
+                }
+                _ => return Err(format!("unknown serve flag {flag}")),
+            }
+        }
+        Ok(limits)
+    }
+
+    fn to_json(self) -> Value {
+        json!({
+            "maxMemoryShare": self.max_memory_share,
+            "maxMemoryGrowthBytes": self.max_memory_growth_bytes,
+            "maxRequests": self.max_requests,
+            "maxHandles": self.max_handles,
+            "idleTimeoutMs": self.idle_timeout.map(|limit| limit.as_millis()),
+        })
+    }
+}
+
+impl SoftLimits {
+    /// The first limit `life` and `usage` are over. Memory and handles are the whole process's,
+    /// so they are compared only while nothing runs.
+    fn over(self, life: &Life, usage: &Usage) -> Option<DrainReason> {
+        let quiet = life.running == 0;
+        #[allow(clippy::cast_precision_loss)]
+        if let (true, Some(share), Some(footprint), Some(capacity)) = (
+            quiet,
+            self.max_memory_share,
+            usage.footprint,
+            usage.capacity,
+        ) && footprint as f64 > share * capacity as f64
+        {
+            return Some(DrainReason::Memory);
+        }
+        if let (true, Some(growth), Some(footprint), Some(baseline)) = (
+            quiet,
+            self.max_memory_growth_bytes,
+            usage.footprint,
+            life.baseline_footprint,
+        ) && footprint.saturating_sub(baseline) > growth
+        {
+            return Some(DrainReason::MemoryGrowth);
+        }
+        if self
+            .max_requests
+            .is_some_and(|limit| life.requests_served >= limit)
+        {
+            return Some(DrainReason::Requests);
+        }
+        if let (true, Some(limit), Some(open)) = (quiet, self.max_handles, usage.handles)
+            && open > limit
+        {
+            return Some(DrainReason::Handles);
+        }
+        if self.drain_degraded && usage.degraded {
+            return Some(DrainReason::Degraded);
+        }
+        None
+    }
+}
+
+const fn nonzero(value: u64) -> Option<u64> {
+    if value == 0 { None } else { Some(value) }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HostState {
+    Ready,
+    Draining,
+}
+
+impl HostState {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Draining => "draining",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DrainReason {
+    Memory,
+    MemoryGrowth,
+    Requests,
+    Handles,
+    Degraded,
+    Idle,
+    DeviceLost,
+    ThreadsAbandoned,
+    Terminating,
+    InputClosed,
+    /// A request panicked; shared state may be as the unwind left it.
+    Defect,
+}
+
+impl DrainReason {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Memory => "memory",
+            Self::MemoryGrowth => "memory-growth",
+            Self::Requests => "requests",
+            Self::Handles => "handles",
+            Self::Degraded => "degraded",
+            Self::Idle => "idle",
+            Self::DeviceLost => "device-lost",
+            Self::ThreadsAbandoned => "threads-abandoned",
+            Self::Terminating => "terminating",
+            Self::InputClosed => "input-closed",
+            Self::Defect => "defect",
+        }
+    }
+
+    /// The process cannot run another request and exits once it has answered.
+    pub(crate) const fn exits_at_once(self) -> bool {
+        matches!(self, Self::DeviceLost | Self::ThreadsAbandoned)
+    }
+}
+
+/// What the renderer the host made says about itself.
+pub(crate) struct RendererFacts {
+    pub renderer: &'static str,
+    pub fallback: Option<String>,
+    pub hardware_decode_fallback: Option<String>,
+}
+
+#[derive(Default)]
+struct Life {
+    draining: Option<(DrainReason, Instant)>,
+    requests_served: u64,
+    running: usize,
+    /// Taken at the first answer after which nothing runs, and again after the renderer is made.
+    baseline_footprint: Option<u64>,
+    /// A request's panic was caught.
+    defect: bool,
+    renderer: Option<RendererFacts>,
+}
+
+/// Shared by the request thread, which changes it, and the reader thread, which answers `status`.
+pub(crate) struct Lifecycle {
+    limits: SoftLimits,
+    life: Mutex<Life>,
+}
+
+impl Lifecycle {
+    pub(crate) fn new(limits: SoftLimits) -> Self {
+        Self {
+            limits,
+            life: Mutex::default(),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Life> {
+        self.life.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) const fn idle_timeout(&self) -> Option<Duration> {
+        self.limits.idle_timeout
+    }
+
+    pub(crate) fn state(&self) -> HostState {
+        if self.lock().draining.is_some() {
+            HostState::Draining
+        } else {
+            HostState::Ready
+        }
+    }
+
+    /// When the host started draining, if it has.
+    pub(crate) fn draining_since(&self) -> Option<(DrainReason, Instant)> {
+        self.lock().draining
+    }
+
+    /// Records the renderer. Making it grows the process, so the memory baseline is taken again.
+    pub(crate) fn set_renderer(&self, facts: RendererFacts) {
+        let mut life = self.lock();
+        life.renderer = Some(facts);
+        life.baseline_footprint = None;
+    }
+
+    pub(crate) fn record_defect(&self) {
+        self.lock().defect = true;
+    }
+
+    pub(crate) fn defect(&self) -> bool {
+        self.lock().defect
+    }
+
+    pub(crate) fn begin_request(&self) {
+        self.lock().running += 1;
+    }
+
+    /// Counts the answer and returns the first soft limit the host is over after it, if any.
+    pub(crate) fn end_request(&self) -> Option<DrainReason> {
+        self.end_with(&Usage::now())
+    }
+
+    fn end_with(&self, usage: &Usage) -> Option<DrainReason> {
+        let mut life = self.lock();
+        life.running = life.running.saturating_sub(1);
+        life.requests_served += 1;
+        if life.running == 0 && life.baseline_footprint.is_none() {
+            life.baseline_footprint = usage.footprint;
+        }
+        self.limits.over(&life, usage)
+    }
+
+    #[cfg(test)]
+    fn over_limit(&self, usage: &Usage) -> Option<DrainReason> {
+        self.limits.over(&self.lock(), usage)
+    }
+
+    /// Moves to `draining` and writes the `state` message. A host already draining keeps its
+    /// first reason and writes nothing.
+    ///
+    /// # Errors
+    /// When the output refuses the message.
+    pub(crate) fn drain(
+        &self,
+        reason: DrainReason,
+        out: &Responder,
+    ) -> Result<(), crate::protocol::HostError> {
+        {
+            let mut life = self.lock();
+            if life.draining.is_some() {
+                return Ok(());
+            }
+            life.draining = Some((reason, Instant::now()));
+        }
+        out.send(&self.state_message())
+    }
+
+    /// `{type: "state", state, reason, details}` as the host is now.
+    pub(crate) fn state_message(&self) -> Value {
+        let mut message = self.status();
+        message["protocolVersion"] = json!(PROTOCOL_VERSION);
+        message["type"] = json!("state");
+        message
+    }
+
+    /// `{state, reason, details}` as the host is now.
+    pub(crate) fn status(&self) -> Value {
+        let memory = alpha2_os::process_memory();
+        let capacity = alpha2_os::memory_capacity().effective_limit();
+        let handles = alpha2_os::open_handles();
+        let degradations = degradations();
+        let life = self.lock();
+        let (state, reason) = match life.draining {
+            Some((reason, _)) => (HostState::Draining, reason.as_str()),
+            None => (HostState::Ready, "started"),
+        };
+        let renderer = life.renderer.as_ref();
+        json!({
+            "state": state.as_str(),
+            "reason": reason,
+            "details": {
+                "hostVersion": env!("CARGO_PKG_VERSION"),
+                "activity": if life.running == 0 { "idle" } else { "busy" },
+                "runningRequests": life.running,
+                "requestsServed": life.requests_served,
+                "memory": {
+                    "residentBytes": memory.resident_bytes,
+                    "footprintBytes": memory.footprint_bytes.or(memory.resident_bytes),
+                    "baselineBytes": life.baseline_footprint,
+                    "capacityBytes": capacity,
+                },
+                "openHandles": handles,
+                "renderer": renderer.map(|facts| facts.renderer),
+                "rendererFallback": renderer.and_then(|facts| facts.fallback.clone()),
+                "hardwareDecodeFallback":
+                    renderer.and_then(|facts| facts.hardware_decode_fallback.clone()),
+                "degradations": degradations,
+                "limits": self.limits.to_json(),
+            },
+        })
+    }
+}
+
+/// What the soft limits are compared with.
+struct Usage {
+    footprint: Option<u64>,
+    capacity: Option<u64>,
+    handles: Option<u64>,
+    degraded: bool,
+}
+
+impl Usage {
+    fn now() -> Self {
+        Self {
+            footprint: footprint_bytes(),
+            capacity: alpha2_os::memory_capacity().effective_limit(),
+            handles: alpha2_os::open_handles(),
+            degraded: !degradations().is_empty(),
+        }
+    }
+}
+
+/// The footprint, else resident memory where the system reports no footprint.
+fn footprint_bytes() -> Option<u64> {
+    let memory = alpha2_os::process_memory();
+    memory.footprint_bytes.or(memory.resident_bytes)
+}
+
+/// What this process has lost that a new process would have again.
+fn degradations() -> Vec<String> {
+    #[allow(unused_mut)]
+    let mut lost = crate::render_cache::abandoned_directory_reasons();
+    #[cfg(all(target_os = "windows", feature = "hwencode"))]
+    lost.extend(alpha2_native::d3d12va_timeouts());
+    lost
+}
+
+static ANNOUNCED: OnceLock<(Arc<Lifecycle>, Arc<Responder>)> = OnceLock::new();
+
+/// Lets a termination that ends the process say so first ([`announce_termination`]).
+pub(crate) fn install(lifecycle: &Arc<Lifecycle>, out: &Arc<Responder>) {
+    let _ = ANNOUNCED.set((Arc::clone(lifecycle), Arc::clone(out)));
+}
+
+/// What `serve` installed, for a thread that answers outside a request's own.
+pub(crate) fn served() -> Option<&'static (Arc<Lifecycle>, Arc<Responder>)> {
+    ANNOUNCED.get()
+}
+
+/// Writes the `terminating` state message, when `serve` installed one and no other thread holds
+/// the output. Nothing may depend on it: the client may have closed the pipe or stopped reading.
+pub(crate) fn announce_termination() {
+    if let Some((lifecycle, out)) = ANNOUNCED.get() {
+        {
+            let mut life = lifecycle.lock();
+            if life.draining.is_some() {
+                return;
+            }
+            life.draining = Some((DrainReason::Terminating, Instant::now()));
+        }
+        let _ = out.try_send(&lifecycle.state_message());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(text: &str) -> Vec<String> {
+        text.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn serve_flags_override_the_defaults_and_zero_turns_a_limit_off() {
+        let limits = SoftLimits::from_args(args(
+            "--max-memory-share 0.25 --max-memory-growth 0 --max-requests 3 --max-handles 0 --idle-timeout 50",
+        ))
+        .expect("flags");
+        assert_eq!(limits.max_memory_share, Some(0.25));
+        assert_eq!(limits.max_memory_growth_bytes, None);
+        assert_eq!(limits.max_requests, Some(3));
+        assert_eq!(limits.max_handles, None);
+        assert_eq!(limits.idle_timeout, Some(Duration::from_millis(50)));
+        assert_eq!(SoftLimits::from_args(args("")), Ok(SoftLimits::default()));
+        let options =
+            ServeOptions::from_args(args("--max-requests 3 --max-running 4")).expect("flags");
+        assert_eq!(options.max_running, 4);
+        assert_eq!(options.limits.max_requests, Some(3));
+        assert_eq!(
+            ServeOptions::from_args(args("")).expect("none").max_running,
+            DEFAULT_MAX_RUNNING
+        );
+        assert!(ServeOptions::from_args(args("--max-running 0")).is_err());
+        for refused in [
+            "--max-memory-share 2",
+            "--max-requests -1",
+            "--max-requests",
+            "--idle-timeout soon",
+            "--restart-often 1",
+        ] {
+            assert!(SoftLimits::from_args(args(refused)).is_err(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn the_plugin_policy_flags_set_mode_origins_and_root() {
+        use crate::plugin_policy::{Origin, Origins, PluginMode, Root};
+        let policy = |flags: &str| ServeOptions::from_args(args(flags)).map(|o| o.extract.plugins);
+        let default = policy("").expect("none");
+        assert_eq!(*default, crate::plugin_policy::PluginPolicy::DEFAULT);
+        assert_eq!(default.mode, PluginMode::Wasm);
+        assert_eq!(default.origins, Origins::ManifestOnly);
+        assert_eq!(default.root, Root::Any);
+        for (flag, mode) in [
+            ("off", PluginMode::Off),
+            ("wasm", PluginMode::Wasm),
+            ("native", PluginMode::Native),
+        ] {
+            assert_eq!(policy(&format!("--plugins {flag}")).expect(flag).mode, mode);
+        }
+        assert_eq!(
+            policy("--plugin-origins none").expect("none").origins,
+            Origins::None
+        );
+        let listed =
+            policy("--plugin-origins https://A.example,https://b.example:8443/").expect("list");
+        assert_eq!(
+            listed.origins,
+            Origins::List(vec![
+                Origin::of_url("https://a.example").expect("origin"),
+                Origin::of_url("https://b.example:8443").expect("origin"),
+            ])
+        );
+        assert_eq!(policy("--plugin-root any").expect("any").root, Root::Any);
+        assert_eq!(policy("--plugin-root none").expect("none").root, Root::None);
+        let here = std::env::current_dir().expect("cwd");
+        assert_eq!(
+            policy("--plugin-root .").expect("relative").root,
+            Root::Dir(std::fs::canonicalize(&here).expect("canonical"))
+        );
+        for refused in [
+            "--plugins all",
+            "--plugins",
+            "--plugin-origins http://a.example",
+            "--plugin-origins https://a.example/path",
+            "--plugin-origins https://user@a.example",
+            "--plugin-origins https://a.example:port",
+            "--plugin-origins https://a.example,",
+            "--plugin-root /a/directory/that/does/not/exist",
+        ] {
+            assert!(policy(refused).is_err(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn the_plugin_memory_limit_is_at_most_2_gib() {
+        let options =
+            ServeOptions::from_args(args("--plugin-memory-limit 2147483648")).expect("flags");
+        assert_eq!(options.extract.plugin_memory_bytes, 1 << 31);
+        for refused in [
+            "--plugin-memory-limit 0",
+            "--plugin-memory-limit 2147483649",
+        ] {
+            assert!(ServeOptions::from_args(args(refused)).is_err(), "{refused}");
+        }
+    }
+
+    #[test]
+    fn each_soft_limit_drains_the_host() {
+        const MIB: u64 = 1 << 20;
+        let usage = |footprint: u64, handles: u64, degraded: bool| Usage {
+            footprint: Some(footprint * MIB),
+            capacity: Some(1000 * MIB),
+            handles: Some(handles),
+            degraded,
+        };
+        let limits = SoftLimits {
+            max_memory_share: Some(0.5),
+            max_memory_growth_bytes: Some(100 * MIB),
+            max_requests: Some(2),
+            max_handles: Some(50),
+            idle_timeout: None,
+            drain_degraded: true,
+        };
+        let lifecycle = Lifecycle::new(limits);
+        lifecycle.begin_request();
+        let _ = lifecycle.end_request();
+        lifecycle.lock().baseline_footprint = Some(200 * MIB);
+        assert_eq!(lifecycle.over_limit(&usage(300, 50, false)), None);
+        assert_eq!(
+            lifecycle.over_limit(&usage(501, 0, false)),
+            Some(DrainReason::Memory)
+        );
+        assert_eq!(
+            lifecycle.over_limit(&usage(301, 0, false)),
+            Some(DrainReason::MemoryGrowth)
+        );
+        assert_eq!(
+            lifecycle.over_limit(&usage(300, 51, false)),
+            Some(DrainReason::Handles)
+        );
+        assert_eq!(
+            lifecycle.over_limit(&usage(300, 0, true)),
+            Some(DrainReason::Degraded)
+        );
+        lifecycle.begin_request();
+        let _ = lifecycle.end_request();
+        assert_eq!(
+            lifecycle.over_limit(&usage(300, 0, false)),
+            Some(DrainReason::Requests)
+        );
+        let off = Lifecycle::new(SoftLimits::OFF);
+        assert_eq!(off.over_limit(&usage(999, 1 << 20, false)), None);
+        assert_eq!(off.over_limit(&usage(999, 0, true)), None);
+    }
+
+    #[test]
+    fn memory_and_handles_are_compared_only_when_nothing_runs() {
+        const MIB: u64 = 1 << 20;
+        let usage = |footprint: u64, handles: u64| Usage {
+            footprint: Some(footprint * MIB),
+            capacity: Some(1000 * MIB),
+            handles: Some(handles),
+            degraded: false,
+        };
+        let limits = SoftLimits {
+            max_memory_share: Some(0.5),
+            max_memory_growth_bytes: Some(100 * MIB),
+            max_requests: None,
+            max_handles: Some(50),
+            idle_timeout: None,
+            drain_degraded: true,
+        };
+        let lifecycle = Lifecycle::new(limits);
+        lifecycle.begin_request();
+        lifecycle.begin_request();
+        // Another request still runs: what the process holds is partly its.
+        assert_eq!(lifecycle.end_with(&usage(900, 500)), None);
+        assert_eq!(lifecycle.lock().baseline_footprint, None);
+        assert_eq!(lifecycle.end_with(&usage(200, 10)), None);
+        assert_eq!(lifecycle.lock().baseline_footprint, Some(200 * MIB));
+        lifecycle.begin_request();
+        lifecycle.begin_request();
+        assert_eq!(lifecycle.end_with(&usage(400, 10)), None);
+        assert_eq!(
+            lifecycle.end_with(&usage(400, 10)),
+            Some(DrainReason::MemoryGrowth)
+        );
+        let handles = Lifecycle::new(limits);
+        handles.begin_request();
+        handles.begin_request();
+        assert_eq!(handles.end_with(&usage(10, 51)), None);
+        assert_eq!(handles.end_with(&usage(10, 51)), Some(DrainReason::Handles));
+        // The count and degradations are this host's whatever runs.
+        let counted = Lifecycle::new(SoftLimits {
+            max_requests: Some(1),
+            ..limits
+        });
+        counted.begin_request();
+        counted.begin_request();
+        assert_eq!(
+            counted.end_with(&usage(900, 500)),
+            Some(DrainReason::Requests)
+        );
+    }
+
+    #[test]
+    fn the_memory_baseline_is_taken_again_after_the_renderer_is_made() {
+        const MIB: u64 = 1 << 20;
+        let usage = |footprint: u64| Usage {
+            footprint: Some(footprint * MIB),
+            capacity: Some(1000 * MIB),
+            handles: Some(1),
+            degraded: false,
+        };
+        let lifecycle = Lifecycle::new(SoftLimits {
+            max_memory_growth_bytes: Some(100 * MIB),
+            ..SoftLimits::OFF
+        });
+        lifecycle.begin_request();
+        assert_eq!(lifecycle.end_with(&usage(50)), None);
+        assert_eq!(lifecycle.lock().baseline_footprint, Some(50 * MIB));
+        lifecycle.set_renderer(RendererFacts {
+            renderer: "gpu",
+            fallback: None,
+            hardware_decode_fallback: None,
+        });
+        assert_eq!(lifecycle.lock().baseline_footprint, None);
+        lifecycle.begin_request();
+        assert_eq!(lifecycle.end_with(&usage(400)), None);
+        assert_eq!(lifecycle.lock().baseline_footprint, Some(400 * MIB));
+        lifecycle.begin_request();
+        assert_eq!(
+            lifecycle.end_with(&usage(501)),
+            Some(DrainReason::MemoryGrowth)
+        );
+    }
+
+    #[test]
+    fn the_first_answer_sets_the_memory_baseline() {
+        let lifecycle = Lifecycle::new(SoftLimits::OFF);
+        assert_eq!(
+            lifecycle.status()["details"]["memory"]["baselineBytes"],
+            Value::Null
+        );
+        lifecycle.begin_request();
+        assert_eq!(lifecycle.status()["details"]["activity"], "busy");
+        let _ = lifecycle.end_request();
+        let details = &lifecycle.status()["details"];
+        assert_eq!(details["activity"], "idle");
+        assert_eq!(details["requestsServed"], 1);
+        assert!(
+            details["memory"]["baselineBytes"].as_u64().is_some(),
+            "{details}"
+        );
+    }
+
+    #[test]
+    fn a_draining_host_keeps_its_first_reason_and_reports_it() {
+        let captured = crate::serve_io::Captured::default();
+        let out = captured.responder();
+        let lifecycle = Lifecycle::new(SoftLimits::default());
+        assert_eq!(lifecycle.state(), HostState::Ready);
+        assert_eq!(lifecycle.status()["reason"], "started");
+        lifecycle.drain(DrainReason::Idle, &out).expect("drain");
+        lifecycle.drain(DrainReason::Requests, &out).expect("drain");
+        assert_eq!(lifecycle.state(), HostState::Draining);
+        let messages = crate::serve_io::messages_of(&captured.bytes());
+        assert_eq!(messages.len(), 1);
+        let message = &messages[0].0;
+        assert_eq!(message["type"], "state");
+        assert_eq!(message["state"], "draining");
+        assert_eq!(message["reason"], "idle");
+        assert_eq!(message["details"]["activity"], "idle");
+        assert_eq!(
+            message["details"]["limits"]["maxRequests"],
+            DEFAULT_MAX_REQUESTS
+        );
+        assert_eq!(message["details"]["hostVersion"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            lifecycle.status()["details"]["hostVersion"],
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+}

@@ -100,7 +100,12 @@ pub fn exercise(
     let count = report.timing.frame_count();
     let picks = [0, count / 2, count.saturating_sub(1)];
     let mut drawn = Vec::new();
+    let mut renders = Vec::new();
     for (pick, fit) in picks.iter().zip(FITS.iter().cycle()) {
+        if renders.contains(&(*pick, *fit)) {
+            continue;
+        }
+        renders.push((*pick, *fit));
         let time = start_of(&report.timing, *pick);
         let Ok(frame) = opened.render(time, *fit) else {
             // A source may refuse a frame (drawn past a budget at that size): typed, not a panic.

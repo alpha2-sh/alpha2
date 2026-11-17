@@ -5,6 +5,14 @@
 //! it, the skip fails instead. Other skips are printed and, if `ALPHA2_SKIP_LOG` is an absolute
 //! path, appended there as JSON lines. Tests that never apply to an OS stay `#[cfg]`-gated.
 
+#![forbid(unsafe_code)]
+
+pub mod extract;
+mod files;
+pub mod media;
+
+pub use files::{ScratchDir, corpus, scratch_dir, tests_dir};
+
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
@@ -27,6 +35,8 @@ pub enum Capability {
     VulkanValidation,
     /// A Khronos validation layer older than 1.4.
     OldVulkanValidationLayer,
+    /// `FFmpeg` moves Vulkan frames with a queue transfer, which advances their timeline semaphores.
+    VulkanQueueTransfer,
     /// D3D12VA decode on the renderer's D3D12 device.
     D3d12Video,
     /// D3D12VA H.264 encode on an accepted adapter.
@@ -53,12 +63,24 @@ pub enum Capability {
     HardwareH264Encode,
     /// The `OpenH264` runtime.
     Openh264,
+    /// The pinned `ffmpeg` and `ffprobe` executables (`ALPHA2_FFMPEG`, `ALPHA2_FFPROBE`).
+    FfmpegTools,
+    /// An `FFmpeg` 8.0 SDK in the SDK cache beside the pinned one.
+    PreviousFfmpegSdk,
+    /// A GPU that presents to the platform's native windows (an app's surface or layer).
+    WindowPresent,
+    /// A VP9 or AV1 video encoder, which `WebM` output needs.
+    WebmEncode,
+    /// A hardware decoder for the codec of the stream under test.
+    HardwareVideoDecode,
     /// A C compiler that builds shared libraries.
     CCompiler,
     /// Two or more GPU adapters.
     MultiAdapter,
     /// 16-bit normalized textures on the test device.
     Unorm16,
+    /// Blending into 16-bit float targets on the test device.
+    HalfFloatBlend,
     /// GPU timestamp queries on the test device.
     TimestampQuery,
     /// A GPU stall the render stall calibration can measure.
@@ -69,6 +91,8 @@ pub enum Capability {
     Browser,
     /// A Python that imports alpha2.
     Python,
+    /// The test hooks of a debug build of the Python native module.
+    NativeTestHooks,
     /// A built alpha2-host.
     Host,
     /// A host that renders on the GPU.
@@ -107,6 +131,14 @@ pub enum Capability {
     AudioAutostart,
     /// Decoded `VideoFrame`s in 8-bit 4:2:0.
     YuvVideoFrames,
+    /// Android hardware decoder buffers imported into the renderer's Vulkan device.
+    AhbImport,
+    /// A `MediaCodec` HEVC encoder.
+    MediacodecEncodeHevc,
+    /// A `MediaCodec` VP9 encoder.
+    MediacodecEncodeVp9,
+    /// A `MediaCodec` AV1 encoder.
+    MediacodecEncodeAv1,
 }
 
 impl Capability {
@@ -119,6 +151,7 @@ impl Capability {
         Self::VulkanVideoEncodeHevc,
         Self::VulkanValidation,
         Self::OldVulkanValidationLayer,
+        Self::VulkanQueueTransfer,
         Self::D3d12Video,
         Self::D3d12Encode,
         Self::D3d12DebugLayer,
@@ -132,14 +165,21 @@ impl Capability {
         Self::Dxc,
         Self::HardwareH264Encode,
         Self::Openh264,
+        Self::FfmpegTools,
+        Self::PreviousFfmpegSdk,
+        Self::WindowPresent,
+        Self::WebmEncode,
+        Self::HardwareVideoDecode,
         Self::CCompiler,
         Self::MultiAdapter,
         Self::Unorm16,
+        Self::HalfFloatBlend,
         Self::TimestampQuery,
         Self::MeasurableGpuStall,
         Self::Wasm,
         Self::Browser,
         Self::Python,
+        Self::NativeTestHooks,
         Self::Host,
         Self::GpuRenderer,
         Self::H264,
@@ -159,6 +199,10 @@ impl Capability {
         Self::AudioOutputTimestamp,
         Self::AudioAutostart,
         Self::YuvVideoFrames,
+        Self::AhbImport,
+        Self::MediacodecEncodeHevc,
+        Self::MediacodecEncodeVp9,
+        Self::MediacodecEncodeAv1,
     ];
 
     /// The capability's name in `ALPHA2_REQUIRE` and the skip log.
@@ -172,6 +216,7 @@ impl Capability {
             Self::VulkanVideoEncodeHevc => "vulkan-video-encode-hevc",
             Self::VulkanValidation => "vulkan-validation",
             Self::OldVulkanValidationLayer => "old-vulkan-validation-layer",
+            Self::VulkanQueueTransfer => "vulkan-queue-transfer",
             Self::D3d12Video => "d3d12-video",
             Self::D3d12Encode => "d3d12-encode",
             Self::D3d12DebugLayer => "d3d12-debug-layer",
@@ -185,14 +230,21 @@ impl Capability {
             Self::Dxc => "dxc",
             Self::HardwareH264Encode => "hardware-h264-encode",
             Self::Openh264 => "openh264",
+            Self::FfmpegTools => "ffmpeg-tools",
+            Self::PreviousFfmpegSdk => "previous-ffmpeg-sdk",
+            Self::WindowPresent => "window-present",
+            Self::WebmEncode => "webm-encode",
+            Self::HardwareVideoDecode => "hardware-video-decode",
             Self::CCompiler => "c-compiler",
             Self::MultiAdapter => "multi-adapter",
             Self::Unorm16 => "unorm16",
+            Self::HalfFloatBlend => "half-float-blend",
             Self::TimestampQuery => "timestamp-query",
             Self::MeasurableGpuStall => "measurable-gpu-stall",
             Self::Wasm => "wasm",
             Self::Browser => "browser",
             Self::Python => "python",
+            Self::NativeTestHooks => "native-test-hooks",
             Self::Host => "host",
             Self::GpuRenderer => "gpu-renderer",
             Self::H264 => "h264",
@@ -212,6 +264,10 @@ impl Capability {
             Self::AudioOutputTimestamp => "audio-output-timestamp",
             Self::AudioAutostart => "audio-autostart",
             Self::YuvVideoFrames => "yuv-video-frames",
+            Self::AhbImport => "ahb-import",
+            Self::MediacodecEncodeHevc => "mediacodec-encode-hevc",
+            Self::MediacodecEncodeVp9 => "mediacodec-encode-vp9",
+            Self::MediacodecEncodeAv1 => "mediacodec-encode-av1",
         }
     }
 

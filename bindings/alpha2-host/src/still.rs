@@ -10,6 +10,7 @@ use std::sync::PoisonError;
 use std::time::{Duration, Instant};
 
 use alpha2_engine::{ExportTextureStep, Exporter, FrameProvider, FramesWithText, QualityProfile};
+use alpha2_host_core::host_frames::Attachment;
 use alpha2_media::CancelToken;
 use alpha2_native::{ExistingOutput, OutputTarget};
 use alpha2_render::RenderSize;
@@ -17,14 +18,17 @@ use alpha2_time::{MediaTime, TimeRange};
 use serde_json::{Value, json};
 
 use crate::decode::{DecodeScheduler, DecodeWorker};
-use crate::effect_request::EffectRequest;
 use crate::encode::PipelineFailure;
 use crate::export_decode::ExportDecodePlan;
 use crate::host::{Host, result_cache_budget, written_path};
 use crate::metrics::ExportMetrics;
+use crate::protocol::EffectRequest;
 use crate::protocol::StillEntry;
 use crate::renderer_backend::RendererBackend;
 use crate::{WORKER_RETRY_INTERVAL, error_message};
+
+/// What one response carries in attachments, the most a frame holds.
+const MAX_RESPONSE_ATTACHMENT_BYTES: u64 = u32::MAX as u64;
 
 impl Host {
     /// Renders in time order so every decoder only moves forward, and answers in request order.
@@ -59,8 +63,7 @@ impl Host {
                 .map_err(error_message)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        self.renderer.clear_result_cache();
-        self.renderer.set_result_cache_budget(result_cache_budget(
+        self.reserve_result_cache(result_cache_budget(
             size,
             self.renderer.intermediate_format(),
         ));
@@ -81,12 +84,14 @@ impl Host {
             PipelineFailure::default(),
         )?;
         let mut gpu_frames = self.export_gpu_frames(size, &project);
-        let mut cpu_frames = crate::cpu_frames::NativeCpuFrames::new(size);
+        let mut cpu_frames = crate::cpu_frames::NativeCpuFrames::new(size, self.cache_scope);
         cpu_frames.color = gpu_frames.color;
         let mut metrics = ExportMetrics::default();
         let mut timings = StillTimings::default();
         let mut answers = vec![Value::Null; stills.len()];
         let mut written: Vec<&Path> = Vec::with_capacity(stills.len());
+        let mut pngs: Vec<(usize, Vec<u8>)> = Vec::new();
+        let mut attached = 0_u64;
         for (index, mut exporter) in order.iter().map(|&index| (index, exporters[index].clone())) {
             let still = &stills[index];
             let frame_time = exporter
@@ -144,43 +149,74 @@ impl Host {
             };
             timings.render += render_started.elapsed();
             let write_started = Instant::now();
-            // A link or a second name of a folder can still name a file an earlier still wrote.
-            if let Some(earlier) = written
-                .iter()
-                .find(|earlier| alpha2_os::same_file_at(&still.output, earlier).unwrap_or(false))
-            {
-                return Err(crate::protocol::code_tag(
-                    "INVALID_INPUT",
-                    format!(
-                        "two stills write one file: {} and {}",
-                        earlier.display(),
-                        still.output.display()
-                    ),
-                ));
-            }
-            let straight = unpremultiplied(pixels);
-            let published = alpha2_native::write_png(
-                OutputTarget {
-                    path: still.output.clone(),
-                    existing,
-                },
-                size.width,
-                size.height,
-                &straight,
-            )
-            .map_err(|error| crate::encode::encode_failure("writing a still", error))?;
-            timings.write += write_started.elapsed();
-            written.push(&still.output);
-            answers[index] = json!({
-                "output": written_path(&still.output),
+            let straight = alpha2_host_core::tools::unpremultiplied(pixels);
+            let mut answer = json!({
                 "frameTime": frame_time.ticks(),
                 "width": size.width,
                 "height": size.height,
-                "publish": crate::host::publish_json(Some(published)),
             });
+            if let Some(output) = &still.output {
+                // A link or a second name of a folder can still name a file an earlier still
+                // wrote.
+                if let Some(earlier) = written
+                    .iter()
+                    .find(|earlier| alpha2_os::same_file_at(output, earlier).unwrap_or(false))
+                {
+                    return Err(crate::protocol::code_tag(
+                        "INVALID_INPUT",
+                        format!(
+                            "two stills write one file: {} and {}",
+                            earlier.display(),
+                            output.display()
+                        ),
+                    ));
+                }
+                let published = alpha2_native::write_png(
+                    OutputTarget {
+                        path: output.clone(),
+                        existing,
+                    },
+                    size.width,
+                    size.height,
+                    &straight,
+                )
+                .map_err(|error| crate::encode::encode_failure("writing a still", error))?;
+                written.push(output);
+                answer["output"] = json!(written_path(output));
+                answer["publish"] = crate::host::publish_json(Some(published));
+            } else {
+                let png = alpha2_host_core::partial::png_bytes(size.width, size.height, &straight)
+                    .map_err(|error| crate::protocol::code_tag("ENCODE_ERROR", error))?;
+                attached = attached.saturating_add(png.len() as u64);
+                if attached > MAX_RESPONSE_ATTACHMENT_BYTES {
+                    return Err(crate::protocol::code_tag(
+                        "RESOURCE_LIMIT",
+                        format!(
+                            "the stills without an output are over {MAX_RESPONSE_ATTACHMENT_BYTES} \
+                             bytes of PNG, more than one response carries; give some an output"
+                        ),
+                    ));
+                }
+                answer["output"] = Value::Null;
+                pngs.push((index, png));
+            }
+            timings.write += write_started.elapsed();
+            answers[index] = answer;
             check_cancel(&cancel)?;
         }
         worker.finish()?;
+        // Attached in request order, which is the order their indices were given in.
+        pngs.sort_by_key(|(index, _)| *index);
+        for (attachment, (index, _)) in pngs.iter().enumerate() {
+            answers[*index]["attachment"] = json!(attachment);
+        }
+        self.reply_attachments = pngs
+            .into_iter()
+            .map(|(_, bytes)| Attachment {
+                kind: "image/png".to_owned(),
+                bytes,
+            })
+            .collect();
         let mut result = self.response_metadata(started.elapsed().as_secs_f64() * 1_000.0);
         result["stills"] = Value::Array(answers);
         result["timings"] = timings.to_json();
@@ -226,35 +262,5 @@ fn check_cancel(cancel: &CancelToken) -> Result<(), String> {
         Err("the still was cancelled".to_owned())
     } else {
         Ok(())
-    }
-}
-
-/// PNG stores straight alpha, so each color is divided by its alpha and rounded.
-fn unpremultiplied(mut pixels: Vec<u8>) -> Vec<u8> {
-    for pixel in pixels.as_chunks_mut::<4>().0 {
-        let alpha = u16::from(pixel[3]);
-        if alpha == 0 || alpha == 255 {
-            continue;
-        }
-        for channel in &mut pixel[..3] {
-            let straight = (u16::from(*channel) * 255 + alpha / 2) / alpha;
-            *channel = u8::try_from(straight.min(255)).unwrap_or(u8::MAX);
-        }
-    }
-    pixels
-}
-
-#[cfg(test)]
-mod tests {
-    use super::unpremultiplied;
-
-    #[test]
-    fn premultiplied_pixels_are_divided_by_their_alpha() {
-        assert_eq!(
-            unpremultiplied(vec![
-                10, 20, 30, 255, 0, 0, 0, 0, 64, 32, 0, 128, 200, 0, 0, 100
-            ]),
-            vec![10, 20, 30, 255, 0, 0, 0, 0, 128, 64, 0, 128, 255, 0, 0, 100]
-        );
     }
 }

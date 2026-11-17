@@ -13,7 +13,6 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["rasters"]
-# A feature here so unification does not enable these formats for every alpha2-extensions user.
 rasters = ["alpha2-extensions/svg", "alpha2-extensions/lottie", "alpha2-extensions/latex", "alpha2-extensions/pdf"]
 
 [dependencies]

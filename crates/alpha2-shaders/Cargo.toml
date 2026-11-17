@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["wgsl", "wesl", "shaders", "video", "transitions"]
 categories = ["rendering", "graphics"]
-# Tests, benches and fixtures stay out of the published crate.
 include = [
   "/build.rs",
   "/src/**",

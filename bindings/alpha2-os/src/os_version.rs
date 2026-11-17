@@ -2,8 +2,9 @@
 
 use std::sync::OnceLock;
 
-/// The OS version, read once: `27.0.1 (26A434)` on macOS, `Ubuntu 22.04.5 LTS, kernel 6.8.0` on
-/// Linux, `10.0.26300.9711` on Windows. Missing parts are omitted; `unknown` if all are.
+/// The OS version, read once: `27.0.1 (26A434)` on macOS and iOS, `Ubuntu 22.04.5 LTS, kernel
+/// 6.8.0` on Linux, `Android 16 (API 36), kernel 6.1.0` on Android, `10.0.26300.9711` on Windows.
+/// Missing parts are omitted; `unknown` if all are.
 #[must_use]
 pub fn os_version() -> &'static str {
     static VERSION: OnceLock<String> = OnceLock::new();
@@ -17,10 +18,27 @@ pub fn os_version() -> &'static str {
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_vendor = "apple", not(target_abi = "sim")))]
 fn read() -> String {
-    let product = sysctl_string(c"kern.osproductversion");
-    let build = sysctl_string(c"kern.osversion");
+    product_and_build(
+        sysctl_string(c"kern.osproductversion"),
+        sysctl_string(c"kern.osversion"),
+    )
+}
+
+/// The simulator's kernel is the host's, so its `sysctl` names the macOS release; the simulated
+/// runtime is in the environment of every process it starts.
+#[cfg(all(target_vendor = "apple", target_abi = "sim"))]
+fn read() -> String {
+    let variable = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
+    product_and_build(
+        variable("SIMULATOR_RUNTIME_VERSION"),
+        variable("SIMULATOR_RUNTIME_BUILD_VERSION"),
+    )
+}
+
+#[cfg(target_vendor = "apple")]
+fn product_and_build(product: Option<String>, build: Option<String>) -> String {
     match (product, build) {
         (Some(product), Some(build)) => format!("{product} ({build})"),
         (Some(product), None) => product,
@@ -29,7 +47,7 @@ fn read() -> String {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_vendor = "apple", not(target_abi = "sim")))]
 fn sysctl_string(name: &std::ffi::CStr) -> Option<String> {
     let mut length = 0_usize;
     // SAFETY: `name` is NUL-terminated; a null buffer asks only for the length.
@@ -65,7 +83,40 @@ fn sysctl_string(name: &std::ffi::CStr) -> Option<String> {
     (!text.is_empty()).then(|| text.to_owned())
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "android")]
+fn read() -> String {
+    let release = system_property(c"ro.build.version.release");
+    let api = system_property(c"ro.build.version.sdk");
+    let system = match (release, api) {
+        (Some(release), Some(api)) => Some(format!("Android {release} (API {api})")),
+        (Some(release), None) => Some(format!("Android {release}")),
+        (None, Some(api)) => Some(format!("Android API {api}")),
+        (None, None) => None,
+    };
+    match (system, kernel_release()) {
+        (Some(system), Some(kernel)) => format!("{system}, kernel {kernel}"),
+        (Some(system), None) => system,
+        (None, Some(kernel)) => format!("kernel {kernel}"),
+        (None, None) => String::new(),
+    }
+}
+
+#[cfg(target_os = "android")]
+fn system_property(name: &std::ffi::CStr) -> Option<String> {
+    let mut value = [0 as libc::c_char; libc::PROP_VALUE_MAX as usize];
+    // SAFETY: `name` is NUL-terminated and `value` holds the `PROP_VALUE_MAX` bytes the call may
+    // write, including the terminator.
+    let length = unsafe { libc::__system_property_get(name.as_ptr(), value.as_mut_ptr()) };
+    if length <= 0 {
+        return None;
+    }
+    // SAFETY: the call wrote a NUL-terminated string into `value`.
+    let text = unsafe { std::ffi::CStr::from_ptr(value.as_ptr()) };
+    let text = text.to_string_lossy().trim().to_owned();
+    (!text.is_empty()).then_some(text)
+}
+
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 fn read() -> String {
     let distribution = std::fs::read_to_string("/etc/os-release")
         .ok()
@@ -85,7 +136,7 @@ fn read() -> String {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 fn kernel_release() -> Option<String> {
     // SAFETY: `utsname` is plain old data; all zeros is a valid value.
     let mut name: libc::utsname = unsafe { std::mem::zeroed() };

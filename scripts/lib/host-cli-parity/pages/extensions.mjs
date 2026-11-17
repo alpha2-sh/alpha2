@@ -5,13 +5,13 @@ import init, { WebEffectRegistry } from "/packages/alpha2/wasm/alpha2_wasm.js";
 import initExtensions, { ExtensionRegistry } from "/packages/alpha2/wasm/alpha2_extensions.js";
 const done = (value) => { document.title = encodeURIComponent(JSON.stringify(value)); };
 const PROJECT_TICKS_PER_FRAME = 12_000n; // 10 fps
-const bytes = async (name) => new Uint8Array(await fetch(\`/tests/corpus/extensions/\${name}\`).then((response) => response.arrayBuffer()));
+const bytes = async (name) => new Uint8Array(await (await fetch(\`/tests/corpus/extensions/\${name}\`)).arrayBuffer());
 try {
   await init();
   await initExtensions();
   const project = await fetch("/tests/cases/host-parity-extensions-project.json").then((response) => response.json());
   const { width, height } = project.settings;
-  const native = parseY4m(new Uint8Array(await fetch("/native.y4m").then((response) => response.arrayBuffer())), width, height);
+  const native = parseY4m(new Uint8Array(await (await fetch("/native.y4m")).arrayBuffer()), width, height);
   const surface = document.createElement("canvas");
   surface.width = width;
   surface.height = height;
@@ -19,7 +19,7 @@ try {
   const engine = await WebEffectRegistry.createForHtmlCanvas(surface);
   engine.loadProject(JSON.stringify(project));
   const extensions = new ExtensionRegistry();
-  extensions.registerFont(new Uint8Array(await fetch("/tests/fonts/Alpha2Fixture.ttf").then((response) => response.arrayBuffer())));
+  extensions.registerFont(new Uint8Array(await (await fetch("/tests/fonts/Alpha2Fixture.ttf")).arrayBuffer()));
   for (const [index, locator] of ["f7", "f8", "f9", "f10"].entries())
     extensions.registerResource(locator, await bytes(\`sequence_\${String(index + 7).padStart(4, "0")}.png\`));
   for (const [index, locator] of ["x1", "x2"].entries())
@@ -31,6 +31,7 @@ try {
     handles[source.id] = extensions.open(JSON.stringify(source.provider), files[source.id] ? await bytes(files[source.id]) : undefined);
     kinds[source.id] = source.kind;
   }
+  /** @type {Record<string, [number, number, number]>} */
   const totals = { y: [0, 0, 0], u: [0, 0, 0], v: [0, 0, 0] };
   for (let index = 0; index < native.length; index += 1) {
     const time = BigInt(index) * PROJECT_TICKS_PER_FRAME;

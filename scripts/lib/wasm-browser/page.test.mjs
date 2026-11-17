@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { LUMA_AT } from "./page.mjs";
+import { DECODE_REFUSAL_SKIP, LUMA_AT } from "./page.mjs";
 
 const lumaAt = new Function(`${LUMA_AT}; return lumaAt;`)();
 
@@ -36,5 +36,76 @@ test("the luma helper reads BT.709 limited-range luma from RGB and YUV layouts",
   await assert.rejects(
     lumaAt(frame("RGBAF16", plane, 4), 0, 0),
     /no luma for a RGBAF16 frame/,
+  );
+});
+
+test("the engine's DECODE_UNAVAILABLE skips only when WebCodecs refuses the codec too", async () => {
+  const asked = [];
+  const decoders = (supported) => {
+    const decoder = {
+      isConfigSupported: async (config) => {
+        asked.push(config);
+        return { supported: supported(config.codec), config };
+      },
+    };
+    return { VideoDecoder: decoder, AudioDecoder: decoder };
+  };
+  const skipWith = (globals) =>
+    new Function(
+      "globalThis",
+      `${DECODE_REFUSAL_SKIP}; return decodeRefusalSkip;`,
+    )(globals);
+  const refusal = (kind, codec, channels) =>
+    Object.assign(new Error(`cannot decode ${codec}`), {
+      code: "DECODE_UNAVAILABLE",
+      facts: { kind, codec, ...(channels ? { channels } : {}) },
+    });
+  const only = skipWith(decoders((codec) => codec === "avc1.64001f"));
+  assert.equal(await only(refusal("video", "avc1.64001f")), null);
+  const trialFailed = Object.assign(refusal("audio", "avc1.64001f"), {
+    cause: new Error("EncodingError"),
+  });
+  assert.equal(await only(trialFailed), null, "no source was tried");
+  const trying = (decodes) =>
+    skipWith({
+      ...decoders((codec) => codec === "avc1.64001f"),
+      trialDecodes: async () => decodes,
+    });
+  assert.equal(
+    (await trying(false)(trialFailed)).capability,
+    "webcodecs-audio",
+    "the source fails a plain decode too",
+  );
+  assert.equal(await trying(true)(trialFailed), null, "the source decodes");
+  assert.equal(await trying(undefined)(trialFailed), null, "no source matched");
+  assert.deepEqual(await only(refusal("video", "hvc1.1.6.L93.B0")), {
+    skipped:
+      "this browser does not decode the case's source (WebCodecs refuses hvc1.1.6.L93.B0): cannot decode hvc1.1.6.L93.B0",
+    capability: "webcodecs-video",
+  });
+  assert.equal(
+    (await only(refusal("audio", "ac-3", 6))).capability,
+    "webcodecs-audio",
+  );
+  assert.deepEqual(asked.at(-1), {
+    codec: "ac-3",
+    sampleRate: 48000,
+    numberOfChannels: 6,
+  });
+  // No codec to ask about, another error, or no WebCodecs at all.
+  assert.equal(await only(refusal("video", null)), null);
+  assert.equal(await only(new Error("device lost")), null);
+  assert.equal(
+    (await skipWith({})(refusal("audio", "opus"))).capability,
+    "webcodecs-audio",
+  );
+  const throwing = skipWith({
+    VideoDecoder: {
+      isConfigSupported: async () => Promise.reject(new TypeError("bad")),
+    },
+  });
+  assert.equal(
+    (await throwing(refusal("video", "vp8"))).capability,
+    "webcodecs-video",
   );
 });

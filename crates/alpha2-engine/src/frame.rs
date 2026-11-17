@@ -5,7 +5,7 @@
 
 use alpha2_eval::{
     ActiveClip, ActiveComposition, ActiveEffect, ActiveTransition, EvaluatedVisual, FrameDesc,
-    GeneratorPlan, ShapesPlan, StepOp, sample_scalar, sample_visual,
+    GeneratorPlan, SampleContext, ShapesPlan, StepOp, sample_scalar, sample_visual,
 };
 use alpha2_media::{PixelLayout, SourceId, YuvEncoding};
 use alpha2_model::{
@@ -15,10 +15,10 @@ use alpha2_render::{
     BlendMode, CacheIntent, Color, CpuImage, CpuRenderer, EffectCatalog, EffectId, EffectInputs,
     EffectParams, EffectResources, EffectRuntime, FrameSubmitTimings, GENERATOR_EFFECT_ID,
     GraphError, GraphLayer, LayerTransform, MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES,
-    MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamValue, PendingSourceWork, PlaneTarget,
-    RenderCacheKey, RenderControls, RenderError, RenderGraph, RenderNodeId, RenderNodeKind,
-    RenderSize, RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID, Yuv420pReadback,
-    Yuv420pTargets,
+    MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamType, ParamValue, PendingSourceWork,
+    PlaneTarget, RenderCacheKey, RenderControls, RenderError, RenderGraph, RenderNodeId,
+    RenderNodeKind, RenderSize, RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID,
+    Yuv420pReadback, Yuv420pTargets,
 };
 use alpha2_time::MediaTime;
 
@@ -464,7 +464,7 @@ impl FrameRenderer for CpuRenderer {
         }
         let render = self.render_frame(size, frame, frames)?;
         if let Some(image) = render.texture {
-            alpha2_render::pack_cpu_image(&image, encoding, layout, targets)?;
+            self.pack_image(&image, encoding, layout, targets)?;
         }
         Ok(render.report)
     }
@@ -939,12 +939,16 @@ fn box_anchor(anchor: f32, extent: u32, margin: u32) -> f32 {
     (margin as f32 + anchor * inner) / extent as f32
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn frame_runtime(frame: &FrameDesc, size: RenderSize) -> EffectRuntime {
-    #[allow(clippy::cast_precision_loss)]
     let ratio = size.width as f32 / size.height as f32;
+    let scale = frame.canvas.map_or(1.0, |(width, height)| {
+        size.width.min(size.height) as f32 / width.min(height).max(1) as f32
+    });
     EffectRuntime {
         time: frame.time,
         ratio,
+        scale,
         ..EffectRuntime::default()
     }
 }
@@ -989,26 +993,7 @@ fn frame_graph<'a>(
         });
     }
     let background = background_color(frame.background);
-    let mut suppressed = HashSet::new();
-    for transition in &frame.transitions {
-        let from = *nodes
-            .get(transition.from_clip)
-            .ok_or(RenderError::InvalidGraph)?;
-        let to = *nodes
-            .get(transition.to_clip)
-            .ok_or(RenderError::InvalidGraph)?;
-        let output = inputs.len();
-        inputs.push(FrameInput {
-            kind: FrameInputKind::Transition {
-                from,
-                to,
-                transition,
-            },
-            uses_backdrop: inputs[from].uses_backdrop || inputs[to].uses_backdrop,
-        });
-        nodes.insert(transition.to_clip, output);
-        suppressed.insert(transition.from_clip);
-    }
+    let suppressed = fold_transitions(frame, available, &mut nodes, &mut inputs)?;
     let mut layers = Vec::with_capacity(available.len() + captions.len());
     let mut captions = captions.iter().peekable();
     for (clip, textures) in available {
@@ -1062,6 +1047,100 @@ fn frame_graph<'a>(
         .set_cache_intent(output, CacheIntent::Auto)
         .map_err(GraphError::into_render_error)?;
     Ok(graph)
+}
+
+/// Adds a node per transition of `frame`, each replacing its `to` clip's node, and returns the
+/// `from` clips, which are drawn only through a transition.
+fn fold_transitions<'a>(
+    frame: &'a FrameDesc<'a>,
+    available: &[(&'a ActiveClip<'a>, ClipFrames<'a>)],
+    nodes: &mut HashMap<&'a alpha2_model::ClipId, usize>,
+    inputs: &mut Vec<FrameInput<'a>>,
+) -> Result<HashSet<&'a alpha2_model::ClipId>, RenderError> {
+    let mut suppressed = HashSet::new();
+    let mut fold = |transition: &'a ActiveTransition<'a>| {
+        let from = *nodes
+            .get(transition.from_clip)
+            .ok_or(RenderError::InvalidGraph)?;
+        let to = *nodes
+            .get(transition.to_clip)
+            .ok_or(RenderError::InvalidGraph)?;
+        let output = inputs.len();
+        inputs.push(FrameInput {
+            kind: FrameInputKind::Transition {
+                from,
+                to,
+                transition,
+            },
+            uses_backdrop: inputs[from].uses_backdrop || inputs[to].uses_backdrop,
+        });
+        nodes.insert(transition.to_clip, output);
+        suppressed.insert(transition.from_clip);
+        Ok::<_, RenderError>(())
+    };
+    if frame.transitions.len() > 1 {
+        for index in tournament_order(&frame.transitions, available)? {
+            fold(&frame.transitions[index])?;
+        }
+    } else {
+        for transition in &frame.transitions {
+            fold(transition)?;
+        }
+    }
+    Ok(suppressed)
+}
+
+/// Indices of `transitions` in the order the fold applies them.
+///
+/// A clip receives all of its incoming transitions, in the order of their `from` clips, before it
+/// feeds another, so overlaps of three or more clips draw one picture whatever the list order.
+/// Clips are ordered topologically over the edges `from -> to`, ties by frame order.
+fn tournament_order(
+    transitions: &[ActiveTransition<'_>],
+    available: &[(&ActiveClip<'_>, ClipFrames<'_>)],
+) -> Result<Vec<usize>, RenderError> {
+    let position = |id: &alpha2_model::ClipId| {
+        available
+            .iter()
+            .position(|(clip, _)| clip.clip_id == id)
+            .ok_or(RenderError::InvalidGraph)
+    };
+    let edges = transitions
+        .iter()
+        .map(|transition| {
+            Ok((
+                position(transition.from_clip)?,
+                position(transition.to_clip)?,
+            ))
+        })
+        .collect::<Result<Vec<_>, RenderError>>()?;
+    let mut clips = edges
+        .iter()
+        .flat_map(|&(from, to)| [from, to])
+        .collect::<Vec<_>>();
+    clips.sort_unstable();
+    clips.dedup();
+    let mut incoming = clips
+        .iter()
+        .map(|clip| edges.iter().filter(|(_, to)| to == clip).count())
+        .collect::<Vec<_>>();
+    let mut rank = vec![usize::MAX; available.len()];
+    for step in 0..clips.len() {
+        // A cycle leaves no clip without pending incoming transitions.
+        let next = incoming
+            .iter()
+            .position(|&count| count == 0)
+            .ok_or(RenderError::InvalidGraph)?;
+        incoming[next] = usize::MAX;
+        rank[clips[next]] = step;
+        let feeds = edges.iter().filter(|(from, _)| *from == clips[next]);
+        for target in feeds.filter_map(|(_, to)| clips.binary_search(to).ok()) {
+            incoming[target] -= 1;
+        }
+    }
+    let mut order = (0..transitions.len()).collect::<Vec<_>>();
+    order.sort_by_key(|&index| (rank[edges[index].1], rank[edges[index].0]));
+    Ok(order)
 }
 
 const fn cache_intent(intent: alpha2_model::CacheIntent) -> CacheIntent {
@@ -1141,7 +1220,7 @@ fn clip_layer<'a>(
         )?,
     };
     if !clip.masks.is_empty() {
-        source = mask_node(graph, source, clip.masks, time, runtime)?;
+        source = mask_node(graph, source, clip.masks, time, runtime, &clip.data)?;
     }
     // Cache the finished clip picture: layers above change often and everything below is in its
     // key. A bare source frame is already the host's, so only a bypass applies to it.
@@ -1149,6 +1228,15 @@ fn clip_layer<'a>(
     if intent == CacheIntent::Bypass || graph.node_kind(source) != Some(RenderNodeKind::Source) {
         graph
             .set_cache_intent(source, intent)
+            .map_err(GraphError::into_render_error)?;
+    }
+    if let Some(correction) = clip.correction {
+        source = graph
+            .add_composite(vec![GraphLayer {
+                source,
+                visual: correction_transform(correction),
+                blend_mode: BlendMode::Normal,
+            }])
             .map_err(GraphError::into_render_error)?;
     }
     Ok(GraphLayer {
@@ -1270,7 +1358,15 @@ fn plan_node<'a>(
                 Some(StepFrame::Layout(layout)) => layout.add_to(graph)?,
                 _ => return Err(RenderError::MissingText),
             },
-            op => step_node(renderer, graph, op, &built, at, step_runtime)?,
+            op => step_node(
+                renderer,
+                graph,
+                op,
+                &built,
+                at,
+                step_runtime,
+                composition.step_data(index),
+            )?,
         };
         built.push(node);
     }
@@ -1284,6 +1380,7 @@ fn step_input(built: &[RenderNodeId], step: usize) -> Result<RenderNodeId, Rende
     built.get(step).copied().ok_or(RenderError::InvalidGraph)
 }
 
+#[allow(clippy::too_many_lines)]
 fn step_node<'a>(
     renderer: &dyn EffectCatalog,
     graph: &mut RenderGraph<'a>,
@@ -1291,6 +1388,7 @@ fn step_node<'a>(
     built: &[RenderNodeId],
     time: MediaTime,
     runtime: EffectRuntime,
+    context: SampleContext<'a>,
 ) -> Result<RenderNodeId, RenderError> {
     let input = |step: usize| step_input(built, step);
     let node = match op {
@@ -1314,7 +1412,7 @@ fn step_node<'a>(
             effect,
         } => {
             let id = project_effect_id(renderer, &effect.id, effect.version)?;
-            let active = ActiveEffect::new(effect, time);
+            let active = ActiveEffect::new(effect, time, context);
             let params = effect_params(renderer, &id, active);
             let runtime = effect_runtime(renderer, &id, runtime);
             let mut named = EffectInputs::new();
@@ -1338,10 +1436,10 @@ fn step_node<'a>(
             progress,
         } => {
             let id = project_effect_id(renderer, &effect.id, effect.version)?;
-            let active = ActiveEffect::new(effect, time);
+            let active = ActiveEffect::new(effect, time, context);
             let params = effect_params(renderer, &id, active);
             let runtime = EffectRuntime {
-                progress: sample_scalar(progress, time).clamp(0.0, 1.0),
+                progress: sample_scalar(progress, time, &context).clamp(0.0, 1.0),
                 ..effect_runtime(renderer, &id, runtime)
             };
             graph.add_transition_with_resources(
@@ -1360,7 +1458,12 @@ fn step_node<'a>(
         } => graph
             .add_composite(vec![GraphLayer {
                 source: input(*from)?,
-                visual: layer_transform(sample_visual(transform, time, graph_aspect(graph))),
+                visual: layer_transform(sample_visual(
+                    transform,
+                    time,
+                    graph_aspect(graph),
+                    &context,
+                )),
                 blend_mode: BlendMode::Normal,
             }])
             .map_err(GraphError::into_render_error)?,
@@ -1369,7 +1472,8 @@ fn step_node<'a>(
                 .iter()
                 .map(|layer| {
                     let mut placed = identity_layer(input(layer.input)?);
-                    placed.visual.opacity = sample_scalar(&layer.opacity, time).clamp(0.0, 1.0);
+                    placed.visual.opacity =
+                        sample_scalar(&layer.opacity, time, &context).clamp(0.0, 1.0);
                     placed.blend_mode = blend_mode(layer.blend_mode);
                     Ok(placed)
                 })
@@ -1384,7 +1488,7 @@ fn step_node<'a>(
             mode,
         } => matte_node(graph, input(*from)?, input(*matte)?, *mode, runtime)?,
         StepOp::ShapeMask { input: from, masks } => {
-            mask_node(graph, input(*from)?, masks, time, runtime)?
+            mask_node(graph, input(*from)?, masks, time, runtime, &context)?
         }
     };
     Ok(node)
@@ -1405,6 +1509,7 @@ fn mask_node(
     masks: &[ShapeMask],
     time: MediaTime,
     runtime: EffectRuntime,
+    context: &SampleContext<'_>,
 ) -> Result<RenderNodeId, RenderError> {
     let size = graph.size();
     let canvas = alpha2_geometry::CanvasSize::new(size.width, size.height);
@@ -1419,7 +1524,7 @@ fn mask_node(
     }
     let mut coverages = Vec::with_capacity(shown.len());
     for mask in shown {
-        let outline = alpha2_eval::evaluate_geometry(&mask.shape, time, aspect);
+        let outline = alpha2_eval::evaluate_geometry(&mask.shape, time, aspect, context);
         let items = [
             alpha2_geometry::EvaluatedItem::Geometry(outline),
             alpha2_geometry::EvaluatedItem::Fill {
@@ -1432,7 +1537,7 @@ fn mask_node(
             &items, canvas,
         )));
         #[allow(clippy::cast_precision_loss)]
-        let sigma = 0.3125 * sample_scalar(&mask.feather, time).max(0.0) * unit as f32;
+        let sigma = 0.3125 * sample_scalar(&mask.feather, time, context).max(0.0) * unit as f32;
         let coverage = graph
             .add_gaussian_pixels(coverage, sigma, timeless(runtime))
             .map_err(GraphError::into_render_error)?;
@@ -1666,6 +1771,21 @@ fn identity_layer(source: RenderNodeId) -> GraphLayer {
     }
 }
 
+/// A correction as a layer transform: turned and scaled about the layer's centre, then moved by
+/// its translation in fractions of the displayed picture, as `Correction::apply` maps points.
+fn correction_transform(correction: alpha2_eval::Correction) -> LayerTransform {
+    LayerTransform {
+        position: [
+            0.5 + correction.translate.x * correction.picture.x,
+            0.5 + correction.translate.y * correction.picture.y,
+        ],
+        anchor: [0.5, 0.5],
+        scale: [correction.scale, correction.scale],
+        rotation_degrees: correction.rotation_degrees,
+        opacity: 1.0,
+    }
+}
+
 const fn layer_transform(visual: EvaluatedVisual) -> LayerTransform {
     LayerTransform {
         position: [visual.position.x, visual.position.y],
@@ -1686,14 +1806,20 @@ fn effect_params<'a>(
     effect: ActiveEffect<'a>,
 ) -> EffectParams<'a> {
     let mut params = EffectParams::with_capacity(effect.authored().params.len());
+    let definition = renderer.effect_definition(id);
     for (name, sample) in effect.params() {
         let mut value = param_value(sample.value);
-        if sample.interpolated
-            && let Some(spec) = renderer
-                .effect_definition(id)
-                .and_then(|definition| definition.params.iter().find(|spec| spec.name == name))
-        {
-            value = clamp_to_range(spec, value);
+        let spec = definition
+            .as_ref()
+            .and_then(|definition| definition.params.iter().find(|spec| spec.name == name));
+        if let Some(spec) = spec {
+            // A scalar data set feeding a Vec2 parameter sets both components.
+            if let (ParamType::Vec2, ParamValue::Float(scalar)) = (spec.param_type, &value) {
+                value = ParamValue::Vec2([*scalar, *scalar]);
+            }
+            if sample.interpolated {
+                value = clamp_to_range(spec, value);
+            }
         }
         params.insert(name, value);
     }
@@ -1707,7 +1833,6 @@ fn project_effect_id(
 ) -> Result<EffectId, RenderError> {
     renderer
         .project_effect_id(id, version)
-        .cloned()
         .ok_or(RenderError::UnknownEffect)
 }
 

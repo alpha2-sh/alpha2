@@ -31,6 +31,22 @@ fn a_rate_control_child_answers_in_one_line() {
 }
 
 #[test]
+fn the_features_command_lists_the_features_this_build_has() {
+    let features = compiled_features();
+    assert_eq!(features.contains(&"hwdecode"), cfg!(feature = "hwdecode"));
+    assert_eq!(features.contains(&"hwencode"), cfg!(feature = "hwencode"));
+    assert_eq!(features.contains(&"timeline"), cfg!(feature = "timeline"));
+    assert!(run(vec!["features".to_owned()], &mut Decoding::default()).is_ok());
+    assert!(
+        run(
+            vec!["features".to_owned(), "extra".to_owned()],
+            &mut Decoding::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn the_waveform_command_summarizes_a_source_at_its_own_rate() {
     let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus");
     let path = corpus.join("audio-adts.aac");

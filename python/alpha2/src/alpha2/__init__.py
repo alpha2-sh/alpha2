@@ -29,7 +29,7 @@ except ImportError as _refused:
         ) from _refused
     raise
 
-from . import compose, layout, shapes
+from . import compose, edit, layout, shapes
 from . import effect_values as fx
 from ._native import __version__
 from .builder import (
@@ -64,9 +64,11 @@ from .errors import (
     Alpha2AbortError,
     Alpha2ComposeError,
     Alpha2ConformError,
+    Alpha2EditError,
     Alpha2GpuInitializationError,
     Alpha2HostError,
     Alpha2HostInstallError,
+    Alpha2InternalError,
     Alpha2ProjectValidationError,
 )
 from .install import (
@@ -114,9 +116,11 @@ __all__ = [
     "Alpha2AbortError",
     "Alpha2ComposeError",
     "Alpha2ConformError",
+    "Alpha2EditError",
     "Alpha2GpuInitializationError",
     "Alpha2HostError",
     "Alpha2HostInstallError",
+    "Alpha2InternalError",
     "Alpha2ProjectValidationError",
     "CaptionTrackBuilder",
     "ExportProgress",
@@ -140,6 +144,7 @@ __all__ = [
     "conform",
     "constant",
     "cubic_bezier",
+    "edit",
     "effect",
     "export",
     "frames",

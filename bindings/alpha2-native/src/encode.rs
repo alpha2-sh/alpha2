@@ -25,10 +25,9 @@ use alpha2_media::{
 };
 use alpha2_time::MediaTime;
 use rsmpeg::avcodec::{AVCodecContext, AVPacket};
-use rsmpeg::avutil::{AVFrameWithImage, AVImage, AVRational, av_rescale_q};
+use rsmpeg::avutil::{AVRational, av_rescale_q};
 use rsmpeg::error::RsmpegError;
 use rsmpeg::ffi;
-use rsmpeg::swscale::SwsContext;
 
 /// Where one encode sink's wall time went, split into codec, packet drain and mux write so a
 /// change in one is visible.
@@ -77,50 +76,7 @@ impl EncodeStageTimings {
     }
 }
 
-thread_local! {
-    /// What this thread calls before each encoder and muxer call ([`watch_encode_calls`]).
-    static ENCODE_CALL_WATCH: std::cell::RefCell<Option<Box<dyn Fn()>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Calls `beat` on this thread before every encoder and muxer call a sink
-/// makes, until the guard drops.
-///
-/// Some calls wait forever (`h264_vulkan` waits on fences with `UINT64_MAX`; `write(2)` to a stuck
-/// hard-mounted share retries forever) and cannot be interrupted, so the driving thread reports
-/// where it is and its owner decides when a call is stuck. The audio encoder's thread is covered by
-/// the call that waits on it.
-#[must_use = "the watch ends when the guard drops"]
-pub fn watch_encode_calls(beat: impl Fn() + 'static) -> EncodeCallWatch {
-    let previous = ENCODE_CALL_WATCH.with(|watch| watch.replace(Some(Box::new(beat))));
-    EncodeCallWatch {
-        previous,
-        thread: std::marker::PhantomData,
-    }
-}
-
-/// Ends a [`watch_encode_calls`] watch, restoring the one before it.
-pub struct EncodeCallWatch {
-    previous: Option<Box<dyn Fn()>>,
-    thread: std::marker::PhantomData<*const ()>,
-}
-
-impl Drop for EncodeCallWatch {
-    fn drop(&mut self) {
-        let previous = self.previous.take();
-        ENCODE_CALL_WATCH.with(|watch| {
-            watch.replace(previous);
-        });
-    }
-}
-
-pub(crate) fn beat_encode_call() {
-    ENCODE_CALL_WATCH.with(|watch| {
-        if let Some(beat) = watch.borrow().as_ref() {
-            beat();
-        }
-    });
-}
+pub(crate) use alpha2_host_core::encode_watch::beat_encode_call;
 
 /// Runs `body`, an encoder or muxer call, adding its time to `total` and beating the watch.
 pub(crate) fn timed<T>(total: &mut Duration, body: impl FnOnce() -> T) -> T {
@@ -172,7 +128,7 @@ pub struct NativeAvEncodeSink {
     /// One frame in `video_encoder_time_base`.
     pub(crate) video_frame_units: i64,
     pub(crate) video_stream_time_base: AVRational,
-    pub(crate) video_scaler: SwsContext,
+    pub(crate) video_scaler: alpha2_ffmpeg_bridge::PackedScaler,
     /// Turns decoded YUV of any layout into the encoder's 4:2:0.
     pub(crate) yuv_input: crate::convert::Yuv420pConverter,
     pub(crate) width: i32,
@@ -343,7 +299,7 @@ impl NativeAvEncodeSink {
         }
         let target = path.into();
         let partial = PartialOutput::claim(&target, SeekNeed::Required)?;
-        let mut output = partial.open_muxer(config.video.container)?;
+        let mut output = crate::partial::open_muxer(&partial, config.video.container)?;
         let global_header =
             output.oformat().flags & i32::try_from(ffi::AVFMT_GLOBALHEADER).unwrap_or(0) != 0;
 
@@ -402,19 +358,13 @@ impl NativeAvEncodeSink {
             output.streams()[usize::try_from(video_stream_index).unwrap_or(0)].time_base;
         let audio_stream_time_base =
             output.streams()[usize::try_from(audio_stream_index).unwrap_or(0)].time_base;
-        let mut video_scaler = SwsContext::get_context(
+        let mut video_scaler = alpha2_ffmpeg_bridge::PackedScaler::new(
             width,
             height,
             ffi::AV_PIX_FMT_RGBA,
-            width,
-            height,
             ffi::AV_PIX_FMT_YUV420P,
-            ffi::SWS_BILINEAR,
-            None,
-            None,
-            None,
         )
-        .ok_or_else(|| EncodeError::Adapter("cannot create RGBA to YUV scaler".into()))?;
+        .map_err(|_| EncodeError::Adapter("cannot create RGBA to YUV scaler".into()))?;
         configure_rgba_to_yuv(&mut video_scaler, config.video.color)
             .map_err(encode_adapter_error)?;
         let audio_input = audio.input;
@@ -546,8 +496,10 @@ impl NativeAvEncodeSink {
                 .output
                 .as_mut()
                 .ok_or_else(|| EncodeError::Adapter("muxer is already closed".into()))?;
+            let bytes = u64::try_from(queued.packet.size).unwrap_or(0);
             timed(total, || output.interleaved_write_frame(&mut queued.packet))
                 .map_err(|error| encode_adapter_error_at("packet write failed", error))?;
+            self.partial.wrote(bytes)?;
         }
         Ok(())
     }
@@ -592,6 +544,13 @@ impl NativeAvEncodeSink {
         {
             return Err(EncodeError::Adapter(
                 "encoder input dimensions do not match its configuration".into(),
+            ));
+        }
+        if crate::convert::pixel_format(self.video_selection.pixels).ok()
+            != Some(frame.frame().format)
+        {
+            return Err(EncodeError::Adapter(
+                "encoder input pixel format does not match its configuration".into(),
             ));
         }
         let pts = av_rescale_q(pts.ticks(), tick_base(), self.video_encoder_time_base);
@@ -671,11 +630,9 @@ impl NativeAvEncodeSink {
         // translucent layers at full strength.
         let rgba = alpha2_ffmpeg_bridge::rgba_frame(&plane.bytes, self.width, self.height)
             .map_err(encode_adapter_error)?;
-        let yuv_image = AVImage::new(ffi::AV_PIX_FMT_YUV420P, self.width, self.height, 1)
-            .ok_or_else(|| EncodeError::Adapter("cannot allocate YUV input".into()))?;
-        let mut yuv = AVFrameWithImage::new(yuv_image);
-        self.video_scaler
-            .scale_frame(&rgba, 0, self.height, &mut yuv)
+        let mut yuv = self
+            .video_scaler
+            .convert_to_frame(&rgba)
             .map_err(encode_adapter_error)?;
         yuv.set_pts(pts);
         yuv.set_time_base(self.video_encoder_time_base);
@@ -1045,6 +1002,8 @@ impl NativeWavEncodeSink {
                     .extend_from_slice(&block.channels[*plane][frame].to_le_bytes());
             }
         }
+        self.partial
+            .wrote(u64::try_from(self.interleaved.len()).unwrap_or(u64::MAX))?;
         file.write_all(&self.interleaved)
             .map_err(encode_adapter_error)?;
         self.frames_written = self

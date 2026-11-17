@@ -1,10 +1,6 @@
 use super::*;
 
-fn corpus(name: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/corpus")
-        .join(name)
-}
+use alpha2_test_support::corpus;
 
 /// A relative name with a colon is not taken for a protocol.
 #[test]
@@ -22,7 +18,7 @@ fn a_file_url_is_absolute_and_prefixed() {
 fn an_interrupt_stops_the_call_that_waits_on_input() {
     let backward = i32::try_from(ffi::AVSEEK_FLAG_BACKWARD).expect("flag fits");
     let mut input =
-        open_input(&corpus("h264-bt709-copy.mp4"), c"mov").expect("an MP4 opens as mov");
+        open_input(&corpus("h264-bt709-copy.mp4"), c"mov", None).expect("an MP4 opens as mov");
     input.interrupt_when(|| true);
     // Reading through the file outgrows the I/O buffer, so a refill gets interrupted.
     input.seek(-1, 0, backward).expect("seeking reads nothing");
@@ -45,10 +41,14 @@ fn an_interrupt_stops_the_call_that_waits_on_input() {
 /// A JPEG with an Exif segment opens with the JPEG demuxer, not `image2`.
 #[test]
 fn a_still_opens_with_the_demuxer_its_bytes_name() {
-    let input = open_input(&corpus("exif-orientation-6.jpg"), c"png_pipe,jpeg_pipe")
-        .unwrap_or_else(|error| panic!("{error}"));
+    let input = open_input(
+        &corpus("exif-orientation-6.jpg"),
+        c"png_pipe,jpeg_pipe",
+        None,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(input.iformat().name(), c"jpeg_pipe");
-    let refused = open_input(&corpus("exif-orientation-6.jpg"), c"png_pipe")
+    let refused = open_input(&corpus("exif-orientation-6.jpg"), c"png_pipe", None)
         .err()
         .expect("a JPEG is not a PNG");
     assert!(
@@ -59,7 +59,7 @@ fn a_still_opens_with_the_demuxer_its_bytes_name() {
 
 #[test]
 fn a_container_the_policy_leaves_out_is_refused_by_name() {
-    let refused = open_input(&corpus("h264-long-gop.mp4"), c"matroska")
+    let refused = open_input(&corpus("h264-long-gop.mp4"), c"matroska", None)
         .err()
         .expect("an MP4 is not Matroska");
     assert!(

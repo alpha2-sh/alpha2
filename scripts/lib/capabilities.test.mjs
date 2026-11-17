@@ -14,6 +14,7 @@ import {
   summarizeSkipLog,
   virtualMachine,
   virtualMachineEncoderStall,
+  virtualMachineWorkerDecoder,
 } from "./capabilities.mjs";
 
 test("ALPHA2_REQUIRE is a trimmed comma list of known names", () => {
@@ -103,26 +104,28 @@ test("records appended by many processes are whole lines", async () => {
       Array.from(
         { length: 8 },
         () =>
-          new Promise((resolveChild, reject) => {
-            const child = spawn(
-              process.execPath,
-              ["--input-type=module", "-e", script],
-              {
-                env: {
-                  ...process.env,
-                  ALPHA2_SKIP_LOG: log,
-                  ALPHA2_REQUIRE: "",
+          /** @type {Promise<void>} */ (
+            new Promise((resolveChild, reject) => {
+              const child = spawn(
+                process.execPath,
+                ["--input-type=module", "-e", script],
+                {
+                  env: {
+                    ...process.env,
+                    ALPHA2_SKIP_LOG: log,
+                    ALPHA2_REQUIRE: "",
+                  },
+                  stdio: "ignore",
                 },
-                stdio: "ignore",
-              },
-            );
-            child.once("error", reject);
-            child.once("exit", (code) =>
-              code === 0
-                ? resolveChild()
-                : reject(new Error(`child exited ${code}`)),
-            );
-          }),
+              );
+              child.once("error", reject);
+              child.once("exit", (code) =>
+                code === 0
+                  ? resolveChild()
+                  : reject(new Error(`child exited ${code}`)),
+              );
+            })
+          ),
       ),
     );
     const lines = readFileSync(log, "utf8").trimEnd().split("\n");
@@ -144,6 +147,19 @@ test("only a video encoder stall on a virtual machine is forgiven", () => {
   ]) {
     const reason = virtualMachineEncoderStall(stall);
     if (guest === null) assert.equal(reason, null);
-    else assert.match(reason, /stalled.*virtual machine/);
+    else assert.match(reason ?? "", /stalled.*virtual machine/);
   }
+});
+
+test("only a preview worker without a video decoder on a virtual machine is forgiven", () => {
+  for (const other of [
+    null,
+    "The preview worker failed (WebGPU device lost); the preview renders on the main thread",
+  ])
+    assert.equal(virtualMachineWorkerDecoder(other), null);
+  const reason = virtualMachineWorkerDecoder(
+    "The preview worker failed (No worker decoder for src-1; use the main-thread media fallback); the preview renders on the main thread",
+  );
+  if (virtualMachine() === null) assert.equal(reason, null);
+  else assert.match(reason ?? "", /no video decoder.*virtual machine/);
 });

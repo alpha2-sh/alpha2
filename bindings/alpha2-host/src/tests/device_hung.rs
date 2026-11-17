@@ -34,7 +34,7 @@ fn export_that_loses_its_device() {
     project["timeline"]["tracks"][0]["clips"][0]["composition"] = json!({"id": "heavy"});
     let request = parse_request(
         &json!({
-            "protocolVersion": 1,
+            "protocolVersion": 2,
             "operation": "export",
             "requestId": "hung",
             "project": project,
@@ -150,7 +150,7 @@ fn heavy_export_submissions(watchdog_ms: u32) -> Value {
     project["timeline"]["tracks"][0]["clips"][0]["composition"] = json!({"id": "look"});
     let request = parse_request(
         &json!({
-            "protocolVersion": 1,
+            "protocolVersion": 2,
             "operation": "export",
             "requestId": "split",
             "project": project,

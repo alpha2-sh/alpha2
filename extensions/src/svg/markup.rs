@@ -1,9 +1,10 @@
-//! Element nesting depth, measured from the raw text before any XML parser runs.
+//! Element nesting and entity expansion, measured from the raw text before any XML parser runs.
 //!
 //! The XML parser, usvg, and resvg all recurse per nesting level, so a few thousand levels
 //! overflow the stack (aborting natively, trapping in wasm). This non-recursive scan refuses
-//! documents deeper than [`super::MAX_NESTING`]. It is not a validating parser; it must only
-//! never count less than the parser would.
+//! documents deeper than [`super::MAX_NESTING`], and sums the bytes entity references expand to
+//! in text and attribute values, which the parser copies or reads. It is not a validating parser;
+//! it must only never count less than the parser would.
 
 use std::collections::HashMap;
 
@@ -12,35 +13,43 @@ use crate::api::ExtensionError;
 /// Entity reference nesting roxmltree allows; deeper is reported with its error.
 const MAX_ENTITY_DEPTH: usize = 10;
 
-/// The deepest element nesting in `text`, with entity expansions included, or
-/// [`ExtensionError::Budget`] once it passes `limit`.
-pub(super) fn nesting(text: &str, limit: usize) -> Result<usize, ExtensionError> {
+/// The bytes every entity reference in `text` expands to, in text and attribute values, summed;
+/// or [`ExtensionError::Budget`] once its elements nest past `limit`, entity expansions included.
+pub(super) fn entity_expansion(text: &str, limit: usize) -> Result<usize, ExtensionError> {
+    measure(text, limit).map(|(_, expanded)| expanded)
+}
+
+/// The deepest element nesting in `text` and the bytes its entity references expand to.
+fn measure(text: &str, limit: usize) -> Result<(usize, usize), ExtensionError> {
     let mut scan = Scan {
-        entities: Vec::new(),
-        depths: HashMap::new(),
+        entities: HashMap::new(),
+        measured: HashMap::new(),
         limit,
     };
     scan.content(text.as_bytes(), 0, 0)
 }
 
 struct Scan<'a> {
-    /// Declared general entities in order; the first declaration of a name wins.
-    entities: Vec<(&'a [u8], &'a [u8])>,
-    /// Measured entity depths; `None` while measuring, to detect loops.
-    depths: HashMap<&'a [u8], Option<usize>>,
+    /// Declared general entities; the first declaration of a name wins.
+    entities: HashMap<&'a [u8], &'a [u8]>,
+    /// Each measured entity's depth and the bytes one reference to it expands to; `None` while
+    /// measuring, to detect loops.
+    measured: HashMap<&'a [u8], Option<(usize, usize)>>,
     limit: usize,
 }
 
 impl<'a> Scan<'a> {
-    /// The deepest nesting in `bytes`, starting `base` levels and `entities` references deep.
+    /// The deepest nesting in `bytes`, starting `base` levels and `entities` references deep, and
+    /// the bytes its entity references expand to.
     fn content(
         &mut self,
         bytes: &'a [u8],
         base: usize,
         entities: usize,
-    ) -> Result<usize, ExtensionError> {
+    ) -> Result<(usize, usize), ExtensionError> {
         let mut depth = base;
         let mut deepest = base;
+        let mut expanded = 0_usize;
         let mut at = 0;
         while let Some(offset) = bytes[at..].iter().position(|&b| b == b'<' || b == b'&') {
             at += offset;
@@ -49,14 +58,11 @@ impl<'a> Scan<'a> {
                 let Some(end) = rest.iter().position(|&b| b == b';') else {
                     break;
                 };
-                let name = &rest[1..end];
                 at += end + 1;
-                if name.first() == Some(&b'#')
-                    || matches!(name, b"lt" | b"gt" | b"amp" | b"apos" | b"quot")
-                {
+                let Some((nested, bytes)) = self.reference(&rest[1..end], entities)? else {
                     continue;
-                }
-                let nested = self.entity(name, entities)?;
+                };
+                expanded = expanded.saturating_add(bytes);
                 deepest = deepest.max(self.within(depth.saturating_add(nested))?);
                 continue;
             }
@@ -72,9 +78,14 @@ impl<'a> Scan<'a> {
                 depth = depth.saturating_sub(1);
                 after(rest, 2, b">")
             } else {
-                let Some(end) = tag_end(rest) else {
+                let mut values = Vec::new();
+                let Some(end) = tag_end(rest, Some(&mut values)) else {
                     break;
                 };
+                for (start, end) in values {
+                    let bytes = self.references_in_value(&rest[start..end], entities)?;
+                    expanded = expanded.saturating_add(bytes);
+                }
                 deepest = deepest.max(self.within(depth + 1)?);
                 if rest[end - 1] != b'/' {
                     depth += 1;
@@ -86,7 +97,42 @@ impl<'a> Scan<'a> {
             };
             at += skipped;
         }
-        Ok(deepest)
+        Ok((deepest, expanded))
+    }
+
+    /// Bytes the entity references in a quoted attribute value expand to.
+    fn references_in_value(
+        &mut self,
+        value: &'a [u8],
+        entities: usize,
+    ) -> Result<usize, ExtensionError> {
+        let mut expanded = 0_usize;
+        let mut rest = value;
+        while let Some(start) = rest.iter().position(|&b| b == b'&') {
+            let Some(end) = rest[start..].iter().position(|&b| b == b';') else {
+                break;
+            };
+            let name = &rest[start + 1..start + end];
+            rest = &rest[start + end + 1..];
+            if let Some((_, bytes)) = self.reference(name, entities)? {
+                expanded = expanded.saturating_add(bytes);
+            }
+        }
+        Ok(expanded)
+    }
+
+    /// The levels and bytes a reference to `name` adds; `None` for a character reference or a
+    /// predefined entity, which expand to one character.
+    fn reference(
+        &mut self,
+        name: &'a [u8],
+        entities: usize,
+    ) -> Result<Option<(usize, usize)>, ExtensionError> {
+        if name.first() == Some(&b'#') || matches!(name, b"lt" | b"gt" | b"amp" | b"apos" | b"quot")
+        {
+            return Ok(None);
+        }
+        self.entity(name, entities).map(Some)
     }
 
     fn within(&self, depth: usize) -> Result<usize, ExtensionError> {
@@ -99,15 +145,20 @@ impl<'a> Scan<'a> {
         Ok(depth)
     }
 
-    /// Levels a reference to entity `name` adds: one plus its replacement text's depth.
-    fn entity(&mut self, name: &'a [u8], entities: usize) -> Result<usize, ExtensionError> {
+    /// Levels a reference to entity `name` adds (one plus its replacement text's depth) and the
+    /// bytes it expands to (its replacement text plus what the references in it expand to).
+    fn entity(
+        &mut self,
+        name: &'a [u8],
+        entities: usize,
+    ) -> Result<(usize, usize), ExtensionError> {
         let loop_error = || {
             ExtensionError::Malformed(
                 "SVG data parsing failed cause a possible entity reference loop is detected".into(),
             )
         };
-        match self.depths.get(name) {
-            Some(Some(depth)) => return Ok(*depth),
+        match self.measured.get(name) {
+            Some(Some(measured)) => return Ok(*measured),
             Some(None) => return Err(loop_error()),
             None => {}
         }
@@ -115,13 +166,14 @@ impl<'a> Scan<'a> {
             return Err(loop_error());
         }
         // An unknown entity is the parser's error.
-        let Some(&(_, value)) = self.entities.iter().find(|(declared, _)| *declared == name) else {
-            return Ok(0);
+        let Some(&value) = self.entities.get(name) else {
+            return Ok((0, 0));
         };
-        self.depths.insert(name, None);
-        let depth = self.content(value, 0, entities + 1)? + 1;
-        self.depths.insert(name, Some(depth));
-        Ok(depth)
+        self.measured.insert(name, None);
+        let (depth, expanded) = self.content(value, 0, entities + 1)?;
+        let measured = (depth + 1, value.len().saturating_add(expanded));
+        self.measured.insert(name, Some(measured));
+        Ok(measured)
     }
 
     /// The end of a doctype declaration in `rest`, recording its general entities.
@@ -150,7 +202,7 @@ impl<'a> Scan<'a> {
             } else if subset.starts_with(b"<!ENTITY") {
                 self.entity_declaration(subset)?
             } else if subset.starts_with(b"<") {
-                tag_end(subset)? + 1
+                tag_end(subset, None)? + 1
             } else {
                 // A parameter entity reference, or what the parser refuses.
                 1
@@ -160,7 +212,7 @@ impl<'a> Scan<'a> {
 
     /// The end of an entity declaration, recording a general entity's replacement text.
     fn entity_declaration(&mut self, decl: &'a [u8]) -> Option<usize> {
-        let end = tag_end(decl)?;
+        let end = tag_end(decl, None)?;
         let mut words = decl[8..end].trim_ascii_start();
         let general = !words.starts_with(b"%");
         if !general {
@@ -175,9 +227,8 @@ impl<'a> Scan<'a> {
             && let Some(&quote) = definition.first()
             && matches!(quote, b'"' | b'\'')
             && let Some(close) = find(&definition[1..], &[quote])
-            && !self.entities.iter().any(|(declared, _)| *declared == name)
         {
-            self.entities.push((name, &definition[1..=close]));
+            self.entities.entry(name).or_insert(&definition[1..=close]);
         }
         Some(end + 1)
     }
@@ -194,12 +245,19 @@ fn after(bytes: &[u8], from: usize, closing: &[u8]) -> Option<usize> {
     Some(from + find(bytes.get(from..)?, closing)? + closing.len())
 }
 
-/// The `>` ending the tag at the start of `bytes`, skipping quoted values.
-fn tag_end(bytes: &[u8]) -> Option<usize> {
+/// The `>` ending the tag at the start of `bytes`, skipping quoted values, whose ranges go to
+/// `values` when given.
+fn tag_end(bytes: &[u8], mut values: Option<&mut Vec<(usize, usize)>>) -> Option<usize> {
     let mut at = 1;
     loop {
         match *bytes.get(at)? {
-            quote @ (b'"' | b'\'') => at += 1 + find(&bytes[at + 1..], &[quote])? + 1,
+            quote @ (b'"' | b'\'') => {
+                let close = at + 1 + find(&bytes[at + 1..], &[quote])?;
+                if let Some(values) = values.as_mut() {
+                    values.push((at + 1, close));
+                }
+                at = close + 1;
+            }
             b'>' => return Some(at),
             _ => at += 1,
         }
@@ -208,10 +266,18 @@ fn tag_end(bytes: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::nesting;
+    use super::{entity_expansion, measure};
+
+    fn nesting(text: &str, limit: usize) -> Result<usize, crate::ExtensionError> {
+        measure(text, limit).map(|(depth, _)| depth)
+    }
 
     fn depth(text: &str) -> usize {
         nesting(text, usize::MAX).expect("measured")
+    }
+
+    fn expanded(text: &str) -> usize {
+        entity_expansion(text, usize::MAX).expect("measured")
     }
 
     #[test]
@@ -253,5 +319,30 @@ mod tests {
         assert!(nesting(&text(10), usize::MAX).is_err());
         let looping = r#"<!DOCTYPE svg [<!ENTITY a "&b;"><!ENTITY b "&a;">]><svg>&a;</svg>"#;
         assert!(nesting(looping, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn an_entity_expands_to_its_text_and_the_entities_it_names() {
+        // b is 4 bytes; a is 10 bytes plus three b; the body names a twice.
+        let text = r#"<!DOCTYPE svg [<!ENTITY b "<g/>"><!ENTITY a "x&b;&b;&b;">]><svg>&a;&a;&amp;&#65;</svg>"#;
+        assert_eq!(expanded(text), 2 * (10 + 3 * 4));
+        let unknown = "<svg>&nothing;</svg>";
+        assert_eq!(expanded(unknown), 0);
+    }
+
+    #[test]
+    fn an_entity_in_an_attribute_value_counts_as_it_expands() {
+        let text = |references: usize| {
+            format!(
+                r#"<!DOCTYPE svg [<!ENTITY t "{}"><!ENTITY m "{}">]><svg id='{}' class="&t;"/>"#,
+                "x".repeat(1000),
+                "&t;".repeat(255),
+                "&m;".repeat(references)
+            )
+        };
+        let one = 255 * 3 + 255 * 1000;
+        assert_eq!(expanded(&text(1)), one + 1000);
+        assert_eq!(expanded(&text(100)), 100 * one + 1000);
+        assert_eq!(nesting(&text(100), usize::MAX).expect("measured"), 1);
     }
 }

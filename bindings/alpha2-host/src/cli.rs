@@ -3,18 +3,19 @@ use std::path::PathBuf;
 
 use crate::assets::{ProxyRequest, RequestMedia, resolve_media};
 use crate::config::VideoDecodePolicy;
-use crate::effect_request::EffectRequest;
 use crate::host::Host;
+use crate::protocol::EffectRequest;
 use crate::protocol::{
     AudioQualityRequest, ExportMedia, ExportRequest, HostError, LoudnessRequest, ProjectJson,
-    PurposeRequest, RateRequest, Request, VideoQualityRequest,
+    RateRequest, Request, VideoQualityRequest,
 };
 use crate::{PROTOCOL_VERSION, create_host_with, write_stdout};
+use alpha2_assets::MediaPurpose;
 use alpha2_media::{AudioCodec, Container, VideoCodec};
 use serde_json::{Value, json};
 
 pub fn usage() -> String {
-    "usage: alpha2-host serve\n       alpha2-host conform --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--purpose preview|preview-proxy|thumbnail|remote-edit|export-original|export-proxy]\n       alpha2-host export --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] --effect-asset <resource-id>=<path> [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--overwrite] [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--alpha] [--bit-depth 8|10] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]".to_owned()
+    "usage: alpha2-host serve [--max-running <count>] [--max-memory-share <fraction>] [--max-memory-growth <bytes>] [--max-requests <count>] [--max-handles <count>] [--idle-timeout <ms>] [--extract-step-timeout <ms>] [--plugin-call-timeout <ms>] [--plugin-memory-limit <bytes>] [--plugins off|wasm|native] [--plugin-origins none|<https-origin>,...] [--plugin-root any|none|<dir>] [--allow-every-decoder]\n       alpha2-host conform --project <project.json> [--asset <source-id>=<path>]... [--proxy <source-id>=<path>]... [--purpose preview|preview_proxy|thumbnail|remote_edit|export_original|export_proxy] [--allow-every-decoder]\n       alpha2-host export --project <project.json> [--asset <source-id>=<path>]... [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] [--effect-asset <resource-id>=<path>]... [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--overwrite] [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--alpha] [--bit-depth 8|10] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]] [--allow-every-decoder]\n       alpha2-host probe-gpu-encode [<width> [<height>]]".to_owned()
 }
 
 #[derive(Default)]
@@ -25,7 +26,8 @@ pub struct ExportCliOptions {
     pub frames: HashMap<String, Vec<Option<PathBuf>>>,
     pub resources: HashMap<String, HashMap<String, PathBuf>>,
     pub media: ExportMedia,
-    pub purpose: PurposeRequest,
+    /// `None` for `export_original`.
+    pub purpose: Option<MediaPurpose>,
     pub effect_assets: HashMap<String, PathBuf>,
     pub font_files: Vec<PathBuf>,
     pub effects: Option<PathBuf>,
@@ -79,7 +81,7 @@ pub fn conform_cli(args: Vec<String>) -> Result<(), HostError> {
         &project,
         &media,
         &media,
-        options.purpose.purpose(),
+        options.purpose.unwrap_or(MediaPurpose::ExportOriginal),
         &hardware,
     );
     let ready = resolved.report.ready;
@@ -115,6 +117,14 @@ pub fn export_cli(args: Vec<String>, host: &mut Option<Host>) -> Result<(), Host
     let (request, output) = export_request(options)?;
     crate::install_termination();
     crate::termination::terminations().hold_busy();
+    crate::heartbeat::supervise_requests(crate::request_stalled);
+    let _watch = crate::heartbeat::watch_request(
+        "cli-export",
+        None,
+        true,
+        crate::heartbeat::RequestSide::Input,
+        "prepare",
+    );
     let host = host.insert(create_host_with(policy, renderer)?);
     let result = host.handle(request, &mut report_progress)?;
     write_stdout(&json!({
@@ -156,9 +166,11 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
         None => Vec::new(),
     };
     let request = ExportRequest {
+        operation: serde::de::IgnoredAny,
+        attachments: serde::de::IgnoredAny,
         protocol_version: PROTOCOL_VERSION,
         request_id: "cli-export".to_owned(),
-        project: ProjectJson::from_value(&project)?,
+        project: ProjectJson::from_value(&project).map_err(HostError::json)?,
         assets: options.assets,
         proxies: options.proxies,
         frames: options.frames,
@@ -195,10 +207,12 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
         audio_codec: options.audio_codec,
         audio_quality: options.audio_quality,
         loudness: match (options.loudness_target, options.true_peak_ceiling) {
-            // EBU R128's broadcast ceiling, and the platforms' usual one.
             (Some(target), ceiling) => Some(
-                LoudnessRequest::new(target, ceiling.unwrap_or(-1.0))
-                    .map_err(HostError::invalid_input)?,
+                LoudnessRequest::new(
+                    target,
+                    ceiling.unwrap_or(alpha2_compose::DEFAULT_TRUE_PEAK_CEILING_DBTP),
+                )
+                .map_err(HostError::invalid_input)?,
             ),
             (None, Some(_)) => {
                 return Err(HostError::invalid_input(
@@ -244,7 +258,7 @@ fn render_cache_request(
     match (directory, quota, backlog) {
         (Some(directory), quota, backlog) => crate::render_cache::RenderCacheRequest::new(
             directory,
-            quota.unwrap_or(crate::render_cache::DEFAULT_QUOTA_BYTES),
+            quota.unwrap_or(alpha2_host_core::requests::DEFAULT_RENDER_CACHE_QUOTA_BYTES),
             backlog.unwrap_or_default(),
         )
         .map(Some)
@@ -336,11 +350,12 @@ pub fn parse_export_args(args: Vec<String>) -> Result<ExportCliOptions, HostErro
                     .map_err(|_| HostError::invalid_input("--media must be original or proxies"))?;
             }
             "--purpose" => {
-                options.purpose = serde_json::from_value(json!(value(&mut args)?)).map_err(|_| {
-                    HostError::invalid_input(
-                        "--purpose must be preview, preview-proxy, thumbnail, remote-edit, export-original, or export-proxy",
-                    )
-                })?;
+                options.purpose =
+                    Some(serde_json::from_value(json!(value(&mut args)?)).map_err(|_| {
+                        HostError::invalid_input(
+                            "--purpose must be preview, preview_proxy, thumbnail, remote_edit, export_original, or export_proxy",
+                        )
+                    })?);
             }
             "--font" => {
                 let path = value(&mut args)?;
@@ -494,7 +509,8 @@ fn end_ticks(requested: Option<i64>, project: &[u8]) -> Result<i64, HostError> {
     }
 }
 
-/// The end of everything the timeline shows, caption cues included; `None` when it shows nothing.
+/// The end of the project's default export range (everything the timeline shows, caption cues
+/// included); `None` when it shows nothing.
 ///
 /// # Errors
 /// Returns `INVALID_INPUT` for a document that is not a valid project.
@@ -503,5 +519,7 @@ pub fn project_end_ticks(project: &[u8]) -> Result<Option<i64>, HostError> {
         .map_err(|error| HostError::invalid_input(format!("the project is not UTF-8: {error}")))?;
     let project = alpha2_model::Project::from_json(text)
         .map_err(|error| HostError::invalid_input(error.to_string()))?;
-    Ok(project.timeline.extent().map(|extent| extent.end().ticks()))
+    Ok(project
+        .default_export_range()
+        .map(|range| range.end().ticks()))
 }

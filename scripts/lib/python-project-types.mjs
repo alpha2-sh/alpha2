@@ -60,7 +60,7 @@ const PRIMITIVE_ARGUMENTS = new Map([
   ["string", "str"],
 ]);
 
-const GENERICS = new Set(["Animated", "Keyframe"]);
+const GENERICS = new Set(["Animated", "Keyframed", "Keyframe"]);
 
 function pascal(text) {
   return text
@@ -116,8 +116,49 @@ export function pythonProjectTypes(schema, limits) {
   return pythonTypes(schema, { root: "Project", header, limits });
 }
 
+/** The compose schema with its `$ref`s into the project schema made local, with every project
+ * type they reach copied in. */
+function withProjectTypes(schema, projectSchema) {
+  const external = `${projectSchema.$id}#/$defs/`;
+  const projectDefs = projectSchema.$defs ?? {};
+  const copy = structuredClone(schema);
+  const defs = copy.$defs ?? {};
+  const pending = [];
+  const localize = (node) => {
+    if (Array.isArray(node)) return node.forEach(localize);
+    if (node === null || typeof node !== "object") return;
+    if (typeof node.$ref === "string" && node.$ref.startsWith(external)) {
+      const name = node.$ref.slice(external.length);
+      node.$ref = `#/$defs/${name}`;
+      if (!(name in defs)) pending.push(name);
+    }
+    Object.values(node).forEach(localize);
+  };
+  localize(copy);
+  while (pending.length > 0) {
+    const name = pending.pop();
+    if (name in defs) continue;
+    if (!(name in projectDefs))
+      throw new Error(`the project schema has no type ${name}`);
+    defs[name] = structuredClone(projectDefs[name]);
+    const reach = (node) => {
+      if (Array.isArray(node)) return node.forEach(reach);
+      if (node === null || typeof node !== "object") return;
+      if (typeof node.$ref === "string" && node.$ref.startsWith("#/$defs/")) {
+        const inner = node.$ref.slice("#/$defs/".length);
+        if (!(inner in defs)) pending.push(inner);
+      }
+      Object.values(node).forEach(reach);
+    };
+    reach(defs[name]);
+  }
+  copy.$defs = defs;
+  return copy;
+}
+
 /** Model types the compose spec embeds are imported from `alpha2.types`, not redeclared. */
-export function pythonComposeTypes(schema, projectSchema) {
+export function pythonComposeTypes(composeSchema, projectSchema) {
+  const schema = withProjectTypes(composeSchema, projectSchema);
   const projectDefs = projectSchema.$defs ?? {};
   const defs = schema.$defs ?? {};
   const shared = new Set();
@@ -143,6 +184,11 @@ export function pythonComposeTypes(schema, projectSchema) {
   });
 }
 
+/**
+ * @param {{ $defs?: Record<string, object> }} schema
+ * @param {{ root: string, header: string, limits: Record<string, any>, shared?: Set<string>,
+ *   sharedModule?: string }} options
+ */
 function pythonTypes(
   schema,
   { root, header, limits, shared = new Set(), sharedModule },
@@ -250,6 +296,7 @@ function pythonTypes(
     function member(variant, owner, index) {
       if (variant.type !== "object" || variant.properties === undefined)
         return type(variant, owner);
+      if (variant.additionalProperties !== false) return object(variant, owner);
       const tag = Object.entries(variant.properties).find(
         ([, property]) => typeof property.const === "string",
       );
@@ -258,11 +305,19 @@ function pythonTypes(
         throw new Error(
           `inline type ${name} collides with schema type ${name}`,
         );
-      return declareClass(name, variant);
+      // The `data` value mode reads a data set, so its fields do not depend on the value's type.
+      const dataMode = variant.properties.mode?.const === "data";
+      return declareClass(name, variant, dataMode ? null : generic);
     }
 
     function object(node, owner) {
       const properties = node.properties ?? {};
+      // Open objects (a box's CSS fields) are plain mappings, as in `declareDef`.
+      if (
+        Object.keys(properties).length > 0 &&
+        node.additionalProperties !== false
+      )
+        return "dict[str, Any]";
       if (Object.keys(properties).length === 0) {
         const values = node.additionalProperties;
         if (typeof values === "object" && values !== null)
@@ -276,7 +331,7 @@ function pythonTypes(
       return declareClass(owner, node);
     }
 
-    function declareClass(name, node) {
+    function declareClass(name, node, innerGeneric = generic) {
       const properties = node.properties ?? {};
       if (node.additionalProperties !== false) {
         throw new Error(
@@ -284,7 +339,7 @@ function pythonTypes(
         );
       }
       const required = new Set(node.required ?? []);
-      const inner = renderer(out, generic);
+      const inner = renderer(out, innerGeneric ?? undefined);
       const fields = Object.entries(properties).map(([field, property]) => {
         const rendered = inner.type(property, name + pascal(field));
         return {
@@ -314,11 +369,12 @@ function pythonTypes(
           throw new Error(
             `${name} needs the functional TypedDict syntax, which is not generic`,
           );
-        // A Python keyword (`from`) cannot be a class-body field.
+        // A Python keyword (`from`) cannot be a class-body field. The call evaluates its
+        // annotations, so they are strings: a type declared later still resolves.
         const entries = fields
           .map(
             ({ field, annotation }) =>
-              `        ${JSON.stringify(field)}: ${annotation},`,
+              `        ${JSON.stringify(field)}: ${JSON.stringify(annotation)},`,
           )
           .join("\n");
         text =
@@ -370,6 +426,19 @@ function pythonTypes(
   function declareDef(out, name, node, generic) {
     const r = renderer(out, generic);
     const doc = schemaDoc({ description: node.description });
+    // An object that also takes fields it does not name (an effect's parameters) has no
+    // TypedDict; it is a plain mapping.
+    if (
+      node.type === "object" &&
+      node.properties !== undefined &&
+      node.additionalProperties !== false
+    ) {
+      out.declare(
+        name,
+        `${name}: TypeAlias = dict[str, Any]\n${docstring(doc, "")}`,
+      );
+      return;
+    }
     if (node.type === "object" && node.properties !== undefined) {
       r.declareClass(name, node);
       return;
@@ -480,10 +549,16 @@ function pythonTypes(
     imported.length === 0
       ? ""
       : `from ${sharedModule} import (\n${imported.map((name) => `    ${name},`).join("\n")}\n)\n\n`;
+  // `Any` only for open mappings, so a module without one imports nothing unused.
+  const typing = [...out.declared.values()].some((text) =>
+    text.includes("dict[str, Any]"),
+  )
+    ? ["Any", ...TYPING_NAMES]
+    : TYPING_NAMES;
   const preamble =
     header +
     "\nfrom __future__ import annotations\n\n" +
-    `from typing import ${TYPING_NAMES.join(", ")}\n\n` +
+    `from typing import ${typing.join(", ")}\n\n` +
     imports +
     'T = TypeVar("T")\n';
   return [

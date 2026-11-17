@@ -16,8 +16,14 @@ AUDIO_EFFECT_STATE_MARGIN_MS = 1100
 CURRENT_SCHEMA_VERSION = 1
 """Mirrors `alpha2_model::CURRENT_SCHEMA_VERSION`."""
 
+MAX_ANIMATOR_OFFSET = 1024
+"""Mirrors `alpha2_model::MAX_ANIMATOR_OFFSET`."""
+
 MAX_ANIMATOR_SCALE = 10
 """Mirrors `alpha2_model::MAX_ANIMATOR_SCALE`."""
+
+MAX_ASPECT_RATIO = 10000
+"""Mirrors `alpha2_model::MAX_ASPECT_RATIO`."""
 
 MAX_AUDIO_CHANNELS = 24
 """Mirrors `alpha2_model::MAX_AUDIO_CHANNELS`."""
@@ -82,8 +88,47 @@ MAX_COMPRESSOR_RATIO = 100
 MAX_DASH_ENTRIES = 16
 """Mirrors `alpha2_model::MAX_DASH_ENTRIES`."""
 
+MAX_DATA_CHANNELS = 64
+"""Mirrors `alpha2_model::MAX_DATA_CHANNELS`."""
+
+MAX_DATA_COORDINATE = 16
+"""Mirrors `alpha2_model::MAX_DATA_COORDINATE`."""
+
+MAX_DATA_ID_BYTES = 64
+"""Mirrors `alpha2_model::MAX_DATA_ID_BYTES`."""
+
+MAX_DATA_INTERVALS = 200000
+"""Mirrors `alpha2_model::MAX_DATA_INTERVALS`."""
+
+MAX_DATA_LABEL_BYTES = 256
+"""Mirrors `alpha2_model::MAX_DATA_LABEL_BYTES`."""
+
+MAX_DATA_ROTATION_DEGREES = 36000
+"""Mirrors `alpha2_model::MAX_DATA_ROTATION_DEGREES`."""
+
+MAX_DATA_SCALAR = 1000000000
+"""Mirrors `alpha2_model::MAX_DATA_SCALAR`."""
+
+MAX_DATA_SCALE = 1000
+"""Mirrors `alpha2_model::MAX_DATA_SCALE`."""
+
+MAX_DATA_SETS = 256
+"""Mirrors `alpha2_model::MAX_DATA_SETS`."""
+
+MAX_DATA_VALUES = 4000000
+"""Mirrors `alpha2_model::MAX_DATA_VALUES`."""
+
+MAX_DATA_WORDS = 200000
+"""Mirrors `alpha2_model::MAX_DATA_WORDS`."""
+
+MAX_DERIVED_CUES = 65536
+"""Mirrors `alpha2_model::MAX_DERIVED_CUES`."""
+
 MAX_EFFECT_INPUTS = 8
 """Mirrors `alpha2_model::MAX_EFFECT_INPUTS`."""
+
+MAX_EFFECT_RESOURCES = 10000
+"""Mirrors `alpha2_model::MAX_EFFECT_RESOURCES`."""
 
 MAX_ENVELOPE_MS = 10000
 """Mirrors `alpha2_model::MAX_ENVELOPE_MS`."""
@@ -99,6 +144,12 @@ MAX_EQ_GAIN_DB = 36
 
 MAX_EQ_Q = 50
 """Mirrors `alpha2_model::MAX_EQ_Q`."""
+
+MAX_FLEX_FACTOR = 1000000
+"""Mirrors `alpha2_model::MAX_FLEX_FACTOR`."""
+
+MAX_FOLLOW_DEPTH = 8
+"""Mirrors `alpha2_model::MAX_FOLLOW_DEPTH`."""
 
 MAX_FONT_FAMILY_BYTES = 256
 """Mirrors `alpha2_model::MAX_FONT_FAMILY_BYTES`."""
@@ -127,6 +178,9 @@ MAX_HDR_PEAK_NITS = 10000
 MAX_INLINED_NODES = 65536
 """Mirrors `alpha2_model::MAX_INLINED_NODES`."""
 
+MAX_KEYFRAMES = 100000
+"""Mirrors `alpha2_model::MAX_KEYFRAMES`."""
+
 MAX_LATEX_BYTES = 4096
 """Mirrors `alpha2_model::MAX_LATEX_BYTES`."""
 
@@ -139,11 +193,20 @@ MAX_LAYOUT_DEPTH = 16
 MAX_LAYOUT_FONT_SIZE = 1
 """Mirrors `alpha2_model::MAX_LAYOUT_FONT_SIZE`."""
 
+MAX_LAYOUT_FRACTION = 1024
+"""Mirrors `alpha2_model::MAX_LAYOUT_FRACTION`."""
+
 MAX_LAYOUT_ISOLATED = 16
 """Mirrors `alpha2_model::MAX_LAYOUT_ISOLATED`."""
 
 MAX_LAYOUT_NODES = 256
 """Mirrors `alpha2_model::MAX_LAYOUT_NODES`."""
+
+MAX_LAYOUT_PERCENT = 100000
+"""Mirrors `alpha2_model::MAX_LAYOUT_PERCENT`."""
+
+MAX_LAYOUT_PX = 16777216
+"""Mirrors `alpha2_model::MAX_LAYOUT_PX`."""
 
 MAX_LAYOUT_TEXTS = 64
 """Mirrors `alpha2_model::MAX_LAYOUT_TEXTS`."""
@@ -156,6 +219,9 @@ MAX_LINE_HEIGHT = 3
 
 MAX_LOOKAHEAD_MS = 100
 """Mirrors `alpha2_model::MAX_LOOKAHEAD_MS`."""
+
+MAX_LOOP_PASSES = 65536
+"""Mirrors `alpha2_model::MAX_LOOP_PASSES`."""
 
 MAX_LOTTIE_DOCUMENT_BYTES = 16777216
 """Mirrors `alpha2_model::MAX_LOTTIE_DOCUMENT_BYTES`."""
@@ -223,6 +289,9 @@ MAX_TEXT_GENERATOR_FONT_SIZE = 1
 MAX_TEXT_PADDING = 2
 """Mirrors `alpha2_model::MAX_TEXT_PADDING`."""
 
+MAX_TEXT_POSITION = 1024
+"""Mirrors `alpha2_model::MAX_TEXT_POSITION`."""
+
 MAX_TEXT_RUNS = 512
 """Mirrors `alpha2_model::MAX_TEXT_RUNS`."""
 
@@ -246,6 +315,9 @@ MAX_TRACKS = 256
 
 MAX_TRANSITIONS_PER_TRACK = 4096
 """Mirrors `alpha2_model::MAX_TRANSITIONS_PER_TRACK`."""
+
+MIN_ASPECT_RATIO = 0.0001
+"""Mirrors `alpha2_model::MIN_ASPECT_RATIO`."""
 
 MIN_EQ_FREQUENCY_HZ = 10
 """Mirrors `alpha2_model::MIN_EQ_FREQUENCY_HZ`."""
@@ -307,6 +379,12 @@ COLOR_PRIMARIES_VALUES: tuple[ColorPrimaries, ...] = ("bt601", "bt709", "bt2020"
 
 COLOR_RANGE_VALUES: tuple[ColorRange, ...] = ("limited", "full")
 """Every `ColorRange`, in the model's order."""
+
+DATA_INTERPOLATION_VALUES: tuple[DataInterpolation, ...] = ("hold", "linear")
+"""Every `DataInterpolation`, in the model's order."""
+
+DATA_SPACE_VALUES: tuple[DataSpace, ...] = ("picture", "canvas")
+"""Every `DataSpace`, in the model's order."""
 
 DISPLAY_VALUES: tuple[Display, ...] = ("flex", "grid")
 """Every `Display`, in the model's order."""
@@ -402,37 +480,23 @@ TRIM_MODE_VALUES: tuple[TrimMode, ...] = ("together", "individually")
 """Every `TrimMode`, in the model's order."""
 
 
-class Project(TypedDict):
-    """The deserialized shape of a `Project` before its invariants are checked.
-
-    This is the wire contract the published JSON Schema is derived from; `Project::validate`
-    then decides whether a well-shaped document is valid.
-    """
-
-    audio: NotRequired[MasterAudio]
-    """Master bus applied to the summed track audio."""
-    compositions: NotRequired[list[Composition]]
-    """Composition graphs that clips show.
-
-    Default: `[]`.
-    """
-    effect_resources: NotRequired[list[EffectResource]]
-    """Non-media resources referenced by effect invocations.
-
-    Default: `[]`.
-    """
-    id: ProjectId
-    """Stable identity of this project."""
-    name: str
-    """Human-readable project name. It has no semantic meaning."""
-    schema_version: Literal[1]
-    """Document version. This build reads and writes only `CURRENT_SCHEMA_VERSION`."""
-    settings: ProjectSettings
-    """Output-wide timeline settings."""
-    sources: list[MediaSource]
-    """Media resources referenced by clips."""
-    timeline: Timeline
-    """Ordered visual and audio tracks."""
+Project = TypedDict(
+    "Project",
+    {
+        "$schema": "NotRequired[str | None]",
+        "audio": "NotRequired[MasterAudio]",
+        "compositions": "NotRequired[list[Composition]]",
+        "data": "NotRequired[list[DataSet]]",
+        "effect_resources": "NotRequired[list[EffectResource]]",
+        "id": "ProjectId",
+        "name": "str",
+        "schema_version": "Literal[1]",
+        "settings": "ProjectSettings",
+        "sources": "list[MediaSource]",
+        "timeline": "Timeline",
+    },
+)
+Project.__doc__ = "The deserialized shape of a `Project` before its invariants are checked.\n\nThis is the wire contract the published JSON Schema is derived from; `Project::validate`\nthen decides whether a well-shaped document is valid."
 
 
 AlignContent: TypeAlias = Literal["start", "center", "end", "space_between", "space_around", "space_evenly", "stretch"]
@@ -459,8 +523,28 @@ class AnimatedKeyframes(TypedDict, Generic[T]):
     mode: Literal["keyframes"]
 
 
-Animated: TypeAlias = "AnimatedConstant[T] | AnimatedKeyframes[T]"
-"""A value that is either constant or controlled by sorted keyframes."""
+class AnimatedData(TypedDict):
+    """A channel of a data set, followed at render time."""
+
+    channel: str
+    """The channel followed."""
+    data: DataSetId
+    """The data set, a `points` or `scalars` one."""
+    mode: Literal["data"]
+    offset: NotRequired[list[float] | None]
+    """`[x, y]` added after the space mapping, in that space's normalized units (points only)."""
+    remap: NotRequired[DataRemap | None]
+    """A linear map of the value (scalars only)."""
+    space: NotRequired[DataSpace | None]
+    """Where a point is read (points with `via` only, where it is required)."""
+    via: NotRequired[DataVia | None]
+    """The reader whose time map gives source time: required for a source-anchored set,
+    forbidden for a timeline-anchored one.
+    """
+
+
+Animated: TypeAlias = "AnimatedConstant[T] | AnimatedKeyframes[T] | AnimatedData"
+"""A value that is constant, controlled by sorted keyframes, or following a data set."""
 
 
 class AnimatedPointConstant(TypedDict):
@@ -479,7 +563,27 @@ class AnimatedPointKeyframes(TypedDict):
     mode: Literal["keyframes"]
 
 
-AnimatedPoint: TypeAlias = "AnimatedPointConstant | AnimatedPointKeyframes"
+class AnimatedPointData(TypedDict):
+    """A channel of a data set, followed at render time."""
+
+    channel: str
+    """The channel followed."""
+    data: DataSetId
+    """The data set, a `points` or `scalars` one."""
+    mode: Literal["data"]
+    offset: NotRequired[list[float] | None]
+    """`[x, y]` added after the space mapping, in that space's normalized units (points only)."""
+    remap: NotRequired[DataRemap | None]
+    """A linear map of the value (scalars only)."""
+    space: NotRequired[DataSpace | None]
+    """Where a point is read (points with `via` only, where it is required)."""
+    via: NotRequired[DataVia | None]
+    """The reader whose time map gives source time: required for a source-anchored set,
+    forbidden for a timeline-anchored one.
+    """
+
+
+AnimatedPoint: TypeAlias = "AnimatedPointConstant | AnimatedPointKeyframes | AnimatedPointData"
 """A position that can move along curves between its keyframes.
 
 Its JSON is an `Animated<Vec2>` plus optional spatial tangents per keyframe. With them,
@@ -606,6 +710,18 @@ modes such as overlay and soft-light match design tools only in
 """
 
 
+class BlockEllipsisVariant3(TypedDict):
+    """This text, 1 to `MAX_BLOCK_ELLIPSIS_BYTES` bytes with no control characters or line
+    and paragraph separators.
+    """
+
+    string: str
+
+
+BlockEllipsis: TypeAlias = "Literal[\"no_ellipsis\", \"ellipsis\"] | BlockEllipsisVariant3"
+"""What ends a line that a clamp cuts, as CSS `block-ellipsis`."""
+
+
 CacheIntent: TypeAlias = Literal["auto", "pin", "bypass"]
 """Whether a runtime may keep and reuse a clip's rendered picture."""
 
@@ -630,13 +746,32 @@ class CaptionCue(TypedDict):
 class Captions(TypedDict):
     """What a caption track shows: its cues, in its style."""
 
-    cues: list[CaptionCue]
-    """Cues in timeline order, none overlapping; a track shows one cue at a time."""
+    cues: NotRequired[list[CaptionCue]]
+    """Cues in timeline order, none overlapping; a track shows one cue at a time. Empty when
+    `from_words` gives the cues.
+
+    Default: `[]`.
+    """
+    from_words: NotRequired[CaptionsFromWords | None]
+    """Cues built at evaluation from a `words` data set, instead of `cues`."""
     style: NotRequired[TextStyle]
     """The style every cue starts from."""
     styles: NotRequired[dict[str, TextStylePatch]]
     """Named changes to `style` for cues that name one or whose speaker has one. At most
     `MAX_CAPTION_STYLES`, names 1 to 64 bytes.
+    """
+
+
+class CaptionsFromWords(TypedDict):
+    """Caption cues built from a `words` data set."""
+
+    data: DataSetId
+    """The data set, a `words` one."""
+    max_chars: int
+    """Most characters of one cue, at least 1."""
+    track: NotRequired[TrackId | None]
+    """For a source-anchored set, the track whose clips showing the source give the words their
+    timeline times; forbidden for a timeline-anchored set.
     """
 
 
@@ -723,7 +858,10 @@ class ClipEffect(TypedDict):
     """
 
     id: str
-    """Stable effect definition identifier."""
+    """Stable effect definition identifier. Ids under `alpha2.` name built-ins
+    (`schema/effects.v1.json`): validation checks such an invocation's version, kind,
+    parameters, inputs and resources against its definition.
+    """
     params: NotRequired[dict[str, Animated[EffectValue]]]
     """Named parameter values, constant or keyframed. Omitted entries use definition defaults.
 
@@ -870,6 +1008,13 @@ class CompositionNode(TypedDict):
     """What the node does, with its inputs and settings."""
 
 
+class CorrectionRef(TypedDict):
+    """A `similarity` data set applied to a clip's own picture before its transform."""
+
+    data: DataSetId
+    """The data set, a `similarity` one anchored to the clip's source."""
+
+
 class Dash(TypedDict):
     """A dash pattern."""
 
@@ -883,6 +1028,222 @@ class Dash(TypedDict):
     `MAX_DASH_ENTRIES` non-negative entries, not all zero. An odd count repeats once more to
     pair up.
     """
+
+
+class DataAnchorSource(TypedDict):
+    """Source time, the presentation times the source's pictures and sound carry once decoded.
+    Points are normalized to the displayed source picture.
+    """
+
+    source_id: SourceId
+    """The source."""
+    type: Literal["source"]
+
+
+class DataAnchorTimeline(TypedDict):
+    """Timeline time. Points are normalized to the canvas."""
+
+    type: Literal["timeline"]
+
+
+DataAnchor: TypeAlias = "DataAnchorSource | DataAnchorTimeline"
+
+
+DataInterpolation: TypeAlias = Literal["hold", "linear"]
+"""How a sampled data set reads between its samples."""
+
+
+class DataInterval(TypedDict):
+    """One timed range; `start == end` is an instant."""
+
+    end: MediaTime
+    """When it ends; not before `start`."""
+    label: NotRequired[str | None]
+    """A free label, at most `MAX_DATA_LABEL_BYTES` bytes. Edit operations ignore it."""
+    score: NotRequired[float | None]
+    """A free, finite score of at most `MAX_DATA_SCALAR` in magnitude; edit operations ignore it."""
+    start: MediaTime
+    """When it starts, in ticks on the anchor's clock."""
+
+
+class DataRemap(TypedDict):
+    """A linear map from `input` to `output`, clamped to `output`."""
+
+    input: list[float]
+    """The input values mapped to `output[0]` and `output[1]`; distinct and finite."""
+    output: list[float]
+    """The output range; finite."""
+
+
+class DataSetPoints(TypedDict):
+    """Named channels of normalized `(x, y)` points, each pair `null` when lost."""
+
+    anchor: DataAnchor
+    """The clock the times are on."""
+    channels: list[str]
+    """Channel names, unique, 1 to 256 bytes each."""
+    id: DataSetId
+    """Stable identity, 1 to 64 bytes."""
+    interpolation: DataInterpolation
+    """How the values read between samples."""
+    kind: Literal["points"]
+    made_by: NotRequired[MadeBy | None]
+    """Which extractor made it.
+
+    Default: `null`.
+    """
+    made_from: NotRequired[MediaFingerprint | None]
+    """The original source's fingerprint when it was made.
+
+    Default: `null`.
+    """
+    times: list[MediaTime]
+    """Sample times in ticks on the anchor's clock, strictly ascending."""
+    values: list[float | None]
+    """`times.len() * channels.len() * 2` numbers, sample after sample, channel after channel."""
+
+
+class DataSetScalars(TypedDict):
+    """Named channels of numbers, each `null` when lost."""
+
+    anchor: DataAnchor
+    """The clock the times are on."""
+    channels: list[str]
+    """Channel names, unique, 1 to 256 bytes each."""
+    id: DataSetId
+    """Stable identity, 1 to 64 bytes."""
+    interpolation: DataInterpolation
+    """How the values read between samples."""
+    kind: Literal["scalars"]
+    made_by: NotRequired[MadeBy | None]
+    """Which extractor made it.
+
+    Default: `null`.
+    """
+    made_from: NotRequired[MediaFingerprint | None]
+    """The original source's fingerprint when it was made.
+
+    Default: `null`.
+    """
+    times: list[MediaTime]
+    """Sample times in ticks on the anchor's clock, strictly ascending."""
+    values: list[float | None]
+    """`times.len() * channels.len()` numbers, sample after sample, channel after channel."""
+
+
+class DataSetSimilarity(TypedDict):
+    """Translation (normalized), rotation (degrees) and uniform scale about the picture's
+    center, per sample; four `null`s when lost.
+    """
+
+    anchor: DataAnchor
+    """The clock the times are on."""
+    id: DataSetId
+    """Stable identity, 1 to 64 bytes."""
+    interpolation: DataInterpolation
+    """How the values read between samples."""
+    kind: Literal["similarity"]
+    made_by: NotRequired[MadeBy | None]
+    """Which extractor made it.
+
+    Default: `null`.
+    """
+    made_from: NotRequired[MediaFingerprint | None]
+    """The original source's fingerprint when it was made.
+
+    Default: `null`.
+    """
+    times: list[MediaTime]
+    """Sample times in ticks on the anchor's clock, strictly ascending."""
+    values: list[float | None]
+    """`times.len() * 4` numbers: `tx`, `ty`, rotation, scale per sample."""
+
+
+class DataSetWords(TypedDict):
+    """Timed words."""
+
+    anchor: DataAnchor
+    """The clock the times are on."""
+    id: DataSetId
+    """Stable identity, 1 to 64 bytes."""
+    kind: Literal["words"]
+    made_by: NotRequired[MadeBy | None]
+    """Which extractor made it.
+
+    Default: `null`.
+    """
+    made_from: NotRequired[MediaFingerprint | None]
+    """The original source's fingerprint when it was made.
+
+    Default: `null`.
+    """
+    words: list[DataWord]
+    """Words sorted by `(start, end)`."""
+
+
+class DataSetIntervals(TypedDict):
+    """Timed ranges."""
+
+    anchor: DataAnchor
+    """The clock the times are on."""
+    id: DataSetId
+    """Stable identity, 1 to 64 bytes."""
+    intervals: list[DataInterval]
+    """Intervals sorted by `(start, end)`."""
+    kind: Literal["intervals"]
+    made_by: NotRequired[MadeBy | None]
+    """Which extractor made it.
+
+    Default: `null`.
+    """
+    made_from: NotRequired[MediaFingerprint | None]
+    """The original source's fingerprint when it was made.
+
+    Default: `null`.
+    """
+
+
+DataSet: TypeAlias = "DataSetPoints | DataSetScalars | DataSetSimilarity | DataSetWords | DataSetIntervals"
+"""Values derived from media, anchored to a source's clock or the timeline's."""
+
+
+DataSetId: TypeAlias = str
+"""A stable data-set identifier."""
+
+
+DataSpace: TypeAlias = Literal["picture", "canvas"]
+"""Where a bound point is read."""
+
+
+class DataViaVariant1(TypedDict):
+    """A timeline clip showing the anchor's source; its picture time map gives source time."""
+
+    clip: ClipId
+
+
+class DataViaVariant2(TypedDict):
+    """A `media` node of the same composition reading the anchor's source; its start plus the
+    composition time gives source time.
+    """
+
+    node: NodeId
+
+
+DataVia: TypeAlias = "DataViaVariant1 | DataViaVariant2"
+"""The reader whose clock maps time onto a source-anchored data set."""
+
+
+class DataWord(TypedDict):
+    """One timed word."""
+
+    end: MediaTime
+    """When it ends; after `start`."""
+    speaker: NotRequired[str | None]
+    """Who says it, at most `MAX_DATA_LABEL_BYTES` bytes."""
+    start: MediaTime
+    """When the word starts, in ticks on the anchor's clock."""
+    text: str
+    """The word, non-empty, at most `MAX_DATA_LABEL_BYTES` bytes."""
 
 
 Display: TypeAlias = Literal["flex", "grid"]
@@ -1039,6 +1400,23 @@ FlexWrap: TypeAlias = Literal["nowrap", "wrap"]
 """Whether a flex container's children wrap."""
 
 
+class FontSizeFit(TypedDict):
+    """The font sizes a text is fitted between, as fractions of the canvas's shorter side.
+
+    The text draws at the largest size in `[min, max]` at which no line breaks inside a word,
+    the lines fit the box's height, and there are no more lines than `line_clamp.max_lines`.
+    When no size fits, it draws at `min`. A `min` above `max` wins, as CSS `min-width` does.
+    Sizes are tried by bisection over `max`, `min` and the multiples of `1 / 8192` between.
+    """
+
+    max: NotRequired[float | None]
+    """Largest font size, at least `min` and at most the holder's largest font size. `None`
+    is `font_size`, so the text only shrinks.
+    """
+    min: float
+    """Smallest font size, positive. At most the holder's largest font size."""
+
+
 class FrameRate(TypedDict):
     """A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps)."""
 
@@ -1185,13 +1563,44 @@ class Keyframe(TypedDict, Generic[T]):
     """Value at `time`."""
 
 
+class KeyframedConstant(TypedDict, Generic[T]):
+    """A value without animation."""
+
+    mode: Literal["constant"]
+    value: T
+    """Value used at every timestamp."""
+
+
+class KeyframedKeyframes(TypedDict, Generic[T]):
+    """Values evaluated from their keyframe sequence."""
+
+    keyframes: list[Keyframe[T]]
+    """Strictly ascending keyframes. The evaluator clamps outside the sequence."""
+    mode: Literal["keyframes"]
+
+
+Keyframed: TypeAlias = "KeyframedConstant[T] | KeyframedKeyframes[T]"
+"""A value that is constant or controlled by sorted keyframes."""
+
+
 class LayoutBorder(TypedDict):
     """A border inside the border box, as wide on every side."""
 
-    paint: Animated[Paint]
+    paint: Keyframed[Paint]
     """What covers the border. Positions are normalized to the border box."""
-    width: Animated[LayoutSize]
+    width: Keyframed[LayoutSize]
     """Width. At least 0."""
+
+
+class LayoutFontSizeFit(TypedDict):
+    """The font sizes a layout text is fitted between, as a text style's
+    `FontSizeFit`, in layout sizes. A `min` above `max` wins.
+    """
+
+    max: NotRequired[LayoutSize | None]
+    """Largest font size, with the same limits. `None` is `font_size`, so the text only shrinks."""
+    min: LayoutSize
+    """Smallest font size, positive and at most `MAX_LAYOUT_FONT_SIZE` of the shorter side."""
 
 
 class LayoutInset(TypedDict):
@@ -1199,13 +1608,13 @@ class LayoutInset(TypedDict):
     neither `left` nor `right`, the box keeps its flow position on that axis.
     """
 
-    bottom: NotRequired[Animated[LayoutLength] | None]
+    bottom: NotRequired[Keyframed[LayoutLength] | None]
     """Distance from the parent's bottom padding edge."""
-    left: NotRequired[Animated[LayoutLength] | None]
+    left: NotRequired[Keyframed[LayoutLength] | None]
     """Distance from the parent's left padding edge."""
-    right: NotRequired[Animated[LayoutLength] | None]
+    right: NotRequired[Keyframed[LayoutLength] | None]
     """Distance from the parent's right padding edge."""
-    top: NotRequired[Animated[LayoutLength] | None]
+    top: NotRequired[Keyframed[LayoutLength] | None]
     """Distance from the parent's top padding edge."""
 
 
@@ -1234,19 +1643,19 @@ class LayoutNode(TypedDict):
     """
     aspect_ratio: NotRequired[float | None]
     """Width over height. Positive."""
-    background: NotRequired[Animated[Paint] | None]
+    background: NotRequired[Keyframed[Paint] | None]
     """What covers the border box, rounded by `border_radius`. Positions are normalized to the
     border box.
     """
     border: NotRequired[LayoutBorder | None]
     """A border inside the border box."""
-    border_radius: NotRequired[Animated[LayoutSize] | None]
+    border_radius: NotRequired[Keyframed[LayoutSize] | None]
     """The corner radius of the border box. At least 0; default 0. Capped at half the box's
     shorter side.
     """
     children: NotRequired[list[LayoutNode]]
     """Boxes laid out in this one, in document (and paint) order. Not with `text` or `shape`."""
-    column_gap: NotRequired[Animated[LayoutSize] | None]
+    column_gap: NotRequired[Keyframed[LayoutSize] | None]
     """Space between columns, in place of `gap`. At least 0."""
     display: NotRequired[Display | None]
     """How the box lays its children out. Default `flex`. Like every container field, not on a
@@ -1254,7 +1663,7 @@ class LayoutNode(TypedDict):
     """
     fill: NotRequired[Paint | None]
     """What paints the text's glyphs, as a text style's `fill`. Inherited; the root's is white."""
-    flex_basis: NotRequired[Animated[LayoutLength] | None]
+    flex_basis: NotRequired[Keyframed[LayoutLength] | None]
     """The main size before growing and shrinking. `None` is auto."""
     flex_direction: NotRequired[FlexDirection | None]
     """The main axis of a flex container's children. Default `row`."""
@@ -1272,15 +1681,20 @@ class LayoutNode(TypedDict):
     """The family the box's text draws in, as a text style's `font_family`. Inherited; the
     root's is the host's first font.
     """
-    font_size: NotRequired[Animated[LayoutSize] | None]
+    font_size: NotRequired[Keyframed[LayoutSize] | None]
     """Font size: positive, at most `MAX_LAYOUT_FONT_SIZE` of the picture's shorter side.
     Inherited; the root's is 0.05.
+    """
+    font_size_fit: NotRequired[LayoutFontSizeFit | None]
+    """The range the font size of the box's own text is fitted in so the text fits its content
+    box, as a text style's `font_size_fit`. The box is laid out at `font_size` first, and
+    the fit never changes its size. Not inherited.
     """
     font_weight: NotRequired[int | None]
     """The weight in `[1, 1000]` used to match the family's faces, as a text style's
     `font_weight`. Not animated. Inherited; the root's is 400.
     """
-    gap: NotRequired[Animated[LayoutSize] | None]
+    gap: NotRequired[Keyframed[LayoutSize] | None]
     """Space between children, on both axes. At least 0; default 0."""
     grid_auto_columns: NotRequired[TrackList | None]
     """The size of a grid's implicit columns. Default `auto`."""
@@ -1300,7 +1714,7 @@ class LayoutNode(TypedDict):
     """
     grid_template_rows: NotRequired[TrackList | None]
     """A grid's explicit rows. Default none."""
-    height: NotRequired[Animated[LayoutLength] | None]
+    height: NotRequired[Keyframed[LayoutLength] | None]
     """Border-box height. `None` is auto."""
     inset: NotRequired[LayoutInset | None]
     """Where an `absolute` box lies in its parent's padding box."""
@@ -1316,25 +1730,30 @@ class LayoutNode(TypedDict):
     """Space after each character, as a fraction of the font size, in `[-0.5, 1]`, as a text
     style's `letter_spacing`. Not animated. Inherited; the root's is 0.
     """
+    line_clamp: NotRequired[LineClamp | None]
+    """Where the lines of the box's own text are cut and what ends the cut line, as CSS
+    `line-clamp` and a text style's `line_clamp`. The clamp point is also at the content
+    box's height. The box's automatic height ends at the clamp point. Not inherited.
+    """
     line_height: NotRequired[float | None]
     """Baseline-to-baseline distance in font sizes, in `[0.5, 3]`, as a text style's
     `line_height`. Inherited; the root's is 1.2.
     """
-    margin: NotRequired[Animated[Insets] | None]
+    margin: NotRequired[Keyframed[Insets] | None]
     """Space outside the border, written as `padding` is. Sides may be negative; no `auto`."""
-    max_height: NotRequired[Animated[LayoutLength] | None]
+    max_height: NotRequired[Keyframed[LayoutLength] | None]
     """Largest height. `None` is none."""
-    max_width: NotRequired[Animated[LayoutLength] | None]
+    max_width: NotRequired[Keyframed[LayoutLength] | None]
     """Largest width. `None` is none."""
-    min_height: NotRequired[Animated[LayoutLength] | None]
+    min_height: NotRequired[Keyframed[LayoutLength] | None]
     """Smallest height. `None` is auto."""
-    min_width: NotRequired[Animated[LayoutLength] | None]
+    min_width: NotRequired[Keyframed[LayoutLength] | None]
     """Smallest width. `None` is auto, the CSS automatic minimum size."""
     opacity: NotRequired[Animated[float] | None]
     """Opacity of the box and everything in it as one group, in `0..=1`. Applied after layout."""
     overflow: NotRequired[Overflow | None]
     """Whether content past the padding box is drawn. Default `visible`."""
-    padding: NotRequired[Animated[Insets] | None]
+    padding: NotRequired[Keyframed[Insets] | None]
     """Space inside the border: a length, the CSS shorthand (`"8px 16px"`), or the sides object.
     Sides at least 0; default 0.
     """
@@ -1344,7 +1763,7 @@ class LayoutNode(TypedDict):
     """Clockwise rotation of the box and everything in it about its border-box centre, in
     degrees, after layout.
     """
-    row_gap: NotRequired[Animated[LayoutSize] | None]
+    row_gap: NotRequired[Keyframed[LayoutSize] | None]
     """Space between rows (or lines of a wrapping row flex container), in place of `gap`. At
     least 0.
     """
@@ -1362,7 +1781,7 @@ class LayoutNode(TypedDict):
     """Bands around the glyphs, as a text style's `strokes`. Inherited as a whole list; the root
     has none.
     """
-    text: NotRequired[Animated[str] | None]
+    text: NotRequired[Keyframed[str] | None]
     """The box's text, wrapped at its content width in the inherited style; `\\n` starts a line.
     At most `MAX_TEXT_CONTENT_BYTES` bytes per value; may be empty. Keyframes all `hold`.
     Not with `children` or `shape`.
@@ -1374,11 +1793,11 @@ class LayoutNode(TypedDict):
     runs). At most `MAX_TEXT_ANIMATORS`, keyed in picture time. Not inherited; never
     changes layout.
     """
-    translate: NotRequired[Animated[LayoutOffset] | None]
+    translate: NotRequired[Keyframed[LayoutOffset] | None]
     """Offset of the box and everything in it after layout: the object, or one or two lengths as
     CSS `translate` writes them.
     """
-    width: NotRequired[Animated[LayoutLength] | None]
+    width: NotRequired[Keyframed[LayoutLength] | None]
     """Border-box width. `None` is auto. Like every item field, not on the root."""
 
 
@@ -1417,6 +1836,25 @@ LineCap: TypeAlias = Literal["butt", "round", "square"]
 """How an open stroke ends."""
 
 
+class LineClamp(TypedDict):
+    """Lines past a clamp point are discarded, as CSS Overflow 4 `line-clamp` discards them.
+
+    The clamp point is after the last line within `max_lines` that fits the box's height, and
+    never before the first line. Unlike CSS, the height counts without `max-lines: auto`, so
+    clamped text stays inside a box that has one. A cut line is shortened to its last word end,
+    else its last character, at which the ellipsis fits after it. Text animators count no unit
+    for the ellipsis, which moves with the character before it.
+    """
+
+    block_ellipsis: NotRequired[BlockEllipsis]
+    """What ends the last kept line of cut text. Default `ellipsis`, as CSS `line-clamp` sets it.
+
+    Default: `"ellipsis"`.
+    """
+    max_lines: NotRequired[int | None]
+    """Most lines, at least 1, as CSS `max-lines`. `None` cuts at the box's height alone."""
+
+
 LineJoin: TypeAlias = Literal["miter", "round", "bevel"]
 """How stroke segments meet at a vertex."""
 
@@ -1427,6 +1865,31 @@ LinearPrimaries: TypeAlias = Literal["bt709", "bt2020", "p3_d65", "aces_ap0", "a
 
 LoopMode: TypeAlias = Literal["repeat", "ping_pong"]
 """How each pass of a `TimeMap::Loop` follows the one before."""
+
+
+class MadeBy(TypedDict):
+    """Which extractor made a data set. Recorded for hosts; the engine never reads it."""
+
+    extractor: str
+    """The extractor's reverse-DNS id."""
+    params: NotRequired[dict[str, Never]]
+    """The parameters it ran with.
+
+    Default: `{}`.
+    """
+    plugin: NotRequired[MadeByPlugin | None]
+    """The plugin that ran, when the extractor was one."""
+    version: int
+    """The extractor's output-contract version."""
+
+
+class MadeByPlugin(TypedDict):
+    """The plugin build that made a data set."""
+
+    artifact_sha256: str
+    """SHA-256 of the artifact that ran, as 64 lowercase hexadecimal digits."""
+    version: str
+    """The package's semantic version."""
 
 
 MaskMode: TypeAlias = Literal["add", "subtract", "intersect"]
@@ -1626,7 +2089,8 @@ class NodeOpEffect(TypedDict):
     inputs: NotRequired[dict[str, NodeId | None]]
     """The images the effect samples besides its input, by the names its definition declares
     (`sample_<name>` in its shader); at most `MAX_EFFECT_INPUTS`. An undeclared name, or a
-    declared one left out, fails the frames that draw the node.
+    declared one left out, is invalid for a built-in and fails the frames that draw the
+    node otherwise.
     """
     type: Literal["effect"]
 
@@ -1634,11 +2098,11 @@ class NodeOpEffect(TypedDict):
 NodeOpTransition = TypedDict(
     "NodeOpTransition",
     {
-        "effect": ClipEffect,
-        "from": NotRequired[NodeId | None],
-        "progress": Animated[float],
-        "to": NotRequired[NodeId | None],
-        "type": Literal["transition"],
+        "effect": "ClipEffect",
+        "from": "NotRequired[NodeId | None]",
+        "progress": "Animated[float]",
+        "to": "NotRequired[NodeId | None]",
+        "type": "Literal[\"transition\"]",
     },
 )
 NodeOpTransition.__doc__ = "A registered two-input transition at an explicit progress."
@@ -2139,7 +2603,7 @@ class ShapeGeometryPolystar(TypedDict):
 class ShapeGeometryPath(TypedDict):
     """A Bezier path."""
 
-    path: Animated[Path]
+    path: Keyframed[Path]
     """The path."""
     type: Literal["path"]
 
@@ -2240,7 +2704,7 @@ class ShapeItemPolystar(TypedDict):
 class ShapeItemPath(TypedDict):
     """A Bezier path."""
 
-    path: Animated[Path]
+    path: Keyframed[Path]
     """The path."""
     type: Literal["path"]
 
@@ -2255,7 +2719,7 @@ class ShapeItemFill(TypedDict):
 
     Default: `{"mode":"constant","value":1}`.
     """
-    paint: Animated[Paint]
+    paint: Keyframed[Paint]
     """What covers it."""
     rule: NotRequired[FillRule]
     """Which regions of the compound path are inside.
@@ -2294,7 +2758,7 @@ class ShapeItemStroke(TypedDict):
 
     Default: `{"mode":"constant","value":1}`.
     """
-    paint: Animated[Paint]
+    paint: Keyframed[Paint]
     """What covers the stroke."""
     type: Literal["stroke"]
     width: Animated[float]
@@ -2447,7 +2911,7 @@ class TextAnimatorProperties(TypedDict):
     out does nothing.
     """
 
-    fill: NotRequired[Animated[Rgba] | None]
+    fill: NotRequired[Keyframed[Rgba] | None]
     """The fill color a fully selected character takes; a gradient fill is mixed toward it."""
     offset: NotRequired[Animated[Vec2] | None]
     """Moves the character, in font sizes, +y down."""
@@ -2456,8 +2920,10 @@ class TextAnimatorProperties(TypedDict):
     rotation_degrees: NotRequired[Animated[float] | None]
     """Turns the character about its centre, clockwise degrees."""
     scale: NotRequired[Animated[Vec2] | None]
-    """Scales the character about its centre; 1 is none. Each axis in `[0, 10]`."""
-    stroke: NotRequired[Animated[Rgba] | None]
+    """Scales the character about its centre; 1 is none. Each axis in `[0, 10]`. The scales of
+    several animators multiply, and the product is at most 10 on each axis.
+    """
+    stroke: NotRequired[Keyframed[Rgba] | None]
     """The color every stroke of a fully selected character takes."""
     tracking: NotRequired[Animated[float] | None]
     """Space added after the character, in font sizes, in `[-0.5, 1]`, as letter spacing adds
@@ -2487,9 +2953,9 @@ Written as `"Hello"` or `[{ "text": "Hel" }, { "text": "lo", "class": ["key"] }]
 TextRun = TypedDict(
     "TextRun",
     {
-        "class": NotRequired[list[str]],
-        "text": str,
-        "time": NotRequired[RunTime | None],
+        "class": "NotRequired[list[str]]",
+        "text": "str",
+        "time": "NotRequired[RunTime | None]",
     },
 )
 TextRun.__doc__ = "A piece of a text that animators' Class and Timing selectors can pick."
@@ -2559,8 +3025,8 @@ class TextSelectorTiming(TypedDict):
 TextSelectorClass = TypedDict(
     "TextSelectorClass",
     {
-        "class": str,
-        "type": Literal["class"],
+        "class": "str",
+        "type": "Literal[\"class\"]",
     },
 )
 TextSelectorClass.__doc__ = "Characters of runs that carry a class."
@@ -2619,7 +3085,7 @@ class TextStyle(TypedDict):
     """
     anchor: NotRequired[Vec2]
     """The point of the text, background included, placed at `position`; `(0.5, 1)` is its
-    bottom centre.
+    bottom centre. Each coordinate within `MAX_TEXT_POSITION`.
 
     Default: `{"x":0.5,"y":1}`.
     """
@@ -2653,6 +3119,10 @@ class TextStyle(TypedDict):
 
     Default: `0.05`.
     """
+    font_size_fit: NotRequired[FontSizeFit | None]
+    """The range the font size is fitted in so the text fits its box. `None` draws at the
+    font size as set.
+    """
     font_weight: NotRequired[int]
     """The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches
     `font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is
@@ -2667,11 +3137,18 @@ class TextStyle(TypedDict):
 
     Default: `0`.
     """
+    line_clamp: NotRequired[LineClamp | None]
+    """Where lines are cut and what ends a cut line, as CSS `line-clamp`. `None` cuts nothing."""
     line_height: NotRequired[float]
     """Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each line's em box (0.8 font
     sizes above the baseline, 0.2 below) is centred in a taller line.
 
     Default: `1.2`.
+    """
+    max_height: NotRequired[float | None]
+    """Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for
+    `font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS
+    `max-height` lets a box with visible overflow. `None` sets no height.
     """
     max_width: NotRequired[float]
     """Width text wraps at, as a fraction of the canvas width, in `(0, 1]`.
@@ -2679,7 +3156,8 @@ class TextStyle(TypedDict):
     Default: `0.9`.
     """
     position: NotRequired[Vec2]
-    """Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right.
+    """Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right;
+    each coordinate within `MAX_TEXT_POSITION`.
 
     Default: `{"x":0.5,"y":0.92}`.
     """
@@ -2712,12 +3190,18 @@ class TextStylePatch(TypedDict):
     """The family; `null` draws from the fallback order alone."""
     font_size: NotRequired[float | None]
     """See `TextStyle::font_size`."""
+    font_size_fit: NotRequired[FontSizeFit | None]
+    """See `TextStyle::font_size_fit`; `null` removes the base's."""
     font_weight: NotRequired[int | None]
     """See `TextStyle::font_weight`."""
     letter_spacing: NotRequired[float | None]
     """See `TextStyle::letter_spacing`."""
+    line_clamp: NotRequired[LineClamp | None]
+    """See `TextStyle::line_clamp`; `null` removes the base's."""
     line_height: NotRequired[float | None]
     """See `TextStyle::line_height`."""
+    max_height: NotRequired[float | None]
+    """See `TextStyle::max_height`; `null` removes the base's."""
     max_width: NotRequired[float | None]
     """See `TextStyle::max_width`."""
     position: NotRequired[Vec2 | None]
@@ -2914,6 +3398,10 @@ class VisualProperties(TypedDict):
     """Unanimated normalized point within the source rectangle.
 
     Default: `{"x":0.5,"y":0.5}`.
+    """
+    correction: NotRequired[CorrectionRef | None]
+    """A `similarity` data set moving the clip's own picture, applied before this transform.
+    Clip visuals only.
     """
     opacity: NotRequired[Animated[float]]
     """Animated opacity constrained to `0..=1`.

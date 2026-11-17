@@ -5,7 +5,7 @@
 //! `build_shader`) gives a shader: bilinear clamp-to-edge inputs, parameters with defaults, and
 //! runtime values.
 
-use crate::cpu::image::{CpuImage, PixelBox};
+use crate::cpu::image::{CpuImage, PixelBox, Texels};
 use crate::{EffectDef, EffectParams, EffectRuntime, ParamValue, RenderSize};
 
 mod effects;
@@ -37,6 +37,8 @@ pub(crate) struct KernelContext<'a> {
     pub(crate) source_a: &'a CpuImage,
     /// A transition's `to`; the source again for anything else.
     pub(crate) source_b: &'a CpuImage,
+    /// `source_a` and `source_b` resolved for sampling.
+    pub(crate) texels: [Texels<'a>; 2],
     /// Named inputs, by the names the definition declares.
     pub(crate) inputs: &'a [(&'a str, &'a CpuImage)],
     /// Resources, by the names the definition declares.
@@ -116,6 +118,16 @@ impl KernelContext<'_> {
         self.runtime.ratio
     }
 
+    /// `render_scale()`.
+    pub(crate) const fn render_scale(&self) -> f32 {
+        self.runtime.scale
+    }
+
+    /// `render_scale_fixed()`: the render scale in 16.16 fixed point.
+    pub(crate) fn render_scale_fixed(&self) -> u32 {
+        crate::runtime_effect::render_scale_fixed(self.runtime.scale)
+    }
+
     /// `max_filter_samples()`.
     #[allow(clippy::cast_precision_loss)]
     pub(crate) const fn max_filter_samples(&self) -> f32 {
@@ -125,20 +137,20 @@ impl KernelContext<'_> {
     /// `sample_src(uv)`.
     #[inline]
     pub(crate) fn sample_src(&self, uv: [f32; 2]) -> [f32; 4] {
-        self.source_a.sample(uv[0], uv[1])
+        self.texels[0].sample(uv[0], uv[1])
     }
 
     /// `from_color(uv)`.
     #[inline]
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn from_color(&self, uv: [f32; 2]) -> [f32; 4] {
-        self.source_a.sample(uv[0], uv[1])
+        self.texels[0].sample(uv[0], uv[1])
     }
 
     /// `to_color(uv)`.
     #[inline]
     pub(crate) fn to_color(&self, uv: [f32; 2]) -> [f32; 4] {
-        self.source_b.sample(uv[0], uv[1])
+        self.texels[1].sample(uv[0], uv[1])
     }
 
     /// The lookup table bound as `name`.

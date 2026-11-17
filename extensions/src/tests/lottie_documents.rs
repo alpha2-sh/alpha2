@@ -44,6 +44,26 @@ fn lottie_animations_are_evaluated_at_their_own_frames() {
 
 #[cfg(feature = "lottie")]
 #[test]
+fn a_lottie_source_reports_its_composition_as_held() {
+    let file = bytes("moving.json");
+    let source = Registry::with_defaults()
+        .open(
+            &ProviderSource::Lottie { animation: None },
+            Some(Arc::clone(&file)),
+            Arc::new(NoResources),
+        )
+        .expect("open");
+    // The normalized text velato parsed, before any frame is drawn.
+    assert!(
+        source.resident_bytes() > file.len() / 2,
+        "{} for a {}-byte file",
+        source.resident_bytes(),
+        file.len()
+    );
+}
+
+#[cfg(feature = "lottie")]
+#[test]
 fn lottie_features_the_backend_leaves_out_are_reported_and_what_stops_it_refused() {
     let registry = Registry::with_defaults();
     let (_, report) = registry
@@ -890,5 +910,64 @@ fn a_dotlottie_package_of_either_version_draws_its_images() {
     assert_eq!(
         pixel(&source.render(ms(0), (0, 0)).expect("frame"), 18, 20),
         [0, 0, 0, 0]
+    );
+}
+
+#[cfg(feature = "lottie")]
+fn lottie_opened(file: Vec<u8>) -> Result<Box<dyn crate::VisualSource>, ExtensionError> {
+    Registry::with_defaults().open(
+        &ProviderSource::Lottie { animation: None },
+        Some(file.into()),
+        Arc::new(NoResources),
+    )
+}
+
+#[cfg(feature = "lottie")]
+#[test]
+fn a_lottie_frame_is_charged_for_the_vertices_of_its_paths() {
+    use super::hostile::lottie_dense_path;
+    // One path of 100,000 vertices takes over a second a frame, 500,000 half a minute.
+    lottie_opened(lottie_dense_path(10_000, &[]))
+        .expect("opens")
+        .render(ms(0), (0, 0))
+        .expect("draws");
+    for (vertices, repeaters) in [(100_000, &[][..]), (500_000, &[]), (10_000, &[1000, 49])] {
+        let opened = lottie_opened(lottie_dense_path(vertices, repeaters));
+        assert!(
+            matches!(&opened, Err(ExtensionError::Budget(reason)) if reason.contains("paints more than")),
+            "{vertices} x {repeaters:?}: {:?}",
+            opened.err()
+        );
+    }
+}
+
+#[cfg(feature = "lottie")]
+#[test]
+fn a_lottie_frame_is_charged_for_the_clip_of_every_image_layer() {
+    use super::hostile::lottie_image_layers;
+    lottie_opened(lottie_image_layers(190, 10))
+        .expect("opens")
+        .render(ms(0), (0, 0))
+        .expect("draws");
+    let opened = lottie_opened(lottie_image_layers(190, 500));
+    assert!(
+        matches!(&opened, Err(ExtensionError::Budget(reason)) if reason.contains("paints more than")),
+        "{:?}",
+        opened.err()
+    );
+}
+
+#[cfg(feature = "lottie")]
+#[test]
+fn a_lottie_frame_is_held_to_its_offscreen_layers_at_the_size_drawn() {
+    use super::hostile::lottie_nested_precompositions;
+    // 32 clipped precompositions hold 64 offscreen layers of the output size.
+    let mut source = lottie_opened(lottie_nested_precompositions(32)).expect("opens at 1080p");
+    source.render(ms(0), (0, 0)).expect("draws at 1080p");
+    let large = source.render(ms(0), (3840, 2160));
+    assert!(
+        matches!(&large, Err(ExtensionError::Budget(reason)) if reason.contains("nested offscreen layers")),
+        "{:?}",
+        large.err()
     );
 }

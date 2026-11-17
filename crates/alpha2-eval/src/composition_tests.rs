@@ -20,7 +20,7 @@ fn effect(input: &str) -> NodeOp {
         input: Some(node_id(input)),
         inputs: BTreeMap::new(),
         effect: ClipEffect {
-            id: "alpha2.effect.gaussian-blur".into(),
+            id: "test.blur".into(),
             version: 1,
             params: BTreeMap::new(),
             resources: BTreeMap::new(),
@@ -185,6 +185,16 @@ fn an_incomplete_output_fails_only_the_frames_that_show_it() {
         })
     );
     let index = ActiveIndex::build(&project).expect("an incomplete graph still indexes");
+    // An export can ask before its first frame; a range before the clip lists nothing.
+    assert_eq!(index.plan_errors(range(0, 999)), []);
+    assert!(matches!(
+        index.plan_errors(range(0, 5_000)).as_slice(),
+        [EvalError::IncompleteComposition {
+            reason: PlanError::MissingInput { .. },
+            ..
+        }]
+    ));
+    assert!(!index.plans_too_large());
     evaluate(&project, &index, MediaTime(999)).expect("the clip is not shown yet");
     assert!(matches!(
         evaluate(&project, &index, MediaTime(1_000)),
@@ -748,12 +758,16 @@ fn the_plans_of_one_project_hold_at_most_the_plan_budget_together() {
     // Each composition holds about 150 MiB of steps: within the budget alone, past it together.
     let keyframe = size_of::<alpha2_model::Keyframe<EffectValue>>();
     let keyframes = 150 * 1024 * 1024 / 20 / keyframe;
+    // Two effects share the keyframes, so each animation stays within its own limit.
+    let mut shared = big(keyframes / 2);
+    let mut first = keyframed_effect("fx0", "fill", keyframes - keyframes / 2);
+    first.id = node_id("fx0");
+    if let NodeOp::Effect { input, .. } = &mut shared.nodes[1].op {
+        *input = Some(node_id("fx0"));
+    }
+    shared.nodes.insert(1, first);
     let mut project = project(composition(vec![node("clip", NodeOp::Clip {})], "clip"));
-    project.compositions = vec![
-        drawing("a", "big", 20),
-        drawing("b", "big", 20),
-        big(keyframes),
-    ];
+    project.compositions = vec![drawing("a", "big", 20), drawing("b", "big", 20), shared];
     project.timeline.tracks[0].clips[0].composition =
         Some(ClipComposition::new(CompositionId::new("a").expect("id")));
     let alone = plan_composition(
@@ -769,6 +783,8 @@ fn the_plans_of_one_project_hold_at_most_the_plan_budget_together() {
     project.validate().expect("valid project");
     let index = ActiveIndex::build(&project).expect("indexes");
     evaluate(&project, &index, MediaTime(1_500)).expect("only a is shown: it draws");
+    assert!(!index.plans_too_large());
+    assert_eq!(index.plan_errors(range(0, 10_000)), []);
 
     // With b shown too, every composition is refused regardless of compile order.
     let mut clip = project.timeline.tracks[0].clips[0].clone();
@@ -778,6 +794,15 @@ fn the_plans_of_one_project_hold_at_most_the_plan_budget_together() {
     project.timeline.tracks[0].clips.push(clip);
     project.validate().expect("valid project");
     let index = ActiveIndex::build(&project).expect("indexes");
+    // The cause is the whole document, so an export lists it once, for the first clip.
+    assert!(index.plans_too_large());
+    assert!(matches!(
+        index.plan_errors(range(0, 10_000)).as_slice(),
+        [EvalError::IncompleteComposition {
+            reason: PlanError::TooLarge,
+            ..
+        }]
+    ));
     for time in [1_500, 3_500] {
         assert!(
             matches!(
@@ -1049,7 +1074,7 @@ fn an_unconnected_input_inside_a_group_is_named_by_its_path() {
         input: None,
         inputs: BTreeMap::new(),
         effect: ClipEffect {
-            id: "alpha2.effect.gaussian-blur".into(),
+            id: "test.blur".into(),
             version: 1,
             params: BTreeMap::new(),
             resources: BTreeMap::new(),
@@ -1163,7 +1188,7 @@ fn reads_and_effects_of_a_shared_composition_are_counted_per_clip_and_walked_onc
             .effects()
             .map(|effect| effect.id.as_str())
             .collect::<Vec<_>>(),
-        ["alpha2.effect.gaussian-blur"]
+        ["test.blur"]
     );
 }
 

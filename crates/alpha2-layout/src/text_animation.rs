@@ -8,7 +8,7 @@
 
 use alpha2_eval::{SampledAnimator, SampledSelector};
 use alpha2_model::{RangeShape, RangeUnits, RunState, TextRun, TextUnit};
-use alpha2_text::{ClusterState, ColorMix, TextLayout};
+use alpha2_text::{ClusterState, ColorMix, MAX_CLUSTER_SCALE, TextLayout};
 use alpha2_time::MediaTime;
 
 /// The selection in `[0, 1]` that `selector` gives each cluster of `layout`, at `time` for a
@@ -226,8 +226,35 @@ fn timing(
 /// Each cluster's state under `animators` at `time`, in pixels of a `font_size`-pixel font,
 /// and a hash of the states. The hash is 0 when every state is identity, so the text draws as
 /// it would without animators. `base_fill` and `base_stroke` are where color mixes start.
+///
+/// No selector counts the ellipsis of a clamped text. It takes the state of the cluster before
+/// it, so it moves and fades with the text it ends.
 #[must_use]
 pub fn cluster_states(
+    layout: &TextLayout,
+    runs: &[TextRun],
+    animators: &[SampledAnimator],
+    time: MediaTime,
+    font_size: f32,
+) -> (Vec<ClusterState>, u64) {
+    let Some(mark) = layout.clusters.iter().position(|cluster| cluster.ellipsis) else {
+        return text_states(layout, runs, animators, time, font_size);
+    };
+    let mut text = layout.clone();
+    text.clusters.remove(mark);
+    for line in &mut text.lines {
+        let shift = |index: usize| index - usize::from(index > mark);
+        line.clusters = shift(line.clusters.start)..shift(line.clusters.end);
+    }
+    let (mut states, hash) = text_states(&text, runs, animators, time, font_size);
+    let before = mark
+        .checked_sub(1)
+        .map_or(ClusterState::IDENTITY, |index| states[index]);
+    states.insert(mark, before);
+    (states, hash)
+}
+
+fn text_states(
     layout: &TextLayout,
     runs: &[TextRun],
     animators: &[SampledAnimator],
@@ -279,6 +306,8 @@ pub fn cluster_states(
     for (state, degrees) in states.iter_mut().zip(degrees) {
         state.rotation = degrees.to_radians();
         state.opacity = state.opacity.clamp(0.0, 1.0);
+        // Scales of several animators multiply; the product keeps one animator's limit.
+        state.scale = state.scale.map(|axis| axis.min(MAX_CLUSTER_SCALE));
         identity &= state.is_identity();
         let mixes = [state.fill, state.stroke].map(|mix| {
             mix.map_or([1.0, 0.0, 0.0, 0.0, 0.0], |mix| {

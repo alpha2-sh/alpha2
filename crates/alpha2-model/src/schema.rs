@@ -19,6 +19,10 @@ pub fn project_json_schema() -> Value {
         .into_generator()
         .into_root_schema_for::<ProjectWire>();
     schema.insert(
+        "$id".to_owned(),
+        Value::String(PROJECT_SCHEMA_ID.to_owned()),
+    );
+    schema.insert(
         "title".to_owned(),
         Value::String(format!(
             "alpha2 project document, schema version {}",
@@ -30,11 +34,29 @@ pub fn project_json_schema() -> Value {
     value
 }
 
+/// Where the project schema is published.
+pub const PROJECT_SCHEMA_ID: &str = "https://alpha2.sh/schema/project.v1.json";
+
 /// Post-processes a schemars schema the way the project schema is: every `uint32` bounded and
 /// every default spelled as the engine writes it. Used by schemas that embed model types.
 pub fn finish_json_schema(value: &mut Value) {
     bound_unsigned_integers(value);
     shortest_defaults(value);
+}
+
+/// Removes the `data` variant from an `Animated` schema whose value type takes no data.
+pub(crate) fn drop_data_mode(schema: &mut schemars::Schema) {
+    let is_data = |variant: &Value| {
+        variant
+            .pointer("/properties/mode/const")
+            .and_then(Value::as_str)
+            == Some("data")
+    };
+    for union in ["oneOf", "anyOf"] {
+        if let Some(variants) = schema.get_mut(union).and_then(Value::as_array_mut) {
+            variants.retain(|variant| !is_data(variant));
+        }
+    }
 }
 
 /// What a CSS hex color string looks like.
@@ -131,6 +153,8 @@ pub fn project_limits_json() -> Value {
         ("MAX_CLIPS", json!(crate::MAX_CLIPS)),
         ("MAX_CLIPS_PER_TRACK", json!(crate::MAX_CLIPS_PER_TRACK)),
         ("MAX_COMPOSITIONS", json!(crate::MAX_COMPOSITIONS)),
+        ("MAX_EFFECT_RESOURCES", json!(crate::MAX_EFFECT_RESOURCES)),
+        ("MAX_KEYFRAMES", json!(crate::MAX_KEYFRAMES)),
         ("MAX_COMPOSITION_NODES", json!(crate::MAX_COMPOSITION_NODES)),
         ("MAX_GROUP_INPUTS", json!(crate::MAX_GROUP_INPUTS)),
         ("MAX_EFFECT_INPUTS", json!(crate::MAX_EFFECT_INPUTS)),
@@ -158,6 +182,14 @@ pub fn project_limits_json() -> Value {
         ("MAX_LAYOUT_ISOLATED", json!(crate::MAX_LAYOUT_ISOLATED)),
         ("MAX_LAYOUT_FONT_SIZE", json!(crate::MAX_LAYOUT_FONT_SIZE)),
         ("MAX_GRID_TRACKS", json!(crate::MAX_GRID_TRACKS)),
+        ("MAX_LAYOUT_FRACTION", json!(crate::MAX_LAYOUT_FRACTION)),
+        ("MAX_LAYOUT_PX", json!(crate::MAX_LAYOUT_PX)),
+        ("MAX_LAYOUT_PERCENT", json!(crate::MAX_LAYOUT_PERCENT)),
+        ("MAX_FLEX_FACTOR", json!(crate::MAX_FLEX_FACTOR)),
+        ("MIN_ASPECT_RATIO", json!(crate::ASPECT_RATIO_RANGE.start())),
+        ("MAX_ASPECT_RATIO", json!(crate::ASPECT_RATIO_RANGE.end())),
+        ("MAX_TEXT_POSITION", json!(crate::MAX_TEXT_POSITION)),
+        ("MAX_ANIMATOR_OFFSET", json!(crate::MAX_ANIMATOR_OFFSET)),
         ("MIN_POLYSTAR_POINTS", json!(crate::MIN_POLYSTAR_POINTS)),
         ("MAX_POLYSTAR_POINTS", json!(crate::MAX_POLYSTAR_POINTS)),
         (
@@ -169,6 +201,7 @@ pub fn project_limits_json() -> Value {
             json!(crate::MAX_CAPTION_FILE_BYTES),
         ),
         ("MAX_CAPTION_FILE_CUES", json!(crate::MAX_CAPTION_FILE_CUES)),
+        ("MAX_DERIVED_CUES", json!(crate::MAX_DERIVED_CUES)),
         ("MAX_FONT_FAMILY_BYTES", json!(crate::MAX_FONT_FAMILY_BYTES)),
         (
             "MAX_TRANSITIONS_PER_TRACK",
@@ -270,6 +303,22 @@ pub fn project_limits_json() -> Value {
         ),
         ("MAX_PDF_PAGES", json!(crate::MAX_PDF_PAGES)),
         ("TICKS_PER_SECOND", json!(alpha2_time::TICKS_PER_SECOND)),
+        ("MAX_DATA_SETS", json!(crate::MAX_DATA_SETS)),
+        ("MAX_DATA_CHANNELS", json!(crate::MAX_DATA_CHANNELS)),
+        ("MAX_DATA_VALUES", json!(crate::MAX_DATA_VALUES)),
+        ("MAX_DATA_WORDS", json!(crate::MAX_DATA_WORDS)),
+        ("MAX_DATA_INTERVALS", json!(crate::MAX_DATA_INTERVALS)),
+        ("MAX_DATA_LABEL_BYTES", json!(crate::MAX_DATA_LABEL_BYTES)),
+        ("MAX_DATA_ID_BYTES", json!(crate::MAX_DATA_ID_BYTES)),
+        ("MAX_DATA_COORDINATE", json!(crate::MAX_DATA_COORDINATE)),
+        ("MAX_DATA_SCALAR", json!(crate::MAX_DATA_SCALAR)),
+        (
+            "MAX_DATA_ROTATION_DEGREES",
+            json!(crate::MAX_DATA_ROTATION_DEGREES),
+        ),
+        ("MAX_DATA_SCALE", json!(crate::MAX_DATA_SCALE)),
+        ("MAX_FOLLOW_DEPTH", json!(crate::MAX_FOLLOW_DEPTH)),
+        ("MAX_LOOP_PASSES", json!(crate::MAX_LOOP_PASSES)),
     ];
     let mut value = Value::Object(
         limits

@@ -55,6 +55,13 @@ impl EngineProject {
         evaluate(&self.project, &self.index, time)
     }
 
+    /// The errors [`Self::evaluate`] would return in `range` because a clip's composition cannot
+    /// draw ([`alpha2_eval::ActiveIndex::plan_errors`]). An export checks its range before frame 0.
+    #[must_use]
+    pub fn plan_errors(&self, range: alpha2_time::TimeRange) -> Vec<EvalError> {
+        self.index.plan_errors(range)
+    }
+
     /// Returns the host frames needed at a timeline timestamp.
     ///
     /// # Errors
@@ -87,7 +94,7 @@ impl EngineProject {
     /// ([`alpha2_model::Timeline::extent`]).
     #[must_use]
     pub fn timeline_range(&self) -> Option<TimeRange> {
-        self.project.timeline.extent()
+        self.project.extent()
     }
 
     /// Every effect the project can draw, by id and version, each once. Compositions that cannot
@@ -120,5 +127,11 @@ impl EngineProject {
     #[must_use]
     pub fn project(&self) -> &Project {
         &self.project
+    }
+
+    /// What the project's timeline-time values read their data bindings through.
+    #[must_use]
+    pub fn sample_context(&self) -> alpha2_eval::SampleContext<'_> {
+        self.index.sample_context(&self.project)
     }
 }

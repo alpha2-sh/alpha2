@@ -60,6 +60,7 @@ test("quarantine refusal lists quarantined files that Gatekeeper rejects", async
   const message = await quarantineRefusal(
     join(root, "bin", "alpha2-host"),
     checks,
+    null,
   );
   assert.match(message, /^macOS quarantined 5 file\(s\) alpha2-host needs/);
   assert.match(message, /and 2 more\./);
@@ -71,19 +72,42 @@ test("quarantine refusal lists quarantined files that Gatekeeper rejects", async
   );
 });
 
+test("the OpenH264 library the host loads is assessed with the archive", async () => {
+  const root = await archiveTree(["libavcodec.62.dylib"]);
+  const openh264 = join(root, "libopenh264.dylib");
+  await writeFile(openh264, "");
+  const checks = probe({ quarantined: () => true, accepted: () => false });
+  const message = await quarantineRefusal(
+    join(root, "bin", "alpha2-host"),
+    checks,
+    openh264,
+  );
+  assert.match(message, /^macOS quarantined 3 file\(s\)/);
+  assert.ok(message.includes(openh264), message);
+  assert.deepEqual(
+    checks.assessed.map(([path, kind]) => [path === openh264, kind]),
+    [
+      [false, "execute"],
+      [false, "library"],
+      [true, "library"],
+    ],
+  );
+});
+
 test("a quarantined file Gatekeeper accepts is not refused", async () => {
   const root = await archiveTree(["libavcodec.62.dylib"]);
   assert.equal(
     await quarantineRefusal(
       join(root, "bin", "alpha2-host"),
       probe({ quarantined: () => true, accepted: () => true }),
+      null,
     ),
     undefined,
   );
   // Files that are not quarantined are never assessed.
   const checks = probe({ quarantined: () => false, accepted: () => false });
   assert.equal(
-    await quarantineRefusal(join(root, "bin", "alpha2-host"), checks),
+    await quarantineRefusal(join(root, "bin", "alpha2-host"), checks, null),
     undefined,
   );
   assert.deepEqual(checks.assessed, []);
@@ -95,6 +119,7 @@ test("an unknown assessment does not refuse", async () => {
     await quarantineRefusal(
       join(root, "bin", "alpha2-host"),
       probe({ quarantined: () => true, accepted: () => undefined }),
+      null,
     ),
     undefined,
   );
@@ -104,7 +129,7 @@ test("the remedy names the archive root", async () => {
   const root = await archiveTree(["libavcodec.62.dylib"]);
   const rejected = probe({ quarantined: () => true, accepted: () => false });
   assert.match(
-    await quarantineRefusal(join(root, "bin", "alpha2-host"), rejected),
+    await quarantineRefusal(join(root, "bin", "alpha2-host"), rejected, null),
     new RegExp(
       `xattr -dr com\\.apple\\.quarantine '${root.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")}'`,
     ),
@@ -113,7 +138,7 @@ test("the remedy names the archive root", async () => {
   const alone = join(root, "lib", "alpha2-host");
   await writeFile(alone, "");
   assert.ok(
-    (await quarantineRefusal(alone, rejected)).includes(
+    (await quarantineRefusal(alone, rejected, null)).includes(
       `xattr -dr com.apple.quarantine '${join(root, "lib")}'`,
     ),
   );

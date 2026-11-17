@@ -50,8 +50,8 @@ const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm
 await init();
 const engine = await gpuEngine(WebEffectRegistry);
 // Two compositions of about 170 MiB of compiled steps each: within the 256 MiB plan budget alone,
-// past it together.
-const keyframes = Array.from({ length: 180000 }, (_, time) => ({ time, value: { type: "float", value: 2 }, interpolation: { type: "hold" } }));
+// past it together. Two blurs split the keyframes, since one animated value holds at most 100,000.
+const keyframes = Array.from({ length: 90000 }, (_, time) => ({ time, value: { type: "float", value: 0.5 }, interpolation: { type: "hold" } }));
 const drawing = (id) => ({
   id,
   nodes: [
@@ -74,7 +74,8 @@ const project = (clips) => JSON.stringify({
     { id: "big", nodes: [
       { id: "clip", op: { type: "clip" } },
       { id: "blur", op: { type: "effect", input: "clip", effect: { id: "alpha2.effect.gaussian-blur", version: 1, params: { radius: { mode: "keyframes", keyframes } } } } },
-    ], output: "blur" },
+      { id: "blur2", op: { type: "effect", input: "blur", effect: { id: "alpha2.effect.gaussian-blur", version: 1, params: { radius: { mode: "keyframes", keyframes } } } } },
+    ], output: "blur2" },
   ],
   timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips }] },
 });
@@ -103,7 +104,7 @@ export function gpuMemoryRelease() {
   return `
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const destroyed = { texture: 0, buffer: 0, device: 0 };
-for (const [type, key] of [[GPUTexture, "texture"], [GPUBuffer, "buffer"], [GPUDevice, "device"]]) {
+for (const [type, key] of /** @type {[{ prototype: { destroy(): undefined } }, string][]} */ ([[GPUTexture, "texture"], [GPUBuffer, "buffer"], [GPUDevice, "device"]])) {
   const destroy = type.prototype.destroy;
   type.prototype.destroy = function (...args) {
     destroyed[key] += 1;

@@ -577,7 +577,7 @@ impl Renderer {
             output_format,
             "alpha2 RGBA presentation target",
         );
-        let cached = self.rgba_presentation_pipeline();
+        let cached = self.rgba_presentation_pipeline()?;
         let uniform_bytes = presentation_uniform_bytes(
             source_size,
             presentation,
@@ -663,8 +663,8 @@ impl Renderer {
         self.render_yuv420p_presented(frame, SourcePresentation::identity(frame.size), policy)
     }
 
-    fn rgba_presentation_pipeline(&self) -> &CachedSampledPipeline {
-        self.pipelines.rgba_present.get_or_init(|| {
+    fn rgba_presentation_pipeline(&self) -> Result<&CachedSampledPipeline, RenderError> {
+        crate::gpu_errors::checked_cell(&self.pipelines.rgba_present, self.gpu.device(), || {
             let output_format = self.intermediate_format();
             let bind_group_layout =
                 self.gpu
@@ -997,7 +997,7 @@ impl Renderer {
             "alpha2 YUV conversion target",
         );
         let output_view = output.view().clone();
-        let cached = self.yuv_pipeline(storage == PlaneStorage::Uint16);
+        let cached = self.yuv_pipeline(storage == PlaneStorage::Uint16)?;
         let uniform_bytes = uniform_bytes(
             color,
             tone,
@@ -1177,13 +1177,13 @@ impl Renderer {
     }
 
     /// With `integer_planes`, the pipeline for 16-bit containers uploaded as unsigned integers.
-    fn yuv_pipeline(&self, integer_planes: bool) -> &CachedYuvPipeline {
+    fn yuv_pipeline(&self, integer_planes: bool) -> Result<&CachedYuvPipeline, RenderError> {
         let (cache, source) = if integer_planes {
             (&self.pipelines.yuv16, YUV16_TO_LINEAR_WGSL)
         } else {
             (&self.pipelines.yuv, YUV_TO_LINEAR_WGSL)
         };
-        cache.get_or_init(|| {
+        crate::gpu_errors::checked_cell(cache, self.gpu.device(), || {
             let bind_group_layout = self.yuv_bind_group_layout(if integer_planes {
                 wgpu::TextureSampleType::Uint
             } else {
@@ -1406,7 +1406,7 @@ pub(crate) fn uniform_bytes(
     let factor_x = (1_u32 << format.chroma_shift_x) as f32;
     let factor_y = (1_u32 << format.chroma_shift_y) as f32;
     // A co-sited chroma sample sits `factor / 2 - 0.5` luma samples before its group's centre.
-    let (cosited_x, cosited_y) = match presentation.chroma_siting {
+    let (cosited_x, cosited_y) = match presentation.chroma_siting.resolved_for(format) {
         ChromaLocation::Left => (true, false),
         ChromaLocation::TopLeft => (true, true),
         ChromaLocation::Unspecified | ChromaLocation::Center => (false, false),
@@ -1513,7 +1513,7 @@ fn color_uniform_bytes(
         _ => 0,
     };
     if color.matrix == ColorMatrix::Rgb {
-        return identity_rgb_uniform_bytes(alpha, transfer);
+        return identity_rgb_uniform_bytes(alpha, transfer, code_scale);
     }
     let (kr, kb) = color
         .matrix
@@ -1566,7 +1566,9 @@ fn range_scale_offset(range: ColorRange, depth: u8, code: f32) -> ([f32; 4], [f3
     )
 }
 
-fn identity_rgb_uniform_bytes(alpha: f32, transfer: u32) -> Vec<u8> {
+/// The identity matrix over RGB codes; `code` is [`PlaneStorage::code_scale`]. The range flag is
+/// ignored: untagged RGB reads as limited, and RGB codes are always full range.
+fn identity_rgb_uniform_bytes(alpha: f32, transfer: u32, code: f32) -> Vec<u8> {
     let rows = [
         [1.0_f32, 0.0, 0.0, 0.0],
         [0.0_f32, 1.0, 0.0, 0.0],
@@ -1576,7 +1578,7 @@ fn identity_rgb_uniform_bytes(alpha: f32, transfer: u32) -> Vec<u8> {
     for value in rows
         .into_iter()
         .flatten()
-        .chain([1.0, 1.0, 1.0, 0.0])
+        .chain([code, code, code, 0.0])
         .chain([0.0; 4])
     {
         bytes.extend_from_slice(&value.to_ne_bytes());
@@ -1714,6 +1716,72 @@ mod tests {
             .into_iter()
             .map(f32::to_bits)
             .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn an_unspecified_siting_of_horizontally_subsampled_chroma_is_left() {
+        let size = RenderSize::new(16, 4).expect("size");
+        let bytes = |format, siting| {
+            uniform_bytes(
+                ColorMetadata::EXPORT,
+                None,
+                1.0,
+                size,
+                SourcePresentation {
+                    chroma_siting: siting,
+                    ..SourcePresentation::identity(size)
+                },
+                format,
+                1.0,
+                64.0,
+            )
+        };
+        for format in [YuvFormat::planar(1, 0, 10), YuvFormat::planar(2, 0, 8)] {
+            assert_eq!(
+                bytes(format, ChromaLocation::Unspecified),
+                bytes(format, ChromaLocation::Left),
+                "{format:?}"
+            );
+        }
+        assert_eq!(
+            bytes(YuvFormat::I420, ChromaLocation::Unspecified),
+            bytes(YuvFormat::I420, ChromaLocation::Center)
+        );
+        assert_ne!(
+            bytes(YuvFormat::I420, ChromaLocation::Unspecified),
+            bytes(YuvFormat::I420, ChromaLocation::Left)
+        );
+    }
+
+    #[test]
+    fn rgb_uniform_scales_ten_bit_codes_to_full_range() {
+        let code_scale = 65535.0 / 1023.0;
+        let bytes = uniform_bytes(
+            ColorMetadata {
+                primaries: ColorPrimaries::Bt2020,
+                transfer: TransferFunction::Bt709,
+                matrix: ColorMatrix::Rgb,
+                range: ColorRange::Full,
+                dynamic_range: DynamicRange::Sdr,
+            },
+            None,
+            1.0,
+            RenderSize::new(2, 2).expect("size"),
+            SourcePresentation::identity(RenderSize::new(2, 2).expect("size")),
+            YuvFormat::planar(0, 0, 10),
+            code_scale,
+            64.0,
+        );
+        let scale = bytes[48..64]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_ne_bytes(*bytes).to_bits())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            scale,
+            [code_scale, code_scale, code_scale, 0.0].map(f32::to_bits)
         );
     }
 

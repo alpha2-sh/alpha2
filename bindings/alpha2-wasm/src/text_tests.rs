@@ -89,3 +89,36 @@ fn an_animated_request_gives_each_cluster_its_state() {
     let still = rasterizer.rasterize(&request).expect("raster");
     assert_ne!(animated.pixels.rgba8, still.pixels.rgba8);
 }
+
+#[test]
+fn a_request_over_the_frame_area_is_refused_and_a_wide_paragraph_draws() {
+    let bytes = std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture font");
+    let mut rasterizer = TextRasterizer::empty();
+    rasterizer
+        .add_font(font("Alpha2 Fixture".into(), bytes, 0))
+        .expect("valid font");
+    let huge = format!(
+        r#"{{"text":"{}","fontSize":2048,"fill":[255,255,255,255]}}"#,
+        "WWWWWWW\\n".repeat(6)
+    );
+    let wire: TextRequestWire = serde_json::from_str(&huge).expect("request JSON");
+    assert_eq!(
+        rasterizer.rasterize(&wire.into_request(6)).map(|_| ()),
+        Err(alpha2_text::TextRasterError::TooLarge)
+    );
+    let animated = huge.replacen('{', r#"{"clusterState":{"opacity":0.5},"#, 1);
+    let wire: TextRequestWire = serde_json::from_str(&animated).expect("request JSON");
+    let (request, states) = animated_request(wire, 7, &rasterizer).expect("states");
+    assert_eq!(
+        rasterizer.rasterize_animated(&request, &states).map(|_| ()),
+        Err(alpha2_text::TextRasterError::TooLarge)
+    );
+    let paragraph = format!(
+        r#"{{"text":"{}","fontSize":96,"maxWidth":3800,"fill":[255,255,255,255],
+            "strokes":[{{"color":[0,0,0,255],"width":3}}]}}"#,
+        "The quick brown fox jumps over the lazy dog. ".repeat(24)
+    );
+    let wire: TextRequestWire = serde_json::from_str(&paragraph).expect("request JSON");
+    let result = rasterizer.rasterize(&wire.into_request(8)).expect("raster");
+    assert!(result.descriptor.texture.width >= 3_700);
+}

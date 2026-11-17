@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["gpu", "wgpu", "webgpu", "video"]
 categories = ["graphics", "rendering"]
-# Tests, benches and fixtures stay out of the published crate.
 include = [
   "/src/**",
   "/README.md",
@@ -19,15 +18,12 @@ include = [
 ]
 
 [features]
-# Serializes device acquisition within a process; enabled by test dev-dependencies only.
 serial-acquisition = []
-# Exposes `alpha2_gpu::wgpu` and the items that take or return `wgpu` types.
 wgpu-interop = []
 
 [dependencies]
 wgpu.workspace = true
 web-time = "1.1.0"
-# `validation_log` installs the process logger that wgpu-hal logs through.
 log = "0.4.34"
 
 # Must match the version wgpu-hal uses so its raw device casts to the debug info queue.
@@ -50,7 +46,6 @@ windows = { version = "0.62", features = [
 ] }
 
 [lints.rust]
-# Allowed only where the validation collector reaches raw devices through wgpu's hal interop.
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "warn"

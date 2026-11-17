@@ -7,6 +7,16 @@ TICKS_PER_SECOND: int
 COMPOSE_VERSION: int
 COMPOSE_THEMES: list[str]
 
+class InternalError(RuntimeError):
+    """An engine defect (a Rust panic) inside a native call, with the panic message.
+
+    Every function and method here raises it for a panic; a :class:`TextMeasurer` whose call
+    panicked raises it again on every later call.
+    """
+
+    code: str
+    """Always ``INTERNAL``."""
+
 def validate_project_json(json: str) -> list[str]:
     """The problems the engine finds in a project document, as JSON text: empty when it is valid."""
 
@@ -44,17 +54,53 @@ def resolve_pixels(
     Raises ValueError with the engine's message for pictures the codec cannot write.
     """
 
+def apply_edit(project: str, request: str) -> tuple[str, str]:
+    """An edit operation applied to a project, both JSON text, as ``(project, report)`` in the
+    engine's canonical JSON text.
+
+    Raises ValueError(message, code, refusal) for an invalid project or request, or a refusal.
+    """
+
 def compose_requirements(spec: str) -> str:
     """The files a compose spec (JSON text) names, as JSON text: ``{"media", "texts"}``.
 
     Raises ValueError(message, path, problem) for a spec that does not parse.
     """
 
+def compose_media_facts(fingerprint: str) -> str:
+    """A file's compose facts (JSON text) from a host's fingerprint of it (JSON text)."""
+
 def compose(spec: str, facts: str, fonts: list[bytes]) -> str:
     """A compose spec compiled with facts about its files and the export's font files, as JSON
     text: ``{"project", "assets", "loudness", "warnings"}``.
 
     Raises ValueError(message, path, problem) for a spec that does not compile.
+    """
+
+COMPOSE_TEMPLATES: str
+"""The 1st-party ``alpha2/`` templates, as a JSON list."""
+
+def compose_core_schema() -> str:
+    """The compose schema without engine nodes, as JSON."""
+
+def compose_bind(document: str, data: str, options: str) -> str:
+    """A template (JSON text) bound to its data, or a spec with its template nodes expanded, as
+    JSON text. ``options`` is ``{"theme"?, "templates"?}``.
+
+    Raises ValueError(message, path, problem) for a template or data that does not bind.
+    """
+
+def compose_data_schema(template: str) -> str:
+    """A template's data as a JSON Schema, as JSON text.
+
+    Raises ValueError(message, path, problem) for a template that does not parse.
+    """
+
+def compose_lint(template: str, data: str, options: str) -> str:
+    """A template's problems, with ``data`` when not empty, as a JSON list of
+    ``{path, code, message, severity}``.
+
+    Raises ValueError for text that is not JSON.
     """
 
 class TextMeasurer:

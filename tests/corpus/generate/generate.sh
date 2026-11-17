@@ -2,7 +2,8 @@
 # Regenerates tests/corpus and tests/fonts. Steps run in this order (recovery cuts a media file):
 #
 #   media        `ffmpeg` on PATH (MANIFEST.md hashes come from FFmpeg N-119331). FFMPEG_ENCODERS
-#                (libx264, libx265, libaom, libvpx, libopus, libvorbis) adds the encoded files.
+#                (libx264, libx265, libaom, libvpx, libopus, libvorbis, libmp3lame) adds the
+#                encoded files.
 #   recovery     FFMPEG_ENCODERS (libx264, libvpx-vp9) and the ffprobe beside it.
 #   extensions   python3 with Pillow 9+ built with WebP animation.
 #   fonts        DEJAVU_SANS (DejaVuSans.ttf 2.37), BLACK_HAN_SANS (BlackHanSans-Regular.ttf 1.001),
@@ -10,6 +11,7 @@
 #   emoji-fonts  NOTO_EMOJI_COLRV1 (Noto-COLRv1.ttf), NOTO_EMOJI_CBDT (NotoColorEmoji.ttf) from
 #                noto-emoji v2.051, fontTools.
 #   weight-fonts fontTools only.
+#   hostile-fonts fontTools only.
 #
 # Usage: generate.sh [--out DIR] [STEP...]
 #
@@ -31,8 +33,8 @@ fonts="$tests/fonts"
 named=("$@")
 for step in "${named[@]}"; do
   case "$step" in
-    media | recovery | extensions | fonts | emoji-fonts | weight-fonts) ;;
-    *) echo "error: unknown step '$step' (media, recovery, extensions, fonts, emoji-fonts, weight-fonts)" >&2; exit 2 ;;
+    media | recovery | extensions | fonts | emoji-fonts | weight-fonts | hostile-fonts) ;;
+    *) echo "error: unknown step '$step' (media, recovery, extensions, fonts, emoji-fonts, weight-fonts, hostile-fonts)" >&2; exit 2 ;;
   esac
 done
 
@@ -85,4 +87,9 @@ fi
 if wanted weight-fonts "$(python3 -c 'import fontTools' 2>/dev/null || echo 'fontTools')"; then
   mkdir -p "$fonts"
   python3 "$here/font-weights.py" "$fonts"
+fi
+
+if wanted hostile-fonts "$(python3 -c 'import fontTools' 2>/dev/null || echo 'fontTools')"; then
+  mkdir -p "$fonts"
+  python3 "$here/font-hostile.py" "$fonts"
 fi

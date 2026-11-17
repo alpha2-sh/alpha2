@@ -182,11 +182,7 @@ report({ ok: decodeOrderDiffers && wrong.length === 0, decodeOrderDiffers, frame
 }
 
 // SDR keeps display-referred R'G'B'. Check `copyExternalImageToTexture` against decoded YUV.
-export function videoColorContract() {
-  return `
-const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
-await init();
-const video = document.createElement("video");
+const COLOR_FIXTURE_FIRST_FRAME = `const video = document.createElement("video");
 video.muted = true;
 video.src = "/tests/corpus/vp9-color.webm";
 await new Promise((resolve, reject) => {
@@ -195,7 +191,13 @@ await new Promise((resolve, reject) => {
 });
 video.currentTime = 0;
 await new Promise((resolve) => (video.readyState >= 2 ? resolve() : (video.oncanplay = resolve)));
-const width = video.videoWidth;
+`;
+
+export function videoColorContract() {
+  return `
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+${COLOR_FIXTURE_FIRST_FRAME}const width = video.videoWidth;
 const height = video.videoHeight;
 const source = new VideoFrame(video, { timestamp: 0 });
 const layout = { format: source.format, colorSpace: source.colorSpace.toJSON() };
@@ -347,6 +349,7 @@ for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
   planes[width * height + cw * ch + y * cw + x] = red ? 220 : 70;
 }
 const layout = [{ offset: 0, stride: width }, { offset: width * height, stride: cw }, { offset: width * height + cw * ch, stride: cw }];
+/** @type {VideoColorSpaceInit} */
 const colorSpace = { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false };
 const project = JSON.stringify({
   schema_version: 1, id: "siting", name: "Siting",
@@ -398,14 +401,7 @@ report({ ok: supply <= 1 && browser >= 8, supply, browser });
 // copyExternalImageToTexture into an srgb-tagged rgba8unorm texture must not change the transfer.
 export function browserVideoConversion() {
   return `
-const video = document.createElement("video");
-video.muted = true;
-video.src = "/tests/corpus/vp9-color.webm";
-await new Promise((resolve, reject) => {
-  video.onloadeddata = resolve;
-  video.onerror = () => reject(new Error("the browser cannot decode the fixture"));
-});
-const frame = new VideoFrame(video, { timestamp: 0 });
+${COLOR_FIXTURE_FIRST_FRAME}const frame = new VideoFrame(video, { timestamp: 0 });
 const width = frame.displayWidth, height = frame.displayHeight;
 if (frame.format !== "I420" && frame.format !== "NV12") {
   const format = frame.format;
@@ -416,6 +412,7 @@ const raw = new Uint8Array(frame.allocationSize());
 const planes = await frame.copyTo(raw);
 const sample = (index, x, y, step = 1, phase = 0) =>
   raw[planes[index].offset + y * planes[index].stride + x * step + phase];
+/** @returns {[number, number, number]} */
 const yuv = (x, y) => {
   const cx = x >> 1, cy = y >> 1;
   return frame.format === "I420"
@@ -471,7 +468,7 @@ for (let y = 0; y < height; y += 2)
     const encoded = matrix(yuv(x, y)).map(clamp);
     for (let c = 0; c < 3; c++) {
       const actual = rgba[y * row + x * 4 + c];
-      for (const [target, value] of [[contract, encoded[c]], [reencoded, bt709ToSrgb(encoded[c])]]) {
+      for (const [target, value] of /** @type {[ReturnType<typeof stats>, number][]} */ ([[contract, encoded[c]], [reencoded, bt709ToSrgb(encoded[c])]])) {
         const d = actual - value * 255;
         target.worst = Math.max(target.worst, Math.abs(d));
         target.sum += Math.abs(d);
@@ -543,6 +540,188 @@ report({
 `;
 }
 
+// A backward run reads its frames from reverse windows of copies. Each must hold the decoder's
+// planes as the forward path gives them, also when the browser refuses a copy once.
+export function reverseWindowPixels() {
+  return `
+if (globalThis.VideoDecoder === undefined) skip("webcodecs-video", "this browser has no WebCodecs VideoDecoder");
+const { MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
+const bytes = new Uint8Array(await (await fetch("/tests/corpus/h264-long-gop.mp4")).arrayBuffer());
+const FRAMES = 24;
+const read = async (frame) => {
+  const copy = new Uint8Array(frame.allocationSize());
+  await frame.copyTo(copy);
+  return { format: frame.format, copy };
+};
+const decodeAll = async (order, refuseOnce) => {
+  const decoder = await MediabunnyVideoDecoder.open("clip", bytes);
+  const copyTo = VideoFrame.prototype.copyTo;
+  let refused = 0;
+  const frames = new Map();
+  try {
+    for (const index of order) {
+      if (refuseOnce) {
+        let calls = 0;
+        VideoFrame.prototype.copyTo = function (...args) {
+          calls += 1;
+          if (calls === 2) {
+            refused += 1;
+            return Promise.reject(new DOMException("injected readback refusal", "InvalidStateError"));
+          }
+          return copyTo.apply(this, args);
+        };
+      }
+      let decoded;
+      try {
+        decoded = await decoder.refill({ sourceId: "clip", mediaTimeTicks: BigInt(index) * 4000n, reason: "prefetch", generation: 0 });
+      } finally {
+        VideoFrame.prototype.copyTo = copyTo;
+      }
+      frames.set(index, await read(decoded.frame));
+      decoded.frame.close();
+    }
+    return { frames, windows: decoder.reverseWindowsBuilt, refused };
+  } finally {
+    decoder.close();
+  }
+};
+const indices = [...Array(FRAMES).keys()];
+const forward = await decodeAll(indices, false);
+const results = {};
+for (const refuseOnce of [false, true]) {
+  const reverse = await decodeAll([...indices].reverse(), refuseOnce);
+  let maxDiff = 0;
+  const formats = new Set();
+  for (const index of indices) {
+    const a = forward.frames.get(index);
+    const b = reverse.frames.get(index);
+    formats.add(b.format);
+    if (a.format !== b.format || a.copy.length !== b.copy.length) { maxDiff = Infinity; continue; }
+    for (let i = 0; i < a.copy.length; i += 1) maxDiff = Math.max(maxDiff, Math.abs(a.copy[i] - b.copy[i]));
+  }
+  results[refuseOnce ? "refusedOnce" : "clean"] = { maxDiff, windows: reverse.windows, refused: reverse.refused, formats: [...formats] };
+}
+const forwardFormat = forward.frames.get(0).format;
+report({
+  ok: Object.values(results).every((result) => result.maxDiff === 0 && result.windows > 0)
+    && results.refusedOnce.refused > 0,
+  forwardFormat, ...results,
+});
+`;
+}
+
+// Trimmed clips of N 1080p files played in turn through one refill coordinator, with its default
+// cursor budget and with none: live configured decoders, decoded frames not closed, and the first
+// failure. The first N at which a browser fails without the budget bounds the default.
+export function decoderCursorBudget() {
+  return `
+const Native = globalThis.VideoDecoder;
+if (Native === undefined) skip("webcodecs-video", "this browser has no WebCodecs VideoDecoder");
+const counts = { live: 0, peak: 0, framesHeld: 0 };
+globalThis.VideoDecoder = class extends Native {
+  #counted = false;
+  constructor(init) {
+    super({
+      ...init,
+      output: (frame) => {
+        counts.framesHeld += 1;
+        const close = frame.close.bind(frame);
+        let closed = false;
+        frame.close = () => {
+          if (!closed) counts.framesHeld -= 1;
+          closed = true;
+          close();
+        };
+        init.output(frame);
+      },
+      // A decode error closes the decoder without a close() call.
+      error: (error) => {
+        this.#release();
+        init.error(error);
+      },
+    });
+  }
+  #release() {
+    if (this.#counted) counts.live -= 1;
+    this.#counted = false;
+  }
+  configure(config) {
+    if (!this.#counted) {
+      this.#counted = true;
+      counts.live += 1;
+      counts.peak = Math.max(counts.peak, counts.live);
+    }
+    return super.configure(config);
+  }
+  close() {
+    this.#release();
+    return super.close();
+  }
+};
+const { canEncodeVideoTrack, MediabunnySink, MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
+const { DecoderRefillCoordinator } = await import("/packages/alpha2/dist/media.js");
+// A 4 s 1080p file made here, so a clip of its first frames never reaches the end of its stream.
+const frameRate = { num: 30, den: 1 };
+/** @type {import("/packages/alpha2/dist/rate-control.js").VideoRateControl} */
+const rate = { bitrate: 4_000_000, bitrateMode: "variable" };
+const encoding = await canEncodeVideoTrack("avc", { width: 1920, height: 1080, frameRate, rate });
+if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder");
+const sink = new MediabunnySink({ container: "mp4", videoCodec: "avc", videoRateControl: rate, frameRate,
+  ...(encoding.codecString === undefined ? {} : { videoCodecString: encoding.codecString }),
+  destination: { kind: "memory", maxBytes: 1 << 26 } });
+const pixels = new Uint8Array(1920 * 1080 * 3 / 2);
+for (let index = 0; index < 120; index += 1) {
+  pixels.fill(16 + index, 0, 1920 * 1080);
+  pixels.fill(128, 1920 * 1080);
+  const frame = new VideoFrame(pixels, { format: "I420", codedWidth: 1920, codedHeight: 1080,
+    timestamp: Math.round((index * 1e6) / 30), duration: Math.round(1e6 / 30) });
+  await sink.writeVideo({ index: BigInt(index), timeTicks: BigInt(index * 4000), frame });
+}
+await sink.finish();
+const bytes = new Uint8Array(/** @type {{ readonly buffer: ArrayBuffer }} */ (sink.output).buffer);
+const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const play = async (sources, options) => {
+  Object.assign(counts, { live: 0, peak: 0, framesHeld: 0 });
+  const coordinator = new DecoderRefillCoordinator(
+    (sourceId) => MediabunnyVideoDecoder.open(sourceId, bytes),
+    async (decoded) => decoded.frame.close(),
+    options,
+  );
+  let failure = null;
+  const started = performance.now();
+  try {
+    for (let source = 0; source < sources && failure === null; source += 1)
+      for (let frame = 0; frame < 10 && failure === null; frame += 1)
+        try {
+          await coordinator.refill({ sourceId: "file-" + source, consumerId: "clip-" + source,
+            mediaTimeTicks: BigInt(frame) * 4000n, reason: frame === 0 ? "seek" : "prefetch", generation: 0 });
+        } catch (error) {
+          failure = { source, frame, error: String(error?.name) + ": " + String(error?.message ?? error) };
+        }
+    const played = { live: counts.live, framesHeld: counts.framesHeld, ms: Math.round(performance.now() - started) };
+    await settle(2500);
+    return { sources, failure, peak: counts.peak, played, idle: { live: counts.live, framesHeld: counts.framesHeld },
+      diagnostics: coordinator.diagnostics };
+  } finally {
+    coordinator.close();
+    await settle(100);
+  }
+};
+const unbounded = { maxCursors: Number.MAX_SAFE_INTEGER, idleMs: Number.MAX_SAFE_INTEGER };
+const results = {};
+for (const sources of [12, 40]) {
+  results["budget-" + sources] = await play(sources, {});
+  results["none-" + sources] = await play(sources, unbounded);
+}
+globalThis.VideoDecoder = Native;
+const budgeted = [results["budget-12"], results["budget-40"]];
+report({
+  ok: budgeted.every((result) => result.failure === null && result.peak <= 16 + 1 && result.idle.framesHeld === 0),
+  ...results,
+});
+`;
+}
+
 // Phone HDR video (HEVC Main 10, HLG) through the SDK and the editor's import: either it renders on
 // every route, or both refuse it at import, typed. With `degraded`, a source decoded only to frames
 // without planes is previewed through the browser's tone mapping and its export refused.
@@ -553,6 +732,7 @@ const T = 120000;
 const FPS = 30;
 const TICKS_PER_FRAME = T / FPS;
 const FRAMES = 3;
+/** @type {import("/packages/alpha2/dist/project.js").ColorMetadata} */
 const HLG = { primaries: "bt2020", transfer: "hlg", matrix: "bt2020_ncl", range: "limited", dynamic_range: "hdr" };
 const FILES = [
   { path: "/tests/corpus/hevc-main10-hlg.mp4", hdr: true, subject: true },
@@ -630,13 +810,17 @@ const render = async (file, id, color) => {
   } finally {
     probe.close();
   }
-  const host = await createWasmRenderWorkerHost(WebEffectRegistry, JSON.stringify(projectFor(id, size, color)), { renderer: "gpu" })(
+  const host = await createWasmRenderWorkerHost(
+    /** @type {import("/packages/alpha2/dist/effects.js").WasmEffectRegistryBinding} */ (WebEffectRegistry),
+    JSON.stringify(projectFor(id, size, color)),
+    { renderer: "gpu" },
+  )(
     new OffscreenCanvas(size[0], size[1]),
   );
   const coordinator = new DecoderRefillCoordinator(
     (sourceId, { decode }) =>
       MediabunnyVideoDecoder.open(sourceId, file, decode === "software" ? { hardwareAcceleration: "prefer-software" } : {}),
-    (decoded) => host.uploadVideoFrame(decoded),
+    async (decoded) => host.uploadVideoFrame(decoded),
   );
   try {
     const luma = [];

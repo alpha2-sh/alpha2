@@ -4,7 +4,7 @@
 //! engine and fails on drift; `ALPHA2_UPDATE_GOLDENS=1` rewrites it.
 
 use alpha2_engine::{EngineProject, Exporter, QualityProfile};
-use alpha2_eval::picture_source_time;
+use alpha2_eval::{picture_source_time, source_range_to_timeline};
 use alpha2_media::VideoCodec;
 use alpha2_media::sample_ticks_floor;
 use alpha2_model::{CubicBezier, LoopMode, Project, ProjectId, ProjectSettings, TimeMap};
@@ -245,6 +245,76 @@ fn source_times() -> Value {
     Value::Array(cases)
 }
 
+/// The timeline ranges at which clips of every time map show a source interval: the full
+/// preimage of the picture time map.
+fn source_ranges() -> Value {
+    let maps = [
+        TimeMap::Forward,
+        TimeMap::Reverse,
+        TimeMap::Freeze {
+            source_time: MediaTime::from_ticks(50_000),
+        },
+        TimeMap::Loop {
+            mode: LoopMode::Repeat,
+        },
+        TimeMap::Loop {
+            mode: LoopMode::PingPong,
+        },
+    ];
+    let spans = [
+        ((0, 120_000), (0, 120_000)),
+        ((60_000, 180_000), (12_000, 72_000)),
+        ((0, 60_000), (10_000, 250_000)),
+        ((40_000, 300_000), (10_000, 130_000)),
+        ((40_001, 58_000), (10_000, 46_000)),
+    ];
+    let mut cases = Vec::new();
+    for pair in [(30, 1), (30_000, 1_001), (24, 1)] {
+        let rate = rate(pair);
+        for map in maps {
+            for (timeline, source) in spans {
+                let (timeline, source) = (range(timeline.0, timeline.1), range(source.0, source.1));
+                let (start, end) = (source.start().ticks(), source.end().ticks());
+                let third = (end - start) / 3;
+                let intervals = [
+                    (start, end),
+                    (start, start + third),
+                    (start + third, end - third),
+                    (50_000, 50_001),
+                    (end - 1, end + 10_000),
+                    (end + 1, end + 2),
+                ];
+                let found = intervals
+                    .into_iter()
+                    .map(|(from, to)| {
+                        let ranges = source_range_to_timeline(
+                            timeline,
+                            source,
+                            map,
+                            rate,
+                            MediaTime::from_ticks(from),
+                            MediaTime::from_ticks(to),
+                        )
+                        .expect("preimage")
+                        .into_iter()
+                        .map(|range| json!([range.start().ticks(), range.end().ticks()]))
+                        .collect::<Vec<_>>();
+                        json!({ "interval": [from, to], "ranges": ranges })
+                    })
+                    .collect::<Vec<_>>();
+                cases.push(json!({
+                    "rate": rate_json(rate),
+                    "timeline": { "start": timeline.start().ticks(), "end": timeline.end().ticks() },
+                    "source": { "start": source.start().ticks(), "end": source.end().ticks() },
+                    "timeMap": map,
+                    "cases": found,
+                }));
+            }
+        }
+    }
+    Value::Array(cases)
+}
+
 /// Samples to the tick at or before them, negative ones included.
 fn samples() -> Value {
     let mut cases = Vec::new();
@@ -293,7 +363,14 @@ fn presentation_slacks() -> Value {
             .map(|frame| (2 * frame * den * base + num) / (2 * num) * scale)
             .collect::<Vec<_>>()
     };
-    let streams: [((i64, i64), Vec<i64>); 14] = [
+    // Stills held 3, 3, 3, 4, 4 and 4 s, in `units` per second.
+    let stills = |units: i64| {
+        [0, 3, 6, 9, 13, 17, 21]
+            .iter()
+            .map(|second| second * units)
+            .collect::<Vec<_>>()
+    };
+    let streams: [((i64, i64), Vec<i64>); 18] = [
         ((1, 1_000), rounded(30_000, 1_001, 1_000, 1)),
         ((1, 16_000), rounded(30_000, 1_001, 1_000, 16)),
         ((1, 600), rounded(30_000, 1_001, 600, 1)),
@@ -308,6 +385,12 @@ fn presentation_slacks() -> Value {
         ((1, 15_360), vec![67, 0, 33, 33, 100, 133]),
         ((1, 1_000), vec![0, 33]),
         ((0, 0), vec![0, 33, 67, 100]),
+        // Unequal holds and two exact rates mixed are not a rounding; stills at 0, 3, 7, 10 and
+        // 14 s are also a 3.5 s period rounded to seconds.
+        ((1, 90_000), stills(90_000)),
+        ((1, 1_000), stills(1_000)),
+        ((1, 90_000), vec![0, 3_003, 6_757, 9_760, 13_514, 16_517]),
+        ((1, 90_000), vec![0, 270_000, 630_000, 900_000, 1_260_000]),
     ];
     streams
         .into_iter()
@@ -342,7 +425,7 @@ fn audio_frame_grids() -> Value {
         .collect::<Vec<_>>();
     let mut missing = rounded(0, 1_024, 48_000, 1_000, frames);
     missing.remove(10);
-    let streams: [(i64, u32, Vec<i64>); 12] = [
+    let streams: [(i64, u32, Vec<i64>); 16] = [
         // AAC in Matroska, 48 and 44.1 kHz, from its priming frame.
         (1_000, 48_000, rounded(-1_024, 1_024, 48_000, 1_000, frames)),
         (1_000, 44_100, rounded(-1_024, 1_024, 44_100, 1_000, frames)),
@@ -364,6 +447,11 @@ fn audio_frame_grids() -> Value {
         (1_000, 48_000, vec![0, 21]),
         // Opus's 20 ms frames, which milliseconds hold exactly.
         (1_000, 48_000, (0..frames).map(|k| k * 20).collect()),
+        // Timestamps that allow too many periods to search, and the two sides of the bound.
+        (1_000, 48_000, vec![0, 3_000_000, 7_000_000]),
+        (1_000, 48_000, vec![0, 3_000_000_000_000, 7_000_000_000_000]),
+        (12, 48_000, vec![0, 2, 5]),
+        (11, 48_000, vec![0, 2, 5]),
     ];
     streams
         .into_iter()
@@ -410,6 +498,7 @@ fn the_time_rules_table_is_the_engines() {
         "exports": exports(),
         "curves": curves(),
         "sourceTimes": source_times(),
+        "sourceRangesToTimeline": source_ranges(),
         "samplesToTicks": samples(),
         "secondsToTicks": seconds(),
         "presentationSlack": presentation_slacks(),

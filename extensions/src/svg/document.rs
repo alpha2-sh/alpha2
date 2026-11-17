@@ -2,13 +2,13 @@
 //!
 //! usvg 0.47 expands `<use>` copies, matches every style rule against every element (descendant
 //! combinators backtrack, so cost grows as a power of depth), resolves properties through
-//! ancestors, splits arcs into cubics ([`super::path_data`]), and copies marker content at every
-//! vertex after its own node limit check. Its own limits do not bound this: a 400-byte selector
-//! over 100 nested groups does not finish in a minute, and a large marker on a long path can use
-//! tens of GB. Documents over their share of [`super::MAX_READING`] or [`super::MAX_NESTING`]
-//! are refused.
+//! ancestors, splits arcs into cubics ([`super::path_data`]), copies marker content at every
+//! vertex after its own node limit check, and converts the patterns, masks, clip paths, and
+//! filters an element names by recursing into them. Its own limits do not bound this cost, so
+//! documents over their share of [`super::MAX_READING`] or [`super::MAX_NESTING`], or whose
+//! references form a ring, are refused.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use resvg::usvg::roxmltree::{Document, Node, NodeId};
 
@@ -30,10 +30,87 @@ const MAX_SELECTOR_HOPS: u32 = 512;
 /// own limit, which markers bypass.
 pub(super) const MAX_ELEMENTS: u64 = 1_000_000;
 
-const MARKERS: [&str; 4] = ["marker", "marker-start", "marker-mid", "marker-end"];
+/// Nesting levels one paint, mask, clip path, filter, or template reference counts as. usvg
+/// recurses through several frames per reference (about 5.7 kB of stack for a pattern), so
+/// [`super::MAX_NESTING`] references of one level each would overflow a 1 MiB stack.
+pub(crate) const REFERENCE_LEVELS: usize = 4;
 
 /// Most vertices of a basic shape (a rounded rectangle's lines and corner cubics).
 const SHAPE_VERTICES: u64 = 16;
+
+/// Steps per character of a `<text>` element: shaping and one outline per glyph take about
+/// 1.4 us a character natively.
+const TEXT_CHAR_STEPS: u64 = 190;
+
+/// Bytes of a `data:` URL per step. usvg decodes the URL again for every element that draws it,
+/// about 1 ns a byte natively.
+const DATA_URL_BYTES_PER_STEP: u64 = 8;
+
+/// Character pairs of one `<text>` element per step. usvg's horizontal layout walks a chunk from
+/// its start for every cluster, about 0.5 ns per pair of characters natively.
+const TEXT_PAIRS_PER_STEP: u64 = 15;
+
+/// A property whose value can name another element.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Property {
+    Marker,
+    Fill,
+    Stroke,
+    Mask,
+    ClipPath,
+    Filter,
+}
+
+const PROPERTIES: [(&str, Property); 9] = [
+    ("marker", Property::Marker),
+    ("marker-start", Property::Marker),
+    ("marker-mid", Property::Marker),
+    ("marker-end", Property::Marker),
+    ("fill", Property::Fill),
+    ("stroke", Property::Stroke),
+    ("mask", Property::Mask),
+    ("clip-path", Property::ClipPath),
+    ("filter", Property::Filter),
+];
+
+fn property(name: &str) -> Option<Property> {
+    PROPERTIES
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, property)| *property)
+}
+
+/// Elements usvg draws with a fill or stroke paint.
+fn paints(name: &str) -> bool {
+    matches!(
+        name,
+        "path"
+            | "rect"
+            | "circle"
+            | "ellipse"
+            | "line"
+            | "polyline"
+            | "polygon"
+            | "text"
+            | "tspan"
+            | "textPath"
+            | "tref"
+    )
+}
+
+fn paint_server(name: &str) -> bool {
+    matches!(name, "pattern" | "linearGradient" | "radialGradient")
+}
+
+/// The ids every `url(#id)` in a property value names.
+fn urls(value: &str) -> impl Iterator<Item = &str> {
+    value.split("url(").skip(1).filter_map(|rest| {
+        rest[..rest.find(')')?]
+            .trim()
+            .trim_matches(['"', '\''])
+            .strip_prefix('#')
+    })
+}
 
 pub(super) struct Conversion {
     pub(super) steps: u64,
@@ -46,26 +123,14 @@ pub(super) fn conversion(
     steps: u64,
     depth: usize,
 ) -> Result<Conversion, ExtensionError> {
-    let mut count = Count {
-        budget: steps,
-        depth_limit: depth,
-        styles: HashMap::new(),
-        styled_markers: HashMap::new(),
-        subtrees: HashMap::new(),
-        ids: HashMap::new(),
-        contexts: vec![Vec::new()],
-        context_ids: HashMap::from([(Vec::new(), 0)]),
-        paths: HashMap::new(),
-    };
+    let mut count = Count::new(steps, depth);
     count.match_styles(doc)?;
-    // As in usvg, an id links to the first element carrying it.
-    for node in doc.descendants() {
-        if let Some(id) = node.attribute("id") {
-            count.ids.entry(id).or_insert(node.id());
-        }
-    }
+    count.index(doc);
     let root = count.subtree(doc.root(), 0, 0)?;
-    let steps = root.cost();
+    let steps = root
+        .cost()
+        .saturating_add(count.resolving)
+        .saturating_add(count.matching);
     if steps > count.budget {
         return Err(too_costly(count.budget));
     }
@@ -80,16 +145,23 @@ pub(super) fn conversion(
 
 fn too_many() -> ExtensionError {
     ExtensionError::Budget(format!(
-        "the SVG converts to more than {MAX_ELEMENTS} elements with its `use` copies and markers in place"
+        "the SVG converts to more than {MAX_ELEMENTS} elements with its `use` copies, markers, \
+         and references in place"
     ))
 }
 
 fn too_costly(budget: u64) -> ExtensionError {
     ExtensionError::Budget(format!(
         "reading the SVG takes more than {budget} steps (its elements, each as deep as it nests, \
-         its `use` copies and markers, its paths' arcs, and its style rules matched against each \
-         element)"
+         its `use` copies, markers, and references, its paths' arcs, and its style rules matched \
+         against each element)"
     ))
+}
+
+fn ring() -> ExtensionError {
+    ExtensionError::Malformed(
+        "a paint, mask, clip path or filter of the SVG refers to itself".to_owned(),
+    )
 }
 
 /// One element's share of the converted tree, wherever it is copied.
@@ -104,24 +176,86 @@ struct Subtree {
     height: usize,
 }
 
+/// A subtree being counted, with the references on the path when it started, or counted.
+#[derive(Clone, Copy)]
+enum Counted {
+    Counting(usize),
+    Done(Subtree),
+}
+
+/// What an element and its ancestors name that its content uses: markers, and the paints a
+/// fill or stroke inherits.
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
+struct Context {
+    markers: Vec<NodeId>,
+    fills: Vec<NodeId>,
+    strokes: Vec<NodeId>,
+}
+
 struct Count<'a> {
     budget: u64,
     depth_limit: usize,
     /// Style matching cost per element.
     styles: HashMap<NodeId, u64>,
-    /// Marker values any matching style rule declares, per element.
-    styled_markers: HashMap<NodeId, Vec<String>>,
-    /// Counted subtrees per (element, marker context); `None` while counting, so self-references
-    /// (which usvg leaves out) count as empty.
-    subtrees: HashMap<(NodeId, usize), Option<Subtree>>,
+    /// Declarations of [`PROPERTIES`] that matching style rules make, per element. A fill or
+    /// stroke value that names nothing is kept empty.
+    styled: HashMap<NodeId, Vec<(Property, String)>>,
+    /// Counted subtrees per (element, context). usvg leaves out a `<use>` of itself, so a subtree
+    /// reached again while counting counts as empty, unless a reference lies on the way back.
+    subtrees: HashMap<(NodeId, usize), Counted>,
+    /// The first element carrying each id, as usvg resolves `<use>`.
     ids: HashMap<&'a str, NodeId>,
-    /// Marker sets named by an element and its ancestors, indexed by context.
-    contexts: Vec<Vec<NodeId>>,
-    context_ids: HashMap<Vec<NodeId>, usize>,
+    /// Every element carrying each id; a reference may resolve to any of them.
+    all_ids: HashMap<&'a str, Vec<NodeId>>,
+    contexts: Vec<Context>,
+    context_ids: HashMap<Context, usize>,
+    /// The context each referenced element's ancestors give its content.
+    outside: HashMap<NodeId, usize>,
+    /// References on the path being counted.
+    references: usize,
+    /// Paint servers and templates usvg converts once and shares.
+    shared: HashSet<NodeId>,
+    /// Steps spent resolving the paints contexts name, one per candidate element.
+    resolving: u64,
+    /// Steps the metered pass over the style rules spent.
+    matching: u64,
+    /// Elements under and including each `<use>` target, which usvg checks per copy.
+    descendants: HashMap<NodeId, u64>,
     paths: HashMap<NodeId, PathData>,
 }
 
 impl<'a> Count<'a> {
+    fn new(budget: u64, depth_limit: usize) -> Self {
+        Count {
+            budget,
+            depth_limit,
+            styles: HashMap::new(),
+            styled: HashMap::new(),
+            subtrees: HashMap::new(),
+            ids: HashMap::new(),
+            all_ids: HashMap::new(),
+            contexts: vec![Context::default()],
+            context_ids: HashMap::from([(Context::default(), 0)]),
+            outside: HashMap::new(),
+            references: 0,
+            shared: HashSet::new(),
+            resolving: 0,
+            matching: 0,
+            descendants: HashMap::new(),
+            paths: HashMap::new(),
+        }
+    }
+
+    fn index(&mut self, doc: &'a Document<'_>) {
+        for node in doc.descendants() {
+            if let Some(id) = node.attribute("id") {
+                // As in usvg, a `<use>` links to the first element carrying it.
+                self.ids.entry(id).or_insert(node.id());
+                self.all_ids.entry(id).or_default().push(node.id());
+            }
+        }
+    }
+
     /// Matches every style rule against every element as usvg will, stopping once the budget is
     /// spent.
     fn match_styles(&mut self, doc: &'a Document<'_>) -> Result<(), ExtensionError> {
@@ -137,8 +271,9 @@ impl<'a> Count<'a> {
         if sheet.rules.is_empty() {
             return Ok(());
         }
+        // usvg matches the rules again, so this pass may spend half the budget and counts too.
         let meter = Meter {
-            left: std::cell::Cell::new(self.budget),
+            left: std::cell::Cell::new(self.budget / 2),
             deep: std::cell::Cell::new(false),
         };
         for node in doc.descendants().filter(Node::is_element) {
@@ -157,12 +292,19 @@ impl<'a> Count<'a> {
                         return Err(too_costly(self.budget));
                     }
                     for declaration in &rule.declarations {
-                        if MARKERS.contains(&declaration.name) {
-                            self.styled_markers
-                                .entry(node.id())
-                                .or_default()
-                                .push(declaration.value.to_owned());
-                        }
+                        let Some(property) = property(declaration.name) else {
+                            continue;
+                        };
+                        let value = declaration.value;
+                        let kept = if value.contains("url(") || value.trim() == "inherit" {
+                            value.to_owned()
+                        } else {
+                            String::new()
+                        };
+                        self.styled
+                            .entry(node.id())
+                            .or_default()
+                            .push((property, kept));
                     }
                 }
                 if meter.deep.get() {
@@ -176,11 +318,12 @@ impl<'a> Count<'a> {
             }
             self.styles.insert(node.id(), before - meter.left.get());
         }
-        // Matching cost is added per converted copy in the subtree walk.
+        // usvg's matching is added per converted copy in the subtree walk.
+        self.matching = self.budget / 2 - meter.left.get();
         Ok(())
     }
 
-    /// The converted subtree of `node` at `level`, under marker context `inherited`.
+    /// The converted subtree of `node` at `level`, under context `inherited`.
     fn subtree(
         &mut self,
         node: Node<'a, '_>,
@@ -191,16 +334,21 @@ impl<'a> Count<'a> {
             return Err(too_deep(self.depth_limit));
         }
         let key = (node.id(), inherited);
-        if let Some(known) = self.subtrees.get(&key) {
-            let Some(known) = *known else {
-                return Ok(Subtree::default());
-            };
-            if level + known.height > self.depth_limit {
-                return Err(too_deep(self.depth_limit));
+        match self.subtrees.get(&key) {
+            Some(Counted::Counting(references)) if self.references > *references => {
+                return Err(ring());
             }
-            return Ok(known);
+            Some(Counted::Counting(_)) => return Ok(Subtree::default()),
+            Some(Counted::Done(known)) => {
+                if level + known.height > self.depth_limit {
+                    return Err(too_deep(self.depth_limit));
+                }
+                return Ok(*known);
+            }
+            None => {}
         }
-        self.subtrees.insert(key, None);
+        self.subtrees
+            .insert(key, Counted::Counting(self.references));
         let own = if node.is_element() {
             // usvg keeps only SVG or unnamespaced elements, and drops `<style>`.
             if !matches!(node.tag_name().namespace(), None | Some(SVG_NS))
@@ -208,48 +356,7 @@ impl<'a> Count<'a> {
             {
                 Subtree::default()
             } else {
-                let here = self.context(inherited, node);
-                let mut subtree = Subtree {
-                    elements: 1,
-                    work: self.styles.get(&node.id()).copied().unwrap_or(0),
-                    height: 1,
-                    ..Subtree::default()
-                };
-                let name = node.tag_name().name();
-                if name == "use" {
-                    if let Some(link) = self.link(node) {
-                        // usvg checks the copy's descendants for a `<use>` naming it.
-                        let checked = u64::try_from(link.descendants().count()).unwrap_or(u64::MAX);
-                        subtree.work = subtree.work.saturating_add(checked);
-                        let copy = self.subtree(link, level + 1, here)?;
-                        subtree.add(copy);
-                    }
-                } else {
-                    for child in node.children().filter(Node::is_element) {
-                        let child = self.subtree(child, level + 1, here)?;
-                        subtree.add(child);
-                    }
-                }
-                let steps = self.path(node).steps;
-                subtree.work = subtree.work.saturating_add(steps);
-                // A text path reads the path it follows again.
-                if name == "textPath"
-                    && let Some(link) = self.link(node)
-                {
-                    let steps = self.path(link).steps;
-                    subtree.work = subtree.work.saturating_add(steps);
-                }
-                if let Some(vertices) = self.vertices(node) {
-                    for marker in self.contexts[here].clone() {
-                        let Some(marker) = node.document().get_node(marker) else {
-                            continue;
-                        };
-                        let outside = self.outside_context(marker);
-                        let instance = self.subtree(marker, level + 1, outside)?;
-                        subtree.add_copies(instance, vertices);
-                    }
-                }
-                subtree
+                self.element(node, level, inherited)?
             }
         } else {
             // The document root's children are at its own level.
@@ -260,17 +367,180 @@ impl<'a> Count<'a> {
                 subtree.elements = subtree.elements.saturating_add(child.elements);
                 subtree.work = subtree.work.saturating_add(child.work);
                 subtree.height = subtree.height.max(child.height);
+                self.within_budget(&subtree)?;
             }
             subtree
         };
-        if own.cost() > self.budget {
+        self.within_budget(&own)?;
+        self.subtrees.insert(key, Counted::Done(own));
+        Ok(own)
+    }
+
+    /// The converted subtree of an SVG element.
+    fn element(
+        &mut self,
+        node: Node<'a, '_>,
+        level: usize,
+        inherited: usize,
+    ) -> Result<Subtree, ExtensionError> {
+        let here = self.context(inherited, node);
+        if self.resolving > self.budget {
             return Err(too_costly(self.budget));
         }
-        if own.elements > MAX_ELEMENTS {
+        let mut subtree = Subtree {
+            elements: 1,
+            work: self.styles.get(&node.id()).copied().unwrap_or(0),
+            height: 1,
+            ..Subtree::default()
+        };
+        let name = node.tag_name().name();
+        if name == "use" {
+            if let Some(link) = self.link(node) {
+                // usvg checks the copy's descendants for a `<use>` naming it.
+                let checked = *self.descendants.entry(link.id()).or_insert_with(|| {
+                    u64::try_from(link.descendants().count()).unwrap_or(u64::MAX)
+                });
+                subtree.work = subtree.work.saturating_add(checked);
+                let copy = self.subtree(link, level + 1, here)?;
+                subtree.add(copy);
+            }
+        } else {
+            for child in node.children().filter(Node::is_element) {
+                let child = self.subtree(child, level + 1, here)?;
+                subtree.add(child);
+                self.within_budget(&subtree)?;
+            }
+        }
+        if matches!(name, "image" | "feImage")
+            && let Some(href) = node
+                .attribute((XLINK_NS, "href"))
+                .or_else(|| node.attribute("href"))
+                .filter(|href| href.trim_start().starts_with("data:"))
+        {
+            let bytes = u64::try_from(href.len()).unwrap_or(u64::MAX);
+            subtree.work = subtree.work.saturating_add(bytes / DATA_URL_BYTES_PER_STEP);
+        }
+        if name == "text" {
+            // Every glyph becomes an outline, whether or not a font is registered here.
+            let chars: u64 = node
+                .descendants()
+                .filter(Node::is_text)
+                .map(|text| text.text().map_or(0, |text| text.chars().count() as u64))
+                .sum();
+            let pairs = chars.saturating_mul(chars) / 2;
+            subtree.elements = subtree.elements.saturating_add(chars);
+            subtree.work = subtree
+                .work
+                .saturating_add(chars.saturating_mul(TEXT_CHAR_STEPS))
+                .saturating_add(pairs / TEXT_PAIRS_PER_STEP);
+            self.within_budget(&subtree)?;
+        }
+        let steps = self.path(node).steps;
+        subtree.work = subtree.work.saturating_add(steps);
+        // A text path reads the path it follows again.
+        if name == "textPath"
+            && let Some(link) = self.link(node)
+        {
+            let steps = self.path(link).steps;
+            subtree.work = subtree.work.saturating_add(steps);
+        }
+        if let Some(vertices) = self.vertices(node) {
+            for marker in self.contexts[here].markers.clone() {
+                let Some(marker) = node.document().get_node(marker) else {
+                    continue;
+                };
+                let outside = self.outside_context(marker);
+                let instance = self.subtree(marker, level + 1, outside)?;
+                subtree.add_copies(instance, vertices);
+                self.within_budget(&subtree)?;
+            }
+        }
+        for (target, shared) in self.referenced(node, here, &mut subtree) {
+            let Some(target) = node.document().get_node(target) else {
+                continue;
+            };
+            let outside = self.outside_context(target);
+            self.references += 1;
+            let counted = self.subtree(target, level + REFERENCE_LEVELS, outside);
+            self.references -= 1;
+            let counted = counted?;
+            if shared && !self.shared.insert(target.id()) {
+                subtree.height = subtree.height.max(counted.height + REFERENCE_LEVELS);
+            } else {
+                subtree.add(counted);
+                subtree.height = subtree.height.max(counted.height + REFERENCE_LEVELS);
+            }
+            self.within_budget(&subtree)?;
+        }
+        Ok(subtree)
+    }
+
+    /// Refuses a subtree being counted as soon as it is past the step or element budget.
+    fn within_budget(&self, subtree: &Subtree) -> Result<(), ExtensionError> {
+        let spent = subtree
+            .cost()
+            .saturating_add(self.matching)
+            .saturating_add(self.resolving);
+        if spent > self.budget {
+            return Err(too_costly(self.budget));
+        }
+        if subtree.elements > MAX_ELEMENTS {
             return Err(too_many());
         }
-        self.subtrees.insert(key, Some(own));
-        Ok(own)
+        Ok(())
+    }
+
+    /// The elements usvg converts in place of `node`'s references, and whether each is converted
+    /// once and shared. Every candidate an id could resolve to counts, at one step each.
+    fn referenced(
+        &self,
+        node: Node<'_, '_>,
+        here: usize,
+        subtree: &mut Subtree,
+    ) -> Vec<(NodeId, bool)> {
+        let name = node.tag_name().name();
+        let mut found = Vec::new();
+        let mut add = |id: &str, accept: fn(&str) -> bool, shared: bool, found: &mut Vec<_>| {
+            for &target in self.all_ids.get(id).into_iter().flatten() {
+                subtree.work = subtree.work.saturating_add(1);
+                let Some(element) = node.document().get_node(target) else {
+                    continue;
+                };
+                if accept(element.tag_name().name()) {
+                    found.push((target, shared));
+                }
+            }
+        };
+        for (property, value) in self.declarations(node) {
+            let accept: fn(&str) -> bool = match property {
+                Property::Mask => |name| name == "mask",
+                Property::ClipPath => |name| name == "clipPath",
+                Property::Filter => |name| name == "filter",
+                Property::Marker | Property::Fill | Property::Stroke => continue,
+            };
+            for id in urls(value) {
+                add(id, accept, false, &mut found);
+            }
+        }
+        if paints(name) {
+            let context = &self.contexts[here];
+            for &target in context.fills.iter().chain(&context.strokes) {
+                found.push((target, true));
+            }
+        }
+        let href = node
+            .attribute((XLINK_NS, "href"))
+            .or_else(|| node.attribute("href"))
+            .and_then(|href| href.trim().strip_prefix('#'));
+        if let Some(id) = href {
+            if paint_server(name) {
+                // A pattern or gradient takes what it lacks from the one it names.
+                add(id, paint_server, true, &mut found);
+            } else if name == "feImage" {
+                add(id, |_| true, false, &mut found);
+            }
+        }
+        found
     }
 
     fn path(&mut self, node: Node<'_, '_>) -> PathData {
@@ -294,71 +564,114 @@ impl<'a> Count<'a> {
         }
     }
 
-    /// Markers `node` names via attributes, `style`, or the style sheet. Every value counts,
-    /// whichever usvg would apply.
-    fn own_markers(&self, node: Node<'_, '_>) -> Vec<NodeId> {
-        let mut values: Vec<&str> = MARKERS
+    /// Declarations of [`PROPERTIES`] on `node` by attribute, `style`, or the style sheet. Every
+    /// value counts, whichever usvg would apply.
+    fn declarations<'n>(&'n self, node: Node<'n, '_>) -> Vec<(Property, &'n str)> {
+        let mut values: Vec<(Property, &str)> = PROPERTIES
             .iter()
-            .filter_map(|name| node.attribute(*name))
+            .filter_map(|(name, property)| Some((*property, node.attribute(*name)?)))
             .collect();
         if let Some(style) = node.attribute("style") {
             values.extend(
-                simplecss::DeclarationTokenizer::from(style)
-                    .filter(|declaration| MARKERS.contains(&declaration.name))
-                    .map(|declaration| declaration.value),
+                simplecss::DeclarationTokenizer::from(style).filter_map(|declaration| {
+                    Some((property(declaration.name)?, declaration.value))
+                }),
             );
         }
-        if let Some(styled) = self.styled_markers.get(&node.id()) {
-            values.extend(styled.iter().map(String::as_str));
+        if let Some(styled) = self.styled.get(&node.id()) {
+            values.extend(
+                styled
+                    .iter()
+                    .map(|(property, value)| (*property, value.as_str())),
+            );
         }
         values
-            .into_iter()
-            .filter_map(|value| {
-                let id = value
-                    .trim()
-                    .strip_prefix("url(")?
-                    .strip_suffix(')')?
-                    .trim()
-                    .trim_matches(['"', '\''])
-                    .strip_prefix('#')?;
+    }
+
+    /// The context below `node`: `inherited` plus the markers it names, with the fill and stroke
+    /// paints it names in place of the inherited ones.
+    fn context(&mut self, inherited: usize, node: Node<'_, '_>) -> usize {
+        let declarations = self.declarations(node);
+        if declarations.is_empty() {
+            return inherited;
+        }
+        let mut next = self.contexts[inherited].clone();
+        let paint = |wanted: Property, inherited: &mut Vec<NodeId>| {
+            let mut declared = false;
+            let mut inherits = false;
+            let mut named = Vec::new();
+            for (property, value) in &declarations {
+                if *property != wanted {
+                    continue;
+                }
+                declared = true;
+                inherits |= value.trim() == "inherit";
+                named.extend(urls(value));
+            }
+            if declared && !inherits {
+                inherited.clear();
+            }
+            named
+        };
+        let fills = paint(Property::Fill, &mut next.fills);
+        let strokes = paint(Property::Stroke, &mut next.strokes);
+        let markers: Vec<NodeId> = declarations
+            .iter()
+            .filter(|(property, _)| *property == Property::Marker)
+            .flat_map(|(_, value)| urls(value))
+            .filter_map(|id| {
                 let marker = node.document().get_node(*self.ids.get(id)?)?;
                 (marker.tag_name().name() == "marker").then_some(marker.id())
             })
-            .collect()
-    }
-
-    /// The marker context below `node`: `inherited` plus its own markers.
-    fn context(&mut self, inherited: usize, node: Node<'_, '_>) -> usize {
-        let own = self.own_markers(node);
-        if own
-            .iter()
-            .all(|marker| self.contexts[inherited].contains(marker))
-        {
+            .collect();
+        let resolve = |ids: Vec<&str>, resolving: &mut u64| -> Vec<NodeId> {
+            ids.into_iter()
+                .flat_map(|id| self.all_ids.get(id).into_iter().flatten().copied())
+                .inspect(|_| *resolving = resolving.saturating_add(1))
+                .filter(|target| {
+                    node.document()
+                        .get_node(*target)
+                        .is_some_and(|target| paint_server(target.tag_name().name()))
+                })
+                .collect()
+        };
+        let mut resolving = self.resolving;
+        next.fills.extend(resolve(fills, &mut resolving));
+        next.strokes.extend(resolve(strokes, &mut resolving));
+        self.resolving = resolving;
+        next.markers.extend(markers);
+        for set in [&mut next.markers, &mut next.fills, &mut next.strokes] {
+            set.sort_unstable_by_key(|node| node.get_usize());
+            set.dedup();
+        }
+        if next == self.contexts[inherited] {
             return inherited;
         }
-        let mut markers = self.contexts[inherited].clone();
-        markers.extend(own);
-        markers.sort_unstable_by_key(|marker| marker.get_usize());
-        markers.dedup();
-        let next = self.contexts.len();
-        let index = *self.context_ids.entry(markers.clone()).or_insert(next);
-        if index == next {
-            self.contexts.push(markers);
+        let index = self.contexts.len();
+        let index = *self.context_ids.entry(next.clone()).or_insert(index);
+        if index == self.contexts.len() {
+            self.contexts.push(next);
         }
         index
     }
 
-    /// A marker's content uses its own ancestors' markers, not those of the shape it is drawn at.
-    fn outside_context(&mut self, marker: Node<'_, '_>) -> usize {
-        let ancestors: Vec<_> = marker
+    /// A marker's or referenced element's content uses its own ancestors' context, not that of
+    /// the element that names it.
+    fn outside_context(&mut self, element: Node<'_, '_>) -> usize {
+        if let Some(&known) = self.outside.get(&element.id()) {
+            return known;
+        }
+        let ancestors: Vec<_> = element
             .ancestors()
             .skip(1)
             .filter(Node::is_element)
             .collect();
-        ancestors
+        let context = ancestors
             .into_iter()
             .rev()
-            .fold(0, |context, ancestor| self.context(context, ancestor))
+            .fold(0, |context, ancestor| self.context(context, ancestor));
+        self.outside.insert(element.id(), context);
+        context
     }
 
     /// The element a `<use>` copies, resolved as usvg does (`xlink:href` or `href`).
@@ -407,7 +720,7 @@ impl Subtree {
 
 fn too_deep(limit: usize) -> ExtensionError {
     ExtensionError::Budget(format!(
-        "the SVG's elements nest more than {limit} deep with its `use` copies in place"
+        "the SVG's elements nest more than {limit} deep with its `use` copies and references in place"
     ))
 }
 
@@ -573,23 +886,9 @@ mod tests {
     fn a_marker_counts_at_each_vertex_of_each_shape_that_names_it() {
         let elements = |text: &str| {
             let doc = parse(text);
-            let mut count = Count {
-                budget: u64::MAX,
-                depth_limit: usize::MAX,
-                styles: HashMap::new(),
-                styled_markers: HashMap::new(),
-                subtrees: HashMap::new(),
-                ids: HashMap::new(),
-                contexts: vec![Vec::new()],
-                context_ids: HashMap::from([(Vec::new(), 0)]),
-                paths: HashMap::new(),
-            };
+            let mut count = Count::new(u64::MAX, usize::MAX);
             count.match_styles(&doc).expect("matched");
-            for node in doc.descendants() {
-                if let Some(id) = node.attribute("id") {
-                    count.ids.entry(id).or_insert(node.id());
-                }
-            }
+            count.index(&doc);
             count.subtree(doc.root(), 0, 0).expect("counted").elements
         };
         let svg = |body: &str| {
@@ -696,5 +995,60 @@ mod tests {
             .err()
             .expect("refused");
         assert!(error.to_string().contains("looks more than 512"), "{error}");
+    }
+
+    /// Counts `text` with the full budgets, answering the result and the counter.
+    fn counted(text: &str) -> (Result<Subtree, ExtensionError>, usize, usize, usize) {
+        let doc = parse(text);
+        let mut count = Count::new(super::super::MAX_READING, usize::MAX);
+        count.match_styles(&doc).expect("matched");
+        count.index(&doc);
+        let result = count.subtree(doc.root(), 0, 0);
+        (
+            result,
+            count.subtrees.len(),
+            count.descendants.len(),
+            count.outside.len(),
+        )
+    }
+
+    #[test]
+    fn many_use_copies_of_a_large_target_are_refused_after_few_visits() {
+        let text = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg"><defs><g id="t">{}</g></defs>{}</svg>"#,
+            "<rect/>".repeat(100_000),
+            r##"<use href="#t"/>"##.repeat(200_000)
+        );
+        let (result, subtrees, descendants, _) = counted(&text);
+        let error = result.err().expect("refused");
+        assert!(error.to_string().contains("elements"), "{error}");
+        // The target's elements, and the first few copies before the running count is past the
+        // budget; its descendants are counted once.
+        assert_eq!(descendants, 1);
+        assert!(subtrees < 100_100, "{subtrees} subtrees counted");
+    }
+
+    #[test]
+    fn a_shape_naming_many_markers_is_refused_before_it_counts_them_all() {
+        use std::fmt::Write as _;
+        let mut text = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg"><style>"#);
+        for at in 0..1000 {
+            let _ = write!(text, "path{{marker-mid:url(#m{at})}}");
+        }
+        text.push_str("</style>");
+        for at in 0..1000 {
+            let _ = write!(text, r#"<marker id="m{at}"><rect/></marker>"#);
+        }
+        let _ = write!(
+            text,
+            r#"<defs><path id="p" d="M 0 0 {}"/></defs>{}</svg>"#,
+            "L 1 1 ".repeat(1000),
+            r##"<use href="#p"/>"##.repeat(1000)
+        );
+        let (result, _, _, outside) = counted(&text);
+        let error = result.err().expect("refused");
+        assert!(error.to_string().contains("elements"), "{error}");
+        // Each marker costs its two elements at each of the path's 1001 vertices.
+        assert!(outside < 1000, "{outside} markers placed");
     }
 }

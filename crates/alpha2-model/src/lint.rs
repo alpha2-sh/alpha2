@@ -3,6 +3,7 @@
 //! [`Project::lint`] never refuses a project. Checks are conservative: every reported issue
 //! is certain, and a missed one is not an error.
 
+use crate::animation::Keyed;
 use crate::{
     Animated, AnimatedPoint, ClipId, CompositionId, Generator, MediaKind, NodeId, Paint, Project,
     ShapeGeometry, ShapeItem, TrackId, TrackKind,
@@ -89,6 +90,15 @@ pub enum LintIssue {
         track: TrackId,
         /// The style's name.
         style: String,
+    },
+    /// A source-anchored data set made from other media: its `made_from` differs from its
+    /// source's current fingerprint ([`Project::stale_data`], where the host compares), or one of
+    /// its times is past the duration its source's fingerprint records ([`Project::lint`]).
+    StaleData {
+        /// The data set.
+        data: crate::DataSetId,
+        /// Its source.
+        source: SourceId,
     },
     /// A text animator that sets no property, which changes nothing.
     EmptyTextAnimator {
@@ -184,6 +194,27 @@ pub enum LintEdge {
 }
 
 impl Project {
+    /// [`LintIssue::StaleData`] for each source-anchored data set with a `made_from` that
+    /// `is_stale` judges different from its source's current fingerprint, in data order.
+    /// Hosts pass their fingerprint comparison; the model holds no current fingerprints.
+    #[must_use]
+    pub fn stale_data(
+        &self,
+        mut is_stale: impl FnMut(&SourceId, &crate::MediaFingerprint) -> bool,
+    ) -> Vec<LintIssue> {
+        self.data
+            .iter()
+            .filter_map(|set| {
+                let source = set.anchor.source()?;
+                let made_from = set.made_from.as_ref()?;
+                is_stale(source, made_from).then(|| LintIssue::StaleData {
+                    data: set.id.clone(),
+                    source: source.clone(),
+                })
+            })
+            .collect()
+    }
+
     /// Diagnostics that do not stop the project rendering, in a fixed order: unused sources,
     /// shapes generators (sources', then composition nodes'), HDR sources, each track's clips,
     /// transitions and cues, composition nodes, then generated sources' trees.
@@ -270,7 +301,30 @@ impl Project {
         }
         self.lint_keyframes_in_other_times(&mut issues);
         self.lint_text_animators(&mut issues);
+        self.lint_data_past_its_source(&mut issues);
         issues
+    }
+
+    /// Every source-anchored data set with a time past its source's recorded duration.
+    fn lint_data_past_its_source(&self, issues: &mut Vec<LintIssue>) {
+        for set in &self.data {
+            let Some(source) = set.anchor.source() else {
+                continue;
+            };
+            let duration = self
+                .sources
+                .iter()
+                .find(|candidate| &candidate.id == source)
+                .and_then(|source| source.fingerprint.as_ref()?.duration_ticks);
+            if let (Some(duration), Some(last)) = (duration, set.last_time())
+                && last.ticks() > duration
+            {
+                issues.push(LintIssue::StaleData {
+                    data: set.id.clone(),
+                    source: source.clone(),
+                });
+            }
+        }
     }
 
     /// Every text animator that sets nothing, in text generators and layout text nodes.
@@ -337,8 +391,10 @@ impl Project {
                     shown: spans,
                     issues,
                 };
-                node_keyed(&node.op, &mut |property, times| {
-                    keyframes.check_times(property, times);
+                node_keyed(&node.op, &mut |property, keyed| {
+                    if let Keyed::Times(times) = keyed {
+                        keyframes.check_times(property, times);
+                    }
                 });
             }
         }
@@ -354,8 +410,10 @@ impl Project {
                 shown: spans,
                 issues,
             };
-            let mut check = |property: &str, times: &[MediaTime]| {
-                keyframes.check_times(property, times);
+            let mut check = |property: &str, keyed: Keyed<'_>| {
+                if let Keyed::Times(times) = keyed {
+                    keyframes.check_times(property, times);
+                }
             };
             match &source.generator {
                 Some(Generator::Shapes { items }) => {
@@ -588,7 +646,11 @@ impl Keyframes<'_> {
     }
 
     fn check_geometry(&mut self, at: &str, geometry: &ShapeGeometry) {
-        geometry.for_each_keyed(at, &mut |property, times| self.check_times(property, times));
+        geometry.for_each_keyed(at, &mut |property, keyed| {
+            if let Keyed::Times(times) = keyed {
+                self.check_times(property, times);
+            }
+        });
     }
 
     fn check_point(&mut self, property: &str, animated: &AnimatedPoint) {
@@ -807,12 +869,16 @@ impl<'a> Shown<'a> {
 
 /// Calls `visit` with each keyframed setting of a node, by its path in the node
 /// (`effect.params.radius`, `generator.items[0].transform.scale`, ...), and its times.
-fn node_keyed(op: &crate::NodeOp, visit: &mut impl FnMut(&str, &[MediaTime])) {
+pub(crate) fn node_keyed(
+    op: &crate::NodeOp,
+    visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>),
+) {
     use crate::animation::{visit_keyed, visit_keyed_point};
-    let params = |effect: &crate::ClipEffect, visit: &mut dyn FnMut(&str, &[MediaTime])| {
+    let params = |effect: &crate::ClipEffect,
+                  visit: &mut dyn FnMut(&str, crate::animation::Keyed<'_>)| {
         for (name, value) in &effect.params {
-            visit_keyed(&format!("effect.params.{name}"), value, &mut |at, times| {
-                visit(at, times);
+            visit_keyed(&format!("effect.params.{name}"), value, &mut |at, keyed| {
+                visit(at, keyed);
             });
         }
     };
@@ -895,6 +961,7 @@ fn lint_shape_items(
                     Animated::Keyframes { keyframes } => {
                         keyframes.iter().map(|keyframe| &keyframe.value).collect()
                     }
+                    Animated::Data(_) => Vec::new(),
                 };
                 // Keyframes share their structure, so the first tells.
                 if let Some(first) = paths.first() {
@@ -999,7 +1066,11 @@ fn lint_caption_animators(
     crate::text_animation::for_each_keyed_animator(
         &captions.style.animators,
         "style.animators",
-        &mut |property, times| keyframes.check_times(property, times),
+        &mut |property, keyed| {
+            if let Keyed::Times(times) = keyed {
+                keyframes.check_times(property, times);
+            }
+        },
     );
     empty_animators(&owner, &captions.style.animators, "style.animators", issues);
     for name in captions.styles.keys() {

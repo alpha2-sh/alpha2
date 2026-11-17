@@ -1,0 +1,33 @@
+{
+  "compose_version": 1,
+  "template": {
+    "id": "alpha2/circle-reveal",
+    "version": 1,
+    "kind": "node",
+    "title": "Circle reveal",
+    "description": "Shows a node through a circle that grows from the middle of its area until it covers it."
+  },
+  "params": [
+    { "name": "content", "type": "node", "title": "What is revealed" },
+    { "name": "seconds", "type": "number", "min": 0.05, "max": 10, "default": 0.8, "title": "How long the circle grows" },
+    {
+      "name": "ease",
+      "type": "enum",
+      "values": ["linear", "ease", "ease-in", "ease-out", "ease-in-out"],
+      "default": "ease-out",
+      "title": "Timing curve"
+    }
+  ],
+  "node": {
+    "type": "mask",
+    "content": { "$param": "content" },
+    "shapes": [
+      {
+        "shape": "polygon",
+        "points": 48,
+        "roundness": 1,
+        "radius": { "from": 0, "to": 1.1, "duration": { "$param": "seconds" }, "ease": { "$param": "ease" } }
+      }
+    ]
+  }
+}

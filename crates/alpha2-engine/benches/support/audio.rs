@@ -187,6 +187,7 @@ pub fn project(clips: usize, rate: u32, effects: bool) -> Project {
         });
     }
     Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: ProjectId::new("audio-mix").expect("ID"),
         name: "audio mix benchmark".into(),

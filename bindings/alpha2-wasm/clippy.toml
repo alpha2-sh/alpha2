@@ -7,5 +7,4 @@ disallowed-methods = [
   { path = "wgpu::Device::limits", reason = "use `Renderer::limits`, read once per device" },
 ]
 
-# Format names, not code.
 doc-valid-idents = ["SubRip", "WebVTT", "OpenEXR", "ACEScg", ".."]

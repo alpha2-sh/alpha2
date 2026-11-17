@@ -706,6 +706,37 @@ test("a render worker that failed stays failed: pending and later requests rejec
   backend.dispose();
 });
 
+test("a render worker request unanswered past its active-time deadline fails the backend", async () => {
+  const worker = fakeWorker();
+  const backend = new WorkerRenderBackend(worker, { requestTimeoutMs: 300 });
+  const started = performance.now();
+  await assert.rejects(backend.present(0n), (error) => {
+    assert.equal(error.code, "RENDER_WORKER_FAILED");
+    assert.equal(error.fatal, true);
+    assert.match(error.message, /present/);
+    return true;
+  });
+  assert.ok(performance.now() - started < 2000);
+  const posted = worker.posted.length;
+  await assert.rejects(backend.reset(), (error) => error.fatal === true);
+  assert.equal(worker.posted.length, posted);
+  backend.dispose();
+});
+
+test("a render worker message that cannot be read fails the backend", async () => {
+  const worker = fakeWorker();
+  const backend = new WorkerRenderBackend(worker);
+  const pending = backend.present(0n);
+  worker.listeners.get("messageerror")({});
+  await assert.rejects(pending, (error) => {
+    assert.equal(error.code, "RENDER_WORKER_FAILED");
+    assert.equal(error.fatal, true);
+    return true;
+  });
+  await assert.rejects(backend.reset(), (error) => error.fatal === true);
+  backend.dispose();
+});
+
 test("the render worker reports a device loss before the answer that found it", async () => {
   // A player checks isDeviceLost() as soon as its request settles, so the loss must arrive first.
   const responses = [];

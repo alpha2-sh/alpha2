@@ -87,6 +87,7 @@ pub fn probe_vulkan_decode(
         .codecpar();
     let preferred = AVCodec::find_decoder(parameters.codec_id)
         .ok_or_else(|| DecodeError::Unsupported("selected video codec has no decoder".into()))?;
+    crate::decode::allowed_decoder(&preferred)?;
     // The preferred decoder may be software (libdav1d for AV1); the Vulkan configuration lives on
     // `FFmpeg`'s own decoder for the codec.
     let (codec, config) = crate::decode::registered_video_decoders(parameters.codec_id)
@@ -110,6 +111,8 @@ pub fn probe_vulkan_decode(
             ))
         })?;
     debug_assert_eq!(config.pix_fmt, ffi::AV_PIX_FMT_VULKAN);
+    alpha2_ffmpeg_bridge::check_hardware_interop()
+        .map_err(|error| DecodeError::Unsupported(error.to_string()))?;
 
     // Pass the device by loader index: `FFmpeg` reads a leading digit as an index, so an
     // `ALPHA2_GPU_ADAPTER` name passed unchanged could select another device.

@@ -1,0 +1,227 @@
+//! The `compose` operation, answered with the functions the browser and Python bindings use.
+
+use std::sync::Arc;
+
+use serde_json::{Value, json};
+
+use crate::protocol::{ComposeRequest, EditRequest, HostError};
+
+/// A compose error as `INVALID_INPUT`, with `path` and `problem` in its details.
+fn refused(error: &alpha2_compose::ComposeError) -> HostError {
+    HostError::new("INVALID_INPUT", error.to_string())
+        .with_details(json!({"path": error.path, "problem": error.message}))
+}
+
+fn required<'a>(value: Option<&'a Value>, field: &str) -> Result<&'a Value, HostError> {
+    value.ok_or_else(|| {
+        HostError::new(
+            "INVALID_REQUEST",
+            format!("this compose action needs `{field}`"),
+        )
+    })
+}
+
+fn parsed(text: &str) -> Result<Value, HostError> {
+    serde_json::from_str(text).map_err(|error| HostError::new("INTERNAL", error.to_string()))
+}
+
+/// Makes the next `compose` or `edit` request panic, as a defect inside the engine would.
+#[cfg(test)]
+pub static INJECT_REQUEST_PANIC: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Parks the next `compose` or `edit` request's thread for good, as a call that never returns.
+#[cfg(test)]
+pub static INJECT_REQUEST_PARK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn injected_panic(operation: &str) {
+    if INJECT_REQUEST_PARK.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        loop {
+            std::thread::park();
+        }
+    }
+    assert!(
+        !INJECT_REQUEST_PANIC.swap(false, std::sync::atomic::Ordering::Relaxed),
+        "injected panic in {operation}"
+    );
+}
+
+/// The edited project as the engine's canonical text, and the report.
+///
+/// # Errors
+/// `INVALID_INPUT` for an invalid project or operation and for every refusal, `INTERNAL` for an
+/// edited project that fails validation; `details.refusal` names why.
+pub fn answer_edit(request: &EditRequest) -> Result<Value, HostError> {
+    #[cfg(test)]
+    injected_panic("edit");
+    let edited = alpha2_eval::edit::apply_json(request.project.text(), request.edit.get())
+        .map_err(|failure| {
+            HostError::new(failure.code, failure.message)
+                .with_details(json!({ "refusal": failure.refusal }))
+        })?;
+    let report: Value = serde_json::from_str(&edited.report).map_err(HostError::json)?;
+    Ok(json!({ "projectJson": edited.project, "report": report }))
+}
+
+/// Answers a compose request.
+///
+/// # Errors
+/// `INVALID_REQUEST` for an unknown action or a missing field, `INVALID_INPUT` for a spec,
+/// template or data that does not compile or bind, and an I/O failure reading a font file.
+pub fn answer(request: &ComposeRequest) -> Result<Value, HostError> {
+    #[cfg(test)]
+    injected_panic("compose");
+    let options = || {
+        json!({
+            "theme": request.theme,
+            "templates": request.templates,
+        })
+        .to_string()
+    };
+    let text = |value: Option<&Value>| value.map_or_else(|| "{}".to_owned(), Value::to_string);
+    match request.action.as_str() {
+        "compile" => {
+            let mut spec = required(request.spec.as_ref(), "spec")?.clone();
+            if !request.templates.is_empty() {
+                spec = parsed(
+                    &alpha2_compose::bind_json(&spec.to_string(), "null", &options())
+                        .map_err(|error| refused(&error))?,
+                )?;
+            }
+            let fonts = request
+                .fonts
+                .iter()
+                .map(|path| {
+                    std::fs::read(path).map(Arc::<[u8]>::from).map_err(|error| {
+                        HostError::new(
+                            "INVALID_INPUT",
+                            format!("cannot read font {}: {error}", path.display()),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let compiled = alpha2_compose::compile_json(
+                &spec.to_string(),
+                &text(request.facts.as_ref()),
+                &fonts,
+            )
+            .map_err(|error| refused(&error))?;
+            let mut answer = parsed(&compiled)?;
+            // An answer's loudness is the one `export` takes.
+            if let Some(loudness) = answer.get_mut("loudness").filter(|value| !value.is_null()) {
+                *loudness = json!({
+                    "targetLufs": loudness["target_lufs"],
+                    "truePeakCeilingDbtp": loudness["true_peak_ceiling_dbtp"],
+                });
+            }
+            Ok(answer)
+        }
+        "bind" => parsed(
+            &alpha2_compose::bind_json(
+                &required(request.template.as_ref(), "template")?.to_string(),
+                &text(request.data.as_ref()),
+                &options(),
+            )
+            .map_err(|error| refused(&error))?,
+        )
+        .map(|spec| json!({"spec": spec})),
+        "dataSchema" => parsed(
+            &alpha2_compose::data_schema_json(
+                &required(request.template.as_ref(), "template")?.to_string(),
+            )
+            .map_err(|error| refused(&error))?,
+        )
+        .map(|schema| json!({"schema": schema})),
+        "lint" => parsed(
+            &alpha2_compose::lint_json(
+                &required(request.template.as_ref(), "template")?.to_string(),
+                &request
+                    .data
+                    .as_ref()
+                    .map_or_else(String::new, Value::to_string),
+                &options(),
+            )
+            .map_err(|error| refused(&error))?,
+        )
+        .map(|issues| json!({"issues": issues})),
+        "requirements" => parsed(
+            &alpha2_compose::requirements_json(
+                &required(request.spec.as_ref(), "spec")?.to_string(),
+            )
+            .map_err(|error| refused(&error))?,
+        ),
+        "templates" => {
+            parsed(&alpha2_compose::templates_json()).map(|list| json!({"templates": list}))
+        }
+        other => Err(HostError::new(
+            "INVALID_REQUEST",
+            format!(
+                "unknown compose action `{other}`, expected one of `compile`, `bind`, `dataSchema`, `lint`, `requirements`, `templates`"
+            ),
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(fields: &Value) -> ComposeRequest {
+        let mut line = json!({"protocolVersion": 1, "requestId": "1"});
+        line.as_object_mut()
+            .expect("an object")
+            .extend(fields.as_object().expect("an object").clone());
+        serde_json::from_value(line).expect("a compose request")
+    }
+
+    #[test]
+    fn compose_requests_bind_compile_and_describe_templates() {
+        let template = json!({
+            "template": {"id": "acme/t", "version": 1},
+            "params": [{"name": "t", "type": "text", "max_chars": 3}],
+            "duration": 1,
+            "body": {"type": "text", "text": "{{t}}"},
+        });
+        let bound = answer(&request(
+            &json!({"action": "bind", "template": template, "data": {"t": "Hi"}}),
+        ))
+        .expect("binds");
+        assert_eq!(bound["spec"]["body"]["text"], "Hi");
+        assert!(bound["spec"].get("theme").is_none());
+        let compiled = answer(&request(
+            &json!({"action": "compile", "spec": bound["spec"]}),
+        ))
+        .expect("compiles");
+        assert_eq!(compiled["project"]["schema_version"], 1);
+        let schema = answer(&request(
+            &json!({"action": "dataSchema", "template": template}),
+        ))
+        .expect("a schema");
+        assert_eq!(schema["schema"]["properties"]["t"]["maxLength"], 3);
+        let issues =
+            answer(&request(&json!({"action": "lint", "template": template}))).expect("issues");
+        assert_eq!(issues["issues"], json!([]));
+        let listed = answer(&request(&json!({"action": "templates"}))).expect("templates");
+        assert!(
+            listed["templates"]
+                .as_array()
+                .is_some_and(|list| !list.is_empty())
+        );
+    }
+
+    #[test]
+    fn compose_refusals_name_where_and_why() {
+        let refused = answer(&request(
+            &json!({"action": "compile", "spec": {"body": {"type": "nope"}}}),
+        ))
+        .expect_err("refused");
+        assert_eq!(refused.code, "INVALID_INPUT");
+        assert_eq!(refused.details.expect("details")["path"], "spec.body.type");
+        let unknown = answer(&request(&json!({"action": "nope"}))).expect_err("refused");
+        assert_eq!(unknown.code, "INVALID_REQUEST");
+        let missing = answer(&request(&json!({"action": "bind"}))).expect_err("refused");
+        assert!(missing.message.contains("`template`"));
+    }
+}

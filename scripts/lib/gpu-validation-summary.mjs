@@ -64,8 +64,10 @@ export function defaultCrates(backend) {
  *   shaderValidation?: boolean,
  *   gpuBasedValidation?: boolean,
  * }} options
+ * @returns {NodeJS.ProcessEnv}
  */
 export function backendEnvironment(backend, options) {
+  /** @type {NodeJS.ProcessEnv} */
   const environment = {
     ...options.base,
     WGPU_BACKEND: backend,
@@ -147,6 +149,7 @@ export function parseDevices(output) {
   return [...seen.values()];
 }
 
+/** @type {[string, RegExp][]} */
 const ICD_ADAPTERS = [
   ["lvp", /llvmpipe/i],
   ["radeon", /AMD|RADV/i],

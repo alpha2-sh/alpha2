@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  BROWSER_ERROR_CODES,
   classifyBrowserFailure,
   ExportFailureError,
   failureClassOfCode,
@@ -227,6 +228,16 @@ test("a code classifies as the shared table says, the host's own table included 
     assert.equal(failure.stderr, "tail");
     assert.equal(failureOf({ failure })?.code, expected.code, code);
   }
+  assert.deepEqual(
+    Object.keys(table.browser).sort(),
+    [...BROWSER_ERROR_CODES].sort(),
+  );
+  for (const code of BROWSER_ERROR_CODES)
+    assert.deepEqual(
+      { ...failureClassOfCode(code) },
+      table.browser[code],
+      code,
+    );
   assert.equal(failureClassOfCode("SOMETHING_NEW").code, "UNKNOWN");
   assert.equal(failureClassOfCode(undefined).code, "UNKNOWN");
   assert.equal(failureClassOfCode("toString").code, "UNKNOWN");

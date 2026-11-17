@@ -11,11 +11,9 @@ export const ROUNDING_SCAN_FRAMES = 64;
 export const ROUNDING_SCAN_BYTES = 16 * 1024 * 1024;
 
 /**
- * The unit a stream's timestamps are rounded to, in units of its time resolution, or 0 when none
- * shows. A frame interval that is not a whole number of units rounds to two lengths a unit apart
- * (29.97 fps in ms gives 33 and 34), so the unit is the GCD of the interval differences. Returns 0
- * for uniform or variable frame rates and for fewer than three distinct timestamps.
- * Throws `RangeError` for a timestamp that is not a safe integer.
+ * The unit a stream's timestamps are rounded to, in units of its time resolution (1 for 29.97 fps
+ * in ms, whose frames last 33 and 34), or 0 when none shows. Mirrors the engine's
+ * `rounding_quantum`. Throws `RangeError` for a timestamp that is not a safe integer.
  */
 export function roundingQuantum(timestamps: readonly number[]): number {
   for (const timestamp of timestamps)
@@ -37,7 +35,51 @@ export function roundingQuantum(timestamps: readonly number[]): number {
     quantum = a;
   }
   if (quantum === 0n || quantum * 2n >= shortest) return 0;
+  if (!fitsOnePeriod(sorted.map(BigInt), intervals, shortest, quantum))
+    return 0;
   return Number(quantum);
+}
+
+/** Mirrors `fits_one_period` of the engine's `rounding_quantum`. */
+function fitsOnePeriod(
+  sorted: readonly bigint[],
+  intervals: readonly bigint[],
+  shortest: bigint,
+  unit: bigint,
+): boolean {
+  const first = sorted[0];
+  if (sorted.some((time) => (((time - first) % unit) + unit) % unit !== 0n))
+    return false;
+  let sum = 0n;
+  let count = 0n;
+  for (const interval of intervals) {
+    if (interval - shortest <= unit) {
+      sum += interval;
+      count += 1n;
+    }
+  }
+  const frames = [0n];
+  for (const interval of intervals) {
+    frames.push(
+      frames[frames.length - 1] + (interval * 2n * count + sum) / (2n * sum),
+    );
+  }
+  let low: [bigint, bigint] | undefined;
+  let high: [bigint, bigint] | undefined;
+  const below = (a: [bigint, bigint], b: [bigint, bigint]) =>
+    a[0] * b[1] < b[0] * a[1];
+  for (let j = 0; j < sorted.length; j++) {
+    for (let k = j + 1; k < sorted.length; k++) {
+      const span = sorted[k] - sorted[j];
+      const frameCount = frames[k] - frames[j];
+      if (frameCount <= 0n) return false;
+      const from: [bigint, bigint] = [span - unit, frameCount];
+      const to: [bigint, bigint] = [span + unit, frameCount];
+      if (low === undefined || below(low, from)) low = from;
+      if (high === undefined || below(to, high)) high = to;
+    }
+  }
+  return low !== undefined && high !== undefined && !below(high, low);
 }
 
 /**
@@ -52,6 +94,9 @@ export interface AudioFrameGrid {
   /** Wider than `startTolerance` because dropping codec delay (Opus pre-skip) rounds again. */
   readonly trimmedTolerance: number;
 }
+
+/** Most whole-sample periods `audioFrameGrid` tries. Mirrors `audio_frame_grid`. */
+const MAX_GRID_CANDIDATES = 4096n;
 
 /**
  * The frame grid an audio stream's first packet timestamps show at `sampleRate`, for timestamps in
@@ -93,6 +138,7 @@ export function audioFrameGrid(
   let shortest = floorDiv(span - rounding, den * frames);
   if (shortest < 2n * trimmed + 1n) shortest = 2n * trimmed + 1n;
   const longest = floorDiv(span + rounding, den * frames) + 1n;
+  if (longest - shortest >= MAX_GRID_CANDIDATES) return undefined;
   let best: { period: bigint; low: bigint; high: bigint } | undefined;
   for (let period = shortest; period <= longest; period += 1n) {
     let low: bigint | undefined;
@@ -232,6 +278,8 @@ export const UPRIGHT: VideoOrientation = Object.freeze({
 export type ContainerBytes = Blob | ArrayBuffer | ArrayBufferView;
 
 const MAX_HEADER_SCAN_BYTES = 64 * 1024 * 1024;
+/** Boxes one level of an MP4 walk visits; each costs one 16-byte read, wherever it starts. */
+const MAX_BOXES_PER_LEVEL = 4096;
 
 /**
  * Reads track `trackId`'s orientation, mirror included, from MP4/QuickTime `tkhd`/`mvhd` matrices
@@ -298,7 +346,11 @@ async function* isobmffBoxes(
   end: number,
 ): AsyncGenerator<Box> {
   let at = start;
-  while (at + 8 <= end && at < MAX_HEADER_SCAN_BYTES + start) {
+  for (
+    let visited = 0;
+    at + 8 <= end && visited < MAX_BOXES_PER_LEVEL;
+    visited++
+  ) {
     const header = await reader.read(at, 16);
     if (header.length < 8) return;
     let size = readU32(header, 0);
@@ -457,14 +509,18 @@ function vint(
   };
 }
 
+// EBML integers are at most 8 bytes and floats 0, 4 or 8, so longer sizes are refused unread.
 async function ebmlUnsigned(reader: ByteReader, element: Element) {
-  const bytes = await reader.read(element.start, element.end - element.start);
+  const length = element.end - element.start;
+  if (length > 8) return Number.NaN;
+  const bytes = await reader.read(element.start, length);
   return bytes.reduce((value, byte) => value * 256 + byte, 0);
 }
 
 async function ebmlFloat(reader: ByteReader, element: Element) {
   const length = element.end - element.start;
   if (length === 0) return 0;
+  if (length !== 4 && length !== 8) return Number.NaN;
   const bytes = await reader.read(element.start, length);
   const view = new DataView(bytes.buffer, bytes.byteOffset);
   if (length === 4) return view.getFloat32(0);
@@ -559,7 +615,7 @@ async function matroskaOrientation(
 
 /**
  * The `CodecDelay` a Matroska or WebM file declares for track `trackId` (mediabunny's
- * `InputTrack.id`), in nanoseconds; 0 when none. Readers should subtract it; mediabunny does not.
+ * `InputTrack.id`), in nanoseconds, or 0 when none or malformed. mediabunny does not subtract it.
  */
 export async function readMatroskaCodecDelay(
   container: ContainerBytes,
@@ -571,7 +627,8 @@ export async function readMatroskaCodecDelay(
   for await (const { number, entry } of matroskaTrackEntries(reader)) {
     if (number !== trackId) continue;
     for await (const field of ebmlElements(reader, entry.start, entry.end))
-      if (field.id === EBML.codecDelay) return ebmlUnsigned(reader, field);
+      if (field.id === EBML.codecDelay)
+        return (await ebmlUnsigned(reader, field)) || 0;
     return 0;
   }
   return 0;
@@ -740,6 +797,7 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
   #readyBytes = 0;
   #activeTargetTicks?: bigint;
   #reverseCacheHits = 0;
+  readonly #openedSoftware: boolean;
   #software: boolean;
   #softwareFallback?: string;
   #decodedAny = false;
@@ -782,7 +840,9 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
       source.config.description,
     );
     this.#sitingFromKeyChunk = source.config.description === undefined;
-    this.#software = source.config.hardwareAcceleration === "prefer-software";
+    this.#openedSoftware =
+      source.config.hardwareAcceleration === "prefer-software";
+    this.#software = this.#openedSoftware;
   }
 
   /** Why decoding moved to software after the browser's first pick failed, if it did. */
@@ -814,7 +874,9 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
 
   /**
    * A decoder failure retries once from the keyframe with `"prefer-software"`. If that fails too,
-   * rejects with `DecodeUnavailableError` when no frame was ever decoded, else with the failure.
+   * rejects with `DecodeUnavailableError` when no frame was ever decoded, else with the failure,
+   * and the next request decodes with the configured acceleration. A `device-recovery` request
+   * also returns a decoder that fell back to that acceleration.
    */
   async refill(
     request: DecoderRefillRequest,
@@ -823,18 +885,25 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
     if (request.sourceId !== this.#sourceId) {
       throw new Error(`decoder source mismatch: ${request.sourceId}`);
     }
+    if (
+      request.reason === "device-recovery" &&
+      this.#software !== this.#openedSoftware
+    )
+      this.#useSoftware(this.#openedSoftware);
     try {
       const frame = await withSoftwareFallback(
         () => this.#refillOnce(request, signal),
         this.#software || signal.aborted
           ? undefined
           : (cause) => {
-              this.#software = true;
+              this.#useSoftware(true);
               this.#softwareFallback = `${cause.name}: ${cause.message}`;
-              this.#resetCursor();
-              this.#cache.clear();
               return Promise.resolve();
             },
+        () => {
+          this.#useSoftware(this.#openedSoftware);
+          return Promise.resolve();
+        },
       );
       this.#decodedAny = true;
       return frame;
@@ -847,6 +916,13 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
         false,
       );
     }
+  }
+
+  #useSoftware(software: boolean): void {
+    this.#software = software;
+    if (software === this.#openedSoftware) this.#softwareFallback = undefined;
+    this.#resetCursor();
+    this.#cache.clear();
   }
 
   async #refillOnce(
@@ -960,10 +1036,11 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
         if (!(await this.#waitForOutput(signal))) {
           // Every surface is held. Closing queued frames would answer with a later frame.
           if (this.#cache.releaseAllButPresentedAt(target) === 0)
-            throw new Error(
+            throw decoderStalled(
               `video decoder ${this.#sourceId} stalled: no output for ` +
                 `${this.#stallTimeoutMs} ms with ${decoder.decodeQueueSize} chunks queued; ` +
                 "its surfaces are held by frames that were never closed",
+              "video-decoder-stalled",
             );
         }
       } else {
@@ -1085,8 +1162,9 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
         signal.addEventListener("abort", abort, { once: true });
         void activeTimeout(this.#stallTimeoutMs, settled.signal).then(() =>
           reject(
-            new Error(
+            decoderStalled(
               `video decoder ${this.#sourceId} stalled during EOF flush after ${this.#stallTimeoutMs} ms`,
+              "video-decoder-flush-stalled",
             ),
           ),
         );
@@ -1180,8 +1258,27 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
 export interface DecoderRefillCoordinatorOptions {
   /** Concurrent refills across sources (default 2). */
   readonly maxConcurrency?: number;
-  /** Decoders kept open per source (default 4); the least recently used one closes past it. */
-  readonly maxCursorsPerSource?: number;
+  /**
+   * Decoder cursors kept open across all sources (default 16). Past it the least recently used
+   * cursor that is neither refilling nor retained closes; when none can, the budget is exceeded.
+   */
+  readonly maxCursors?: number;
+  /**
+   * Active milliseconds without a request after which a cursor drops its decode position and
+   * cached frames, keeping the file open (default 2000).
+   */
+  readonly idleMs?: number;
+}
+
+/** Counters of a {@link DecoderRefillCoordinator}'s cursor budget. */
+export interface DecoderRefillDiagnostics {
+  readonly openCursors: number;
+  /** Cursors closed to stay within `maxCursors`. */
+  readonly evictions: number;
+  /** Cursors flushed after `idleMs` without a request. */
+  readonly idleFlushes: number;
+  /** Times a cursor opened while every open one was refilling or retained. */
+  readonly overBudget: number;
 }
 
 /** What a {@link DecoderRefillCoordinator} asks its opener for. */
@@ -1190,10 +1287,22 @@ export interface DecoderOpenOptions {
   readonly decode: "default" | "software";
 }
 
+interface DecoderCursor {
+  readonly sourceId: string;
+  /** Consumer id as given, for {@link DecoderRefillCoordinator.retain}. */
+  readonly consumer: string;
+  readonly decoder: Promise<BrowserVideoDecoder>;
+  touched: number;
+  /** Active time of the coordinator's ticker at the last request. */
+  requestedAt: number;
+  flushed: boolean;
+}
+
 /**
  * Runs refills on decoders it opens, one per source and consumer (plus one for software), with
  * one refill per source at a time and at most `maxConcurrency` overall. A newer generation aborts
- * requests in flight and closes their frames instead of delivering them.
+ * requests in flight and closes their frames instead of delivering them. At most `maxCursors`
+ * decoders stay open across sources, and a cursor idle for `idleMs` releases its decoder's frames.
  */
 export class DecoderRefillCoordinator {
   readonly #open: (
@@ -1204,14 +1313,20 @@ export class DecoderRefillCoordinator {
   #generation = 0;
   #controller = new AbortController();
   readonly #maxConcurrency: number;
-  readonly #maxCursorsPerSource: number;
+  readonly #maxCursors: number;
+  readonly #idleMs: number;
   #active = 0;
   #capacityWaiters: Array<() => void> = [];
   #sourceTails = new Map<string, Promise<void>>();
-  readonly #cursors = new Map<
-    string,
-    Map<string, Promise<BrowserVideoDecoder>>
-  >();
+  readonly #cursors = new Map<string, DecoderCursor>();
+  // Refills queued or running per cursor key; a busy cursor is never closed or flushed.
+  readonly #busy = new Map<string, number>();
+  #retained = new Set<string>();
+  #touches = 0;
+  #ticker?: ActiveStopwatch;
+  #evictions = 0;
+  #idleFlushes = 0;
+  #overBudget = 0;
   #closed = false;
 
   /**
@@ -1226,23 +1341,19 @@ export class DecoderRefillCoordinator {
     deliver: (frame: BrowserDecodedFrame) => Promise<void>,
     options: DecoderRefillCoordinatorOptions = {},
   ) {
-    const maxConcurrency = options.maxConcurrency ?? 2;
-    const maxCursorsPerSource = options.maxCursorsPerSource ?? 4;
-    if (!Number.isSafeInteger(maxConcurrency) || maxConcurrency <= 0) {
-      throw new RangeError("maxConcurrency must be a positive safe integer");
-    }
-    if (
-      !Number.isSafeInteger(maxCursorsPerSource) ||
-      maxCursorsPerSource <= 0
-    ) {
-      throw new RangeError(
-        "maxCursorsPerSource must be a positive safe integer",
-      );
-    }
+    const limits = {
+      maxConcurrency: options.maxConcurrency ?? 2,
+      maxCursors: options.maxCursors ?? DEFAULT_MAX_DECODER_CURSORS,
+      idleMs: options.idleMs ?? DEFAULT_DECODER_IDLE_MS,
+    };
+    for (const [name, value] of Object.entries(limits))
+      if (!Number.isSafeInteger(value) || value <= 0)
+        throw new RangeError(`${name} must be a positive safe integer`);
     this.#open = open;
     this.#deliver = deliver;
-    this.#maxConcurrency = maxConcurrency;
-    this.#maxCursorsPerSource = maxCursorsPerSource;
+    this.#maxConcurrency = limits.maxConcurrency;
+    this.#maxCursors = limits.maxCursors;
+    this.#idleMs = limits.idleMs;
   }
 
   /** Aborts requests in flight and returns the new generation number. */
@@ -1250,6 +1361,34 @@ export class DecoderRefillCoordinator {
     this.#controller.abort(new DOMException("Superseded", "AbortError"));
     this.#controller = new AbortController();
     return ++this.#generation;
+  }
+
+  /**
+   * Declares the cursors of the current round, replacing the previous set; retained cursors are
+   * never closed for the budget. A cursor is a source and a `consumerId` (absent is the source's
+   * own), in both decode kinds.
+   */
+  retain(
+    cursors: Iterable<{
+      readonly sourceId: string;
+      readonly consumerId?: string;
+    }>,
+  ): void {
+    this.#retained = new Set(
+      Array.from(cursors, ({ sourceId, consumerId }) =>
+        retainKey(sourceId, consumerId ?? ""),
+      ),
+    );
+    this.#enforceBudget();
+  }
+
+  get diagnostics(): DecoderRefillDiagnostics {
+    return {
+      openCursors: this.#cursors.size,
+      evictions: this.#evictions,
+      idleFlushes: this.#idleFlushes,
+      overBudget: this.#overBudget,
+    };
   }
 
   /**
@@ -1263,16 +1402,32 @@ export class DecoderRefillCoordinator {
       this.#controller = new AbortController();
       this.#generation = request.generation;
     }
-    const previous =
-      this.#sourceTails.get(request.sourceId) ?? Promise.resolve();
-    const task = previous.catch(() => {}).then(() => this.#refillNow(request));
-    this.#sourceTails.set(request.sourceId, task);
+    const key = cursorKey(
+      request.sourceId,
+      request.consumerId ?? "",
+      request.decode === "software",
+    );
+    this.#busy.set(key, (this.#busy.get(key) ?? 0) + 1);
+    try {
+      await this.#onSource(request.sourceId, () => this.#refillNow(request));
+    } finally {
+      const left = (this.#busy.get(key) ?? 1) - 1;
+      if (left > 0) this.#busy.set(key, left);
+      else this.#busy.delete(key);
+    }
+  }
+
+  // Serializes `work` after everything queued on the source, so a close or flush never overlaps
+  // a refill.
+  async #onSource(sourceId: string, work: () => Promise<void>): Promise<void> {
+    const previous = this.#sourceTails.get(sourceId) ?? Promise.resolve();
+    const task = previous.catch(() => {}).then(work);
+    this.#sourceTails.set(sourceId, task);
     try {
       await task;
     } finally {
-      if (this.#sourceTails.get(request.sourceId) === task) {
-        this.#sourceTails.delete(request.sourceId);
-      }
+      if (this.#sourceTails.get(sourceId) === task)
+        this.#sourceTails.delete(sourceId);
     }
   }
 
@@ -1283,12 +1438,26 @@ export class DecoderRefillCoordinator {
       if (request.generation !== this.#generation) return;
       throwIfAborted(this.#controller.signal);
       const software = request.decode === "software";
+      const key = cursorKey(
+        request.sourceId,
+        request.consumerId ?? "",
+        software,
+      );
       const decoder = await this.#cursor(
+        key,
         request.sourceId,
         request.consumerId ?? "",
         software ? "software" : "default",
       );
-      const frame = await decoder.refill(request, this.#controller.signal);
+      let frame: BrowserDecodedFrame;
+      try {
+        frame = await decoder.refill(request, this.#controller.signal);
+      } catch (error) {
+        // A failed decoder is not kept, as a failed open is not; aborts and stalls keep it.
+        if (isDecoderFailure(error) || error instanceof DecodeUnavailableError)
+          this.#forget(key);
+        throw error;
+      }
       if (frame.generation !== this.#generation) {
         frame.frame.close();
         return;
@@ -1299,44 +1468,105 @@ export class DecoderRefillCoordinator {
     }
   }
 
-  // Runs inside the source's queue, so a decoder closed past the limit is not decoding.
-  async #cursor(
+  // Runs inside the source's queue, so the cursor it returns is not decoding for anyone else.
+  #cursor(
+    key: string,
     sourceId: string,
     consumer: string,
     decode: "default" | "software",
   ): Promise<BrowserVideoDecoder> {
-    let cursors = this.#cursors.get(sourceId);
-    if (cursors === undefined) {
-      cursors = new Map();
-      this.#cursors.set(sourceId, cursors);
-    }
-    const consumerId =
-      decode === "software" ? `${consumer}\u0000software` : consumer;
-    let decoder = cursors.get(consumerId);
-    if (decoder === undefined) {
-      decoder = Promise.resolve()
+    let cursor = this.#cursors.get(key);
+    if (cursor === undefined) {
+      const decoder = Promise.resolve()
         .then(() => this.#open(sourceId, { decode }))
         .catch((error: unknown) => {
           throw decode === "software"
             ? softwareRefusal(sourceId, error)
             : error;
         });
+      const opened: DecoderCursor = {
+        sourceId,
+        consumer,
+        decoder,
+        touched: 0,
+        requestedAt: 0,
+        flushed: false,
+      };
+      cursor = opened;
       // A source that failed to open is opened again by the next request.
       decoder.catch(() => {
-        if (cursors.get(consumerId) === decoder) cursors.delete(consumerId);
+        if (this.#cursors.get(key) === opened) this.#cursors.delete(key);
       });
+      this.#cursors.set(key, cursor);
     }
-    cursors.delete(consumerId);
-    cursors.set(consumerId, decoder);
-    for (const [consumer, evicted] of cursors) {
-      if (cursors.size <= this.#maxCursorsPerSource) break;
-      cursors.delete(consumer);
-      evicted.then(
-        (closed) => closed.close(),
-        () => {},
-      );
+    cursor.touched = ++this.#touches;
+    cursor.requestedAt = this.#startTicker().elapsed();
+    cursor.flushed = false;
+    this.#enforceBudget();
+    return cursor.decoder;
+  }
+
+  #enforceBudget(): void {
+    while (this.#cursors.size > this.#maxCursors) {
+      let oldest: [string, DecoderCursor] | undefined;
+      for (const entry of this.#cursors) {
+        const [key, cursor] = entry;
+        if (
+          (this.#busy.get(key) ?? 0) > 0 ||
+          this.#retained.has(retainKey(cursor.sourceId, cursor.consumer))
+        )
+          continue;
+        if (oldest === undefined || cursor.touched < oldest[1].touched)
+          oldest = entry;
+      }
+      if (oldest === undefined) {
+        this.#overBudget += 1;
+        return;
+      }
+      this.#evictions += 1;
+      this.#forget(oldest[0]);
     }
-    return decoder;
+  }
+
+  #forget(key: string): void {
+    const cursor = this.#cursors.get(key);
+    if (cursor === undefined) return;
+    this.#cursors.delete(key);
+    void this.#onSource(cursor.sourceId, async () => {
+      (await cursor.decoder).close();
+    }).catch(() => {});
+  }
+
+  #startTicker(): ActiveStopwatch {
+    if (this.#ticker === undefined) {
+      const ticker = new ActiveStopwatch();
+      ticker.onTick(() => this.#flushIdle(ticker));
+      this.#ticker = ticker;
+    }
+    return this.#ticker;
+  }
+
+  #flushIdle(ticker: ActiveStopwatch): void {
+    const now = ticker.elapsed();
+    let waiting = false;
+    for (const [key, cursor] of this.#cursors) {
+      if (cursor.flushed || (this.#busy.get(key) ?? 0) > 0) continue;
+      if (now - cursor.requestedAt < this.#idleMs) {
+        waiting = true;
+        continue;
+      }
+      cursor.flushed = true;
+      this.#idleFlushes += 1;
+      void this.#onSource(cursor.sourceId, async () => {
+        if (!cursor.flushed) return;
+        await (await cursor.decoder).flush();
+      }).catch(() => {});
+    }
+    // Nothing left to flush stops the ticks until the next request.
+    if (!waiting && ![...this.#busy.values()].some((count) => count > 0)) {
+      ticker.dispose();
+      if (this.#ticker === ticker) this.#ticker = undefined;
+    }
   }
 
   async #acquire(): Promise<void> {
@@ -1356,15 +1586,33 @@ export class DecoderRefillCoordinator {
   close(): void {
     this.#closed = true;
     this.#controller.abort();
+    this.#ticker?.dispose();
+    this.#ticker = undefined;
     for (const wake of this.#capacityWaiters.splice(0)) wake();
-    for (const cursors of this.#cursors.values())
-      for (const decoder of cursors.values())
-        decoder.then(
-          (opened) => opened.close(),
-          () => {},
-        );
+    for (const cursor of this.#cursors.values())
+      cursor.decoder.then(
+        (opened) => opened.close(),
+        () => {},
+      );
     this.#cursors.clear();
   }
+}
+
+/** Decoder cursors a {@link DecoderRefillCoordinator} keeps open by default. */
+export const DEFAULT_MAX_DECODER_CURSORS = 16;
+/** Active milliseconds after which an unrequested cursor is flushed by default. */
+export const DEFAULT_DECODER_IDLE_MS = 2_000;
+
+function cursorKey(
+  sourceId: string,
+  consumer: string,
+  software: boolean,
+): string {
+  return `${sourceId}\u0000${consumer}${software ? "\u0000software" : ""}`;
+}
+
+function retainKey(sourceId: string, consumer: string): string {
+  return `${sourceId}\u0000${consumer}`;
 }
 
 function softwareRefusal(sourceId: string, error: unknown): unknown {
@@ -1538,10 +1786,16 @@ function validatePositiveByteLimit(value: number, name: string): void {
   }
 }
 import { abortError, throwIfAborted } from "./abort.js";
-import { activeTimeout } from "./active-clock.js";
+import { ActiveStopwatch, activeTimeout } from "./active-clock.js";
+import { decoderStalled } from "./decoder-stall.js";
 import { type ChromaSiting, chromaSitingForStream } from "./chroma-siting.js";
 import {
+  DecodeUnavailableError,
   decodeRefusalMessage,
   PlanarDecodeUnavailableError,
 } from "./hdr-frames.js";
-import { decodeFailureOf, withSoftwareFallback } from "./decoder-fallback.js";
+import {
+  decodeFailureOf,
+  isDecoderFailure,
+  withSoftwareFallback,
+} from "./decoder-fallback.js";

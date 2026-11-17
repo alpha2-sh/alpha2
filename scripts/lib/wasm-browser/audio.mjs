@@ -14,14 +14,14 @@ if (typeof AudioDecoder === "undefined") {
   // converges over its 400 ms pre-roll without matching bits. Matroska and WebM timestamps are
   // rounded to the millisecond, so a window must snap to the frame grid, not land up to 48 samples
   // off.
-  for (const [name, whole, later, tolerance] of [
+  for (const [name, whole, later, tolerance] of /** @type {[string, [number, number], number, number][]} */ ([
     ["audio-only-aac-priming.m4a", [0.05, 0.38], 0.2003, 1e-4],
     ["audio-opus.mp4", [0.05, 0.55], 0.3011, 1e-3],
     ["audio-seek-aac.mkv", [0.05, 1.5], 0.7771, 1e-4],
     ["audio-seek-aac-remux.mp4", [0.05, 1.5], 0.7771, 1e-4],
     ["audio-seek-opus.webm", [0.05, 1.5], 0.7771, 1e-3],
     ["audio-seek-libopus.webm", [0.05, 1.5], 0.7771, 1e-3],
-  ]) {
+  ])) {
     const bytes = new Uint8Array(await (await fetch("/tests/corpus/" + name)).arrayBuffer());
     const decoder = await MediabunnyAudioDecoder.open("a", bytes, wasm);
     const request = (start, end) => decoder.refill({ sourceId: "a", startMediaTimeTicks: ticks(start), endMediaTimeTicks: ticks(end), generation: 1 }, 48000);
@@ -619,5 +619,49 @@ report({
     /no audio stream 2/.test(missingStream ?? ""),
   streams, needs, channels: block.channels.length, left, right, missing, missingStream,
 });
+`;
+}
+
+// A clip choosing channels of a source this browser cannot decode: the editor's supplier uploads
+// silence with the stream's planes, so the mix still has the other clip's sound.
+export function silentChannelSelection() {
+  return `
+const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await wasm.default();
+const { AudioWindowSupplier } = await import("/packages/alpha2-editor/dist/browser/runtime/audio.js");
+const engine = wasm.WebEffectRegistry.createCpu();
+const clip = (id, extra = {}) => ({ id, source_id: id, timeline_range: { start: 0, end: 12000 },
+  source_range: { start: 0, end: 12000 }, ...extra });
+const project = {
+  schema_version: 1, id: "silent-lane", name: "Silent lane",
+  settings: { width: 16, height: 16, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [
+    { id: "surround", locator: "asset://surround", kind: "audio" },
+    { id: "tone", locator: "asset://tone", kind: "audio" },
+  ],
+  timeline: { tracks: [
+    { id: "a", name: "A", kind: "audio", clips: [clip("surround", { audio: { channels: [0, 1] } })] },
+    { id: "b", name: "B", kind: "audio", clips: [clip("tone")] },
+  ] },
+  audio: { limiter: null },
+};
+engine.loadProject(JSON.stringify(project));
+const tone = new AudioBuffer({ numberOfChannels: 2, length: 48000, sampleRate: 48000 });
+tone.getChannelData(0).fill(0.25);
+tone.getChannelData(1).fill(0.25);
+const assets = {
+  surround: { id: "surround", kind: "audio", file: new Blob([]), hasAudio: true, audioDecodable: false,
+    audioStreams: [{ channels: 6, default: true }] },
+  tone: { id: "tone", kind: "audio", audioBuffer: tone },
+};
+const supplier = new AudioWindowSupplier({ get: (id) => assets[id] });
+supplier.configure(engine, project);
+await supplier.supply(0, 1024);
+const mixed = engine.renderAudio(0n, 1024, true);
+const missing = JSON.parse(engine.audioMissingSources());
+const level = Math.round(Math.abs(mixed[512]) * 1000) / 1000;
+await supplier.close();
+engine.free();
+report({ ok: missing.length === 0 && level > 0.1, missing, level });
 `;
 }

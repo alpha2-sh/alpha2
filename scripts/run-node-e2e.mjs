@@ -1,26 +1,34 @@
 #!/usr/bin/env node
 // Builds alpha2-host and the Node client and runs the Node end-to-end tests from any shell.
-// usage: run-node-e2e.mjs [--release] [-- <node --test args>]
+// --host runs them against that alpha2-host (such as a downloaded archive's) and builds none.
+// usage: run-node-e2e.mjs [--release | --host <alpha2-host>] [-- <node --test args>]
 
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { executable } from "./lib/cargo-target.mjs";
+import { nodeTestReporterArgs } from "./lib/test-report.mjs";
 
 const root = resolve(import.meta.dirname, "..");
+const usage =
+  "usage: run-node-e2e.mjs [--release | --host <alpha2-host>] [-- <node --test args>]";
 const argv = process.argv.slice(2);
 const separator = argv.indexOf("--");
 const own = separator < 0 ? argv : argv.slice(0, separator);
 const passed = separator < 0 ? [] : argv.slice(separator + 1);
-for (const arg of own)
-  if (arg !== "--release") {
-    process.stderr.write(
-      `unknown argument ${arg}\nusage: run-node-e2e.mjs [--release] [-- <node --test args>]\n`,
-    );
+let profile = "debug";
+let host;
+for (let index = 0; index < own.length; index += 1) {
+  if (own[index] === "--release" && host === undefined) profile = "release";
+  else if (own[index] === "--host" && profile === "debug" && own[index + 1]) {
+    index += 1;
+    host = resolve(own[index]);
+  } else {
+    process.stderr.write(`unknown argument ${own[index]}\n${usage}\n`);
     process.exit(2);
   }
-const profile = own.includes("--release") ? "release" : "debug";
+}
 
 function run(file, args, env = process.env) {
   const result = spawnSync(file, args, { cwd: root, stdio: "inherit", env });
@@ -28,12 +36,13 @@ function run(file, args, env = process.env) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-run("cargo", [
-  "build",
-  ...(profile === "release" ? ["--release"] : []),
-  "-p",
-  "alpha2-host",
-]);
+if (host === undefined)
+  run("cargo", [
+    "build",
+    ...(profile === "release" ? ["--release"] : []),
+    "-p",
+    "alpha2-host",
+  ]);
 // npm is a `.cmd` on Windows, which spawn cannot start without a shell, so run `npm_execpath`
 // with Node.
 const npmArgs = ["run", "build", "--workspace", "@alpha2-sh/node"];
@@ -56,9 +65,15 @@ const files = readdirSync(join(root, directory))
   .map((name) => join(directory, name));
 run(
   process.execPath,
-  ["--test", "--test-timeout=180000", ...passed, ...files],
+  [
+    "--test",
+    ...nodeTestReporterArgs("node-e2e"),
+    "--test-timeout=180000",
+    ...passed,
+    ...files,
+  ],
   {
     ...process.env,
-    ALPHA2_HOST_BINARY: executable("alpha2-host", profile),
+    ALPHA2_HOST_BINARY: host ?? executable("alpha2-host", profile),
   },
 );

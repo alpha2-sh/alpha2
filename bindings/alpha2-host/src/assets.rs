@@ -12,7 +12,7 @@ use std::time::UNIX_EPOCH;
 
 use alpha2_assets::{
     AssetCatalog, AssetEntry, AudioStreamFacts, ConformIssue, ConformReport, FrameRateEvidence,
-    MediaPurpose, OriginalState, ProxyState, ProxyVariant, Selection, conform,
+    MediaPurpose, OriginalState, ProxyState, ProxyVariant, Selection, conform_sources,
 };
 use alpha2_extensions::Registry;
 use alpha2_media::{SourceId, StreamKind};
@@ -21,8 +21,9 @@ use alpha2_model::{
     VideoStreamShape,
 };
 use alpha2_time::MediaTime;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
+
+pub use alpha2_host_core::requests::ProxyRequest;
 
 /// A stream only a hardware session decodes (AV1 without libdav1d) is reported `unsupported` by
 /// conform on a software-decode host, rather than failing the export at its first frame.
@@ -48,27 +49,6 @@ impl HardwareVideoDecode {
             Self::None => false,
             Self::Codecs(codecs) => codecs.contains(&codec),
             Self::PerStream => true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProxyRequest {
-    pub path: PathBuf,
-    #[serde(default)]
-    pub made_from: Option<MediaFingerprint>,
-    /// Set when the proxy was tone-mapped.
-    #[serde(default)]
-    pub color_pipeline: Option<String>,
-}
-
-impl ProxyRequest {
-    pub const fn at(path: PathBuf) -> Self {
-        Self {
-            path,
-            made_from: None,
-            color_pipeline: None,
         }
     }
 }
@@ -147,11 +127,33 @@ pub fn resolve_media(
     purpose: MediaPurpose,
     hardware: &HardwareVideoDecode,
 ) -> ResolvedMedia {
+    resolve_sources(
+        project,
+        project.used_sources(),
+        resolver,
+        derivatives,
+        purpose,
+        hardware,
+    )
+}
+
+/// [`resolve_media`] over `sources` instead of the ones a render reads.
+pub fn resolve_sources(
+    project: &Project,
+    sources: Vec<&alpha2_model::MediaSource>,
+    resolver: &dyn AssetResolver,
+    derivatives: &dyn DerivativeProvider,
+    purpose: MediaPurpose,
+    hardware: &HardwareVideoDecode,
+) -> ResolvedMedia {
     let mut assets = Vec::new();
     let mut proxy_paths = HashMap::new();
     let mut frames = HashMap::<PathBuf, VideoFrameSize>::new();
-    for source in project
-        .used_sources()
+    let wanted = sources
+        .iter()
+        .map(|source| source.id.clone())
+        .collect::<Vec<_>>();
+    for source in sources
         .into_iter()
         .filter(|source| source.is_host_supplied())
     {
@@ -199,7 +201,16 @@ pub fn resolve_media(
         assets.push(entry);
     }
     let catalog = AssetCatalog::new(assets);
-    let report = conform(project, &catalog, purpose);
+    let report = conform_sources(
+        project,
+        project
+            .sources
+            .iter()
+            .filter(|source| wanted.contains(&source.id))
+            .collect(),
+        &catalog,
+        purpose,
+    );
     let paths = report
         .sources
         .iter()
@@ -290,7 +301,7 @@ fn provider_original(
     if !path.is_file() {
         return Some(offline(path));
     }
-    let bytes = match crate::providers::read_source(path, provider) {
+    let bytes = match alpha2_host_core::providers::read_source(path, provider) {
         Ok(bytes) => bytes,
         Err(error) => {
             return Some(OriginalState::Unsupported {
@@ -383,7 +394,7 @@ fn sequence_original(
     hardware: &HardwareVideoDecode,
 ) -> Option<OriginalState> {
     let paths = resolver.sequence_frames(source)?;
-    if let Err(reason) = crate::providers::frame_files(locators, paths) {
+    if let Err(reason) = alpha2_host_core::providers::frame_files(locators, paths) {
         return Some(OriginalState::Unsupported { reason });
     }
     let frames = locators.len();
@@ -520,6 +531,7 @@ fn probe_media(
     ),
     String,
 > {
+    crate::heartbeat::request_step(crate::heartbeat::RequestSide::Input, "conform");
     let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
     let probe = alpha2_native::probe(path).map_err(|error| format!("{error}"))?;
     let stored_frames = probe.selected_video_stream().and_then(VideoFrameSize::of);
@@ -574,15 +586,29 @@ fn probe_media(
 /// `None` when it cannot be measured, as a browser then records none.
 fn measured_rate(path: &Path, index: usize) -> Option<alpha2_time::FrameRate> {
     let mut evidence = FrameRateEvidence::new();
-    alpha2_native::visit_packet_times(path, index, |seconds| evidence.push(seconds)).ok()?;
+    alpha2_native::visit_packet_times(path, index, |seconds| {
+        crate::heartbeat::beat_request();
+        evidence.push(seconds)
+    })
+    .ok()?;
     evidence.rate()
 }
+
+/// Milliseconds each 1 MiB of hashing takes on top of its work, for a step whose length is known.
+#[cfg(test)]
+pub static INJECT_HASH_CHUNK_DELAY_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 fn sha256(path: &Path) -> Result<String, String> {
     let mut file = File::open(path).map_err(|error| error.to_string())?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0; 1 << 20];
     loop {
+        crate::heartbeat::beat_request();
+        #[cfg(test)]
+        std::thread::sleep(std::time::Duration::from_millis(
+            INJECT_HASH_CHUNK_DELAY_MS.load(std::sync::atomic::Ordering::Relaxed),
+        ));
         let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
         if read == 0 {
             break;

@@ -111,7 +111,6 @@ notices = [
   "licenses/SVT-AV1/LICENSE.md",
   "licenses/SVT-AV1/PATENTS.md",
 ]
-# Vulkan headers are Linux-only; nv-codec-headers are Linux and Windows.
 notices_linux = [
   "licenses/Vulkan-Headers/LICENSE.md",
   "licenses/Vulkan-Headers/LICENSES/Apache-2.0.txt",

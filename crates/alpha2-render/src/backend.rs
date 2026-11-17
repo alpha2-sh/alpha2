@@ -5,18 +5,18 @@ use crate::{EffectDef, EffectId, Renderer};
 /// graph on either.
 pub trait EffectCatalog {
     /// The definition registered as `id`.
-    fn effect_definition(&self, id: &EffectId) -> Option<&EffectDef>;
+    fn effect_definition(&self, id: &EffectId) -> Option<std::sync::Arc<EffectDef>>;
 
     /// Whether `id`'s output can change with frame time alone; `true` for unknown effects.
     fn effect_reads_time(&self, id: &EffectId) -> bool;
 
     /// The identity a project's effect `id`@`version` draws under; `None` if this renderer cannot
     /// draw it or it is internal.
-    fn project_effect_id(&self, id: &str, version: u32) -> Option<&EffectId>;
+    fn project_effect_id(&self, id: &str, version: u32) -> Option<EffectId>;
 }
 
 impl EffectCatalog for Renderer {
-    fn effect_definition(&self, id: &EffectId) -> Option<&EffectDef> {
+    fn effect_definition(&self, id: &EffectId) -> Option<std::sync::Arc<EffectDef>> {
         Renderer::effect_definition(self, id)
     }
 
@@ -24,7 +24,7 @@ impl EffectCatalog for Renderer {
         Renderer::effect_reads_time(self, id)
     }
 
-    fn project_effect_id(&self, id: &str, version: u32) -> Option<&EffectId> {
+    fn project_effect_id(&self, id: &str, version: u32) -> Option<EffectId> {
         Renderer::project_effect_id(self, id, version)
     }
 }

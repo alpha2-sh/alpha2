@@ -36,12 +36,38 @@ FACTS: dict[str, Any] = {
 
 
 def test_constructors_write_the_spec_as_plain_dicts() -> None:
-    node = c.Media(Path("clips") / "a.mp4", loop=True, zoom=(1, 1.2), label=None)
+    node = c.Media(Path("clips") / "a.mp4", loop=True, zoom=c.Ramp(1, 1.2), label=None)
     assert node == {
         "type": "media",
         "path": str(Path("clips") / "a.mp4"),
         "loop": True,
-        "zoom": [1, 1.2],
+        "zoom": {"from": 1, "to": 1.2},
+    }
+    assert c.Group(
+        [c.Text("Hi")], blend="screen", effects=[c.Effect("gaussian-blur", radius=0.1)]
+    ) == {
+        "type": "group",
+        "children": [{"type": "text", "text": "Hi"}],
+        "blend": "screen",
+        "effects": [{"effect": "gaussian-blur", "radius": 0.1}],
+    }
+    assert c.Shape([{"shape": "ellipse"}], fill=c.ThemeColor("accent", 0.5)) == {
+        "type": "shape",
+        "shapes": [{"shape": "ellipse"}],
+        "fill": {"$theme": "accent", "alpha": 0.5},
+    }
+    card = c.Box([c.Item(c.Text("Hi"), flex_grow=1)], flex_direction="column", gap="8px")
+    assert card == {
+        "type": "box",
+        "children": [{"box": {"flex_grow": 1}, "node": {"type": "text", "text": "Hi"}}],
+        "flex_direction": "column",
+        "gap": "8px",
+    }
+    window = c.Matte(c.Media("a.mp4"), c.Text("HI"), use="luma")
+    assert window["by"] == {"type": "text", "text": "HI"} and window["use"] == "luma"
+    assert c.Mask(c.Media("a.mp4"), [{"shape": "ellipse"}])["shapes"] == [{"shape": "ellipse"}]
+    assert c.Keys((0, 1), (2, 1.5, "ease-out")) == {
+        "keys": [{"t": 0, "v": 1}, {"t": 2, "v": 1.5, "ease": "ease-out"}]
     }
     assert c.Captions("talk.srt", style="bar-bottom") == {
         "type": "captions",
@@ -199,7 +225,9 @@ def test_exporting_a_compiled_spec_sends_its_assets_fonts_and_loudness(
     compiled = c.Video(c.Media("talk.mp4"), loudness=-14).compile(facts=FACTS, fonts=[FONT])
     HostClient(host_path=host).export(compiled, tmp_path / "out.mp4")
     request = json.loads(recorded.read_text(encoding="utf-8"))
-    assert request["assets"] == compiled.assets
+    assert request["assets"] == {
+        key: str(Path.cwd() / path) for key, path in compiled.assets.items()
+    }
     assert request["fonts"] == [str(FONT)]
     assert request["loudness"] == {"targetLufs": -14.0, "truePeakCeilingDbtp": -1.0}
     assert request["endTicks"] == 12 * SECOND
@@ -248,6 +276,17 @@ def test_a_caption_file_in_a_legacy_code_page_is_a_compose_error(tmp_path: Path)
     assert f"{srt} is not UTF-8 text (invalid byte at offset 32)" in str(caught.value)
 
 
+def test_a_caption_file_longer_than_a_project_may_be_is_a_compose_error(tmp_path: Path) -> None:
+    srt = tmp_path / "talk.srt"
+    with srt.open("wb") as file:
+        file.truncate(c._native.MAX_PROJECT_JSON_BYTES + 1)
+    video = c.Video(c.CaptionedVideo("talk.mp4", c.Captions(srt)))
+    with pytest.raises(Alpha2ComposeError) as caught:
+        c.gather_facts(video, known={"media": FACTS["media"]})
+    assert caught.value.path == "facts.texts"
+    assert f"larger than {c._native.MAX_PROJECT_JSON_BYTES} bytes" in str(caught.value)
+
+
 def test_motion_presets_compile_to_keyframes_timed_from_each_nodes_span() -> None:
     video = c.Video(
         c.Stack(
@@ -283,3 +322,45 @@ def test_motion_constructors_write_plain_dicts() -> None:
     assert c.Scale(size=0.5, fade=False) == {"type": "scale", "size": 0.5, "fade": False}
     assert c.Reveal("line") == {"by": "line"}
     assert c.Counter(1, 2)["start"] == 1
+
+
+def test_a_template_binds_its_data_and_says_what_it_takes() -> None:
+    template = {
+        "template": {"id": "acme/card", "version": 1, "kind": "video", "title": "Card"},
+        "params": [
+            {"name": "title", "type": "text", "max_chars": 10},
+            {"name": "photo", "type": "media"},
+        ],
+        "duration": 2,
+        "body": {
+            "type": "alpha2/wipe-reveal",
+            "with": {"content": {"type": "media", "path": {"$param": "photo"}}, "from": "right"},
+        },
+        "overlays": [{"type": "text", "text": "{{title}}!"}],
+    }
+    spec = c.bind(template, {"title": "Hello", "photo": "a.jpg"}, theme="clean-light")
+    assert spec["theme"] == "clean-light"
+    assert spec["overlays"][0]["text"] == "Hello!"
+    assert spec["body"]["children"][0]["content"]["path"] == "a.jpg"
+    schema = c.data_schema(template)
+    assert schema["title"] == "Card"
+    assert schema["required"] == ["title", "photo"]
+    assert c.lint(template, {"title": "Hello", "photo": "a.jpg"}) == []
+    with pytest.raises(alpha2.Alpha2ComposeError, match="at most 10"):
+        c.bind(template, {"title": "x" * 11, "photo": "a.jpg"})
+    assert {entry["template"]["id"] for entry in c.TEMPLATES} >= {
+        "alpha2/circle-reveal",
+        "alpha2/wipe-reveal",
+    }
+
+
+def test_a_comparison_grid_takes_paths_or_labeled_items_and_hears_one() -> None:
+    grid = c.ComparisonGrid(["talk.mp4", {"path": "talk.mp4", "label": "B"}], audio_from=1)
+    assert grid["items"] == [
+        {"path": "talk.mp4"},
+        {"path": "talk.mp4", "label": "B", "audio": True},
+    ]
+    compiled = c.Video(grid).compile(facts=FACTS, fonts=[FONT])
+    assert alpha2.validate_project(compiled.project) == []
+    with pytest.raises(ValueError, match="no item 2"):
+        c.ComparisonGrid(["talk.mp4"], audio_from=2)

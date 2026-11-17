@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn runtime_effect_registration_compiles_author_wgsl_and_layout() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let definition = runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     );
@@ -13,7 +13,10 @@ fn runtime_effect_registration_compiles_author_wgsl_and_layout() {
         .expect("valid runtime effect compiles");
     assert_eq!(id.as_str(), "test.tint");
     assert_eq!(id.version(), 1);
-    assert_eq!(renderer.effect_definition(&id), Some(&definition));
+    assert_eq!(
+        renderer.effect_definition(&id).as_deref(),
+        Some(&definition)
+    );
     assert_eq!(
         renderer
             .effect_uniform_layout(&id)
@@ -28,7 +31,7 @@ fn runtime_effect_registration_compiles_author_wgsl_and_layout() {
 #[test]
 fn effects_compiled_side_by_side_register_in_any_order_and_a_duplicate_is_refused_at_commit() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let tint = |id: &str| EffectDef {
         id: id.to_owned(),
         ..runtime_tint_effect(
@@ -77,7 +80,7 @@ fn effects_compiled_side_by_side_register_in_any_order_and_a_duplicate_is_refuse
 }
 
 fn render_runtime_effect_pixel(body: &str) -> [u8; 4] {
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(runtime_tint_effect(body)))
         .expect("a bounded loop compiles");
     let size = RenderSize::new(1, 1).expect("size");
@@ -123,6 +126,43 @@ fn a_runtime_for_loop_that_never_ends_is_bounded() {
 }
 
 #[test]
+fn a_counted_loop_stops_at_its_literal_count_however_its_counter_is_written() {
+    let _lock = gpu_test_lock();
+    for (header, write, iterations) in [
+        ("var i = 0u; i < 8u; i++", "(i)--;", 8.0),
+        ("var i = 0u; i < 8u; i++", "(i) -= 1u;", 8.0),
+        ("var i = 0u; i < 8u; i++", "(i) = 0u;", 8.0),
+        ("var i = 0u; i < 8u; i++", "*(&(i)) = 0u;", 8.0),
+        ("var i = 0u; i < 8u; i++", "let p = &(i); *p = 0u;", 8.0),
+        ("var i = 4294967295u; i <= 4294967295u; i++", "", 1.0),
+        ("var i = 2147483647; i <= 2147483647; i++", "", 1.0),
+    ] {
+        let pixel = render_runtime_effect_pixel(&format!(
+            "fn effect(_uv: vec2f, src: vec4f) -> vec4f {{
+                var count = 0.0;
+                for ({header}) {{ {write} count += 1.0 / 16.0; }}
+                return vec4f(count, count, count, 1.0);
+            }}"
+        ));
+        assert_counted(pixel, iterations / 16.0);
+    }
+}
+
+#[test]
+fn an_array_at_the_size_limit_registers_and_draws() {
+    let _lock = gpu_test_lock();
+    let pixel = render_runtime_effect_pixel(
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f {
+            var table: array<vec4f, 128>;
+            let i = u32(uv.x * 128.0) % 128u;
+            table[i] = vec4f(0.5);
+            return vec4f(table[(i * 7u + 1u) % 128u].rgb + table[i].rgb, 1.0);
+        }",
+    );
+    assert_counted(pixel, 0.5);
+}
+
+#[test]
 fn nested_loops_and_loops_in_called_functions_share_one_budget() {
     // A per-loop bound would run 1024 x 1024 iterations (white); the shared budget stops after one
     // outer and 1023 inner iterations.
@@ -165,7 +205,7 @@ fn a_flat_operator_chain_fails_its_registration_not_the_process() {
         std::thread::Builder::new()
             .stack_size(stack)
             .spawn(move || {
-                let mut renderer = Renderer::new(gpu());
+                let renderer = Renderer::new(gpu());
                 pollster::block_on(renderer.register_effect(runtime_tint_effect(&body)))
                     .map(drop)
                     .map_err(|diagnostics| format!("{diagnostics:?}"))
@@ -176,15 +216,33 @@ fn a_flat_operator_chain_fails_its_registration_not_the_process() {
     };
     let error = register(chain(16_000), 1 << 20).expect_err("a 16,000-operand chain is refused");
     assert!(error.contains("operators"), "{error}");
-    // A release build needs well under 1 MiB at the limit; debug frames are about 20x larger.
-    let stack = if cfg!(debug_assertions) { 8 } else { 1 } << 20;
-    register(chain(256), stack).expect("a chain at the limit registers");
+    register(chain(256), 1 << 20).expect("a chain at the limit registers");
+}
+
+#[test]
+fn an_else_if_chain_at_the_nesting_limit_registers_from_a_small_stack() {
+    let _lock = gpu_test_lock();
+    let body = format!(
+        "fn effect(_uv: vec2f, src: vec4f) -> vec4f {{ let b = src.a > 2.0; var x = src.r; \
+         if b {{ x += 1.0; }}{} return vec4f(x); }}",
+        "else if b { x += 1.0; }".repeat(39)
+    );
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || {
+            let renderer = Renderer::new(gpu());
+            pollster::block_on(renderer.register_effect(runtime_tint_effect(&body))).map(drop)
+        })
+        .expect("the registering thread starts")
+        .join()
+        .expect("registration returns instead of overflowing the stack")
+        .expect("a 40-arm chain registers");
 }
 
 #[test]
 fn runtime_effect_registration_returns_shader_diagnostics() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let definition = runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return definitely_invalid(src); }",
     );
@@ -202,7 +260,7 @@ fn runtime_effect_registration_returns_shader_diagnostics() {
 #[test]
 fn registered_effect_executes_with_named_parameters() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let definition = runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     );
@@ -226,6 +284,7 @@ fn registered_effect_executes_with_named_parameters() {
                 time: alpha2_time::MediaTime::ZERO,
                 progress: 0.0,
                 ratio: 1.0,
+                scale: 1.0,
             },
         )
         .expect("registered effect renders");
@@ -284,7 +343,7 @@ fn resource_backed_lut_effect_executes_from_a_cube_resource() {
 #[test]
 fn registered_transition_executes_with_two_inputs() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let definition = EffectDef {
         id: "test.crossfade".into(),
         version: 1,
@@ -314,6 +373,7 @@ fn registered_transition_executes_with_two_inputs() {
                 time: alpha2_time::MediaTime::ZERO,
                 progress: 0.25,
                 ratio: 1.0,
+                scale: 1.0,
             },
         )
         .expect("registered transition renders");
@@ -361,7 +421,7 @@ fn every_uniform_a_graph_writes_fits_the_arena_at_the_adapters_own_alignment() {
     let gpu = gpu_with_the_adapters_uniform_alignment();
     let alignment = gpu.device().limits().min_uniform_buffer_offset_alignment;
     eprintln!("uniform offset alignment {alignment}");
-    let mut renderer = Renderer::new(gpu);
+    let renderer = Renderer::new(gpu);
     let effect = pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -447,7 +507,7 @@ fn effect_with_float_params(id: &str, count: usize) -> EffectDef {
 #[test]
 fn a_definition_past_the_webgl2_uniform_limit_is_refused_on_every_device() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let refused = pollster::block_on(
         renderer.register_effect(effect_with_float_params("test.webgl2-limit", 1025)),
     )
@@ -466,7 +526,7 @@ fn an_effect_whose_parameters_overflow_the_uniform_binding_limit_is_refused_at_r
     // Each parameter is a 16-byte slot (16 KiB on WebGL2 limits). Past the cap the pipeline
     // compiles but every bind group is invalid.
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     assert!(renderer.limits().max_uniform_buffer_binding_size >= 16_384);
     let fitting = 16_384 / 16;
     let refused = pollster::block_on(
@@ -515,7 +575,7 @@ fn an_effect_whose_parameters_overflow_the_uniform_binding_limit_is_refused_at_r
 fn a_generator_that_declares_a_resource_draws_with_the_resource_it_is_given() {
     // Generator resource slots are validated like an effect's, so the node must carry resources.
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(EffectDef {
         id: "test.graded-generator".into(),
         version: 1,
@@ -663,7 +723,7 @@ const ONE: RenderSize = RenderSize {
 fn an_effect_samples_its_named_inputs_by_name() {
     // Declared `b` then `a`: each binds by name, not position.
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
         "test.two-inputs",
         &["b", "a"],
@@ -687,7 +747,7 @@ fn an_effect_samples_its_named_inputs_by_name() {
 #[test]
 fn size_of_a_named_input_is_the_bound_textures() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
         "test.input-size",
         &["x"],
@@ -702,7 +762,7 @@ fn size_of_a_named_input_is_the_bound_textures() {
 #[test]
 fn a_declared_input_left_unbound_fails_the_pass() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
         "test.needs-map",
         &["map"],
@@ -718,7 +778,7 @@ fn a_declared_input_left_unbound_fails_the_pass() {
 #[test]
 fn an_undeclared_input_fails_the_pass() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
         "test.needs-map",
         &["map"],
@@ -737,7 +797,7 @@ fn an_effect_past_the_devices_texture_budget_is_refused_at_compilation() {
     // WebGL2 limits allow 16 sampled textures per stage, two for the source pair; eight resources
     // and six inputs fill it, and a seventh input is refused before reaching the device.
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     assert_eq!(renderer.limits().max_sampled_textures_per_shader_stage, 16);
     let budget = |inputs: usize| EffectDef {
         resources: (0..8)
@@ -836,4 +896,75 @@ fn the_built_ins_leave_the_host_its_whole_share_of_the_registry() {
     let error = pollster::block_on(renderer.register_effect(host(256)))
         .expect_err("the host's share is full");
     assert!(format!("{error:?}").contains("full"), "{error:?}");
+}
+
+#[test]
+fn sharpen_and_film_grain_are_sized_in_project_pixels() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    renderer.register_builtins().expect("built-ins register");
+    let run = |id: &str, size: RenderSize, pixels: &[u8], params: &EffectParams, scale| {
+        let source = rgba_image_texture(&renderer, size, pixels);
+        let view = source.create_view(&wgpu::TextureViewDescriptor::default());
+        let target = renderer
+            .render_effect(
+                &crate::EffectId::new(id.to_owned(), 1),
+                &view,
+                None,
+                size,
+                params,
+                EffectRuntime {
+                    scale,
+                    ..EffectRuntime::default()
+                },
+            )
+            .expect("draws");
+        read_rgba8(&renderer, &target)
+    };
+    // The project picture at full and at half scale.
+    let mut sharpened = Vec::new();
+    for (width, height, scale) in [(256_u32, 16_u32, 1.0), (128, 8, 0.5)] {
+        let size = RenderSize::new(width, height).expect("size");
+        let grey = [128, 128, 128, 255].repeat((width * height) as usize);
+        let params = EffectParams::new()
+            .with("amount", ParamValue::Float(1.0))
+            .with("size", ParamValue::Float(4.0));
+        let grain = run("alpha2.effect.film-grain", size, &grey, &params, scale);
+        let row = grain[..(width * 4) as usize].chunks(4).collect::<Vec<_>>();
+        let cells = 1 + row.windows(2).filter(|pair| pair[0] != pair[1]).count();
+        assert_eq!(cells, 64, "{width} wide at scale {scale}");
+        // A vertical edge halfway: the sharpening halo is a fixed share of the width.
+        let edge = (0..height)
+            .flat_map(|_| {
+                (0..width).flat_map(|x| {
+                    if x < width / 2 {
+                        [64, 64, 64, 255]
+                    } else {
+                        [192, 192, 192, 255]
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let amount = |value| EffectParams::new().with("amount", ParamValue::Float(value));
+        let plain = run("alpha2.effect.sharpen", size, &edge, &amount(0.0), scale);
+        let sharp = run("alpha2.effect.sharpen", size, &edge, &amount(2.0), scale);
+        assert_ne!(plain, sharp);
+        sharpened.push(
+            sharp[..(width * 4) as usize]
+                .chunks(4)
+                .map(|pixel| pixel[0])
+                .collect::<Vec<_>>(),
+        );
+    }
+    // Half scale draws the halo the full picture shows, two columns averaged into one.
+    let halved = sharpened[0]
+        .chunks(2)
+        .map(|pair| (u16::from(pair[0]) + u16::from(pair[1])).div_ceil(2))
+        .collect::<Vec<_>>();
+    for (column, (half, halved)) in sharpened[1].iter().zip(&halved).enumerate() {
+        assert!(
+            u16::from(*half).abs_diff(*halved) <= 1,
+            "column {column}: half scale draws {half}, the full picture halved {halved}"
+        );
+    }
 }

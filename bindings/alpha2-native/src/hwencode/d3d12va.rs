@@ -33,6 +33,7 @@ use super::{
 };
 use crate::NativeVideoCodec;
 use crate::bitstream::EncodedVideoFilter;
+use crate::capabilities::FfmpegCodec;
 use crate::convert::{encode_adapter_error, tick_base};
 use crate::encode::{EncodeStageTimings, timed};
 use crate::mux::Muxer;
@@ -456,6 +457,16 @@ static TIMED_OUT: std::sync::LazyLock<Mutex<HashMap<ProbedAdapter, String>>> =
 /// `E_OUTOFMEMORY` in an answer means the device was busy, so the answer is not cached.
 const BUSY_HRESULT: &str = "0x8007000E";
 
+/// Why D3D12VA is off on each adapter whose test encode timed out in this process.
+pub fn d3d12va_timeouts() -> Vec<String> {
+    TIMED_OUT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .values()
+        .cloned()
+        .collect()
+}
+
 fn timed_out_on(adapter: ProbedAdapter) -> Option<String> {
     TIMED_OUT
         .lock()
@@ -464,12 +475,18 @@ fn timed_out_on(adapter: ProbedAdapter) -> Option<String> {
         .cloned()
 }
 
+/// Whether a D3D12VA test encode refusal says the device was busy (`E_OUTOFMEMORY`).
+#[must_use]
+pub fn d3d12va_busy(reason: &str) -> bool {
+    reason.contains(BUSY_HRESULT)
+}
+
 fn keep_answer(
     probed: &mut Vec<TestEncode>,
     key: (ProbedAdapter, D3D12EncodeCodec),
     answer: &Result<D3D12EncodeProbe, String>,
 ) {
-    if !matches!(answer, Err(reason) if reason.contains(BUSY_HRESULT)) {
+    if !matches!(answer, Err(reason) if d3d12va_busy(reason)) {
         probed.push((key, answer.clone()));
     }
 }

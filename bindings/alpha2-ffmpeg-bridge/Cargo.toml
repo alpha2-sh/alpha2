@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["ffmpeg", "video", "ffi", "vulkan"]
 categories = ["multimedia::video", "external-ffi-bindings"]
-# Tests and fixtures stay out of the published package.
 include = [
   "/build.rs",
   "/src/**",
@@ -21,13 +20,11 @@ include = [
 ]
 build = "build.rs"
 
-# docs.rs compiles no C shim, so the hardware-device API can be documented there.
 [package.metadata.docs.rs]
 features = ["hwdevice"]
 
 [features]
 default = []
-# C shims for native GPU interop with FFmpeg hardware devices (hardware decode and encode).
 hwdevice = []
 
 [build-dependencies]

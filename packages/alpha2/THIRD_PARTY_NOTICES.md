@@ -4,7 +4,11 @@ alpha2 is under the MIT License (`LICENSE.md`). It also contains third-party wor
 
 ## Rust crates
 
-The `alpha2` npm package and the native archives each list the third-party Rust crates compiled into them, with their license texts: `wasm/rust-crate-licenses.md` in the package, `licenses/rust-crate-licenses.md` in each archive.
+The `alpha2` npm package, the native archives, the `alpha2` Python wheels and the mobile packages each list the third-party Rust crates compiled into them, with their license texts: `wasm/rust-crate-licenses.md` in the npm package, `licenses/rust-crate-licenses.md` in each archive (and in the `alpha2-host` wheel built from it), `rust-crate-licenses.md` in the `.dist-info/licenses/` directory of each `alpha2` wheel, in `META-INF/alpha2/` of the Android library and in each framework of the Swift package's XCFramework. The wheels and the mobile packages carry this file and `LICENSE.md` beside that list.
+
+## uniffi (iOS and Android packages)
+
+The Swift package and the Android library contain the runtime of uniffi 0.32 (https://github.com/mozilla/uniffi-rs), unmodified, and Swift and Kotlin sources it generated. uniffi is under the Mozilla Public License 2.0 (https://mozilla.org/MPL/2.0/); its source is available from that repository at the tag `v0.32.2`. The packages' crate lists carry the license text. The mobile packages contain no FFmpeg.
 
 ## FFmpeg
 
@@ -82,7 +86,7 @@ In addition, the Cisco-provided binary of this Software is licensed under Cisco'
 
 ## STIX Two Math and the dvips color names
 
-The `alpha2-extensions` crate, the extensions wasm module in the `alpha2` npm package, and the native archives contain the STIX Two Math font (version 2.13) and a modified copy of the dvips color names, both embedded by the `latex-rust` crate (https://github.com/jscarr64/latex-rust) to typeset LaTeX math. The font is under the SIL Open Font License 1.1, below with its copyright and trademark signs and dashes written in ASCII.
+The `alpha2-extensions` crate, the extensions wasm module in the `alpha2` npm package, the native archives (and the `alpha2-host` wheels built from them) and the mobile packages contain the STIX Two Math font (version 2.13) and a modified copy of the dvips color names, both embedded by the `latex-rust` crate (https://github.com/jscarr64/latex-rust) to typeset LaTeX math. The font is under the SIL Open Font License 1.1, below with its copyright and trademark signs and dashes written in ASCII.
 
 The color names are a modified copy of `dvipsnam.def` from the `%<*dvipsnames>` section of `drivers.dtx` in the LaTeX graphics bundle, Copyright 1994 David Carlisle and Sebastian Rahtz, Copyright 1995-1999 David Carlisle, Copyright 2000-2026 The LaTeX Project, under the LaTeX Project Public License 1.3c or later (https://www.latex-project.org/lppl.txt). The definitions were rewritten as a tab-separated table and re-sorted by name; the original authors and The LaTeX Project do not maintain or support it. The unmodified graphics bundle is at https://github.com/latex3/latex2e/tree/develop/required/graphics (CTAN: macros/latex/required/graphics).
 
@@ -199,7 +203,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
 ## PDF standard fonts and CMaps
 
-The `alpha2-extensions` crate, the extensions wasm module in the `alpha2` npm package, and the native archives contain data the `hayro` crates (https://github.com/LaurenzV/hayro) embed to draw PDF pages: substitutes for the 14 standard PDF fonts, extracted from PDFium (original code copyright 2014 Foxit Software Inc.), and Adobe's predefined CMaps.
+The `alpha2-extensions` crate, the extensions wasm module in the `alpha2` npm package, the native archives (and the `alpha2-host` wheels built from them) and the mobile packages contain data the `hayro` crates (https://github.com/LaurenzV/hayro) embed to draw PDF pages: substitutes for the 14 standard PDF fonts, extracted from PDFium (original code copyright 2014 Foxit Software Inc.), and Adobe's predefined CMaps.
 
 The standard font substitutes:
 

@@ -13,11 +13,12 @@ use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 /// # Errors
 /// Returns an error for mismatched indexes or unrepresentable retiming.
 pub fn evaluate<'a>(
-    project: &Project,
+    project: &'a Project,
     index: &'a ActiveIndex,
     time: MediaTime,
 ) -> Result<FrameDesc<'a>, EvalError> {
     ensure_index_matches(project, index)?;
+    let context = crate::SampleContext::timeline(project, &index.data);
     let aspect = f64::from(project.settings.width) / f64::from(project.settings.height.max(1));
     // No instant has more clips active than the index's deepest overlap.
     let mut active = Vec::with_capacity(index.max_active);
@@ -64,7 +65,7 @@ pub fn evaluate<'a>(
     let mut audio = Vec::with_capacity(audio_count);
     let frame_mirror = crate::Mirror::frame(project.settings.frame_rate);
     for entry in active {
-        let item = active_clip(entry, frame_mirror, time, aspect)?;
+        let item = active_clip(entry, frame_mirror, time, aspect, &context)?;
         match entry.track_kind {
             TrackKind::Video => visual.push(item),
             TrackKind::Audio => audio.push(item),
@@ -88,7 +89,7 @@ pub fn evaluate<'a>(
         ActiveTransition {
             from_clip: &transition.from_clip,
             to_clip: &transition.to_clip,
-            effect: ActiveEffect::new(&transition.effect, time),
+            effect: ActiveEffect::new(&transition.effect, time, context),
             progress,
         }
     }));
@@ -96,6 +97,7 @@ pub fn evaluate<'a>(
         time,
         background: Some(project.settings.background),
         blend_space: project.settings.blend_space,
+        canvas: Some((project.settings.width, project.settings.height)),
         visual,
         audio,
         transitions,
@@ -103,12 +105,13 @@ pub fn evaluate<'a>(
     })
 }
 
-fn active_clip(
-    entry: &crate::IndexedClip,
+fn active_clip<'a>(
+    entry: &'a crate::IndexedClip,
     frame_mirror: crate::Mirror,
     time: MediaTime,
     aspect: f64,
-) -> Result<ActiveClip<'_>, EvalError> {
+    context: &crate::SampleContext<'a>,
+) -> Result<ActiveClip<'a>, EvalError> {
     let source_time = map_source_time(
         entry.timeline_range,
         entry.source_range,
@@ -125,8 +128,8 @@ fn active_clip(
         track_id: &entry.track_id,
         source_time,
         visual: (entry.track_kind == TrackKind::Video)
-            .then(|| sample_visual(&entry.visual, time, aspect)),
-        composition: active_composition(entry, time)?,
+            .then(|| sample_visual(&entry.visual, time, aspect, context)),
+        composition: active_composition(entry, time)?.map(|plan| plan.with_data(*context)),
         blend_mode: entry.blend_mode,
         cache: entry.cache,
         masks: &entry.masks,
@@ -134,7 +137,19 @@ fn active_clip(
         is_matte: entry.is_matte,
         generator: entry.generator.as_ref(),
         plan: entry.plan.as_deref(),
-        source_composition: active_source_composition(entry, source_time)?,
+        source_composition: active_source_composition(entry, source_time)?
+            .map(|plan| plan.with_data(*context)),
+        data: *context,
+        correction: (entry.track_kind == TrackKind::Video)
+            .then(|| {
+                crate::data::clip_correction(
+                    &entry.visual,
+                    (entry.timeline_range, entry.source_range, entry.time_map),
+                    time,
+                    context,
+                )
+            })
+            .flatten(),
     })
 }
 
@@ -209,8 +224,8 @@ fn centred_progress(range: TimeRange, frame_rate: FrameRate, time: MediaTime) ->
 /// Describes all source frames needed at a timestamp.
 ///
 /// The list is in evaluation order with no duplicate `(source, timestamp)` pairs. Generated
-/// sources need no frames. A visual clip needs its own source only when it draws it
-/// ([`ActiveClip::needs_source`]) plus every source its composition reads. A matte clip needs
+/// sources and audio clips need no frames. A visual clip needs its own source only when it draws
+/// it ([`ActiveClip::needs_source`]) plus every source its composition reads. A matte clip needs
 /// frames only while an active clip names it ([`FrameDesc::draws`]).
 ///
 /// # Errors
@@ -223,12 +238,7 @@ pub fn frame_needs(
 ) -> Result<Vec<FrameNeed>, EvalError> {
     let frame = evaluate(project, index, time)?;
     let mut needs = Needs::default();
-    for item in frame
-        .visual
-        .iter()
-        .filter(|item| frame.draws(item))
-        .chain(&frame.audio)
-    {
+    for item in frame.visual.iter().filter(|item| frame.draws(item)) {
         if item.needs_source() {
             needs.ask(item.clip_id, item.source_id, item.source_time, || None);
         }

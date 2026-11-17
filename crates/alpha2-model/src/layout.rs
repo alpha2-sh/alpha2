@@ -6,7 +6,8 @@
 //! pixels), or, for sizes and insets, `"<n>%"` of the parent's content box (see
 //! [`crate::layout_values`]). Boxes are `border-box`. Text style fields (`font_family`,
 //! `font_size`, `fill`, `font_weight`, `line_height`, `letter_spacing`, `text_align`,
-//! `strokes`, `shadows`) may be set on any box and inherit as in CSS.
+//! `strokes`, `shadows`) may be set on any box and inherit as in CSS. `font_size_fit`,
+//! `line_clamp` and `text_animators` apply to the box's own text only.
 
 use crate::animation::visit_keyed;
 use crate::checks::{
@@ -35,6 +36,10 @@ pub const MAX_LAYOUT_TEXTS: usize = 64;
 pub const MAX_LAYOUT_ISOLATED: usize = 16;
 /// Largest font size of a layout's text, as a fraction of the picture's shorter side.
 pub const MAX_LAYOUT_FONT_SIZE: f32 = 1.0;
+/// Largest flex grow or shrink factor.
+pub const MAX_FLEX_FACTOR: f32 = 1e6;
+/// The range of a layout box's `aspect_ratio`.
+pub const ASPECT_RATIO_RANGE: std::ops::RangeInclusive<f32> = 1e-4..=1e4;
 /// Most explicit tracks on one axis of a grid, `repeat()` counts expanded.
 pub const MAX_GRID_TRACKS: usize = 64;
 /// The farthest grid line a placement names, from either end.
@@ -91,6 +96,8 @@ pub struct LayoutTextStyle {
 pub struct LayoutNode {
     /// Boxes laid out in this one, in document (and paint) order. Not with `text` or `shape`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_LAYOUT_NODES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_LAYOUT_NODES)))]
     pub children: Vec<LayoutNode>,
     /// The box's text, wrapped at its content width in the inherited style; `\n` starts a line.
     /// At most [`MAX_TEXT_CONTENT_BYTES`] bytes per value; may be empty. Keyframes all `hold`.
@@ -257,15 +264,31 @@ pub struct LayoutNode {
     /// Bands around the glyphs, as a text style's `strokes`. Inherited as a whole list; the root
     /// has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_TEXT_STROKES }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_STROKES)))]
     pub strokes: Option<Vec<TextStroke>>,
     /// Shadows of the glyphs and strokes, as a text style's `shadows`. Inherited as a whole list
     /// (as CSS `text-shadow`); the root has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::bounded::option_seq::<_, _, { crate::MAX_TEXT_SHADOWS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_SHADOWS)))]
     pub shadows: Option<Vec<TextShadow>>,
+    /// The range the font size of the box's own text is fitted in so the text fits its content
+    /// box, as a text style's `font_size_fit`. The box is laid out at `font_size` first, and
+    /// the fit never changes its size. Not inherited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_size_fit: Option<LayoutFontSizeFit>,
+    /// Where the lines of the box's own text are cut and what ends the cut line, as CSS
+    /// `line-clamp` and a text style's `line_clamp`. The clamp point is also at the content
+    /// box's height. The box's automatic height ends at the clamp point. Not inherited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_clamp: Option<crate::LineClamp>,
     /// Per-character motion of the box's own text, Range selectors only (layout text has no
     /// runs). At most [`crate::MAX_TEXT_ANIMATORS`], keyed in picture time. Not inherited; never
     /// changes layout.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_TEXT_ANIMATORS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TEXT_ANIMATORS)))]
     pub text_animators: Vec<crate::TextAnimator>,
 
     /// Opacity of the box and everything in it as one group, in `0..=1`. Applied after layout.
@@ -284,6 +307,19 @@ pub struct LayoutNode {
     pub rotation_degrees: Option<Animated<f32>>,
 }
 
+/// The font sizes a layout text is fitted between, as a text style's
+/// [`crate::FontSizeFit`], in layout sizes. A `min` above `max` wins.
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LayoutFontSizeFit {
+    /// Smallest font size, positive and at most [`MAX_LAYOUT_FONT_SIZE`] of the shorter side.
+    pub min: LayoutSize,
+    /// Largest font size, with the same limits. `None` is `font_size`, so the text only shrinks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<LayoutSize>,
+}
+
 /// A box's shapes, drawn as a shapes generator draws its items on a picture the size of the
 /// box's content box. A shape box has no size of its own.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -291,6 +327,8 @@ pub struct LayoutNode {
 #[serde(deny_unknown_fields)]
 pub struct LayoutShape {
     /// The content tree, front first.
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_SHAPE_ITEMS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_SHAPE_ITEMS)))]
     pub items: Vec<ShapeItem>,
 }
 
@@ -785,6 +823,10 @@ where
     Ok(value.map_or(Ok(()), check)?)
 }
 
+fn flex_factor(value: f32) -> bool {
+    (0.0..=MAX_FLEX_FACTOR).contains(&value)
+}
+
 fn validate_fields(node: &LayoutNode, at: &str) -> LayoutChecked {
     let field = |name: &str| format!("{at}.{name}");
     for (name, gap) in [
@@ -821,7 +863,7 @@ fn validate_fields(node: &LayoutNode, at: &str) -> LayoutChecked {
     }
     if node
         .aspect_ratio
-        .is_some_and(|ratio| !ratio.is_finite() || ratio <= 0.0)
+        .is_some_and(|ratio| !ASPECT_RATIO_RANGE.contains(&ratio))
     {
         return Err(ValueIssue::new(field("aspect_ratio"), ValueProblem::OutOfRange).into());
     }
@@ -829,10 +871,10 @@ fn validate_fields(node: &LayoutNode, at: &str) -> LayoutChecked {
         insets(margin, &field("margin"), any)
     })?;
     optional(node.flex_grow.as_ref(), |grow| {
-        scalar(grow, &field("flex_grow"), non_negative)
+        scalar(grow, &field("flex_grow"), flex_factor)
     })?;
     optional(node.flex_shrink.as_ref(), |shrink| {
-        scalar(shrink, &field("flex_shrink"), non_negative)
+        scalar(shrink, &field("flex_shrink"), flex_factor)
     })?;
     optional(node.flex_basis.as_ref(), |basis| {
         length(basis, &field("flex_basis"), non_negative)
@@ -849,7 +891,7 @@ fn validate_fields(node: &LayoutNode, at: &str) -> LayoutChecked {
     })?;
     optional(node.translate.as_ref(), |translate| {
         animated(translate, &field("translate"), |offset| {
-            offset.x.value().is_finite() && offset.y.value().is_finite()
+            offset.x.in_bounds() && offset.y.in_bounds()
         })
     })?;
     optional(node.scale.as_ref(), |scale| {
@@ -880,7 +922,7 @@ fn validate_grid(node: &LayoutNode, at: &str) -> LayoutChecked {
     ] {
         let in_range = |edge: GridEdge| match edge {
             GridEdge::Auto => true,
-            GridEdge::Line(line) => line != 0 && line.abs() <= MAX_GRID_LINE,
+            GridEdge::Line(line) => line != 0 && (-MAX_GRID_LINE..=MAX_GRID_LINE).contains(&line),
             GridEdge::Span(count) => (1..=64).contains(&count),
         };
         if placement.is_some_and(|placement| !placement.edges().into_iter().all(in_range)) {
@@ -893,7 +935,7 @@ fn validate_grid(node: &LayoutNode, at: &str) -> LayoutChecked {
 fn track_problem(tracks: &TrackList, explicit: bool) -> Option<LayoutProblem> {
     let lengths_valid = tracks
         .lengths()
-        .all(|length| length.value().is_finite() && length.value() >= 0.0);
+        .all(|length| length.in_bounds() && length.value() >= 0.0);
     let shares_valid = tracks
         .shares()
         .all(|share| share.is_finite() && share > 0.0);
@@ -991,6 +1033,33 @@ fn validate_style(node: &LayoutNode, at: &str, shorter_side: Option<f32>) -> Lay
     if !crate::text_animation::valid_animators(&node.text_animators, true) {
         return out_of_range("text_animators");
     }
+    if let Some(fit) = &node.font_size_fit {
+        let font_size = |value: LayoutSize| {
+            // Pixels compare with the limit on a known canvas only.
+            let fraction = match (value, shorter_side) {
+                (LayoutSize::Px(_), None) => 0.0,
+                (value, Some(side)) => value.fraction(side),
+                (value, None) => value.value(),
+            };
+            value.value().is_finite() && value.value() > 0.0 && fraction <= MAX_LAYOUT_FONT_SIZE
+        };
+        let ordered = match (fit.min, fit.max, shorter_side) {
+            (min, Some(max), Some(side)) => min.fraction(side) <= max.fraction(side),
+            (LayoutSize::Fraction(min), Some(LayoutSize::Fraction(max)), None)
+            | (LayoutSize::Px(min), Some(LayoutSize::Px(max)), None) => min <= max,
+            _ => true,
+        };
+        if !font_size(fit.min) || !fit.max.is_none_or(font_size) || !ordered {
+            return out_of_range("font_size_fit");
+        }
+    }
+    if node
+        .line_clamp
+        .as_ref()
+        .is_some_and(|clamp| !clamp.is_valid())
+    {
+        return out_of_range("line_clamp");
+    }
     Ok(())
 }
 
@@ -999,13 +1068,13 @@ fn insets(animation: &Animated<Insets>, at: &str, check: fn(f32) -> bool) -> Che
         value
             .sides()
             .iter()
-            .all(|side| side.value().is_finite() && check(side.value()))
+            .all(|side| side.in_bounds() && check(side.value()))
     })
 }
 
 fn size(animation: &Animated<LayoutSize>, at: &str, check: fn(f32) -> bool) -> Checked {
     animated(animation, at, |value| {
-        value.value().is_finite() && check(value.value())
+        value.in_bounds() && check(value.value())
     })
 }
 
@@ -1017,7 +1086,7 @@ fn length(
     check: fn(f32) -> bool,
 ) -> Result<(), GeneratorIssue> {
     animated(animation, at, |value| {
-        value.value().is_finite() && check(value.value())
+        value.in_bounds() && check(value.value())
     })?;
     if let Animated::Keyframes { keyframes } = animation {
         let kind = keyframes[0].value.is_percent();
@@ -1208,7 +1277,7 @@ impl LayoutNode {
     pub(crate) fn for_each_keyed(
         &self,
         at: &str,
-        visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+        visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>),
     ) {
         let field = |name: &str| format!("{at}.{name}");
         if let Some(text) = &self.text {
@@ -1312,6 +1381,10 @@ impl LayoutNode {
         ] {
             size(value);
         }
+        if let Some(fit) = &mut self.font_size_fit {
+            fit.min = fit.min.without_px(shorter_side);
+            fit.max = fit.max.map(|max| max.without_px(shorter_side));
+        }
         insets(&mut self.padding);
         insets(&mut self.margin);
         if let Some(border) = &mut self.border {
@@ -1347,10 +1420,10 @@ impl LayoutNode {
     }
 }
 
-fn visit_option<T>(
+fn visit_option<T: crate::animation::Placed>(
     at: &str,
     animation: Option<&Animated<T>>,
-    visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+    visit: &mut impl FnMut(&str, crate::animation::Keyed<'_>),
 ) {
     if let Some(animation) = animation {
         visit_keyed(at, animation, visit);

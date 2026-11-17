@@ -90,8 +90,10 @@ export interface RuntimeAsset {
   readonly hasAudio?: boolean;
   /**
    * `false` when this browser cannot decode the file's audio (Safari before 26 has no
-   * `AudioDecoder`). It then plays and exports silent in this session, while the document still
-   * records the audio for native hosts and other browsers.
+   * `AudioDecoder`). It then plays silent in this session, and an export that would write its
+   * sound is refused unless `BrowserExportOptions.undecodableAudio` is `silence`; the document
+   * still records the audio for native hosts and other browsers. `conform` for an export purpose
+   * decodes a trial again and updates it.
    */
   readonly audioDecodable?: boolean;
   /** When `audioDecodable` is `false`, what the trial decode at import found. */
@@ -127,10 +129,12 @@ export interface BrowserMediaAdapter {
   /**
    * Stages one file. The bridge stages at most four files of one import at once.
    *
-   * Rejects with an `EditorError` coded `unsupported_media` for a file the adapter does not import,
-   * `unreadable_media` when this browser or an extension provider cannot read it (the reason is the
-   * message and `cause`), `too_large` for Lottie, dotLottie or SVG past the engine's parse limits
-   * (`MAX_LOTTIE_DOCUMENT_BYTES`, `MAX_PROVIDER_DOCUMENT_BYTES`, `MAX_SVG_DOCUMENT_BYTES`),
+   * Rejects with an `EditorError` coded `unsupported_media` for a file the adapter does not import
+   * or a video this browser decodes none of (its `cause` a `DecodeUnavailableError` with the
+   * track's `facts`), `unreadable_media` when this browser or an extension provider cannot read it
+   * (the reason is the message and `cause`), `too_large` for Lottie, dotLottie or SVG past the
+   * engine's parse limits (`MAX_LOTTIE_DOCUMENT_BYTES`, `MAX_PROVIDER_DOCUMENT_BYTES`,
+   * `MAX_SVG_DOCUMENT_BYTES`),
    * `provider_stalled` past `EXTENSIONS_CALL_TIMEOUT_MS`, and when `signal` aborts.
    */
   stage(
@@ -166,12 +170,20 @@ export interface BrowserBridgeOptions {
   /** Defaults to `createMediaAdapter(runtimeAssets)`. */
   readonly mediaAdapter?: BrowserMediaAdapter;
   /**
-   * The most runtime resources (imported media, rasterized text, proxies) held at once,
-   * default 128. An import past it is refused with `EditorError` `resource_budget`.
+   * The most imported media files (videos, images, audio, fonts, LUTs) this session holds at
+   * once, default 128. Media removed from the document still counts while undo or redo can bring
+   * it back. Rasterized text and adopted proxies are not counted. An import past the limit is
+   * refused with `EditorError` `resource_budget` and changes nothing.
    */
   readonly resourceLimit?: number;
   /** `false` renders picture only: no AudioContext opens and playback runs on the wall clock. */
   readonly audio?: boolean;
+  /**
+   * Overrides the preview worker's request deadlines (`WorkerPreviewOptions.requestTimeoutMs`).
+   * A request past it gives the worker up: the main-thread renderer takes over the surface and
+   * `onError` receives one `preview_worker_failed`.
+   */
+  readonly workerRequestTimeoutMs?: number;
   /**
    * Receives errors no caller awaits, such as a failed preview render or audio that did not start.
    * The bridge keeps running after each.
@@ -290,6 +302,13 @@ export interface BrowserExportOptions {
    * an `EditorError` `invalid_video_conversion`.
    */
   readonly videoConversion?: "engine" | "browser";
+  /**
+   * What an export does with audible sources whose audio this browser cannot decode
+   * (`RuntimeAsset.audioDecodable` `false`): `refuse` (the default) refuses the export before it
+   * renders; `silence` writes them silent. The result's `report.silentAudioSources` lists the
+   * sources written silent either way (empty when none).
+   */
+  readonly undecodableAudio?: "refuse" | "silence";
 }
 /** Where a browser export writes its file. */
 export type ExportOutputTarget =
@@ -391,7 +410,9 @@ export interface BrowserBridge {
   /** The playhead, in ticks. */
   readonly tick: number;
   readonly playing: boolean;
-  /** Runtime resources currently held (see `BrowserBridgeOptions.resourceLimit`). */
+  /**
+   * Runtime resources currently held, counted or not (see `BrowserBridgeOptions.resourceLimit`).
+   */
   readonly resourceCount: number;
   /**
    * Preview output volume from 0 to 1, a monitor control outside the project and exports. Kept by
@@ -537,8 +558,11 @@ export interface BrowserBridge {
    * Plays from the playhead at `rate` (negative plays backwards) under a playback `policy`
    * (default `drop_video_keep_audio`), stopping at the end of the export range (else of the
    * content), or looping with `loop`. Sound plays only at rate 1 under a policy that allows it;
-   * when it cannot start within 3 s the picture plays silently and `onError` hears why. Rejects
-   * for a zero or non-finite rate (`invalid_rate`) and an unknown policy (`invalid_policy`).
+   * when it fails to start or cannot start within 3 s the picture plays silently and `onError`
+   * hears why (`audio_unavailable`). A source whose stream this browser cannot decode, or which
+   * the file it reads (a proxy, say) does not have, plays silent and is reported once; so is a
+   * source whose sound does not arrive for a few mixes in a row, until playback starts again.
+   * Rejects a zero or non-finite rate (`invalid_rate`) and an unknown policy (`invalid_policy`).
    */
   play(
     rate?: number,
@@ -597,8 +621,62 @@ export interface BrowserBridge {
     options?: Pick<BrowserExportOptions, "media">,
   ): Promise<import("../native-client/index.js").NativeAsset[]>;
   /**
+   * Runs an engine edit operation (`remove_ranges`, `split_at`, `bake`) on the committed document
+   * with this runtime's engine and commits it as one undo step (`EditorSession.applyEdit`), with
+   * `then` in the same step. Waits for the engine to load, so it can be called right away.
+   *
+   * Rejects with the engine's refusal (an `Alpha2Error` whose `details.refusal` names it), with
+   * `stale_edit` when the document changed while the engine loaded, with what
+   * `EditorSession.applyEdit` refuses, when `signal` aborts before the edit runs, and after the
+   * bridge is disposed (`disposed`).
+   */
+  applyEdit(
+    request: import("alpha2/apply-edit").EditRequest,
+    options?: {
+      readonly then?: readonly import("../core/commands.js").Command[];
+      readonly label?: string;
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<{
+    readonly document: import("../core/document.js").EditorDocument;
+    readonly report: import("alpha2/apply-edit").EditReport;
+  }>;
+  /**
+   * Runs an extractor over a source's original media on this page (`runExtractor` from
+   * `alpha2/extract`), with an app's `extractor` or a `plugin` it loads (`loadPlugin` from
+   * `alpha2/plugins`, manifest and SHA-256 pinned). Resolves with the result and the read taken
+   * when the run started; commit them with `EditorSession.applyExtraction(result, { read })`.
+   *
+   * Rejects without exactly one of `plugin` and `extractor` (`invalid_command`), for a timeline
+   * input (`unsupported_media`), without the source's original in this session (`missing_asset`),
+   * with the plugin loader's and the extractor's errors (`PLUGIN_*`, `INVALID_INPUT`,
+   * `INVALID_EMIT`, `EXTRACTOR_FAILED`, `DECODE_UNAVAILABLE`), with `cancelled` when `signal`
+   * aborts or the bridge is disposed, and after disposal (`disposed`).
+   */
+  extract(
+    run: import("alpha2/extractor").ExtractRun,
+    options: {
+      readonly plugin?: {
+        readonly manifest: string | URL;
+        readonly sha256: string;
+        /** The most linear memory the module may have; the loader's default when left out. */
+        readonly memoryBytes?: number;
+      };
+      readonly extractor?: import("alpha2/extractor").Extractor;
+      readonly signal?: AbortSignal;
+      readonly onProgress?: (
+        progress: import("alpha2/extractor").ExtractProgress,
+      ) => void;
+    },
+  ): Promise<{
+    readonly result: import("alpha2/extractor").ExtractResult;
+    readonly read: import("../core/session.js").ExtractionRead;
+  }>;
+  /**
    * Whether the document's media is ready for `purpose`, as the engine decides from this session's
-   * originals and kept proxies.
+   * originals and kept proxies. Its `stale_data` lists the data sets whose `made_from` no longer
+   * matches their source's original (`data`, `source` and the differing `fields`); the set's own
+   * `made_by` in the project says how to run its extractor again. Nothing is fixed automatically.
    */
   conform(
     purpose: MediaPurpose,
@@ -610,8 +688,10 @@ export interface BrowserBridge {
    * export that starts restarts the conversion from 0 once it ends. Rejects for a source without a
    * single video file (`unsupported_media`, including HDR video), without its original in this
    * session (`missing_asset`), with a proxy already being made (`proxy_busy`), when the conversion
-   * makes no progress for 30 s (`proxy_stalled`; preview keeps reading the original), or when
-   * `signal` aborts.
+   * makes no progress for 30 s (`proxy_stalled`; preview keeps reading the original), when
+   * `signal` aborts, or when the bridge is disposed (`disposed`). Opening another project does not
+   * stop it: the proxy is kept in origin storage and used only while a document this session can
+   * show has that media.
    */
   generateProxy(id: string, options?: { signal?: AbortSignal }): Promise<void>;
   /** Whether a source has a kept proxy, the progress of one being made, and what preview reads. */
@@ -654,7 +734,9 @@ export interface BrowserBridge {
   /**
    * Makes preview read a fresh proxy wherever a source has one (`proxies`), or the original
    * wherever it is online (`original`, the default). Preview only: an export reads what its own
-   * `media` says. {@link BrowserBridge.proxyStatus} reports what each source reads.
+   * `media` says. {@link BrowserBridge.proxyStatus} reports what each source reads. A kept proxy
+   * that cannot be staged or held goes to `onError` once (`EditorError` `proxy_unavailable`), and
+   * its source reads the original.
    */
   setPreviewMedia(media: "original" | "proxies"): void;
   /** What {@link BrowserBridge.setPreviewMedia} last set. */
@@ -698,10 +780,13 @@ export interface BrowserBridge {
    * (`export_busy`), `frameRate` is not one the engine reads (`invalid_frame_rate`), `videoDecode`
    * is not `auto` or `software` (`invalid_video_decode`), `videoConversion` is not `engine` or
    * `browser` (`invalid_video_conversion`), the asset decisions are not loaded (`conform_pending`),
-   * the media is not ready (`ConformError`), the document does not compile, or it shows an HDR
+   * the media is not ready (`ConformError`), the document does not compile, it shows an HDR
    * source this browser previews only degraded (`unsupported_media`, its `cause` a
-   * `PlanarDecodeUnavailableError` naming the sources). Later failures arrive through the job's
-   * `result`.
+   * `PlanarDecodeUnavailableError` naming the sources), `undecodableAudio` is not `refuse` or
+   * `silence` (`invalid_undecodable_audio`), or it would write audio this browser cannot decode
+   * (`unsupported_media`, its `cause` a `DecodeUnavailableError` and `details.sources` each
+   * source's `id`, `name` and import-time `facts`). `conform` for an export purpose decodes a trial
+   * of such audio again first. Later failures arrive through the job's `result`.
    */
   startExport(options?: BrowserExportOptions): ExportJob;
   /**
@@ -731,6 +816,12 @@ export interface WorkerPreviewOptions {
   readonly opaqueEngineFrames?: "refuse" | "present-degraded";
   /** `"auto"` (the default: a hardware GPU, else the CPU renderer), `"gpu"` or `"cpu"`. */
   readonly renderer?: "auto" | "gpu" | "cpu";
+  /**
+   * Milliseconds of active time (a hidden or frozen page does not count) any request waits for
+   * its reply. Default 60000 for `init` and `replaceProject`, 30000 for every other call. Past it
+   * the call and every later one reject with a fatal `worker_timeout`.
+   */
+  readonly requestTimeoutMs?: number;
 }
 /** The main-thread side of a preview renderer running in a worker. */
 export interface WorkerPreview {
@@ -789,6 +880,9 @@ export interface WorkerPreview {
   mix(startSample: number, frames: number): Promise<Float32Array[]>;
   /** Drops the render in flight; its `seek` resolves with `rendered: false`. */
   cancel(): Promise<void>;
-  /** Releases the worker's engine and terminates the worker. Idempotent. */
+  /**
+   * Asks the worker to release its engine, waits at most one second for its reply, then terminates
+   * it and rejects every pending call. Idempotent.
+   */
   dispose(): Promise<void>;
 }

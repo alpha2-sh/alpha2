@@ -25,7 +25,6 @@ alpha2-audio.workspace = true
 alpha2-time.workspace = true
 
 [dev-dependencies]
-# Tests read the model's master-bus limits, which the record decoder must accept.
 alpha2-model.workspace = true
 
 [lints.rust]

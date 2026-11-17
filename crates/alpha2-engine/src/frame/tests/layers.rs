@@ -30,6 +30,8 @@ fn the_project_blend_space_decides_how_a_frame_blends() {
         entries: ids.iter().cloned().zip(views.iter()).collect(),
     };
     let clip = |index: usize, blend_mode| ActiveClip {
+        data: alpha2_eval::SampleContext::NONE,
+        correction: None,
         clip_id: leak(ClipId::new(format!("clip-{index}")).expect("valid ID")),
         source_id: leak(ids[index].clone()),
         track_id: leak(TrackId::new(format!("track-{index}")).expect("valid ID")),
@@ -50,6 +52,7 @@ fn the_project_blend_space_decides_how_a_frame_blends() {
             time: MediaTime::ZERO,
             background: Some(alpha2_model::Rgb::BLACK),
             blend_space,
+            canvas: None,
             visual: vec![clip(0, ClipBlendMode::Normal), clip(1, mode)],
             audio: Vec::new(),
             transitions: Vec::new(),
@@ -88,7 +91,7 @@ fn a_track_matte_keeps_its_clip_where_the_matte_says_and_is_never_drawn() {
     use alpha2_model::{Matte, MatteMode};
 
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::track_matte_definition()))
         .expect("the matte compiles");
     let size = RenderSize::new(2, 1).expect("size");
@@ -106,6 +109,8 @@ fn a_track_matte_keeps_its_clip_where_the_matte_says_and_is_never_drawn() {
     let render = |mode: MatteMode, with_matte: bool| {
         let luma = matches!(mode, MatteMode::Luma | MatteMode::LumaInverted);
         let clip = |id: &'static ClipId, source: usize, matte, is_matte| ActiveClip {
+            data: alpha2_eval::SampleContext::NONE,
+            correction: None,
             clip_id: id,
             source_id: leak(ids[source].clone()),
             track_id: leak(TrackId::new(format!("track-{source}")).expect("id")),
@@ -139,6 +144,7 @@ fn a_track_matte_keeps_its_clip_where_the_matte_says_and_is_never_drawn() {
             time: MediaTime::ZERO,
             background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::LinearLight,
+            canvas: None,
             visual: visual_clips,
             audio: Vec::new(),
             transitions: Vec::new(),
@@ -171,7 +177,7 @@ fn clip_masks_are_applied_after_its_effects_in_source_space() {
     };
 
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     for definition in alpha2_render::mask_combine_definitions() {
         pollster::block_on(renderer.register_effect(definition)).expect("the masks compile");
     }
@@ -204,7 +210,10 @@ fn clip_masks_are_applied_after_its_effects_in_source_space() {
         time: MediaTime::ZERO,
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         visual: vec![ActiveClip {
+            data: alpha2_eval::SampleContext::NONE,
+            correction: None,
             clip_id: leak(ClipId::new("clip").expect("id")),
             source_id: leak(source.clone()),
             track_id: leak(TrackId::new("track").expect("id")),
@@ -243,7 +252,7 @@ fn clip_masks_are_applied_after_its_effects_in_source_space() {
 #[test]
 fn stacked_clips_keep_their_own_source_across_repeated_frames() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -284,11 +293,14 @@ fn stacked_clips_keep_their_own_source_across_repeated_frames() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: [(1.0, 0.0), (0.5, 30.0), (0.25, -20.0)]
             .into_iter()
             .enumerate()
             .map(|(index, (scale, rotation))| ActiveClip {
+                data: alpha2_eval::SampleContext::NONE,
+                correction: None,
                 clip_id: leak(ClipId::new(format!("clip-{index}")).expect("valid ID")),
                 source_id: leak(sources[index].clone()),
                 track_id: leak(TrackId::new(format!("track-{index}")).expect("valid ID")),
@@ -345,7 +357,7 @@ fn stacked_clips_keep_their_own_source_across_repeated_frames() {
 #[allow(clippy::too_many_lines)]
 fn a_transformed_top_layer_never_samples_another_track_across_many_frames() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -376,6 +388,8 @@ fn a_transformed_top_layer_never_samples_another_track_across_many_frames() {
     };
 
     let clip = |index: usize, visual: EvaluatedVisual, effects: Vec<ClipEffect>| ActiveClip {
+        data: alpha2_eval::SampleContext::NONE,
+        correction: None,
         clip_id: leak(ClipId::new(format!("clip-{index}")).expect("valid ID")),
         source_id: leak(sources[index].clone()),
         track_id: leak(TrackId::new(format!("track-{index}")).expect("valid ID")),
@@ -414,6 +428,7 @@ fn a_transformed_top_layer_never_samples_another_track_across_many_frames() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![
             clip(0, faint(0.2), Vec::new()),
@@ -457,7 +472,7 @@ fn a_transformed_top_layer_never_samples_another_track_across_many_frames() {
 #[test]
 fn two_effected_clips_do_not_share_an_intermediate_texture() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -488,6 +503,8 @@ fn two_effected_clips_do_not_share_an_intermediate_texture() {
         params: constant_params([("tint", EffectValue::Color([1.0, 1.0, 1.0, 1.0]))]),
     };
     let clip = |index: usize, visual: EvaluatedVisual, effects: Vec<ClipEffect>| ActiveClip {
+        data: alpha2_eval::SampleContext::NONE,
+        correction: None,
         clip_id: leak(ClipId::new(format!("clip-{index}")).expect("valid ID")),
         source_id: leak(sources[index].clone()),
         track_id: leak(TrackId::new(format!("track-{index}")).expect("valid ID")),
@@ -521,6 +538,7 @@ fn two_effected_clips_do_not_share_an_intermediate_texture() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![
             clip(0, faint(0.2), Vec::new()),
@@ -574,6 +592,8 @@ fn stacked_effect_frame(sources: &[SourceId]) -> FrameDesc<'static> {
         opacity,
     };
     let clip = |index: usize, visual: EvaluatedVisual, effects: Vec<ClipEffect>| ActiveClip {
+        data: alpha2_eval::SampleContext::NONE,
+        correction: None,
         clip_id: leak(ClipId::new(format!("clip-{index}")).expect("valid ID")),
         source_id: leak(sources[index].clone()),
         track_id: leak(TrackId::new(format!("track-{index}")).expect("valid ID")),
@@ -592,6 +612,7 @@ fn stacked_effect_frame(sources: &[SourceId]) -> FrameDesc<'static> {
     FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![
             clip(0, flat(0.2), Vec::new()),
@@ -619,7 +640,7 @@ fn stacked_effect_frame(sources: &[SourceId]) -> FrameDesc<'static> {
 #[test]
 fn stacked_effect_layers_survive_per_frame_source_uploads_without_a_sync() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -718,7 +739,7 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
     use alpha2_model::{Animated, Matte, MatteMode, ShapeMask};
 
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::track_matte_definition()))
         .expect("the matte compiles");
     for definition in alpha2_render::mask_combine_definitions() {
@@ -735,6 +756,8 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
         entries: ids.iter().cloned().zip(views.iter()).collect(),
     };
     let clip = |id: &str, source: usize, matte: Option<&str>, is_matte: bool| ActiveClip {
+        data: alpha2_eval::SampleContext::NONE,
+        correction: None,
         clip_id: leak(ClipId::new(id).expect("id")),
         source_id: leak(ids[source].clone()),
         track_id: leak(TrackId::new(format!("track-{id}")).expect("id")),
@@ -759,6 +782,7 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
         time: MediaTime(time),
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         visual,
         audio: Vec::new(),
         transitions: Vec::new(),
@@ -840,4 +864,75 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
         (first, 0),
         "the frame at another time is found"
     );
+}
+
+#[test]
+fn a_clip_filling_a_uhd_canvas_keeps_its_columns() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    for width in [1920_u32, 3840] {
+        let size = RenderSize::new(width, 8).unwrap();
+        let pixels = (0..8)
+            .flat_map(|_| {
+                (0..width).flat_map(|x| {
+                    if x % 2 == 0 {
+                        [0, 0, 0, 255]
+                    } else {
+                        [255, 255, 255, 255]
+                    }
+                })
+            })
+            .collect::<Vec<u8>>();
+        let texture = rgba_image_texture(&renderer, size, &pixels);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let source = SourceId::new("source").unwrap();
+        let clip = ActiveClip {
+            data: alpha2_eval::SampleContext::NONE,
+            correction: None,
+            clip_id: leak(ClipId::new("clip").unwrap()),
+            source_id: leak(source.clone()),
+            track_id: leak(TrackId::new("track").unwrap()),
+            source_time: MediaTime::ZERO,
+            visual: Some(visual(Vec2::new(1.0, 1.0), 1.0)),
+            composition: None,
+            blend_mode: ClipBlendMode::Normal,
+            cache: alpha2_model::CacheIntent::Auto,
+            masks: &[],
+            matte: None,
+            is_matte: false,
+            generator: None,
+            plan: None,
+            source_composition: None,
+        };
+        let frame = FrameDesc {
+            background: Some(alpha2_model::Rgb::BLACK),
+            blend_space: alpha2_model::BlendSpace::LinearLight,
+            canvas: None,
+            time: MediaTime::ZERO,
+            visual: vec![clip],
+            audio: vec![],
+            transitions: vec![],
+            captions: Vec::new(),
+        };
+        let output = renderer
+            .render_frame(
+                size,
+                &frame,
+                &SingleFrame {
+                    source,
+                    texture: &view,
+                },
+            )
+            .unwrap()
+            .texture
+            .unwrap();
+        let drawn = read_rgba8(&renderer, &output);
+        let wrong = drawn
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(pixels.as_chunks::<4>().0)
+            .position(|(drawn, source)| drawn != source);
+        assert_eq!(wrong, None, "{width} wide: the first differing pixel");
+    }
 }

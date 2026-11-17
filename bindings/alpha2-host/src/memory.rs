@@ -9,7 +9,6 @@
 //! their defaults shrink together to half of what the process may use
 //! ([`MemoryPolicy::resolve_on`]); explicitly set budgets are never shrunk.
 
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
@@ -17,25 +16,7 @@ use crate::{
     DEFAULT_EXPORT_IN_FLIGHT_BYTES, DEFAULT_PROVIDER_SOURCE_BYTES, DEFAULT_REVERSE_CACHE_BYTES,
 };
 
-#[allow(clippy::struct_field_names)] // Named as the protocol names them.
-#[derive(Copy, Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MemoryRequest {
-    /// Readback staging and packed encoder frames, or on the GPU-resident path the plane ring and
-    /// encoder surfaces.
-    pub in_flight_bytes: Option<u64>,
-    pub decode_queue_bytes: Option<u64>,
-    /// Frames a reversed clip keeps decoded.
-    pub reverse_cache_bytes: Option<u64>,
-    pub audio_window_bytes: Option<u64>,
-    /// Kept frames and images of SVG, animated image, Lottie, OpenEXR and image sequence sources.
-    pub provider_source_bytes: Option<u64>,
-    /// By the host's per-session estimate; bounds how many sessions an export opens.
-    pub decoder_session_bytes: Option<u64>,
-    /// In (0, 1], applied to every budget after resolution, so a retry can ask for less without
-    /// knowing the host's defaults.
-    pub scale: Option<f64>,
-}
+pub use alpha2_host_core::requests::MemoryRequest;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BudgetSource {
@@ -80,36 +61,9 @@ pub struct Budget {
     pub unscaled: u64,
 }
 
-/// What a budget may use, and how far `memory.scale` may be undone for one working set.
-///
-/// A retry's scale asks for less in flight, not for an export that cannot run: the least one frame
-/// or block needs is held whatever the scale, up to the unscaled budget. Only a budget too small
-/// before any scale refuses the export (`RESOURCE_LIMIT`).
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct ByteBudget {
-    pub bytes: u64,
-    pub ceiling: u64,
-}
-
-impl ByteBudget {
-    pub const fn exact(bytes: u64) -> Self {
-        Self {
-            bytes,
-            ceiling: bytes,
-        }
-    }
-
-    /// The budget, or `least` up to the unscaled budget where the scale shrank it below that.
-    pub fn holding(self, least: u64) -> u64 {
-        self.bytes.max(least.min(self.ceiling))
-    }
-}
-
-impl From<u64> for ByteBudget {
-    fn from(bytes: u64) -> Self {
-        Self::exact(bytes)
-    }
-}
+/// What a budget may use, and how far `memory.scale` may be undone for one working set; a
+/// retry's scale asks for less in flight, not for an export that cannot run.
+pub use alpha2_host_core::audio_windows::ByteBudget;
 
 impl Budget {
     fn resolve(requested: Option<u64>, variable: &str, default: u64) -> Self {
@@ -390,6 +344,19 @@ impl InFlightBudget {
         .holding(least)
     }
 
+    /// Raises a budget neither the request nor the environment set to at least `least`, so only an
+    /// explicit budget refuses an export as too small.
+    #[must_use]
+    pub fn at_least_unless_asked(mut self, least: u64) -> Self {
+        if !matches!(
+            self.source,
+            BudgetSource::Request | BudgetSource::Environment
+        ) {
+            self.unscaled = self.unscaled.max(least);
+        }
+        self
+    }
+
     /// Names the setting that applied (`memory.inFlightBytes`, `ALPHA2_EXPORT_IN_FLIGHT_BYTES`, or
     /// the default) and any scale. Since the least is held whatever the scale, what refuses a
     /// pipeline is the unscaled budget.
@@ -480,26 +447,36 @@ pub struct LeastWorkingSet {
     pub decoder_sessions: u64,
     /// What the renderer keeps in system memory (the CPU renderer, or a GPU with shared memory).
     pub renderer: u64,
+    /// One decoded frame set: each video read at once, at the largest source frame. The decode
+    /// queue holds a set larger than its budget alone, so this is the least it holds.
+    pub decode_queue: u64,
 }
 
 impl LeastWorkingSet {
     pub fn estimate(
-        (width, height): (u32, u32),
+        (size, format, layout): (
+            alpha2_render::RenderSize,
+            wgpu::TextureFormat,
+            alpha2_media::PixelLayout,
+        ),
         (videos, decoder_threads): (usize, i64),
         frame_bytes: u64,
         renderer: u64,
     ) -> Self {
-        let pixels = u64::from(width).saturating_mul(u64::from(height));
-        // An rgba16float readback, two 8-bit 4:2:0 packed frames.
-        let in_flight = pixels
-            .saturating_mul(8)
-            .saturating_add(pixels.saturating_mul(3));
+        // One readback and two packed frames, in the output's layout.
+        let in_flight = crate::frames::estimated_staging_bytes(size, format, layout)
+            .saturating_add(
+                layout
+                    .frame_bytes(size.width, size.height)
+                    .saturating_mul(2),
+            );
         let sessions = u64::try_from(videos.min(crate::MAX_DECODER_SESSIONS)).unwrap_or(1);
         Self {
             in_flight,
             decoder_sessions: crate::config::decoder_session_bytes(frame_bytes, decoder_threads)
                 .saturating_mul(sessions),
             renderer,
+            decode_queue: frame_bytes.saturating_mul(u64::try_from(videos).unwrap_or(u64::MAX)),
         }
     }
 
@@ -507,6 +484,7 @@ impl LeastWorkingSet {
         self.in_flight
             .saturating_add(self.decoder_sessions)
             .saturating_add(self.renderer)
+            .saturating_add(self.decode_queue)
     }
 
     /// A quarter more for what no estimate counts (codec buffers, inter-stage queues); measured
@@ -531,12 +509,13 @@ pub fn admit(least: LeastWorkingSet, capacity: &alpha2_os::MemoryCapacity) -> Re
     }
     Err(machine_memory_limit(format!(
         "the export needs about {} bytes of memory (in flight {}, decoder sessions {}, \
-         renderer {}, and a quarter more for the codecs and queues), and this machine can give \
-         the host {headroom} bytes now ({}{})",
+         renderer {}, decode queue {}, and a quarter more for the codecs and queues), and this \
+         machine can give the host {headroom} bytes now ({}{})",
         least.expected_peak(),
         least.in_flight,
         least.decoder_sessions,
         least.renderer,
+        least.decode_queue,
         capacity.available_bytes.map_or_else(
             || "available unknown".to_owned(),
             |bytes| format!("{bytes} available")
@@ -545,25 +524,49 @@ pub fn admit(least: LeastWorkingSet, capacity: &alpha2_os::MemoryCapacity) -> Re
             .limit_bytes
             .zip(capacity.used_in_limit_bytes)
             .map_or_else(String::new, |(limit, used)| format!(
-                ", {} limit {limit} with {used} used",
-                capacity.limit_source
+                ", {} limit {limit} with a working set of {used}{}",
+                capacity.limit_source,
+                capacity
+                    .charged_in_limit_bytes
+                    .map_or_else(String::new, |charged| format!(
+                        " ({charged} charged with file cache)"
+                    ))
             )),
     )))
 }
 
-/// Stops the export once the cgroup v2 working set reaches 95 % of the limit, so it fails with
-/// `RESOURCE_LIMIT` (`memory-limit-reached`) instead of being silently OOM-killed. Best effort: an
-/// allocation that jumps past the limit between looks still gets the process killed. Linux only.
+/// Stops an export once the cgroup working set (the charge less reclaimable file cache) reaches
+/// 95 % of the lowest limit on the process's cgroup path, so it fails with `RESOURCE_LIMIT`
+/// (`memory-limit-reached`) instead of being silently OOM-killed. Linux only. Of the exports
+/// running at once, the newest stops first; the next newest stops only if the set stays over the
+/// limit once it has gone. Best effort: an allocation that jumps past the limit between looks
+/// still gets the process killed.
 pub struct MemoryWatchdog {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     stop: Option<(std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>)>,
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    watched: u64,
+}
+
+/// The watchdogs running, oldest first.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+static WATCHED: std::sync::Mutex<Vec<u64>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+static NEXT_WATCHED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn watchdogs() -> std::sync::MutexGuard<'static, Vec<u64>> {
+    WATCHED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl MemoryWatchdog {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     const LIMIT_PERCENT: u64 = 95;
-    /// Startup working sets have grown about 100 MiB per 50 ms, which a slower look misses between
-    /// 90 % and the kill. A look reads three small files.
+    /// A working set can grow about 100 MiB per 50 ms at startup, which a slower look misses
+    /// between 90 % and the kill. A look reads two small files, and `memory.stat` near the limit.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     const INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
@@ -574,32 +577,69 @@ impl MemoryWatchdog {
     pub fn start(failure: crate::encode::PipelineFailure) -> Self {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
-            if alpha2_os::cgroup_v2_usage().is_none() {
-                return Self { stop: None };
-            }
-            let (sender, receiver) = std::sync::mpsc::channel::<()>();
-            let spawned = std::thread::Builder::new()
-                .name("alpha2 memory watchdog".to_owned())
-                .spawn(move || {
-                    while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
-                        receiver.recv_timeout(Self::INTERVAL)
-                    {
-                        if let Some(reached) = Self::reached(alpha2_os::cgroup_v2_usage()) {
-                            failure.record(&reached);
-                            crate::termination::terminations().cancel_running();
-                            return;
-                        }
-                    }
-                });
-            Self {
-                stop: spawned.ok().map(|handle| (sender, handle)),
-            }
+            let mut watch = alpha2_os::CgroupMemoryWatch::new();
+            Self::start_with(failure, move || {
+                watch
+                    .read()
+                    .and_then(|memory| Some((memory.working_set_bytes?, memory.limit_bytes)))
+            })
         }
         #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             let _ = failure;
             Self {}
         }
+    }
+
+    /// [`Self::start`] over `usage`, which returns the working set and the limit.
+    ///
+    /// While this is the newest watchdog and the set is over the limit, every look stops the
+    /// request that started it: its running exports are cancelled and those it starts later
+    /// begin cancelled. The cause is recorded once.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn start_with(
+        failure: crate::encode::PipelineFailure,
+        mut usage: impl FnMut() -> Option<(u64, u64)> + Send + 'static,
+    ) -> Self {
+        let watched = NEXT_WATCHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if usage().is_none() {
+            return Self {
+                stop: None,
+                watched,
+            };
+        }
+        watchdogs().push(watched);
+        let request = crate::termination::current_request();
+        let (sender, receiver) = std::sync::mpsc::channel::<()>();
+        let spawned = std::thread::Builder::new()
+            .name("alpha2 memory watchdog".to_owned())
+            .spawn(move || {
+                let mut recorded = false;
+                while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                    receiver.recv_timeout(Self::INTERVAL)
+                {
+                    let newest = watchdogs().last() == Some(&watched);
+                    if newest && let Some(reached) = Self::reached(usage()) {
+                        if !recorded {
+                            failure.record(&reached);
+                            recorded = true;
+                        }
+                        crate::termination::terminations().stop_for_recorded_cause(request);
+                    }
+                }
+            });
+        let stop = match spawned {
+            Ok(handle) => Some((sender, handle)),
+            Err(error) => {
+                watchdogs().retain(|known| *known != watched);
+                alpha2_os::diagnostic!(
+                    "alpha2-host: the memory watchdog did not start, so the kernel may end the \
+                     host at the cgroup limit: {error}"
+                );
+                None
+            }
+        };
+        Self { stop, watched }
     }
 
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -617,9 +657,12 @@ impl MemoryWatchdog {
 impl Drop for MemoryWatchdog {
     fn drop(&mut self) {
         #[cfg(any(target_os = "linux", target_os = "android"))]
-        if let Some((sender, handle)) = self.stop.take() {
-            drop(sender);
-            let _ = handle.join();
+        {
+            if let Some((sender, handle)) = self.stop.take() {
+                drop(sender);
+                let _ = handle.join();
+            }
+            watchdogs().retain(|watched| *watched != self.watched);
         }
     }
 }
@@ -652,6 +695,70 @@ pub fn take_stage(message: &str) -> Option<RefusalStage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn a_watchdog_that_fires_before_its_export_has_a_token_stops_it_and_keeps_watching() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{Duration, Instant};
+        // A firing watchdog stops the newest request of the process; exports hold this lock.
+        let _exports = crate::tests::gpu_test_lock();
+        let percent = std::sync::Arc::new(AtomicU64::new(50));
+        let reader = |percent: &std::sync::Arc<AtomicU64>| {
+            let percent = std::sync::Arc::clone(percent);
+            move || Some((percent.load(Ordering::Relaxed), 100))
+        };
+        let wait_for = |what: &str, done: &dyn Fn() -> bool| {
+            let started = Instant::now();
+            while !done() {
+                assert!(started.elapsed() < Duration::from_secs(10), "{what}");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let older_failure = crate::encode::PipelineFailure::default();
+        let (older_token, older_end) = {
+            let (started, token) = std::sync::mpsc::channel();
+            let (end, ended) = std::sync::mpsc::channel::<()>();
+            let failure = older_failure.clone();
+            let usage = reader(&percent);
+            std::thread::spawn(move || {
+                let _request = crate::termination::terminations().begin_request("watch-older");
+                let cancel = crate::termination::export_cancel();
+                let _watchdog = MemoryWatchdog::start_with(failure, usage);
+                started.send((*cancel).clone()).expect("send");
+                let _ = ended.recv();
+            });
+            (token.recv().expect("older started"), end)
+        };
+        let newer_failure = crate::encode::PipelineFailure::default();
+        let newer = crate::termination::terminations().begin_request("watch-newer");
+        let watchdog = MemoryWatchdog::start_with(newer_failure.clone(), reader(&percent));
+        percent.store(96, Ordering::Relaxed);
+        wait_for("the newest watchdog fired", &|| {
+            newer_failure.cause_or("").contains("memory limit")
+        });
+        std::thread::sleep(MemoryWatchdog::INTERVAL * 4);
+        assert!(!older_token.is_cancelled(), "the older export runs on");
+        assert_eq!(older_failure.cause_or("none"), "none");
+        let token = crate::termination::export_cancel();
+        assert!(
+            token.is_cancelled(),
+            "a token made after the watchdog fired"
+        );
+        assert_eq!(
+            crate::termination::cancelled_by_request_or_termination("export stopped".to_owned()),
+            "export stopped",
+            "the recorded cause is reported, not a cancel"
+        );
+        drop(token);
+        drop(watchdog);
+        drop(newer);
+        wait_for("the older export stops once the newer has gone", &|| {
+            older_token.is_cancelled()
+        });
+        assert!(older_failure.cause_or("").contains("memory limit"));
+        drop(older_end);
+    }
 
     #[test]
     fn a_requested_budget_wins_and_says_so() {
@@ -785,6 +892,7 @@ mod tests {
             limit_bytes: Some(effective),
             limit_source: "cgroup-v2",
             used_in_limit_bytes: Some(0),
+            charged_in_limit_bytes: Some(0),
         }
     }
 
@@ -892,5 +1000,37 @@ mod tests {
     #[test]
     fn unknown_fields_are_refused() {
         assert!(serde_json::from_value::<MemoryRequest>(json!({ "gpuBytes": 1 })).is_err());
+    }
+
+    #[test]
+    fn a_limit_full_of_file_cache_admits_and_a_real_refusal_names_both_figures() {
+        let least = LeastWorkingSet {
+            in_flight: 100 << 20,
+            decoder_sessions: 100 << 20,
+            renderer: 0,
+            decode_queue: 0,
+        };
+        let cached = alpha2_os::MemoryCapacity {
+            physical_bytes: Some(64 << 30),
+            available_bytes: Some(32 << 30),
+            limit_bytes: Some(2 << 30),
+            limit_source: "cgroup-v2",
+            used_in_limit_bytes: Some(1 << 20),
+            charged_in_limit_bytes: Some((2 << 30) - (1 << 20)),
+        };
+        assert_eq!(admit(least, &cached), Ok(()));
+        let full = alpha2_os::MemoryCapacity {
+            used_in_limit_bytes: Some((2 << 30) - (1 << 20)),
+            ..cached
+        };
+        let refusal = admit(least, &full).expect_err("refused");
+        assert!(
+            refusal.contains(&format!("a working set of {}", (2_u64 << 30) - (1 << 20)))
+                && refusal.contains(&format!(
+                    "({} charged with file cache)",
+                    (2_u64 << 30) - (1 << 20)
+                )),
+            "{refusal}"
+        );
     }
 }

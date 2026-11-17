@@ -26,9 +26,12 @@ fn shared_queue_context(lock: Arc<CountingLock>) -> GpuContext {
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .expect("a GPU adapter");
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-            .expect("a device");
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        // Within every adapter's limits, including reduced ones such as the iOS simulator's.
+        required_limits: wgpu::Limits::downlevel_defaults(),
+        ..wgpu::DeviceDescriptor::default()
+    }))
+    .expect("a device");
     GpuContext::from_parts_with_queue_lock(adapter, device, queue, Some(lock))
 }
 

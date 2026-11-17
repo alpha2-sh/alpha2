@@ -1,4 +1,4 @@
-use crate::{ClipId, CompositionId, EffectResourceId, NodeId, TrackId};
+use crate::{ClipId, CompositionId, DataSetId, EffectProblem, EffectResourceId, NodeId, TrackId};
 use alpha2_media::SourceId;
 use std::fmt;
 
@@ -31,6 +31,108 @@ impl fmt::Display for ShapeOwner {
     }
 }
 
+/// What holds the value a [`ModelError::InvalidDataBinding`] names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataOwner {
+    /// A clip's visual, masks or audio.
+    Clip(ClipId),
+    /// A track's bus or caption track.
+    Track(TrackId),
+    /// The master bus.
+    Master,
+    /// A timeline transition's effect.
+    Transition {
+        /// Its track.
+        track: TrackId,
+        /// Its first clip.
+        from: ClipId,
+        /// Its second clip.
+        to: ClipId,
+    },
+    /// A composition node's settings.
+    Node {
+        /// The composition.
+        composition: CompositionId,
+        /// The node.
+        node: NodeId,
+    },
+    /// A generated source's tree.
+    Source(SourceId),
+}
+
+impl fmt::Display for DataOwner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Clip(clip) => write!(formatter, "clip {clip}"),
+            Self::Track(track) => write!(formatter, "track {track}"),
+            Self::Master => formatter.write_str("the master bus"),
+            Self::Transition { track, from, to } => {
+                write!(formatter, "track {track} transition {from} to {to}")
+            }
+            Self::Node { composition, node } => {
+                write!(formatter, "composition {composition} node {node}")
+            }
+            Self::Source(source) => write!(formatter, "source {source}"),
+        }
+    }
+}
+
+/// What holds the effect a [`ModelError::InvalidEffect`] names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EffectOwner {
+    /// A composition's effect, transition or group node.
+    Node {
+        /// The composition.
+        composition: CompositionId,
+        /// The node.
+        node: NodeId,
+    },
+    /// A timeline transition.
+    Transition {
+        /// Its track.
+        track: TrackId,
+        /// The clip at progress zero.
+        from: ClipId,
+        /// The clip at progress one.
+        to: ClipId,
+    },
+}
+
+impl fmt::Display for EffectOwner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Node { composition, node } => {
+                write!(formatter, "composition {composition} node {node}")
+            }
+            Self::Transition { track, from, to } => {
+                write!(
+                    formatter,
+                    "the transition from {from} to {to} on track {track}"
+                )
+            }
+        }
+    }
+}
+
+impl fmt::Display for EffectProblem {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownBuiltin => formatter.write_str("is not a built-in"),
+            Self::Version { expected } => write!(formatter, "needs version {expected}"),
+            Self::Kind => formatter.write_str("is used as the wrong kind"),
+            Self::UnknownParam(name) => write!(formatter, "has no parameter {name}"),
+            Self::InvalidParam(name) => {
+                write!(
+                    formatter,
+                    "has a parameter {name} of the wrong type or out of range"
+                )
+            }
+            Self::Inputs => formatter.write_str("does not get exactly its declared inputs"),
+            Self::Resources => formatter.write_str("does not get exactly its declared resources"),
+        }
+    }
+}
+
 /// A document invariant violation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -39,6 +141,32 @@ pub enum ModelError {
     UnsupportedSchemaVersion {
         /// Version found in the decoded document.
         found: u32,
+    },
+    /// The project has more than [`crate::MAX_DATA_SETS`] data sets.
+    TooManyDataSets {
+        /// Data sets in the document.
+        found: usize,
+        /// Largest accepted count.
+        maximum: usize,
+    },
+    /// Two data sets share one ID.
+    DuplicateDataSetId(DataSetId),
+    /// A data set breaks a rule of its kind.
+    InvalidDataSet {
+        /// The data set.
+        data: DataSetId,
+        /// What is wrong.
+        problem: crate::DataProblem,
+    },
+    /// A data binding, correction or caption words reference is unusable where it sits.
+    InvalidDataBinding {
+        /// What holds it.
+        owner: DataOwner,
+        /// The property, like `visual.position`, `masks[0].feather`, `effect.params.radius`,
+        /// `visual.correction` or `captions.from_words`.
+        at: String,
+        /// What is wrong.
+        problem: crate::BindingProblem,
     },
     /// At least one ID was empty.
     EmptyIdentifier,
@@ -306,6 +434,16 @@ pub enum ModelError {
         /// The source.
         source: SourceId,
     },
+    /// An effect or transition under [`crate::BUILTIN_EFFECT_PREFIX`] that does not match its
+    /// built-in definition.
+    InvalidEffect {
+        /// Where it is used.
+        owner: Box<EffectOwner>,
+        /// The effect id.
+        id: String,
+        /// How it fails its definition.
+        problem: EffectProblem,
+    },
     /// A node's effect references an absent effect resource.
     UnknownNodeResource {
         /// The composition.
@@ -348,6 +486,15 @@ pub enum ModelError {
         /// The clip.
         clip: ClipId,
     },
+    /// A looping clip makes more than [`crate::MAX_LOOP_PASSES`] passes.
+    TooManyLoopPasses {
+        /// The clip.
+        clip: ClipId,
+        /// Its passes, rounded up.
+        found: u64,
+        /// The most passes a clip makes.
+        maximum: u64,
+    },
     /// A clip's matte names no visual clip, itself, a clip with its own matte, or a clip in a
     /// transition; or an audio clip has a matte.
     InvalidMatte {
@@ -375,6 +522,24 @@ pub enum ModelError {
         first: ClipId,
         /// The transition's second clip.
         second: ClipId,
+    },
+    /// A caption track derives more than [`crate::MAX_DERIVED_CUES`] cues from its words, or maps
+    /// more than [`crate::MAX_DATA_WORDS`] words through its clips.
+    TooManyDerivedCues {
+        /// The caption track.
+        track: TrackId,
+    },
+    /// A time lies past [`alpha2_time::MAX_SERIALIZED_TICKS`] either way, which no document holds.
+    UnwritableTime {
+        /// The time, in ticks.
+        ticks: i64,
+    },
+    /// The project has more than [`crate::MAX_EFFECT_RESOURCES`] effect resources.
+    TooManyEffectResources {
+        /// Number supplied by the document.
+        found: usize,
+        /// Largest supported count.
+        maximum: usize,
     },
     /// The project contains too many compositions.
     TooManyCompositions {
@@ -482,6 +647,125 @@ pub enum ModelError {
         /// Largest supported rate.
         maximum: u32,
     },
+}
+
+/// The document object a [`ModelError`] is about, by id.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ErrorSubject<'a> {
+    /// A timeline clip.
+    Clip(&'a ClipId),
+    /// A media source.
+    Source(&'a SourceId),
+    /// A track.
+    Track(&'a TrackId),
+    /// A composition.
+    Composition(&'a CompositionId),
+    /// A data set.
+    DataSet(&'a DataSetId),
+    /// An effect resource.
+    EffectResource(&'a EffectResourceId),
+}
+
+impl ModelError {
+    /// The document object this error is about, or `None` for one about the whole project.
+    ///
+    /// An overlap names its second clip, a duplicate transition its track.
+    #[must_use]
+    pub const fn subject(&self) -> Option<ErrorSubject<'_>> {
+        use ErrorSubject::{Clip, Composition, DataSet, EffectResource, Source, Track};
+        Some(match self {
+            Self::UnsupportedSchemaVersion { .. }
+            | Self::TooManyDataSets { .. }
+            | Self::EmptyIdentifier
+            | Self::InvalidMasterAudio
+            | Self::TooManyInlinedNodes { .. }
+            | Self::TooManyCompositions { .. }
+            | Self::TooManyEffectResources { .. }
+            | Self::UnwritableTime { .. }
+            | Self::TooManySources { .. }
+            | Self::TooManyTracks { .. }
+            | Self::TooManyClips { .. }
+            | Self::TooManyAudioEffects { .. }
+            | Self::TooMuchAudioDelay { .. }
+            | Self::ZeroCanvasDimension
+            | Self::CanvasDimensionTooLarge { .. }
+            | Self::CanvasPixelBudgetExceeded { .. }
+            | Self::InvalidBackground
+            | Self::InvalidColorPipeline
+            | Self::UnsupportedSampleRate { .. } => return None,
+            Self::DuplicateDataSetId(data) | Self::InvalidDataSet { data, .. } => DataSet(data),
+            Self::InvalidDataBinding { owner, .. } => match owner {
+                DataOwner::Clip(clip) | DataOwner::Transition { from: clip, .. } => Clip(clip),
+                DataOwner::Track(track) => Track(track),
+                DataOwner::Master => return None,
+                DataOwner::Node { composition, .. } => Composition(composition),
+                DataOwner::Source(source) => Source(source),
+            },
+            Self::InvalidShape { owner, .. } | Self::InvalidLayout { owner, .. } => match owner {
+                ShapeOwner::Source(source) => Source(source),
+                ShapeOwner::Clip(clip) => Clip(clip),
+                ShapeOwner::Node { composition, .. } => Composition(composition),
+            },
+            Self::InvalidEffect { owner, .. } => match &**owner {
+                EffectOwner::Node { composition, .. } => Composition(composition),
+                EffectOwner::Transition { from, .. } => Clip(from),
+            },
+            Self::DuplicateSourceId(source)
+            | Self::EmptyLocator { source }
+            | Self::AudioOnImage { source }
+            | Self::InvalidProvider { source }
+            | Self::InvalidFingerprint { source }
+            | Self::ContradictoryColor { source }
+            | Self::InvalidGenerator { source }
+            | Self::InvalidCompositionSource { source } => Source(source),
+            Self::DuplicateEffectResourceId(resource)
+            | Self::EmptyEffectResourceLocator { resource } => EffectResource(resource),
+            Self::DuplicateTrackId(track)
+            | Self::InvalidTrackAudio { track }
+            | Self::InvalidDuckingSidechain { track, .. }
+            | Self::InvalidCaptions { track }
+            | Self::UnknownCaptionStyle { track, .. }
+            | Self::InvalidCaptionCueStyle { track, .. }
+            | Self::InvalidClipTransition { track }
+            | Self::TransitionCycle { track, .. }
+            | Self::DuplicateTransition { track, .. }
+            | Self::TooManyClipsOnTrack { track, .. }
+            | Self::TooManyCaptionCues { track, .. }
+            | Self::TooManyDerivedCues { track }
+            | Self::TooManyTransitions { track, .. } => Track(track),
+            Self::DuplicateClipId(clip)
+            | Self::UnknownEffectResource { clip, .. }
+            | Self::EmptyClipRange { clip }
+            | Self::NegativeClipRange { clip }
+            | Self::OverlappingClips { second: clip, .. }
+            | Self::UnknownClipSource { clip, .. }
+            | Self::IncompatibleClipSource { clip, .. }
+            | Self::InvalidVisualProperties { clip }
+            | Self::InvalidAudioProperties { clip }
+            | Self::UnknownComposition { clip, .. }
+            | Self::InvalidClipComposition { clip }
+            | Self::FrameDrawsTooManyNodes { clip, .. }
+            | Self::InvalidClipMask { clip }
+            | Self::InvalidTimeMap { clip }
+            | Self::TooManyLoopPasses { clip, .. }
+            | Self::InvalidMatte { clip } => Clip(clip),
+            Self::DuplicateCompositionId(composition)
+            | Self::InvalidNodeId { composition, .. }
+            | Self::DuplicateNodeId { composition, .. }
+            | Self::TooManyCompositionNodes { composition, .. }
+            | Self::InvalidNode { composition, .. }
+            | Self::UnknownNodeInput { composition, .. }
+            | Self::CompositionCycle { composition, .. }
+            | Self::UnknownCompositionOutput { composition, .. }
+            | Self::InvalidNodeSource { composition, .. }
+            | Self::InvalidCompositionPorts { composition }
+            | Self::UnknownGroupComposition { composition, .. }
+            | Self::CompositionUsesItself { composition }
+            | Self::CompositionNestedTooDeep { composition, .. }
+            | Self::UnknownNodeResource { composition, .. } => Composition(composition),
+        })
+    }
 }
 
 impl fmt::Display for ModelError {
@@ -680,6 +964,9 @@ impl fmt::Display for ModelError {
                     "source {source} is not a valid composition source"
                 )
             }
+            Self::InvalidEffect { owner, id, problem } => {
+                write!(formatter, "effect {id} in {owner} {problem}")
+            }
             Self::UnknownNodeResource {
                 composition,
                 node,
@@ -704,6 +991,14 @@ impl fmt::Display for ModelError {
             Self::InvalidTimeMap { clip } => {
                 write!(formatter, "clip {clip} freezes outside its source range")
             }
+            Self::TooManyLoopPasses {
+                clip,
+                found,
+                maximum,
+            } => write!(
+                formatter,
+                "clip {clip} loops {found} times; the maximum is {maximum}"
+            ),
             Self::InvalidClipTransition { track } => {
                 write!(formatter, "track {track} has an invalid clip transition")
             }
@@ -719,6 +1014,21 @@ impl fmt::Display for ModelError {
             } => write!(
                 formatter,
                 "clips {first} and {second} have more than one transition on track {track}"
+            ),
+            Self::TooManyDerivedCues { track } => write!(
+                formatter,
+                "track {track} derives more than {} caption cues or maps more than {} words",
+                crate::MAX_DERIVED_CUES,
+                crate::MAX_DATA_WORDS
+            ),
+            Self::UnwritableTime { ticks } => write!(
+                formatter,
+                "a time of {ticks} ticks is beyond {} either way",
+                alpha2_time::MAX_SERIALIZED_TICKS
+            ),
+            Self::TooManyEffectResources { found, maximum } => write!(
+                formatter,
+                "project has {found} effect resources; the maximum is {maximum}"
             ),
             Self::TooManyCompositions { found, maximum } => write!(
                 formatter,
@@ -801,6 +1111,17 @@ impl fmt::Display for ModelError {
             Self::InvalidColorPipeline => {
                 formatter.write_str("the HDR peak must be within 100..=10000 nits")
             }
+            Self::TooManyDataSets { found, maximum } => write!(
+                formatter,
+                "project has {found} data sets; the maximum is {maximum}"
+            ),
+            Self::DuplicateDataSetId(data) => write!(formatter, "duplicate data set id {data}"),
+            Self::InvalidDataSet { data, problem } => {
+                write!(formatter, "data set {data} {problem}")
+            }
+            Self::InvalidDataBinding { owner, at, problem } => {
+                write!(formatter, "{owner} {at} {problem}")
+            }
             Self::UnsupportedSampleRate {
                 found,
                 minimum,
@@ -853,6 +1174,40 @@ impl std::error::Error for ProjectLoadError {
             Self::TooLarge { .. } => None,
             Self::Json(error) => Some(error),
             Self::InvalidProject(error) => Some(error),
+        }
+    }
+}
+
+/// Why [`crate::Project::to_json`] wrote no document.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ProjectWriteError {
+    /// The document would be longer than any loader accepts.
+    TooLarge {
+        /// Largest accepted byte length, which the document passes.
+        maximum: usize,
+    },
+    /// Serialization failed.
+    Json(serde_json::Error),
+}
+
+impl fmt::Display for ProjectWriteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooLarge { maximum } => write!(
+                formatter,
+                "the project JSON would be longer than {maximum} bytes, the maximum a project loads with"
+            ),
+            Self::Json(error) => write!(formatter, "the project does not serialize: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ProjectWriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::TooLarge { .. } => None,
+            Self::Json(error) => Some(error),
         }
     }
 }

@@ -3,6 +3,8 @@
 //! `FFmpeg` ownership stays in `alpha2-ffmpeg-bridge`; this crate owns raw GPU handles,
 //! barriers, synchronization, and bounded surface accounting.
 
+#[cfg(all(target_os = "android", feature = "ahb-import"))]
+mod android;
 #[cfg(all(
     test,
     feature = "hwdevice",
@@ -93,6 +95,11 @@ mod sync;
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 mod vulkan;
 
+#[cfg(all(target_os = "android", feature = "ahb-import"))]
+pub use android::{
+    AhbImportError, AhbImporter, AhbPlanes, ImportedAhbFrame, MAX_CONVERSIONS_IN_FLIGHT,
+    reopen_for_ahb_import,
+};
 pub use context::NativeGpuIdentity;
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 pub use d3d12::{
@@ -131,6 +138,8 @@ pub fn set_gpu_wait_timeout(timeout: std::time::Duration) {
     d3d12::set_wait_timeout(timeout);
     #[cfg(all(target_os = "macos", feature = "hwdevice"))]
     metal::set_wait_timeout(timeout);
+    #[cfg(all(target_os = "android", feature = "ahb-import"))]
+    android::set_wait_timeout(timeout);
     let _ = timeout;
 }
 

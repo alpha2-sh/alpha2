@@ -18,7 +18,7 @@ use crate::{EngineError, TextError};
 pub enum ErrorCode {
     /// The project, a range, a rate, a size, or another argument is invalid.
     InvalidInput,
-    /// An effect asset, font, or frame the render needs is absent.
+    /// An effect resource or font the render needs is absent.
     MissingInput,
     /// A composition graph has an unconnected output or input.
     IncompleteComposition,

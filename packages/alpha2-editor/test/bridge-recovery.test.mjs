@@ -1,28 +1,20 @@
-import { FakeCanvas, resetPageGpuLosses } from "./support/preview-stubs.mjs";
+import {
+  FakeCanvas,
+  failingWorker,
+  resetPageGpuLosses,
+} from "./support/preview-stubs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createEditor, createEmptyDocument } from "../dist/index.js";
-import { createBrowserBridge } from "../dist/browser/index.js";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
-const wasmDirectory = join(
-  resolve(import.meta.dirname, "..", ".."),
-  "alpha2",
-  "wasm",
-);
-const skip =
-  !existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")) &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const skip = wasmSkip(import.meta.url);
+const { createBrowserBridge } = skip
+  ? {}
+  : await import("../dist/browser/index.js");
 
 let wasm = null;
 async function engineWasm() {
@@ -36,7 +28,7 @@ async function engineWasm() {
   return wasm;
 }
 
-async function session() {
+async function session(runtimeAssets = {}) {
   resetPageGpuLosses();
   const reported = [];
   const editor = createEditor({
@@ -46,7 +38,7 @@ async function session() {
     editor,
     audio: false,
     assetDecisions: await engineWasm(),
-    runtimeAssets: {},
+    runtimeAssets,
     onError: (error) => reported.push(error),
   });
   return { editor, bridge, reported };
@@ -271,6 +263,34 @@ test(
       globalThis.stubEngine.drawnEffects = null;
       globalThis.stubEngine.setCaptionFonts = null;
     }
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "a worker factory that throws while the preview recovers from a lost GPU leaves it on the main thread",
+  { skip },
+  async () => {
+    let workers = 0;
+    const { editor, bridge, reported } = await session({
+      workerFactory: () => {
+        workers += 1;
+        if (workers > 1)
+          throw new DOMException("blocked worker script", "SecurityError");
+        return failingWorker("seek", "GPU_DEVICE_LOST");
+      },
+    });
+    addColor(editor);
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(await bridge.seek(0), true);
+    assert.equal(bridge.previewBackend, "main-thread");
+    assert.equal(bridge.previewRecoveries, 1);
+    assert.deepEqual(
+      reported.map((e) => e.code),
+      ["preview_worker_failed"],
+    );
+    assert.equal(reported[0].cause.name, "SecurityError");
     await bridge.dispose();
     editor.dispose();
   },

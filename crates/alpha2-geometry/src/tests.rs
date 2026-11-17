@@ -631,3 +631,81 @@ fn a_scene_in_a_box_is_the_canvas_scene_moved_there_with_its_paints() {
         }
     }
 }
+
+#[test]
+fn slow_motion_along_a_curve_moves_by_the_wanted_distance_every_frame() {
+    use kurbo::{CubicBez, ParamCurveDeriv, PathSeg};
+    let aspect = 16.0 / 9.0;
+    // Normalized coordinates as positions are sampled: x scaled by the aspect, y in heights.
+    let from = Point::new(0.2 * aspect, 0.7);
+    let to = Point::new(0.8 * aspect, 0.4);
+    let out_tangent = Vec2::new(0.02 * aspect, -0.5);
+    let in_tangent = Vec2::new(-0.35 * aspect, 0.05);
+    let curve = CubicBez::new(from, from + out_tangent, to + in_tangent, to);
+    let segment = PathSeg::Cubic(curve);
+    let total = arclen::length_within(&segment, 0.0, 1.0, 1e-12);
+    for height in [1080.0, 2160.0] {
+        for (start, per_frame) in [(0.30, 0.1), (0.62, 0.25), (0.45, 1.0)] {
+            let step = per_frame / (total * height);
+            let mut previous = spatial::point_along(from, out_tangent, in_tangent, to, start);
+            for frame in 1..240 {
+                let amount = start + step * f64::from(frame);
+                let point = spatial::point_along(from, out_tangent, in_tangent, to, amount);
+                let moved = (point - previous) * height;
+                // A sub-pixel chord equals its arc to far below the allowance.
+                assert!(
+                    (affine::length(moved) - per_frame).abs() <= 0.01,
+                    "{height} px high, {per_frame} px per frame from {start}: frame {frame} moved {} px",
+                    affine::length(moved)
+                );
+                let t = arclen::parameter_within(&segment, amount * total, total, 1e-12);
+                assert!(
+                    moved.dot(curve.deriv().eval(t).to_vec2()) > 0.0,
+                    "frame {frame} steps back"
+                );
+                previous = point;
+            }
+        }
+    }
+}
+
+#[test]
+fn a_far_shape_in_a_box_covers_the_canvas_it_covers() {
+    // A rectangle centred in its box, zoomed until its device bounds pass the far limit.
+    let zoomed = |scale: f64| {
+        [EvaluatedItem::Group {
+            items: Arc::from(vec![rectangle(0.0, 0.0, 0.5, 0.5), fill()]),
+            transform: EvaluatedTransform {
+                position: Point::new(0.5, 0.5),
+                scale: Vec2::new(scale, scale),
+                ..EvaluatedTransform::default()
+            },
+        }]
+    };
+    let canvas = CanvasSize::new(200, 100);
+    let space = CanvasSize::new(40, 30);
+    let probes = [
+        (5.0, 5.0),
+        (60.0, 30.0),
+        (90.0, 35.0),
+        (150.0, 80.0),
+        (195.0, 95.0),
+        (100.0, 90.0),
+    ];
+    let covered = |ops: &[VectorOp]| {
+        let VectorOp::Fill { path, .. } = &ops[0] else {
+            panic!("a fill");
+        };
+        probes.map(|(x, y)| kurbo::Shape::winding(&**path, Point::new(x, y)) != 0)
+    };
+    for origin in [Vec2::new(70.0, 20.0), Vec2::ZERO] {
+        for scale in [4_000.0, 10_000.0] {
+            let ops = crate::build_scene_in(&zoomed(scale), space, origin, canvas);
+            assert_eq!(covered(&ops), [true; 6], "box at {origin:?}, scale {scale}");
+        }
+    }
+    assert_eq!(
+        covered(&build_scene(&zoomed(10_000.0), canvas).ops),
+        [true; 6]
+    );
+}

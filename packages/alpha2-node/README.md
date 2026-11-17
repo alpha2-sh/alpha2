@@ -47,7 +47,7 @@ const output = await client.exportProject({
 });
 ```
 
-Each export runs in its own `alpha2-host` process. The project is checked with `validateProject` from `alpha2/project` before a process starts; an invalid one is refused with an `Alpha2ProjectValidationError` listing the problems. An existing output is refused unless the request sets `overwrite: true`, and an output that is one of the request's inputs is always refused: the host writes `<stem>.a2partial.<ext>` beside it and moves it into place when it is complete. A finished file that cannot be moved there is kept beside it, and the error (`OUTPUT_PUBLISH_FAILED`) names it in `keptPath`. `exportProject` resolves with the output path once the file is complete; `onResult` receives what the host reports about the export (frames, encoder, rate control, timing, which media each source read).
+Exports run in `alpha2-host` processes that the client keeps between requests (see [Concurrency](#concurrency)). The project is checked with `validateProject` from `alpha2/project` before it is sent to a host; an invalid one is refused with an `Alpha2ProjectValidationError` listing the problems. An existing output is refused unless the request sets `overwrite: true`, and an output that is one of the request's inputs is always refused: the host writes `<stem>.a2partial.<ext>` beside it and moves it into place when it is complete. A finished file that cannot be moved there is kept beside it, and the error (`OUTPUT_PUBLISH_FAILED`) names it in `keptPath`. `exportProject` resolves with the output path once the file is complete; `onResult` receives what the host reports about the export (frames, encoder, rate control, timing, which media each source read). `startTicks`, `endTicks` and `frameRate` are required. `onProgress` receives `{ phase, completed, total }`; when the export starts over (the host moved a GPU-resident export to the readback path, or the client reran it with software decode after a hardware decoder stalled), the first report of the new run carries `restarted: true`, and only such a report sets `completed` back to 0.
 
 The request's fields are typed and described in `ExportProjectRequest`; the [host protocol](https://github.com/alpha2-sh/alpha2/blob/main/docs/host-protocol.md) lists them with their defaults. Among them: `container` (`mp4`, `mov`, `mkv` or `webm`; by default the one the output's extension names), `videoCodec` and `audioCodec` (by default the container's: `h264` and `aac`, or `vp9` and `opus` for WebM; `hevc`, `av1`, `mpeg4-part2` and `prores` (MOV) are the other video codecs, and each container offers only some, as `encode.containers` lists), `alpha` and `bitDepth` (transparency with VP9 in WebM or ProRes 4444, and 10-bit pictures), `videoQuality` and `audioQuality` (a level, `very-low` to `very-high`, `high` by default, which the host turns into a rate for the codec, size and frame rate, or an explicit bitrate), `includeAudio`, `loudness`, `fonts`, `effectAssets`, `proxies` with `media: "proxies"`, `renderCache` and `memory`.
 
@@ -60,11 +60,61 @@ const { encode } = (await client.getCapabilities()).capabilities;
 if (encode.h264.status !== "available") console.warn(encode.h264.reason, encode.h264.remedy);
 ```
 
-The first `getCapabilities` call for a decode mode and renderer starts a host; calls made while it runs share it, and its answer serves later calls for those modes.
+The first `getCapabilities` call for a host environment (decode mode, renderer and environment variables) asks a host; calls made while it runs share it, and its answer serves later calls for that environment.
 
 `videoDecode` (`software`, `auto`, `hardware-required`) chooses how the host decodes video, as a client option or per export; by default the host decides, `auto` on Linux and macOS and `software` on Windows. Under `auto`, an export whose hardware decoder stalls runs once more decoding in software.
 
 `renderer` (`auto`, `gpu`, `cpu`) chooses what draws the frames, as a client option or per export; unset, the host reads `ALPHA2_RENDERER`, else uses `auto`. `auto` renders on a hardware GPU when there is one and on the CPU otherwise, never on a software GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader); `gpu` takes whatever adapter the host finds and fails with `GPU_INIT_FAILED` without one; `cpu` opens no graphics driver. Results and capabilities report `renderer` (`gpu` or `cpu`), `rendererReason` (why the host renders on the CPU) and, on the CPU, `rendererThreads`; `capabilities.features` has `renderer.gpu`, `renderer.cpu` and `effects.runtime`. A runtime WGSL effect cannot run on the CPU renderer: such an export fails with `EFFECT_ERROR`.
+
+## Extract data
+
+`client.extract(request, extractor)` runs an extractor of your own over a source or the timeline and resolves with the data sets it made, ready to put in `project.data`. The host decodes and presents the input and calls the extractor step by step; every value it emits is validated as the project validates data:
+
+```js
+const { dataSets } = await client.extract(
+  {
+    project,
+    assets: { interview: "interview.mp4" },
+    request: {
+      extractor: "com.example.brightness",
+      version: 1,
+      input: { from: "source", source_id: "interview", range: { start: 0, end: 600_000 }, size: 64 },
+      outputs: { level: "interview-brightness" },
+    },
+  },
+  {
+    describe: () => ({
+      id: "com.example.brightness",
+      version: 1,
+      input: { media: "video", from: ["source"], format: "luma8" },
+      outputs: [{ name: "level", kind: "scalars", channels: ["y"] }],
+    }),
+    video(frame, out) {
+      const sum = frame.data.reduce((total, value) => total + value, 0);
+      out.sample("level", frame.time, [sum / frame.data.length / 255]);
+    },
+  },
+);
+```
+
+`begin`, `pass`, `audio` and `end` are the other steps; any may return a promise. `request.params` is checked against the descriptor's `params_schema` first. Output the project would refuse fails with `INVALID_EMIT`, a step that throws with `EXTRACTOR_FAILED`, and a step slower than the host's `--extract-step-timeout` with `EXTRACTOR_TIMEOUT`. `signal` and `onProgress` work as for exports.
+
+A [plugin](../../docs/plugin-abi.md) runs inside the host instead: pass `plugin: { manifest, sha256 }` in the request and no extractor. The host fetches the manifest (an `https:` URL or a path), checks every file against its pinned SHA-256 and runs the wasm artifact sandboxed. The client option `plugins` decides what its hosts allow: `mode` (`off`, `wasm` by default, or `native`), `origins` (`"none"` or the `https:` origins manifests and files may come from) and `root` (the directory local manifests must lie under, or `"none"`). Only under `mode: "native"` does a request's `allowNative: true` let a native artifact run, with the host's rights. A plugin that is refused, does not load, traps or runs past its limits fails with a `PLUGIN_*` code.
+
+## Apply data with edit operations
+
+`client.edit(project, edit)` runs one of the engine's edit operations in the host, without a GPU, and resolves with `{ project, projectJson, report }`. `remove_ranges` drops ranges (silences from an extractor, or a list on a source or the timeline) and closes the gaps, `split_at` cuts at times, and `bake` turns data bindings into keyframes and words into cues:
+
+```js
+const { project: tight } = await client.edit(project, {
+  op: "remove_ranges",
+  ranges: { data: "interview-silence" },
+  target: { track: "v1" },
+  padding: 12_000,
+});
+```
+
+Kept moments render as before for clip picture and sound, clip keyframes, captions, timeline-anchored data and track and master automation, a matte or a binding read through another clip follows the part beside it or the edit is refused (`matte_source`, `read_through`), and `projectJson` is the same bytes on every surface. The host protocol lists what is not exact in this release. A refusal rejects with `INVALID_INPUT`, whose `refusal` names why (`unknown_data`, `empty_target`, ...). [The host protocol](../../docs/host-protocol.md#edit) lists the fields.
 
 ## Software H.264 (OpenH264)
 
@@ -74,7 +124,7 @@ Where no hardware H.264 encoder is available, `alpha2-host` can encode H.264 in 
 npx @alpha2-sh/node install --openh264
 ```
 
-This downloads Cisco's OpenH264 2.7.0 binary for the platform from `https://ciscobinary.openh264.org`, checks the download and the library in it against their SHA-256s, and puts the library in the cache beside the host archives, in `openh264-2.7.0-<target>/`, where `alpha2-host` finds it. It installs only the library, not `alpha2-host`. `--force` downloads again, `installOpenH264(options)` does the same from code, and `ALPHA2_OPENH264_DOWNLOAD_URL` (or the `downloadUrl` option) names a mirror. Every run prints Cisco's notice:
+This downloads Cisco's OpenH264 2.7.0 binary for the platform from `https://ciscobinary.openh264.org`, checks the download and the library in it against their SHA-256s, and puts the library in the cache beside the host archives, in `openh264-2.7.0-<target>/`, where `alpha2-host` finds it. It installs only the library, not `alpha2-host`. `--force` downloads again, `installOpenH264(options)` does the same from code, and `ALPHA2_OPENH264_DOWNLOAD_URL` (or the `downloadUrl` option) names a mirror. A client made with `cacheDirectory` gives its hosts that directory, so they find a library installed there. After `installOpenH264` downloads, the clients of this process start new hosts and probe capabilities again; an install made by another process is not seen by a running client. Every run prints Cisco's notice:
 
 ```text
 OpenH264 Video Codec provided by Cisco Systems, Inc.
@@ -84,24 +134,30 @@ The library is Cisco's binary, under [Cisco's terms](https://www.openh264.org/BI
 
 ## Errors
 
-Every rejection is an `Alpha2HostError` with a `code`, the protocol's error codes and the client's own (`HOST_NOT_FOUND`, `HOST_EXITED`, `HOST_OOM_KILLED` (a host the kernel's out-of-memory killer ended, on Linux), `HOST_LOAD_FAILED`, `HOST_START_TIMEOUT`, `HOST_QUARANTINED`, `HOST_BLOCKED`, `ABORTED`, and others). Its `failure` classifies it for a retry policy (`alpha2/export-failure`, `alpha2/export-retry`): the step and frame it failed at, and whether it is evidence of a lost device, running out of memory or bad input. `stderr` holds the end of the host's standard error. Subclasses:
+Every rejection is an `Alpha2HostError` with a `code`, the protocol's error codes and the client's own (`HOST_NOT_FOUND`, `HOST_EXITED`, `HOST_OOM_KILLED` (a host the kernel's out-of-memory killer ended, on Linux), `HOST_LOAD_FAILED`, `HOST_START_TIMEOUT`, `HOST_QUARANTINED`, `HOST_BLOCKED`, `HOST_VERSION_MISMATCH` (a host of another alpha2 release, which is ended at once), `ABORTED`, and others). Its `failure` classifies it for a retry policy (`alpha2/export-failure`, `alpha2/export-retry`): the step and frame it failed at, and whether it is evidence of a lost device, running out of memory or bad input. `stderr` holds the end of the host's standard error. Subclasses:
 
 - `Alpha2ProjectValidationError`: the project is invalid (`problems`).
 - `Alpha2ConformError`: the media is not ready, so nothing was rendered (`report` says, per source, what is missing, offline or not the media the project recorded). `client.conform({ project, assets })` asks the same question without exporting.
 - `Alpha2GpuInitializationError`: the host could not create its GPU device (only with `renderer: "gpu"`).
 - `Alpha2AbortError`: the request's `signal` aborted it.
 
-A host that writes nothing within `hostStartTimeoutMs` (a client option, 30 000 by default, `Infinity` to wait forever) is killed and the request fails with `HOST_START_TIMEOUT`: something held it before it ran, a Gatekeeper check on macOS, or an antivirus scan or an App Control policy on Windows. On macOS a host whose files carry the quarantine attribute of a browser download, and which Gatekeeper does not accept, is refused before it starts with `HOST_QUARANTINED`, whose message names the `xattr -dr com.apple.quarantine` command that clears it. A host Windows refuses by policy (Smart App Control, App Control, AppLocker) is `HOST_BLOCKED`, and a Linux host whose program interpreter is missing (a glibc build on musl, such as Alpine) or whose glibc is too old is `HOST_LOAD_FAILED`; no retry mends any of the three.
+A host that does not report that it is ready within `hostStartTimeoutMs` (a client option, 30 000 by default, `Infinity` to wait forever) is killed and the request fails with `HOST_START_TIMEOUT`: something held it before it ran, a Gatekeeper check on macOS, or an antivirus scan or an App Control policy on Windows. On macOS a host whose files carry the quarantine attribute of a browser download, and which Gatekeeper does not accept, is refused before it starts with `HOST_QUARANTINED`, whose message names the `xattr -dr com.apple.quarantine` command that clears it. A host Windows refuses by policy (Smart App Control, App Control, AppLocker) is `HOST_BLOCKED`, and a Linux host whose program interpreter is missing (a glibc build on musl, such as Alpine) or whose glibc is too old is `HOST_LOAD_FAILED`; no retry mends any of the three.
 
 ## Cancelling
 
-`signal` (an `AbortSignal`) cancels an export. The client writes a `cancel` line to the host, which stops the export, removes its partial file and answers; then the process ends, and `exportProject` rejects with `Alpha2AbortError` once it is gone. A host that does not answer within 5 seconds is ended. The host also watches the process that started it: when that process dies, the host cancels its export and exits.
+`signal` (an `AbortSignal`) cancels an export. The client sends the host a `cancel`, which stops the export, removes its partial file and answers; `exportProject` then rejects with `Alpha2AbortError`, and the host serves later requests. A host that does not answer within 5 seconds is ended, and the request rejects once it has exited. The host also watches the process that started it: when that process dies, the host cancels its export and exits.
+
+## Stills
+
+`client.still({ project, assets, time, output })` renders one frame to a PNG, the frame an export draws at that time (the frame of the project's grid that holds it, `stills[0].frameTime` in the result), without encoding a video; `client.stills({ ..., stills: [{ time, output }, ...] })` renders up to 256 with one host. `time` is in ticks. A still without an `output` writes no file: its entry in the result has `output: null` and the PNG's bytes as `png`, a `Uint8Array`.
 
 ## Concurrency
 
-`client.still({ project, assets, time, output })` renders one frame to a PNG, the frame an export draws at that time (the frame of the project's grid that holds it, `stills[0].frameTime` in the result), without encoding a video; `client.stills({ ..., stills: [{ time, output }, ...] })` renders up to 256 with one host. `time` is in ticks.
+`concurrency` (default 1) is how many host processes a client runs at once, and so how many exports share the GPU. Each host runs one request at a time and is kept for the next one. A host reads its environment when it starts, so it serves only requests that would start a host with the same environment: the same `videoDecode`, `renderer` and environment variables (`process.env` when the request is made). A request for another environment gets a host of its own, and at the limit an idle host of another environment is ended to make room. Other requests wait for a host to come free.
 
-`concurrency` (default 1) is how many host processes a client runs at once, and so how many exports share the GPU; more requests wait for a slot. The module-level `exportProject(request, options)`, `still`, `stills` and `getCapabilities(options)` share one client per host binary and `concurrency`.
+A host decides when a new process would serve better, for example once its memory has grown, and reports that it is draining. The client sends no more requests to a draining host or one that has exited, and starts a new host when it needs one. A request the host turned away while draining (`HOST_RETIRING`) goes to another host. A request whose host exits while running it fails and is not sent again, since only the caller knows whether running an export again is safe.
+
+Idle hosts do not keep Node.js running. `await client.close()` ends a client's hosts; later requests start new ones. The module-level `exportProject(request, options)`, `still`, `stills` and `getCapabilities(options)` share one client, and its hosts, per host binary, `concurrency`, `hostStartTimeoutMs` and `cacheDirectory`.
 
 ## Electron
 

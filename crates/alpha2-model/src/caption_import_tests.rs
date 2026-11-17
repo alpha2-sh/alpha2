@@ -131,6 +131,7 @@ fn a_cue_later_than_a_project_holds_is_skipped() {
                 crate::TrackKind::Caption,
             );
             track.captions = Some(crate::Captions {
+                from_words: None,
                 style: crate::TextStyle::default(),
                 styles: std::collections::BTreeMap::new(),
                 cues: row,
@@ -279,6 +280,7 @@ fn a_row_holds_no_more_cues_than_a_caption_track() {
             crate::TrackKind::Caption,
         );
         track.captions = Some(crate::Captions {
+            from_words: None,
             style: crate::TextStyle::default(),
             styles: std::collections::BTreeMap::new(),
             cues: row,
@@ -565,4 +567,147 @@ fn plain_cues_stay_plain() {
     );
     assert_eq!(imported.cues[0].speaker, None);
     assert_eq!(imported.notes, ImportNotes::default());
+}
+
+/// `count` tags of distinct classes, each followed by `after`.
+fn tags(count: usize, after: &str) -> String {
+    use std::fmt::Write as _;
+    let mut body = String::new();
+    for at in 0..count {
+        write!(body, "<c.k{at}>{after}").expect("a string takes it");
+    }
+    body
+}
+
+/// Cue bodies whose markup grows with `count`: empty tags, nested distinct classes, a letter
+/// after each such tag, and lines of bold opened and closed.
+fn markup_shapes() -> [fn(usize) -> String; 4] {
+    [
+        |count| "<c>".repeat(count),
+        |count| tags(count, ""),
+        |count| tags(count, "a"),
+        |count| "<b>\n</b>\n".repeat(count / 2),
+    ]
+}
+
+/// A file builder by size, its name, and whether it is WebVTT.
+type Shape<'a> = (&'a str, &'a dyn Fn(usize) -> String, bool);
+
+#[test]
+fn markup_is_read_in_time_linear_in_its_length() {
+    for (shape, body) in markup_shapes().into_iter().enumerate() {
+        // One block over the block limit, and blocks under it, in both formats.
+        let one_vtt = |count| format!("WEBVTT\n\n00:01.000 --> 00:02.000\nx{}\n", body(count));
+        let one_srt = |count| format!("1\n00:00:01,000 --> 00:00:02,000\nx{}\n", body(count));
+        let many_vtt = |count: usize| {
+            let block = format!("00:01.000 --> 00:02.000\nx{}\n\n", body(64));
+            format!("WEBVTT\n\n{}", block.repeat(count / 64))
+        };
+        let many_srt = |count: usize| {
+            let block = format!("1\n00:00:01,000 --> 00:00:02,000\nx{}\n\n", body(64));
+            block.repeat(count / 64)
+        };
+        let files: [Shape<'_>; 4] = [
+            ("one WebVTT block", &one_vtt, true),
+            ("one SRT block", &one_srt, false),
+            ("WebVTT blocks", &many_vtt, true),
+            ("SRT blocks", &many_srt, false),
+        ];
+        for (what, file, vtt) in files {
+            let parse = |text: &String| {
+                if vtt {
+                    parse_webvtt(text)
+                } else {
+                    parse_srt(text)
+                }
+                .expect("a subtitle file")
+            };
+            alpha2_scaling_support::assert_linear_shared(
+                &format!("{what} of markup shape {shape}"),
+                16_384,
+                file,
+                |text| {
+                    std::hint::black_box(parse(text));
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn a_block_over_the_block_limit_is_skipped() {
+    let long = "a".repeat(MAX_CUE_BLOCK_BYTES);
+    let lines = "a\n".repeat(MAX_CUE_BLOCK_LINES);
+    for body in [long, lines] {
+        let text =
+            format!("WEBVTT\n\n00:01.000 --> 00:02.000\n{body}\n\n00:03.000 --> 00:04.000\nnext\n");
+        let imported = parse_webvtt(&text).expect("a WebVTT file");
+        assert_eq!(imported.skipped, 1);
+        assert_eq!(imported.cues.len(), 1);
+        assert_eq!(imported.cues[0].text, "next");
+    }
+}
+
+#[test]
+fn a_tag_left_open_at_the_end_ends_the_cue_text() {
+    let text = "WEBVTT\n\n00:00.000 --> 00:05.000\n<00:01.000><c\nhello\n";
+    let imported = parse_webvtt(text).expect("a WebVTT file");
+    assert_eq!((imported.cues.len(), imported.skipped), (0, 1));
+    let text = "WEBVTT\n\n00:00.000 --> 00:05.000\nkept <c.k\nhello\n";
+    let imported = parse_webvtt(text).expect("a WebVTT file");
+    assert_eq!(imported.cues[0].text, "kept ");
+}
+
+#[test]
+fn a_cue_with_more_tags_open_than_tracked_is_plain_text() {
+    let nested = |count: usize| {
+        format!(
+            "WEBVTT\n\n00:01.000 --> 00:02.000\n{}deep\n",
+            "<c.k0>".repeat(count)
+        )
+    };
+    let tracked = parse_webvtt(&nested(MAX_OPEN_TAGS)).expect("a WebVTT file");
+    assert!(matches!(tracked.cues[0].text, TextContent::Runs(_)));
+    assert_eq!(tracked.notes.flattened, 0);
+    let flattened = parse_webvtt(&nested(MAX_OPEN_TAGS + 1)).expect("a WebVTT file");
+    assert_eq!(flattened.cues[0].text, TextContent::Plain("deep".into()));
+    assert_eq!(flattened.notes.flattened, 1);
+    let classes = format!(
+        "WEBVTT\n\n00:01.000 --> 00:02.000\n<c.{}>many\n",
+        (0..=MAX_HELD_CLASSES)
+            .map(|at| format!("k{at}"))
+            .collect::<Vec<_>>()
+            .join(".")
+    );
+    let imported = parse_webvtt(&classes).expect("a WebVTT file");
+    assert_eq!(imported.cues[0].text, TextContent::Plain("many".into()));
+    assert_eq!(imported.notes.flattened, 1);
+}
+
+#[test]
+fn every_hostile_caption_input_imports_valid_cues() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/corpus/hostile/caption_import");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(root).expect("hostile inputs") {
+        let bytes = std::fs::read(entry.expect("entry").path()).expect("input");
+        let Some((&format, text)) = bytes.split_first() else {
+            continue;
+        };
+        let Ok(text) = std::str::from_utf8(text) else {
+            continue;
+        };
+        let parsed = if format & 1 == 1 {
+            parse_webvtt(text)
+        } else {
+            parse_srt(text)
+        };
+        for cue in parsed.map(|imported| imported.cues).unwrap_or_default() {
+            let text = cue.text.text();
+            assert!(!text.trim().is_empty() && text.len() <= MAX_TEXT_CONTENT_BYTES);
+            assert!(cue.text.runs().len() <= MAX_TEXT_RUNS);
+        }
+        seen += 1;
+    }
+    assert!(seen > 0);
 }

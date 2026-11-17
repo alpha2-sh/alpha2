@@ -70,7 +70,6 @@ fn a_warning_inside_a_turn_is_reported_without_failing_it() {
     drop(gpu);
     let written = std::fs::read_to_string(&report).expect("the report");
     assert!(written.contains("a deliberate warning"), "{written}");
-    std::fs::remove_dir_all(&directory).ok();
 }
 
 #[test]
@@ -183,17 +182,10 @@ fn report_mode_writes_one_json_line_per_record() {
     );
     assert_eq!(lines[1]["level"], "WARN");
     assert_eq!(lines[1]["message"], "second");
-    std::fs::remove_dir_all(&directory).ok();
 }
 
-fn scratch(name: &str) -> std::path::PathBuf {
-    let directory = std::env::temp_dir().join(format!(
-        "alpha2-validation-log-{name}-{}",
-        std::process::id()
-    ));
-    std::fs::remove_dir_all(&directory).ok();
-    std::fs::create_dir_all(&directory).expect("scratch directory");
-    directory
+fn scratch(name: &str) -> alpha2_test_support::ScratchDir {
+    alpha2_test_support::scratch_dir(&format!("validation-log-{name}"))
 }
 
 /// A validating device on `backends` (adapter from `WGPU_ADAPTER_NAME` or the default), or `None`.
@@ -214,9 +206,12 @@ fn validated_device(
     ))
     .ok()?;
     eprintln!("validation tests on {:?}", adapter.get_info());
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-            .expect("a device");
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        // Within every adapter's limits, including reduced ones such as the iOS simulator's.
+        required_limits: wgpu::Limits::downlevel_defaults(),
+        ..wgpu::DeviceDescriptor::default()
+    }))
+    .expect("a device");
     Some((adapter, device, queue))
 }
 

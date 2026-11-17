@@ -2,24 +2,12 @@
 // run in Chrome (`npm run test:editor:package`).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { decideRetry, isRetryableFailure } from "alpha2/export-retry";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
-const root = resolve(import.meta.dirname, "..", "..", "..");
-const wasmDirectory = join(root, "packages", "alpha2", "wasm");
-const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-const skip =
-  !packaged &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const skip = wasmSkip(import.meta.url);
 
 globalThis.VideoFrame ??= class VideoFrame {
   constructor(data, init) {

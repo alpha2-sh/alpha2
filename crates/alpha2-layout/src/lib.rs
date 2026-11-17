@@ -6,6 +6,7 @@
 //! what a render draws. [`json`] writes the measurements in the JSON form every binding
 //! returns.
 
+mod fit;
 pub mod json;
 pub mod layout;
 mod text;
@@ -17,14 +18,16 @@ use std::sync::Arc;
 
 use alpha2_text::{TextFont, TextRasterError};
 
+pub use fit::FittedSize;
 pub use layout::{
-    LAYOUT_WRAP_SLACK, LayoutBounds, NodeBounds, NodeRects, ResolvedLayout, layout_texts,
-    measure_layout, resolve, shape_texts,
+    LAYOUT_WRAP_SLACK, LayoutBounds, NodeBounds, NodeRects, ResolvedLayout, fit_texts,
+    layout_texts, measure_layout, resolve, shape_texts,
 };
 pub use text::{
     MAX_FONT_PIXELS, MAX_PADDING_PIXELS, MAX_STROKE_PIXELS, ShadowPixels, TextAnimation,
-    TextBounds, TextDraw, animated_text_key, font_pixels, layout_text_key, measure_text, rgba8,
-    shadow_pixels, shaped_key, stroke_pixels, text_draw, text_fill, text_key, text_request,
+    TextBounds, TextDraw, animated_text_key, fit_text, font_pixels, layout_text_key, measure_text,
+    rgba8, shadow_pixels, shaped_key, stroke_pixels, text_draw, text_fill, text_key, text_request,
+    text_request_at,
 };
 
 /// The size in pixels of a picture text and layouts are placed on. Never empty, and within

@@ -8,8 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["video", "timeline", "animation", "keyframes"]
 categories = ["multimedia::video"]
-# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
-# stay in the repository, which is where `cargo test` runs.
 include = [
   "/src/**",
   "/README.md",
@@ -24,10 +22,13 @@ alpha2-geometry.workspace = true
 alpha2-media.workspace = true
 alpha2-model.workspace = true
 alpha2-time.workspace = true
+libm = "0.2.16"
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 alpha2-scaling-support.workspace = true
-serde_json.workspace = true
+sha2 = "0.11"
 
 [lints]
 workspace = true

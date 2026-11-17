@@ -80,3 +80,74 @@ impl crate::Renderer {
         }
     }
 }
+
+/// Receives a callback's result from `receiver`, calling `poll` between tries so a callback no
+/// other thread collects still runs.
+///
+/// # Errors
+/// [`crate::RenderError::GpuTimeout`] when nothing arrives within `timeout`, and
+/// [`crate::ReadbackFailure::CallbackDropped`] when the callback was dropped without sending.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn receive_polling<T>(
+    receiver: &std::sync::mpsc::Receiver<T>,
+    timeout: std::time::Duration,
+    poll: impl Fn(),
+) -> Result<T, crate::RenderError> {
+    use std::sync::mpsc::RecvTimeoutError;
+    let deadline = web_time::Instant::now() + timeout;
+    loop {
+        let left = deadline.saturating_duration_since(web_time::Instant::now());
+        match receiver.recv_timeout(left.min(REPOLL_INTERVAL)) {
+            Ok(value) => return Ok(value),
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(crate::RenderError::TextureReadback(
+                    crate::ReadbackFailure::CallbackDropped,
+                ));
+            }
+            Err(RecvTimeoutError::Timeout) if left.is_zero() => {
+                return Err(crate::RenderError::GpuTimeout);
+            }
+            Err(RecvTimeoutError::Timeout) => poll(),
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    use super::receive_polling;
+    use crate::{ReadbackFailure, RenderError};
+
+    #[test]
+    fn a_result_sent_from_another_thread_later_is_received() {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            let _ = sender.send(7);
+        });
+        let polls = std::cell::Cell::new(0);
+        let outcome = receive_polling(&receiver, Duration::from_secs(5), || {
+            polls.set(polls.get() + 1);
+        });
+        assert_eq!(outcome, Ok(7));
+        assert!(polls.get() > 0);
+    }
+
+    #[test]
+    fn a_result_that_never_comes_is_a_gpu_timeout_on_time() {
+        let (sender, receiver) = mpsc::channel::<u8>();
+        let started = Instant::now();
+        let outcome = receive_polling(&receiver, Duration::from_millis(100), || {});
+        assert_eq!(outcome, Err(RenderError::GpuTimeout));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(sender);
+        assert_eq!(
+            receive_polling(&receiver, Duration::from_secs(5), || {}),
+            Err(RenderError::TextureReadback(
+                ReadbackFailure::CallbackDropped
+            ))
+        );
+    }
+}

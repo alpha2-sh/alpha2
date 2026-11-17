@@ -86,7 +86,11 @@ def seconds_to_ticks(seconds: float) -> int:
     """Seconds as the nearest tick, halves away from zero, so
     ``seconds_to_ticks(ticks_to_seconds(t)) == t``."""
     scaled = seconds * TICKS_PER_SECOND
-    return int(math.copysign(math.floor(abs(scaled) + 0.5), scaled))
+    whole = math.floor(abs(scaled))
+    # Adding 0.5 before the floor would round 0.49999999999999994 up.
+    if abs(scaled) - whole >= 0.5:
+        whole += 1
+    return int(math.copysign(whole, scaled))
 
 
 def ticks_to_seconds(count: int) -> float:
@@ -325,7 +329,7 @@ class ProjectBuilder:
 
     def assets(self) -> dict[str, str]:
         """Each media source's id mapped to its locator, for an export's ``assets``. Relative paths
-        resolve against the exporting process's working directory."""
+        resolve against the working directory at the time of the call."""
         return {source["id"]: source["locator"] for source in self._sources if "locator" in source}
 
     def generated(self, generator: Generator, *, id: str | None = None) -> str:

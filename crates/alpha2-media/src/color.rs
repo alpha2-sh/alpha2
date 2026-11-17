@@ -43,6 +43,54 @@ impl ColorMetadata {
             || matches!(self.transfer, TransferFunction::Pq | TransferFunction::Hlg)
     }
 
+    /// The color ITU-T H.273 code points describe (the values of H.264 and HEVC VUI, AV1 color
+    /// config, MP4 `colr` and `FFmpeg`'s tags), `None` when the three codes are unspecified (2)
+    /// and the range is unknown.
+    ///
+    /// An unrecognized code, or an unspecified one beside others, reads as its BT.709
+    /// limited-range default; PQ and HLG make the color HDR.
+    #[must_use]
+    pub const fn from_h273(
+        primaries: u8,
+        transfer: u8,
+        matrix: u8,
+        full_range: Option<bool>,
+    ) -> Option<Self> {
+        if primaries == 2 && transfer == 2 && matrix == 2 && full_range.is_none() {
+            return None;
+        }
+        let transfer = match transfer {
+            16 => TransferFunction::Pq,
+            18 => TransferFunction::Hlg,
+            13 => TransferFunction::Srgb,
+            _ => TransferFunction::Bt709,
+        };
+        Some(Self {
+            primaries: match primaries {
+                9 => ColorPrimaries::Bt2020,
+                5 | 6 => ColorPrimaries::Bt601,
+                _ => ColorPrimaries::Bt709,
+            },
+            transfer,
+            matrix: match matrix {
+                9 => ColorMatrix::Bt2020Ncl,
+                5 | 6 => ColorMatrix::Bt601,
+                0 => ColorMatrix::Rgb,
+                _ => ColorMatrix::Bt709,
+            },
+            range: if matches!(full_range, Some(true)) {
+                ColorRange::Full
+            } else {
+                ColorRange::Limited
+            },
+            dynamic_range: if matches!(transfer, TransferFunction::Pq | TransferFunction::Hlg) {
+                DynamicRange::Hdr
+            } else {
+                DynamicRange::Sdr
+            },
+        })
+    }
+
     /// Whether `dynamic_range` matches `transfer` (HDR exactly for PQ or HLG). Projects with an
     /// inconsistent color are rejected.
     #[must_use]

@@ -10,7 +10,6 @@ publish = false
 
 [features]
 default = ["visual"]
-# A feature so audio contract users do not enable the extension providers through unification.
 visual = [
   "dep:alpha2-extensions",
   "alpha2-extensions/svg",

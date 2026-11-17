@@ -1,3 +1,5 @@
+#[cfg(feature = "svg")]
+use super::hostile::{SvgLink, svg_doubling_masks, svg_reference_chain};
 use super::*;
 
 #[cfg(feature = "svg")]
@@ -733,7 +735,106 @@ fn an_svg_nested_deeper_than_its_parsers_stack_is_refused_before_it_is_parsed() 
     copies.push_str(r##"</defs><use href="#u4"/>"##);
     refused_as(
         svg_drawn(&svg_document(64, 64, &copies), (0, 0)),
-        "nest more than 256 deep with its `use` copies in place",
+        "nest more than 256 deep with its `use` copies and references in place",
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_whose_entities_expand_past_the_node_limit_is_refused_while_it_is_parsed() {
+    use super::hostile::svg_entity_elements;
+    assert_eq!(
+        svg_drawn(&svg_entity_elements(1000, 10), (0, 0)).expect("drawn"),
+        (10, 10)
+    );
+    // Five million elements in 20 MB of expanded text.
+    refused_as(
+        svg_drawn(&svg_entity_elements(1000, 5_000), (0, 0)),
+        "the SVG parses to more than 4000000 nodes",
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_whose_entities_expand_past_its_text_budget_is_refused_before_it_is_parsed() {
+    use super::hostile::{svg_entity_attribute, svg_entity_elements, svg_nested_entity_elements};
+    // Ten million elements, flat and through a nested entity, are 40 MB of text expanded.
+    for document in [
+        svg_entity_elements(1000, 10_000),
+        svg_nested_entity_elements(100, 255, 400),
+    ] {
+        refused_as(svg_drawn(&document, (0, 0)), "bytes of text together");
+    }
+    // One attribute of 25.6 MB expanded still opens; 51 MB and 2.6 GB do not.
+    assert_eq!(
+        svg_drawn(&svg_entity_attribute(1000, 255, 100), (0, 0)).expect("drawn"),
+        (10, 10)
+    );
+    for (text, top) in [(1000, 200), (100_000, 100)] {
+        refused_as(
+            svg_drawn(&svg_entity_attribute(text, 255, top), (0, 0)),
+            "bytes of text together, entities expanded",
+        );
+    }
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_naming_its_namespaces_by_entity_draws_as_it_would_without_them() {
+    let body = r##"<rect width="6" height="4" fill="#20a040"/><circle cx="6" cy="4" r="3" fill="#ff8000"/>"##;
+    let plain = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="12" height="8">{body}</svg>"#
+    );
+    let named = format!(
+        concat!(
+            "<?xml version=\"1.0\"?>\n<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" ",
+            "\"http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd\" [\n",
+            "<!ENTITY ns_svg \"http://www.w3.org/2000/svg\">\n",
+            "<!ENTITY ns_xlink \"http://www.w3.org/1999/xlink\">\n]>\n",
+            "<svg xmlns=\"&ns_svg;\" xmlns:xlink=\"&ns_xlink;\" width=\"12\" height=\"8\">{}</svg>"
+        ),
+        body
+    );
+    let draw = |text: &str| {
+        Registry::with_defaults()
+            .open(
+                &ProviderSource::Svg,
+                Some(Arc::from(text.as_bytes())),
+                Arc::new(NoResources),
+            )
+            .expect("open")
+            .render(ms(0), (0, 0))
+            .expect("frame")
+    };
+    let frame = draw(&named);
+    assert_eq!((frame.width, frame.height), (12, 8));
+    assert_eq!(frame, draw(&plain));
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_of_two_hundred_thousand_entity_declarations_is_scanned_in_linear_time() {
+    use std::fmt::Write as _;
+    let mut declarations = String::new();
+    for at in 0..200_000 {
+        let _ = write!(declarations, r#"<!ENTITY e{at} "{at}">"#);
+    }
+    let document = format!(
+        r#"<!DOCTYPE svg [{declarations}]><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><desc>&e199999;</desc></svg>"#
+    );
+    assert_eq!(svg_drawn(&document, (0, 0)).expect("drawn"), (10, 10));
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_stops_reading_its_nested_images_after_one_is_refused() {
+    use super::hostile::{svg_entity_elements, svg_nested_images};
+    refused_as(
+        svg_drawn(
+            &svg_nested_images(&svg_entity_elements(1000, 5_000), 50),
+            (0, 0),
+        ),
+        "the SVG parses to more than 4000000 nodes",
     );
 }
 
@@ -818,6 +919,206 @@ fn the_svg_images_an_svg_draws_are_read_within_its_text_budget() {
     };
     assert_eq!(drawn(4).expect("drawn"), (8, 8));
     refused_as(drawn(40), "bytes of text together");
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_is_charged_for_the_dashes_and_edges_it_draws() {
+    use super::hostile::{svg_dashed_copies, svg_dense_zigzag, svg_outline};
+    // tiny-skia dashes the whole 400,000-dash line before clipping, 17 ms a copy.
+    for copies in [1, 10] {
+        assert_eq!(
+            svg_drawn(&svg_dashed_copies(copies, 1), (0, 0)).expect("drawn"),
+            (1920, 1080)
+        );
+    }
+    refused_as(
+        svg_drawn(&svg_dashed_copies(100, 100), (0, 0)),
+        "drawing the SVG at 1920x1080 costs more than",
+    );
+    // Edges that overlap in one row are sorted against each other in every row they share.
+    assert_eq!(
+        svg_drawn(&svg_dense_zigzag(10_000), (0, 0)).expect("drawn"),
+        (1920, 1080)
+    );
+    assert_eq!(
+        svg_drawn(&svg_outline(50_000), (0, 0)).expect("drawn"),
+        (1920, 1080)
+    );
+    refused_as(
+        svg_drawn(&svg_dense_zigzag(300_000), (0, 0)),
+        "drawing the SVG at 1920x1080 costs more than",
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_whose_style_rules_cost_more_than_half_the_reading_budget_to_match_is_refused() {
+    // usvg matches the rules again after the metered pass, so each pass gets half the budget.
+    let document = svg_document(
+        1920,
+        1080,
+        &format!(
+            "<style>x g g g rect{{fill:red}}</style>{}{}{}",
+            "<g>".repeat(100),
+            r#"<rect width="1" height="1"/>"#.repeat(10),
+            "</g>".repeat(100)
+        ),
+    );
+    refused_as(
+        svg_drawn(&document, (0, 0)),
+        "reading the SVG takes more than",
+    );
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_text_is_charged_for_its_layout_with_or_without_a_font() {
+    let text = |chars: usize| {
+        let words: String = (0..chars)
+            .map(|at| if at % 6 == 5 { ' ' } else { 'a' })
+            .collect();
+        svg_document(
+            1920,
+            1080,
+            &format!(
+                r#"<text x="2" y="16" font-family="DejaVu Sans" font-size="16">{words}</text>"#
+            ),
+        )
+    };
+    let font: Arc<[u8]> = std::fs::read(corpus("../../fonts/Alpha2Fixture.ttf"))
+        .expect("font")
+        .into();
+    let open = |document: &str, fonts: Vec<Arc<[u8]>>| {
+        Registry::with_defaults()
+            .open(
+                &ProviderSource::Svg,
+                Some(Arc::from(document.as_bytes())),
+                Arc::new(Files {
+                    files: HashMap::new(),
+                    fonts,
+                }),
+            )
+            .map(|mut source| source.render(ms(0), (0, 0)).map(drop))
+    };
+    let paragraph = text(2000);
+    assert!(matches!(
+        open(&paragraph, vec![Arc::clone(&font)]),
+        Ok(Ok(()))
+    ));
+    assert_eq!(svg_drawn(&paragraph, (0, 0)).expect("drawn"), (1920, 1080));
+    // 200 kB lays out in about 10 s and 2 MiB in about 20 minutes.
+    for chars in [200_000, 2 << 20] {
+        let document = text(chars);
+        refused_as(svg_drawn(&document, (0, 0)), "SVG");
+        assert!(
+            matches!(
+                open(&document, vec![Arc::clone(&font)]),
+                Err(ExtensionError::Budget(_))
+            ),
+            "{chars} characters with a font"
+        );
+    }
+}
+
+#[cfg(feature = "svg")]
+fn refused_as_ring(result: Result<(u32, u32), ExtensionError>, what: &str) {
+    match result {
+        Err(ExtensionError::Malformed(message)) if message.contains("refers to itself") => {}
+        other => panic!("{what}: expected a refused ring, got {other:?}"),
+    }
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_reference_ring_that_usvg_would_cut_is_refused_too() {
+    for link in SvgLink::ALL {
+        for links in [1, 2] {
+            refused_as_ring(
+                svg_drawn(&svg_reference_chain(link, links, true), (0, 0)),
+                &format!("{link:?} x {links}"),
+            );
+        }
+    }
+    // A clip path's content takes no paint, so usvg draws this; it is a ring all the same.
+    let mixed = svg_document(
+        10,
+        10,
+        r#"<pattern id="p" width="1" height="1"><rect width="1" height="1" mask="url(#m)"/></pattern><mask id="m"><rect width="1" height="1" clip-path="url(#c)"/></mask><clipPath id="c"><rect width="1" height="1" fill="url(#p)"/></clipPath><rect width="5" height="5" fill="url(#p)"/>"#,
+    );
+    refused_as_ring(svg_drawn(&mixed, (0, 0)), "pattern, mask, clip path");
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_reference_ring_is_refused_before_it_overflows_the_stack() {
+    for link in SvgLink::ALL {
+        for links in [3, 4] {
+            refused_as_ring(
+                svg_drawn(&svg_reference_chain(link, links, true), (0, 0)),
+                &format!("{link:?} x {links}"),
+            );
+        }
+    }
+    // The pattern's content inherits the fill that names it.
+    let inherited = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" fill="url(#p)"><pattern id="p" width="1" height="1"><rect width="1" height="1"/></pattern><rect width="5" height="5"/></svg>"#;
+    refused_as_ring(svg_drawn(inherited, (0, 0)), "inherited fill");
+    let crossed = svg_document(
+        10,
+        10,
+        r#"<mask id="m"><rect width="1" height="1" fill="url(#p)"/></mask><pattern id="p" width="1" height="1"><rect width="1" height="1" mask="url(#m)"/></pattern><rect width="5" height="5" fill="url(#p)"/>"#,
+    );
+    refused_as_ring(svg_drawn(&crossed, (0, 0)), "pattern and mask");
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_gradient_or_pattern_template_ring_is_refused_before_it_loops() {
+    for element in ["linearGradient", "radialGradient", "pattern"] {
+        let document = svg_document(
+            10,
+            10,
+            &format!(
+                r##"<{element} id="a" href="#b"/><{element} id="b" xlink:href="#c"/><{element} id="c" href="#b"/><rect width="5" height="5" fill="url(#a)"/>"##
+            ),
+        );
+        refused_as_ring(svg_drawn(&document, (0, 0)), element);
+    }
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_reference_chain_nests_four_levels_a_link() {
+    use crate::svg::{MAX_NESTING, REFERENCE_LEVELS};
+    // The svg element is level 0 and the drawn rectangle 1; each link adds the referenced
+    // element and its rectangle.
+    let longest = (MAX_NESTING - 2) / (REFERENCE_LEVELS + 1);
+    for link in [SvgLink::Fill, SvgLink::Mask, SvgLink::ClipPath] {
+        assert_eq!(
+            svg_drawn(&svg_reference_chain(link, longest, false), (0, 0)).expect("drawn"),
+            (10, 10),
+            "{link:?} x {longest}"
+        );
+        refused_as(
+            svg_drawn(&svg_reference_chain(link, longest + 1, false), (0, 0)),
+            "nest more than 256 deep",
+        );
+    }
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_whose_masks_double_per_level_is_refused_at_open() {
+    // 4096 masked rectangles still convert and draw.
+    assert_eq!(
+        svg_drawn(&svg_doubling_masks(12), (0, 0)).expect("drawn"),
+        (10, 10)
+    );
+    for levels in [20, 40] {
+        let started = std::time::Instant::now();
+        refused_as(svg_drawn(&svg_doubling_masks(levels), (0, 0)), "SVG");
+        assert!(started.elapsed().as_secs_f64() < 5.0, "{levels} levels");
+    }
 }
 
 #[cfg(all(feature = "latex", feature = "pdf"))]

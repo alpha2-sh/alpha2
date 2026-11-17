@@ -280,6 +280,7 @@ impl FrameInstallMetrics {
 /// place where the platform allows, within the surface budget.
 pub struct NativeGpuFrames {
     pub size: RenderSize,
+    cache_scope: u64,
     pub color: ColorPolicy,
     generation: Option<u64>,
     pub frames: RequestedFrames,
@@ -307,9 +308,11 @@ pub struct NativeGpuFrames {
 }
 
 impl NativeGpuFrames {
-    pub fn new(size: RenderSize) -> Self {
+    /// Frames for one request, whose result-cache keys carry `cache_scope`.
+    pub fn new(size: RenderSize, cache_scope: u64) -> Self {
         Self {
             size,
+            cache_scope,
             color: alpha2_engine::color_policy(&alpha2_model::ColorPipeline::default()),
             generation: None,
             frames: RequestedFrames::default(),
@@ -334,8 +337,12 @@ impl NativeGpuFrames {
     }
 
     #[cfg(all(target_os = "linux", feature = "hwdecode"))]
-    pub fn with_vulkan(size: RenderSize, vulkan: Option<SharedVulkanContext>) -> Self {
-        let mut frames = Self::new(size);
+    pub fn with_vulkan(
+        size: RenderSize,
+        cache_scope: u64,
+        vulkan: Option<SharedVulkanContext>,
+    ) -> Self {
+        let mut frames = Self::new(size, cache_scope);
         frames.vulkan = vulkan;
         let (max_surfaces, max_bytes) = crate::config::configured_decode_surface_limits();
         frames.surface_budget = SurfaceBudget::new(max_surfaces, max_bytes);
@@ -343,8 +350,12 @@ impl NativeGpuFrames {
     }
 
     #[cfg(all(target_os = "macos", feature = "hwdecode"))]
-    pub fn with_metal(size: RenderSize, metal: Option<SharedMetalContext>) -> Self {
-        let mut frames = Self::new(size);
+    pub fn with_metal(
+        size: RenderSize,
+        cache_scope: u64,
+        metal: Option<SharedMetalContext>,
+    ) -> Self {
+        let mut frames = Self::new(size, cache_scope);
         frames.metal = metal;
         let (max_surfaces, max_bytes) = crate::config::configured_decode_surface_limits();
         frames.surface_budget = SurfaceBudget::new(max_surfaces, max_bytes);
@@ -352,8 +363,12 @@ impl NativeGpuFrames {
     }
 
     #[cfg(all(target_os = "windows", feature = "hwdecode"))]
-    pub fn with_d3d12(size: RenderSize, d3d12: Option<SharedD3D12Context>) -> Self {
-        let mut frames = Self::new(size);
+    pub fn with_d3d12(
+        size: RenderSize,
+        cache_scope: u64,
+        d3d12: Option<SharedD3D12Context>,
+    ) -> Self {
+        let mut frames = Self::new(size, cache_scope);
         frames.d3d12 = d3d12;
         let (max_surfaces, max_bytes) = crate::config::configured_decode_surface_limits();
         frames.surface_budget = SurfaceBudget::new(max_surfaces, max_bytes);
@@ -616,6 +631,7 @@ impl FrameProvider for NativeGpuFrames {
 
     fn source_key(&self, source: &SourceId, time: MediaTime) -> Option<RenderCacheKey> {
         export_source_key(
+            self.cache_scope,
             source,
             self.frames.get(source, time).map(|frame| &frame.picture),
             self.images.contains_key(source),
@@ -652,7 +668,8 @@ pub struct SourceSupplyMetrics {
 /// The comparison path's frame supply, decoded synchronously with software decoders.
 pub struct NativeFrames {
     pub size: RenderSize,
-    pub providers: std::sync::Arc<crate::providers::ProviderMedia>,
+    cache_scope: u64,
+    pub providers: std::sync::Arc<alpha2_host_core::providers::ProviderMedia>,
     pub color: ColorPolicy,
     pub paths: HashMap<SourceId, PathBuf>,
     pub kinds: HashMap<SourceId, MediaKind>,
@@ -683,6 +700,7 @@ pub(crate) fn declared_video_colors(
 impl NativeFrames {
     pub fn new(
         size: RenderSize,
+        cache_scope: u64,
         project: &Project,
         assets: &HashMap<String, PathBuf>,
         decoding: std::sync::Arc<crate::recovery::ExportDecoding>,
@@ -708,7 +726,8 @@ impl NativeFrames {
         }
         Ok(Self {
             size,
-            providers: crate::providers::ProviderMedia::none(),
+            cache_scope,
+            providers: alpha2_host_core::providers::ProviderMedia::none(),
             color: alpha2_engine::color_policy(&project.settings.color),
             paths,
             kinds,
@@ -820,7 +839,11 @@ impl NativeFrames {
             return Ok(());
         }
         let decode_started = Instant::now();
-        let frame = Arc::new(self.providers.frame(cursor, requested, self.supplied)?);
+        let frame = Arc::new(
+            self.providers
+                .frame(cursor, requested, self.supplied)
+                .map_err(crate::providers::tagged)?,
+        );
         metrics.decode = metrics.decode.saturating_add(decode_started.elapsed());
         let mut upload = |frames: &Self| {
             let upload_started = Instant::now();
@@ -1548,6 +1571,7 @@ impl FrameProvider for NativeFrames {
 
     fn source_key(&self, source: &SourceId, time: MediaTime) -> Option<RenderCacheKey> {
         export_source_key(
+            self.cache_scope,
             source,
             self.frames.get(source, time).map(|frame| &frame.picture),
             self.images.contains_key(source),
@@ -1570,28 +1594,43 @@ impl FrameProvider for NativeFrames {
     }
 }
 
-pub fn estimated_staging_bytes(size: RenderSize, _format: wgpu::TextureFormat) -> u64 {
+/// The buffer one readback of a `layout` frame maps: 8-bit 4:2:0 is packed on the GPU, any other
+/// layout reads the intermediate's texels back and packs on the CPU.
+pub fn estimated_staging_bytes(
+    size: RenderSize,
+    format: wgpu::TextureFormat,
+    layout: alpha2_media::PixelLayout,
+) -> u64 {
     // Pack textures return to the pool once their copy is submitted; only the mapped buffer stays
     // with the readback.
-    alpha2_render::yuv420p_staging_bytes(size).unwrap_or(u64::MAX)
+    if layout.is_yuv420p() {
+        alpha2_render::yuv420p_staging_bytes(size)
+    } else {
+        alpha2_render::layout_staging_bytes(size, format)
+    }
+    .unwrap_or(u64::MAX)
 }
 
-pub fn packed_yuv420_bytes(size: RenderSize) -> u64 {
-    u64::from(size.width)
-        .saturating_mul(u64::from(size.height))
-        .saturating_mul(3)
-        .div_euclid(2)
+/// Source of request scopes for result-cache keys; every request takes a new one.
+static NEXT_CACHE_SCOPE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A scope no other request on this process has.
+pub(crate) fn next_cache_scope() -> u64 {
+    NEXT_CACHE_SCOPE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
-/// A source's picture is fixed within one export, so the key names the decoded picture (source,
-/// decode generation, timestamp) rather than the requested time, or the still's source. Keys from
-/// different exports could collide, so the result cache is cleared when each export starts.
+/// A source's picture is fixed within one request, so the key names the decoded picture (source,
+/// decode generation, timestamp) rather than the requested time, or the still's source. The
+/// request's `scope` comes first: requests share one renderer's result cache, and only the scope
+/// keeps one request's keys from naming another's pictures.
 pub(crate) fn export_source_key(
+    scope: u64,
     source: &SourceId,
     picture: Option<&PhysicalFrameKey>,
     image: bool,
 ) -> Option<RenderCacheKey> {
     let mut hash = std::hash::DefaultHasher::new();
+    std::hash::Hash::hash(&scope, &mut hash);
     if let Some(picture) = picture {
         std::hash::Hash::hash(&("frame", picture), &mut hash);
     } else if image {

@@ -13,6 +13,7 @@ include = [
   "/src/**",
   "/include/**",
   "/c/**",
+  "/shaders/**",
   "/README.md",
   "/LICENSE.md",
   "!/src/**/tests.rs",
@@ -21,7 +22,6 @@ include = [
 ]
 build = "build.rs"
 
-# docs.rs has no FFmpeg, so the build script skips the C shim there and the API still documents.
 [package.metadata.docs.rs]
 features = ["hwdevice"]
 
@@ -39,6 +39,13 @@ hwdevice = [
   "dep:wgpu-hal",
   "dep:windows",
 ]
+ahb-import = [
+  "dep:alpha2-gpu",
+  "dep:ash",
+  "dep:ndk-sys",
+  "dep:wgpu",
+  "dep:wgpu-hal",
+]
 
 [build-dependencies]
 alpha2-build-support.workspace = true
@@ -48,7 +55,6 @@ alpha2-ffmpeg-bridge = { workspace = true, optional = true }
 
 [dev-dependencies]
 alpha2-test-support.workspace = true
-# Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -65,7 +71,7 @@ pollster.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 alpha2-gpu = { workspace = true, optional = true, features = ["wgpu-interop"] }
-objc2 = { version = "0.6.4", optional = true }
+objc2 = { version = "0.6.5", optional = true }
 objc2-metal = { version = "0.3.2", features = ["MTLTexture"], optional = true }
 rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = true }
 wgpu = { workspace = true, optional = true }
@@ -80,6 +86,13 @@ rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = tru
 wgpu = { workspace = true, optional = true }
 wgpu-hal = { version = "30.0.1", features = ["dx12"], optional = true }
 windows = { version = "0.62", features = ["Wdk_Graphics_Direct3D", "Win32_Foundation", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"], optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+alpha2-gpu = { workspace = true, optional = true, features = ["wgpu-interop"] }
+ash = { version = "0.38", optional = true }
+ndk-sys = { version = "=0.6.0", features = ["nativewindow"], optional = true }
+wgpu = { workspace = true, optional = true }
+wgpu-hal = { version = "30.0.1", features = ["vulkan"], optional = true }
 
 [target.'cfg(target_os = "windows")'.dev-dependencies]
 pollster.workspace = true

@@ -1,9 +1,9 @@
-//! Peak heap held while reading a Lottie document, dotLottie package, or PDF page, as a multiple
-//! of its size or against a fixed bound.
+//! Peak heap held while reading an SVG, Lottie document, dotLottie package, EXR image, or PDF
+//! page, as a multiple of its size or against a fixed bound.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
-#![cfg(any(feature = "lottie", feature = "pdf"))]
+#![cfg(any(feature = "svg", feature = "lottie", feature = "exr", feature = "pdf"))]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 #[cfg(feature = "lottie")]
 use alpha2_extensions::LottieProvider;
+#[cfg(feature = "svg")]
+use alpha2_extensions::SvgProvider;
 use alpha2_extensions::{ExtensionError, NoResources, VisualProvider};
 #[cfg(feature = "lottie")]
 use alpha2_model::MAX_LOTTIE_DOCUMENT_BYTES;
@@ -124,6 +126,76 @@ fn a_lottie_animation_opens_holding_one_parse_of_it_at_a_time() {
     // velato's parse is about 25 times the file, plus 1 for the text.
     assert!(probe < 26.0, "the probe held {probe:.1} times the file");
     assert!(open < 30.0, "the open held {open:.1} times the file");
+}
+
+#[cfg(feature = "lottie")]
+#[test]
+fn a_lottie_animation_of_a_thousand_assets_naming_one_file_holds_one_decode() {
+    struct Photo(Arc<[u8]>);
+    impl alpha2_extensions::ResourceResolver for Photo {
+        fn bytes(&self, _: &str) -> Result<Arc<[u8]>, ExtensionError> {
+            Ok(Arc::clone(&self.0))
+        }
+    }
+    // A 512 x 512 RGBA PNG of 1 MiB of samples, stored without compression.
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = u32::MAX;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xedb8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut chunk = |kind: &[u8], data: &[u8]| {
+        png.extend_from_slice(&u32::try_from(data.len()).expect("small").to_be_bytes());
+        let body = [kind, data].concat();
+        png.extend_from_slice(&body);
+        png.extend_from_slice(&crc32(&body).to_be_bytes());
+    };
+    let mut header = [512_u32.to_be_bytes(), 512_u32.to_be_bytes()].concat();
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(b"IHDR", &header);
+    let mut rows = Vec::with_capacity(512 * (1 + 512 * 4));
+    for _ in 0..512 {
+        rows.push(0);
+        rows.extend_from_slice(&[200; 512 * 4]);
+    }
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::none());
+    std::io::Write::write_all(&mut encoder, &rows).expect("compress");
+    chunk(b"IDAT", &encoder.finish().expect("compressed"));
+    chunk(b"IEND", &[]);
+    let assets: Vec<String> = (0..1000)
+        .map(|index| format!(r#"{{"id":"a{index}","w":512,"h":512,"e":0,"u":"","p":"photo.png"}}"#))
+        .collect();
+    let bytes: Arc<[u8]> = format!(
+        r#"{{"v":"5.7.0","w":64,"h":64,"fr":30,"ip":0,"op":30,"assets":[{}],"layers":[]}}"#,
+        assets.join(",")
+    )
+    .into_bytes()
+    .into();
+    let resolver = Photo(png.into());
+    let (opened, held) = peak_ratio(&bytes, || {
+        LottieProvider
+            .open(
+                Arc::clone(&bytes),
+                &ProviderSource::Lottie { animation: None },
+                &resolver,
+            )
+            .map(drop)
+    });
+    opened.expect("opens");
+    #[allow(clippy::cast_precision_loss)]
+    let held = held * bytes.len() as f64;
+    eprintln!("held {held:.0} bytes");
+    // The decoded picture, 1 MiB, and the parsed document; 1000 decoded copies would be 2 GB.
+    assert!(held < 17.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
 }
 
 #[cfg(feature = "lottie")]
@@ -343,12 +415,82 @@ fn a_pdf_page_whose_streams_or_images_decode_past_the_limit_is_refused_holding_l
         #[allow(clippy::cast_precision_loss)]
         let held = held * bytes.len() as f64;
         eprintln!("{what}: held {held:.0} bytes");
-        // Covers the file hayro parses and the scan's 64 KiB decode buffers.
+        // Covers the file hayro parses, the scan's 64 KiB decode buffers, and the 32 MiB of
+        // content a page's streams may decode to, which the scan keeps to read.
         assert!(
-            held < 16.0 * 1024.0 * 1024.0,
+            held < 48.0 * 1024.0 * 1024.0,
             "{what}: held {held:.0} bytes"
         );
     }
+}
+
+#[cfg(feature = "pdf")]
+#[test]
+fn a_pdf_image_whose_codestream_declares_billions_of_pixels_is_refused_holding_little() {
+    // A 16 x 16 gray JPEG 2000 codestream whose SIZ marker says 60000 x 60000.
+    let mut codestream = vec![
+        0xff, 0x4f, 0xff, 0x51, 0x00, 0x29, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00,
+        0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x07, 0x01, 0x01,
+        0xff, 0x52, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x04, 0x04, 0x00, 0x01, 0xff,
+        0x5c, 0x00, 0x04, 0x40, 0x40, 0xff, 0x90, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f,
+        0x00, 0x01, 0xff, 0x93, 0x80, 0xff, 0xd9,
+    ];
+    for at in [8, 24] {
+        codestream[at..at + 4].copy_from_slice(&60_000_u32.to_be_bytes());
+        codestream[at + 4..at + 8].copy_from_slice(&60_000_u32.to_be_bytes());
+    }
+    let image = pdf_stream(
+        "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode",
+        &codestream,
+    );
+    let bytes = pdf(
+        "<< /XObject << /Im 5 0 R >> >>",
+        b"q 60 0 0 30 0 0 cm /Im Do Q",
+        &[image],
+    );
+    let (opened, held) = peak_ratio(&bytes, || open_pdf(&bytes));
+    assert!(
+        matches!(opened, Err(ExtensionError::Budget(_))),
+        "{opened:?}"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let held = held * bytes.len() as f64;
+    eprintln!("held {held:.0} bytes");
+    assert!(held < 16.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
+}
+
+#[cfg(feature = "pdf")]
+#[test]
+fn a_pdf_page_of_a_billion_form_invocations_is_refused_holding_little() {
+    // The page invokes a form 1000 times, it the next 1000 times, and that one a rectangle.
+    let invoke = |form: usize| format!("/F{form} Do\n").repeat(1000).into_bytes();
+    let form = |resources: &str, content: &[u8]| {
+        pdf_stream(
+            &format!(
+                "/Type /XObject /Subtype /Form /BBox [0 0 60 30] /Resources {resources} /Filter /FlateDecode"
+            ),
+            &zlib(content, 1),
+        )
+    };
+    let bytes = pdf(
+        "<< /XObject << /F1 5 0 R >> >>",
+        &invoke(1),
+        &[
+            form("<< /XObject << /F2 6 0 R >> >>", &invoke(2)),
+            form("<< /XObject << /F3 7 0 R >> >>", &invoke(3)),
+            form("<< >>", b"0 0 1 1 re f"),
+        ],
+    );
+    let (opened, held) = peak_ratio(&bytes, || open_pdf(&bytes));
+    assert!(
+        matches!(&opened, Err(ExtensionError::Budget(reason)) if reason.contains("draws more than")),
+        "{opened:?}"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let held = held * bytes.len() as f64;
+    eprintln!("held {held:.0} bytes");
+    assert!(held < 16.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
 }
 
 #[cfg(feature = "pdf")]
@@ -378,4 +520,178 @@ fn a_pdf_page_of_one_photo_opens_holding_a_few_times_its_pixels() {
     eprintln!("open held {held:.1} times the file");
     // Covers the decoded samples, their PNG, its base64 in the SVG, and usvg's decoded copy.
     assert!(held < 12.0, "the open held {held:.1} times the file");
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_whose_entities_expand_past_its_text_budget_is_refused_holding_little() {
+    let document = |declarations: String, body: String| -> Arc<[u8]> {
+        format!(
+            concat!(
+                "<?xml version=\"1.0\"?>\n<!DOCTYPE svg [\n{}]>\n",
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\">{}</svg>\n"
+            ),
+            declarations, body
+        )
+        .into_bytes()
+        .into()
+    };
+    // A hundred million elements, and one attribute of 2.6 GB.
+    for bytes in [
+        document(
+            format!("<!ENTITY b \"{}\">\n", "<g/>".repeat(1000)),
+            "&b;".repeat(100_000),
+        ),
+        document(
+            format!(
+                "<!ENTITY t \"{}\">\n<!ENTITY m \"{}\">\n",
+                "x".repeat(100_000),
+                "&t;".repeat(255)
+            ),
+            format!("<desc id=\"{}\"/>", "&m;".repeat(100)),
+        ),
+    ] {
+        let (opened, held) = peak_ratio(&bytes, || {
+            SvgProvider
+                .open(Arc::clone(&bytes), &ProviderSource::Svg, &NoResources)
+                .map(drop)
+        });
+        assert!(
+            matches!(opened, Err(ExtensionError::Budget(_))),
+            "{opened:?}"
+        );
+        eprintln!("held {held:.2} times the file");
+        // The entity scan keeps only its declarations; the parser never runs.
+        assert!(held < 2.0, "held {held:.2} times the file");
+    }
+}
+
+#[cfg(feature = "svg")]
+#[test]
+fn an_svg_image_drawn_by_many_use_copies_is_refused_holding_its_byte_budget() {
+    // A 4 x 4 PNG padded to 1 MiB: usvg decodes the `data:` URL again for every copy.
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x04\0\0\0\x04\x08\x06\0\0\0".to_vec();
+    png.extend_from_slice(&[0xa9, 0xf1, 0x9e, 0x7e]);
+    png.extend_from_slice(&u32::to_be_bytes(1 << 20));
+    png.extend_from_slice(b"tEXt");
+    png.resize(png.len() + (1 << 20), b'x');
+    png.extend_from_slice(&[0; 4]);
+    png.extend_from_slice(b"\0\0\0\0IEND\xaeB`\x82");
+    let bytes: Arc<[u8]> = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><defs><image id="i" width="4" height="4" href="data:image/png;base64,{}"/></defs>{}</svg>"#,
+        base64(&png),
+        r##"<use href="#i"/>"##.repeat(300)
+    )
+    .into_bytes()
+    .into();
+    let (opened, held) = peak_ratio(&bytes, || {
+        SvgProvider
+            .open(Arc::clone(&bytes), &ProviderSource::Svg, &NoResources)
+            .map(drop)
+    });
+    assert!(
+        matches!(opened, Err(ExtensionError::Budget(_))),
+        "{opened:?}"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let held = held * bytes.len() as f64;
+    eprintln!("held {held:.0} bytes");
+    // The 256 MiB image byte budget and the copy being decoded when it runs out.
+    assert!(held < 300.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
+}
+
+#[cfg(feature = "svg")]
+fn base64(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let word = u32::from(chunk[0]) << 16
+            | u32::from(*chunk.get(1).unwrap_or(&0)) << 8
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        for (at, shift) in [18, 12, 6, 0].into_iter().enumerate() {
+            out.push(if at <= chunk.len() {
+                char::from(DIGITS[(word >> shift & 63) as usize])
+            } else {
+                '='
+            });
+        }
+    }
+    out
+}
+
+/// A ZIP-compressed EXR file of one 3840 by 2160 tile with B, G, R and `extra` float channels,
+/// whose only chunk holds a 9-byte zlib stream.
+#[cfg(feature = "exr")]
+fn exr_one_tile(extra: usize) -> Arc<[u8]> {
+    fn attribute(out: &mut Vec<u8>, name: &str, kind: &str, value: &[u8]) {
+        out.extend_from_slice(&[name.as_bytes(), b"\0", kind.as_bytes(), b"\0"].concat());
+        out.extend_from_slice(&u32::try_from(value.len()).expect("size").to_le_bytes());
+        out.extend_from_slice(value);
+    }
+    let channel = |name: &str, pixel_type: u32| {
+        let mut bytes = [name.as_bytes(), b"\0"].concat();
+        for word in [pixel_type, 0, 1, 1] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    };
+    let mut list = ["B", "G", "R"].map(|name| channel(name, 1)).concat();
+    for at in 0..extra {
+        list.extend(channel(&format!("c{at:06}"), 2));
+    }
+    list.push(0);
+    let window = [0_i32, 0, 3839, 2159].map(i32::to_le_bytes).concat();
+    let mut tiles = [3840_u32, 2160].map(u32::to_le_bytes).concat();
+    tiles.push(0);
+    let mut out = [20_000_630_u32, 0x202].map(u32::to_le_bytes).concat();
+    attribute(&mut out, "channels", "chlist", &list);
+    attribute(&mut out, "compression", "compression", &[3]);
+    attribute(&mut out, "dataWindow", "box2i", &window);
+    attribute(&mut out, "displayWindow", "box2i", &window);
+    attribute(&mut out, "lineOrder", "lineOrder", &[0]);
+    attribute(
+        &mut out,
+        "pixelAspectRatio",
+        "float",
+        &1.0_f32.to_le_bytes(),
+    );
+    attribute(&mut out, "screenWindowCenter", "v2f", &[0; 8]);
+    attribute(
+        &mut out,
+        "screenWindowWidth",
+        "float",
+        &1.0_f32.to_le_bytes(),
+    );
+    attribute(&mut out, "tiles", "tiledesc", &tiles);
+    out.push(0);
+    let chunk = u64::try_from(out.len() + 8).expect("offset");
+    out.extend_from_slice(&chunk.to_le_bytes());
+    out.extend_from_slice(&[0; 16]);
+    out.extend_from_slice(&9_i32.to_le_bytes());
+    out.extend_from_slice(&[0x78, 0x9c, 0x63, 0, 0, 0, 1, 0, 1]);
+    out.into()
+}
+
+#[cfg(feature = "exr")]
+#[test]
+fn an_exr_header_of_sixty_thousand_channels_is_refused_holding_little() {
+    let bytes = exr_one_tile(60_000);
+    let (opened, held) = peak_ratio(&bytes, || {
+        alpha2_extensions::ExrProvider
+            .open(
+                Arc::clone(&bytes),
+                &ProviderSource::Exr { primaries: None },
+                &NoResources,
+            )
+            .map(drop)
+    });
+    assert!(
+        matches!(opened, Err(ExtensionError::Budget(_))),
+        "{opened:?}"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let held = held * bytes.len() as f64;
+    eprintln!("held {held:.0} bytes");
+    // The parsed channel list; the 2 TB block it describes is never allocated.
+    assert!(held < 16.0 * 1024.0 * 1024.0, "held {held:.0} bytes");
 }

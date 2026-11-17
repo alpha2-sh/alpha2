@@ -96,6 +96,7 @@
               "items": {
                 "$ref": "#/$defs/PointKeyframe"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -108,11 +109,81 @@
             "keyframes"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A channel of a data set, followed at render time.",
+          "properties": {
+            "channel": {
+              "description": "The channel followed.",
+              "type": "string"
+            },
+            "data": {
+              "$ref": "#/$defs/DataSetId",
+              "description": "The data set, a `points` or `scalars` one."
+            },
+            "mode": {
+              "const": "data",
+              "type": "string"
+            },
+            "offset": {
+              "description": "`[x, y]` added after the space mapping, in that space's normalized units (points only).",
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "remap": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataRemap"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A linear map of the value (scalars only)."
+            },
+            "space": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataSpace"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where a point is read (points with `via` only, where it is required)."
+            },
+            "via": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataVia"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The reader whose time map gives source time: required for a source-anchored set,\nforbidden for a timeline-anchored one."
+            }
+          },
+          "required": [
+            "mode",
+            "data",
+            "channel"
+          ],
+          "type": "object"
         }
       ]
     },
     "Animated_EffectValue": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "description": "A value that is constant, controlled by sorted keyframes, or following a data set.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -142,6 +213,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_EffectValue"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -152,335 +224,83 @@
           "required": [
             "mode",
             "keyframes"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Animated_Insets": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "A value without animation.",
-          "properties": {
-            "mode": {
-              "const": "constant",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/Insets",
-              "description": "Value used at every timestamp."
-            }
-          },
-          "required": [
-            "mode",
-            "value"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
-          "description": "Values evaluated from their keyframe sequence.",
+          "description": "A channel of a data set, followed at render time.",
           "properties": {
-            "keyframes": {
-              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+            "channel": {
+              "description": "The channel followed.",
+              "type": "string"
+            },
+            "data": {
+              "$ref": "#/$defs/DataSetId",
+              "description": "The data set, a `points` or `scalars` one."
+            },
+            "mode": {
+              "const": "data",
+              "type": "string"
+            },
+            "offset": {
+              "description": "`[x, y]` added after the space mapping, in that space's normalized units (points only).",
               "items": {
-                "$ref": "#/$defs/Keyframe_Insets"
+                "format": "float",
+                "type": "number"
               },
-              "type": "array"
+              "maxItems": 2,
+              "minItems": 2,
+              "type": [
+                "array",
+                "null"
+              ]
             },
-            "mode": {
-              "const": "keyframes",
-              "type": "string"
+            "remap": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataRemap"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A linear map of the value (scalars only)."
+            },
+            "space": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataSpace"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where a point is read (points with `via` only, where it is required)."
+            },
+            "via": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataVia"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The reader whose time map gives source time: required for a source-anchored set,\nforbidden for a timeline-anchored one."
             }
           },
           "required": [
             "mode",
-            "keyframes"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Animated_LayoutLength": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "A value without animation.",
-          "properties": {
-            "mode": {
-              "const": "constant",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/LayoutLength",
-              "description": "Value used at every timestamp."
-            }
-          },
-          "required": [
-            "mode",
-            "value"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Values evaluated from their keyframe sequence.",
-          "properties": {
-            "keyframes": {
-              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
-              "items": {
-                "$ref": "#/$defs/Keyframe_LayoutLength"
-              },
-              "type": "array"
-            },
-            "mode": {
-              "const": "keyframes",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode",
-            "keyframes"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Animated_LayoutOffset": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "A value without animation.",
-          "properties": {
-            "mode": {
-              "const": "constant",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/LayoutOffset",
-              "description": "Value used at every timestamp."
-            }
-          },
-          "required": [
-            "mode",
-            "value"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Values evaluated from their keyframe sequence.",
-          "properties": {
-            "keyframes": {
-              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
-              "items": {
-                "$ref": "#/$defs/Keyframe_LayoutOffset"
-              },
-              "type": "array"
-            },
-            "mode": {
-              "const": "keyframes",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode",
-            "keyframes"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Animated_LayoutSize": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "A value without animation.",
-          "properties": {
-            "mode": {
-              "const": "constant",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/LayoutSize",
-              "description": "Value used at every timestamp."
-            }
-          },
-          "required": [
-            "mode",
-            "value"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Values evaluated from their keyframe sequence.",
-          "properties": {
-            "keyframes": {
-              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
-              "items": {
-                "$ref": "#/$defs/Keyframe_LayoutSize"
-              },
-              "type": "array"
-            },
-            "mode": {
-              "const": "keyframes",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode",
-            "keyframes"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Animated_Paint": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "A value without animation.",
-          "properties": {
-            "mode": {
-              "const": "constant",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/Paint",
-              "description": "Value used at every timestamp."
-            }
-          },
-          "required": [
-            "mode",
-            "value"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Values evaluated from their keyframe sequence.",
-          "properties": {
-            "keyframes": {
-              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
-              "items": {
-                "$ref": "#/$defs/Keyframe_Paint"
-              },
-              "type": "array"
-            },
-            "mode": {
-              "const": "keyframes",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode",
-            "keyframes"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Animated_Path": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "A value without animation.",
-          "properties": {
-            "mode": {
-              "const": "constant",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/Path",
-              "description": "Value used at every timestamp."
-            }
-          },
-          "required": [
-            "mode",
-            "value"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Values evaluated from their keyframe sequence.",
-          "properties": {
-            "keyframes": {
-              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
-              "items": {
-                "$ref": "#/$defs/Keyframe_Path"
-              },
-              "type": "array"
-            },
-            "mode": {
-              "const": "keyframes",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode",
-            "keyframes"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Animated_Rgba": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "A value without animation.",
-          "properties": {
-            "mode": {
-              "const": "constant",
-              "type": "string"
-            },
-            "value": {
-              "$ref": "#/$defs/Rgba",
-              "description": "Value used at every timestamp."
-            }
-          },
-          "required": [
-            "mode",
-            "value"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "Values evaluated from their keyframe sequence.",
-          "properties": {
-            "keyframes": {
-              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
-              "items": {
-                "$ref": "#/$defs/Keyframe_Rgba"
-              },
-              "type": "array"
-            },
-            "mode": {
-              "const": "keyframes",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode",
-            "keyframes"
+            "data",
+            "channel"
           ],
           "type": "object"
         }
       ]
     },
     "Animated_Vec2": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "description": "A value that is constant, controlled by sorted keyframes, or following a data set.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -510,6 +330,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_Vec2"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -522,11 +343,81 @@
             "keyframes"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A channel of a data set, followed at render time.",
+          "properties": {
+            "channel": {
+              "description": "The channel followed.",
+              "type": "string"
+            },
+            "data": {
+              "$ref": "#/$defs/DataSetId",
+              "description": "The data set, a `points` or `scalars` one."
+            },
+            "mode": {
+              "const": "data",
+              "type": "string"
+            },
+            "offset": {
+              "description": "`[x, y]` added after the space mapping, in that space's normalized units (points only).",
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "remap": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataRemap"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A linear map of the value (scalars only)."
+            },
+            "space": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataSpace"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where a point is read (points with `via` only, where it is required)."
+            },
+            "via": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataVia"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The reader whose time map gives source time: required for a source-anchored set,\nforbidden for a timeline-anchored one."
+            }
+          },
+          "required": [
+            "mode",
+            "data",
+            "channel"
+          ],
+          "type": "object"
         }
       ]
     },
     "Animated_float": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "description": "A value that is constant, controlled by sorted keyframes, or following a data set.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -557,6 +448,7 @@
               "items": {
                 "$ref": "#/$defs/Keyframe_float"
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "mode": {
@@ -567,52 +459,76 @@
           "required": [
             "mode",
             "keyframes"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Animated_string": {
-      "description": "A value that is either constant or controlled by sorted keyframes.",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "A value without animation.",
-          "properties": {
-            "mode": {
-              "const": "constant",
-              "type": "string"
-            },
-            "value": {
-              "description": "Value used at every timestamp.",
-              "type": "string"
-            }
-          },
-          "required": [
-            "mode",
-            "value"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
-          "description": "Values evaluated from their keyframe sequence.",
+          "description": "A channel of a data set, followed at render time.",
           "properties": {
-            "keyframes": {
-              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
-              "items": {
-                "$ref": "#/$defs/Keyframe_string"
-              },
-              "type": "array"
+            "channel": {
+              "description": "The channel followed.",
+              "type": "string"
+            },
+            "data": {
+              "$ref": "#/$defs/DataSetId",
+              "description": "The data set, a `points` or `scalars` one."
             },
             "mode": {
-              "const": "keyframes",
+              "const": "data",
               "type": "string"
+            },
+            "offset": {
+              "description": "`[x, y]` added after the space mapping, in that space's normalized units (points only).",
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "remap": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataRemap"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "A linear map of the value (scalars only)."
+            },
+            "space": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataSpace"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Where a point is read (points with `via` only, where it is required)."
+            },
+            "via": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/DataVia"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The reader whose time map gives source time: required for a source-anchored set,\nforbidden for a timeline-anchored one."
             }
           },
           "required": [
             "mode",
-            "keyframes"
+            "data",
+            "channel"
           ],
           "type": "object"
         }
@@ -630,6 +546,7 @@
               "items": {
                 "$ref": "#/$defs/EqBand"
               },
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -733,6 +650,7 @@
             "minimum": 0,
             "type": "integer"
           },
+          "maxItems": 2,
           "type": [
             "array",
             "null"
@@ -744,6 +662,7 @@
           "items": {
             "$ref": "#/$defs/AudioEffect"
           },
+          "maxItems": 16,
           "type": "array"
         },
         "fade_in": {
@@ -839,6 +758,34 @@
         }
       ]
     },
+    "BlockEllipsis": {
+      "description": "What ends a line that a clamp cuts, as CSS `block-ellipsis`.",
+      "oneOf": [
+        {
+          "const": "no_ellipsis",
+          "description": "No mark. The cut line keeps its own end.",
+          "type": "string"
+        },
+        {
+          "const": "ellipsis",
+          "description": "U+2026 HORIZONTAL ELLIPSIS.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "This text, 1 to [`MAX_BLOCK_ELLIPSIS_BYTES`] bytes with no control characters or line\nand paragraph separators.",
+          "properties": {
+            "string": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "string"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "CacheIntent": {
       "description": "Whether a runtime may keep and reuse a clip's rendered picture.",
       "oneOf": [
@@ -897,11 +844,24 @@
       "description": "What a caption track shows: its cues, in its style.",
       "properties": {
         "cues": {
-          "description": "Cues in timeline order, none overlapping; a track shows one cue at a time.",
+          "default": [],
+          "description": "Cues in timeline order, none overlapping; a track shows one cue at a time. Empty when\n`from_words` gives the cues.",
           "items": {
             "$ref": "#/$defs/CaptionCue"
           },
+          "maxItems": 4096,
           "type": "array"
+        },
+        "from_words": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CaptionsFromWords"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Cues built at evaluation from a `words` data set, instead of `cues`."
         },
         "style": {
           "$ref": "#/$defs/TextStyle",
@@ -941,8 +901,38 @@
           "type": "object"
         }
       },
+      "type": "object"
+    },
+    "CaptionsFromWords": {
+      "additionalProperties": false,
+      "description": "Caption cues built from a `words` data set.",
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/DataSetId",
+          "description": "The data set, a `words` one."
+        },
+        "max_chars": {
+          "description": "Most characters of one cue, at least 1.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "track": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrackId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For a source-anchored set, the track whose clips showing the source give the words their\ntimeline times; forbidden for a timeline-anchored set."
+        }
+      },
       "required": [
-        "cues"
+        "data",
+        "max_chars"
       ],
       "type": "object"
     },
@@ -1000,6 +990,7 @@
           "items": {
             "$ref": "#/$defs/ShapeMask"
           },
+          "maxItems": 8,
           "type": "array"
         },
         "matte": {
@@ -1196,7 +1187,7 @@
       "description": "One versioned effect invocation: a composition's effect or transition node, or a timeline\ntransition.",
       "properties": {
         "id": {
-          "description": "Stable effect definition identifier.",
+          "description": "Stable effect definition identifier. Ids under `alpha2.` name built-ins\n(`schema/effects.v1.json`): validation checks such an invocation's version, kind,\nparameters, inputs and resources against its definition.",
           "type": "string"
         },
         "params": {
@@ -1391,6 +1382,7 @@
           "items": {
             "$ref": "#/$defs/CompositionControl"
           },
+          "maxItems": 64,
           "type": "array"
         },
         "id": {
@@ -1402,6 +1394,7 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 16,
           "type": "array"
         },
         "nodes": {
@@ -1410,6 +1403,7 @@
           "items": {
             "$ref": "#/$defs/CompositionNode"
           },
+          "maxItems": 256,
           "type": "array"
         },
         "output": {
@@ -1483,6 +1477,20 @@
       ],
       "type": "object"
     },
+    "CorrectionRef": {
+      "additionalProperties": false,
+      "description": "A `similarity` data set applied to a clip's own picture before its transform.",
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/DataSetId",
+          "description": "The data set, a `similarity` one anchored to the clip's source."
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "type": "object"
+    },
     "Dash": {
       "additionalProperties": false,
       "description": "A dash pattern.",
@@ -1500,11 +1508,573 @@
           "items": {
             "$ref": "#/$defs/Animated_float"
           },
+          "maxItems": 16,
           "type": "array"
         }
       },
       "required": [
         "pattern"
+      ],
+      "type": "object"
+    },
+    "DataAnchor": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Source time, the presentation times the source's pictures and sound carry once decoded.\nPoints are normalized to the displayed source picture.",
+          "properties": {
+            "source_id": {
+              "$ref": "#/$defs/SourceId",
+              "description": "The source."
+            },
+            "type": {
+              "const": "source",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Timeline time. Points are normalized to the canvas.",
+          "properties": {
+            "type": {
+              "const": "timeline",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataInterpolation": {
+      "description": "How a sampled data set reads between its samples.",
+      "oneOf": [
+        {
+          "const": "hold",
+          "description": "The sample at or before the time, as the picture shown at that time is chosen.",
+          "type": "string"
+        },
+        {
+          "const": "linear",
+          "description": "A straight line between the samples around the time.",
+          "type": "string"
+        }
+      ]
+    },
+    "DataInterval": {
+      "additionalProperties": false,
+      "description": "One timed range; `start == end` is an instant.",
+      "properties": {
+        "end": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "When it ends; not before `start`."
+        },
+        "label": {
+          "description": "A free label, at most [`MAX_DATA_LABEL_BYTES`] bytes. Edit operations ignore it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "score": {
+          "description": "A free, finite score of at most [`MAX_DATA_SCALAR`] in magnitude; edit operations ignore it.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "start": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "When it starts, in ticks on the anchor's clock."
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "DataRemap": {
+      "additionalProperties": false,
+      "description": "A linear map from `input` to `output`, clamped to `output`.",
+      "properties": {
+        "input": {
+          "description": "The input values mapped to `output[0]` and `output[1]`; distinct and finite.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "output": {
+          "description": "The output range; finite.",
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ],
+      "type": "object"
+    },
+    "DataSet": {
+      "description": "Values derived from media, anchored to a source's clock or the timeline's.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Named channels of normalized `(x, y)` points, each pair `null` when lost.",
+          "properties": {
+            "anchor": {
+              "$ref": "#/$defs/DataAnchor",
+              "description": "The clock the times are on."
+            },
+            "channels": {
+              "description": "Channel names, unique, 1 to 256 bytes each.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "id": {
+              "$ref": "#/$defs/DataSetId",
+              "description": "Stable identity, 1 to 64 bytes."
+            },
+            "interpolation": {
+              "$ref": "#/$defs/DataInterpolation",
+              "description": "How the values read between samples."
+            },
+            "kind": {
+              "const": "points",
+              "type": "string"
+            },
+            "made_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MadeBy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Which extractor made it."
+            },
+            "made_from": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MediaFingerprint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The original source's fingerprint when it was made."
+            },
+            "times": {
+              "description": "Sample times in ticks on the anchor's clock, strictly ascending.",
+              "items": {
+                "$ref": "#/$defs/MediaTime"
+              },
+              "maxItems": 4000000,
+              "type": "array"
+            },
+            "values": {
+              "description": "`times.len() * channels.len() * 2` numbers, sample after sample, channel after channel.",
+              "items": {
+                "format": "float",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "maxItems": 4000000,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "anchor",
+            "interpolation",
+            "channels",
+            "times",
+            "values"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Named channels of numbers, each `null` when lost.",
+          "properties": {
+            "anchor": {
+              "$ref": "#/$defs/DataAnchor",
+              "description": "The clock the times are on."
+            },
+            "channels": {
+              "description": "Channel names, unique, 1 to 256 bytes each.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 64,
+              "type": "array"
+            },
+            "id": {
+              "$ref": "#/$defs/DataSetId",
+              "description": "Stable identity, 1 to 64 bytes."
+            },
+            "interpolation": {
+              "$ref": "#/$defs/DataInterpolation",
+              "description": "How the values read between samples."
+            },
+            "kind": {
+              "const": "scalars",
+              "type": "string"
+            },
+            "made_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MadeBy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Which extractor made it."
+            },
+            "made_from": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MediaFingerprint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The original source's fingerprint when it was made."
+            },
+            "times": {
+              "description": "Sample times in ticks on the anchor's clock, strictly ascending.",
+              "items": {
+                "$ref": "#/$defs/MediaTime"
+              },
+              "maxItems": 4000000,
+              "type": "array"
+            },
+            "values": {
+              "description": "`times.len() * channels.len()` numbers, sample after sample, channel after channel.",
+              "items": {
+                "format": "float",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "maxItems": 4000000,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "anchor",
+            "interpolation",
+            "channels",
+            "times",
+            "values"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Translation (normalized), rotation (degrees) and uniform scale about the picture's\ncenter, per sample; four `null`s when lost.",
+          "properties": {
+            "anchor": {
+              "$ref": "#/$defs/DataAnchor",
+              "description": "The clock the times are on."
+            },
+            "id": {
+              "$ref": "#/$defs/DataSetId",
+              "description": "Stable identity, 1 to 64 bytes."
+            },
+            "interpolation": {
+              "$ref": "#/$defs/DataInterpolation",
+              "description": "How the values read between samples."
+            },
+            "kind": {
+              "const": "similarity",
+              "type": "string"
+            },
+            "made_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MadeBy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Which extractor made it."
+            },
+            "made_from": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MediaFingerprint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The original source's fingerprint when it was made."
+            },
+            "times": {
+              "description": "Sample times in ticks on the anchor's clock, strictly ascending.",
+              "items": {
+                "$ref": "#/$defs/MediaTime"
+              },
+              "maxItems": 4000000,
+              "type": "array"
+            },
+            "values": {
+              "description": "`times.len() * 4` numbers: `tx`, `ty`, rotation, scale per sample.",
+              "items": {
+                "format": "float",
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "maxItems": 4000000,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "anchor",
+            "interpolation",
+            "times",
+            "values"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Timed words.",
+          "properties": {
+            "anchor": {
+              "$ref": "#/$defs/DataAnchor",
+              "description": "The clock the times are on."
+            },
+            "id": {
+              "$ref": "#/$defs/DataSetId",
+              "description": "Stable identity, 1 to 64 bytes."
+            },
+            "kind": {
+              "const": "words",
+              "type": "string"
+            },
+            "made_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MadeBy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Which extractor made it."
+            },
+            "made_from": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MediaFingerprint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The original source's fingerprint when it was made."
+            },
+            "words": {
+              "description": "Words sorted by `(start, end)`.",
+              "items": {
+                "$ref": "#/$defs/DataWord"
+              },
+              "maxItems": 200000,
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "anchor",
+            "words"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Timed ranges.",
+          "properties": {
+            "anchor": {
+              "$ref": "#/$defs/DataAnchor",
+              "description": "The clock the times are on."
+            },
+            "id": {
+              "$ref": "#/$defs/DataSetId",
+              "description": "Stable identity, 1 to 64 bytes."
+            },
+            "intervals": {
+              "description": "Intervals sorted by `(start, end)`.",
+              "items": {
+                "$ref": "#/$defs/DataInterval"
+              },
+              "maxItems": 200000,
+              "type": "array"
+            },
+            "kind": {
+              "const": "intervals",
+              "type": "string"
+            },
+            "made_by": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MadeBy"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Which extractor made it."
+            },
+            "made_from": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MediaFingerprint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The original source's fingerprint when it was made."
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "anchor",
+            "intervals"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataSetId": {
+      "description": "A stable data-set identifier.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "DataSpace": {
+      "description": "Where a bound point is read.",
+      "oneOf": [
+        {
+          "const": "picture",
+          "description": "The normalized source picture, unchanged: effect params and the clip's own masks.",
+          "type": "string"
+        },
+        {
+          "const": "canvas",
+          "description": "Normalized canvas coordinates through the `via` clip's presentation and evaluated\nvisual: another clip's position.",
+          "type": "string"
+        }
+      ]
+    },
+    "DataVia": {
+      "description": "The reader whose clock maps time onto a source-anchored data set.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A timeline clip showing the anchor's source; its picture time map gives source time.",
+          "properties": {
+            "clip": {
+              "$ref": "#/$defs/ClipId"
+            }
+          },
+          "required": [
+            "clip"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A `media` node of the same composition reading the anchor's source; its start plus the\ncomposition time gives source time.",
+          "properties": {
+            "node": {
+              "$ref": "#/$defs/NodeId"
+            }
+          },
+          "required": [
+            "node"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DataWord": {
+      "additionalProperties": false,
+      "description": "One timed word.",
+      "properties": {
+        "end": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "When it ends; after `start`."
+        },
+        "speaker": {
+          "description": "Who says it, at most [`MAX_DATA_LABEL_BYTES`] bytes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "When the word starts, in ticks on the anchor's clock."
+        },
+        "text": {
+          "description": "The word, non-empty, at most [`MAX_DATA_LABEL_BYTES`] bytes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "text"
       ],
       "type": "object"
     },
@@ -1929,6 +2499,29 @@
         }
       ]
     },
+    "FontSizeFit": {
+      "additionalProperties": false,
+      "description": "The font sizes a text is fitted between, as fractions of the canvas's shorter side.\n\nThe text draws at the largest size in `[min, max]` at which no line breaks inside a word,\nthe lines fit the box's height, and there are no more lines than `line_clamp.max_lines`.\nWhen no size fits, it draws at `min`. A `min` above `max` wins, as CSS `min-width` does.\nSizes are tried by bisection over `max`, `min` and the multiples of `1 / 8192` between.",
+      "properties": {
+        "max": {
+          "description": "Largest font size, at least `min` and at most the holder's largest font size. `None`\nis `font_size`, so the text only shrinks.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "min": {
+          "description": "Smallest font size, positive. At most the holder's largest font size.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "min"
+      ],
+      "type": "object"
+    },
     "FrameRate": {
       "additionalProperties": false,
       "description": "A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps).",
@@ -1985,6 +2578,7 @@
               "items": {
                 "$ref": "#/$defs/ShapeItem"
               },
+              "maxItems": 1024,
               "type": "array"
             },
             "type": {
@@ -2543,22 +3137,423 @@
       ],
       "type": "object"
     },
+    "Keyframed_Insets": {
+      "description": "A value that is constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Insets",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_Insets"
+              },
+              "maxItems": 100000,
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Keyframed_LayoutLength": {
+      "description": "A value that is constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/LayoutLength",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_LayoutLength"
+              },
+              "maxItems": 100000,
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Keyframed_LayoutOffset": {
+      "description": "A value that is constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/LayoutOffset",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_LayoutOffset"
+              },
+              "maxItems": 100000,
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Keyframed_LayoutSize": {
+      "description": "A value that is constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/LayoutSize",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_LayoutSize"
+              },
+              "maxItems": 100000,
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Keyframed_Paint": {
+      "description": "A value that is constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Paint",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_Paint"
+              },
+              "maxItems": 100000,
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Keyframed_Path": {
+      "description": "A value that is constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Path",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_Path"
+              },
+              "maxItems": 100000,
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Keyframed_Rgba": {
+      "description": "A value that is constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Rgba",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_Rgba"
+              },
+              "maxItems": 100000,
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Keyframed_string": {
+      "description": "A value that is constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "description": "Value used at every timestamp.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_string"
+              },
+              "maxItems": 100000,
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "LayoutBorder": {
       "additionalProperties": false,
       "description": "A border inside the border box, as wide on every side.",
       "properties": {
         "paint": {
-          "$ref": "#/$defs/Animated_Paint",
+          "$ref": "#/$defs/Keyframed_Paint",
           "description": "What covers the border. Positions are normalized to the border box."
         },
         "width": {
-          "$ref": "#/$defs/Animated_LayoutSize",
+          "$ref": "#/$defs/Keyframed_LayoutSize",
           "description": "Width. At least 0."
         }
       },
       "required": [
         "width",
         "paint"
+      ],
+      "type": "object"
+    },
+    "LayoutFontSizeFit": {
+      "additionalProperties": false,
+      "description": "The font sizes a layout text is fitted between, as a text style's\n[`crate::FontSizeFit`], in layout sizes. A `min` above `max` wins.",
+      "properties": {
+        "max": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutSize"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Largest font size, with the same limits. `None` is `font_size`, so the text only shrinks."
+        },
+        "min": {
+          "$ref": "#/$defs/LayoutSize",
+          "description": "Smallest font size, positive and at most [`MAX_LAYOUT_FONT_SIZE`] of the shorter side."
+        }
+      },
+      "required": [
+        "min"
       ],
       "type": "object"
     },
@@ -2569,7 +3564,7 @@
         "bottom": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutLength"
+              "$ref": "#/$defs/Keyframed_LayoutLength"
             },
             {
               "type": "null"
@@ -2580,7 +3575,7 @@
         "left": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutLength"
+              "$ref": "#/$defs/Keyframed_LayoutLength"
             },
             {
               "type": "null"
@@ -2591,7 +3586,7 @@
         "right": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutLength"
+              "$ref": "#/$defs/Keyframed_LayoutLength"
             },
             {
               "type": "null"
@@ -2602,7 +3597,7 @@
         "top": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutLength"
+              "$ref": "#/$defs/Keyframed_LayoutLength"
             },
             {
               "type": "null"
@@ -2674,7 +3669,7 @@
         "background": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_Paint"
+              "$ref": "#/$defs/Keyframed_Paint"
             },
             {
               "type": "null"
@@ -2696,7 +3691,7 @@
         "border_radius": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutSize"
+              "$ref": "#/$defs/Keyframed_LayoutSize"
             },
             {
               "type": "null"
@@ -2709,12 +3704,13 @@
           "items": {
             "$ref": "#/$defs/LayoutNode"
           },
+          "maxItems": 256,
           "type": "array"
         },
         "column_gap": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutSize"
+              "$ref": "#/$defs/Keyframed_LayoutSize"
             },
             {
               "type": "null"
@@ -2747,7 +3743,7 @@
         "flex_basis": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutLength"
+              "$ref": "#/$defs/Keyframed_LayoutLength"
             },
             {
               "type": "null"
@@ -2809,13 +3805,24 @@
         "font_size": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutSize"
+              "$ref": "#/$defs/Keyframed_LayoutSize"
             },
             {
               "type": "null"
             }
           ],
           "description": "Font size: positive, at most [`MAX_LAYOUT_FONT_SIZE`] of the picture's shorter side.\nInherited; the root's is 0.05."
+        },
+        "font_size_fit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutFontSizeFit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The range the font size of the box's own text is fitted in so the text fits its content\nbox, as a text style's `font_size_fit`. The box is laid out at `font_size` first, and\nthe fit never changes its size. Not inherited."
         },
         "font_weight": {
           "description": "The weight in `[1, 1000]` used to match the family's faces, as a text style's\n`font_weight`. Not animated. Inherited; the root's is 400.",
@@ -2830,7 +3837,7 @@
         "gap": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutSize"
+              "$ref": "#/$defs/Keyframed_LayoutSize"
             },
             {
               "type": "null"
@@ -2918,7 +3925,7 @@
         "height": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutLength"
+              "$ref": "#/$defs/Keyframed_LayoutLength"
             },
             {
               "type": "null"
@@ -2978,6 +3985,17 @@
             "null"
           ]
         },
+        "line_clamp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineClamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the lines of the box's own text are cut and what ends the cut line, as CSS\n`line-clamp` and a text style's `line_clamp`. The clamp point is also at the content\nbox's height. The box's automatic height ends at the clamp point. Not inherited."
+        },
         "line_height": {
           "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`, as a text style's\n`line_height`. Inherited; the root's is 1.2.",
           "format": "float",
@@ -2989,7 +4007,7 @@
         "margin": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_Insets"
+              "$ref": "#/$defs/Keyframed_Insets"
             },
             {
               "type": "null"
@@ -3000,7 +4018,7 @@
         "max_height": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutLength"
+              "$ref": "#/$defs/Keyframed_LayoutLength"
             },
             {
               "type": "null"
@@ -3011,7 +4029,7 @@
         "max_width": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutLength"
+              "$ref": "#/$defs/Keyframed_LayoutLength"
             },
             {
               "type": "null"
@@ -3022,7 +4040,7 @@
         "min_height": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutLength"
+              "$ref": "#/$defs/Keyframed_LayoutLength"
             },
             {
               "type": "null"
@@ -3033,7 +4051,7 @@
         "min_width": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutLength"
+              "$ref": "#/$defs/Keyframed_LayoutLength"
             },
             {
               "type": "null"
@@ -3066,7 +4084,7 @@
         "padding": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_Insets"
+              "$ref": "#/$defs/Keyframed_Insets"
             },
             {
               "type": "null"
@@ -3099,7 +4117,7 @@
         "row_gap": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutSize"
+              "$ref": "#/$defs/Keyframed_LayoutSize"
             },
             {
               "type": "null"
@@ -3123,6 +4141,7 @@
           "items": {
             "$ref": "#/$defs/TextShadow"
           },
+          "maxItems": 4,
           "type": [
             "array",
             "null"
@@ -3144,6 +4163,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
+          "maxItems": 4,
           "type": [
             "array",
             "null"
@@ -3152,7 +4172,7 @@
         "text": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_string"
+              "$ref": "#/$defs/Keyframed_string"
             },
             {
               "type": "null"
@@ -3176,12 +4196,13 @@
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
+          "maxItems": 8,
           "type": "array"
         },
         "translate": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutOffset"
+              "$ref": "#/$defs/Keyframed_LayoutOffset"
             },
             {
               "type": "null"
@@ -3192,7 +4213,7 @@
         "width": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_LayoutLength"
+              "$ref": "#/$defs/Keyframed_LayoutLength"
             },
             {
               "type": "null"
@@ -3237,6 +4258,7 @@
           "items": {
             "$ref": "#/$defs/ShapeItem"
           },
+          "maxItems": 1024,
           "type": "array"
         }
       },
@@ -3298,6 +4320,28 @@
           "type": "string"
         }
       ]
+    },
+    "LineClamp": {
+      "additionalProperties": false,
+      "description": "Lines past a clamp point are discarded, as CSS Overflow 4 `line-clamp` discards them.\n\nThe clamp point is after the last line within `max_lines` that fits the box's height, and\nnever before the first line. Unlike CSS, the height counts without `max-lines: auto`, so\nclamped text stays inside a box that has one. A cut line is shortened to its last word end,\nelse its last character, at which the ellipsis fits after it. Text animators count no unit\nfor the ellipsis, which moves with the character before it.",
+      "properties": {
+        "block_ellipsis": {
+          "$ref": "#/$defs/BlockEllipsis",
+          "default": "ellipsis",
+          "description": "What ends the last kept line of cut text. Default `ellipsis`, as CSS `line-clamp` sets it."
+        },
+        "max_lines": {
+          "description": "Most lines, at least 1, as CSS `max-lines`. `None` cuts at the box's height alone.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     },
     "LineJoin": {
       "description": "How stroke segments meet at a vertex.",
@@ -3364,6 +4408,64 @@
         }
       ]
     },
+    "MadeBy": {
+      "additionalProperties": false,
+      "description": "Which extractor made a data set. Recorded for hosts; the engine never reads it.",
+      "properties": {
+        "extractor": {
+          "description": "The extractor's reverse-DNS id.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "The parameters it ran with.",
+          "type": "object"
+        },
+        "plugin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MadeByPlugin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The plugin that ran, when the extractor was one."
+        },
+        "version": {
+          "description": "The extractor's output-contract version.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "extractor",
+        "version"
+      ],
+      "type": "object"
+    },
+    "MadeByPlugin": {
+      "additionalProperties": false,
+      "description": "The plugin build that made a data set.",
+      "properties": {
+        "artifact_sha256": {
+          "description": "SHA-256 of the artifact that ran, as 64 lowercase hexadecimal digits.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The package's semantic version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "artifact_sha256"
+      ],
+      "type": "object"
+    },
     "MaskMode": {
       "description": "How a mask combines with the coverage of the masks before it.\n\nCoverage starts empty when the first mask adds and full otherwise, so a clip whose only\nmask subtracts is visible outside the shape.",
       "oneOf": [
@@ -3394,6 +4496,7 @@
           "items": {
             "$ref": "#/$defs/AudioEffect"
           },
+          "maxItems": 16,
           "type": "array"
         },
         "gain": {
@@ -3799,7 +4902,8 @@
                   }
                 ]
               },
-              "description": "The images the effect samples besides its input, by the names its definition declares\n(`sample_<name>` in its shader); at most [`MAX_EFFECT_INPUTS`]. An undeclared name, or a\ndeclared one left out, fails the frames that draw the node.",
+              "description": "The images the effect samples besides its input, by the names its definition declares\n(`sample_<name>` in its shader); at most [`MAX_EFFECT_INPUTS`]. An undeclared name, or a\ndeclared one left out, is invalid for a built-in and fails the frames that draw the\nnode otherwise.",
+              "maxProperties": 8,
               "type": "object"
             },
             "type": {
@@ -3929,6 +5033,7 @@
               "items": {
                 "$ref": "#/$defs/MergeLayer"
               },
+              "maxItems": 32,
               "type": "array"
             },
             "type": {
@@ -4005,6 +5110,7 @@
               "items": {
                 "$ref": "#/$defs/ShapeMask"
               },
+              "maxItems": 8,
               "type": "array"
             },
             "type": {
@@ -4046,6 +5152,7 @@
                   }
                 ]
               },
+              "maxItems": 16,
               "type": "array"
             },
             "type": {
@@ -4142,6 +5249,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
+              "maxItems": 8,
               "type": "array"
             },
             "type": {
@@ -4180,6 +5288,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
+              "maxItems": 8,
               "type": "array"
             },
             "type": {
@@ -4214,6 +5323,7 @@
               "items": {
                 "$ref": "#/$defs/GradientStop"
               },
+              "maxItems": 8,
               "type": "array"
             },
             "type": {
@@ -4242,6 +5352,7 @@
           "items": {
             "$ref": "#/$defs/Subpath"
           },
+          "maxItems": 256,
           "type": "array"
         }
       },
@@ -4479,6 +5590,7 @@
                   "null"
                 ]
               },
+              "maxItems": 100000,
               "type": "array"
             },
             "missing": {
@@ -4914,7 +6026,7 @@
           "description": "A Bezier path.",
           "properties": {
             "path": {
-              "$ref": "#/$defs/Animated_Path",
+              "$ref": "#/$defs/Keyframed_Path",
               "description": "The path."
             },
             "type": {
@@ -4942,6 +6054,7 @@
               "items": {
                 "$ref": "#/$defs/ShapeItem"
               },
+              "maxItems": 1024,
               "type": "array"
             },
             "transform": {
@@ -5133,7 +6246,7 @@
           "description": "A Bezier path.",
           "properties": {
             "path": {
-              "$ref": "#/$defs/Animated_Path",
+              "$ref": "#/$defs/Keyframed_Path",
               "description": "The path."
             },
             "type": {
@@ -5160,7 +6273,7 @@
               "description": "Opacity in `0..=1`."
             },
             "paint": {
-              "$ref": "#/$defs/Animated_Paint",
+              "$ref": "#/$defs/Keyframed_Paint",
               "description": "What covers it."
             },
             "rule": {
@@ -5220,7 +6333,7 @@
               "description": "Opacity in `0..=1`."
             },
             "paint": {
-              "$ref": "#/$defs/Animated_Paint",
+              "$ref": "#/$defs/Keyframed_Paint",
               "description": "What covers the stroke."
             },
             "type": {
@@ -5439,6 +6552,7 @@
           "items": {
             "$ref": "#/$defs/PathVertex"
           },
+          "maxItems": 4096,
           "type": "array"
         }
       },
@@ -5493,7 +6607,7 @@
         "fill": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_Rgba"
+              "$ref": "#/$defs/Keyframed_Rgba"
             },
             {
               "type": "null"
@@ -5543,12 +6657,12 @@
               "type": "null"
             }
           ],
-          "description": "Scales the character about its centre; 1 is none. Each axis in `[0, 10]`."
+          "description": "Scales the character about its centre; 1 is none. Each axis in `[0, 10]`. The scales of\nseveral animators multiply, and the product is at most 10 on each axis."
         },
         "stroke": {
           "anyOf": [
             {
-              "$ref": "#/$defs/Animated_Rgba"
+              "$ref": "#/$defs/Keyframed_Rgba"
             },
             {
               "type": "null"
@@ -5601,6 +6715,7 @@
           "items": {
             "$ref": "#/$defs/TextRun"
           },
+          "maxItems": 512,
           "type": "array"
         }
       ],
@@ -5615,6 +6730,7 @@
           "items": {
             "type": "string"
           },
+          "maxItems": 8,
           "type": "array"
         },
         "text": {
@@ -5815,13 +6931,14 @@
             "x": 0.5,
             "y": 1.0
           },
-          "description": "The point of the text, background included, placed at `position`; `(0.5, 1)` is its\nbottom centre."
+          "description": "The point of the text, background included, placed at `position`; `(0.5, 1)` is its\nbottom centre. Each coordinate within [`MAX_TEXT_POSITION`]."
         },
         "animators": {
           "description": "Per-character motion and color, applied in order, at most [`crate::MAX_TEXT_ANIMATORS`].\nKeyframes are in the holder's time (since a caption cue's start, or a text generator's\npicture time). They never change line layout.",
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
+          "maxItems": 8,
           "type": "array"
         },
         "background": {
@@ -5862,6 +6979,17 @@
           "format": "float",
           "type": "number"
         },
+        "font_size_fit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FontSizeFit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The range the font size is fitted in so the text fits its box. `None` draws at the\nfont size as set."
+        },
         "font_weight": {
           "default": 400,
           "description": "The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches\n`font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is\nsynthetically emboldened.",
@@ -5876,11 +7004,30 @@
           "format": "float",
           "type": "number"
         },
+        "line_clamp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineClamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where lines are cut and what ends a cut line, as CSS `line-clamp`. `None` cuts nothing."
+        },
         "line_height": {
           "default": 1.2,
           "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each line's em box (0.8 font\nsizes above the baseline, 0.2 below) is centred in a taller line.",
           "format": "float",
           "type": "number"
+        },
+        "max_height": {
+          "description": "Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for\n`font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS\n`max-height` lets a box with visible overflow. `None` sets no height.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "max_width": {
           "default": 0.9,
@@ -5894,13 +7041,14 @@
             "x": 0.5,
             "y": 0.92
           },
-          "description": "Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right."
+          "description": "Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right;\neach coordinate within [`MAX_TEXT_POSITION`]."
         },
         "shadows": {
           "description": "Shadows of the glyphs and strokes, the first on top, as CSS `text-shadow` lists them. At\nmost [`MAX_TEXT_SHADOWS`].",
           "items": {
             "$ref": "#/$defs/TextShadow"
           },
+          "maxItems": 4,
           "type": "array"
         },
         "strokes": {
@@ -5908,6 +7056,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
+          "maxItems": 4,
           "type": "array"
         }
       },
@@ -5944,6 +7093,7 @@
           "items": {
             "$ref": "#/$defs/TextAnimator"
           },
+          "maxItems": 8,
           "type": [
             "array",
             "null"
@@ -5986,6 +7136,17 @@
             "null"
           ]
         },
+        "font_size_fit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FontSizeFit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::font_size_fit`]; `null` removes the base's."
+        },
         "font_weight": {
           "description": "See [`TextStyle::font_weight`].",
           "format": "uint16",
@@ -6004,8 +7165,27 @@
             "null"
           ]
         },
+        "line_clamp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineClamp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::line_clamp`]; `null` removes the base's."
+        },
         "line_height": {
           "description": "See [`TextStyle::line_height`].",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_height": {
+          "description": "See [`TextStyle::max_height`]; `null` removes the base's.",
           "format": "float",
           "type": [
             "number",
@@ -6036,6 +7216,7 @@
           "items": {
             "$ref": "#/$defs/TextShadow"
           },
+          "maxItems": 4,
           "type": [
             "array",
             "null"
@@ -6046,6 +7227,7 @@
           "items": {
             "$ref": "#/$defs/TextStroke"
           },
+          "maxItems": 4,
           "type": [
             "array",
             "null"
@@ -6203,6 +7385,7 @@
           "items": {
             "$ref": "#/$defs/Track"
           },
+          "maxItems": 256,
           "type": "array"
         }
       },
@@ -6251,6 +7434,7 @@
           "items": {
             "$ref": "#/$defs/Clip"
           },
+          "maxItems": 4096,
           "type": "array"
         },
         "id": {
@@ -6271,6 +7455,7 @@
           "items": {
             "$ref": "#/$defs/ClipTransition"
           },
+          "maxItems": 4096,
           "type": "array"
         }
       },
@@ -6303,6 +7488,7 @@
           "items": {
             "$ref": "#/$defs/AudioEffect"
           },
+          "maxItems": 16,
           "type": "array"
         },
         "gain": {
@@ -6472,6 +7658,17 @@
           },
           "description": "Unanimated normalized point within the source rectangle."
         },
+        "correction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CorrectionRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A `similarity` data set moving the clip's own picture, applied before this transform.\nClip visuals only."
+        },
         "opacity": {
           "$ref": "#/$defs/Animated_float",
           "default": {
@@ -6514,10 +7711,19 @@
       "type": "object"
     }
   },
+  "$id": "https://alpha2.sh/schema/project.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The deserialized shape of a [`Project`] before its invariants are checked.\n\nThis is the wire contract the published JSON Schema is derived from; [`Project::validate`]\nthen decides whether a well-shaped document is valid.",
   "properties": {
+    "$schema": {
+      "default": null,
+      "description": "The schema the document follows (`https://alpha2.sh/schema/project.v1.json`), for editors\nand validators. The engine does not read or keep it.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "audio": {
       "$ref": "#/$defs/MasterAudio",
       "default": {
@@ -6539,6 +7745,16 @@
       "items": {
         "$ref": "#/$defs/Composition"
       },
+      "maxItems": 10000,
+      "type": "array"
+    },
+    "data": {
+      "default": [],
+      "description": "Values derived from media, which properties and caption tracks can follow. At most 256.",
+      "items": {
+        "$ref": "#/$defs/DataSet"
+      },
+      "maxItems": 256,
       "type": "array"
     },
     "effect_resources": {
@@ -6547,6 +7763,7 @@
       "items": {
         "$ref": "#/$defs/EffectResource"
       },
+      "maxItems": 10000,
       "type": "array"
     },
     "id": {
@@ -6574,6 +7791,7 @@
       "items": {
         "$ref": "#/$defs/MediaSource"
       },
+      "maxItems": 100000,
       "type": "array"
     },
     "timeline": {

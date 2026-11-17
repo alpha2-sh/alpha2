@@ -1,7 +1,12 @@
-use std::io::Write as _;
-
 use alpha2_model::Rgba;
 
+use std::io::Write as _;
+
+use super::hostile::{
+    PDF_RECTANGLE, j2k_codestream, jbig2_page, pdf_coded_image, pdf_content_bomb, pdf_far_path,
+    pdf_forms, pdf_image_draws, pdf_one_page, pdf_self_invoking_form, pdf_stream as stream,
+    pdf_type3_glyphs,
+};
 use super::*;
 
 const WHITE: Rgba = Rgba::new(1.0, 1.0, 1.0, 1.0);
@@ -12,41 +17,7 @@ fn pdf_source(page: u32, background: Rgba) -> ProviderSource {
 
 /// A one-page document of `content` with `resources` and `extra` objects numbered from 5.
 fn one_page(resources: &str, content: &[u8], extra: &[Vec<u8>]) -> Arc<[u8]> {
-    let mut objects = vec![
-        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
-        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
-        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 60 30] /Resources {resources} /Contents 4 0 R >>")
-            .into_bytes(),
-        stream("", content),
-    ];
-    objects.extend_from_slice(extra);
-    let mut out = b"%PDF-1.4\n".to_vec();
-    let mut offsets = Vec::new();
-    for (index, object) in objects.iter().enumerate() {
-        offsets.push(out.len());
-        writeln!(out, "{} 0 obj", index + 1).expect("write");
-        out.extend_from_slice(object);
-        out.extend_from_slice(b"\nendobj\n");
-    }
-    let xref = out.len();
-    write!(out, "xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).expect("write");
-    for offset in offsets {
-        writeln!(out, "{offset:010} 00000 n ").expect("write");
-    }
-    write!(
-        out,
-        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
-        objects.len() + 1
-    )
-    .expect("write");
-    out.into()
-}
-
-fn stream(entries: &str, data: &[u8]) -> Vec<u8> {
-    let mut object = format!("<< {entries} /Length {} >>\nstream\n", data.len()).into_bytes();
-    object.extend_from_slice(data);
-    object.extend_from_slice(b"\nendstream");
-    object
+    pdf_one_page(resources, content, extra).into()
 }
 
 fn open(
@@ -178,6 +149,226 @@ fn text_in_a_font_the_pdf_does_not_embed_is_drawn_with_a_standard_font_and_repor
         }]
     );
     assert_eq!(drawn("Courier"), Vec::new());
+}
+
+fn refused_saying(file: Vec<u8>, says: &str) {
+    match open(file.into(), &pdf_source(1, WHITE)) {
+        Err(ExtensionError::Budget(reason)) if reason.contains(says) => {}
+        other => panic!("expected `too large: ...{says}...`, got {:?}", other.err()),
+    }
+}
+
+#[test]
+fn a_page_is_held_to_what_its_forms_draw_each_time_they_are_invoked() {
+    // 97,336 rectangles open; a million are refused before hayro converts the page.
+    open(
+        pdf_forms(46, 3, PDF_RECTANGLE).into(),
+        &pdf_source(1, WHITE),
+    )
+    .expect("46^3 draws open");
+    refused_saying(
+        pdf_forms(100, 3, PDF_RECTANGLE),
+        "the page draws more than 262144",
+    );
+    refused_saying(pdf_self_invoking_form(), "draws itself");
+}
+
+#[test]
+fn a_page_of_a_billion_form_invocations_is_refused_before_it_is_converted() {
+    refused_saying(
+        pdf_forms(1000, 3, PDF_RECTANGLE),
+        "the page draws more than 262144",
+    );
+}
+
+fn with_bad_checksums(mut pdf: Vec<u8>) -> Vec<u8> {
+    let mut from = 0;
+    while let Some(filter) = find(&pdf[from..], b"/FlateDecode").map(|at| from + at) {
+        let end = filter + find(&pdf[filter..], b"\nendstream").expect("the stream ends");
+        pdf[end - 1] ^= 0xff;
+        from = end;
+    }
+    pdf
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+#[test]
+fn a_page_whose_form_stream_does_not_inflate_to_its_end_is_refused() {
+    let file = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/corpus/hostile/extension_pdf/form-stream-invalid-distance.pdf"),
+    )
+    .expect("the hostile page");
+    match open(file.into(), &pdf_source(1, WHITE)) {
+        Err(ExtensionError::Malformed(reason)) if reason.contains("damaged") => {}
+        other => panic!("expected a damaged stream, got {:?}", other.err()),
+    }
+}
+
+#[test]
+fn a_form_whose_checksum_is_wrong_still_counts_what_it_invokes() {
+    refused_saying(
+        with_bad_checksums(pdf_forms(100, 3, PDF_RECTANGLE)),
+        "the page draws more than 262144",
+    );
+}
+
+#[test]
+fn every_form_invocation_counts_even_of_a_form_that_draws_nothing() {
+    open(pdf_forms(46, 3, b"").into(), &pdf_source(1, WHITE)).expect("46^3 invocations open");
+    refused_saying(pdf_forms(1000, 3, b""), "the page draws more than 262144");
+}
+
+#[test]
+fn a_page_is_held_to_the_pixels_and_data_its_image_draws_write() {
+    // A flat 4 MP image drawn 10 times opens; 100 times it decodes 400 MP.
+    open(
+        pdf_image_draws(2000, true, false, 10).into(),
+        &pdf_source(1, WHITE),
+    )
+    .expect("ten draws open");
+    refused_saying(
+        pdf_image_draws(2000, true, false, 100),
+        "image draws decode more than",
+    );
+    refused_saying(
+        pdf_image_draws(1000, false, true, 1000),
+        "image draws decode more than",
+    );
+}
+
+#[test]
+fn a_page_is_held_to_what_its_type3_glyphs_draw() {
+    open(pdf_type3_glyphs(10, 100).into(), &pdf_source(1, WHITE)).expect("small text opens");
+    refused_saying(
+        pdf_type3_glyphs(1000, 10_000),
+        "the page draws more than 262144",
+    );
+}
+
+#[test]
+fn a_page_is_held_to_what_its_content_streams_decode_to_together() {
+    refused_saying(
+        pdf_content_bomb(250 << 20),
+        "content streams decode to more than 33554432",
+    );
+}
+
+#[test]
+fn an_image_is_sized_from_its_own_coded_data() {
+    // One pixel by the dictionary; 3.6 and 4.3 billion by their codecs.
+    let jpx = |side, draws| {
+        pdf_coded_image(
+            "/Height 1 /BitsPerComponent 8 /Filter /JPXDecode",
+            &j2k_codestream(side),
+            draws,
+        )
+    };
+    refused_saying(jpx(60_000, 1), "decode to more than");
+    refused_saying(
+        pdf_coded_image(
+            "/Height 1 /BitsPerComponent 1 /Filter /JBIG2Decode",
+            &jbig2_page(65_535),
+            1,
+        ),
+        "decode to more than",
+    );
+    refused_saying(
+        pdf_coded_image(
+            "/Height 30000 /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 1000000 >>",
+            &[0, 0x10, 1, 0, 0x10, 1],
+            1,
+        ),
+        "decode to more than",
+    );
+    refused_saying(
+        pdf_coded_image(
+            "/Height 0 /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 >>",
+            &[0, 0x10, 1, 0, 0x10, 1],
+            1,
+        ),
+        "row count is not given",
+    );
+    // A 4000 x 4000 codestream counts as 16 MP: ten draws are past four canvases.
+    open(jpx(4000, 1).into(), &pdf_source(1, WHITE)).expect("one draw opens");
+    refused_saying(jpx(4000, 10), "image draws decode more than");
+    let inline = pdf_one_page(
+        "<< >>",
+        b"q 60 0 0 30 0 0 cm BI /W 1 /H 30000 /CS /G /BPC 1 /F /CCF /DP << /K -1 /Columns 1000000 >> ID \x00\x10\x01 EI Q",
+        &[],
+    );
+    refused_saying(inline, "decode to more than");
+}
+
+#[test]
+fn an_image_whose_codestream_does_not_parse_is_reported_unreadable() {
+    let truncated = j2k_codestream(16)[..20].to_vec();
+    let source = open(
+        pdf_coded_image(
+            "/Height 1 /BitsPerComponent 8 /Filter /JPXDecode",
+            &truncated,
+            1,
+        )
+        .into(),
+        &pdf_source(1, WHITE),
+    )
+    .expect("open");
+    assert!(
+        source
+            .report()
+            .diagnostics
+            .iter()
+            .any(|diagnostic| matches!(diagnostic, Diagnostic::UnreadableImage { .. })),
+        "{:?}",
+        source.report().diagnostics
+    );
+}
+
+#[test]
+fn a_probe_refuses_a_first_page_that_opening_refuses() {
+    let file = pdf_far_path();
+    let probed = Registry::with_defaults().probe(&file).expect("claimed");
+    let opened = open(file.into(), &pdf_source(1, WHITE));
+    match (probed, opened) {
+        (Err(ExtensionError::Budget(probed)), Err(ExtensionError::Budget(opened))) => {
+            assert_eq!(probed, opened);
+        }
+        (probed, opened) => panic!("probe {:?}, open {:?}", probed.err(), opened.err()),
+    }
+}
+
+#[test]
+fn a_page_reports_the_images_it_holds() {
+    // An incompressible 256 x 256 RGB image stays about 196 kB as PNG.
+    let mut state = 0x2545_f491_u32;
+    let noise: Vec<u8> = (0..256 * 256 * 3)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state.to_le_bytes()[0]
+        })
+        .collect();
+    let image = stream(
+        "/Type /XObject /Subtype /Image /Width 256 /Height 256 /ColorSpace /DeviceRGB /BitsPerComponent 8",
+        &noise,
+    );
+    let file = one_page(
+        "<< /XObject << /Im1 5 0 R >> >>",
+        b"q 60 0 0 30 0 0 cm /Im1 Do Q",
+        &[image],
+    );
+    let source = open(file, &pdf_source(1, WHITE)).expect("open");
+    assert!(
+        source.resident_bytes() > 190_000,
+        "{}",
+        source.resident_bytes()
+    );
 }
 
 #[test]

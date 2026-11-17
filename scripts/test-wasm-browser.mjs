@@ -4,7 +4,8 @@
 // edge|safari|firefox` overrides Chrome, `--case <name>` selects one case (perf cases run only
 // this way), and `--serve[=port]` serves pages for manual runs.
 
-import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
@@ -13,7 +14,7 @@ import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
 import { probeRun } from "./lib/browser-probe.mjs";
 import { recordSkip, virtualMachineEncoderStall } from "./lib/capabilities.mjs";
 import {
-  gpuProcessEnvironment,
+  runWithGpuProcessRerun,
   reportSkippedBrowser,
   skippedCasesSummary,
   fromThisMachine,
@@ -67,8 +68,49 @@ if (!existsSync(join(root, "packages/alpha2/wasm/alpha2_wasm_bg.wasm"))) {
   process.exit(1);
 }
 
+// Plugin cases load every plugin crate packed for the browser, wasm only, at the path it has
+// under plugins/.
+if (names.some((name) => name.startsWith("plugin-"))) {
+  const browserPlugins = ["first-party", "fixtures"].flatMap((group) =>
+    readdirSync(join(root, "plugins", group))
+      .filter((name) =>
+        existsSync(join(root, "plugins", group, name, "descriptor.json")),
+      )
+      .map((name) => join(group, name)),
+  );
+  for (const plugin of browserPlugins) {
+    const packed = spawnSync(
+      "cargo",
+      [
+        "run",
+        "--quiet",
+        "--release",
+        "--manifest-path",
+        join(root, "plugins", "Cargo.toml"),
+        "-p",
+        "alpha2-plugin-pack",
+        "--",
+        join(root, "plugins", plugin),
+        "--out",
+        join(root, "plugins", "target", "browser-fixtures", plugin),
+        "--no-native",
+      ],
+      { stdio: "inherit" },
+    );
+    if (packed.status !== 0) {
+      process.stdout.write(`FAIL plugins/${plugin} did not pack\n`);
+      process.exit(1);
+    }
+  }
+}
+
 const server = createServer(async (request, response) => {
-  if (!fromThisMachine(request.headers.host, server.address().port)) {
+  if (
+    !fromThisMachine(
+      request.headers.host,
+      /** @type {import("node:net").AddressInfo} */ (server.address()).port,
+    )
+  ) {
     response.writeHead(403).end();
     return;
   }
@@ -108,12 +150,16 @@ const server = createServer(async (request, response) => {
     response.writeHead(404).end();
   }
 });
-await new Promise((resolveListen) =>
-  server.listen(servePort ?? 0, "127.0.0.1", resolveListen),
+await /** @type {Promise<void>} */ (
+  new Promise((resolveListen) =>
+    server.listen(servePort ?? 0, "127.0.0.1", resolveListen),
+  )
 );
 if (servePort !== null) {
   // Cross-origin isolation (for the audio cases) requires a secure context.
-  const { port } = server.address();
+  const { port } = /** @type {import("node:net").AddressInfo} */ (
+    server.address()
+  );
   for (const name of [...Object.keys(cases), ...Object.keys(perfCases)])
     process.stdout.write(`http://localhost:${port}/${name}\n`);
   process.stdout.write("serving; stop with Ctrl-C\n");
@@ -128,52 +174,44 @@ try {
   await probeRun("wasm-browser", browser, {
     engineModule: "/packages/alpha2/wasm/alpha2_wasm.js",
   });
-  const runPage = async (name) => {
-    let gpuProcess;
-    let encoded;
-    try {
-      encoded = await runBrowserPage(
-        browser,
-        `http://127.0.0.1:${address.port}/${name}${process.env.ALPHA2_CASE_QUERY ?? ""}`,
-        {
-          // A perf case exports for minutes on a slow GPU.
-          timeoutMs: Number(
-            process.env.ALPHA2_CASE_TIMEOUT_MS ??
-              (Object.hasOwn(perfCases, name)
-                ? 600_000
-                : (caseLaunch[name]?.timeoutMs ?? 60_000)),
-          ),
-          ...(Object.hasOwn(pageDrivers, name)
-            ? { onPage: pageDrivers[name] }
-            : {}),
-          ...(caseLaunch[name]?.domainBlocking3d
-            ? { domainBlocking3d: true }
-            : {}),
-          onGpuProcess: (record) => (gpuProcess = record),
-        },
-      );
-    } catch (error) {
-      const marked = gpuProcessEnvironment(gpuProcess, {
-        error: error.message,
-      });
-      if (marked === null) throw error;
-      return marked;
-    }
-    const result = JSON.parse(decodeURIComponent(encoded));
-    // Only GPU process exits the case did not cause count as the environment's (a Windows session
-    // 0 restarts it at launch).
-    const caused = caseLaunch[name]?.gpuProcessExits;
-    if (caused !== undefined && gpuProcess !== undefined) {
-      if (gpuProcess.exits <= caused) return { ...result, gpuProcess };
-      return (
-        gpuProcessEnvironment(
-          { ...gpuProcess, exits: gpuProcess.exits - caused },
-          result,
-        ) ?? result
-      );
-    }
-    return gpuProcessEnvironment(gpuProcess, result) ?? result;
-  };
+  const runPage = (name) =>
+    runWithGpuProcessRerun(
+      async () => {
+        let gpuProcess;
+        try {
+          const encoded = await runBrowserPage(
+            /** @type {import("./lib/browser-page.mjs").PageBrowser} */ (
+              browser
+            ),
+            `http://127.0.0.1:${address.port}/${name}${process.env.ALPHA2_CASE_QUERY ?? ""}`,
+            {
+              // A perf case exports for minutes on a slow GPU.
+              timeoutMs: Number(
+                process.env.ALPHA2_CASE_TIMEOUT_MS ??
+                  (Object.hasOwn(perfCases, name)
+                    ? 600_000
+                    : (caseLaunch[name]?.timeoutMs ?? 60_000)),
+              ),
+              ...(Object.hasOwn(pageDrivers, name)
+                ? { onPage: pageDrivers[name] }
+                : {}),
+              ...(caseLaunch[name]?.domainBlocking3d
+                ? { domainBlocking3d: true }
+                : {}),
+              onGpuProcess: (record) => (gpuProcess = record),
+            },
+          );
+          return {
+            result: JSON.parse(decodeURIComponent(encoded)),
+            gpuProcess,
+          };
+        } catch (error) {
+          return { error, gpuProcess };
+        }
+      },
+      // Exits the case causes itself (a Windows session 0 restarts it at launch) are no restart.
+      caseLaunch[name]?.gpuProcessExits,
+    );
   const report = (name, outcome) => {
     const stalled =
       outcome.ok === true ? null : virtualMachineEncoderStall(outcome);

@@ -9,13 +9,13 @@
 //! code plus the budget spent on the costliest iterations. A nested loop body is its own
 //! iteration; calls are inlined; both branch sides count.
 //!
-//! A loop is assumed to use the whole remaining budget unless its header counts a variable
-//! between integer literals (`for (var i = 0u; i < 64u; i++)`), the body never writes it, and
-//! the loop runs at most once per call (not nested, function not called from a loop).
+//! A loop is assumed to use the whole remaining budget unless it has a
+//! [`crate::loop_bound::proven_count`] (`for (var i = 0u; i < 64u; i++)`), which the rewrite
+//! enforces, and runs at most once per call (not nested, function not called from a loop).
 
 use crate::ShaderDiagnostics;
 use crate::call_budget::{declarations, declared_names, loops};
-use crate::loop_bound::{MAX_LOOP_ITERATIONS, is_identifier_byte};
+use crate::loop_bound::{MAX_LOOP_ITERATIONS, header_parts, is_identifier_byte, proven_count};
 
 // Timed on discrete and integrated GPUs from three vendors, predictions moved by under 10% when
 // these weights changed up to 8x; tap and iteration counts dominate. Arithmetic keeps a nonzero
@@ -136,10 +136,23 @@ struct Loop {
 pub(crate) fn invocation_cost(code: &str) -> EffectCost {
     let declared = declarations(code);
     let names = declared_names(&declared);
+    let arrays = array_types(code);
+    let copies = array_names(code, &arrays);
     let walked = declared
         .iter()
-        .map(|(_, body)| walk(code, body.clone(), &names))
+        .map(|(_, body)| walk(code, body.clone(), &names, &arrays, &copies))
         .collect::<Vec<_>>();
+    // A module-scope private array is zeroed in every invocation.
+    let module_arrays = arrays
+        .iter()
+        .filter(|array| {
+            !declared
+                .iter()
+                .any(|(_, body)| body.contains(&array.span.start))
+        })
+        .fold(0_u64, |total, array| {
+            total.saturating_add(array.slots.unwrap_or(0))
+        });
     let straight = straight_costs(&walked);
     let calls = straight_calls(&walked, &roots(&walked));
     let resolve = |items: &[Item]| {
@@ -173,7 +186,10 @@ pub(crate) fn invocation_cost(code: &str) -> EffectCost {
         .collect::<Vec<_>>();
     iterations.sort_by_key(|(cost, _)| std::cmp::Reverse(cost.units()));
     let mut budget = u64::from(MAX_LOOP_ITERATIONS);
-    let mut total = entry;
+    let mut total = entry.plus(EffectCost {
+        arithmetic: module_arrays,
+        ..EffectCost::default()
+    });
     for (cost, most) in iterations {
         let spent = budget.min(most);
         total = total.plus(cost.times(spent));
@@ -332,6 +348,8 @@ fn walk(
     code: &str,
     body: std::ops::Range<usize>,
     names: &std::collections::HashMap<&str, usize>,
+    arrays: &[ArrayType],
+    copies: &std::collections::HashMap<&str, u64>,
 ) -> Walked {
     let spans = loops(code, body.clone());
     let mut walked = Walked {
@@ -362,6 +380,12 @@ fn walk(
             None => walked.straight.push(item),
         }
     };
+    let charge = |slots: u64| {
+        Item::Cost(EffectCost {
+            arithmetic: slots,
+            ..EffectCost::default()
+        })
+    };
     let mut index = body.start;
     while index < body.end {
         let byte = bytes[index];
@@ -372,6 +396,17 @@ fn walk(
                     .take_while(|&byte| is_identifier_byte(byte))
                     .count();
             let word = &code[index..end];
+            // Declaring, building or copying a whole array touches every element.
+            if let Some(array) = arrays.iter().find(|array| array.span.start == index) {
+                push(index, charge(array.slots.unwrap_or(0)));
+                index = array.span.end.min(body.end);
+                continue;
+            }
+            if let Some(&slots) = copies.get(word)
+                && !code[end..body.end].trim_start().starts_with(['[', ':'])
+            {
+                push(index, charge(slots));
+            }
             let called = code[end..body.end].trim_start().starts_with('(');
             if called && !KEYWORDS.contains(&word) && !byte.is_ascii_digit() {
                 push(
@@ -406,86 +441,154 @@ fn walk(
     walked
 }
 
-/// Iteration count of the loop at `span` if its header counts a variable by one between integer
-/// literals and the body never writes it.
+/// The [`proven_count`] of the loop at `span`.
 fn literal_count(code: &str, span: std::ops::Range<usize>) -> Option<u64> {
     let open = span.start + code[span.clone()].find('(')?;
     let close = crate::loop_bound::matching(code, open).ok()?;
-    let header = &code[open + 1..close];
-    let [init, condition, update] = header.split(';').collect::<Vec<_>>()[..] else {
-        return None;
-    };
-    let mut init = init.split_whitespace();
-    if !matches!(init.next(), Some("var" | "let")) {
-        return None;
-    }
-    let rest = init.collect::<String>();
-    let (name, start) = rest.split_once('=')?;
-    let name = name.split(':').next()?.trim();
-    let start = integer_literal(start)?;
-    let condition = condition.split_whitespace().collect::<String>();
-    let (inclusive, end) = if let Some(end) = condition.strip_prefix(&format!("{name}<=")) {
-        (true, end)
-    } else {
-        (false, condition.strip_prefix(&format!("{name}<"))?)
-    };
-    let end = integer_literal(end)?;
-    let update = update.split_whitespace().collect::<String>();
-    if ![
-        format!("{name}++"),
-        format!("++{name}"),
-        format!("{name}+=1"),
-        format!("{name}+=1u"),
-    ]
-    .contains(&update)
-    {
-        return None;
-    }
-    if writes(&code[close + 1..span.end], name) {
-        return None;
-    }
-    Some(
-        end.saturating_sub(start)
-            .saturating_add(u64::from(inclusive)),
-    )
+    let [init, condition, update] = header_parts(&code[open + 1..close])?;
+    let body = &code[close + 1..span.end];
+    proven_count(init, condition, update, body.trim_start())
 }
 
-/// An integer literal such as `64`, `64u` or `64i`.
-fn integer_literal(text: &str) -> Option<u64> {
-    let text = text.trim();
-    text.strip_suffix(['u', 'i'])
-        .unwrap_or(text)
-        .parse::<u64>()
-        .ok()
+/// One `array` in a body's code.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ArrayType {
+    /// Byte range of `array` and its template list.
+    pub(crate) span: std::ops::Range<usize>,
+    /// Elements as `vec4f`-sized slots, counts multiplied through nested arrays; `None` without
+    /// a literal count or with an element type that is not a scalar, vector, matrix or array.
+    pub(crate) slots: Option<u64>,
+    /// Whether it has a template list (`array(...)` infers its count from the arguments).
+    pub(crate) templated: bool,
 }
 
-/// Whether `code` may write `name`: assignment, increment, address-of, or a shadowing
-/// declaration.
-fn writes(code: &str, name: &str) -> bool {
+/// Every `array` in `code`, a comment-blanked body.
+pub(crate) fn array_types(code: &str) -> Vec<ArrayType> {
+    let mut found = Vec::new();
     let mut from = 0;
-    while let Some(start) = crate::loop_bound::find_keyword(code, from, name) {
-        let end = start + name.len();
-        from = end;
-        let after = code[end..].trim_start();
-        let before = code[..start].trim_end();
-        let assigned = after.starts_with('=') && !after.starts_with("==");
-        let compound = [
-            "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "++", "--",
-        ]
-        .iter()
-        .any(|operator| after.starts_with(operator));
-        let declared = before.ends_with("var") || before.ends_with("let");
-        if assigned
-            || compound
-            || declared
-            || before.ends_with("++")
-            || before.ends_with("--")
-            || before.ends_with('&')
-        {
-            return true;
+    while let Some(start) = crate::loop_bound::find_keyword(code, from, "array") {
+        from = start + "array".len();
+        let open = from + (code[from..].len() - code[from..].trim_start().len());
+        if code.as_bytes().get(open) != Some(&b'<') {
+            found.push(ArrayType {
+                span: start..from,
+                slots: None,
+                templated: false,
+            });
+            continue;
+        }
+        let Some(close) = template_end(code, open) else {
+            found.push(ArrayType {
+                span: start..code.len(),
+                slots: None,
+                templated: true,
+            });
+            continue;
+        };
+        found.push(ArrayType {
+            span: start..close + 1,
+            slots: array_slots(&code[open + 1..close]),
+            templated: true,
+        });
+    }
+    found
+}
+
+/// Index of the `>` closing the template list opened at `open`.
+fn template_end(code: &str, open: usize) -> Option<usize> {
+    let mut depth = 0_usize;
+    for (index, byte) in code.bytes().enumerate().skip(open) {
+        match byte {
+            b'<' => depth += 1,
+            b'>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            b';' | b'{' | b'}' => return None,
+            _ => {}
         }
     }
-    false
+    None
+}
+
+/// Slots of `array<template>`: the literal count times the element type's slots.
+fn array_slots(template: &str) -> Option<u64> {
+    let mut depth = 0_usize;
+    let comma = template.bytes().enumerate().find_map(|(index, byte)| {
+        match byte {
+            b'<' | b'(' => depth += 1,
+            b'>' | b')' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => return Some(index),
+            _ => {}
+        }
+        None
+    })?;
+    let element = template[..comma].trim();
+    let count = template[comma + 1..].trim();
+    let count = count.strip_suffix(['u', 'i']).unwrap_or(count);
+    if count.is_empty() || !count.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    count
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(element_slots(element)?)
+}
+
+/// `vec4f`-sized slots of one element: 1 for a scalar or vector, its columns for a matrix.
+fn element_slots(element: &str) -> Option<u64> {
+    if let Some(rest) = element.strip_prefix("array") {
+        let open = element.len() - rest.trim_start().len();
+        let close = template_end(element, open)?;
+        return (close + 1 == element.len())
+            .then(|| array_slots(&element[open + 1..close]))
+            .flatten();
+    }
+    let name = element.split('<').next().unwrap_or_default().trim();
+    if matches!(name, "f32" | "f16" | "i32" | "u32" | "bool")
+        || ["vec2", "vec3", "vec4"].iter().any(|vector| {
+            name.strip_prefix(vector)
+                .is_some_and(|suffix| matches!(suffix, "" | "f" | "h" | "i" | "u"))
+        })
+    {
+        return Some(1);
+    }
+    let columns = name.strip_prefix("mat")?.bytes().next()?;
+    let shape = &name[3..];
+    let valid = shape.len() >= 3
+        && matches!(shape.as_bytes()[1], b'x')
+        && matches!(shape.as_bytes()[2], b'2'..=b'4')
+        && matches!(&shape[3..], "" | "f" | "h");
+    (valid && matches!(columns, b'2'..=b'4')).then(|| u64::from(columns - b'0'))
+}
+
+/// Names declared with an array type or array value, with their slots.
+fn array_names<'a>(code: &'a str, arrays: &[ArrayType]) -> std::collections::HashMap<&'a str, u64> {
+    let mut names = std::collections::HashMap::new();
+    for array in arrays {
+        let Some(slots) = array.slots else { continue };
+        let before = code[..array.span.start].trim_end();
+        let Some(before) = before.strip_suffix(':').or_else(|| {
+            before
+                .strip_suffix('=')
+                .filter(|rest| !rest.ends_with(['=', '!', '<', '>']))
+        }) else {
+            continue;
+        };
+        let before = before.trim_end();
+        let name_start = before
+            .bytes()
+            .rposition(|byte| !is_identifier_byte(byte))
+            .map_or(0, |index| index + 1);
+        let name = &before[name_start..];
+        if !name.is_empty() {
+            let held = names.entry(name).or_insert(0);
+            *held = slots.max(*held);
+        }
+    }
+    names
 }
 
 /// Cost of a call to an undeclared `name` (wrapper helper or WGSL built-in).
@@ -597,6 +700,41 @@ mod tests {
                      for (var i = 0u; i <= 9u; i++) { a = sample_src(uv); } return a; }\n\
                      fn effect(uv: vec2f, src: vec4f) -> vec4f { return taps(uv) + taps(uv); }";
         assert_eq!(cost(twice).fetches, 20);
+    }
+
+    #[test]
+    fn a_counted_loop_is_priced_at_its_literal_count_however_its_counter_is_written() {
+        for (header, write, count) in [
+            ("var i = 0u; i < 8u; i++", "(i)--;", 8),
+            ("var i = 0u; i < 8u; i++", "(i) -= 1u;", 8),
+            ("var i = 0u; i < 2u; i++", "(i) = 0u;", 2),
+            ("var i = 0u; i < 2u; i++", "*(&(i)) = 0u;", 2),
+            ("var i = 0u; i < 2u; i++", "let p = &(i); *p = 0u;", 2),
+            ("var i = 4294967295u; i <= 4294967295u; i++", "", 1),
+            ("var i = 2147483647; i <= 2147483647; i++", "", 1),
+        ] {
+            let body = format!(
+                "fn effect(uv: vec2f, src: vec4f) -> vec4f {{ var a = src; \
+                 for ({header}) {{ {write} a = a * sample_src(uv); }} return a; }}"
+            );
+            assert_eq!(cost(&body).fetches, count, "{body}");
+        }
+    }
+
+    #[test]
+    fn declaring_and_copying_a_whole_array_costs_its_elements() {
+        let copy = "fn effect(uv: vec2f, src: vec4f) -> vec4f { \
+                    var a: array<vec4f, 100>; var b: array<vec4f, 100>; \
+                    for (var i = 0u; i < n; i++) { b = a; } return b[0]; }";
+        let worst = cost(copy);
+        // Two zeroed declarations and the copy (both names) per iteration; `b[0]` reads one.
+        assert!(worst.arithmetic >= 200 + 1024 * 200, "{worst:?}");
+        let private = "var<private> big: array<vec4f, 100>;\n\
+                       fn effect(uv: vec2f, src: vec4f) -> vec4f { return big[0] + src; }";
+        assert!(cost(private).arithmetic >= 100);
+        let indexed = "fn effect(uv: vec2f, src: vec4f) -> vec4f { \
+                       var a: array<vec4f, 100>; return a[1]; }";
+        assert!(cost(indexed).arithmetic < 110, "{:?}", cost(indexed));
     }
 
     #[test]

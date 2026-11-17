@@ -183,8 +183,12 @@ fn automation_between_control_points_follows_its_curve_closely() {
     let mut exact_samples = 0;
     for (index, mixed) in mixed[0].iter().zip(&mixed[1]).enumerate() {
         let time = MediaTime::from_ticks(ticks_at(i64::try_from(index).expect("small"), RATE));
-        let gain = sample_scalar(&gain, time).clamp(0.0, MAX_GAIN);
-        let weights = pan_gains(sample_scalar(&pan, time), 2);
+        let gain =
+            sample_scalar(&gain, time, &alpha2_eval::SampleContext::NONE).clamp(0.0, MAX_GAIN);
+        let weights = pan_gains(
+            sample_scalar(&pan, time, &alpha2_eval::SampleContext::NONE),
+            2,
+        );
         for (mixed, weight) in [mixed.0, mixed.1].into_iter().zip(weights) {
             let error = (mixed - gain * weight).abs();
             worst = worst.max(error);

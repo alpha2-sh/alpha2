@@ -86,6 +86,7 @@ fn long_timeline() -> Project {
         })
         .collect();
     Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: ProjectId::new("memory".to_owned()).expect("id"),
         name: "memory".into(),

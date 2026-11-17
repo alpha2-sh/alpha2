@@ -1,0 +1,149 @@
+{
+  "compose_version": 1,
+  "template": {
+    "id": "alpha2/lower-third",
+    "version": 1,
+    "kind": "node",
+    "title": "Lower third",
+    "description": "A name and an optional role in the lower left, on panels beside an accent bar."
+  },
+  "params": [
+    {
+      "name": "text",
+      "type": "text",
+      "min_chars": 1,
+      "title": "The name"
+    },
+    {
+      "name": "subtitle",
+      "type": "text",
+      "required": false,
+      "title": "The role"
+    },
+    {
+      "name": "fade",
+      "type": "number",
+      "min": 0,
+      "max": 60,
+      "required": false,
+      "title": "Seconds of fade in and out; 0 for none. Default: the theme's"
+    }
+  ],
+  "node": {
+    "type": "box",
+    "flex_direction": "column",
+    "justify_content": "end",
+    "align_items": "start",
+    "padding": {
+      "top": 0,
+      "right": 0,
+      "bottom": {
+        "$theme": "margin",
+        "scale": 2.25
+      },
+      "left": {
+        "$theme": "margin",
+        "scale": 1.5
+      }
+    },
+    "children": [
+      {
+        "type": "box",
+        "flex_direction": "row",
+        "align_items": "stretch",
+        "max_width": "60%",
+        "gap": {
+          "$theme": "margin",
+          "scale": 0.3
+        },
+        "children": [
+          {
+            "box": {
+              "width": {
+                "$theme": "margin",
+                "scale": 0.2
+              }
+            },
+            "node": {
+              "type": "color",
+              "color": {
+                "$theme": "accent"
+              },
+              "enter": {
+                "type": "fade",
+                "duration": {
+                  "$param": "fade"
+                }
+              },
+              "exit": {
+                "type": "fade",
+                "duration": {
+                  "$param": "fade"
+                }
+              }
+            }
+          },
+          {
+            "type": "box",
+            "flex_direction": "column",
+            "align_items": "start",
+            "gap": {
+              "$theme": "body_size",
+              "scale": 0.6
+            },
+            "children": [
+              {
+                "type": "text",
+                "text": "{{text}}",
+                "max_lines": 1,
+                "background": {
+                  "$theme": "panel"
+                },
+                "align": "left",
+                "enter": {
+                  "type": "fade",
+                  "duration": {
+                    "$param": "fade"
+                  }
+                },
+                "exit": {
+                  "type": "fade",
+                  "duration": {
+                    "$param": "fade"
+                  }
+                },
+                "font_size": {
+                  "$theme": "subtitle_size",
+                  "scale": 1.2
+                }
+              },
+              {
+                "$if": "subtitle",
+                "then": {
+                  "type": "text",
+                  "text": "{{subtitle}}",
+                  "background": {
+                    "$theme": "panel"
+                  },
+                  "align": "left",
+                  "enter": {
+                    "type": "fade",
+                    "duration": {
+                      "$param": "fade"
+                    }
+                  },
+                  "exit": {
+                    "type": "fade",
+                    "duration": {
+                      "$param": "fade"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -18,11 +18,28 @@ export const PAGE_BROWSERS = Object.freeze([
 ]);
 
 /**
+ * @typedef {{ kind: "chrome", name: "chrome" | "edge", command: string } |
+ *   { kind: "webdriver", name: string, webdriver: ReturnType<typeof webDriverBrowser> }} PageBrowser
+ * @typedef {{ argv?: string[], required?: boolean } &
+ *   import("./chrome-cdp.mjs").BrowserLookup} BrowserRunOptions
+ */
+
+/**
+ * @overload
+ * @param {BrowserRunOptions & { required: true }} options
+ * @returns {PageBrowser}
+ */
+/**
+ * @overload
+ * @param {BrowserRunOptions} [options]
+ * @returns {PageBrowser | null}
+ */
+/**
  * `--browser <name>`, else ALPHA2_BROWSER, else Chrome. Null when Chrome is missing and not
  * required; a browser asked for by name always throws when missing.
  *
- * @returns {{ kind: "chrome", name: "chrome" | "edge", command: string } |
- *   { kind: "webdriver", name: string, webdriver: ReturnType<typeof webDriverBrowser> } | null}
+ * @param {BrowserRunOptions} [options]
+ * @returns {PageBrowser | null}
  */
 export function browserForRun({
   argv = process.argv,
@@ -69,13 +86,16 @@ function requestedBrowser(argv, env) {
   return name;
 }
 
+/** @typedef {NonNullable<Parameters<typeof runChromePage>[2]>} ChromePageOptions */
+
 /**
  * Resolves to the page's title. `onPage` and `onGpuProcess` apply to Chrome only.
  *
- * @param {NonNullable<ReturnType<typeof browserForRun>>} browser
+ * @param {PageBrowser} browser
  * @param {string} url
- * @param {{ timeoutMs?: number, onBrowser?: (version: object) => void, onPage?: Function,
- *   onGpuProcess?: Function, domainBlocking3d?: boolean }} [options]
+ * @param {{ timeoutMs?: number, onBrowser?: (version: object) => void,
+ *   onPage?: ChromePageOptions["onPage"], onGpuProcess?: ChromePageOptions["onGpuProcess"],
+ *   domainBlocking3d?: boolean }} [options]
  * @returns {Promise<string>}
  */
 export function runBrowserPage(

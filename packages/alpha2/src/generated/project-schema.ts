@@ -8,8 +8,14 @@ export const AUDIO_EFFECT_STATE_MARGIN_MS = 1100;
 /** Mirrors `alpha2_model::CURRENT_SCHEMA_VERSION`. */
 export const CURRENT_SCHEMA_VERSION = 1;
 
+/** Mirrors `alpha2_model::MAX_ANIMATOR_OFFSET`. */
+export const MAX_ANIMATOR_OFFSET = 1024;
+
 /** Mirrors `alpha2_model::MAX_ANIMATOR_SCALE`. */
 export const MAX_ANIMATOR_SCALE = 10;
+
+/** Mirrors `alpha2_model::MAX_ASPECT_RATIO`. */
+export const MAX_ASPECT_RATIO = 10000;
 
 /** Mirrors `alpha2_model::MAX_AUDIO_CHANNELS`. */
 export const MAX_AUDIO_CHANNELS = 24;
@@ -74,8 +80,47 @@ export const MAX_COMPRESSOR_RATIO = 100;
 /** Mirrors `alpha2_model::MAX_DASH_ENTRIES`. */
 export const MAX_DASH_ENTRIES = 16;
 
+/** Mirrors `alpha2_model::MAX_DATA_CHANNELS`. */
+export const MAX_DATA_CHANNELS = 64;
+
+/** Mirrors `alpha2_model::MAX_DATA_COORDINATE`. */
+export const MAX_DATA_COORDINATE = 16;
+
+/** Mirrors `alpha2_model::MAX_DATA_ID_BYTES`. */
+export const MAX_DATA_ID_BYTES = 64;
+
+/** Mirrors `alpha2_model::MAX_DATA_INTERVALS`. */
+export const MAX_DATA_INTERVALS = 200000;
+
+/** Mirrors `alpha2_model::MAX_DATA_LABEL_BYTES`. */
+export const MAX_DATA_LABEL_BYTES = 256;
+
+/** Mirrors `alpha2_model::MAX_DATA_ROTATION_DEGREES`. */
+export const MAX_DATA_ROTATION_DEGREES = 36000;
+
+/** Mirrors `alpha2_model::MAX_DATA_SCALAR`. */
+export const MAX_DATA_SCALAR = 1000000000;
+
+/** Mirrors `alpha2_model::MAX_DATA_SCALE`. */
+export const MAX_DATA_SCALE = 1000;
+
+/** Mirrors `alpha2_model::MAX_DATA_SETS`. */
+export const MAX_DATA_SETS = 256;
+
+/** Mirrors `alpha2_model::MAX_DATA_VALUES`. */
+export const MAX_DATA_VALUES = 4000000;
+
+/** Mirrors `alpha2_model::MAX_DATA_WORDS`. */
+export const MAX_DATA_WORDS = 200000;
+
+/** Mirrors `alpha2_model::MAX_DERIVED_CUES`. */
+export const MAX_DERIVED_CUES = 65536;
+
 /** Mirrors `alpha2_model::MAX_EFFECT_INPUTS`. */
 export const MAX_EFFECT_INPUTS = 8;
+
+/** Mirrors `alpha2_model::MAX_EFFECT_RESOURCES`. */
+export const MAX_EFFECT_RESOURCES = 10000;
 
 /** Mirrors `alpha2_model::MAX_ENVELOPE_MS`. */
 export const MAX_ENVELOPE_MS = 10000;
@@ -91,6 +136,12 @@ export const MAX_EQ_GAIN_DB = 36;
 
 /** Mirrors `alpha2_model::MAX_EQ_Q`. */
 export const MAX_EQ_Q = 50;
+
+/** Mirrors `alpha2_model::MAX_FLEX_FACTOR`. */
+export const MAX_FLEX_FACTOR = 1000000;
+
+/** Mirrors `alpha2_model::MAX_FOLLOW_DEPTH`. */
+export const MAX_FOLLOW_DEPTH = 8;
 
 /** Mirrors `alpha2_model::MAX_FONT_FAMILY_BYTES`. */
 export const MAX_FONT_FAMILY_BYTES = 256;
@@ -119,6 +170,9 @@ export const MAX_HDR_PEAK_NITS = 10000;
 /** Mirrors `alpha2_model::MAX_INLINED_NODES`. */
 export const MAX_INLINED_NODES = 65536;
 
+/** Mirrors `alpha2_model::MAX_KEYFRAMES`. */
+export const MAX_KEYFRAMES = 100000;
+
 /** Mirrors `alpha2_model::MAX_LATEX_BYTES`. */
 export const MAX_LATEX_BYTES = 4096;
 
@@ -131,11 +185,20 @@ export const MAX_LAYOUT_DEPTH = 16;
 /** Mirrors `alpha2_model::MAX_LAYOUT_FONT_SIZE`. */
 export const MAX_LAYOUT_FONT_SIZE = 1;
 
+/** Mirrors `alpha2_model::MAX_LAYOUT_FRACTION`. */
+export const MAX_LAYOUT_FRACTION = 1024;
+
 /** Mirrors `alpha2_model::MAX_LAYOUT_ISOLATED`. */
 export const MAX_LAYOUT_ISOLATED = 16;
 
 /** Mirrors `alpha2_model::MAX_LAYOUT_NODES`. */
 export const MAX_LAYOUT_NODES = 256;
+
+/** Mirrors `alpha2_model::MAX_LAYOUT_PERCENT`. */
+export const MAX_LAYOUT_PERCENT = 100000;
+
+/** Mirrors `alpha2_model::MAX_LAYOUT_PX`. */
+export const MAX_LAYOUT_PX = 16777216;
 
 /** Mirrors `alpha2_model::MAX_LAYOUT_TEXTS`. */
 export const MAX_LAYOUT_TEXTS = 64;
@@ -148,6 +211,9 @@ export const MAX_LINE_HEIGHT = 3;
 
 /** Mirrors `alpha2_model::MAX_LOOKAHEAD_MS`. */
 export const MAX_LOOKAHEAD_MS = 100;
+
+/** Mirrors `alpha2_model::MAX_LOOP_PASSES`. */
+export const MAX_LOOP_PASSES = 65536;
 
 /** Mirrors `alpha2_model::MAX_LOTTIE_DOCUMENT_BYTES`. */
 export const MAX_LOTTIE_DOCUMENT_BYTES = 16777216;
@@ -215,6 +281,9 @@ export const MAX_TEXT_GENERATOR_FONT_SIZE = 1;
 /** Mirrors `alpha2_model::MAX_TEXT_PADDING`. */
 export const MAX_TEXT_PADDING = 2;
 
+/** Mirrors `alpha2_model::MAX_TEXT_POSITION`. */
+export const MAX_TEXT_POSITION = 1024;
+
 /** Mirrors `alpha2_model::MAX_TEXT_RUNS`. */
 export const MAX_TEXT_RUNS = 512;
 
@@ -238,6 +307,9 @@ export const MAX_TRACKS = 256;
 
 /** Mirrors `alpha2_model::MAX_TRANSITIONS_PER_TRACK`. */
 export const MAX_TRANSITIONS_PER_TRACK = 4096;
+
+/** Mirrors `alpha2_model::MIN_ASPECT_RATIO`. */
+export const MIN_ASPECT_RATIO = 0.0001;
 
 /** Mirrors `alpha2_model::MIN_EQ_FREQUENCY_HZ`. */
 export const MIN_EQ_FREQUENCY_HZ = 10;
@@ -345,6 +417,15 @@ export const COLOR_PRIMARIES_VALUES: readonly ColorPrimaries[] = [
 
 /** Every {@link ColorRange}, in the model's order. */
 export const COLOR_RANGE_VALUES: readonly ColorRange[] = ["limited", "full"];
+
+/** Every {@link DataInterpolation}, in the model's order. */
+export const DATA_INTERPOLATION_VALUES: readonly DataInterpolation[] = [
+  "hold",
+  "linear",
+];
+
+/** Every {@link DataSpace}, in the model's order. */
+export const DATA_SPACE_VALUES: readonly DataSpace[] = ["picture", "canvas"];
 
 /** Every {@link Display}, in the model's order. */
 export const DISPLAY_VALUES: readonly Display[] = ["flex", "grid"];
@@ -537,6 +618,13 @@ export const TRIM_MODE_VALUES: readonly TrimMode[] = [
  */
 export interface Project {
   /**
+   * The schema the document follows (`https://alpha2.sh/schema/project.v1.json`), for editors
+   * and validators. The engine does not read or keep it.
+   *
+   * @defaultValue `null`
+   */
+  readonly $schema?: string | null;
+  /**
    * Master bus applied to the summed track audio.
    */
   readonly audio?: MasterAudio;
@@ -546,6 +634,12 @@ export interface Project {
    * @defaultValue `[]`
    */
   readonly compositions?: readonly Composition[];
+  /**
+   * Values derived from media, which properties and caption tracks can follow. At most 256.
+   *
+   * @defaultValue `[]`
+   */
+  readonly data?: readonly DataSet[];
   /**
    * Non-media resources referenced by effect invocations.
    *
@@ -596,7 +690,7 @@ export type AlignContent =
 export type AlignItems = "start" | "center" | "end" | "stretch";
 
 /**
- * A value that is either constant or controlled by sorted keyframes.
+ * A value that is constant, controlled by sorted keyframes, or following a data set.
  */
 export type Animated<T> =
   | {
@@ -618,6 +712,37 @@ export type Animated<T> =
        * Values evaluated from their keyframe sequence.
        */
       readonly mode: "keyframes";
+    }
+  | {
+      /**
+       * The channel followed.
+       */
+      readonly channel: string;
+      /**
+       * The data set, a `points` or `scalars` one.
+       */
+      readonly data: DataSetId;
+      /**
+       * A channel of a data set, followed at render time.
+       */
+      readonly mode: "data";
+      /**
+       * `[x, y]` added after the space mapping, in that space's normalized units (points only).
+       */
+      readonly offset?: readonly [number, number] | null;
+      /**
+       * A linear map of the value (scalars only).
+       */
+      readonly remap?: DataRemap | null;
+      /**
+       * Where a point is read (points with `via` only, where it is required).
+       */
+      readonly space?: DataSpace | null;
+      /**
+       * The reader whose time map gives source time: required for a source-anchored set,
+       * forbidden for a timeline-anchored one.
+       */
+      readonly via?: DataVia | null;
     };
 
 /**
@@ -648,6 +773,37 @@ export type AnimatedPoint =
        * Values evaluated from their keyframe sequence.
        */
       readonly mode: "keyframes";
+    }
+  | {
+      /**
+       * The channel followed.
+       */
+      readonly channel: string;
+      /**
+       * The data set, a `points` or `scalars` one.
+       */
+      readonly data: DataSetId;
+      /**
+       * A channel of a data set, followed at render time.
+       */
+      readonly mode: "data";
+      /**
+       * `[x, y]` added after the space mapping, in that space's normalized units (points only).
+       */
+      readonly offset?: readonly [number, number] | null;
+      /**
+       * A linear map of the value (scalars only).
+       */
+      readonly remap?: DataRemap | null;
+      /**
+       * Where a point is read (points with `via` only, where it is required).
+       */
+      readonly space?: DataSpace | null;
+      /**
+       * The reader whose time map gives source time: required for a source-anchored set,
+       * forbidden for a timeline-anchored one.
+       */
+      readonly via?: DataVia | null;
     };
 
 /**
@@ -801,6 +957,16 @@ export interface AudioStreamShape {
 export type BlendSpace = "linear_light" | "srgb_encoded";
 
 /**
+ * What ends a line that a clamp cuts, as CSS `block-ellipsis`.
+ */
+export type BlockEllipsis =
+  | "no_ellipsis"
+  | "ellipsis"
+  | {
+      readonly string: string;
+    };
+
+/**
  * Whether a runtime may keep and reuse a clip's rendered picture.
  */
 export type CacheIntent = "auto" | "pin" | "bypass";
@@ -834,9 +1000,16 @@ export interface CaptionCue {
  */
 export interface Captions {
   /**
-   * Cues in timeline order, none overlapping; a track shows one cue at a time.
+   * Cues in timeline order, none overlapping; a track shows one cue at a time. Empty when
+   * `from_words` gives the cues.
+   *
+   * @defaultValue `[]`
    */
-  readonly cues: readonly CaptionCue[];
+  readonly cues?: readonly CaptionCue[];
+  /**
+   * Cues built at evaluation from a `words` data set, instead of `cues`.
+   */
+  readonly from_words?: CaptionsFromWords | null;
   /**
    * The style every cue starts from.
    */
@@ -846,6 +1019,25 @@ export interface Captions {
    * `MAX_CAPTION_STYLES`, names 1 to 64 bytes.
    */
   readonly styles?: Readonly<Record<string, TextStylePatch>>;
+}
+
+/**
+ * Caption cues built from a `words` data set.
+ */
+export interface CaptionsFromWords {
+  /**
+   * The data set, a `words` one.
+   */
+  readonly data: DataSetId;
+  /**
+   * Most characters of one cue, at least 1.
+   */
+  readonly max_chars: number;
+  /**
+   * For a source-anchored set, the track whose clips showing the source give the words their
+   * timeline times; forbidden for a timeline-anchored set.
+   */
+  readonly track?: TrackId | null;
 }
 
 /**
@@ -971,7 +1163,9 @@ export interface ClipComposition {
  */
 export interface ClipEffect {
   /**
-   * Stable effect definition identifier.
+   * Stable effect definition identifier. Ids under `alpha2.` name built-ins
+   * (`schema/effects.v1.json`): validation checks such an invocation's version, kind,
+   * parameters, inputs and resources against its definition.
    */
   readonly id: string;
   /**
@@ -1173,6 +1367,16 @@ export interface CompositionNode {
 }
 
 /**
+ * A `similarity` data set applied to a clip's own picture before its transform.
+ */
+export interface CorrectionRef {
+  /**
+   * The data set, a `similarity` one anchored to the clip's source.
+   */
+  readonly data: DataSetId;
+}
+
+/**
  * A dash pattern.
  */
 export interface Dash {
@@ -1188,6 +1392,297 @@ export interface Dash {
    * pair up.
    */
   readonly pattern: readonly Animated<number>[];
+}
+
+export type DataAnchor =
+  | {
+      /**
+       * The source.
+       */
+      readonly source_id: SourceId;
+      /**
+       * Source time, the presentation times the source's pictures and sound carry once decoded.
+       * Points are normalized to the displayed source picture.
+       */
+      readonly type: "source";
+    }
+  | {
+      /**
+       * Timeline time. Points are normalized to the canvas.
+       */
+      readonly type: "timeline";
+    };
+
+/**
+ * How a sampled data set reads between its samples.
+ */
+export type DataInterpolation = "hold" | "linear";
+
+/**
+ * One timed range; `start == end` is an instant.
+ */
+export interface DataInterval {
+  /**
+   * When it ends; not before `start`.
+   */
+  readonly end: MediaTime;
+  /**
+   * A free label, at most `MAX_DATA_LABEL_BYTES` bytes. Edit operations ignore it.
+   */
+  readonly label?: string | null;
+  /**
+   * A free, finite score of at most `MAX_DATA_SCALAR` in magnitude; edit operations ignore it.
+   */
+  readonly score?: number | null;
+  /**
+   * When it starts, in ticks on the anchor's clock.
+   */
+  readonly start: MediaTime;
+}
+
+/**
+ * A linear map from `input` to `output`, clamped to `output`.
+ */
+export interface DataRemap {
+  /**
+   * The input values mapped to `output[0]` and `output[1]`; distinct and finite.
+   */
+  readonly input: readonly [number, number];
+  /**
+   * The output range; finite.
+   */
+  readonly output: readonly [number, number];
+}
+
+/**
+ * Values derived from media, anchored to a source's clock or the timeline's.
+ */
+export type DataSet =
+  | {
+      /**
+       * The clock the times are on.
+       */
+      readonly anchor: DataAnchor;
+      /**
+       * Channel names, unique, 1 to 256 bytes each.
+       */
+      readonly channels: readonly string[];
+      /**
+       * Stable identity, 1 to 64 bytes.
+       */
+      readonly id: DataSetId;
+      /**
+       * How the values read between samples.
+       */
+      readonly interpolation: DataInterpolation;
+      /**
+       * Named channels of normalized `(x, y)` points, each pair `null` when lost.
+       */
+      readonly kind: "points";
+      /**
+       * Which extractor made it.
+       *
+       * @defaultValue `null`
+       */
+      readonly made_by?: MadeBy | null;
+      /**
+       * The original source's fingerprint when it was made.
+       *
+       * @defaultValue `null`
+       */
+      readonly made_from?: MediaFingerprint | null;
+      /**
+       * Sample times in ticks on the anchor's clock, strictly ascending.
+       */
+      readonly times: readonly MediaTime[];
+      /**
+       * `times.len() * channels.len() * 2` numbers, sample after sample, channel after channel.
+       */
+      readonly values: readonly (number | null)[];
+    }
+  | {
+      /**
+       * The clock the times are on.
+       */
+      readonly anchor: DataAnchor;
+      /**
+       * Channel names, unique, 1 to 256 bytes each.
+       */
+      readonly channels: readonly string[];
+      /**
+       * Stable identity, 1 to 64 bytes.
+       */
+      readonly id: DataSetId;
+      /**
+       * How the values read between samples.
+       */
+      readonly interpolation: DataInterpolation;
+      /**
+       * Named channels of numbers, each `null` when lost.
+       */
+      readonly kind: "scalars";
+      /**
+       * Which extractor made it.
+       *
+       * @defaultValue `null`
+       */
+      readonly made_by?: MadeBy | null;
+      /**
+       * The original source's fingerprint when it was made.
+       *
+       * @defaultValue `null`
+       */
+      readonly made_from?: MediaFingerprint | null;
+      /**
+       * Sample times in ticks on the anchor's clock, strictly ascending.
+       */
+      readonly times: readonly MediaTime[];
+      /**
+       * `times.len() * channels.len()` numbers, sample after sample, channel after channel.
+       */
+      readonly values: readonly (number | null)[];
+    }
+  | {
+      /**
+       * The clock the times are on.
+       */
+      readonly anchor: DataAnchor;
+      /**
+       * Stable identity, 1 to 64 bytes.
+       */
+      readonly id: DataSetId;
+      /**
+       * How the values read between samples.
+       */
+      readonly interpolation: DataInterpolation;
+      /**
+       * Translation (normalized), rotation (degrees) and uniform scale about the picture's
+       * center, per sample; four `null`s when lost.
+       */
+      readonly kind: "similarity";
+      /**
+       * Which extractor made it.
+       *
+       * @defaultValue `null`
+       */
+      readonly made_by?: MadeBy | null;
+      /**
+       * The original source's fingerprint when it was made.
+       *
+       * @defaultValue `null`
+       */
+      readonly made_from?: MediaFingerprint | null;
+      /**
+       * Sample times in ticks on the anchor's clock, strictly ascending.
+       */
+      readonly times: readonly MediaTime[];
+      /**
+       * `times.len() * 4` numbers: `tx`, `ty`, rotation, scale per sample.
+       */
+      readonly values: readonly (number | null)[];
+    }
+  | {
+      /**
+       * The clock the times are on.
+       */
+      readonly anchor: DataAnchor;
+      /**
+       * Stable identity, 1 to 64 bytes.
+       */
+      readonly id: DataSetId;
+      /**
+       * Timed words.
+       */
+      readonly kind: "words";
+      /**
+       * Which extractor made it.
+       *
+       * @defaultValue `null`
+       */
+      readonly made_by?: MadeBy | null;
+      /**
+       * The original source's fingerprint when it was made.
+       *
+       * @defaultValue `null`
+       */
+      readonly made_from?: MediaFingerprint | null;
+      /**
+       * Words sorted by `(start, end)`.
+       */
+      readonly words: readonly DataWord[];
+    }
+  | {
+      /**
+       * The clock the times are on.
+       */
+      readonly anchor: DataAnchor;
+      /**
+       * Stable identity, 1 to 64 bytes.
+       */
+      readonly id: DataSetId;
+      /**
+       * Intervals sorted by `(start, end)`.
+       */
+      readonly intervals: readonly DataInterval[];
+      /**
+       * Timed ranges.
+       */
+      readonly kind: "intervals";
+      /**
+       * Which extractor made it.
+       *
+       * @defaultValue `null`
+       */
+      readonly made_by?: MadeBy | null;
+      /**
+       * The original source's fingerprint when it was made.
+       *
+       * @defaultValue `null`
+       */
+      readonly made_from?: MediaFingerprint | null;
+    };
+
+/**
+ * A stable data-set identifier.
+ */
+export type DataSetId = string;
+
+/**
+ * Where a bound point is read.
+ */
+export type DataSpace = "picture" | "canvas";
+
+/**
+ * The reader whose clock maps time onto a source-anchored data set.
+ */
+export type DataVia =
+  | {
+      readonly clip: ClipId;
+    }
+  | {
+      readonly node: NodeId;
+    };
+
+/**
+ * One timed word.
+ */
+export interface DataWord {
+  /**
+   * When it ends; after `start`.
+   */
+  readonly end: MediaTime;
+  /**
+   * Who says it, at most `MAX_DATA_LABEL_BYTES` bytes.
+   */
+  readonly speaker?: string | null;
+  /**
+   * When the word starts, in ticks on the anchor's clock.
+   */
+  readonly start: MediaTime;
+  /**
+   * The word, non-empty, at most `MAX_DATA_LABEL_BYTES` bytes.
+   */
+  readonly text: string;
 }
 
 /**
@@ -1388,6 +1883,26 @@ export type FlexDirection = "row" | "column" | "row_reverse" | "column_reverse";
 export type FlexWrap = "nowrap" | "wrap";
 
 /**
+ * The font sizes a text is fitted between, as fractions of the canvas's shorter side.
+ *
+ * The text draws at the largest size in `[min, max]` at which no line breaks inside a word,
+ * the lines fit the box's height, and there are no more lines than `line_clamp.max_lines`.
+ * When no size fits, it draws at `min`. A `min` above `max` wins, as CSS `min-width` does.
+ * Sizes are tried by bisection over `max`, `min` and the multiples of `1 / 8192` between.
+ */
+export interface FontSizeFit {
+  /**
+   * Largest font size, at least `min` and at most the holder's largest font size. `None`
+   * is `font_size`, so the text only shrinks.
+   */
+  readonly max?: number | null;
+  /**
+   * Smallest font size, positive. At most the holder's largest font size.
+   */
+  readonly min: number;
+}
+
+/**
  * A positive rational frame rate in reduced form, at most one frame per tick (120 000 fps).
  */
 export interface FrameRate {
@@ -1575,17 +2090,57 @@ export interface Keyframe<T> {
 }
 
 /**
+ * A value that is constant or controlled by sorted keyframes.
+ */
+export type Keyframed<T> =
+  | {
+      /**
+       * A value without animation.
+       */
+      readonly mode: "constant";
+      /**
+       * Value used at every timestamp.
+       */
+      readonly value: T;
+    }
+  | {
+      /**
+       * Strictly ascending keyframes. The evaluator clamps outside the sequence.
+       */
+      readonly keyframes: readonly Keyframe<T>[];
+      /**
+       * Values evaluated from their keyframe sequence.
+       */
+      readonly mode: "keyframes";
+    };
+
+/**
  * A border inside the border box, as wide on every side.
  */
 export interface LayoutBorder {
   /**
    * What covers the border. Positions are normalized to the border box.
    */
-  readonly paint: Animated<Paint>;
+  readonly paint: Keyframed<Paint>;
   /**
    * Width. At least 0.
    */
-  readonly width: Animated<LayoutSize>;
+  readonly width: Keyframed<LayoutSize>;
+}
+
+/**
+ * The font sizes a layout text is fitted between, as a text style's
+ * `FontSizeFit`, in layout sizes. A `min` above `max` wins.
+ */
+export interface LayoutFontSizeFit {
+  /**
+   * Largest font size, with the same limits. `None` is `font_size`, so the text only shrinks.
+   */
+  readonly max?: LayoutSize | null;
+  /**
+   * Smallest font size, positive and at most `MAX_LAYOUT_FONT_SIZE` of the shorter side.
+   */
+  readonly min: LayoutSize;
 }
 
 /**
@@ -1596,19 +2151,19 @@ export interface LayoutInset {
   /**
    * Distance from the parent's bottom padding edge.
    */
-  readonly bottom?: Animated<LayoutLength> | null;
+  readonly bottom?: Keyframed<LayoutLength> | null;
   /**
    * Distance from the parent's left padding edge.
    */
-  readonly left?: Animated<LayoutLength> | null;
+  readonly left?: Keyframed<LayoutLength> | null;
   /**
    * Distance from the parent's right padding edge.
    */
-  readonly right?: Animated<LayoutLength> | null;
+  readonly right?: Keyframed<LayoutLength> | null;
   /**
    * Distance from the parent's top padding edge.
    */
-  readonly top?: Animated<LayoutLength> | null;
+  readonly top?: Keyframed<LayoutLength> | null;
 }
 
 /**
@@ -1647,7 +2202,7 @@ export interface LayoutNode {
    * What covers the border box, rounded by `border_radius`. Positions are normalized to the
    * border box.
    */
-  readonly background?: Animated<Paint> | null;
+  readonly background?: Keyframed<Paint> | null;
   /**
    * A border inside the border box.
    */
@@ -1656,7 +2211,7 @@ export interface LayoutNode {
    * The corner radius of the border box. At least 0; default 0. Capped at half the box's
    * shorter side.
    */
-  readonly border_radius?: Animated<LayoutSize> | null;
+  readonly border_radius?: Keyframed<LayoutSize> | null;
   /**
    * Boxes laid out in this one, in document (and paint) order. Not with `text` or `shape`.
    */
@@ -1664,7 +2219,7 @@ export interface LayoutNode {
   /**
    * Space between columns, in place of `gap`. At least 0.
    */
-  readonly column_gap?: Animated<LayoutSize> | null;
+  readonly column_gap?: Keyframed<LayoutSize> | null;
   /**
    * How the box lays its children out. Default `flex`. Like every container field, not on a
    * box with text or shape content.
@@ -1677,7 +2232,7 @@ export interface LayoutNode {
   /**
    * The main size before growing and shrinking. `None` is auto.
    */
-  readonly flex_basis?: Animated<LayoutLength> | null;
+  readonly flex_basis?: Keyframed<LayoutLength> | null;
   /**
    * The main axis of a flex container's children. Default `row`.
    */
@@ -1705,7 +2260,13 @@ export interface LayoutNode {
    * Font size: positive, at most `MAX_LAYOUT_FONT_SIZE` of the picture's shorter side.
    * Inherited; the root's is 0.05.
    */
-  readonly font_size?: Animated<LayoutSize> | null;
+  readonly font_size?: Keyframed<LayoutSize> | null;
+  /**
+   * The range the font size of the box's own text is fitted in so the text fits its content
+   * box, as a text style's `font_size_fit`. The box is laid out at `font_size` first, and
+   * the fit never changes its size. Not inherited.
+   */
+  readonly font_size_fit?: LayoutFontSizeFit | null;
   /**
    * The weight in `[1, 1000]` used to match the family's faces, as a text style's
    * `font_weight`. Not animated. Inherited; the root's is 400.
@@ -1714,7 +2275,7 @@ export interface LayoutNode {
   /**
    * Space between children, on both axes. At least 0; default 0.
    */
-  readonly gap?: Animated<LayoutSize> | null;
+  readonly gap?: Keyframed<LayoutSize> | null;
   /**
    * The size of a grid's implicit columns. Default `auto`.
    */
@@ -1748,7 +2309,7 @@ export interface LayoutNode {
   /**
    * Border-box height. `None` is auto.
    */
-  readonly height?: Animated<LayoutLength> | null;
+  readonly height?: Keyframed<LayoutLength> | null;
   /**
    * Where an `absolute` box lies in its parent's padding box.
    */
@@ -1772,6 +2333,12 @@ export interface LayoutNode {
    */
   readonly letter_spacing?: number | null;
   /**
+   * Where the lines of the box's own text are cut and what ends the cut line, as CSS
+   * `line-clamp` and a text style's `line_clamp`. The clamp point is also at the content
+   * box's height. The box's automatic height ends at the clamp point. Not inherited.
+   */
+  readonly line_clamp?: LineClamp | null;
+  /**
    * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`, as a text style's
    * `line_height`. Inherited; the root's is 1.2.
    */
@@ -1779,23 +2346,23 @@ export interface LayoutNode {
   /**
    * Space outside the border, written as `padding` is. Sides may be negative; no `auto`.
    */
-  readonly margin?: Animated<Insets> | null;
+  readonly margin?: Keyframed<Insets> | null;
   /**
    * Largest height. `None` is none.
    */
-  readonly max_height?: Animated<LayoutLength> | null;
+  readonly max_height?: Keyframed<LayoutLength> | null;
   /**
    * Largest width. `None` is none.
    */
-  readonly max_width?: Animated<LayoutLength> | null;
+  readonly max_width?: Keyframed<LayoutLength> | null;
   /**
    * Smallest height. `None` is auto.
    */
-  readonly min_height?: Animated<LayoutLength> | null;
+  readonly min_height?: Keyframed<LayoutLength> | null;
   /**
    * Smallest width. `None` is auto, the CSS automatic minimum size.
    */
-  readonly min_width?: Animated<LayoutLength> | null;
+  readonly min_width?: Keyframed<LayoutLength> | null;
   /**
    * Opacity of the box and everything in it as one group, in `0..=1`. Applied after layout.
    */
@@ -1808,7 +2375,7 @@ export interface LayoutNode {
    * Space inside the border: a length, the CSS shorthand (`"8px 16px"`), or the sides object.
    * Sides at least 0; default 0.
    */
-  readonly padding?: Animated<Insets> | null;
+  readonly padding?: Keyframed<Insets> | null;
   /**
    * Whether the box is in its parent's flow. Default `relative`.
    */
@@ -1822,7 +2389,7 @@ export interface LayoutNode {
    * Space between rows (or lines of a wrapping row flex container), in place of `gap`. At
    * least 0.
    */
-  readonly row_gap?: Animated<LayoutSize> | null;
+  readonly row_gap?: Keyframed<LayoutSize> | null;
   /**
    * Per-axis scale of the box and everything in it about its border-box centre, after layout.
    */
@@ -1847,7 +2414,7 @@ export interface LayoutNode {
    * At most `MAX_TEXT_CONTENT_BYTES` bytes per value; may be empty. Keyframes all `hold`.
    * Not with `children` or `shape`.
    */
-  readonly text?: Animated<string> | null;
+  readonly text?: Keyframed<string> | null;
   /**
    * How lines align within the content width. Inherited; the root's is `start`.
    */
@@ -1862,11 +2429,11 @@ export interface LayoutNode {
    * Offset of the box and everything in it after layout: the object, or one or two lengths as
    * CSS `translate` writes them.
    */
-  readonly translate?: Animated<LayoutOffset> | null;
+  readonly translate?: Keyframed<LayoutOffset> | null;
   /**
    * Border-box width. `None` is auto. Like every item field, not on the root.
    */
-  readonly width?: Animated<LayoutLength> | null;
+  readonly width?: Keyframed<LayoutLength> | null;
 }
 
 /**
@@ -1915,6 +2482,28 @@ export interface Limiter {
 export type LineCap = "butt" | "round" | "square";
 
 /**
+ * Lines past a clamp point are discarded, as CSS Overflow 4 `line-clamp` discards them.
+ *
+ * The clamp point is after the last line within `max_lines` that fits the box's height, and
+ * never before the first line. Unlike CSS, the height counts without `max-lines: auto`, so
+ * clamped text stays inside a box that has one. A cut line is shortened to its last word end,
+ * else its last character, at which the ellipsis fits after it. Text animators count no unit
+ * for the ellipsis, which moves with the character before it.
+ */
+export interface LineClamp {
+  /**
+   * What ends the last kept line of cut text. Default `ellipsis`, as CSS `line-clamp` sets it.
+   *
+   * @defaultValue `"ellipsis"`
+   */
+  readonly block_ellipsis?: BlockEllipsis;
+  /**
+   * Most lines, at least 1, as CSS `max-lines`. `None` cuts at the box's height alone.
+   */
+  readonly max_lines?: number | null;
+}
+
+/**
  * How stroke segments meet at a vertex.
  */
 export type LineJoin = "miter" | "round" | "bevel";
@@ -1929,6 +2518,44 @@ export type LinearPrimaries =
  * How each pass of a `TimeMap::Loop` follows the one before.
  */
 export type LoopMode = "repeat" | "ping_pong";
+
+/**
+ * Which extractor made a data set. Recorded for hosts; the engine never reads it.
+ */
+export interface MadeBy {
+  /**
+   * The extractor's reverse-DNS id.
+   */
+  readonly extractor: string;
+  /**
+   * The parameters it ran with.
+   *
+   * @defaultValue `{}`
+   */
+  readonly params?: Readonly<Record<string, never>>;
+  /**
+   * The plugin that ran, when the extractor was one.
+   */
+  readonly plugin?: MadeByPlugin | null;
+  /**
+   * The extractor's output-contract version.
+   */
+  readonly version: number;
+}
+
+/**
+ * The plugin build that made a data set.
+ */
+export interface MadeByPlugin {
+  /**
+   * SHA-256 of the artifact that ran, as 64 lowercase hexadecimal digits.
+   */
+  readonly artifact_sha256: string;
+  /**
+   * The package's semantic version.
+   */
+  readonly version: string;
+}
 
 /**
  * How a mask combines with the coverage of the masks before it.
@@ -2179,7 +2806,8 @@ export type NodeOp =
       /**
        * The images the effect samples besides its input, by the names its definition declares
        * (`sample_<name>` in its shader); at most `MAX_EFFECT_INPUTS`. An undeclared name, or a
-       * declared one left out, fails the frames that draw the node.
+       * declared one left out, is invalid for a built-in and fails the frames that draw the
+       * node otherwise.
        */
       readonly inputs?: Readonly<Record<string, NodeId | null>>;
       /**
@@ -2830,7 +3458,7 @@ export type ShapeGeometry =
       /**
        * The path.
        */
-      readonly path: Animated<Path>;
+      readonly path: Keyframed<Path>;
       /**
        * A Bezier path.
        */
@@ -2962,7 +3590,7 @@ export type ShapeItem =
       /**
        * The path.
        */
-      readonly path: Animated<Path>;
+      readonly path: Keyframed<Path>;
       /**
        * A Bezier path.
        */
@@ -2978,7 +3606,7 @@ export type ShapeItem =
       /**
        * What covers it.
        */
-      readonly paint: Animated<Paint>;
+      readonly paint: Keyframed<Paint>;
       /**
        * Which regions of the compound path are inside.
        *
@@ -3026,7 +3654,7 @@ export type ShapeItem =
       /**
        * What covers the stroke.
        */
-      readonly paint: Animated<Paint>;
+      readonly paint: Keyframed<Paint>;
       /**
        * Strokes the geometry listed before it in its group.
        */
@@ -3209,7 +3837,7 @@ export interface TextAnimatorProperties {
   /**
    * The fill color a fully selected character takes; a gradient fill is mixed toward it.
    */
-  readonly fill?: Animated<Rgba> | null;
+  readonly fill?: Keyframed<Rgba> | null;
   /**
    * Moves the character, in font sizes, +y down.
    */
@@ -3223,13 +3851,14 @@ export interface TextAnimatorProperties {
    */
   readonly rotation_degrees?: Animated<number> | null;
   /**
-   * Scales the character about its centre; 1 is none. Each axis in `[0, 10]`.
+   * Scales the character about its centre; 1 is none. Each axis in `[0, 10]`. The scales of
+   * several animators multiply, and the product is at most 10 on each axis.
    */
   readonly scale?: Animated<Vec2> | null;
   /**
    * The color every stroke of a fully selected character takes.
    */
-  readonly stroke?: Animated<Rgba> | null;
+  readonly stroke?: Keyframed<Rgba> | null;
   /**
    * Space added after the character, in font sizes, in `[-0.5, 1]`, as letter spacing adds
    * it. Lines are not re-broken.
@@ -3427,7 +4056,7 @@ export interface TextStyle {
   readonly align?: TextAlign;
   /**
    * The point of the text, background included, placed at `position`; `(0.5, 1)` is its
-   * bottom centre.
+   * bottom centre. Each coordinate within `MAX_TEXT_POSITION`.
    *
    * @defaultValue `{"x":0.5,"y":1}`
    */
@@ -3468,6 +4097,11 @@ export interface TextStyle {
    */
   readonly font_size?: number;
   /**
+   * The range the font size is fitted in so the text fits its box. `None` draws at the
+   * font size as set.
+   */
+  readonly font_size_fit?: FontSizeFit | null;
+  /**
    * The weight in `[1, 1000]` used to match a family's faces, as CSS Fonts 4 matches
    * `font-weight`. Variable faces draw at it, clamped to their `wght` axis; no face is
    * synthetically emboldened.
@@ -3484,6 +4118,10 @@ export interface TextStyle {
    */
   readonly letter_spacing?: number;
   /**
+   * Where lines are cut and what ends a cut line, as CSS `line-clamp`. `None` cuts nothing.
+   */
+  readonly line_clamp?: LineClamp | null;
+  /**
    * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each line's em box (0.8 font
    * sizes above the baseline, 0.2 below) is centred in a taller line.
    *
@@ -3491,13 +4129,20 @@ export interface TextStyle {
    */
   readonly line_height?: number;
   /**
+   * Height the lines' box fits in, as a fraction of the canvas height, in `(0, 1]`, for
+   * `font_size_fit` and `line_clamp`. Text taller than it still draws past it, as CSS
+   * `max-height` lets a box with visible overflow. `None` sets no height.
+   */
+  readonly max_height?: number | null;
+  /**
    * Width text wraps at, as a fraction of the canvas width, in `(0, 1]`.
    *
    * @defaultValue `0.9`
    */
   readonly max_width?: number;
   /**
-   * Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right.
+   * Where on the canvas the text's anchor lies, `(0, 0)` top-left to `(1, 1)` bottom-right;
+   * each coordinate within `MAX_TEXT_POSITION`.
    *
    * @defaultValue `{"x":0.5,"y":0.92}`
    */
@@ -3548,6 +4193,10 @@ export interface TextStylePatch {
    */
   readonly font_size?: number | null;
   /**
+   * See `TextStyle::font_size_fit`; `null` removes the base's.
+   */
+  readonly font_size_fit?: FontSizeFit | null;
+  /**
    * See `TextStyle::font_weight`.
    */
   readonly font_weight?: number | null;
@@ -3556,9 +4205,17 @@ export interface TextStylePatch {
    */
   readonly letter_spacing?: number | null;
   /**
+   * See `TextStyle::line_clamp`; `null` removes the base's.
+   */
+  readonly line_clamp?: LineClamp | null;
+  /**
    * See `TextStyle::line_height`.
    */
   readonly line_height?: number | null;
+  /**
+   * See `TextStyle::max_height`; `null` removes the base's.
+   */
+  readonly max_height?: number | null;
   /**
    * See `TextStyle::max_width`.
    */
@@ -3818,6 +4475,11 @@ export interface VisualProperties {
    * @defaultValue `{"x":0.5,"y":0.5}`
    */
   readonly anchor?: Vec2;
+  /**
+   * A `similarity` data set moving the clip's own picture, applied before this transform.
+   * Clip visuals only.
+   */
+  readonly correction?: CorrectionRef | null;
   /**
    * Animated opacity constrained to `0..=1`.
    *

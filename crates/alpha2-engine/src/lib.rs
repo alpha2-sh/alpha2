@@ -8,12 +8,16 @@
 //! documented only with the `wgpu-interop` feature and follow `wgpu`'s major version.
 
 mod audio;
+#[cfg(test)]
+mod builtin_effects_tests;
 mod capabilities;
 mod downmix;
 mod error;
 mod error_code;
 mod exporter;
+pub mod extract;
 mod frame;
+pub mod frame_store;
 mod generated;
 mod layout;
 mod passthrough;

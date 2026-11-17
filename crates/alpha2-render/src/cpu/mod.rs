@@ -11,6 +11,7 @@
 mod blend;
 mod composite;
 mod curves;
+pub mod decoded;
 mod execute;
 mod frames;
 pub(crate) mod half;
@@ -34,9 +35,11 @@ mod vector;
 mod workers;
 
 #[cfg(test)]
+pub(crate) use image::Pixels;
+#[cfg(test)]
 pub(crate) use vector::over as premultiplied_over;
 
 pub use image::CpuImage;
-pub use pack::pack_cpu_image;
 pub use renderer::{CpuRenderStats, CpuRenderer};
 pub use source::{CpuSource, RgbaPixels, YuvPlanes};
+pub use workers::{BandProgress, report_band_progress};

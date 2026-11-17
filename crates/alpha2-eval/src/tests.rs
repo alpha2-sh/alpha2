@@ -34,6 +34,7 @@ fn project() -> Project {
         range(2_000, 2_100),
     ));
     Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: id(ProjectId::new, "project"),
         name: "test".into(),
@@ -96,7 +97,7 @@ fn frame_needs_are_deduplicated() {
     project.timeline.tracks.push(copied_track);
     let index = ActiveIndex::build(&project).expect("valid project");
     let needs = frame_needs(&project, &index, MediaTime(175)).expect("matching index");
-    assert_eq!(needs.len(), 2);
+    assert_eq!(needs.len(), 1);
     assert_eq!(needs[0].clip_id.as_str(), "clip-v");
 }
 
@@ -237,7 +238,7 @@ fn output_effect<'a>(clip: &ActiveClip<'a>) -> ActiveEffect<'a> {
     let StepOp::Effect { effect, .. } = &plan.steps[plan.output].op else {
         panic!("an effect output");
     };
-    ActiveEffect::new(effect, composition.time())
+    ActiveEffect::new(effect, composition.time(), crate::SampleContext::NONE)
 }
 
 #[test]
@@ -294,11 +295,13 @@ fn colors_interpolate_premultiplied() {
     // Premultiplied: red keeps its value while alpha rises, instead of [0.5, 0, 0, 0.5].
     let fade = ramp([0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(
-        sample_effect_param(&fade, MediaTime(50)).value,
+        sample_effect_param(&fade, MediaTime(50), &crate::SampleContext::NONE).value,
         EffectValue::Color([1.0, 0.0, 0.0, 0.5])
     );
     let opaque = ramp([0.0, 0.2, 1.0, 1.0], [1.0, 0.6, 0.0, 1.0]);
-    let EffectValue::Color(mid) = sample_effect_param(&opaque, MediaTime(25)).value else {
+    let EffectValue::Color(mid) =
+        sample_effect_param(&opaque, MediaTime(25), &crate::SampleContext::NONE).value
+    else {
         panic!("a color");
     };
     for (actual, expected) in mid.into_iter().zip([0.25, 0.3, 0.75, 1.0]) {
@@ -330,7 +333,9 @@ fn vec4_parameters_interpolate_component_by_component() {
         (25, [0.15, 0.35, 0.55, 0.25]),
         (50, [0.3, 0.5, 0.7, 0.5]),
     ] {
-        let EffectValue::Vec4(value) = sample_effect_param(&steps, MediaTime(time)).value else {
+        let EffectValue::Vec4(value) =
+            sample_effect_param(&steps, MediaTime(time), &crate::SampleContext::NONE).value
+        else {
             panic!("a vec4");
         };
         for (actual, expected) in value.into_iter().zip(expected) {
@@ -364,7 +369,7 @@ fn effect_parameters_are_sampled_at_the_composition_time() {
     with_effect(
         &mut project,
         alpha2_model::ClipEffect {
-            id: "alpha2.effect.gaussian-blur".into(),
+            id: "test.blur".into(),
             version: 1,
             resources: BTreeMap::new(),
             params: BTreeMap::from([
@@ -431,7 +436,12 @@ fn effect_parameters_are_sampled_at_the_composition_time() {
         panic!("an effect node");
     };
     assert_eq!(
-        sample_effect_param(&effect.params["mode"], MediaTime(100)).value,
+        sample_effect_param(
+            &effect.params["mode"],
+            MediaTime(100),
+            &crate::SampleContext::NONE
+        )
+        .value,
         EffectValue::Enum(3)
     );
 }
@@ -569,12 +579,12 @@ fn extreme_keyframe_times_and_values_remain_finite() {
     clip.visual.rotation_degrees = Animated::Keyframes {
         keyframes: vec![
             Keyframe {
-                time: MediaTime(i64::MIN),
+                time: MediaTime(-alpha2_time::MAX_SERIALIZED_TICKS),
                 value: -3.0e38,
                 interpolation: Interpolation::Linear,
             },
             Keyframe {
-                time: MediaTime(i64::MAX),
+                time: MediaTime(alpha2_time::MAX_SERIALIZED_TICKS),
                 value: 3.0e38,
                 interpolation: Interpolation::Hold,
             },
@@ -752,7 +762,10 @@ fn direct_empty_keyframe_mutation_cannot_panic_the_scalar_sampler() {
     let animation = Animated::Keyframes {
         keyframes: Vec::<Keyframe<f32>>::new(),
     };
-    assert!(sample_scalar(&animation, MediaTime::ZERO).abs() <= f32::EPSILON);
+    assert!(
+        sample_scalar(&animation, MediaTime::ZERO, &crate::SampleContext::NONE).abs()
+            <= f32::EPSILON
+    );
 }
 
 #[test]
@@ -834,6 +847,7 @@ fn each_caption_track_shows_its_cue_over_the_tracks_before_it() {
     let mut project = project();
     let mut captions = Track::new(id(TrackId::new, "c1"), "captions", TrackKind::Caption);
     captions.captions = Some(Captions {
+        from_words: None,
         style: alpha2_model::TextStyle::default(),
         styles: std::collections::BTreeMap::new(),
         cues: vec![
@@ -1224,6 +1238,7 @@ fn a_speaker_style_applies_to_each_of_their_cues() {
     let mut project = project();
     let mut track = Track::new(id(TrackId::new, "c1"), "captions", TrackKind::Caption);
     track.captions = Some(Captions {
+        from_words: None,
         style: alpha2_model::TextStyle::default(),
         styles: [(
             "Ann".to_owned(),
@@ -1261,6 +1276,7 @@ fn animator_time_restarts_at_each_cue() {
     let mut project = project();
     let mut track = Track::new(id(TrackId::new, "c1"), "captions", TrackKind::Caption);
     track.captions = Some(Captions {
+        from_words: None,
         style: alpha2_model::TextStyle::default(),
         styles: std::collections::BTreeMap::new(),
         cues: vec![
@@ -1279,4 +1295,76 @@ fn animator_time_restarts_at_each_cue() {
     assert_eq!(local(120), MediaTime(20));
     assert_eq!(local(150), MediaTime(0));
     assert_eq!(local(179), MediaTime(29));
+}
+
+/// Clips a, b and c overlapping at frames 80..100 on one track with their transitions listed in
+/// `order`, plus `unrelated` other transitions on an earlier track.
+fn three_way(order: [usize; 3], unrelated: usize) -> Project {
+    use serde_json::json;
+    const FRAME: i64 = 4_000;
+    let clip = |id: &str, source: &str, from: i64, to: i64| {
+        json!({ "id": id, "source_id": source,
+                "timeline_range": { "start": from * FRAME, "end": to * FRAME },
+                "source_range": { "start": 0, "end": (to - from) * FRAME } })
+    };
+    let fade = |from: &str, to: &str, start: i64, end: i64| {
+        json!({ "from_clip": from, "to_clip": to,
+                "timeline_range": { "start": start * FRAME, "end": end * FRAME },
+                "easing": { "type": "linear" }, "effect": { "id": "alpha2.transition.fade", "version": 1 } })
+    };
+    let three = [
+        fade("a", "b", 50, 100),
+        fade("a", "c", 80, 100),
+        fade("b", "c", 80, 150),
+    ];
+    let mut others = (Vec::new(), Vec::new());
+    for pair in 0..i64::try_from(unrelated).expect("count") {
+        let base = 300 + pair * 40;
+        let (x, y) = (format!("x{pair}"), format!("y{pair}"));
+        others.0.push(clip(&x, "v", base, base + 20));
+        others.0.push(clip(&y, "w", base + 10, base + 30));
+        others.1.push(fade(&x, &y, base + 10, base + 20));
+    }
+    let document = json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": { "width": 640, "height": 360, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48_000 },
+        "sources": [
+            { "id": "v", "kind": "video", "locator": "v.mp4" },
+            { "id": "w", "kind": "video", "locator": "w.mp4" }
+        ],
+        "timeline": { "tracks": [
+            { "id": "u", "name": "U", "kind": "video", "clips": others.0, "transitions": others.1 },
+            { "id": "t", "name": "T", "kind": "video",
+              "clips": [clip("a", "v", 0, 100), clip("b", "w", 50, 150), clip("c", "v", 80, 200)],
+              "transitions": order.iter().map(|index| three[*index].clone()).collect::<Vec<_>>() }
+        ] }
+    });
+    Project::from_json(&document.to_string()).expect("valid project")
+}
+
+#[test]
+fn transitions_that_start_together_follow_their_track_list() {
+    for (order, expected) in [([0, 1, 2], "a>b a>c b>c"), ([0, 2, 1], "a>b b>c a>c")] {
+        for unrelated in [0, 18, 2_000] {
+            let project = three_way(order, unrelated);
+            let index = ActiveIndex::build(&project).expect("index");
+            let frame = evaluate(&project, &index, MediaTime(90 * 4_000)).expect("frame");
+            let listed = frame
+                .transitions
+                .iter()
+                .map(|transition| format!("{}>{}", transition.from_clip, transition.to_clip))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(listed, expected, "{order:?} with {unrelated} others");
+        }
+    }
+}
+
+#[test]
+fn audio_clips_need_no_frames() {
+    let project = project();
+    let index = ActiveIndex::build(&project).expect("valid project");
+    let needs = frame_needs(&project, &index, MediaTime(175)).expect("matching index");
+    assert!(needs.iter().all(|need| need.clip_id.as_str() != "clip-a"));
+    assert_eq!(needs.len(), 1);
 }

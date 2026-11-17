@@ -70,10 +70,10 @@ impl Renderer {
         uniforms: &mut UniformArenaLease,
     ) -> Result<Option<PendingEffectTiming>, RenderError> {
         let registered = self
-            .effects
+            .effects()
             .get(pass.id)
             .ok_or(RenderError::UnknownEffect)?;
-        self.encode_registered_pass(encoder, registered, pass, uniforms)
+        self.encode_registered_pass(encoder, &registered, pass, uniforms)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -96,7 +96,7 @@ impl Renderer {
             runtime,
             output,
         } = pass;
-        let drawn = self.effect_pipeline(registered);
+        let drawn = self.effect_pipeline(registered)?;
         let source_b = match (registered.definition.kind, source_b) {
             (EffectKind::Transition, Some(source)) => source,
             (EffectKind::Transition, None) => return Err(RenderError::MissingEffectInput),
@@ -119,6 +119,23 @@ impl Renderer {
             runtime,
             self.quality_controls().max_filter_samples,
         ));
+        // Held until the bind group is made, whatever another thread registers meanwhile.
+        let bound = registered
+            .definition
+            .resources
+            .iter()
+            .map(|spec| {
+                let resource = resources
+                    .get(&spec.name)
+                    .and_then(|id| self.effect_resource(id))
+                    .ok_or(RenderError::MissingEffectResource)?;
+                if resource.kind == spec.kind {
+                    Ok(resource)
+                } else {
+                    Err(RenderError::EffectResourceKindMismatch)
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -141,17 +158,7 @@ impl Renderer {
                 resource: uniforms.binding(runtime_uniform),
             },
         ];
-        for (index, spec) in registered.definition.resources.iter().enumerate() {
-            let id = resources
-                .get(&spec.name)
-                .ok_or(RenderError::MissingEffectResource)?;
-            let resource = self
-                .effect_resources
-                .get(id)
-                .ok_or(RenderError::MissingEffectResource)?;
-            if resource.kind != spec.kind {
-                return Err(RenderError::EffectResourceKindMismatch);
-            }
+        for (index, resource) in bound.iter().enumerate() {
             entries.push(wgpu::BindGroupEntry {
                 binding: u32::try_from(index).unwrap_or(0) * 2 + 5,
                 resource: wgpu::BindingResource::TextureView(&resource.view),
@@ -402,14 +409,17 @@ pub(crate) fn validate_runtime(runtime: EffectRuntime) -> Result<(), RenderError
         || !(0.0..=1.0).contains(&runtime.progress)
         || !runtime.ratio.is_finite()
         || runtime.ratio <= 0.0
+        || !runtime.scale.is_finite()
+        || runtime.scale <= 0.0
     {
         return Err(RenderError::InvalidEffectParameter);
     }
     Ok(())
 }
 
-/// Runtime uniform: resolution, `time()` seconds, progress, ratio and filter budget as floats,
-/// then the tick count as two words, low first (`time_ticks()`).
+/// Runtime uniform: resolution, `time()` seconds, `render_scale()`, progress, ratio and filter
+/// budget as floats, then the tick count as two words, low first (`time_ticks()`), and the render
+/// scale in 16.16 fixed point (`render_scale_fixed()`).
 #[allow(clippy::cast_precision_loss)]
 fn runtime_bytes(size: RenderSize, runtime: EffectRuntime, max_filter_samples: u32) -> Vec<u8> {
     let ticks = runtime.time.ticks().cast_unsigned();
@@ -420,17 +430,28 @@ fn runtime_bytes(size: RenderSize, runtime: EffectRuntime, max_filter_samples: u
         size.width as f32,
         size.height as f32,
         seconds,
-        0.0,
+        runtime.scale,
         runtime.progress,
         runtime.ratio,
         max_filter_samples as f32,
         0.0,
     ];
     #[allow(clippy::cast_possible_truncation)]
-    let words: [u32; RUNTIME_UNIFORM_WORDS - 8] = [ticks as u32, (ticks >> 32) as u32, 0, 0];
+    let words: [u32; RUNTIME_UNIFORM_WORDS - 8] = [
+        ticks as u32,
+        (ticks >> 32) as u32,
+        render_scale_fixed(runtime.scale),
+        0,
+    ];
     let mut bytes = f32_bytes(values);
     bytes.extend(words.iter().flat_map(|word| word.to_ne_bytes()));
     bytes
+}
+
+/// `scale` in 16.16 fixed point, as `render_scale_fixed()` gives it.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(crate) fn render_scale_fixed(scale: f32) -> u32 {
+    (f64::from(scale) * 65_536.0).round() as u32
 }
 
 /// Encodes one full-target draw, or with `band` (index, top row, width, rows) one band; the

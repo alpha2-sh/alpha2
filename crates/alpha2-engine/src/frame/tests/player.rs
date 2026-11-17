@@ -83,7 +83,7 @@ fn step(
 #[test]
 fn a_frame_equal_to_the_one_shown_is_neither_rendered_nor_submitted() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
         .expect("the generator compiles");
     let tint = pollster::block_on(renderer.register_effect(runtime_tint_effect(
@@ -178,4 +178,58 @@ fn an_upload_a_transient_source_or_a_hold_renders_the_frame_again() {
     };
     assert_eq!(at(&mut player, &transient, 12_000), (false, 1));
     assert_eq!(at(&mut player, &transient, 12_000), (false, 1));
+}
+
+/// A keyed source that clears `renderer`'s result cache while a frame is built when asked, as
+/// another thread sharing the renderer may.
+struct ClearingWhileBuilt<'a> {
+    uploaded: Uploaded<'a>,
+    renderer: &'a Renderer,
+    clear: Cell<bool>,
+}
+
+impl FrameProvider for ClearingWhileBuilt<'_> {
+    fn texture_for(&self, source: &SourceId, time: MediaTime) -> Option<SourceView<'_>> {
+        if self.clear.take() {
+            self.renderer.clear_result_cache();
+        }
+        self.uploaded.texture_for(source, time)
+    }
+
+    fn source_key(&self, source: &SourceId, time: MediaTime) -> Option<RenderCacheKey> {
+        self.uploaded.source_key(source, time)
+    }
+}
+
+#[test]
+fn a_frame_built_across_a_clear_is_drawn_again_next_time() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let project = one_clip_snapshot();
+    let size = RenderSize::new(16, 16).expect("size");
+    let texture = rgba_image_texture(&renderer, size, &[200; 16 * 16 * 4]);
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let provider = ClearingWhileBuilt {
+        uploaded: Uploaded {
+            source: SourceId::new("video").expect("valid ID"),
+            texture: &view,
+            arrived: Cell::new(true),
+            generation: Cell::new(1),
+            keyed: true,
+        },
+        renderer: &renderer,
+        clear: Cell::new(false),
+    };
+    let mut player = Player::new(QualityProfile::export()).expect("quality");
+    let mut at = |ticks| step(&mut player, &project, &renderer, &provider, ticks);
+    assert_eq!(at(0), (false, 1));
+    assert_eq!(at(4_000), (true, 0));
+    provider.clear.set(true);
+    assert_eq!(at(8_000), (false, 1));
+    assert_eq!(
+        at(8_000),
+        (false, 1),
+        "drawn from inputs read before the clear"
+    );
+    assert_eq!(at(8_000), (true, 0));
 }

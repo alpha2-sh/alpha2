@@ -92,7 +92,10 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     let size = RenderSize::new(3_840, 2_160).expect("4K size");
     let limits = export_pipeline_limits(
         size,
-        wgpu::TextureFormat::Rgba16Float,
+        (
+            wgpu::TextureFormat::Rgba16Float,
+            alpha2_media::PixelLayout::YUV420P,
+        ),
         InFlightBudget::requested(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -121,7 +124,10 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
 
     let pinned = export_pipeline_limits(
         size,
-        wgpu::TextureFormat::Rgba16Float,
+        (
+            wgpu::TextureFormat::Rgba16Float,
+            alpha2_media::PixelLayout::YUV420P,
+        ),
         InFlightBudget::requested(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         Some(2),
@@ -131,7 +137,10 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
 
     let tight = export_pipeline_limits(
         size,
-        wgpu::TextureFormat::Rgba16Float,
+        (
+            wgpu::TextureFormat::Rgba16Float,
+            alpha2_media::PixelLayout::YUV420P,
+        ),
         InFlightBudget::requested(12_718_080 + 16 + 12_441_600 * 3),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -143,7 +152,10 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     let least = 12_718_080 + 16 + 12_441_600 * 2;
     let rendezvous = export_pipeline_limits(
         size,
-        wgpu::TextureFormat::Rgba16Float,
+        (
+            wgpu::TextureFormat::Rgba16Float,
+            alpha2_media::PixelLayout::YUV420P,
+        ),
         InFlightBudget::requested(least),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -153,14 +165,17 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     assert_eq!(rendezvous.encode_channel_depth, 0);
     let error = export_pipeline_limits(
         size,
-        wgpu::TextureFormat::Rgba16Float,
+        (
+            wgpu::TextureFormat::Rgba16Float,
+            alpha2_media::PixelLayout::YUV420P,
+        ),
         InFlightBudget::requested(least - 1),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
     )
     .expect_err("one readback and less than two packed frames is refused");
     assert!(
-        error.contains("one readback and two packed 3840x2160 YUV420P frames"),
+        error.contains("one readback and two packed 3840x2160 yuv420p frames"),
         "{error}"
     );
     assert!(
@@ -171,7 +186,10 @@ fn export_pipeline_limits_include_staging_and_encode_frames() {
     assert!(
         export_pipeline_limits(
             size,
-            wgpu::TextureFormat::Rgba16Float,
+            (
+                wgpu::TextureFormat::Rgba16Float,
+                alpha2_media::PixelLayout::YUV420P
+            ),
             InFlightBudget::requested(1),
             1,
             Some(0)
@@ -194,7 +212,10 @@ fn a_retry_scale_holds_the_least_an_export_needs() {
     .expect("policy");
     let limits = export_pipeline_limits(
         size,
-        wgpu::TextureFormat::Rgba16Float,
+        (
+            wgpu::TextureFormat::Rgba16Float,
+            alpha2_media::PixelLayout::YUV420P,
+        ),
         minimal.in_flight_budget(),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -211,7 +232,10 @@ fn a_retry_scale_holds_the_least_an_export_needs() {
     .expect("policy");
     let refused = export_pipeline_limits(
         size,
-        wgpu::TextureFormat::Rgba16Float,
+        (
+            wgpu::TextureFormat::Rgba16Float,
+            alpha2_media::PixelLayout::YUV420P,
+        ),
         small.in_flight_budget(),
         MAX_IN_FLIGHT_VIDEO_FRAMES,
         None,
@@ -221,7 +245,7 @@ fn a_retry_scale_holds_the_least_an_export_needs() {
 }
 
 #[test]
-fn a_scaled_decode_queue_holds_one_frame_set_up_to_its_unscaled_budget() {
+fn a_scaled_decode_queue_holds_one_frame_set_alone_whatever_its_size() {
     let budget = DecodeBudget {
         limit: crate::memory::ByteBudget {
             bytes: 8,
@@ -233,12 +257,13 @@ fn a_scaled_decode_queue_holds_one_frame_set_up_to_its_unscaled_budget() {
     let cancel = CancelToken::default();
     budget.reserve(20, &cancel).expect("one set fits alone");
     budget.release(20);
-    let error = budget
+    budget
         .reserve(33, &cancel)
-        .expect_err("over the unscaled budget");
-    assert!(error.contains("32 byte decode queue budget"), "{error}");
+        .expect("a set over the unscaled budget is held alone");
+    assert_eq!(budget.oversized_sets(), 1);
+    budget.release(33);
     budget.reserve(6, &cancel).expect("fits the scaled budget");
-    assert_eq!(budget.peak_bytes(), 20);
+    assert_eq!(budget.peak_bytes(), 33);
 }
 
 #[test]
@@ -473,13 +498,15 @@ fn a_rendezvous_export_waits_only_for_the_encoder() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("rendezvous-export");
     let size = RenderSize::new(640, 360).expect("size");
-    let least = crate::frames::estimated_staging_bytes(size, wgpu::TextureFormat::Rgba16Float)
-        + crate::frames::packed_yuv420_bytes(size)
-            * u64::try_from(crate::metrics::readback_encode_frame_bound(0)).expect("bound");
+    let layout = alpha2_media::PixelLayout::YUV420P;
+    let least =
+        crate::frames::estimated_staging_bytes(size, wgpu::TextureFormat::Rgba16Float, layout)
+            + layout.frame_bytes(size.width, size.height)
+                * u64::try_from(crate::metrics::readback_encode_frame_bound(0)).expect("bound");
     let end = 2 * alpha2_time::TICKS_PER_SECOND;
     crate::encode::INJECT_SLOW_ENCODE.with(|slow| slow.set(Some(Duration::from_millis(15))));
     let request = json!({
-        "protocolVersion": 1, "operation": "export", "requestId": "rendezvous",
+        "protocolVersion": 2, "operation": "export", "requestId": "rendezvous",
         "project": {
             "schema_version": 1, "id": "rendezvous", "name": "Rendezvous",
             "settings": {"width": 640, "height": 360, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
@@ -523,5 +550,255 @@ fn a_rendezvous_export_waits_only_for_the_encoder() {
         average < 125.0,
         "a hand-off waited {average:.1} ms on average ({waited:.1} ms over {waits})"
     );
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// Checks the set-up and finish split of an export result; `encoder` is false for a copy.
+pub(super) fn assert_phase_timings(result: &Value, encoder: bool) {
+    let performance = &result["performance"];
+    let number = |key: &str| {
+        performance[key]
+            .as_f64()
+            .unwrap_or_else(|| panic!("{key} is not a number: {performance}"))
+    };
+    let render = result["renderMs"].as_f64().expect("renderMs");
+    let setup = number("setupMs");
+    let finish = number("finishMs");
+    let first = number("firstFrameMs");
+    assert!(setup + finish <= render, "{setup} + {finish} > {render}");
+    assert!(
+        setup <= first && first <= render,
+        "{setup} {first} {render}"
+    );
+    assert!(number("loudnessMs") >= 0.0);
+    for key in ["encoderProbeMs", "encoderOpenMs"] {
+        if encoder {
+            assert!(number(key) <= setup, "{key}: {performance}");
+        } else {
+            assert_eq!(performance[key], Value::Null, "{key}: {performance}");
+        }
+    }
+    if encoder {
+        assert!(number("steadyFps") > 0.0, "{performance}");
+    } else {
+        assert_eq!(performance["steadyFps"], Value::Null, "{performance}");
+    }
+}
+
+#[test]
+fn the_steady_rate_follows_the_encoder_and_leaves_out_set_up_and_finish() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("steady-rate");
+    let end = 2 * alpha2_time::TICKS_PER_SECOND;
+    let slow = Duration::from_millis(40);
+    crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(Some(slow)));
+    crate::host::INJECT_SLOW_RENDER.with(|injected| injected.set(Some(Duration::from_millis(30))));
+    let request = json!({
+        "protocolVersion": 2, "operation": "export", "requestId": "steady-rate",
+        "project": {
+            "schema_version": 1, "id": "steady", "name": "Steady",
+            "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": end},
+                "source_range": {"start": 0, "end": end}
+            }]}]}
+        },
+        "assets": {"video": corpus("h264-long-gop.mp4")},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "inputPolicy": "cpu-readback",
+        "output": directory.join("steady.mp4")
+    });
+    let result = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |_| Ok(()),
+        )
+        .expect("export");
+    std::fs::remove_dir_all(&directory).ok();
+    assert_eq!(result["frames"], json!(60), "{result}");
+    assert_phase_timings(&result, true);
+    let encoder = 1.0 / slow.as_secs_f64();
+    let steady = result["performance"]["steadyFps"]
+        .as_f64()
+        .expect("steadyFps");
+    // The encoder caps the rate; on a slow machine its real work slows it further.
+    assert!(
+        steady <= encoder * 1.2,
+        "steady {steady:.1} fps against the encoder's {encoder:.1} fps"
+    );
+    let render_ms = result["renderMs"].as_f64().expect("renderMs");
+    let performance = &result["performance"];
+    let number = |key: &str| performance[key].as_f64().expect(key);
+    let encode = number("videoEncodeMs") / 60.0;
+    let handoffs = render_ms - number("finishMs") - number("firstFrameMs");
+    let render = (handoffs - number("encodeQueueWaitMs")) / 59.0;
+    let halfway_to_in_turn = 1000.0 / (encode.max(render) + encode.min(render) / 2.0);
+    assert!(
+        steady >= halfway_to_in_turn,
+        "steady {steady:.1} fps below {halfway_to_in_turn:.1} fps: encode {encode:.1} ms and render \
+         {render:.1} ms per frame do not overlap: {performance}"
+    );
+}
+
+#[test]
+fn the_steady_rate_window_matches_the_harness_percentiles() {
+    use crate::metrics::SteadyRate;
+    assert_eq!(SteadyRate::window(2), None);
+    assert_eq!(SteadyRate::window(3), Some((0, 1)));
+    assert_eq!(SteadyRate::window(15), Some((1, 13)));
+    assert_eq!(SteadyRate::window(60), Some((6, 56)));
+    let mut rate = SteadyRate::default();
+    for index in 0..60 {
+        rate.record(index, 60, Duration::from_millis(500 + 20 * index));
+    }
+    let fps = rate.fps(60).expect("rate");
+    assert!((fps - 50.0).abs() < 1e-9, "{fps}");
+}
+
+fn default_budget(bytes: u64) -> InFlightBudget {
+    InFlightBudget {
+        bytes,
+        source: crate::memory::BudgetSource::Default,
+        scale: 1.0,
+        unscaled: bytes,
+    }
+}
+
+#[test]
+fn the_in_flight_plan_prices_readbacks_and_frames_in_the_output_layout() {
+    let format = wgpu::TextureFormat::Rgba16Float;
+    let size = RenderSize::new(3_840, 2_160).expect("4K");
+    for (name, packed) in [
+        ("yuv422p10le", 3_840 * 2_160 * 4),
+        ("yuva444p10le", 3_840 * 2_160 * 8),
+    ] {
+        let layout = alpha2_media::PixelLayout::from_ffmpeg_name(name).expect("layout");
+        let limits = export_pipeline_limits(
+            size,
+            (format, layout),
+            default_budget(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
+            MAX_IN_FLIGHT_VIDEO_FRAMES,
+            None,
+        )
+        .expect("the default budget holds a 4K layout export");
+        assert_eq!(limits.packed_bytes_per_frame, packed, "{name}");
+        // The intermediate's 8-byte texels, one aligned row per row, then the 16-byte canary.
+        assert_eq!(
+            limits.staging_bytes_per_frame,
+            3_840 * 8 * 2_160 + 16,
+            "{name}"
+        );
+        let reserved = limits.staging_bytes_per_frame
+            * u64::try_from(limits.readback_depth).expect("depth")
+            + limits.packed_bytes_per_frame
+                * u64::try_from(crate::metrics::readback_encode_frame_bound(
+                    limits.encode_channel_depth,
+                ))
+                .expect("depth");
+        assert!(reserved <= limits.byte_budget, "{name}: {limits:?}");
+    }
+
+    let layout = alpha2_media::PixelLayout::from_ffmpeg_name("yuv422p10le").expect("layout");
+    let size = RenderSize::new(7_680, 4_320).expect("8K");
+    let least = 7_680 * 8 * 4_320 + 16 + 7_680 * 4_320 * 4 * 2;
+    let limits = export_pipeline_limits(
+        size,
+        (format, layout),
+        default_budget(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
+        MAX_IN_FLIGHT_VIDEO_FRAMES,
+        None,
+    )
+    .expect("a default budget never refuses the least an export needs");
+    assert_eq!((limits.readback_depth, limits.encode_channel_depth), (1, 0));
+    assert_eq!(limits.byte_budget, least);
+    let refused = export_pipeline_limits(
+        size,
+        (format, layout),
+        InFlightBudget::requested(DEFAULT_EXPORT_IN_FLIGHT_BYTES),
+        MAX_IN_FLIGHT_VIDEO_FRAMES,
+        None,
+    )
+    .expect_err("an explicit budget still refuses");
+    assert!(
+        refused.contains("two packed 7680x4320 yuv422p10le frames"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn a_prores_export_keeps_its_readbacks_within_its_in_flight_budget() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("prores-in-flight");
+    let size = RenderSize::new(640, 360).expect("size");
+    let layout = alpha2_media::PixelLayout::from_ffmpeg_name("yuv422p10le").expect("layout");
+    let staging =
+        crate::frames::estimated_staging_bytes(size, host.renderer.intermediate_format(), layout);
+    let packed = layout.frame_bytes(640, 360);
+    let least = staging
+        + packed * u64::try_from(crate::metrics::readback_encode_frame_bound(0)).expect("bound");
+    let end = 2 * alpha2_time::TICKS_PER_SECOND;
+    let mut project = image_and_tone_project(end, 48_000);
+    project["settings"]["width"] = json!(640);
+    project["settings"]["height"] = json!(360);
+    project["sources"] = json!([{"id": "image", "locator": "fixture://image", "kind": "image"}]);
+    project["timeline"]["tracks"]
+        .as_array_mut()
+        .expect("tracks")
+        .truncate(1);
+    for (file, memory) in [
+        ("least.mov", json!({"inFlightBytes": least})),
+        ("default.mov", Value::Null),
+    ] {
+        let mut request = json!({
+            "protocolVersion": 2, "operation": "export", "requestId": file,
+            "project": project,
+            "assets": {"image": Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/corpus/cross_topology_parity.png")},
+            "startTicks": 0, "endTicks": end,
+            "frameRate": {"num": 30, "den": 1},
+            "includeAudio": false,
+            "videoCodec": "prores",
+            "inputPolicy": "cpu-readback",
+            "output": directory.join(file),
+        });
+        if !memory.is_null() {
+            request["memory"] = memory;
+        }
+        crate::encode::INJECT_SLOW_ENCODE.with(|slow| slow.set(Some(Duration::from_millis(15))));
+        let result = host
+            .handle(
+                parse_request(&request.to_string()).expect("request"),
+                &mut |_| Ok(()),
+            )
+            .expect("export");
+        let performance = &result["performance"];
+        let number = |name: &str| performance[name].as_u64().unwrap_or(u64::MAX);
+        assert_eq!(
+            number("stagingBytesPerFrame"),
+            staging,
+            "{file}: {performance}"
+        );
+        assert_eq!(
+            number("packedBytesPerFrame"),
+            packed,
+            "{file}: {performance}"
+        );
+        assert!(
+            number("peakReadbackBytes") <= number("inFlightByteBudget"),
+            "{file}: {performance}"
+        );
+        let queued = number("peakEncodeQueueBytes");
+        assert!(
+            queued >= packed && queued % packed == 0,
+            "{file}: the queue counts whole {packed}-byte frames: {performance}"
+        );
+    }
     std::fs::remove_dir_all(&directory).ok();
 }

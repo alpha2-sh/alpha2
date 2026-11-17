@@ -1,6 +1,6 @@
 import { register } from "node:module";
-import test from "node:test";
 import assert from "node:assert/strict";
+import { testUnless, wasmSkip } from "./support/wasm.mjs";
 
 register("./support/worklet-hook.mjs", import.meta.url);
 globalThis.crossOriginIsolated = true;
@@ -18,7 +18,11 @@ globalThis.AudioContext = class extends EventTarget {
   async close() {}
 };
 
-const { EngineAudioMixer } = await import("../dist/browser/runtime/audio.js");
+const skip = wasmSkip(import.meta.url);
+const test = testUnless(skip);
+const { EngineAudioMixer } = skip
+  ? {}
+  : await import("../dist/browser/runtime/audio.js");
 
 test("a stop while the first block is still decoding ends Play's start without an error", async () => {
   const mixer = new EngineAudioMixer({}, { enabled: true });
@@ -86,5 +90,67 @@ test("an output suspended under playback stops the mixer and is reported once", 
   assert.deepEqual(interrupted, ["suspended"]);
   assert.equal(mixer.tick, null, "stopped");
   assert.equal(mixer.latencySource, null);
+  await mixer.close();
+});
+
+test("a source that never arrives plays silent after a few mixes, reported once, and the rest plays", async () => {
+  const mixer = new EngineAudioMixer({}, { enabled: true });
+  const supplied = [];
+  const supplier = {
+    supply: async (start, frames, { silentSources = new Set() } = {}) => {
+      supplied.push([...silentSources]);
+      if (silentSources.has("gone")) silent = true;
+    },
+  };
+  let silent = false,
+    mixes = 0;
+  const engine = {
+    resetAudio() {},
+    setAudioContinuity() {},
+    renderAudio: (start, frames) => {
+      mixes += 1;
+      return new Float32Array(2 * frames).fill(0.25);
+    },
+    audioChannels: () => 2,
+    audioMissingSources: () => (silent ? "[]" : '["gone"]'),
+  };
+  const errors = [];
+  await mixer.attach(
+    engine,
+    { settings: { sample_rate: 48_000 } },
+    supplier,
+    null,
+    (error) => errors.push(error),
+  );
+  await mixer.start(0);
+  for (let i = 0; i < 100 && !silent; i += 1)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(silent, "the missing source was given silence");
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.deepEqual(
+    errors.map((e) => [e.code, e.entityId]),
+    [["audio_unavailable", "gone"]],
+  );
+  const afterSilence = supplied.findIndex((ids) => ids.includes("gone"));
+  assert.ok(afterSilence >= 6, `silenced after ${afterSilence} supplies`);
+  assert.ok(supplied.slice(afterSilence).every((ids) => ids.includes("gone")));
+  assert.ok(mixes > afterSilence / 2, "mixing goes on");
+  await mixer.close();
+});
+
+test("a start whose first block fails stops the mixer before it rethrows", async () => {
+  const mixer = new EngineAudioMixer({}, { enabled: true });
+  let transport = null;
+  const supplier = {
+    supply: async (start, frames, { signal }) => {
+      transport = signal;
+      throw new Error("the decoder failed");
+    },
+  };
+  const engine = { resetAudio() {}, setAudioContinuity() {} };
+  await mixer.attach(engine, { settings: { sample_rate: 48_000 } }, supplier);
+  await assert.rejects(mixer.start(0), /the decoder failed/);
+  assert.equal(mixer.tick, null);
+  assert.equal(transport?.aborted, true, "the start's transport is stopped");
   await mixer.close();
 });

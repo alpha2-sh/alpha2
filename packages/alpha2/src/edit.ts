@@ -17,7 +17,12 @@
  *
  * Ripple edits move later content on the edited track and on `syncTracks` by the same amount. A
  * sync track with content across the edit point, or where pulled content would land on content
- * that stays, refuses the whole edit (`sync_conflict`).
+ * that stays, refuses the whole edit (`sync_conflict`). The track and bus keyframes of every track
+ * a ripple reaches move with it; a ripple that reaches every track also edits the master bus keys
+ * and timeline-anchored data sets, as the engine's `remove_ranges` with `ripple: "timeline"` does.
+ * Time the edit closes is cut out of them and time it opens opens in them. Source-anchored data
+ * never changes. A ripple's result reports the change in `timeline`, so a host can move its own
+ * timeline items (markers) by the same rule.
  *
  * Use {@link deferValidation} for a batch of edits that is valid only as a whole.
  */
@@ -32,6 +37,9 @@ import type {
   Track,
 } from "./generated/project-schema.js";
 import { validateProject } from "./project.js";
+import { dataReferences } from "./project-data.js";
+import { renameVia, rippleTimelineData } from "./edit-data.js";
+import { closeKeys, openKeys } from "./edit-keys.js";
 
 /** Why an edit was refused. */
 export type EditErrorCode =
@@ -50,6 +58,8 @@ export type EditErrorCode =
   | "in_fade"
   /** Another clip uses this one as its matte. */
   | "matte_source"
+  /** A data binding of another clip reads through this one (`via`). */
+  | "read_through"
   /** A loop cannot start part way through a pass. */
   | "unsupported_time_map"
   /** The clip's source kind does not belong on that track. */
@@ -73,9 +83,29 @@ export interface EditError {
   readonly problems?: readonly string[];
 }
 
-/** The new project, or why the edit was refused. The input is never modified. */
+/** What a ripple did to timeline time. Ticks are the old timeline's. */
+export interface TimelineChange {
+  /** The time the ripple closed. */
+  readonly removed?: TimeRange;
+  /** The time the ripple opened: `length` ticks at `at`. */
+  readonly opened?: { readonly at: number; readonly length: number };
+  /**
+   * Whether the ripple reached every track, so the master bus keys and timeline data moved and a
+   * host's own timeline items should too.
+   */
+  readonly everyTrack: boolean;
+}
+
+/**
+ * The new project, or why the edit was refused. The input is never modified. A ripple that moved
+ * time reports how in `timeline`.
+ */
 export type EditResult =
-  | { readonly ok: true; readonly project: Project }
+  | {
+      readonly ok: true;
+      readonly project: Project;
+      readonly timeline?: TimelineChange;
+    }
   | { readonly ok: false; readonly error: EditError };
 
 export type ClipEdge = "start" | "end";
@@ -95,8 +125,8 @@ export interface PlaceOptions extends RippleOptions {
 /**
  * Splits a clip at `at`. The left part keeps the id, incoming transitions and fade in; the right
  * part becomes `newId` with outgoing transitions, fade out, and its own copy of the composition
- * ({@link copyComposition}). Refused inside a transition or fade, for a matte source, and for a
- * loop.
+ * ({@link copyComposition}). The right part's bindings that read through the clip read through
+ * `newId`. Refused inside a transition or fade, for a matte source, and for a loop.
  */
 export function split(
   project: Project,
@@ -157,18 +187,20 @@ export function split(
       id: copy.id,
     };
   }
-  const right: Clip = {
-    ...clip,
-    id: newId,
-    timeline_range: { start: at, end: range.end },
-    source_range: sources.right,
-    ...(audio?.fade_in === undefined
-      ? {}
-      : { audio: { ...audio, fade_in: 0 } }),
-    ...(rightComposition === undefined
-      ? {}
-      : { composition: rightComposition }),
-  };
+  const right: Clip = withClipId(
+    {
+      ...clip,
+      timeline_range: { start: at, end: range.end },
+      source_range: sources.right,
+      ...(audio?.fade_in === undefined
+        ? {}
+        : { audio: { ...audio, fade_in: 0 } }),
+      ...(rightComposition === undefined
+        ? {}
+        : { composition: rightComposition }),
+    },
+    newId,
+  );
   const transitions = (track.transitions ?? []).map((transition) =>
     transition.from_clip === clipId
       ? { ...transition, from_clip: newId }
@@ -204,7 +236,8 @@ export function trim(
 
 /**
  * Trims like {@link trim} and shifts later clips on the track by the same amount. A start trim
- * keeps the clip's start in place, so `to` may be before the timeline start.
+ * keeps the clip's start in place, so `to` may be before the timeline start. Sync tracks and
+ * timeline data close or open time at the trimmed edge, which for a start trim is the clip's start.
  */
 export function rippleTrim(
   project: Project,
@@ -221,40 +254,52 @@ export function rippleTrim(
   const before = trimmed.original.timeline_range;
   let edited = clip;
   let delta: number;
+  let pivot = before.end;
   if (edge === "end") {
     delta = to - before.end;
   } else {
     // Trim the head, then slide the clip back to its original start.
     delta = before.start - to;
     edited = shift(clip, delta);
+    pivot = before.start;
   }
   if (pullsOnto(track, before.end, delta, clipId)) return pulledOnto(track);
+  if (edge === "start" && delta < 0)
+    for (const other of syncTracksOf(project, options.syncTracks, track.id))
+      if (occupies(other, { start: before.start, end: to }))
+        return failure(
+          "sync_conflict",
+          `track ${other.id} has content in the time the trim closes`,
+        );
   const shifted = (track.clips ?? []).map((candidate) => {
     if (candidate.id === clipId) return edited;
     return candidate.timeline_range.start >= before.end
       ? shift(candidate, delta)
       : candidate;
   });
-  const synced = rippleSyncTracks(
-    project,
-    options.syncTracks,
-    track.id,
-    before.end,
-    delta,
-  );
-  if (!synced.ok) return synced;
-  return finish(
-    replaceTrack(synced.project, {
+  return rippled(
+    replaceTrack(project, {
       ...track,
       clips: shifted,
       transitions: shiftTransitions(track, before.end, delta),
     }),
+    track.id,
+    options.syncTracks,
+    delta < 0
+      ? {
+          removed: {
+            start: pivot + (edge === "start" ? 0 : delta),
+            end: edge === "start" ? to : pivot,
+          },
+        }
+      : { opened: { at: pivot, length: delta } },
   );
 }
 
 /**
  * Removes a clip and its transitions and closes the gap ({@link rippleDeleteSpan}). Refused for a
- * matte source, and when a sync track has content in that span.
+ * matte source, for a clip another clip's binding reads through, and when a sync track has content
+ * in that span.
  */
 export function rippleDelete(
   project: Project,
@@ -267,6 +312,8 @@ export function rippleDelete(
   if (isMatteSource(project, clipId)) {
     return failure("matte_source", `clip ${clipId} is another clip's matte`);
   }
+  const reader = readThrough(project, clipId);
+  if (reader) return reader;
   const range = clip.timeline_range;
   const gap = aloneSpan(track, clip);
   const delta = gap.start - gap.end;
@@ -293,15 +340,12 @@ export function rippleDelete(
         "sync_conflict",
         `track ${other.id} has content in the time the delete closes`,
       );
-  const synced = rippleSyncTracks(
-    project,
-    options.syncTracks,
+  return rippled(
+    replaceTrack(project, { ...track, clips, transitions }),
     track.id,
-    gap.start,
-    delta,
+    options.syncTracks,
+    { removed: gap },
   );
-  if (!synced.ok) return synced;
-  return finish(replaceTrack(synced.project, { ...track, clips, transitions }));
 }
 
 /**
@@ -621,20 +665,17 @@ export function retime(
         ? shift(candidate, delta)
         : candidate,
   );
-  const synced = rippleSyncTracks(
-    project,
-    options.syncTracks,
-    track.id,
-    range.end,
-    delta,
-  );
-  if (!synced.ok) return synced;
-  return finish(
-    replaceTrack(synced.project, {
+  return rippled(
+    replaceTrack(project, {
       ...track,
       clips,
       transitions: shiftTransitions(track, range.end, delta),
     }),
+    track.id,
+    options.syncTracks,
+    delta < 0
+      ? { removed: { start: range.end + delta, end: range.end } }
+      : { opened: { at: range.end, length: delta } },
   );
 }
 
@@ -671,16 +712,8 @@ export function insert(
     track = edited.timeline.tracks.find((t) => t.id === trackId)!;
   }
   const length = placed.clip.timeline_range.end - at;
-  const synced = rippleSyncTracks(
-    edited,
-    options.syncTracks,
-    trackId,
-    at,
-    length,
-  );
-  if (!synced.ok) return synced;
-  return finish(
-    replaceTrack(synced.project, {
+  return rippled(
+    replaceTrack(edited, {
       ...track,
       clips: [
         ...(track.clips ?? []).map((c) =>
@@ -690,14 +723,17 @@ export function insert(
       ],
       transitions: shiftTransitions(track, at, length),
     }),
+    trackId,
+    options.syncTracks,
+    { opened: { at, length } },
   );
 }
 
 /**
  * Places `clip` at `at`, replacing whatever the track shows there. Clips inside are removed, clips
  * across an edge are trimmed, and a clip across both is split (right part `splitId`). Refused where
- * a transition or matte source would be cut, and (`needs_id`) when more than one clip spans both
- * edges.
+ * a transition, matte source or clip a binding reads through would be cut, and (`needs_id`) when
+ * more than one clip spans both edges.
  */
 export function overwrite(
   project: Project,
@@ -753,6 +789,8 @@ export function overwrite(
           "matte_source",
           `clip ${candidate.id} is another clip's matte`,
         );
+      const reader = readThrough(edited, candidate.id);
+      if (reader) return reader;
       continue;
     }
     const edge: ClipEdge = start < range.start ? "end" : "start";
@@ -875,7 +913,7 @@ function rippleSyncTracks(
         ? {
             captions: {
               ...track.captions,
-              cues: track.captions.cues.map((cue) =>
+              cues: (track.captions.cues ?? []).map((cue) =>
                 cue.timeline_range.start >= pivot
                   ? {
                       ...cue,
@@ -1303,6 +1341,105 @@ function isMatteSource(project: Project, clipId: string): boolean {
   return project.timeline.tracks.some((track) =>
     (track.clips ?? []).some((clip) => clip.matte?.source === clipId),
   );
+}
+
+/** The `read_through` refusal when a binding of another clip reads through `clipId`. */
+function readThrough(
+  project: Project,
+  clipId: string,
+): { readonly ok: false; readonly error: EditError } | undefined {
+  if (!project.data?.length) return undefined;
+  const reader = dataReferences(project).find(
+    (reference) =>
+      reference.via !== undefined &&
+      "clip" in reference.via &&
+      reference.via.clip === clipId &&
+      !(reference.owner.kind === "clip" && reference.owner.clip === clipId),
+  );
+  if (!reader) return undefined;
+  const owner =
+    reader.owner.kind === "clip" ? `clip ${reader.owner.clip} ` : "";
+  return failure(
+    "read_through",
+    `${owner}${reader.property} reads data through clip ${clipId}`,
+  );
+}
+
+/**
+ * Gives `clip` the id `id`, for a paste or a duplicate. Its bindings that read through itself
+ * read through `id`, and those through other clips stay.
+ */
+export function withClipId(clip: Clip, id: string): Clip {
+  return { ...renameVia(clip, clip.id, id), id };
+}
+
+/** A closing or opening of timeline time. */
+type TimeShift =
+  | { readonly removed: TimeRange }
+  | { readonly opened: { readonly at: number; readonly length: number } };
+
+/**
+ * Finishes a ripple whose edited track `trackId` is already in `project`: sync tracks shift (or
+ * refuse), the bus keys of every reached track move, and when the ripple reaches every track the
+ * master bus keys and timeline data move too. The one place a ripple changes time beyond its track.
+ */
+function rippled(
+  project: Project,
+  trackId: string,
+  syncTracks: readonly string[] | undefined,
+  change: TimeShift,
+): EditResult {
+  const removed = "removed" in change ? change.removed : undefined;
+  const opened = "opened" in change ? change.opened : undefined;
+  const pivot = removed ? removed.end : opened!.at;
+  const delta = removed ? removed.start - removed.end : opened!.length;
+  if (delta === 0) return finish(project);
+  const synced = rippleSyncTracks(project, syncTracks, trackId, pivot, delta);
+  if (!synced.ok) return synced;
+  const reached = new Set([
+    trackId,
+    ...syncTracksOf(project, syncTracks, trackId).map((track) => track.id),
+  ]);
+  const everyTrack = project.timeline.tracks.every((track) =>
+    reached.has(track.id),
+  );
+  const keys = <T>(value: T): T =>
+    (removed
+      ? closeKeys(value as never, [[removed.start, removed.end]])
+      : openKeys(value as never, opened!.at, opened!.length)) as T;
+  let result: Project = {
+    ...synced.project,
+    timeline: {
+      ...synced.project.timeline,
+      tracks: synced.project.timeline.tracks.map((track) =>
+        reached.has(track.id) && track.audio
+          ? {
+              ...track,
+              audio: {
+                ...track.audio,
+                ...(track.audio.gain ? { gain: keys(track.audio.gain) } : {}),
+                ...(track.audio.pan ? { pan: keys(track.audio.pan) } : {}),
+              },
+            }
+          : track,
+      ),
+    },
+  };
+  if (everyTrack) {
+    if (result.audio?.gain)
+      result = {
+        ...result,
+        audio: { ...result.audio, gain: keys(result.audio.gain) },
+      };
+    result = rippleTimelineData(result, pivot, delta);
+  }
+  const finished = finish(result);
+  return finished.ok
+    ? {
+        ...finished,
+        timeline: { ...(removed ? { removed } : { opened }), everyTrack },
+      }
+    : finished;
 }
 
 function replaceTrack(project: Project, track: Track): Project {

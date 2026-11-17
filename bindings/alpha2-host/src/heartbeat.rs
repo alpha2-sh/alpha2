@@ -44,6 +44,8 @@ pub struct WorkerHeartbeat {
 pub enum InjectedStall {
     AfterOperations(usize),
     OnClose,
+    /// Where a worker drops what it held, after its last result.
+    OnTeardown,
     PanicAfterOperations(usize),
     /// A long call that keeps going outlasts the stall limit on any build.
     // A provider open is the slow call it stands in for.
@@ -73,6 +75,22 @@ impl HardwareOpen<'_> {
 impl Drop for HardwareOpen<'_> {
     fn drop(&mut self) {
         self.0.opening_hardware.store(false, Ordering::Release);
+    }
+}
+
+/// A shard's heartbeat as provider calls report to it: waits for another shard's call to the same
+/// source are idle, work of their own beats.
+pub struct ProviderHeartbeat<'a>(pub &'a Arc<WorkerHeartbeat>);
+
+impl alpha2_host_core::providers::ProviderWatch for ProviderHeartbeat<'_> {
+    type Waiting = HeartbeatIdle;
+
+    fn waiting(&self) -> HeartbeatIdle {
+        self.0.idle()
+    }
+
+    fn beat(&self) {
+        self.0.beat();
     }
 }
 
@@ -165,8 +183,9 @@ impl WorkerHeartbeat {
             {
                 self.stall_forever();
             }
+            // Once, as a defect would: the worker's own cleanup then runs.
             Some(InjectedStall::PanicAfterOperations(limit))
-                if self.operations.fetch_add(1, Ordering::Relaxed) >= limit =>
+                if self.operations.fetch_add(1, Ordering::Relaxed) == limit =>
             {
                 panic!("injected decoder panic");
             }
@@ -205,6 +224,16 @@ impl WorkerHeartbeat {
         let work = self.begin_work();
         #[cfg(test)]
         if matches!(self.stall, Some(InjectedStall::OnClose)) {
+            self.stall_forever();
+        }
+        work
+    }
+
+    /// Dropping what a worker holds can wait on the GPU inside `FFmpeg`, so it is watched too.
+    pub fn begin_teardown(self: &Arc<Self>) -> HeartbeatWork {
+        let work = self.begin_work();
+        #[cfg(test)]
+        if matches!(self.stall, Some(InjectedStall::OnTeardown)) {
             self.stall_forever();
         }
         work
@@ -367,6 +396,8 @@ pub fn join_or_leave<T>(
     limit: Duration,
     deadline: Option<Duration>,
 ) -> Joined<T> {
+    // Bounded by its own deadline, so the request's watch does not count it.
+    let _idle = request_idle();
     let started = alpha2_os::AwakeInstant::now();
     while !join.is_finished()
         && deadline.is_none_or(|deadline| started.elapsed() < deadline)
@@ -464,6 +495,7 @@ pub fn run_watched<T: Send + 'static>(
         .map_err(|error| format!("failed to start the {}: {error}", watched.what))?;
     let mut failed = None;
     loop {
+        beat_request();
         match received.recv_timeout(STALL_POLL) {
             Ok(WatchedEvent::Progress(reached)) => {
                 if failed.is_none()
@@ -496,13 +528,304 @@ pub fn run_watched<T: Send + 'static>(
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = join.join();
+                let message = join.join().err().map_or_else(
+                    || "no message".to_owned(),
+                    |payload| crate::failure::panic_message(&*payload).to_owned(),
+                );
                 return Err(format!(
-                    "{}the {} panicked",
+                    "{}the {} panicked: {message}",
                     crate::protocol::internal_tag(),
                     watched.what
                 ));
             }
         }
+    }
+}
+
+/// Which side of the host a request's current step is on; a stall is answered with its code.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RequestSide {
+    /// Reading media: conform, decoding, audio windows, the loudness pass.
+    Input,
+    /// Rendering and reading back.
+    Gpu,
+    /// Encoder probes and opens, encoding, the mux, the publish, the answer.
+    Output,
+    /// A native plugin call.
+    Plugin,
+    /// Work on the request's own data, such as `compose` and `edit`.
+    Compute,
+}
+
+impl RequestSide {
+    const ALL: [Self; 5] = [
+        Self::Input,
+        Self::Gpu,
+        Self::Output,
+        Self::Plugin,
+        Self::Compute,
+    ];
+
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Input => "DECODE_STALLED",
+            Self::Gpu => "GPU_TIMEOUT",
+            Self::Output => "ENCODE_STALLED",
+            Self::Plugin => "PLUGIN_LIMIT",
+            Self::Compute => "INTERNAL",
+        }
+    }
+
+    const fn index(self) -> u8 {
+        match self {
+            Self::Input => 0,
+            Self::Gpu => 1,
+            Self::Output => 2,
+            Self::Plugin => 3,
+            Self::Compute => 4,
+        }
+    }
+}
+
+/// The watch on a request's own thread: busy from its start to its answer, beating where a loop
+/// turns or a bounded wait returns, idle while it waits on what is not its own work.
+pub struct RequestWatch {
+    heartbeat: Arc<WorkerHeartbeat>,
+    pub id: String,
+    /// The request's termination sequence, `None` on the command line.
+    pub sequence: Option<u64>,
+    pub export: bool,
+    side: std::sync::atomic::AtomicU8,
+    step: Mutex<&'static str>,
+    phase: std::sync::atomic::AtomicU8,
+    answered: AtomicBool,
+}
+
+impl RequestWatch {
+    pub fn side(&self) -> RequestSide {
+        RequestSide::ALL[usize::from(self.side.load(Ordering::Acquire)).min(4)]
+    }
+
+    pub fn step(&self) -> &'static str {
+        *self
+            .step
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub fn phase(&self) -> crate::failure::ExportPhase {
+        crate::failure::ExportPhase::ALL[usize::from(self.phase.load(Ordering::Acquire)).min(7)]
+    }
+
+    /// True for the one caller that may answer the request: its thread or the supervisor.
+    pub fn claim_answer(&self) -> bool {
+        !self.answered.swap(true, Ordering::AcqRel)
+    }
+
+    fn set(&self, side: RequestSide, step: &'static str) {
+        self.side.store(side.index(), Ordering::Release);
+        *self
+            .step
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = step;
+    }
+}
+
+static REQUEST_WATCHES: Mutex<Vec<Arc<RequestWatch>>> = Mutex::new(Vec::new());
+
+thread_local! {
+    static CURRENT_REQUEST: std::cell::RefCell<Option<Arc<RequestWatch>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn request_watches() -> std::sync::MutexGuard<'static, Vec<Arc<RequestWatch>>> {
+    REQUEST_WATCHES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Watches the calling thread as request `id` until the guard drops: it is at work from now on.
+pub fn watch_request(
+    id: &str,
+    sequence: Option<u64>,
+    export: bool,
+    side: RequestSide,
+    step: &'static str,
+) -> RequestWatchGuard {
+    let watch = Arc::new(RequestWatch {
+        heartbeat: Arc::new(WorkerHeartbeat::default()),
+        id: id.to_owned(),
+        sequence,
+        export,
+        side: std::sync::atomic::AtomicU8::new(side.index()),
+        step: Mutex::new(step),
+        phase: std::sync::atomic::AtomicU8::new(0),
+        answered: AtomicBool::new(false),
+    });
+    let work = watch.heartbeat.begin_work();
+    request_watches().push(Arc::clone(&watch));
+    CURRENT_REQUEST.with(|current| current.replace(Some(Arc::clone(&watch))));
+    let core = alpha2_host_core::request_watch::watch_request(beat_request);
+    let bands = {
+        let heartbeat = Arc::clone(&watch.heartbeat);
+        alpha2_render::report_band_progress(Arc::new(move || heartbeat.progressed()))
+    };
+    RequestWatchGuard {
+        watch,
+        _work: work,
+        _core: core,
+        _bands: bands,
+    }
+}
+
+pub struct RequestWatchGuard {
+    watch: Arc<RequestWatch>,
+    _work: HeartbeatWork,
+    _core: alpha2_host_core::request_watch::RequestWatchGuard,
+    _bands: alpha2_render::BandProgress,
+}
+
+impl std::ops::Deref for RequestWatchGuard {
+    type Target = RequestWatch;
+
+    fn deref(&self) -> &RequestWatch {
+        &self.watch
+    }
+}
+
+impl Drop for RequestWatchGuard {
+    fn drop(&mut self) {
+        request_watches().retain(|watch| !Arc::ptr_eq(watch, &self.watch));
+        CURRENT_REQUEST.with(|current| {
+            let mine = current
+                .borrow()
+                .as_ref()
+                .is_some_and(|watch| Arc::ptr_eq(watch, &self.watch));
+            if mine {
+                current.replace(None);
+            }
+        });
+    }
+}
+
+/// A step of the request this thread handles goes on.
+pub fn beat_request() {
+    CURRENT_REQUEST.with(|current| {
+        if let Some(watch) = current.borrow().as_ref() {
+            watch.heartbeat.beat();
+        }
+    });
+}
+
+/// A new step of the request this thread handles starts, on `side`.
+pub fn request_step(side: RequestSide, step: &'static str) {
+    CURRENT_REQUEST.with(|current| {
+        if let Some(watch) = current.borrow().as_ref() {
+            watch.set(side, step);
+            watch.heartbeat.beat();
+        }
+    });
+    #[cfg(test)]
+    if *INJECT_REQUEST_STALL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        == Some(step)
+    {
+        loop {
+            thread::park();
+        }
+    }
+}
+
+/// Parks a request's thread for good at the step of this name, as a read that never returns.
+#[cfg(test)]
+pub static INJECT_REQUEST_STALL: Mutex<Option<&'static str>> = Mutex::new(None);
+
+/// An export of this thread's request enters `phase` ([`crate::failure::FailureContext`]).
+pub fn request_phase(phase: crate::failure::ExportPhase) {
+    use crate::failure::ExportPhase;
+    let side = match phase {
+        ExportPhase::Prepare | ExportPhase::Decode => RequestSide::Input,
+        ExportPhase::Upload | ExportPhase::Render | ExportPhase::Readback => RequestSide::Gpu,
+        ExportPhase::Encode | ExportPhase::Mux | ExportPhase::Cleanup => RequestSide::Output,
+    };
+    CURRENT_REQUEST.with(|current| {
+        if let Some(watch) = current.borrow().as_ref() {
+            let index = ExportPhase::ALL.iter().position(|known| *known == phase);
+            watch.phase.store(
+                u8::try_from(index.unwrap_or(0)).unwrap_or(0),
+                Ordering::Release,
+            );
+            watch.set(side, phase.as_str());
+            watch.heartbeat.beat();
+        }
+    });
+}
+
+/// The request this thread handles waits on what is not its own work until the guard drops.
+pub fn request_idle() -> Option<HeartbeatIdle> {
+    CURRENT_REQUEST.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .map(|watch| watch.heartbeat.idle())
+    })
+}
+
+/// How long a request may stay in one step: three stall limits, since CPU-bound steps on the
+/// request thread have no measured ceiling on slow machines.
+pub fn request_stall_limit() -> Duration {
+    #[cfg(test)]
+    if let Some(limit) = *TEST_REQUEST_STALL_LIMIT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    {
+        return limit;
+    }
+    crate::config::configured_stall_timeout().saturating_mul(3)
+}
+
+/// A short request stall limit for the serve children of the tests.
+#[cfg(test)]
+pub static TEST_REQUEST_STALL_LIMIT: Mutex<Option<Duration>> = Mutex::new(None);
+
+static REQUEST_THREAD_LEFT: AtomicBool = AtomicBool::new(false);
+
+/// Marks the process as holding a request thread that will not come back, nor free its slot.
+pub fn leave_request_thread() {
+    REQUEST_THREAD_LEFT.store(true, Ordering::Release);
+    THREADS_ABANDONED.store(true, Ordering::Release);
+}
+
+pub fn request_thread_left() -> bool {
+    REQUEST_THREAD_LEFT.load(Ordering::Acquire)
+}
+
+/// Once per process: a thread that looks every [`STALL_POLL`] for a request in one step past
+/// [`request_stall_limit`] and hands the first caller of its answer to `stalled`.
+pub fn supervise_requests(stalled: fn(&RequestWatch, Duration)) {
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    if STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let spawned = thread::Builder::new()
+        .name("alpha2-watch".to_owned())
+        .spawn(move || {
+            loop {
+                thread::sleep(STALL_POLL);
+                let limit = request_stall_limit();
+                let watches = request_watches().clone();
+                for watch in watches {
+                    if let Some(stalled_for) = watch.heartbeat.stuck_past(limit)
+                        && watch.claim_answer()
+                    {
+                        stalled(&watch, stalled_for);
+                    }
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        STARTED.store(false, Ordering::Release);
+        alpha2_os::diagnostic!("alpha2-host: a request that never returns goes unnoticed: {error}");
     }
 }

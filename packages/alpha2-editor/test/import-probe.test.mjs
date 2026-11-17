@@ -16,34 +16,55 @@ const corpus = new URL("../../../tests/corpus/", import.meta.url);
 
 let element = { duration: Infinity, videoWidth: 0, videoHeight: 0 };
 
-class FakeVideo {
-  constructor() {
-    Object.assign(this, element);
+/**
+ * Fires what Chrome fires once loading starts: `loadeddata` for playable media, sound alone
+ * included, `error` for media its pipeline refuses, and nothing for an element that never loads
+ * (`silent`). `clone` is what `cloneNode` gives, `"error"` by default.
+ */
+class FakeVideo extends EventTarget {
+  constructor(props = element) {
+    super();
+    const { clone = "error", ...rest } = props;
+    Object.assign(this, rest);
+    this.cloneBehaviour = clone;
+    this.loads = 0;
+    made.push(this);
+  }
+  #fire() {
+    setTimeout(() => {
+      if (this.silent) return;
+      const type = this.error ? "error" : "loadeddata";
+      (type === "error" ? this.onerror : this.onloadeddata)?.();
+      this.dispatchEvent(new Event(type));
+    }, 0);
   }
   set src(value) {
     this._src = value;
-    // Chrome fires loadeddata for any playable media, sound alone included, and error for media its
-    // pipeline refuses.
-    setTimeout(
-      () => (this.error ? this.onerror?.() : this.onloadeddata?.()),
-      0,
-    );
+    this.#fire();
   }
   get src() {
     return this._src;
   }
   cloneNode() {
-    return {
-      load() {
-        this.onerror?.();
-      },
-      removeAttribute() {},
-    };
+    const behaviour = this.cloneBehaviour;
+    const clone = new FakeVideo({
+      ...element,
+      clone: "error",
+      silent: behaviour === "silent",
+      error: behaviour === "error" ? { code: 4, message: "refused" } : null,
+    });
+    return clone;
   }
-  removeAttribute() {}
+  removeAttribute(name) {
+    if (name === "src") this._src = undefined;
+  }
   pause() {}
-  load() {}
+  load() {
+    this.loads += 1;
+    this.#fire();
+  }
 }
+const made = [];
 globalThis.document = {
   createElement: (kind) =>
     kind === "video"
@@ -209,7 +230,7 @@ test("a video the media element refuses imports when WebCodecs decodes it", asyn
   library.dispose();
 });
 
-test("media error text is not shown to the user", async () => {
+test("media error text is not shown to the user, and a video this browser cannot decode is unsupported with DECODE_UNAVAILABLE", async () => {
   element = {
     duration: NaN,
     videoWidth: 0,
@@ -220,13 +241,16 @@ test("media error text is not shown to the user", async () => {
   const imported = await file("h264-bt709-copy.mp4", "broken.mp4", "video/mp4");
   await withVideoDecoder("unsupported", () =>
     assert.rejects(library.importFile(imported), (error) => {
-      assert.equal(error.code, "unreadable_media");
+      assert.equal(error.code, "unsupported_media");
       assert.match(
         error.message,
         /^Cannot read broken\.mp4 as video: this browser cannot decode H\.264 video/,
       );
       assert.doesNotMatch(error.message, /PIPELINE|VDA/);
-      assert.equal(error.cause, pipelineError);
+      assert.equal(error.cause.code, "DECODE_UNAVAILABLE");
+      assert.equal(error.cause.facts.kind, "video");
+      assert.match(error.cause.facts.codec, /^avc1\./);
+      assert.equal(error.cause.cause, pipelineError);
       return true;
     }),
   );
@@ -324,5 +348,68 @@ test("an import whose decode is aborted rejects with the abort's reason", async 
       (error) => error === reason,
     ),
   );
+  library.dispose();
+});
+
+const within = (promise, ms) =>
+  Promise.race([
+    promise.then(
+      (value) => ({ state: "resolved", value }),
+      (error) => ({ state: "rejected", error }),
+    ),
+    new Promise((resolve) =>
+      setTimeout(() => resolve({ state: "pending" }), ms),
+    ),
+  ]);
+
+test("an import whose media element never loads is cancelled at once by its signal", async () => {
+  element = { duration: 1, videoWidth: 64, videoHeight: 36, silent: true };
+  const library = new AssetLibrary();
+  const imported = await file("h264-bt709-copy.mp4", "stuck.mp4", "video/mp4");
+  const controller = new AbortController();
+  const reason = new Error("import cancelled");
+  const importing = withVideoDecoder("decodes", () =>
+    library.importFile(imported, { signal: controller.signal }),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  controller.abort(reason);
+  const outcome = await within(importing, 1000);
+  assert.equal(outcome.state, "rejected");
+  assert.equal(outcome.error, reason);
+  library.dispose();
+});
+
+test("an import whose media element never loads goes on through the decoder after the load deadline", async () => {
+  element = { duration: 1, videoWidth: 64, videoHeight: 36, silent: true };
+  made.length = 0;
+  const library = new AssetLibrary();
+  const imported = await file("h264-bt709-copy.mp4", "stuck.mp4", "video/mp4");
+  const outcome = await within(
+    withVideoDecoder("decodes", () => library.importFile(imported)),
+    15_000,
+  );
+  assert.equal(outcome.state, "resolved");
+  assert.equal(outcome.value.kind, "video");
+  assert.equal(outcome.value.video, null);
+  assert.equal(made[0].src, undefined, "the element was unloaded");
+  library.dispose();
+});
+
+test("a thumbnail whose element never loads is left out after the load deadline", async () => {
+  element = {
+    duration: 1,
+    videoWidth: 64,
+    videoHeight: 36,
+    clone: "silent",
+  };
+  const library = new AssetLibrary();
+  const imported = await file("h264-bt709-copy.mp4", "clip.mp4", "video/mp4");
+  const outcome = await within(
+    withVideoDecoder("decodes", () => library.importFile(imported)),
+    15_000,
+  );
+  assert.equal(outcome.state, "resolved");
+  assert.equal(outcome.value.thumbnail, null);
+  assert.ok(outcome.value.video, "the element itself loaded");
   library.dispose();
 });

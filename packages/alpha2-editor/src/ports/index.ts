@@ -7,7 +7,7 @@ import type {
 } from "alpha2/export-retry";
 import type { Project } from "alpha2/project";
 import type { EditorDocument, AssetDescriptor } from "../core/document.js";
-/** Shows a project in a preview surface. Implemented by the browser bridge and native previews. */
+/** Shows a project in a preview surface. */
 export interface PreviewBridge {
   /** Replaces the shown project. `revision` increases with every call. */
   replaceProject(project: Project, revision: number): Promise<void>;
@@ -107,9 +107,10 @@ export type ExportArtifact = (
   /**
    * The exporter's run report: timings, `performance` (with `memory` and `output`), rates. A
    * browser export adds `videoDecode` (the decode mode used), `videoConversion` (`engine` or
-   * `browser`), and `decodeFallbacks`. Those list, per source, frames read by element seeks instead
-   * of decoding (`kind: "element-seek"`, with reason, count and whether permanent), and sources
-   * that `videoDecode: "software"` could not decode in software (`kind: "software-unavailable"`).
+   * `browser`), `silentAudioSources` (ids of sources whose audio was written silent) and
+   * `decodeFallbacks`, which lists per source the frames read by element seeks instead of decoding
+   * (`kind: "element-seek"`, with reason, count and whether permanent) and sources that
+   * `videoDecode: "software"` could not decode in software (`kind: "software-unavailable"`).
    */
   readonly report?: Readonly<Record<string, unknown>>;
 };

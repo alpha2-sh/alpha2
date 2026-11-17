@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import ROOT
+from conftest import ROOT, require_or_skip
 
 import alpha2
 from alpha2.layout import box, text
@@ -126,3 +126,18 @@ def test_threads_share_one_measurer() -> None:
     for thread in threads:
         thread.join()
     assert results == [expected] * 80
+
+
+def test_a_measurer_that_panicked_raises_the_same_internal_error_on_later_calls() -> None:
+    measurer = alpha2.TextMeasurer([FIXTURE])
+    panic = getattr(measurer._native, "_panic", None)
+    if panic is None:
+        require_or_skip("native-test-hooks", "the native module is a release build")
+    generator = {"type": "text", "text": "Alpha2", "style": {"font_size": 0.1}}
+    measurer.text(generator, canvas=(100, 100))
+    with pytest.raises(alpha2.Alpha2InternalError, match="index out of bounds") as first:
+        panic("index out of bounds")
+    for _ in range(2):
+        with pytest.raises(alpha2.Alpha2InternalError) as later:
+            measurer.text(generator, canvas=(100, 100))
+        assert str(later.value) == str(first.value)

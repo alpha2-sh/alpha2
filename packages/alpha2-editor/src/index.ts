@@ -6,6 +6,12 @@ export * from "./core/clip-time.js";
 export * from "./core/session.js";
 export * from "./core/timeline-index.js";
 export * from "./core/keyframes.js";
+export {
+  dataValue,
+  isDataBound,
+  type DataBoundValue,
+  type DataValueOptions,
+} from "./core/data.js";
 export * from "./core/presets.js";
 export * from "./core/captions.js";
 export * from "./core/text.js";

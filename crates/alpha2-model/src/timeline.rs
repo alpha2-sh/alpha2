@@ -12,12 +12,14 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct Timeline {
     /// Tracks in composition order.
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_TRACKS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TRACKS)))]
     pub tracks: Vec<Track>,
 }
 
 impl Timeline {
-    /// The smallest interval holding every clip and caption cue, which a whole-project render or
-    /// export covers. `None` for a timeline that shows nothing.
+    /// The smallest interval holding every clip and caption cue. `None` for a timeline that shows
+    /// nothing. A whole-project export covers `Project::default_export_range` instead.
     #[must_use]
     pub fn extent(&self) -> Option<TimeRange> {
         let mut ranges = self.tracks.iter().flat_map(|track| {
@@ -69,9 +71,15 @@ pub struct Track {
     /// Clips on this track, in authoring order; evaluation sorts by time. A caption track has
     /// none.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_CLIPS_PER_TRACK }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_CLIPS_PER_TRACK)))]
     pub clips: Vec<Clip>,
     /// Explicit transitions between overlapping clips on this track.
     #[serde(default)]
+    #[serde(
+        deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_TRANSITIONS_PER_TRACK }>"
+    )]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_TRANSITIONS_PER_TRACK)))]
     pub transitions: Vec<ClipTransition>,
     /// Bus controls applied to this track's mixed audio.
     #[serde(default)]
@@ -150,6 +158,8 @@ pub struct Clip {
     /// Shapes that limit where the clip is visible, applied in order after its composition and
     /// before its transform. At most [`crate::MAX_CLIP_MASKS`]; visual clips only.
     #[serde(default)]
+    #[serde(deserialize_with = "crate::bounded::seq::<_, _, { crate::MAX_CLIP_MASKS }>")]
+    #[cfg_attr(feature = "schema", schemars(length(max = crate::MAX_CLIP_MASKS)))]
     pub masks: Vec<ShapeMask>,
     /// Another visual clip whose picture sets where this clip is visible.
     #[serde(default)]

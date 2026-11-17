@@ -11,8 +11,8 @@ use hayro_svg::hayro_syntax::{DecryptionError, LoadPdfError, Pdf};
 use hayro_svg::{RenderCache, SvgRenderSettings};
 
 use crate::api::{
-    Diagnostic, ExtensionError, Format, NoResources, ProbeReport, ResourceResolver, Timing,
-    VisualProvider, VisualSource,
+    Diagnostic, ExtensionError, Format, NoResources, ProbeReport, ResourceResolver, VisualProvider,
+    VisualSource,
 };
 use crate::budget::{check_canvas, check_document_size};
 use crate::svg::open_document_within;
@@ -32,26 +32,15 @@ impl VisualProvider for PdfProvider {
         "pdf"
     }
 
+    /// Opens the first page, so a probe refuses what opening it would, conversion included.
     fn probe(&self, bytes: &[u8]) -> Option<Result<ProbeReport, ExtensionError>> {
         if !looks_like_pdf(bytes) {
             return None;
         }
-        Some(load(bytes.to_vec().into()).and_then(|pdf| {
-            let first = &pdf.pages()[0];
-            let (width, height) = page_size(first.render_dimensions());
-            check_canvas(width, height)?;
-            Ok(ProbeReport {
-                format: Format::Pdf,
-                width,
-                height,
-                timing: Timing::Static,
-                loop_count: None,
-                items: page_numbers(pdf.pages().len()),
-                item: Some("1".into()),
-                color: None,
-                diagnostics: Vec::new(),
-            })
-        }))
+        Some(
+            open_page(bytes.to_vec().into(), 1, any_page_background())
+                .map(|page| page.report().clone()),
+        )
     }
 
     fn open(
@@ -104,8 +93,12 @@ fn load(bytes: Arc<[u8]>) -> Result<Pdf, ExtensionError> {
 fn any_page() -> ProviderSource {
     ProviderSource::Pdf {
         page: 1,
-        background: Rgba::new(1.0, 1.0, 1.0, 1.0),
+        background: any_page_background(),
     }
+}
+
+const fn any_page_background() -> Rgba {
+    Rgba::new(1.0, 1.0, 1.0, 1.0)
 }
 
 /// A page's size in pixels, as the SVG source it opens as rounds it.
@@ -182,7 +175,8 @@ fn open_page(
     drop(settings);
     drop(pdf);
     check_svg(&svg)?;
-    let mut source = open_document_within(svg.as_bytes(), &NoResources, svg.len())?
+    let images = u64::try_from(MAX_IMAGE_DATA_BYTES).unwrap_or(u64::MAX);
+    let mut source = open_document_within(svg.as_bytes(), &NoResources, svg.len(), images)?
         .scaled(PIXELS_PER_POINT)?
         .with_background(background);
     let report = source.report_mut();

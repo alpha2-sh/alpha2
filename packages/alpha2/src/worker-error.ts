@@ -1,6 +1,8 @@
 // Structured clone keeps little more than an `Error`'s message, so errors cross a worker boundary
 // as plain data with the fields failure classification reads.
 
+import type { BrowserErrorCode } from "./export-failure.js";
+
 /** An error as plain data that survives `postMessage`. */
 export interface SerializedAlpha2Error {
   /** The error's own `code`, else a wasm trap code or the worker's default. */
@@ -38,7 +40,7 @@ export class Alpha2WasmError extends Error {
 export function serializeError(
   error: unknown,
   trapped = false,
-  uncoded = "RENDER_WORKER_ERROR",
+  uncoded: BrowserErrorCode = "RENDER_WORKER_ERROR",
 ): SerializedAlpha2Error {
   const message = error instanceof Error ? error.message : String(error);
   const name = nameOf(error);
@@ -64,7 +66,10 @@ export function serializeError(
   };
   if (trapped) {
     return {
-      code: typeof value?.code === "string" ? value.code : "WASM_TRAPPED",
+      code:
+        typeof value?.code === "string"
+          ? value.code
+          : ("WASM_TRAPPED" satisfies BrowserErrorCode),
       message: `${message} (after an earlier wasm trap; the worker must be replaced)`,
       fatal: true,
       ...carried,
@@ -79,7 +84,7 @@ export function serializeError(
 }
 
 /** Classifies the unrecoverable `WebAssembly` failures, or `undefined`. */
-export function wasmTrapCode(error: unknown): string | undefined {
+export function wasmTrapCode(error: unknown): BrowserErrorCode | undefined {
   if (typeof WebAssembly === "undefined") return undefined;
   if (error instanceof WebAssembly.RuntimeError) return "WASM_TRAP";
   if (error instanceof WebAssembly.CompileError) return "WASM_COMPILE_ERROR";

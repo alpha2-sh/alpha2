@@ -1,4 +1,5 @@
 import type { Animated } from "alpha2/project";
+import { EditorError } from "./document.js";
 
 type Keyframes<T> = Extract<Animated<T>, { mode: "keyframes" }>;
 type Keyframe<T> = Keyframes<T>["keyframes"][number];
@@ -13,6 +14,13 @@ export const EASINGS = {
 } as const satisfies Record<string, Interpolation>;
 
 function keyframesOf<T>(value: Animated<T>): Keyframe<T>[] {
+  if (value.mode === "data")
+    throw new EditorError(
+      "data_bound",
+      `The value follows data set ${value.data}; bake it to edit its keyframes`,
+      "keyframes",
+      value.data,
+    );
   if (value.mode !== "keyframes") throw new Error("the value has no keyframes");
   return [...value.keyframes];
 }
@@ -27,8 +35,9 @@ function indexAt<T>(keys: readonly Keyframe<T>[], time: number): number {
  * The keyframe at `from` moved to `to`, clamped a tick inside its neighbours so keyframe order
  * never changes. Returns the value and where the keyframe landed.
  *
- * Throws when `value` is not keyframed or has no keyframe at `from`; the other keyframe-editing
- * functions below throw in the same cases.
+ * Throws when `value` is not keyframed or has no keyframe at `from`, an `EditorError`
+ * (`data_bound`) when it follows a data set; the other keyframe-editing functions below throw in
+ * the same cases.
  */
 export function moveKeyframe<T>(
   value: Animated<T>,

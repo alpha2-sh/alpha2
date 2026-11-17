@@ -167,6 +167,24 @@ fn a_fingerprint_records_the_streams_a_reader_plays() {
     }
 }
 
+#[test]
+fn a_video_of_a_codec_off_the_decoder_list_conforms_as_unsupported_naming_its_decoder() {
+    use crate::assets::{HardwareVideoDecode, fingerprint};
+    // The FFV1 stream relabelled as Cinepak, which the runtime has and the list leaves out.
+    let mut avi = std::fs::read(corpus("odd-dimensions.avi")).expect("corpus AVI");
+    for at in 0..avi.len() - 4 {
+        if &avi[at..at + 4] == b"FFV1" {
+            avi[at..at + 4].copy_from_slice(b"cvid");
+        }
+    }
+    let directory = scratch_directory("cinepak");
+    let path = directory.join("cinepak.avi");
+    std::fs::write(&path, &avi).expect("fixture");
+    let reason = fingerprint(&path, false, false, &HardwareVideoDecode::None)
+        .expect_err("an unlisted decoder is refused");
+    assert!(reason.contains("cinepak"), "{reason}");
+}
+
 /// A 4:3 picture of 4:3 pixels shows 16:9, so it is no proxy of a 4:3 picture of square pixels.
 #[test]
 fn a_proxy_shows_the_shape_its_original_shows() {
@@ -251,7 +269,7 @@ fn a_panic_handling_a_request_fails_that_request_and_the_host_answers_the_next()
     let conform = || {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "conform", "operation": "conform",
+                "protocolVersion": 2, "requestId": "conform", "operation": "conform",
                 "project": conform_project(&json!({})),
                 "assets": {"video": clip}
             })
@@ -262,7 +280,7 @@ fn a_panic_handling_a_request_fails_that_request_and_the_host_answers_the_next()
     let export = |output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "export", "operation": "export",
+                "protocolVersion": 2, "requestId": "export", "operation": "export",
                 "project": conform_project(&json!({})),
                 "assets": {"video": clip},
                 "startTicks": 0, "endTicks": 30_000,
@@ -295,7 +313,7 @@ fn a_panic_handling_a_request_fails_that_request_and_the_host_answers_the_next()
         .expect_err("the export's conform panics");
     assert_eq!(error.code, "INTERNAL");
     let failure = error.failure.expect("an export failure report");
-    assert_eq!(failure["code"], "UNKNOWN");
+    assert_eq!(failure["code"], "DEFECT");
     assert_eq!(failure["hostCode"], "INTERNAL");
     assert_eq!(failure["phase"], "prepare");
     assert!(!refused.exists());
@@ -315,7 +333,7 @@ fn an_encode_worker_that_cannot_start_fails_the_export_and_leaves_no_partial() {
     let export = |output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "export", "operation": "export",
+                "protocolVersion": 2, "requestId": "export", "operation": "export",
                 "project": conform_project(&json!({})),
                 "assets": {"video": clip},
                 "startTicks": 0, "endTicks": 30_000,
@@ -363,7 +381,7 @@ fn an_export_refuses_unready_media_before_any_output_and_says_what_it_read() {
     let request = |media: &str, assets: Value, proxies: Value, output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "conform", "operation": "export",
+                "protocolVersion": 2, "requestId": "conform", "operation": "export",
                 "project": conform_project(&json!({})),
                 "assets": assets, "proxies": proxies, "media": media,
                 "startTicks": 0, "endTicks": 120_000,
@@ -489,7 +507,7 @@ fn media_only_a_group_or_composition_source_reads_is_checked_and_decoded() {
         let request = |assets: &Value, output: &Path| {
             parse_request(
                 &json!({
-                    "protocolVersion": 1, "requestId": through, "operation": "export",
+                    "protocolVersion": 2, "requestId": through, "operation": "export",
                     "project": nested_media_project(through),
                     "assets": assets,
                     "startTicks": 0, "endTicks": 120_000,
@@ -644,7 +662,7 @@ fn a_native_host_reads_the_proxy_a_browser_made_from_the_evidence_it_recorded() 
 fn a_malformed_made_from_is_refused_as_input() {
     let clip = corpus("parity-rgb.mov");
     let conform = json!({
-        "protocolVersion": 1, "requestId": "conform", "operation": "conform",
+        "protocolVersion": 2, "requestId": "conform", "operation": "conform",
         "project": conform_project(&json!({})),
         "assets": {"video": clip},
         "proxies": {"video": [{"path": clip, "madeFrom": {"content_sha256": "A".repeat(64)}}]}
@@ -652,9 +670,9 @@ fn a_malformed_made_from_is_refused_as_input() {
     let input = format!("{conform}\n");
     let mut serving = Serving::new(VideoDecodePolicy::Software);
     serving.create = no_gpu;
-    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |_| {});
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &|_| None);
     let _ = served;
-    let answers = answers_of(output);
+    let answers = answers_of(&output);
     assert_eq!(answers[0]["ok"], false, "{}", answers[0]);
     assert_eq!(
         answers[0]["error"]["code"], "INVALID_INPUT",
@@ -715,4 +733,35 @@ fn conform_lists_each_audio_stream_and_names_a_missing_one() {
         "the project's media is not ready: mics: clip lane plays missing audio (audio stream 5 \
          does not exist; the media has 2 audio streams)"
     );
+}
+
+/// Data made from one file is stale once its source is relinked to another.
+#[test]
+fn conform_reports_data_made_from_other_media_as_stale() {
+    use alpha2_assets::{MediaPurpose, OriginalState};
+    let clip = corpus("parity-rgb.mov");
+    let first = resolve(
+        &conform_project(&json!({})),
+        &[("video", clip.clone())],
+        &[],
+        MediaPurpose::Preview,
+    );
+    let OriginalState::Online { fingerprint } = &first.catalog.assets[0].original else {
+        panic!("online");
+    };
+    let mut project = conform_project(&json!({}));
+    project["data"] = json!([{ "id": "track", "anchor": { "type": "source", "source_id": "video" },
+                               "kind": "intervals", "intervals": [], "made_from": fingerprint }]);
+    let same = resolve(&project, &[("video", clip)], &[], MediaPurpose::Preview);
+    assert_eq!(same.report.stale_data, Vec::new());
+    let relinked = resolve(
+        &project,
+        &[("video", corpus("h264-bt709-copy.mp4"))],
+        &[],
+        MediaPurpose::Preview,
+    );
+    let stale = &relinked.report.stale_data;
+    assert_eq!(stale.len(), 1, "{stale:?}");
+    assert_eq!(stale[0].data.as_str(), "track");
+    assert!(relinked.report.ready, "stale data never blocks");
 }

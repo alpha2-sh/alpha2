@@ -272,6 +272,31 @@ fn version_headers_are_found_under_each_include_directory() {
 }
 
 #[test]
+#[cfg(unix)]
+fn the_libdir_is_searched_through_a_link_in_out_dir() {
+    let root = std::env::temp_dir().join(format!("alpha2-libdir-link-{}", std::process::id()));
+    let (out, sdk, other) = (
+        root.join("out"),
+        root.join("sdk/lib"),
+        root.join("other/lib"),
+    );
+    for directory in [&out, &sdk, &other] {
+        std::fs::create_dir_all(directory).expect("directory");
+    }
+    std::fs::write(sdk.join("libavcodec.so"), "").expect("library");
+    std::os::unix::fs::symlink(&other, out.join("ffmpeg-lib")).expect("stale link");
+    for _ in 0..2 {
+        let link = libdir_link(&out, &sdk).expect("link");
+        assert!(link.starts_with(&out), "{}", link.display());
+        assert!(link.join("libavcodec.so").is_file());
+        std::fs::remove_file(&link).expect("link");
+        std::fs::create_dir(&link).expect("directory");
+    }
+    assert!(libdir_link(&out, &root.join("missing")).is_err());
+    std::fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
 fn the_directive_is_a_linker_argument_for_this_package() {
     assert_eq!(
         rpath_directives(Path::new("/sdk/lib")),
@@ -287,4 +312,145 @@ fn the_directive_is_a_linker_argument_for_this_package() {
             "cargo:rustc-link-arg=/a,b/My SDK/lib",
         ]
     );
+}
+
+#[test]
+fn rejected_triples_take_the_clang_spelling() {
+    assert_eq!(
+        clang_target_override("aarch64-apple-ios-sim", environment(&[])).as_deref(),
+        Some("arm64-apple-ios-simulator")
+    );
+    assert_eq!(
+        clang_target_override("x86_64-apple-ios-sim", environment(&[])).as_deref(),
+        Some("x86_64-apple-ios-simulator")
+    );
+    assert_eq!(
+        clang_target_override("aarch64-linux-android", environment(&[])).as_deref(),
+        Some("aarch64-linux-android29")
+    );
+    assert_eq!(
+        clang_target_override("aarch64-apple-ios", environment(&[])),
+        None
+    );
+    assert_eq!(
+        clang_target_override("x86_64-unknown-linux-gnu", environment(&[])),
+        None
+    );
+}
+
+#[test]
+fn the_android_api_level_comes_from_the_toolchain() {
+    let level =
+        |pairs: &[(&str, &str)]| android_api_level("aarch64-linux-android", environment(pairs));
+    assert_eq!(level(&[]), MIN_ANDROID_API_LEVEL);
+    assert_eq!(level(&[("ANDROID_PLATFORM", "android-31")]), 31);
+    assert_eq!(
+        level(&[("_CARGO_NDK_LINK_TARGET", "--target=aarch64-linux-android33")]),
+        33
+    );
+    assert_eq!(
+        level(&[(
+            "CC_aarch64_linux_android",
+            "/ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android30-clang"
+        )]),
+        30
+    );
+    // A compiler without a level in its name falls back.
+    assert_eq!(level(&[("TARGET_CC", "clang")]), MIN_ANDROID_API_LEVEL);
+    assert_eq!(
+        android_api_level(
+            "armv7-linux-androideabi",
+            environment(&[(
+                "CFLAGS_armv7-linux-androideabi",
+                "--target=armv7a-linux-androideabi34 -O2"
+            )])
+        ),
+        34
+    );
+}
+
+/// The `include` directory of each cached SDK release whose tag starts with `prefix`.
+fn cached_sdk_includes(prefix: &str) -> Vec<PathBuf> {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let cache = std::env::var_os("ALPHA2_FFMPEG_CACHE")
+        .map_or_else(|| workspace.join("target/ffmpeg-sdk-cache"), PathBuf::from);
+    let Ok(releases) = std::fs::read_dir(&cache) else {
+        return Vec::new();
+    };
+    releases
+        .flatten()
+        .filter(|release| release.file_name().to_string_lossy().starts_with(prefix))
+        .filter_map(|release| std::fs::read_dir(release.path().join("sdk")).ok())
+        .flat_map(|targets| {
+            targets
+                .flatten()
+                .map(|target| target.path().join("include"))
+        })
+        .filter(|include| include.join("libavutil/version.h").is_file())
+        .collect()
+}
+
+/// Whether the shim version guard compiles against `include`, or `None` without a C compiler.
+fn guard_compiles(include: &std::path::Path) -> Option<bool> {
+    let source =
+        std::env::temp_dir().join(format!("alpha2-version-guard-{}.c", std::process::id()));
+    std::fs::write(&source, "#include \"alpha2_ffmpeg_version.h\"\n").expect("source");
+    let guard =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../alpha2-ffmpeg-bridge/include");
+    let compiler = std::env::var("CC").unwrap_or_else(|_| "cc".to_owned());
+    let status = std::process::Command::new(compiler)
+        .arg("-fsyntax-only")
+        .arg(format!(
+            "-DALPHA2_FFMPEG_AVUTIL_MAJOR={FFMPEG_AVUTIL_MAJOR}"
+        ))
+        .arg(format!(
+            "-DALPHA2_FFMPEG_AVCODEC_MAJOR={FFMPEG_AVCODEC_MAJOR}"
+        ))
+        .arg("-I")
+        .arg(guard)
+        .arg("-I")
+        .arg(include)
+        .arg(&source)
+        .stderr(std::process::Stdio::null())
+        .status();
+    std::fs::remove_file(&source).expect("cleanup");
+    status.ok().map(|status| status.success())
+}
+
+#[test]
+fn the_version_guard_refuses_ffmpeg_8_0_headers_and_takes_the_pinned_ones() {
+    let previous = cached_sdk_includes("ffmpeg-8.0.");
+    let Some(include) = previous.first() else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::PreviousFfmpegSdk,
+            "no FFmpeg 8.0 SDK in the SDK cache"
+        );
+        return;
+    };
+    let Some(compiled) = guard_compiles(include) else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::CCompiler,
+            "no C compiler for the version guard"
+        );
+        return;
+    };
+    assert!(!compiled, "{} passed the guard", include.display());
+    let manifest = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../release/ffmpeg-lgpl/manifest.toml"),
+    )
+    .expect("the pinned SDK manifest");
+    let pinned = manifest
+        .lines()
+        .find_map(|line| line.strip_prefix("release_tag = \""))
+        .and_then(|tag| tag.strip_suffix('"'))
+        .expect("a release tag");
+    for include in cached_sdk_includes(pinned) {
+        assert_eq!(
+            guard_compiles(&include),
+            Some(true),
+            "{}",
+            include.display()
+        );
+    }
 }

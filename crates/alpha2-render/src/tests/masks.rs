@@ -17,7 +17,7 @@ fn ellipse(cx: f64, cy: f64, w: f64, h: f64) -> EvaluatedItem {
 }
 
 fn mask_renderer() -> Renderer {
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     for definition in crate::mask_combine_definitions() {
         pollster::block_on(renderer.register_effect(definition)).expect("the masks compile");
     }
@@ -226,7 +226,7 @@ fn a_feather_blur_spreads_the_edge_over_its_ramp_width() {
 #[test]
 fn a_luma_matte_weighs_linear_light_by_bt709_and_by_its_alpha() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(crate::track_matte_definition()))
         .expect("the matte compiles");
     let scope = renderer

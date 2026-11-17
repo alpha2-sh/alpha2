@@ -4,11 +4,11 @@
 //! to fractions of the canvas's shorter side and pre-evaluates a tree without keyframes, so every
 //! frame shares one value and key. Text style is inherited during evaluation.
 
-use crate::ShapesPlan;
 use crate::animation::{
     sample_hold, sample_insets, sample_length, sample_offset, sample_paint, sample_scalar,
     sample_size, sample_vec2,
 };
+use crate::{SampleContext, ShapesPlan};
 use alpha2_geometry::StableHash;
 use alpha2_model::{
     AlignContent, AlignItems, Animated, Display, FlexDirection, FlexWrap, GridAutoFlow,
@@ -237,7 +237,7 @@ pub enum NodeContent {
     /// Boxes laid out in this one, in document order.
     Children(Vec<EvaluatedNode>),
     /// One paragraph of text.
-    Text(EvaluatedText),
+    Text(Box<EvaluatedText>),
     /// Shapes, evaluated at draw time because spatial curves need the post-layout aspect.
     Shape(Arc<ShapesPlan>),
 }
@@ -267,10 +267,24 @@ pub struct EvaluatedText {
     pub shadows: Vec<TextShadow>,
     /// The node's text animators at the layout's picture time.
     pub animators: Vec<crate::SampledAnimator>,
+    /// The font sizes it is fitted between, fractions of the picture's shorter side.
+    pub font_size_fit: Option<alpha2_model::FontSizeFit>,
+    /// Where its lines are cut.
+    pub line_clamp: Option<alpha2_model::LineClamp>,
 }
 
-fn non_negative(animation: Option<&Animated<f32>>, time: MediaTime, default: f32) -> f32 {
-    animation.map_or(default, |value| sample_scalar(value, time).max(0.0))
+/// Largest magnitude of a sampled fraction, which a valid pixel length reaches on a one-pixel
+/// picture. Eased keyframes can overshoot their values; sampling clamps them here.
+const MOST_FRACTION: f32 = alpha2_model::MAX_LAYOUT_PX;
+
+fn fraction(value: f32) -> f32 {
+    value.clamp(-MOST_FRACTION, MOST_FRACTION)
+}
+
+fn flex_factor(animation: Option<&Animated<f32>>, time: MediaTime, default: f32) -> f32 {
+    animation.map_or(default, |value| {
+        sample_scalar(value, time, &SampleContext::NONE).clamp(0.0, alpha2_model::MAX_FLEX_FACTOR)
+    })
 }
 
 fn size_or(
@@ -278,11 +292,20 @@ fn size_or(
     time: MediaTime,
     default: f32,
 ) -> f32 {
-    animation.map_or(default, |value| sample_size(value, time).max(0.0))
+    animation.map_or(default, |value| {
+        sample_size(value, time).clamp(0.0, MOST_FRACTION)
+    })
 }
 
 fn length(animation: Option<&Animated<LayoutLength>>, time: MediaTime) -> Option<LayoutLength> {
-    animation.map(|value| sample_length(value, time))
+    animation.map(|value| {
+        let length = sample_length(value, time);
+        let bound = match length {
+            LayoutLength::Percent(_) => alpha2_model::MAX_LAYOUT_PERCENT,
+            LayoutLength::Fraction(_) | LayoutLength::Px(_) => MOST_FRACTION,
+        };
+        length.with_value(length.value().clamp(-bound, bound))
+    })
 }
 
 fn size(animation: Option<&Animated<LayoutLength>>, time: MediaTime) -> Option<LayoutLength> {
@@ -292,7 +315,7 @@ fn size(animation: Option<&Animated<LayoutLength>>, time: MediaTime) -> Option<L
 fn node_layout(node: &LayoutNode, time: MediaTime, border_width: f32) -> NodeLayout {
     let insets = |value: Option<&Animated<alpha2_model::Insets>>| {
         value.map_or_else(Sides::default, |value| {
-            Sides::from_array(sample_insets(value, time))
+            Sides::from_array(sample_insets(value, time).map(fraction))
         })
     };
     let padding = Sides::from_array(
@@ -335,8 +358,8 @@ fn node_layout(node: &LayoutNode, time: MediaTime, border_width: f32) -> NodeLay
         max_height: size(node.max_height.as_ref(), time),
         aspect_ratio: node.aspect_ratio,
         margin: insets(node.margin.as_ref()),
-        flex_grow: non_negative(node.flex_grow.as_ref(), time, 0.0),
-        flex_shrink: non_negative(node.flex_shrink.as_ref(), time, 1.0),
+        flex_grow: flex_factor(node.flex_grow.as_ref(), time, 0.0),
+        flex_shrink: flex_factor(node.flex_shrink.as_ref(), time, 1.0),
         flex_basis: size(node.flex_basis.as_ref(), time),
         align_self: node.align_self,
         justify_self: node.justify_self,
@@ -381,7 +404,7 @@ fn evaluate_node<'a>(
 ) -> EvaluatedNode {
     let border = node.border.as_ref().map(|border| {
         (
-            sample_size(&border.width, time).max(0.0),
+            sample_size(&border.width, time).clamp(0.0, MOST_FRACTION),
             sample_paint(&border.paint, time),
         )
     });
@@ -395,26 +418,23 @@ fn evaluate_node<'a>(
         border_radius: size_or(node.border_radius.as_ref(), time, 0.0),
     };
     let visual = node.has_visual().then(|| NodeVisual {
-        opacity: node
-            .opacity
-            .as_ref()
-            .map_or(1.0, |value| sample_scalar(value, time).clamp(0.0, 1.0)),
-        translate: node
-            .translate
-            .as_ref()
-            .map_or_else(Vec2::default, |value| sample_offset(value, time)),
-        scale: node
-            .scale
-            .as_ref()
-            .map_or(Vec2::new(1.0, 1.0), |value| sample_vec2(value, time)),
-        rotation_degrees: node
-            .rotation_degrees
-            .as_ref()
-            .map_or(0.0, |value| sample_scalar(value, time)),
+        opacity: node.opacity.as_ref().map_or(1.0, |value| {
+            sample_scalar(value, time, &SampleContext::NONE).clamp(0.0, 1.0)
+        }),
+        translate: node.translate.as_ref().map_or_else(Vec2::default, |value| {
+            let offset = sample_offset(value, time);
+            Vec2::new(fraction(offset.x), fraction(offset.y))
+        }),
+        scale: node.scale.as_ref().map_or(Vec2::new(1.0, 1.0), |value| {
+            sample_vec2(value, time, &SampleContext::NONE)
+        }),
+        rotation_degrees: node.rotation_degrees.as_ref().map_or(0.0, |value| {
+            sample_scalar(value, time, &SampleContext::NONE)
+        }),
     });
     let style = text_style(node, time, inherited);
     let content = if let Some(text) = &node.text {
-        NodeContent::Text(EvaluatedText {
+        NodeContent::Text(Box::new(EvaluatedText {
             content: sample_hold(text, time),
             font_family: style.font_family,
             font_size: style.font_size,
@@ -426,7 +446,12 @@ fn evaluate_node<'a>(
             strokes: style.strokes.clone(),
             shadows: style.shadows.clone(),
             animators: crate::sample_text_animators(&node.text_animators, time),
-        })
+            font_size_fit: node.font_size_fit.map(|fit| alpha2_model::FontSizeFit {
+                min: fit.min.value(),
+                max: fit.max.map(alpha2_model::LayoutSize::value),
+            }),
+            line_clamp: node.line_clamp.clone(),
+        }))
     } else if node.shape.is_some() {
         let (plan, _) = shapes.next().expect("one plan per shape node");
         NodeContent::Shape(Arc::clone(plan))
@@ -676,6 +701,22 @@ fn hash_node_in(
             if !text.animators.is_empty() {
                 crate::hash_sampled_animators(hash, &text.animators);
             }
+            if let Some(fit) = text.font_size_fit {
+                hash.u32(0xf17);
+                hash.f32(fit.min);
+                hash.f32(fit.max.unwrap_or(-1.0));
+            }
+            if let Some(clamp) = &text.line_clamp {
+                hash.u32(0xc1a);
+                hash.u32(clamp.max_lines.unwrap_or(0));
+                match clamp.block_ellipsis.text() {
+                    None => hash.u32(0),
+                    Some(ellipsis) => {
+                        hash.u32(1);
+                        hash.bytes(ellipsis.as_bytes());
+                    }
+                }
+            }
         }
         NodeContent::Shape(_) => {
             hash.u32(3);
@@ -706,6 +747,7 @@ pub(crate) fn layout_bytes(
             .iter()
             .map(|keyframe| size_of::<alpha2_model::Keyframe<String>>() + keyframe.value.len())
             .sum(),
+        Animated::Data(_) => 0,
     });
     let style = node.font_family.as_ref().map_or(0, String::len) + keys(node.font_size.as_ref());
     let tracks = [
@@ -722,7 +764,7 @@ pub(crate) fn layout_bytes(
         Some(Animated::Keyframes { keyframes }) => {
             keyframes.len() * size_of::<alpha2_model::Keyframe<Paint>>()
         }
-        Some(Animated::Constant { .. }) | None => 0,
+        Some(Animated::Constant { .. } | Animated::Data(_)) | None => 0,
     };
     let inset = node.inset.as_ref().map_or(0, |inset| {
         [&inset.left, &inset.top, &inset.right, &inset.bottom]

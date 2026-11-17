@@ -9,7 +9,7 @@ fn grid_export(output: &Path, budget: Option<u64>) -> Request {
         .map(|index| (format!("v{index}"), corpus("h264-bt709-copy.mp4")))
         .collect::<HashMap<_, _>>();
     let mut request = json!({
-        "protocolVersion": 1, "operation": "export", "requestId": "grid",
+        "protocolVersion": 2, "operation": "export", "requestId": "grid",
         "project": project,
         "assets": assets,
         "startTicks": 0, "endTicks": alpha2_time::TICKS_PER_SECOND,
@@ -141,6 +141,7 @@ fn an_export_larger_than_available_memory_is_refused_before_output() {
         limit_bytes: Some(64 << 30),
         limit_source: "physical",
         used_in_limit_bytes: None,
+        charged_in_limit_bytes: None,
     };
     crate::memory::injected::CAPACITY.with(|capacity| capacity.set(Some(tight)));
     let refused = host.handle(grid_export(&output, None), &mut |_| Ok(()));

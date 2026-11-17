@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::decode::HardwareFallbackCounts;
-use crate::frames::{estimated_staging_bytes, packed_yuv420_bytes};
+use crate::frames::estimated_staging_bytes;
 use crate::{MAX_ENCODE_CHANNEL_DEPTH, MAX_IN_FLIGHT_VIDEO_FRAMES, MIN_ENCODE_CHANNEL_DEPTH};
 use alpha2_render::RenderSize;
 use serde_json::{Value, json};
@@ -88,6 +88,8 @@ pub struct ExportMetrics {
     pub pending_depth_total: u64,
     pub pending_depth_samples: u64,
     pub peak_decode_queue_bytes: u64,
+    /// Decoded frame sets larger than the decode queue budget, each held alone.
+    pub decode_queue_oversized_sets: u64,
     pub max_decode_queue: usize,
     pub decode_backpressure: u64,
     pub ready_readback_dispatches: u64,
@@ -144,6 +146,7 @@ pub struct ExportMetrics {
     /// Surfaces the renderer could not import (`sourceDownloadBytes`, `sourceDownloadMs`).
     pub source_download_bytes: u64,
     pub source_download: Duration,
+    pub phases: PhaseTimings,
 }
 
 impl ExportMetrics {
@@ -205,8 +208,89 @@ impl ExportMetrics {
 
     pub fn record_decode_pool(&mut self, worker: &crate::decode::DecodeWorker) {
         self.peak_decode_queue_bytes = self.peak_decode_queue_bytes.max(worker.peak_bytes());
+        self.decode_queue_oversized_sets = worker.oversized_sets();
         self.decode_budget_wait = worker.waits.budget();
         self.decode_handoff_wait = worker.waits.handoff();
+    }
+}
+
+/// Where an export's time went outside its steady frame loop. Times are from the export's start.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PhaseTimings {
+    /// To the first turn of the frame loop.
+    pub setup: Duration,
+    /// `None` where no video encoder is chosen or opened (a copy).
+    pub encoder_probe: Option<Duration>,
+    pub encoder_open: Option<Duration>,
+    pub loudness: Duration,
+    /// Frame 0 handed to the encoder, or a copy's first packet written.
+    pub first_frame: Option<Duration>,
+    /// The last frame handed to the encoder, or a copy's last packet written.
+    pub last_handoff: Option<Duration>,
+    pub steady: SteadyRate,
+}
+
+impl PhaseTimings {
+    pub fn record_handoff(&mut self, index: u64, at: Duration) {
+        if index == 0 {
+            self.first_frame = Some(at);
+        }
+        self.last_handoff = Some(at);
+    }
+
+    /// `elapsed` is the export's `renderMs`; `finishMs` is the part after the last hand-off.
+    pub fn add_json(&self, value: &mut Value, elapsed: Duration, frames: u64) {
+        let optional = |duration: Option<Duration>| duration.map_or(Value::Null, milliseconds);
+        value["setupMs"] = milliseconds(self.setup);
+        value["encoderProbeMs"] = optional(self.encoder_probe);
+        value["encoderOpenMs"] = optional(self.encoder_open);
+        value["loudnessMs"] = milliseconds(self.loudness);
+        value["firstFrameMs"] = optional(self.first_frame);
+        value["finishMs"] = optional(
+            self.last_handoff
+                .map(|handoff| elapsed.saturating_sub(handoff)),
+        );
+        value["steadyFps"] = json!(self.steady.fps(frames));
+    }
+}
+
+/// The encode rate between the completions of the 10th and the 95th percentile frames, which
+/// leaves out start-up and the drain at the end. Two timestamps, whatever the length.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SteadyRate {
+    low: Option<Duration>,
+    high: Option<Duration>,
+}
+
+impl SteadyRate {
+    /// The two frame indices of an export of `frames` frames; `None` below three frames.
+    #[must_use]
+    pub const fn window(frames: u64) -> Option<(u64, u64)> {
+        if frames < 3 {
+            return None;
+        }
+        let low = frames / 10;
+        let high = (frames.saturating_mul(95) / 100).saturating_sub(1);
+        if high > low { Some((low, high)) } else { None }
+    }
+
+    pub fn record(&mut self, index: u64, frames: u64, finished: Duration) {
+        if let Some((low, high)) = Self::window(frames) {
+            if index == low {
+                self.low = Some(finished);
+            }
+            if index == high {
+                self.high = Some(finished);
+            }
+        }
+    }
+
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn fps(&self, frames: u64) -> Option<f64> {
+        let (low, high) = Self::window(frames)?;
+        let span = self.high?.checked_sub(self.low?)?.as_secs_f64();
+        (span > 0.0).then(|| (high - low) as f64 / span)
     }
 }
 
@@ -234,20 +318,20 @@ pub struct ExportPipelineLimits {
 /// is a configuration error rather than backpressure.
 pub fn export_pipeline_limits(
     size: RenderSize,
-    format: wgpu::TextureFormat,
+    (format, layout): (wgpu::TextureFormat, alpha2_media::PixelLayout),
     budget: crate::memory::InFlightBudget,
     requested_depth: usize,
     requested_encode_depth: Option<usize>,
 ) -> Result<ExportPipelineLimits, String> {
-    let staging_bytes_per_frame = estimated_staging_bytes(size, format);
-    let packed_bytes_per_frame = packed_yuv420_bytes(size);
-    // A retry's scale never takes the budget below what a rendezvous channel needs.
-    let byte_budget = budget.holding(
-        staging_bytes_per_frame.saturating_add(
-            packed_bytes_per_frame
-                .saturating_mul(u64::try_from(readback_encode_frame_bound(0)).unwrap_or(u64::MAX)),
-        ),
+    let staging_bytes_per_frame = estimated_staging_bytes(size, format, layout);
+    let packed_bytes_per_frame = layout.frame_bytes(size.width, size.height);
+    let least = staging_bytes_per_frame.saturating_add(
+        packed_bytes_per_frame
+            .saturating_mul(u64::try_from(readback_encode_frame_bound(0)).unwrap_or(u64::MAX)),
     );
+    // A retry's scale never takes the budget below what a rendezvous channel needs, and a default
+    // budget never refuses what this export needs at least.
+    let byte_budget = budget.at_least_unless_asked(least).holding(least);
     let start = requested_encode_depth.map_or_else(
         || {
             derived_encode_channel_depth(
@@ -287,10 +371,11 @@ pub fn export_pipeline_limits(
         }
     }
     Err(crate::memory::resource_limit(format!(
-        "{} cannot hold one readback and two packed {}x{} YUV420P frames",
+        "{} cannot hold one readback and two packed {}x{} {} frames",
         budget.describe(),
         size.width,
-        size.height
+        size.height,
+        layout.ffmpeg_name()
     )))
 }
 
@@ -668,6 +753,7 @@ pub fn export_metrics_json(
         "rgbaFallbackFrames": metrics.rgba_fallback_frames,
         "physicalSourceReuses": metrics.physical_source_reuses,
     });
+    value["decodeQueueOversizedSets"] = json!(metrics.decode_queue_oversized_sets);
     add_decode_path_metrics(&mut value, metrics);
     add_stage_split_metrics(&mut value, metrics);
     value["decodeConcurrency"] = json!(metrics.decode_concurrency);

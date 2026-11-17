@@ -303,7 +303,15 @@ fn grid_tracks_and_lines_are_bounded() {
         ))
     };
     assert!(item("65").is_ok() && item("-65").is_ok() && item(r#""span 64""#).is_ok());
-    for placement in ["0", "66", r#""1 / -66""#, r#""span 65""#, r#""span 0""#] {
+    for placement in [
+        "0",
+        "66",
+        "-32768",
+        r#""1 / -66""#,
+        r#""1 / -32768""#,
+        r#""span 65""#,
+        r#""span 0""#,
+    ] {
         assert_eq!(
             item(placement),
             refused(

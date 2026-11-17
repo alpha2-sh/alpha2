@@ -123,6 +123,31 @@ pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
     })
 }
 
+/// The Unix side of [`crate::create_private_directory`].
+pub(crate) fn create_private_directory(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)?;
+    let metadata = fs::metadata(path)?;
+    // SAFETY: `geteuid` takes no arguments and cannot fail.
+    let user = unsafe { libc::geteuid() };
+    if metadata.uid() != user {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the directory belongs to another user",
+        ));
+    }
+    if metadata.permissions().mode() & 0o022 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "group or others can write the directory",
+        ));
+    }
+    Ok(())
+}
+
 /// From `<linux/fs.h>`; the same on every architecture.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const RENAME_NOREPLACE: libc::c_uint = 1;
@@ -152,7 +177,7 @@ pub(crate) fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 pub(crate) fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     let (from, to) = (c_path(from)?, c_path(to)?);
     // SAFETY: both are NUL-terminated paths that outlive the call.
@@ -164,7 +189,7 @@ pub(crate) fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
 pub(crate) fn rename_exclusive(_from: &Path, _to: &Path) -> io::Result<()> {
     Err(io::Error::from_raw_os_error(libc::ENOTSUP))
 }
@@ -261,13 +286,19 @@ extern "C" fn on_signal(signal: libc::c_int) {
     unsafe { *errno_location() = saved };
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(target_os = "linux")]
 unsafe fn errno_location() -> *mut libc::c_int {
     // SAFETY: always valid on the calling thread.
     unsafe { libc::__errno_location() }
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+#[cfg(target_os = "android")]
+unsafe fn errno_location() -> *mut libc::c_int {
+    // SAFETY: always valid on the calling thread.
+    unsafe { libc::__errno() }
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "freebsd"))]
 unsafe fn errno_location() -> *mut libc::c_int {
     // SAFETY: always valid on the calling thread.
     unsafe { libc::__error() }
@@ -341,6 +372,57 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
     Ok(())
 }
 
+/// Duplicates `stream` for the caller and points it at `diagnostics`, or at `/dev/null` when that
+/// is not open.
+pub(crate) fn claim_stream(
+    stream: std::os::fd::RawFd,
+    diagnostics: std::os::fd::RawFd,
+) -> io::Result<File> {
+    // SAFETY: `F_DUPFD_CLOEXEC` reads no memory; a closed `stream` fails with `EBADF`.
+    let claimed = unsafe { libc::fcntl(stream, libc::F_DUPFD_CLOEXEC, 3) };
+    if claimed < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `claimed` is a new descriptor nothing else owns.
+    let claimed = unsafe { File::from_raw_fd(claimed) };
+    // SAFETY: `dup2` reads no memory; a closed `diagnostics` fails with `EBADF`.
+    if unsafe { libc::dup2(diagnostics, stream) } < 0 {
+        let null = fs::OpenOptions::new().write(true).open("/dev/null")?;
+        // SAFETY: as above, with a descriptor `null` keeps open for the call.
+        if unsafe { libc::dup2(null.as_raw_fd(), stream) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(claimed)
+}
+
+/// Counts the entries of the descriptor directory, less the one the listing itself opens.
+pub(crate) fn open_handles() -> Option<u64> {
+    let directory = if cfg!(any(target_os = "linux", target_os = "android")) {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+    let entries = std::fs::read_dir(directory).ok()?.count();
+    u64::try_from(entries.saturating_sub(1)).ok()
+}
+
+pub(crate) fn open_file_limit() -> Option<u64> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is a valid `rlimit` the call fills.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) } != 0 {
+        return None;
+    }
+    // `rlim_t` is narrower than `u64` on some 32-bit targets.
+    #[allow(clippy::useless_conversion)]
+    (limit.rlim_cur != libc::RLIM_INFINITY)
+        .then(|| u64::try_from(limit.rlim_cur).ok())
+        .flatten()
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn process_memory() -> ProcessMemory {
     let status = fs::read_to_string("/proc/self/status").unwrap_or_default();
@@ -397,6 +479,12 @@ pub(crate) fn process_memory() -> ProcessMemory {
 /// per-process limit, so the limit is the physical total.
 #[cfg(target_os = "macos")]
 pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
+    machine_capacity()
+}
+
+/// The machine's memory as [`memory_capacity`] reports it on macOS.
+#[cfg(target_vendor = "apple")]
+fn machine_capacity() -> crate::MemoryCapacity {
     unsafe extern "C" {
         // The `libc` binding is deprecated.
         fn mach_host_self() -> libc::mach_port_t;
@@ -440,15 +528,138 @@ pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
         limit_bytes: physical,
         limit_source: "physical",
         used_in_limit_bytes: None,
+        charged_in_limit_bytes: None,
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+/// The fields of `task_vm_info` this crate reads, from `<mach/task_info.h>`, padded to the full
+/// structure and packed as the header's `#pragma pack(4)`; `libc` does not bind it. The kernel
+/// fills whole revisions only.
+#[cfg(all(target_vendor = "apple", not(target_os = "macos")))]
+#[repr(C, packed(4))]
+struct TaskVmInfo {
+    virtual_size: u64,
+    region_count: i32,
+    page_size: i32,
+    resident_size: u64,
+    resident_size_peak: u64,
+    device: u64,
+    device_peak: u64,
+    internal: u64,
+    internal_peak: u64,
+    external: u64,
+    external_peak: u64,
+    reusable: u64,
+    reusable_peak: u64,
+    purgeable_volatile_pmap: u64,
+    purgeable_volatile_resident: u64,
+    purgeable_volatile_virtual: u64,
+    compressed: u64,
+    compressed_peak: u64,
+    compressed_lifetime: u64,
+    phys_footprint: u64,
+    min_address: u64,
+    max_address: u64,
+    ledger_phys_footprint_peak: i64,
+    rest: [u32; TASK_VM_INFO_COUNT - 44],
+}
+
+/// `TASK_VM_INFO_COUNT` in `natural_t` units, as of the iOS 27 SDK. Older kernels fill less.
+#[cfg(all(target_vendor = "apple", not(target_os = "macos")))]
+const TASK_VM_INFO_COUNT: usize = 93;
+/// The counts that include `phys_footprint` (revision 1) and `ledger_phys_footprint_peak`
+/// (revision 3).
+#[cfg(all(target_vendor = "apple", not(target_os = "macos")))]
+const TASK_VM_INFO_REV1_COUNT: usize = 38;
+#[cfg(all(target_vendor = "apple", not(target_os = "macos")))]
+const TASK_VM_INFO_REV3_COUNT: usize = 84;
+
+#[cfg(all(target_vendor = "apple", not(target_os = "macos")))]
+impl Default for TaskVmInfo {
+    fn default() -> Self {
+        // SAFETY: every field is an integer, for which all zeros is valid.
+        unsafe { std::mem::zeroed() }
+    }
+}
+
+/// `task_info(TASK_VM_INFO)`, the public footprint query on iOS; `None` if the kernel refuses.
+#[cfg(all(target_vendor = "apple", not(target_os = "macos")))]
+fn task_vm_info() -> Option<(TaskVmInfo, usize)> {
+    const _: () = assert!(std::mem::size_of::<TaskVmInfo>() == TASK_VM_INFO_COUNT * 4);
+    const TASK_VM_INFO: libc::task_flavor_t = 22;
+    unsafe extern "C" {
+        // What the `mach_task_self()` macro reads; the `libc` binding is deprecated.
+        static mach_task_self_: libc::mach_port_t;
+    }
+    let mut info = TaskVmInfo::default();
+    let size = std::mem::size_of::<TaskVmInfo>() / std::mem::size_of::<libc::natural_t>();
+    let mut count = libc::mach_msg_type_number_t::try_from(size).ok()?;
+    // SAFETY: `mach_task_self_` is set before `main`; `info` holds `count` naturals and outlives
+    // the call, and the kernel writes at most that many.
+    let status = unsafe {
+        libc::task_info(
+            mach_task_self_,
+            TASK_VM_INFO,
+            std::ptr::addr_of_mut!(info).cast(),
+            &raw mut count,
+        )
+    };
+    (status == libc::KERN_SUCCESS).then_some((info, usize::try_from(count).ok()?))
+}
+
+/// The footprint the system's memory limit counts, with its lifetime peak where the kernel
+/// reports one.
+#[cfg(all(target_vendor = "apple", not(target_os = "macos")))]
+pub(crate) fn process_memory() -> ProcessMemory {
+    let Some((info, filled)) = task_vm_info() else {
+        return ProcessMemory::default();
+    };
+    let footprint = (filled >= TASK_VM_INFO_REV1_COUNT).then_some(info.phys_footprint);
+    let peak_footprint = (filled >= TASK_VM_INFO_REV3_COUNT)
+        .then(|| u64::try_from(info.ledger_phys_footprint_peak).ok())
+        .flatten();
+    ProcessMemory {
+        resident_bytes: Some(info.resident_size),
+        peak_resident_bytes: Some(info.resident_size_peak.max(info.resident_size)),
+        footprint_bytes: footprint,
+        peak_footprint_bytes: peak_footprint
+            .zip(footprint)
+            .map(|(peak, now)| peak.max(now)),
+    }
+}
+
+/// The app's memory limit is its footprint plus `os_proc_available_memory`. That call reports 0
+/// outside an app process and in the simulator, which have no such limit; the machine's figures
+/// apply there.
+#[cfg(all(target_vendor = "apple", not(target_os = "macos")))]
+pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
+    unsafe extern "C" {
+        /// From `<os/proc.h>`.
+        fn os_proc_available_memory() -> libc::size_t;
+    }
+    let machine = machine_capacity();
+    // SAFETY: no arguments; the call reads the calling process's ledger.
+    let available = u64::try_from(unsafe { os_proc_available_memory() })
+        .ok()
+        .filter(|available| *available > 0);
+    match available.zip(process_memory().footprint_bytes) {
+        Some((available, footprint)) => crate::MemoryCapacity {
+            available_bytes: Some(available),
+            limit_bytes: Some(footprint.saturating_add(available)),
+            limit_source: "app",
+            used_in_limit_bytes: Some(footprint),
+            ..machine
+        },
+        None => machine,
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android", target_vendor = "apple")))]
 pub(crate) fn process_memory() -> ProcessMemory {
     ProcessMemory::default()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(target_vendor = "apple")]
 pub(crate) fn prefer_fast_cores() {
     unsafe extern "C" {
         fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
@@ -496,4 +707,21 @@ pub(crate) fn thread_cpu_work() -> Option<u64> {
             .saturating_mul(1_000_000_000)
             .saturating_add(nanoseconds)
     })
+}
+
+/// Writes `line` to the Android system log at warning priority under the tag `alpha2`.
+#[cfg(target_os = "android")]
+pub(crate) fn android_log(line: &str) {
+    #[link(name = "log")]
+    unsafe extern "C" {
+        fn __android_log_write(
+            priority: libc::c_int,
+            tag: *const libc::c_char,
+            text: *const libc::c_char,
+        ) -> libc::c_int;
+    }
+    const ANDROID_LOG_WARN: libc::c_int = 5;
+    let text = std::ffi::CString::new(line.replace('\0', " ")).unwrap_or_default();
+    // SAFETY: both strings are NUL-terminated and outlive the call.
+    unsafe { __android_log_write(ANDROID_LOG_WARN, c"alpha2".as_ptr(), text.as_ptr()) };
 }

@@ -2,7 +2,6 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 const root = resolve(import.meta.dirname, "../packages/alpha2");
 const manifest = JSON.parse(
@@ -53,14 +52,16 @@ if (packageNotices !== workspaceNotices) {
 // Raise a budget when a feature needs it; do not contort code to fit. Keep each budget at least 5%
 // over what the pinned toolchain builds, so another compiler release does not fail here.
 const wasmBudgets = {
-  // Rust 1.99.0 builds 9,420,347 bytes.
-  "alpha2_wasm_bg.wasm": 9_891_365,
+  // Rust 1.99.0 builds 11,843,556 bytes.
+  "alpha2_wasm_bg.wasm": 12_435_734,
   // Rust 1.99.0 builds 113,964 bytes.
   "alpha2_audio_worklet.wasm": 119_662,
-  // Rust 1.99.0 builds 5,626,026 bytes.
-  "alpha2_extensions_bg.wasm": 5_907_328,
-  // Rust 1.99.0 builds 6,593,724 bytes.
-  "alpha2_extensions_pdf_bg.wasm": 6_923_411,
+  // Rust 1.99.0 builds 5,141,588 bytes.
+  "alpha2_compose_bg.wasm": 5_398_668,
+  // Rust 1.99.0 builds 5,669,071 bytes.
+  "alpha2_extensions_bg.wasm": 5_952_525,
+  // Rust 1.99.0 builds 6,699,540 bytes.
+  "alpha2_extensions_pdf_bg.wasm": 7_034_517,
 };
 // First Chrome, Firefox and Safari per feature (webassembly.org/features.json), so a new toolchain
 // default cannot raise the browser floor unseen. A feature that raises the floor also needs a
@@ -147,9 +148,7 @@ function targetFeatures(module) {
   return features;
 }
 
-const wasm = await import(
-  pathToFileURL(resolve(root, "wasm", "alpha2_wasm.js")).href
-);
+const wasm = await import("../packages/alpha2/wasm/alpha2_wasm.js");
 wasm.initSync({
   module: readFileSync(resolve(root, "wasm", "alpha2_wasm_bg.wasm")),
 });

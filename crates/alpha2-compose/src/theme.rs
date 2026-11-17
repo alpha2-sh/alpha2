@@ -96,6 +96,14 @@ pub(crate) fn resolve(choice: &ThemeChoice) -> Result<Resolved, String> {
         Some(value) if !(value.is_finite() && value >= 0.0) => {
             Err(format!("{field} is {value}; it is non-negative seconds"))
         }
+        Some(value)
+            if crate::lower::seconds_to_ticks(value) > alpha2_time::MAX_SERIALIZED_TICKS =>
+        {
+            Err(format!(
+                "{field} is {value} s, past {}",
+                crate::lower::latest_time()
+            ))
+        }
         value => Ok(value.unwrap_or(fallback)),
     };
     Ok(Resolved {

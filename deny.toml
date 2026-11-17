@@ -1,11 +1,11 @@
 [advisories]
 version = 2
 yanked = "deny"
-# Unmaintained, not vulnerable, and with no drop-in maintained replacement.
 ignore = [
   { id = "RUSTSEC-2024-0436", reason = "paste, a proc-macro dependency of rsmpeg; goes when rsmpeg drops it" },
   { id = "RUSTSEC-2026-0206", reason = "rustybuzz, native text shaping; goes with a move to harfrust" },
   { id = "RUSTSEC-2026-0192", reason = "ttf-parser, native font parsing; goes with the same move" },
+  { id = "RUSTSEC-2026-0374", reason = "basic-toml, read by askama in uniffi's binding generator at build time; goes when uniffi drops it" },
 ]
 
 [licenses]
@@ -14,6 +14,7 @@ confidence-threshold = 0.8
 allow = [
   "0BSD",
   "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
   "BSD-2-Clause",
   "BSD-3-Clause",
   "ISC",
@@ -23,14 +24,23 @@ allow = [
   "Zlib",
 ]
 exceptions = [
-  # Build-script dependency of pyo3-build-config; linked into nothing.
-  { allow = ["Apache-2.0 WITH LLVM-exception"], crate = "target-lexicon" },
+  # Mozilla's CA certificates as data, through ureq and its platform verifier.
+  { allow = ["CDLA-Permissive-2.0"], crate = "webpki-roots" },
+  { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
+  # Only uniffi may bring MPL-2.0; its notice ships with the mobile packages.
+  { allow = ["MPL-2.0"], crate = "uniffi" },
+  { allow = ["MPL-2.0"], crate = "uniffi_bindgen" },
+  { allow = ["MPL-2.0"], crate = "uniffi_core" },
+  { allow = ["MPL-2.0"], crate = "uniffi_internal_macros" },
+  { allow = ["MPL-2.0"], crate = "uniffi_macros" },
+  { allow = ["MPL-2.0"], crate = "uniffi_meta" },
+  { allow = ["MPL-2.0"], crate = "uniffi_pipeline" },
+  { allow = ["MPL-2.0"], crate = "uniffi_udl" },
 ]
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# For the versionless path dev-dependencies on unpublished test crates.
 allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"

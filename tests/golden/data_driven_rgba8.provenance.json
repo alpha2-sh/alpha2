@@ -1,0 +1,14 @@
+{
+  "tiles": {
+    "whole": {
+      "adapter": "NVIDIA GeForce RTX 4090",
+      "backend": "Vulkan",
+      "driver": "NVIDIA 580.105.08",
+      "intermediate": "Rgba8Unorm",
+      "profile": "debug",
+      "renderer": "gpu",
+      "shaderCompiler": "",
+      "stale": false
+    }
+  }
+}

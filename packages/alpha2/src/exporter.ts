@@ -119,7 +119,10 @@ export interface BrowserEncodeSink {
   writeVideo(frame: ExportedFrame): Promise<void>;
   /** Flushes the encoder and finalizes the container after the last frame. */
   finish(): Promise<void>;
-  /** Discards partial output; called once when the export fails. */
+  /**
+   * Discards partial output; called once when the export fails, also while `finish` is pending. A
+   * `finish` that settles after `abort` must not commit the output.
+   */
   abort(reason: Error): Promise<void> | void;
   /** Copied into the result when present. */
   readonly videoLatencyProbe?: VideoLatencyProbe;
@@ -310,12 +313,13 @@ export class Alpha2Exporter {
  * 0), not the preview's. The preview's coordinator moves past generation 0 after its first seek
  * and would silently drop the export's requests.
  *
- * Resolves after `sink.finish()` with timing and memory metrics. Aborting `signal`, even during
- * `finish()`, rejects immediately; late results are closed. On other failures, held frames are
- * closed and pending writes awaited. In both cases `sink.abort` is called once and the promise
- * rejects with an {@link ExportAbortedError}, a `RESOURCE_LIMIT` `ExportFailureError`, a
- * `RangeError` for an invalid option, or the error from the backend, `refill` or sink. An error
- * thrown by `sink.abort` does not replace it.
+ * Resolves after `sink.finish()` with timing and memory metrics. Aborting `signal` before
+ * `finish()` resolves, even while it is pending, rejects immediately; late results are closed. An
+ * abort after `finish()` resolved is ignored. On other failures, held frames are closed and pending
+ * writes awaited. In both cases `sink.abort` is called once and the promise rejects with an
+ * {@link ExportAbortedError}, a `RESOURCE_LIMIT` `ExportFailureError`, a `RangeError` for an
+ * invalid option, or the error from the backend, `refill` or sink. An error thrown by
+ * `sink.abort` does not replace it.
  */
 export async function exportToSink(
   exporter: Alpha2Exporter,
@@ -374,7 +378,7 @@ export async function exportToSink(
       encodeQueueBytes -= write.retainedBytes;
     }
   };
-  // Also checked around finish(), so a cancel after the last submission still wins.
+  // Also checked before finish(), so a cancel after the last submission still wins.
   const cancelledError = (signal: AbortSignal): ExportAbortedError =>
     new ExportAbortedError("cancelled", "browser export cancelled", {
       cause: signal.reason,
@@ -569,9 +573,9 @@ export async function exportToSink(
     pendingWrites.length = 0;
     throwIfCancelled();
     const finishStarted = performance.now();
-    await sink.finish();
+    // Once `finish` has resolved the output is committed, so the signal is not read again.
+    await cancellable(sink.finish());
     metrics.finishMs = performance.now() - finishStarted;
-    throwIfCancelled();
     const renderMs = performance.now() - started;
     const completed = exporter.progress.completed;
     const frames = Number(completed);

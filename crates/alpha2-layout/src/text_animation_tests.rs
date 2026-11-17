@@ -15,6 +15,7 @@ fn row(count: usize) -> TextLayout {
             x: index as f32 * 10.0,
             advance: 10.0,
             baseline: 16.0,
+            ellipsis: false,
         })
         .collect();
     TextLayout {
@@ -317,4 +318,92 @@ fn animators_apply_in_order() {
     let (identity, hash) = cluster_states(&layout, &[], &none, MediaTime::ZERO, 20.0);
     assert_eq!(hash, 0);
     assert!(identity.iter().all(ClusterState::is_identity));
+}
+
+#[test]
+fn compounded_scales_keep_one_animators_limit() {
+    assert_eq!(
+        MAX_CLUSTER_SCALE,
+        *alpha2_model::ANIMATOR_SCALE_RANGE.end(),
+        "a state takes the limit of one animator"
+    );
+    let layout = row(4);
+    let scaled = |scale: [f32; 2]| SampledAnimator {
+        scale: Some(scale),
+        ..animator(range(RangeShape::Square, RangeUnits::Percent, 0.0, 100.0))
+    };
+    let (states, _) = cluster_states(
+        &layout,
+        &[],
+        &[scaled([10.0, 10.0]), scaled([10.0, 0.5])],
+        MediaTime::ZERO,
+        20.0,
+    );
+    for state in &states {
+        assert_eq!(state.scale, [10.0, 5.0]);
+    }
+    let (states, _) = cluster_states(
+        &layout,
+        &[],
+        &[scaled([2.5, 0.5]), scaled([4.0, 3.0])],
+        MediaTime::ZERO,
+        20.0,
+    );
+    for state in &states {
+        assert_eq!(state.scale, [10.0, 1.5]);
+    }
+}
+
+/// [`row`] cut after `count` clusters by a clamp: an ellipsis cluster ends the line.
+fn cut_row(count: usize) -> TextLayout {
+    let mut layout = row(count);
+    let at = layout.clusters.len();
+    layout.clusters.push(ClusterInfo {
+        bytes: at..at,
+        line: 0,
+        word: None,
+        is_space: false,
+        #[allow(clippy::cast_precision_loss)]
+        x: at as f32 * 10.0,
+        advance: 10.0,
+        baseline: 16.0,
+        ellipsis: true,
+    });
+    layout.lines[0].clusters.end += 1;
+    layout
+}
+
+#[test]
+fn an_ellipsis_counts_as_no_unit_and_takes_the_state_before_it() {
+    let fade = SampledAnimator {
+        opacity: Some(0.0),
+        ..animator(range(RangeShape::RampUp, RangeUnits::Percent, 0.0, 100.0))
+    };
+    let (plain, plain_hash) = cluster_states(
+        &row(4),
+        &[],
+        std::slice::from_ref(&fade),
+        MediaTime::ZERO,
+        20.0,
+    );
+    let (cut, cut_hash) = cluster_states(&cut_row(4), &[], &[fade], MediaTime::ZERO, 20.0);
+    assert_eq!(cut.len(), 5);
+    assert_eq!(cut[..4], plain[..]);
+    assert_eq!(cut[4], cut[3]);
+    assert_eq!(cut_hash, plain_hash);
+    let mut alone = cut_row(0);
+    alone.lines[0].clusters = 0..1;
+    let (states, _) = cluster_states(
+        &alone,
+        &[],
+        &[animator(range(
+            RangeShape::Square,
+            RangeUnits::Index,
+            0.0,
+            1.0,
+        ))],
+        MediaTime::ZERO,
+        20.0,
+    );
+    assert_eq!(states, [ClusterState::IDENTITY]);
 }

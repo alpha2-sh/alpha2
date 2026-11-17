@@ -64,9 +64,11 @@ const rate = { num: BigInt(project.settings.frame_rate.num), den: BigInt(project
 const exporter = new Alpha2Exporter(new WorkerExportBackend(backend, "h264"), rate, 0n, BigInt(seconds * 120000));
 const expected = Number(exporter.progress.total);
 // Matches the native side.
+/** @type {import("/packages/alpha2/dist/rate-control.js").VideoRateControl} */
 const videoRateControl = { bitrate: 8_000_000, bitrateMode: "variable" };
 const encoding = await canEncodeVideoTrack("avc", {
-  width: project.settings.width, height: project.settings.height, rate: videoRateControl,
+  width: project.settings.width, height: project.settings.height,
+  frameRate: project.settings.frame_rate, rate: videoRateControl,
 });
 if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder at the project's size");
 const sink = new MediabunnySink({
@@ -95,8 +97,8 @@ report({
   fps: +result.fps.toFixed(2),
   performance: result.performance,
   adapter: info && { vendor: info.vendor, architecture: info.architecture, device: info.device, description: info.description },
-  isFallbackAdapter: info === null ? null : Boolean(info.isFallbackAdapter ?? adapter.isFallbackAdapter),
-  bytes: sink.output?.buffer?.byteLength ?? null,
+  isFallbackAdapter: info === null ? null : Boolean(info.isFallbackAdapter ?? /** @type {GPUAdapter & { isFallbackAdapter?: boolean }} */ (adapter).isFallbackAdapter),
+  bytes: /** @type {{ readonly buffer?: ArrayBuffer }} */ (sink.output)?.buffer?.byteLength ?? null,
 });
 `;
 }

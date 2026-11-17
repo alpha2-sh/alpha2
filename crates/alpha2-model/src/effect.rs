@@ -104,7 +104,9 @@ impl EffectValue {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ClipEffect {
-    /// Stable effect definition identifier.
+    /// Stable effect definition identifier. Ids under `alpha2.` name built-ins
+    /// (`schema/effects.v1.json`): validation checks such an invocation's version, kind,
+    /// parameters, inputs and resources against its definition.
     pub id: String,
     /// Exact effect definition version required by the project.
     pub version: u32,
@@ -148,6 +150,7 @@ pub(crate) fn valid_binding_name(name: &str) -> bool {
 
 pub(crate) fn valid_param(animation: &Animated<EffectValue>) -> bool {
     match animation {
+        Animated::Data(_) => true,
         Animated::Constant { value } => value.is_valid(),
         Animated::Keyframes { keyframes } => {
             let Some(first) = keyframes.first() else {

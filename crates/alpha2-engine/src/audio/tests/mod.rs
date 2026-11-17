@@ -130,6 +130,7 @@ fn audio_clip(id: &str, source: &str, start: i64, end: i64) -> Clip {
 
 fn project(tracks: Vec<Track>, sources: Vec<&str>) -> Project {
     Project {
+        data: Vec::new(),
         schema_version: alpha2_model::CURRENT_SCHEMA_VERSION,
         id: ProjectId::new("audio-test".to_owned()).expect("id"),
         name: "audio".into(),

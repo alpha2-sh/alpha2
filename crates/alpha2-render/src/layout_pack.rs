@@ -145,17 +145,65 @@ struct Band<'a> {
     planes: Vec<Vec<&'a mut [u8]>>,
 }
 
+/// How a pack splits its chroma rows into bands and runs them.
+pub(crate) trait Bands: Sync {
+    /// Chroma rows per band, of `chroma_rows`, each covering `row_pixels` picture pixels.
+    fn rows_per_band(&self, chroma_rows: usize, row_pixels: usize) -> usize;
+
+    /// Calls `job(index)` once for every index below `count`, in any order, possibly in parallel.
+    fn run(&self, count: usize, job: &(dyn Fn(usize) + Sync));
+}
+
+/// One band per core, up to 8, at least 16 rows each, each on a thread of its own.
+pub(crate) struct ScopedThreads;
+
+impl Bands for ScopedThreads {
+    fn rows_per_band(&self, chroma_rows: usize, _row_pixels: usize) -> usize {
+        chroma_rows.div_ceil(available_bands(chroma_rows))
+    }
+
+    fn run(&self, count: usize, job: &(dyn Fn(usize) + Sync)) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if count > 1 {
+            std::thread::scope(|scope| {
+                for index in 0..count {
+                    scope.spawn(move || job(index));
+                }
+            });
+            return;
+        }
+        for index in 0..count {
+            job(index);
+        }
+    }
+}
+
 /// Packs `picture` into one target per plane of `layout`, in storage order
-/// ([`PixelLayout::planes`]).
+/// ([`PixelLayout::planes`]), with bands on their own threads ([`ScopedThreads`]).
 ///
 /// # Errors
-/// [`RenderError::TextureReadback`] for a size the chroma cannot subsample (odd for 4:2:0, odd
-/// width for 4:2:2), a wrong target count, or a target too small.
+/// As [`pack_with`].
 pub(crate) fn pack(
     picture: &Picture<'_>,
     encoding: YuvEncoding,
     layout: PixelLayout,
     targets: &mut [PlaneTarget<'_>],
+) -> Result<(), RenderError> {
+    pack_with(picture, encoding, layout, targets, &ScopedThreads)
+}
+
+/// Packs `picture` into one target per plane of `layout`, in storage order
+/// ([`PixelLayout::planes`]), splitting and running bands as `bands` says.
+///
+/// # Errors
+/// [`RenderError::TextureReadback`] for a size the chroma cannot subsample (odd for 4:2:0, odd
+/// width for 4:2:2), a wrong target count, or a target too small.
+pub(crate) fn pack_with(
+    picture: &Picture<'_>,
+    encoding: YuvEncoding,
+    layout: PixelLayout,
+    targets: &mut [PlaneTarget<'_>],
+    bands: &dyn Bands,
 ) -> Result<(), RenderError> {
     let refuse = |failure| Err(RenderError::TextureReadback(failure));
     let (width, height) = (picture.width, picture.height);
@@ -176,9 +224,11 @@ pub(crate) fn pack(
         target.fits((plane_width * bytes) as usize, rows as usize)?;
     }
     let chroma_rows = height / step_y;
-    let bands = available_bands(chroma_rows);
-    let per_band = chroma_rows.div_ceil(bands);
-    let mut split: Vec<Band<'_>> = (0..bands)
+    let per_band = bands
+        .rows_per_band(chroma_rows, width * step_y)
+        .clamp(1, chroma_rows);
+    let count = chroma_rows.div_ceil(per_band);
+    let mut split: Vec<Band<'_>> = (0..count)
         .map(|band| Band {
             first: band * per_band,
             planes: Vec::new(),
@@ -194,19 +244,23 @@ pub(crate) fn pack(
         }
     }
     let coding = Coding::new(encoding, layout.bit_depth);
-    let run = |band: Band<'_>| pack_band(picture, coding, encoding.chroma, layout, band);
-    #[cfg(not(target_arch = "wasm32"))]
-    if split.len() > 1 {
-        std::thread::scope(|scope| {
-            for band in split {
-                scope.spawn(move || run(band));
-            }
-        });
-        return Ok(());
-    }
-    for band in split {
-        run(band);
-    }
+    let taps = [
+        Taps::new(step_x, siting(encoding.chroma).0),
+        Taps::new(step_y, siting(encoding.chroma).1),
+    ];
+    let split = split
+        .into_iter()
+        .map(|band| std::sync::Mutex::new(Some(band)))
+        .collect::<Vec<_>>();
+    bands.run(count, &|index| {
+        let band = split[index]
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(band) = band {
+            pack_band(picture, coding, taps, layout, band);
+        }
+    });
     Ok(())
 }
 
@@ -219,11 +273,98 @@ fn available_bands(rows: usize) -> usize {
     cores.min(8).min(rows / 16).max(1)
 }
 
-#[allow(clippy::too_many_lines)]
+/// Whether chroma is co-sited with the even luma column and row.
+const fn siting(location: ChromaLocation) -> (bool, bool) {
+    match location {
+        ChromaLocation::Left => (true, false),
+        ChromaLocation::TopLeft => (true, true),
+        ChromaLocation::Unspecified | ChromaLocation::Center => (false, false),
+    }
+}
+
+/// The luma taps one chroma sample sums along an axis, in summation order: offset from the
+/// sample's even column or row, and weight.
+#[derive(Clone, Copy)]
+struct Taps {
+    taps: [(i64, f32); 3],
+    len: usize,
+}
+
+impl Taps {
+    fn new(step: usize, cosited: bool) -> Self {
+        let mut taps = [(0, 0.0); 3];
+        if step == 1 {
+            taps[0] = (0, 1.0);
+            return Self { taps, len: 1 };
+        }
+        let mut len = 0;
+        for offset in -1..=1_i64 {
+            let weight = tap_weight(offset, cosited);
+            if weight != 0.0 {
+                taps[len] = (offset, weight);
+                len += 1;
+            }
+        }
+        Self { taps, len }
+    }
+
+    fn all(&self) -> &[(i64, f32)] {
+        &self.taps[..self.len]
+    }
+}
+
+/// Decoded picture rows kept across chroma rows, each tagged with its row.
+struct Lines {
+    held: Vec<Option<usize>>,
+    lines: Vec<Vec<[f32; 4]>>,
+}
+
+impl Lines {
+    fn new(count: usize, width: usize) -> Self {
+        Self {
+            held: vec![None; count],
+            lines: vec![vec![[0.0; 4]; width]; count],
+        }
+    }
+
+    /// Slots holding picture rows `rows` (`None` where a row is not needed), decoding only the
+    /// rows no slot holds yet.
+    fn fetch(&mut self, picture: &Picture<'_>, rows: &[Option<usize>]) -> [usize; 3] {
+        let mut slots = [usize::MAX; 3];
+        let mut used = [false; 3];
+        for (slot, row) in slots.iter_mut().zip(rows) {
+            let Some(row) = row else { continue };
+            if let Some(held) = self.held.iter().position(|held| *held == Some(*row)) {
+                *slot = held;
+                used[held] = true;
+            }
+        }
+        for index in 0..rows.len().min(3) {
+            let Some(row) = rows[index] else { continue };
+            if slots[index] != usize::MAX {
+                continue;
+            }
+            // An edge row repeated within this chroma row shares one line.
+            if let Some(earlier) = (0..index).find(|&earlier| rows[earlier] == Some(row)) {
+                slots[index] = slots[earlier];
+                continue;
+            }
+            let free = (0..self.lines.len())
+                .find(|slot| !used[*slot])
+                .expect("a free line for every needed row");
+            (picture.row)(row, &mut self.lines[free]);
+            self.held[free] = Some(row);
+            used[free] = true;
+            slots[index] = free;
+        }
+        slots
+    }
+}
+
 fn pack_band(
     picture: &Picture<'_>,
     coding: Coding,
-    siting: ChromaLocation,
+    [columns, rows]: [Taps; 2],
     layout: PixelLayout,
     band: Band<'_>,
 ) {
@@ -231,11 +372,6 @@ fn pack_band(
     let height = picture.height;
     let (step_x, step_y) = layout.chroma.subsampling();
     let (step_x, step_y) = (step_x as usize, step_y as usize);
-    let (cosited_x, cosited_y) = match siting {
-        ChromaLocation::Left => (true, false),
-        ChromaLocation::TopLeft => (true, true),
-        ChromaLocation::Unspecified | ChromaLocation::Center => (false, false),
-    };
     let chroma_width = width / step_x;
     let Band { first, planes } = band;
     let mut planes = planes.into_iter();
@@ -253,17 +389,22 @@ fn pack_band(
         Vec::new()
     };
     let chroma_rows = chroma_planes[0].len();
-    // One row above, the `step_y` rows covered, and one below.
-    let mut lines = vec![vec![[0.0_f32; 4]; width]; step_y + 2];
+    // Line `o` is picture row `top + o - 1`, edge-clamped: the row above (read only by co-sited
+    // 4:2:0 chroma) and the `step_y` rows covered. The row below is never read.
+    let above = rows.all().iter().any(|&(offset, _)| offset < 0);
+    let mut window = Lines::new(step_y + 1, width);
     for local in 0..chroma_rows {
-        let row = first + local;
-        let top = row * step_y;
-        for (offset, line) in lines.iter_mut().enumerate() {
-            let y = (top + offset).saturating_sub(1).min(height - 1);
-            (picture.row)(y, line);
+        let top = (first + local) * step_y;
+        let mut needed = [None; 3];
+        for (offset, row) in needed.iter_mut().enumerate().take(step_y + 1) {
+            if offset > 0 || above {
+                *row = Some((top + offset).saturating_sub(1).min(height - 1));
+            }
         }
+        let slots = window.fetch(picture, &needed);
+        let line = |offset: usize| window.lines[slots[offset]].as_slice();
         for inner in 0..step_y {
-            let line = &lines[inner + 1];
+            let line = line(inner + 1);
             let out = &mut luma[local * step_y + inner];
             for (x, texel) in line.iter().enumerate() {
                 put(out, x, coding.y(color(*texel, layout.alpha)), layout);
@@ -275,16 +416,22 @@ fn pack_band(
                 }
             }
         }
+        let lines = [0, 1, 2].map(|offset| {
+            if slots[offset] == usize::MAX {
+                &[][..]
+            } else {
+                line(offset)
+            }
+        });
         for column in 0..chroma_width {
             let uv = chroma_sample(
                 &lines,
                 column,
-                step_x,
-                step_y,
-                cosited_x,
-                cosited_y,
+                (step_x, step_y),
+                (&columns, &rows),
                 coding,
                 layout.alpha,
+                width,
             );
             match layout.planes {
                 PlaneLayout::Planar => {
@@ -302,38 +449,26 @@ fn pack_band(
 }
 
 /// One chroma sample's Cb and Cr: the pixel itself at 4:4:4, otherwise its taps sited as the
-/// 8-bit pack sites them, alpha-weighted when the layout keeps alpha.
-#[allow(clippy::too_many_arguments)]
+/// 8-bit pack sites them, alpha-weighted when the layout keeps alpha. `lines[o]` is the row
+/// `o - 1` from the sample's first row.
 fn chroma_sample(
-    lines: &[Vec<[f32; 4]>],
+    lines: &[&[[f32; 4]]; 3],
     column: usize,
-    step_x: usize,
-    step_y: usize,
-    cosited_x: bool,
-    cosited_y: bool,
+    (step_x, step_y): (usize, usize),
+    (columns, rows): (&Taps, &Taps),
     coding: Coding,
     alpha: bool,
+    width: usize,
 ) -> [u16; 2] {
-    let width = lines[0].len();
     let x = column * step_x;
     if step_x == 1 && step_y == 1 {
         return coding.uv(color(lines[1][x], alpha));
     }
-    let taps = |step: usize, cosited: bool| -> Vec<(i64, f32)> {
-        if step == 1 {
-            return vec![(0, 1.0)];
-        }
-        (-1..=1_i64)
-            .map(|offset| (offset, tap_weight(offset, cosited)))
-            .filter(|&(_, weight)| weight != 0.0)
-            .collect()
-    };
     let mut sum = [0.0_f32; 3];
     let mut weight_sum = 0.0_f32;
-    for (dy, row_weight) in taps(step_y, cosited_y) {
-        // Line 1 is the first row the chroma row covers.
-        let line = &lines[usize::try_from(1 + dy).unwrap_or(0)];
-        for (dx, column_weight) in taps(step_x, cosited_x) {
+    for &(dy, row_weight) in rows.all() {
+        let line = lines[usize::try_from(1 + dy).unwrap_or(0)];
+        for &(dx, column_weight) in columns.all() {
             let at = usize::try_from(i64::try_from(x).unwrap_or(0) + dx)
                 .unwrap_or(0)
                 .min(width - 1);

@@ -1,31 +1,17 @@
 import { FakeCanvas } from "./support/preview-stubs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createEditor, createEmptyDocument } from "../dist/index.js";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
+const skip = wasmSkip(import.meta.url);
 // Loaded after the stubs' module hook is registered, which a static import would precede.
-const { createBrowserBridge } = await import("../dist/browser/index.js");
-
-const wasmDirectory = join(
-  resolve(import.meta.dirname, "..", ".."),
-  "alpha2",
-  "wasm",
-);
-const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-const skip =
-  !packaged &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const { createBrowserBridge } = skip
+  ? {}
+  : await import("../dist/browser/index.js");
 
 let wasm = null;
 async function engineWasm() {
@@ -87,14 +73,20 @@ function addColor(editor) {
 }
 
 /**
- * A bridge on the recording renderer. Its adapter stages any object with a fingerprint as video,
- * its proxy store counts lookups, finds `kept` proxies by original hash and holds each conversion
- * until the test finishes it, and each engine conform is counted.
+ * A bridge on the recording renderer. Its adapter stages any object with a fingerprint as video
+ * (a kept proxy through `stageProxy` when given), its proxy store counts lookups and holds, finds
+ * `kept` proxies by original hash and holds each conversion until the test finishes it, and each
+ * engine conform is counted.
  */
-async function session({ document, kept = {} } = {}) {
+async function session({
+  document,
+  kept = {},
+  stageProxy,
+  resourceLimit,
+} = {}) {
   const reported = [];
   const engine = await engineWasm();
-  const counts = { conform: 0, find: 0 };
+  const counts = { conform: 0, find: 0, proxyStages: 0, holds: 0, released: 0 };
   const assetDecisions = {
     ...engine,
     conformProject: (...args) => {
@@ -110,9 +102,14 @@ async function session({ document, kept = {} } = {}) {
     editor,
     audio: false,
     assetDecisions,
+    resourceLimit,
     onError: (error) => reported.push(error),
     mediaAdapter: {
-      async stage(file) {
+      async stage(file, signal, options) {
+        if (options?.fingerprint === false) {
+          counts.proxyStages += 1;
+          if (stageProxy) return stageProxy(file, signal);
+        }
         return {
           runtime: {
             id: file.name,
@@ -129,7 +126,12 @@ async function session({ document, kept = {} } = {}) {
     },
     proxyStore: {
       async hold() {
-        return { release: async () => {} };
+        counts.holds += 1;
+        return {
+          release: async () => {
+            counts.released += 1;
+          },
+        };
       },
       async find(hash) {
         counts.find += 1;
@@ -188,6 +190,15 @@ async function importClip(bridge, name, digit) {
     { name, fingerprint: { content_sha256: hash(digit), byte_length: 10 } },
   ]);
 }
+
+const keptProxy = (sha) => ({
+  record: {
+    made_from: { content_sha256: sha, byte_length: 10 },
+    width: 32,
+    height: 18,
+  },
+  file: { name: `${sha.slice(-4)}.proxy`, fingerprint: {} },
+});
 
 const until = async (condition, what) => {
   for (let i = 0; i < 200 && !condition(); i += 1) await settle(2);
@@ -354,6 +365,187 @@ test(
     assert.equal(bridge.proxyStatus("clip").reading, "original");
     assert.throws(() => bridge.setPreviewMedia("half"));
     assert.deepEqual(reported, []);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "a kept proxy that cannot be staged is reported once, and preview, conform and native assets go on",
+  { skip },
+  async () => {
+    const { editor, bridge, reported, counts } = await session({
+      kept: { [hash("e")]: keptProxy(hash("e")) },
+      stageProxy: async () => {
+        throw new Error("this session cannot read the proxy file");
+      },
+    });
+    addColor(editor);
+    await importClip(bridge, "clip", "e");
+    ok(
+      editor.dispatch({
+        type: "asset.put",
+        asset: { ...editor.document.assets.clip, missing: true },
+      }),
+    );
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(await bridge.seek(0), true);
+    assert.equal(await bridge.seek(4000), true);
+    assert.ok(await bridge.conform("preview"));
+    await bridge.nativeAssets();
+    ok(editor.dispatch({ type: "project.update", patch: { name: "edited" } }));
+    assert.equal(await bridge.seek(0), true);
+    assert.deepEqual(
+      reported.map((e) => [e.code, e.entityId, e.recoverable]),
+      [["proxy_unavailable", "clip", true]],
+    );
+    assert.match(reported[0].cause.message, /cannot read the proxy file/);
+    assert.equal(counts.proxyStages, 1, "not staged again on later loads");
+    assert.equal(counts.released, counts.holds);
+    assert.equal(bridge.proxyStatus("clip").available, false);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "Play whose audio start fails plays the picture silent and reports it once",
+  { skip },
+  async (t) => {
+    const { editor, bridge, reported } = await session();
+    addColor(editor);
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(await bridge.seek(0), true);
+    globalThis.stubEngine.audible = () => true;
+    t.after(() => delete globalThis.stubEngine.audible);
+    const mixer = globalThis.stubEngine.mixers.at(-1);
+    let stopped = 0;
+    const stop = mixer.stop.bind(mixer);
+    mixer.stop = () => {
+      stopped += 1;
+      stop();
+    };
+    mixer.resume = async () => {};
+    mixer.start = async () => {
+      throw new Error("the worklet could not start");
+    };
+    const before = stopped;
+    await bridge.play();
+    assert.equal(bridge.playing, true);
+    assert.ok(stopped > before, "the failed start is stopped");
+    assert.deepEqual(
+      reported.map((e) => [e.code, e.cause?.message]),
+      [["audio_unavailable", "the worklet could not start"]],
+    );
+    const at = bridge.tick;
+    await settle(60);
+    assert.ok(bridge.tick > at, "the picture plays on the wall clock");
+    bridge.pause();
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "a kept proxy whose staging never settles does not hold up disposal",
+  { skip },
+  async () => {
+    const { editor, bridge } = await session({
+      kept: { [hash("e")]: keptProxy(hash("e")) },
+      stageProxy: (file, signal) =>
+        new Promise((resolve, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason), {
+            once: true,
+          }),
+        ),
+    });
+    addColor(editor);
+    await importClip(bridge, "clip", "e");
+    ok(
+      editor.dispatch({
+        type: "asset.put",
+        asset: { ...editor.document.assets.clip, missing: true },
+      }),
+    );
+    const binding = bridge.bindPreview(new FakeCanvas(64, 36));
+    binding.catch(() => {});
+    await settle(20);
+    const disposed = await Promise.race([
+      bridge.dispose().then(() => "disposed"),
+      settle(2000).then(() => "pending"),
+    ]);
+    assert.equal(disposed, "disposed");
+    editor.dispose();
+  },
+);
+
+test(
+  "a kept proxy adopts when imported media fill the runtime limit",
+  { skip },
+  async () => {
+    const { editor, bridge, reported } = await session({
+      kept: { [hash("e")]: keptProxy(hash("e")) },
+      resourceLimit: 1,
+    });
+    await importClip(bridge, "shown", "a");
+    place(editor, "shown");
+    ok(
+      editor.dispatch({
+        type: "asset.put",
+        asset: {
+          id: "clip",
+          kind: "video",
+          name: "clip.mp4",
+          contentRevision: 0,
+          missing: true,
+          fingerprint: { content_sha256: hash("e"), byte_length: 10 },
+        },
+        source: {
+          id: "clip",
+          kind: "video",
+          locator: "browser://clip",
+          fingerprint: { content_sha256: hash("e"), byte_length: 10 },
+        },
+      }),
+    );
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(await bridge.seek(0), true);
+    assert.ok(await bridge.conform("preview"));
+    assert.deepEqual(reported, []);
+    assert.equal(bridge.proxyStatus("clip").available, true);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "proxy preview of more sources than the runtime limit reads every proxy",
+  { skip },
+  async () => {
+    const sha = (n) => n.toString(16).padStart(64, "0");
+    const count = 70;
+    const kept = {};
+    for (let n = 1; n <= count; n += 1) kept[sha(n)] = keptProxy(sha(n));
+    const { editor, bridge, reported, counts } = await session({ kept });
+    await bridge.importFiles(
+      Array.from({ length: count }, (_, i) => ({
+        name: `f${i + 1}`,
+        fingerprint: { content_sha256: sha(i + 1), byte_length: 10 },
+      })),
+    );
+    place(editor, "f1");
+    place(editor, `f${count}`);
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(await bridge.seek(0), true);
+    bridge.setPreviewMedia("proxies");
+    assert.equal(await bridge.seek(0), true);
+    assert.equal(bridge.proxyStatus("f1").reading, "proxy");
+    assert.equal(bridge.proxyStatus(`f${count}`).reading, "proxy");
+    assert.equal(counts.proxyStages, count);
+    assert.deepEqual(reported, []);
+    ok(editor.dispatch({ type: "project.update", patch: { name: "edited" } }));
+    assert.equal(await bridge.seek(4000), true);
+    assert.equal(counts.proxyStages, count);
     await bridge.dispose();
     editor.dispose();
   },

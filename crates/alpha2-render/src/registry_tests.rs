@@ -103,6 +103,64 @@ fn a_call_chain_that_inlines_exponentially_is_refused_at_registration() {
     }
 }
 
+/// The doubling chain of `call_budget::call_chain`, with each function named by `name` and
+/// `gap` between a callee and its `(`.
+fn spelled_call_chain(depth: usize, name: impl Fn(usize) -> String, gap: &str) -> String {
+    let base = format!(
+        "fn {}(x: f32) -> f32 {{ return fract(x * 1.0001 + 0.37); }}\n",
+        name(0)
+    );
+    let levels = (1..=depth).map(|level| {
+        let callee = name(level - 1);
+        format!(
+            "fn {}(x: f32) -> f32 {{ return {callee}{gap}({callee}{gap}(x)); }}\n",
+            name(level)
+        )
+    });
+    let effect = format!(
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f {{ return vec4f({}{gap}(uv.x), src.g, src.b, src.a); }}",
+        name(depth)
+    );
+    std::iter::once(base)
+        .chain(levels)
+        .chain([effect])
+        .collect()
+}
+
+#[test]
+fn runtime_effect_code_outside_comments_is_ascii() {
+    let refused = |body: &str| {
+        let error = validate_wgsl_body(body).expect_err("non-ASCII code");
+        assert!(
+            error.messages[0]
+                .message
+                .contains("a runtime effect's code is ASCII"),
+            "{error:?}"
+        );
+    };
+    let ascii = |level: usize| format!("f{level}");
+    assert_eq!(
+        spelled_call_chain(13, ascii, ""),
+        crate::call_budget::call_chain(13)
+    );
+    refused(&spelled_call_chain(
+        13,
+        |level| format!("\u{e9}{level}"),
+        "",
+    ));
+    refused(&spelled_call_chain(13, ascii, "\u{200e}"));
+    refused(&spelled_call_chain(13, ascii, "\u{200f}"));
+    refused(
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f { var acc = 0.0; for (var i = 0u; i < 4u; i++) { i\u{200e}= 0u; acc += 1.0; } return vec4f(acc); }",
+    );
+    assert_eq!(
+        validate_wgsl_body(
+            "// d\u{e9}grad\u{e9} \u{2014} \u{200e}\nfn effect(uv: vec2f, src: vec4f) -> vec4f { /* \u{e9}t\u{e9} */ return src; }"
+        ),
+        Ok(())
+    );
+}
+
 #[test]
 fn a_body_cannot_name_what_the_wrapper_declares() {
     // A body that could assign the loop guard would reset it and never end.
@@ -141,6 +199,94 @@ fn a_statement_is_limited_in_operators_not_delimiters() {
         "x = x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x+x;".repeat(100)
     );
     assert_eq!(validate_wgsl_body(&split), Ok(()));
+}
+
+fn else_if_chain(arms: usize) -> String {
+    format!(
+        "if b {{ x += 1.0; }}{}",
+        "else if b { x += 1.0; }".repeat(arms - 1)
+    )
+}
+
+fn in_effect(code: &str) -> String {
+    format!(
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f {{ let b = src.a > 2.0; var x = src.r; \
+         {code} return vec4f(x); }}"
+    )
+}
+
+#[test]
+fn each_arm_of_an_else_if_chain_nests_one_level() {
+    let error = validate_wgsl_body(&in_effect(&else_if_chain(70))).expect_err("70 arms");
+    assert!(error.messages[0].message.contains("switch"), "{error:?}");
+    assert_eq!(validate_wgsl_body(&in_effect(&else_if_chain(40))), Ok(()));
+    assert_eq!(
+        validate_wgsl_body(&in_effect(&else_if_chain(20).repeat(4))),
+        Ok(())
+    );
+    assert_eq!(
+        validate_wgsl_body(&in_effect(&format!(
+            "{} else {{ x = 0.0; }}",
+            else_if_chain(62)
+        ))),
+        Ok(())
+    );
+    // The body of a deep arm starts at that arm's depth.
+    let nested = format!(
+        "{} else if b {{ {} }}",
+        else_if_chain(39),
+        else_if_chain(30)
+    );
+    assert!(validate_wgsl_body(&in_effect(&nested)).is_err());
+}
+
+#[test]
+fn array_sizes_are_literal_and_bounded() {
+    let body = |declaration: &str| {
+        format!(
+            "{declaration}\nfn effect(uv: vec2f, src: vec4f) -> vec4f {{ \
+             let i = u32(uv.x * 4.0) % 4u; return src + vec4f(f32(i)); }}"
+        )
+    };
+    for refused in [
+        "var<private> big: array<vec4f, 16777216>;",
+        "var<private> big: array<array<vec4f, 16>, 16>;",
+        "var<private> big: array<mat4x4f, 64>;",
+        "const n = 4u;\nvar<private> big: array<vec4f, n>;",
+        "var<private> big: array<vec4f, 2 * 2>;",
+        "var<private> big: array<vec4f>;",
+        "struct S { a: vec4f, }\nvar<private> big: array<S, 4>;",
+        "const big = array(1.0, 2.0, 3.0);",
+        &"var<private> a: array<f32, 2>;".repeat(33),
+    ] {
+        assert!(
+            validate_wgsl_body(&body(refused)).is_err(),
+            "accepted {refused}"
+        );
+    }
+    for accepted in [
+        "var<private> big: array<vec4f, 128>;",
+        "var<private> big: array<array<vec4f, 8>, 16u>;",
+        "var<private> big: array<mat4x4<f32>, 32>;",
+        "const taps = array<vec2f, 3>(vec2f(0.0), vec2f(1.0), vec2f(2.0));",
+    ] {
+        assert_eq!(validate_wgsl_body(&body(accepted)), Ok(()), "{accepted}");
+    }
+}
+
+#[test]
+fn an_effect_is_checked_without_a_device_as_registration_checks_it() {
+    let checked = check_effect(&definition(Vec::new(), Vec::new())).expect("a valid effect");
+    assert!(checked.module.contains("fn effect("), "{}", checked.module);
+    assert_eq!(checked.functions, 1);
+    let refused = EffectDef {
+        wgsl_body: "fn effect(uv: vec2f, src: vec4f) -> vec4f { loop { } }".into(),
+        ..definition(Vec::new(), Vec::new())
+    };
+    assert_eq!(
+        check_effect(&refused).map(drop),
+        validate_definition(&refused)
+    );
 }
 
 #[test]
@@ -585,4 +731,25 @@ fn an_effect_without_named_inputs_generates_the_same_module() {
     assert!(!plain.contains("@binding(21)"));
     assert!(declarations.contains("@binding(21) var input_glow"));
     assert!(declarations.contains("@binding(22) var input_map"));
+}
+
+#[test]
+fn the_render_scale_accessors_are_reserved() {
+    for name in ["render_scale", "render_scale_fixed"] {
+        assert!(
+            refusal(&definition(vec![float_param(name)], Vec::new())).is_some(),
+            "a parameter named {name} is accepted"
+        );
+        let body = format!(
+            "fn {name}() -> f32 {{ return 2.0; }} fn effect(uv: vec2f, src: vec4f) -> vec4f {{ return src; }}"
+        );
+        let source = build_shader(&EffectDef {
+            wgsl_body: body,
+            ..definition(Vec::new(), Vec::new())
+        });
+        assert!(
+            wgpu::naga::front::wgsl::parse_str(&source).is_err(),
+            "a body defining {name} compiles"
+        );
+    }
 }

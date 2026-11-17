@@ -13,6 +13,10 @@ mod markup;
 mod path_data;
 mod render_cost;
 
+#[cfg(test)]
+pub(crate) use document::REFERENCE_LEVELS;
+
+use std::collections::{HashMap, HashSet};
 use std::io::Read as _;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -31,7 +35,10 @@ use crate::api::{
     Diagnostic, ExtensionError, Format, FramePixels, ProbeReport, ResourceResolver, Timing,
     VisualFrame, VisualProvider, VisualSource,
 };
-use crate::budget::{check_canvas, check_document_size, check_image_pixels};
+use crate::budget::{
+    MAX_SOURCE_IMAGE_BYTES, MAX_SOURCE_IMAGE_PIXELS, check_canvas, check_document_size,
+    check_image_pixels,
+};
 
 /// Reads static SVG documents.
 pub struct SvgProvider;
@@ -47,7 +54,14 @@ impl VisualProvider for SvgProvider {
         }
         Some(
             check_document_size(&ProviderSource::Svg, bytes, bytes.len() as u64)
-                .and_then(|()| parse(bytes, &crate::api::NoResources, MAX_SVG_DOCUMENT_BYTES))
+                .and_then(|()| {
+                    parse(
+                        bytes,
+                        &crate::api::NoResources,
+                        MAX_SVG_DOCUMENT_BYTES,
+                        MAX_SOURCE_IMAGE_BYTES,
+                    )
+                })
                 .map(|(_, report)| report),
         )
     }
@@ -75,11 +89,16 @@ pub(crate) fn open_document(
     bytes: &[u8],
     resolver: &dyn ResourceResolver,
 ) -> Result<SvgSource, ExtensionError> {
-    open_document_within(bytes, resolver, MAX_SVG_DOCUMENT_BYTES)
+    open_document_within(
+        bytes,
+        resolver,
+        MAX_SVG_DOCUMENT_BYTES,
+        MAX_SOURCE_IMAGE_BYTES,
+    )
 }
 
-/// [`open_document`] reading at most `text` bytes of SVG text, for a provider that bounds the
-/// markup and the embedded image data of its documents itself.
+/// [`open_document`] reading at most `text` bytes of SVG text and holding at most `images` bytes
+/// of raster images, for a provider that bounds its documents' markup and embedded images itself.
 ///
 /// # Errors
 /// [`ExtensionError::Malformed`] or [`ExtensionError::Budget`].
@@ -87,9 +106,11 @@ pub(crate) fn open_document_within(
     bytes: &[u8],
     resolver: &dyn ResourceResolver,
     text: usize,
+    images: u64,
 ) -> Result<SvgSource, ExtensionError> {
-    let (tree, report) = parse(bytes, resolver, text)?;
+    let (tree, report) = parse(bytes, resolver, text, images)?;
     let size = tree.size();
+    let images = held_image_bytes(tree.root(), &mut HashSet::new());
     Ok(SvgSource {
         view: (0.0, 0.0, size.width(), size.height()),
         scale: 1.0,
@@ -97,6 +118,7 @@ pub(crate) fn open_document_within(
         report,
         background: None,
         opacity: u8::MAX,
+        images,
         last: None,
     })
 }
@@ -171,6 +193,11 @@ pub(crate) const MAX_NESTING: usize = 256;
 /// ancestry walks at about 18 ns each). About a second natively.
 pub(crate) const MAX_READING: u64 = 1 << 27;
 
+/// Most XML nodes one SVG parses to, entities expanded. Text runs, comments, and processing
+/// instructions are nodes too, so this is four per element of [`document::MAX_ELEMENTS`].
+#[allow(clippy::cast_possible_truncation)]
+const MAX_NODES: u32 = 4 * document::MAX_ELEMENTS as u32;
+
 /// Remaining budget for one document and its nested SVG images, shared with the image resolver.
 struct Reading {
     /// Unpacked SVG text bytes allowed in all.
@@ -180,19 +207,54 @@ struct Reading {
     steps: AtomicU64,
     /// Levels used by the enclosing documents being converted.
     nesting: AtomicUsize,
+    /// Raster image bytes allowed in all.
+    image_limit: u64,
+    /// Raster image bytes left.
+    image_bytes: AtomicU64,
+    /// Declared raster image pixels left, counted per image element.
+    image_pixels: AtomicU64,
     /// A nested document's budget error, which refuses the outer document.
     refused: Mutex<Option<ExtensionError>>,
 }
 
 impl Reading {
-    fn new(text: usize) -> Self {
+    fn new(text: usize, images: u64) -> Self {
         Self {
             limit: text,
             text: AtomicUsize::new(text),
             steps: AtomicU64::new(MAX_READING),
             nesting: AtomicUsize::new(0),
+            image_limit: images,
+            image_bytes: AtomicU64::new(images),
+            image_pixels: AtomicU64::new(MAX_SOURCE_IMAGE_PIXELS),
             refused: Mutex::new(None),
         }
+    }
+
+    /// Charges a raster image the tree will hold: `bytes` it adds and the pixels it declares.
+    /// Past either budget the whole document is refused.
+    fn take_image(&self, bytes: usize, pixels: u64) -> bool {
+        let take = |left: &AtomicU64, amount: u64| {
+            let now = left.load(Ordering::Relaxed);
+            let after = now.checked_sub(amount);
+            left.store(after.unwrap_or(0), Ordering::Relaxed);
+            after.is_some()
+        };
+        if !take(&self.image_bytes, u64::try_from(bytes).unwrap_or(u64::MAX)) {
+            self.refuse(ExtensionError::Budget(format!(
+                "its raster images are more than {} bytes, each copy counted",
+                self.image_limit
+            )));
+            return false;
+        }
+        if !take(&self.image_pixels, pixels) {
+            self.refuse(ExtensionError::Budget(format!(
+                "its images decode to more than the {MAX_SOURCE_IMAGE_PIXELS} pixels one source \
+                 may, each copy counted"
+            )));
+            return false;
+        }
+        true
     }
 
     fn refuse(&self, error: ExtensionError) {
@@ -200,6 +262,13 @@ impl Reading {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get_or_insert(error);
+    }
+
+    fn is_refused(&self) -> bool {
+        self.refused
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
     fn refusal(&self) -> Option<ExtensionError> {
@@ -221,7 +290,8 @@ impl Reading {
 
 fn too_much_text(limit: usize) -> ExtensionError {
     ExtensionError::Budget(format!(
-        "the SVG and the SVG images it draws are more than {limit} bytes of text together"
+        "the SVG and the SVG images it draws are more than {limit} bytes of text together, \
+         entities expanded"
     ))
 }
 
@@ -237,15 +307,22 @@ fn read_document(
     let text = std::str::from_utf8(text).map_err(|_| malformed(usvg::Error::NotAnUtf8Str))?;
     let base = reading.nesting.load(Ordering::Relaxed);
     let limit = MAX_NESTING.saturating_sub(base);
-    markup::nesting(text, limit)?;
+    // The parser copies or reads every byte an entity reference expands to.
+    reading.take_text(markup::entity_expansion(text, limit)?)?;
     let xml = roxmltree::Document::parse_with_options(
         text,
         roxmltree::ParsingOptions {
             allow_dtd: true,
+            nodes_limit: MAX_NODES,
             ..roxmltree::ParsingOptions::default()
         },
     )
-    .map_err(|error| malformed(usvg::Error::ParsingFailed(error)))?;
+    .map_err(|error| match error {
+        roxmltree::Error::NodesLimitReached => {
+            ExtensionError::Budget(format!("the SVG parses to more than {MAX_NODES} nodes"))
+        }
+        error => malformed(usvg::Error::ParsingFailed(error)),
+    })?;
     let steps = reading.steps.load(Ordering::Relaxed);
     let conversion = document::conversion(&xml, steps, limit)?;
     reading
@@ -259,17 +336,19 @@ fn read_document(
     tree.map_err(malformed)
 }
 
-/// Parses a document with only `resolver`'s resources and at most `text` bytes of SVG text,
-/// checks its budgets at its own size, and reports what it could not draw.
+/// Parses a document with only `resolver`'s resources, at most `text` bytes of SVG text and
+/// `images` bytes of raster images, checks its budgets at its own size, and reports what it
+/// could not draw.
 fn parse(
     bytes: &[u8],
     resolver: &dyn ResourceResolver,
     text: usize,
+    images: u64,
 ) -> Result<(Tree, ProbeReport), ExtensionError> {
     let registered_fonts = resolver.fonts();
     let missing_fonts = Mutex::new(Vec::<String>::new());
     let image_reports = Mutex::new(Vec::<Diagnostic>::new());
-    let reading = Reading::new(text);
+    let reading = Reading::new(text, images);
     let options = Options {
         // Filled on the first font request, so documents without text load no fonts.
         fontdb: Arc::new(usvg::fontdb::Database::new()),
@@ -362,6 +441,7 @@ fn image_resolver<'a>(
     reading: &'a Reading,
 ) -> ImageHrefResolver<'a> {
     let default_data = ImageHrefResolver::default_data_resolver();
+    let by_locator = Mutex::new(HashMap::<String, Option<Arc<Vec<u8>>>>::new());
     let report = move |diagnostic| {
         reports
             .lock()
@@ -371,6 +451,9 @@ fn image_resolver<'a>(
     ImageHrefResolver {
         // Nested SVG documents resolve their `data:` images through this too.
         resolve_data: Box::new(move |mime, data, options| {
+            if reading.is_refused() {
+                return None;
+            }
             // Matches usvg's own resolver: SVG type, or plain text that is not a raster image.
             let svg = mime == "image/svg+xml"
                 || (mime == "text/plain" && imagesize::image_type(&data).is_err());
@@ -378,9 +461,14 @@ fn image_resolver<'a>(
                 return nested_svg(&data, options, reading);
             }
             let kind = default_data(mime, data, options)?;
+            // usvg decodes a `data:` URL again for every element that draws it.
             within_canvas(kind, || format!("data:{mime}"), reports)
+                .filter(|kind| charge(kind, true, reading))
         }),
         resolve_string: Box::new(move |href, options| {
+            if reading.is_refused() {
+                return None;
+            }
             let unreadable = |reason: &str| {
                 report(Diagnostic::UnreadableImage {
                     href: href.to_owned(),
@@ -388,13 +476,26 @@ fn image_resolver<'a>(
                 });
                 None
             };
-            let Ok(bytes) = resolver.bytes(href) else {
+            // Elements naming one locator share its bytes, which count once.
+            let mut shared = by_locator.lock().unwrap_or_else(PoisonError::into_inner);
+            let (bytes, fresh) = if let Some(known) = shared.get(href) {
+                (known.clone(), false)
+            } else {
+                let read = resolver
+                    .bytes(href)
+                    .ok()
+                    .map(|bytes| Arc::new(bytes.to_vec()));
+                shared.insert(href.to_owned(), read.clone());
+                (read, true)
+            };
+            drop(shared);
+            let Some(bytes) = bytes else {
                 report(Diagnostic::MissingImage {
                     href: href.to_owned(),
                 });
                 return None;
             };
-            let data = || Arc::new(bytes.to_vec());
+            let data = || Arc::clone(&bytes);
             let raster = match registered_image(&bytes) {
                 Some(Registered::Png) => ImageKind::PNG(data()),
                 Some(Registered::Jpeg) => ImageKind::JPEG(data()),
@@ -408,6 +509,7 @@ fn image_resolver<'a>(
                 None => return unreadable("not a PNG, JPEG, GIF, WebP, or SVG image"),
             };
             within_canvas(raster, || href.to_owned(), reports)
+                .filter(|kind| charge(kind, fresh, reading))
         }),
     }
 }
@@ -415,6 +517,9 @@ fn image_resolver<'a>(
 /// Reads a plain or gzipped SVG image within `reading`. Over budget refuses the outer document;
 /// a parse failure just leaves the image out.
 fn nested_svg(data: &[u8], options: &Options, reading: &Reading) -> Option<ImageKind> {
+    if reading.is_refused() {
+        return None;
+    }
     let unpacked;
     let text = if data.starts_with(&[0x1f, 0x8b]) {
         // Unpacked only as far as there is text left to read.
@@ -496,6 +601,45 @@ fn within_canvas(
     Some(kind)
 }
 
+/// Charges a raster image to `reading`: its bytes when `fresh`, and its declared pixels always.
+/// False once the document is refused.
+fn charge(kind: &ImageKind, fresh: bool, reading: &Reading) -> bool {
+    let (ImageKind::JPEG(data)
+    | ImageKind::PNG(data)
+    | ImageKind::GIF(data)
+    | ImageKind::WEBP(data)) = kind
+    else {
+        return true;
+    };
+    // A decoded `data:` URL grows into its buffer, which can be up to twice its length.
+    let bytes = if fresh { data.capacity() } else { 0 };
+    reading.take_image(bytes, raster_pixels(kind))
+}
+
+/// Bytes of the distinct raster images `group` holds, nested SVG images and subroots included.
+fn held_image_bytes(group: &usvg::Group, seen: &mut HashSet<usize>) -> usize {
+    let mut bytes = 0_usize;
+    for node in group.children() {
+        match node {
+            Node::Group(inner) => bytes = bytes.saturating_add(held_image_bytes(inner, seen)),
+            Node::Image(image) => match image.kind() {
+                ImageKind::JPEG(data)
+                | ImageKind::PNG(data)
+                | ImageKind::GIF(data)
+                | ImageKind::WEBP(data) => {
+                    if seen.insert(Arc::as_ptr(data) as usize) {
+                        bytes = bytes.saturating_add(data.capacity());
+                    }
+                }
+                ImageKind::SVG(_) => {}
+            },
+            Node::Path(_) | Node::Text(_) => {}
+        }
+        node.subroots(|root| bytes = bytes.saturating_add(held_image_bytes(root, seen)));
+    }
+    bytes
+}
+
 /// Decoded raster pixels `group` draws, counted per draw since resvg decodes on every draw.
 fn image_pixels(group: &usvg::Group) -> u64 {
     let mut pixels = 0_u64;
@@ -563,6 +707,8 @@ pub(crate) struct SvgSource {
     background: Option<[u8; 4]>,
     /// Coverage the finished picture is scaled by, out of 255.
     opacity: u8,
+    /// Bytes of the distinct raster images the tree holds.
+    images: usize,
     /// The last rasterization, reused while the size holds.
     last: Option<VisualFrame>,
 }
@@ -705,7 +851,10 @@ impl VisualSource for SvgSource {
     }
 
     fn resident_bytes(&self) -> usize {
-        self.last.as_ref().map_or(0, |last| last.pixels.byte_len())
+        self.last
+            .as_ref()
+            .map_or(0, |last| last.pixels.byte_len())
+            .saturating_add(self.images)
     }
 }
 
@@ -728,4 +877,21 @@ fn fitted(width: f32, height: f32, fit: (u32, u32)) -> (u32, u32) {
         (width * scale).round().clamp(1.0, fit.0 as f32) as u32,
         (height * scale).round().clamp(1.0, fit.1 as f32) as u32,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refused_reading_parses_no_more_nested_images() {
+        let image = br#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>"#;
+        let reading = Reading::new(MAX_SVG_DOCUMENT_BYTES, MAX_SOURCE_IMAGE_BYTES);
+        let options = Options::default();
+        assert!(nested_svg(image, &options, &reading).is_some());
+        reading.refuse(ExtensionError::Budget("refused".into()));
+        let text = reading.text.load(Ordering::Relaxed);
+        assert!(nested_svg(image, &options, &reading).is_none());
+        assert_eq!(reading.text.load(Ordering::Relaxed), text);
+    }
 }

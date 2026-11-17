@@ -1,6 +1,5 @@
 // The audio clock never reports a tick before the one Play was pressed at, so the first frame shown
 // is not the one before it.
-import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
@@ -9,7 +8,13 @@ import {
   AudioRingBuffer,
 } from "alpha2/audio-timeline";
 import { frameAt, frameStart, sampleStart } from "../dist/index.js";
-import { playbackStartSample } from "../dist/browser/runtime/audio.js";
+import { testUnless, wasmSkip } from "./support/wasm.mjs";
+
+const skip = wasmSkip(import.meta.url);
+const test = testUnless(skip);
+const { playbackStartSample } = skip
+  ? {}
+  : await import("../dist/browser/runtime/audio.js");
 
 const RATES = [
   { num: 24_000, den: 1_001 },

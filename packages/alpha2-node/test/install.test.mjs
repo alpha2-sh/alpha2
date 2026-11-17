@@ -34,7 +34,11 @@ import { HTTP_SETTINGS } from "../dist/http.js";
 import {
   INSTALL_MACHINE,
   LINUX_GLIBC_FLOOR,
+  OPENH264_DOWNLOAD_URL,
+  OPENH264_LICENSE_URL,
+  OPENH264_NOTICE,
   OPENH264_TARGETS,
+  OPENH264_VERSION,
 } from "../dist/install.js";
 
 const { version } = JSON.parse(
@@ -251,6 +255,40 @@ test("the glibc floor is the minimum_os the FFmpeg lock file names for the Linux
     "linux-x64": `glibc ${LINUX_GLIBC_FLOOR}`,
     "linux-arm64": `glibc ${LINUX_GLIBC_FLOOR}`,
   });
+});
+
+test("the OpenH264 pins are the ones release/openh264/manifest.toml names", async () => {
+  const manifest = await readFile(
+    new URL("../../../release/openh264/manifest.toml", import.meta.url),
+    "utf8",
+  );
+  // `key = "value"` lines by [section], the top level as "".
+  const sections = { "": {} };
+  let section = "";
+  for (const line of manifest.split(/\r?\n/)) {
+    const header = /^\[(.+)\]$/.exec(line);
+    if (header) sections[(section = header[1])] = {};
+    const pair = /^(\w+) = "(.*)"$/.exec(line);
+    if (pair) sections[section][pair[1]] = pair[2];
+  }
+  assert.equal(sections[""].version, OPENH264_VERSION);
+  assert.equal(sections[""].notice, OPENH264_NOTICE);
+  assert.equal(sections[""].download_url, OPENH264_DOWNLOAD_URL);
+  assert.equal(sections[""].license_url, OPENH264_LICENSE_URL);
+  const targets = Object.fromEntries(
+    Object.entries(sections)
+      .filter(([name]) => name.startsWith("targets."))
+      .map(([name, entry]) => [
+        name.slice("targets.".length),
+        {
+          archive: entry.archive,
+          archiveSha256: entry.archive_sha256,
+          library: entry.library,
+          librarySha256: entry.library_sha256,
+        },
+      ]),
+  );
+  assert.deepEqual(OPENH264_TARGETS, targets);
 });
 
 test("the cache is ALPHA2_HOST_CACHE_DIR when it is set, and a blank one is unset", async () => {

@@ -1,8 +1,8 @@
 // Unsharp mask on the straight color against the coverage-weighted color of the four
-// neighbours, so a transparent neighbour does not count as black.
+// neighbours one project pixel away, so a transparent neighbour does not count as black.
 fn effect(uv: vec2f, src: vec4f) -> vec4f {
     if src.a <= 0.0001 { return src; }
-    let texel = 1.0 / resolution();
+    let texel = render_scale() / resolution();
     let neighbours = sample_src(uv + vec2f(texel.x, 0.0))
         + sample_src(uv - vec2f(texel.x, 0.0))
         + sample_src(uv + vec2f(0.0, texel.y))

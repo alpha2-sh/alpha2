@@ -11,7 +11,17 @@ import { track, untrack } from "./browser-cleanup.mjs";
 import { BrowserStartError } from "./browser-errors.mjs";
 import { recordSkip, required } from "./capabilities.mjs";
 
-/** ALPHA2_PARITY_CHROME, else the first installed Chrome or Chromium, else null. */
+/**
+ * @typedef {{ env?: NodeJS.ProcessEnv, platform?: NodeJS.Platform,
+ *   exists?: (path: string) => boolean }} BrowserLookup
+ */
+
+/**
+ * ALPHA2_PARITY_CHROME, else the first installed Chrome or Chromium, else null.
+ *
+ * @param {BrowserLookup} [lookup]
+ * @returns {string | null}
+ */
 export function chromeExecutable({
   env = process.env,
   platform = process.platform,
@@ -57,7 +67,12 @@ function chromeCandidates(platform, env) {
   ];
 }
 
-/** ALPHA2_EDGE, else the first installed Edge, else null. Never a fallback for Chrome. */
+/**
+ * ALPHA2_EDGE, else the first installed Edge, else null. Never a fallback for Chrome.
+ *
+ * @param {BrowserLookup} [lookup]
+ * @returns {string | null}
+ */
 export function edgeExecutable({
   env = process.env,
   platform = process.platform,
@@ -98,7 +113,7 @@ export function browserSettingsMode(env = process.env) {
     throw new Error(
       `unknown ALPHA2_BROWSER_SETTINGS ${JSON.stringify(settings)}: expected ${BROWSER_SETTINGS.join(", ")}`,
     );
-  return settings;
+  return /** @type {"harness" | "stock"} */ (settings);
 }
 
 /**
@@ -112,7 +127,10 @@ export function displayExtensions(display) {
     ["-display", display, "-queryExtensions"],
     { encoding: "utf8", timeout: 10_000 },
   );
-  if (result.error?.code === "ENOENT")
+  if (
+    /** @type {NodeJS.ErrnoException | undefined} */ (result.error)?.code ===
+    "ENOENT"
+  )
     return { tool: false, opened: false, dri3: false };
   return {
     tool: true,
@@ -146,13 +164,14 @@ export function chromeGpuMode({
   const configured = env.ALPHA2_CHROME_GPU_FLAGS;
   if (configured !== undefined)
     return { mode: "custom", flags: configured.split(/\s+/).filter(Boolean) };
-  const mode =
+  const requested =
     env.ALPHA2_CHROME_GPU ||
     (platform === "darwin" || platform === "win32" ? "machine" : "swiftshader");
-  if (!CHROME_GPU_MODES.includes(mode))
+  if (!CHROME_GPU_MODES.includes(requested))
     throw new Error(
-      `unknown ALPHA2_CHROME_GPU ${JSON.stringify(mode)}: expected ${CHROME_GPU_MODES.join(", ")}`,
+      `unknown ALPHA2_CHROME_GPU ${JSON.stringify(requested)}: expected ${CHROME_GPU_MODES.join(", ")}`,
     );
+  const mode = /** @type {"machine" | "swiftshader" | "none"} */ (requested);
   if (mode === "swiftshader")
     return {
       mode,
@@ -193,17 +212,24 @@ export function chromeGpuMode({
         `DISPLAY ${env.DISPLAY} has no DRI3 (Xvfb): Chrome's GPU process hangs on Mesa Vulkan there; use scripts/run-with-gpu-display.sh`,
       );
   }
+  // Without VulkanFromANGLE, some Vulkan drivers under Xwayland give ANGLE no context: no WebGL2,
+  // and accelerated 2D canvases read back transparent black.
   return {
     mode,
     flags: [
       "--use-angle=vulkan",
-      "--enable-features=Vulkan",
+      "--enable-features=Vulkan,VulkanFromANGLE",
       "--ignore-gpu-blocklist",
     ],
   };
 }
 
-/** Null when there is no Chrome, unless ALPHA2_REQUIRE names `browser`. */
+/**
+ * Null when there is no Chrome, unless ALPHA2_REQUIRE names `browser`.
+ *
+ * @param {BrowserLookup} [lookup]
+ * @returns {string | null}
+ */
 export function browserForCheck({ env = process.env, platform, exists } = {}) {
   const chrome = chromeExecutable({ env, platform, exists });
   if (chrome !== null) return chrome;
@@ -214,6 +240,12 @@ export function browserForCheck({ env = process.env, platform, exists } = {}) {
   return null;
 }
 
+/**
+ * @param {string} what
+ * @param {string} suite
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {Omit<BrowserLookup, "env">} [lookup]
+ */
 export function reportSkippedBrowser(
   what,
   suite,
@@ -293,20 +325,95 @@ const GPU_PROCESS_EXIT =
 
 /**
  * Pids are null when there was no GPU process and undefined when DevTools could not say. A GPU
- * process that only started during the page is not a restart.
+ * process that only started during the page is not a restart. `exitsBeforePage` counts the exits
+ * logged before the page was navigated to.
  *
  * @typedef {{ startPid: number | null | undefined, endPid: number | null | undefined,
- *   exits: number, restarted: boolean }} GpuProcessRecord
+ *   exits: number, exitsBeforePage: number, restarted: boolean }} GpuProcessRecord
  */
 
 /** @returns {GpuProcessRecord} */
-export function gpuProcessRecord({ startPid, endPid, exits }) {
+export function gpuProcessRecord({
+  startPid,
+  endPid,
+  exits,
+  exitsBeforePage = 0,
+}) {
   const changed =
     startPid !== null &&
     startPid !== undefined &&
     endPid !== undefined &&
     endPid !== startPid;
-  return { startPid, endPid, exits, restarted: exits > 0 || changed };
+  return {
+    startPid,
+    endPid,
+    exits,
+    exitsBeforePage,
+    restarted: exits > 0 || changed,
+  };
+}
+
+/**
+ * One run of a page: its reported result, or the error `runBrowserPage` threw (a timeout, a
+ * crash), and the GPU process record.
+ *
+ * @typedef {{ result?: object, error?: Error, gpuProcess?: GpuProcessRecord }} PageAttempt
+ */
+
+/**
+ * Runs a page and decides its outcome from the page's own result. A GPU process restart never
+ * turns a result into a skip by itself: an ok page stays ok with the record attached, and a page
+ * that failed while the GPU process restarted runs once more in a new browser. A clean second run
+ * passes and keeps the first run in `firstAttempt`; a second failure fails with both runs. Only a
+ * browser that lost its GPU process before the page started, on both runs, makes the case a
+ * `browser-gpu-process` skip. An error of a run without a restart is thrown as it was.
+ *
+ * @param {() => Promise<PageAttempt>} run
+ * @param {number} [causedExits] GPU process exits the case causes itself, which are no restart.
+ * @returns {Promise<object>} The result to report.
+ */
+export async function runWithGpuProcessRerun(run, causedExits) {
+  const restarted = (record) =>
+    record !== undefined &&
+    (causedExits === undefined ? record.restarted : record.exits > causedExits);
+  const failed = (attempt) =>
+    attempt.error !== undefined ||
+    (attempt.result.ok !== true && attempt.result.skipped === undefined);
+  const page = (attempt) => attempt.error?.message ?? attempt.result;
+  const first = await run();
+  if (!restarted(first.gpuProcess) || !failed(first)) {
+    if (first.error !== undefined) throw first.error;
+    return first.gpuProcess !== undefined &&
+      (causedExits !== undefined || restarted(first.gpuProcess))
+      ? { ...first.result, gpuProcess: first.gpuProcess }
+      : first.result;
+  }
+  const second = await run();
+  const firstAttempt = { page: page(first), gpuProcess: first.gpuProcess };
+  if (!failed(second))
+    return second.gpuProcess === undefined
+      ? { ...second.result, firstAttempt }
+      : { ...second.result, gpuProcess: second.gpuProcess, firstAttempt };
+  const attempts = [
+    firstAttempt,
+    { page: page(second), gpuProcess: second.gpuProcess },
+  ];
+  if (
+    [first, second].every(
+      (attempt) => (attempt.gpuProcess?.exitsBeforePage ?? 0) > 0,
+    )
+  )
+    return {
+      skipped:
+        "gpu-process-lost: the browser's GPU process exited before the page started, in two browsers",
+      capability: "browser-gpu-process",
+      attempts,
+    };
+  const last = second.error?.message ?? JSON.stringify(second.result);
+  return {
+    error: `failed in two browsers; the GPU process restarted during the first run: ${last}`,
+    attempts,
+  };
 }
 
 /**
@@ -368,7 +475,7 @@ function chromeSaid(stderr) {
  * @param {string} url
  * @param {object} [options]
  * @param {number} [options.timeoutMs] Default 30 s.
- * @param {(cdp: Cdp, sessionId: string) => Promise<unknown>} [options.onPage] Runs after
+ * @param {(cdp: Cdp, sessionId: string) => Promise<unknown> | void} [options.onPage] Runs after
  *   navigation starts, within the same deadline.
  * @param {object} [options.viewport]
  * @param {string} [options.initScript] Evaluated in every new document before its own scripts.
@@ -482,6 +589,7 @@ export async function runChromePage(
     }
     const started = await chromeProcesses(cdp);
     for (const pid of started?.pids ?? []) pids.add(pid);
+    let exitsBeforePage;
     try {
       if (onBrowser) onBrowser(await cdp.send("Browser.getVersion"));
       const { targetId } = await cdp.send("Target.createTarget", {
@@ -512,6 +620,7 @@ export async function runChromePage(
         );
       const deadline = Date.now() + timeoutMs;
       const remaining = () => Math.max(1, deadline - Date.now());
+      exitsBeforePage = gpuExits;
       await cdp.send("Page.navigate", { url }, sessionId);
       if (onPage)
         await cdp.within(
@@ -554,6 +663,7 @@ export async function runChromePage(
           startPid: started === null ? undefined : started.gpu,
           endPid: ended === null ? undefined : ended.gpu,
           exits: gpuExits,
+          exitsBeforePage: exitsBeforePage ?? gpuExits,
         }),
       );
       cdp.close();
@@ -605,6 +715,12 @@ export async function processAlive(pid, platform = process.platform) {
  * Ends Chrome's whole process tree (a plain kill on Windows leaves children holding the profile and
  * stderr), then waits up to 10 s for every process in `pids`, since a lingering GPU process holds
  * the GPU the next launch opens.
+ *
+ * @param {import("node:child_process").ChildProcess} child
+ * @param {{ platform?: NodeJS.Platform,
+ *   spawnProcess?: (command: string, args: string[],
+ *     options: import("node:child_process").SpawnOptions) => import("node:events").EventEmitter,
+ *   pids?: number[], alive?: (pid: number) => Promise<boolean>, waitMs?: number }} [options]
  */
 export async function stopChrome(
   child,
@@ -680,6 +796,7 @@ class Cdp {
   #nextId = 0;
   #pending = new Map();
   #sessionId = null;
+  /** @type {Error | null} */
   #failure = null;
 
   constructor(socket) {

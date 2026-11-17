@@ -57,8 +57,34 @@ pub fn stop_std_handle_inheritance() {
     }
 }
 
+/// Takes standard output for a protocol stream.
+///
+/// Returns a writer on the stream standard output was, which children do not inherit, and points
+/// standard output at standard error (a null device when that is closed), so text any library
+/// prints to standard output stays out of the stream. On Windows the C runtime's descriptor 1
+/// follows too.
+///
+/// # Errors
+/// When standard output is closed or cannot be duplicated.
+pub fn claim_stdout() -> io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        crate::platform::claim_stream(libc::STDOUT_FILENO, libc::STDERR_FILENO)
+    }
+    #[cfg(windows)]
+    {
+        crate::platform::claim_stdout()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+}
+
+pub(crate) const PARENT_EXITED_NAME: &str = "PARENT_EXITED";
+
 /// Reported like `SIGTERM`.
-const PARENT_EXITED: Termination = Termination::new("PARENT_EXITED", 143, false);
+const PARENT_EXITED: Termination = Termination::new(PARENT_EXITED_NAME, 143, false);
 
 /// Calls the [`crate::on_termination`] handler with a `PARENT_EXITED` termination (status 143)
 /// when the parent process exits, or at once if it already has.
@@ -474,6 +500,8 @@ mod platform {
     /// No parent watch on this platform.
     pub(super) struct Parent;
 
+    // Same signatures as the platforms that watch.
+    #[allow(clippy::unnecessary_wraps, clippy::unused_self)]
     impl Parent {
         pub(super) fn open() -> io::Result<Option<Self>> {
             Ok(None)

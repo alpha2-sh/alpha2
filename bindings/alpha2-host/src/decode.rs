@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -15,8 +15,13 @@ use crate::metrics::ExportMetrics;
 use crate::{WORKER_RETRY_INTERVAL, error_message};
 use alpha2_engine::{EngineProject, ExportFrameNeeds, Exporter};
 use alpha2_eval::FrameNeed;
+#[cfg(test)]
+pub use alpha2_host_core::cursor::{BackwardRun, MAX_SEQUENTIAL_DECODE_GAP};
+pub use alpha2_host_core::cursor::{
+    CursorReads, DecodeCursorKey, backward_run, cursor_time, decode_cursor_key, decodes_on,
+};
 use alpha2_media::{CancelToken, DecodeError, DecodeRequest, DecodeRequestKind, SourceId};
-use alpha2_model::{ClipId, MediaKind, NodeId, Project};
+use alpha2_model::{ClipId, MediaKind, Project};
 use alpha2_native::{
     DecodeStageTimings, HardwareDecodeFallback, NativeExportDecoder, NativeVideoFrame,
 };
@@ -26,7 +31,7 @@ use alpha2_native_gpu::SharedD3D12Context;
 use alpha2_native_gpu::SharedMetalContext;
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 use alpha2_native_gpu::SharedVulkanContext;
-use alpha2_time::{MediaTime, TimeRange};
+use alpha2_time::MediaTime;
 
 pub struct DecodeJob {
     pub generation: u64,
@@ -215,34 +220,34 @@ pub enum DecodeWorkerStatus {
 pub struct DecodeBudgetState {
     pub bytes: u64,
     pub peak_bytes: u64,
+    /// Sets larger than the budget, each held alone.
+    pub oversized_sets: u64,
 }
 
 /// The byte budget on decoded frame sets queued for the host but not yet released.
 pub struct DecodeBudget {
-    /// A frame set larger than this still fits alone up to the unscaled budget
-    /// ([`crate::memory::ByteBudget::holding`]).
+    /// A frame set larger than this waits for an empty queue and is then held alone: it is
+    /// already decoded, so refusing it would free nothing.
     pub limit: crate::memory::ByteBudget,
     pub state: Mutex<DecodeBudgetState>,
     pub available: Condvar,
 }
 
 impl DecodeBudget {
+    /// Waits until `bytes` fits or the queue is empty. Sets are taken in order and each release
+    /// notifies, so the wait ends.
+    ///
     /// # Errors
-    /// A frame set larger than the whole budget, or a cancelled export.
+    /// A cancelled export.
     pub fn reserve(&self, bytes: u64, cancel: &CancelToken) -> Result<(), String> {
         let limit = self.limit.holding(bytes);
-        if bytes > limit {
-            return Err(crate::memory::resource_limit(format!(
-                "one decoded frame set requires {bytes} bytes, exceeding the {limit} byte decode queue budget"
-            )));
-        }
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // A plain wait suffices: `cancel` takes this mutex before notifying, so a cancellation
         // between the check and the wait cannot be missed.
-        while state.bytes.saturating_add(bytes) > limit {
+        while state.bytes > 0 && state.bytes.saturating_add(bytes) > limit {
             if cancel.is_cancelled() {
                 return Err("decode worker was cancelled".to_owned());
             }
@@ -251,9 +256,19 @@ impl DecodeBudget {
                 .wait(state)
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
+        if bytes > limit {
+            state.oversized_sets = state.oversized_sets.saturating_add(1);
+        }
         state.bytes = state.bytes.saturating_add(bytes);
         state.peak_bytes = state.peak_bytes.max(state.bytes);
         Ok(())
+    }
+
+    pub fn oversized_sets(&self) -> u64 {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .oversized_sets
     }
 
     pub fn release(&self, bytes: u64) {
@@ -344,7 +359,7 @@ pub struct DecodeWorker {
 
 #[derive(Clone)]
 pub struct DecodeWorkerConfig {
-    pub providers: Arc<crate::providers::ProviderMedia>,
+    pub providers: Arc<alpha2_host_core::providers::ProviderMedia>,
     pub decoding: Arc<crate::recovery::ExportDecoding>,
     pub depth: usize,
     pub byte_budget: crate::memory::ByteBudget,
@@ -543,6 +558,7 @@ impl DecodeWorker {
     }
 
     pub fn result_timeout(&self, timeout: Duration) -> Result<Option<DecodedFrameSet>, String> {
+        crate::heartbeat::beat_request();
         self.check_status()?;
         let frames = self
             .frames
@@ -616,6 +632,7 @@ impl DecodeWorker {
     /// ([`crate::protocol::HARDWARE_DECODE_STALL_MARKER`] and `HARDWARE_STALL` evidence), which
     /// tells a caller whether a software retry can help.
     pub fn check_stall(&self) -> Result<(), String> {
+        crate::heartbeat::beat_request();
         let Some((shard, stalled_for, hardware, activity)) = self
             .heartbeats
             .iter()
@@ -671,6 +688,10 @@ impl DecodeWorker {
 
     pub fn peak_bytes(&self) -> u64 {
         self.budget.peak_bytes()
+    }
+
+    pub fn oversized_sets(&self) -> u64 {
+        self.budget.oversized_sets()
     }
 }
 
@@ -849,111 +870,6 @@ impl DecodeScheduler {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub struct BackwardRun {
-    /// Distinct, non-increasing, in the order the cursor asks for them.
-    pub times: Vec<MediaTime>,
-    pub until: u64,
-}
-
-/// Times while they do not increase and every frame asks for the cursor.
-#[must_use]
-pub fn backward_run(
-    frames: &[ExportFrameNeeds],
-    start: u64,
-    cursor: &DecodeCursorKey,
-) -> BackwardRun {
-    let mut times = Vec::<MediaTime>::new();
-    let mut until = start;
-    for frame in frames.iter().skip_while(|frame| frame.index < start) {
-        let Some(time) = cursor_time(frame, cursor) else {
-            break;
-        };
-        match times.last() {
-            Some(last) if time > *last => break,
-            Some(last) if time == *last => {}
-            _ => times.push(time),
-        }
-        until = frame.index;
-    }
-    BackwardRun { times, until }
-}
-
-fn cursor_time(frame: &ExportFrameNeeds, cursor: &DecodeCursorKey) -> Option<MediaTime> {
-    frame
-        .needs
-        .iter()
-        .find(|need| decode_cursor_key(need) == *cursor)
-        .map(|need| need.media_time)
-}
-
-/// Two seconds, as the browser's video adapters use. Further ahead, a seek from the preceding
-/// keyframe decodes less than every frame between.
-pub const MAX_SEQUENTIAL_DECODE_GAP: MediaTime =
-    MediaTime::from_ticks(2 * alpha2_time::TICKS_PER_SECOND);
-
-/// Not backward, and at most [`MAX_SEQUENTIAL_DECODE_GAP`] ahead. Either way the frame presented at
-/// `requested` is the one answered.
-#[must_use]
-pub fn decodes_on(previous: MediaTime, requested: MediaTime) -> bool {
-    requested >= previous
-        && requested.ticks().saturating_sub(previous.ticks()) <= MAX_SEQUENTIAL_DECODE_GAP.ticks()
-}
-
-/// The source, the clip, and the composition step reading it (none for the clip's own source).
-pub type DecodeCursorKey = (SourceId, ClipId, Option<NodeId>);
-
-pub fn decode_cursor_key(need: &FrameNeed) -> DecodeCursorKey {
-    (
-        need.source_id.clone(),
-        need.clip_id.clone(),
-        need.reader.clone(),
-    )
-}
-
-/// Where each cursor may read ([`alpha2_eval::ActiveIndex::source_reads`]), which tells a shard
-/// which session it can close and which one is read last. An unknown cursor is taken to be read
-/// now, so it is never closed early and is evicted only by recency.
-#[derive(Debug, Default)]
-pub struct CursorReads {
-    /// By start.
-    spans: HashMap<DecodeCursorKey, Vec<TimeRange>>,
-}
-
-impl CursorReads {
-    pub fn new(reads: Vec<alpha2_eval::SourceRead>) -> Self {
-        let mut spans = HashMap::<DecodeCursorKey, Vec<TimeRange>>::new();
-        for read in reads {
-            spans
-                .entry((read.source_id, read.clip_id, read.reader))
-                .or_default()
-                .push(read.span);
-        }
-        for cursor_spans in spans.values_mut() {
-            cursor_spans.sort_unstable_by_key(|span| span.start());
-        }
-        Self { spans }
-    }
-
-    pub fn knows(&self, cursor: &DecodeCursorKey) -> bool {
-        self.spans.contains_key(cursor)
-    }
-
-    /// `time` itself inside a span, else the next span's start; `None` when nothing is read from
-    /// `time` on or the cursor is unknown.
-    pub fn next_read(&self, cursor: &DecodeCursorKey, time: MediaTime) -> Option<MediaTime> {
-        self.spans
-            .get(cursor)?
-            .iter()
-            .find(|span| span.end() > time)
-            .map(|span| span.start().max(time))
-    }
-
-    pub fn finished(&self, cursor: &DecodeCursorKey, time: MediaTime) -> bool {
-        self.knows(cursor) && self.next_read(cursor, time).is_none()
-    }
-}
-
 /// The code and evidence stay the error's own; the IDs joined to it decide nothing.
 fn attributed(what: &str, error: &str) -> String {
     format!("decoding {what}: {error}")
@@ -987,7 +903,7 @@ enum NextRead {
 }
 
 pub struct ExportDecodeState {
-    pub providers: Arc<crate::providers::ProviderMedia>,
+    pub providers: Arc<alpha2_host_core::providers::ProviderMedia>,
     pub decoding: Arc<crate::recovery::ExportDecoding>,
     pub paths: HashMap<SourceId, PathBuf>,
     pub kinds: HashMap<SourceId, MediaKind>,
@@ -1053,9 +969,10 @@ pub struct ExportDecodeState {
 /// 1080p at 8-bit 4:2:0, until a window has measured it.
 const DEFAULT_REVERSE_FRAME_BYTES: u64 = 1920 * 1080 * 3 / 2;
 
-pub struct ReverseWindow {
-    pub frames: BTreeMap<MediaTime, Arc<NativeVideoFrame>>,
-    pub bytes: u64,
+pub type ReverseWindow = alpha2_host_core::reverse_window::ReverseWindow<NativeVideoFrame>;
+
+fn frame_bytes(frame: &NativeVideoFrame) -> u64 {
+    frame.retained_bytes()
 }
 
 pub struct ExportDecodedPosition {
@@ -1143,7 +1060,7 @@ impl ExportDecodeState {
             paths.insert(source.id.clone(), path.clone());
         }
         Ok(Self {
-            providers: crate::providers::ProviderMedia::none(),
+            providers: alpha2_host_core::providers::ProviderMedia::none(),
             decoding: Arc::default(),
             paths,
             kinds,
@@ -1549,12 +1466,15 @@ impl ExportDecodeState {
             return Ok(None);
         }
         if self.providers.supplies(&need.source_id) {
-            let frame = self.providers.frame_watched(
-                &decode_cursor_key(need),
-                need.media_time,
-                self.frame_index,
-                Some(&self.heartbeat),
-            )?;
+            let frame = self
+                .providers
+                .frame_watched(
+                    &decode_cursor_key(need),
+                    need.media_time,
+                    self.frame_index,
+                    Some(&crate::heartbeat::ProviderHeartbeat(&self.heartbeat)),
+                )
+                .map_err(crate::providers::tagged)?;
             return Ok(Some(DecodedSourceFrame {
                 source: need.source_id.clone(),
                 clip: need.clip_id.clone(),
@@ -1752,16 +1672,12 @@ impl ExportDecodeState {
         requested: MediaTime,
     ) -> Option<Arc<NativeVideoFrame>> {
         let window = self.reverse_windows.get(cursor)?;
-        if let Some(frame) = window.frames.get(&requested) {
+        if let Some(frame) = window.get(requested) {
             let frame = Arc::clone(frame);
             self.reverse_cache_hits = self.reverse_cache_hits.saturating_add(1);
             return Some(frame);
         }
-        if window
-            .frames
-            .last_key_value()
-            .is_some_and(|(top, _)| requested > *top)
-        {
+        if window.last_time().is_some_and(|top| requested > top) {
             self.drop_reverse_window(cursor);
             self.reverse_plans.remove(cursor);
         }
@@ -1783,7 +1699,7 @@ impl ExportDecodeState {
 
     fn drop_reverse_window(&mut self, cursor: &DecodeCursorKey) {
         if let Some(window) = self.reverse_windows.remove(cursor) {
-            self.reverse_cache_bytes = self.reverse_cache_bytes.saturating_sub(window.bytes);
+            self.reverse_cache_bytes = self.reverse_cache_bytes.saturating_sub(window.bytes());
         }
     }
 
@@ -1916,8 +1832,7 @@ impl ExportDecodeState {
         let mut tally = DecodeTally::default();
         tally.count(&first);
         let mut current = Arc::new(first);
-        let mut frames = BTreeMap::<MediaTime, Arc<NativeVideoFrame>>::new();
-        let mut bytes = 0_u64;
+        let mut window = ReverseWindow::new(share);
         for target in ordered {
             // As on the forward path, each target keeps the last frame at or before its deadline.
             let deadline = decoder.presentation_deadline(target);
@@ -1950,37 +1865,15 @@ impl ExportDecodeState {
                 tally.count(&frame);
                 current = Arc::new(frame);
             }
-            if !frames
-                .last_key_value()
-                .is_some_and(|(_, last)| Arc::ptr_eq(last, &current))
-            {
-                bytes = bytes.saturating_add(current.retained_bytes());
-            }
-            frames.insert(target, Arc::clone(&current));
-            // The lowest times go first, as the run reaches them last.
-            while bytes > share && frames.len() > 1 {
-                if let Some((_, evicted)) = frames.pop_first()
-                    && !frames
-                        .first_key_value()
-                        .is_some_and(|(_, first)| Arc::ptr_eq(first, &evicted))
-                {
-                    bytes = bytes.saturating_sub(evicted.retained_bytes());
-                }
-            }
+            window.push(target, Arc::clone(&current), frame_bytes);
         }
         self.apply_tally(tally);
-        let distinct = frames
-            .values()
-            .zip(frames.values().skip(1))
-            .filter(|(low, high)| !Arc::ptr_eq(low, high))
-            .count()
-            .saturating_add(1);
+        let bytes = window.bytes();
         self.reverse_frame_bytes.insert(
             cursor.clone(),
-            bytes / u64::try_from(distinct).unwrap_or(1).max(1),
+            bytes / u64::try_from(window.distinct()).unwrap_or(1).max(1),
         );
-        self.reverse_windows
-            .insert(cursor.clone(), ReverseWindow { frames, bytes });
+        self.reverse_windows.insert(cursor.clone(), window);
         self.reverse_cache_bytes = self.reverse_cache_bytes.saturating_add(bytes);
         self.reverse_windows_built = self.reverse_windows_built.saturating_add(1);
         while self.reverse_cache_bytes > self.max_reverse_cache_bytes

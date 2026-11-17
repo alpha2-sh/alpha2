@@ -69,7 +69,7 @@ pub(super) fn generated(renderer: &Renderer, size: RenderSize, paint: &TestPaint
 }
 
 pub(super) fn generator_renderer() -> Renderer {
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(crate::generator_definition()))
         .expect("the generator compiles");
     renderer

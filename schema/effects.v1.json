@@ -1,0 +1,7603 @@
+{
+  "$id": "https://alpha2.sh/schema/effects.v1.json",
+  "effects": [
+    {
+      "group": "Color",
+      "id": "alpha2.effect.color-controls",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Color Controls",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Exposure",
+          "max": 3.0,
+          "min": -3.0,
+          "name": "exposure",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Contrast",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "contrast",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Saturation",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "saturation",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Temperature",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "temperature",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Tint",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "tint",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.lut-3d",
+      "inputs": [],
+      "kind": "effect",
+      "label": "3D LUT",
+      "params": [
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Strength",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "strength",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [
+        {
+          "kind": "lut3d",
+          "name": "lut"
+        }
+      ],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.invert",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Invert",
+      "params": [
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.black-and-white",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Black & White",
+      "params": [
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.2125999927520752,
+          "enumValues": [],
+          "label": "Red",
+          "max": 3.0,
+          "min": -2.0,
+          "name": "red",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.7152000069618225,
+          "enumValues": [],
+          "label": "Green",
+          "max": 3.0,
+          "min": -2.0,
+          "name": "green",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0722000002861023,
+          "enumValues": [],
+          "label": "Blue",
+          "max": 3.0,
+          "min": -2.0,
+          "name": "blue",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.sepia",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Sepia",
+      "params": [
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.duotone",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Duotone",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.07999999821186066,
+            0.05000000074505806,
+            0.25,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Shadows",
+          "max": null,
+          "min": null,
+          "name": "shadows",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            0.8500000238418579,
+            0.550000011920929,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Highlights",
+          "max": null,
+          "min": null,
+          "name": "highlights",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.gradient-map",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Gradient Map",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Shadows",
+          "max": null,
+          "min": null,
+          "name": "shadows",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5,
+            0.5,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Midtones",
+          "max": null,
+          "min": null,
+          "name": "midtones",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Highlights",
+          "max": null,
+          "min": null,
+          "name": "highlights",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Midpoint",
+          "max": 0.949999988079071,
+          "min": 0.05000000074505806,
+          "name": "midpoint",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.posterize",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Posterize",
+      "params": [
+        {
+          "animatable": true,
+          "default": 6.0,
+          "enumValues": [],
+          "label": "Levels",
+          "max": 64.0,
+          "min": 2.0,
+          "name": "levels",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.threshold",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Threshold",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Level",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "level",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Softness",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "softness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.levels",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Levels",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "all",
+            "red",
+            "green",
+            "blue"
+          ],
+          "label": "Channel",
+          "max": null,
+          "min": null,
+          "name": "channel",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Input Black",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "input_black",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Input White",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "input_white",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Gamma",
+          "max": 10.0,
+          "min": 0.10000000149011612,
+          "name": "gamma",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Output Black",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "output_black",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Output White",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "output_white",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.hue-saturation",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Hue/Saturation",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Hue",
+          "max": 180.0,
+          "min": -180.0,
+          "name": "hue",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Saturation",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "saturation",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Lightness",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "lightness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.vibrance",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Vibrance",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.channel-mixer",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Channel Mixer",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Red",
+          "max": 2.0,
+          "min": -2.0,
+          "name": "red",
+          "step": 0.009999999776482582,
+          "type": "vec4",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Green",
+          "max": 2.0,
+          "min": -2.0,
+          "name": "green",
+          "step": 0.009999999776482582,
+          "type": "vec4",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Blue",
+          "max": 2.0,
+          "min": -2.0,
+          "name": "blue",
+          "step": 0.009999999776482582,
+          "type": "vec4",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Monochrome",
+          "max": null,
+          "min": null,
+          "name": "monochrome",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.lift-gamma-gain",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Lift Gamma Gain",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Lift",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "lift",
+          "step": 0.004999999888241291,
+          "type": "vec4",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Gamma",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "gamma",
+          "step": 0.004999999888241291,
+          "type": "vec4",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Gain",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "gain",
+          "step": 0.004999999888241291,
+          "type": "vec4",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.color-isolate",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Color Isolate",
+      "params": [
+        {
+          "animatable": true,
+          "default": 120.0,
+          "enumValues": [],
+          "label": "Hue",
+          "max": 360.0,
+          "min": 0.0,
+          "name": "hue",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 30.0,
+          "enumValues": [],
+          "label": "Range",
+          "max": 180.0,
+          "min": 0.0,
+          "name": "range",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 20.0,
+          "enumValues": [],
+          "label": "Softness",
+          "max": 180.0,
+          "min": 0.0,
+          "name": "softness",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.solarize",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Solarize",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Threshold",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "threshold",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Color",
+      "id": "alpha2.effect.fill",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Fill",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Color",
+          "max": null,
+          "min": null,
+          "name": "color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Keying",
+      "id": "alpha2.effect.chroma-key",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Chroma Key",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            1.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Key Color",
+          "max": null,
+          "min": null,
+          "name": "key_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": 0.3499999940395355,
+          "enumValues": [],
+          "label": "Threshold",
+          "max": 1.7320507764816284,
+          "min": 0.0,
+          "name": "threshold",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Softness",
+          "max": 1.0,
+          "min": 1.1920928955078125e-7,
+          "name": "softness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.20000000298023224,
+          "enumValues": [],
+          "label": "Spill Suppression",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "spill_suppression",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "rgb",
+            "chroma"
+          ],
+          "label": "Distance Mode",
+          "max": null,
+          "min": null,
+          "name": "distance_mode",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Keying",
+      "id": "alpha2.effect.luma-key",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Luma Key",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "dark",
+            "bright"
+          ],
+          "label": "Key Out",
+          "max": null,
+          "min": null,
+          "name": "key_out",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Threshold",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "threshold",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Softness",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "softness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Keying",
+      "id": "alpha2.effect.spill-suppress",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Spill Suppress",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "green",
+            "blue"
+          ],
+          "label": "Screen",
+          "max": null,
+          "min": null,
+          "name": "screen",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Keying",
+      "id": "alpha2.effect.alpha-adjust",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Alpha Adjust",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Black",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "black",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "White",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "white",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Gamma",
+          "max": 10.0,
+          "min": 0.10000000149011612,
+          "name": "gamma",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Invert",
+          "max": null,
+          "min": null,
+          "name": "invert",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Keying",
+      "id": "alpha2.effect.matte-choker",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Matte Choker",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Choke",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "choke",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.003000000026077032,
+          "enumValues": [],
+          "label": "Radius",
+          "max": 0.029999999329447746,
+          "min": 0.0,
+          "name": "radius",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Keying",
+      "id": "alpha2.effect.set-matte",
+      "inputs": [
+        {
+          "name": "matte"
+        }
+      ],
+      "kind": "effect",
+      "label": "Set Matte",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "alpha",
+            "luma"
+          ],
+          "label": "Mode",
+          "max": null,
+          "min": null,
+          "name": "mode",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Invert",
+          "max": null,
+          "min": null,
+          "name": "invert",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Blur & Sharpen",
+      "id": "alpha2.effect.gaussian-blur",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Gaussian Blur",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.012000000104308128,
+          "enumValues": [],
+          "label": "Radius",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "radius",
+          "step": 0.0010000000474974513,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Blur & Sharpen",
+      "id": "alpha2.effect.sharpen",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Sharpen",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.6000000238418579,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 3.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Blur & Sharpen",
+      "id": "alpha2.effect.directional-blur",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Directional Blur",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.019999999552965164,
+          "enumValues": [],
+          "label": "Length",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "length",
+          "step": 0.0010000000474974513,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 360.0,
+          "min": -360.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Blur & Sharpen",
+      "id": "alpha2.effect.radial-blur",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Radial Blur",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "zoom",
+            "spin"
+          ],
+          "label": "Mode",
+          "max": null,
+          "min": null,
+          "name": "mode",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 10.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 90.0,
+          "min": 0.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Blur & Sharpen",
+      "id": "alpha2.effect.unsharp-mask",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Unsharp Mask",
+      "params": [
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.004000000189989805,
+          "enumValues": [],
+          "label": "Radius",
+          "max": 0.10000000149011612,
+          "min": 0.0,
+          "name": "radius",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Threshold",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "threshold",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Blur & Sharpen",
+      "id": "alpha2.effect.tilt-shift",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Tilt Shift",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.019999999552965164,
+          "enumValues": [],
+          "label": "Blur",
+          "max": 0.20000000298023224,
+          "min": 0.0,
+          "name": "blur",
+          "step": 0.0010000000474974513,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Position",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "position",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 90.0,
+          "min": -90.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 0.15000000596046448,
+          "enumValues": [],
+          "label": "Focus",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "focus",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.25,
+          "enumValues": [],
+          "label": "Falloff",
+          "max": 1.0,
+          "min": 0.0010000000474974513,
+          "name": "falloff",
+          "step": 0.004999999888241291,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Blur & Sharpen",
+      "id": "alpha2.effect.lens-blur",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Lens Blur",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.00800000037997961,
+          "enumValues": [],
+          "label": "Radius",
+          "max": 0.019999999552965164,
+          "min": 0.0,
+          "name": "radius",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Highlights",
+          "max": 10.0,
+          "min": 0.0,
+          "name": "highlights",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Blur & Sharpen",
+      "id": "alpha2.effect.surface-blur",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Surface Blur",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.004000000189989805,
+          "enumValues": [],
+          "label": "Radius",
+          "max": 0.019999999552965164,
+          "min": 0.0,
+          "name": "radius",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Threshold",
+          "max": 1.0,
+          "min": 0.0010000000474974513,
+          "name": "threshold",
+          "step": 0.004999999888241291,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.vignette",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Vignette",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.44999998807907104,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.7200000286102295,
+          "enumValues": [],
+          "label": "Radius",
+          "max": 1.5,
+          "min": 0.0,
+          "name": "radius",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.44999998807907104,
+          "enumValues": [],
+          "label": "Softness",
+          "max": 1.0,
+          "min": 0.009999999776482582,
+          "name": "softness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.glow",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Glow",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.6000000238418579,
+          "enumValues": [],
+          "label": "Threshold",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "threshold",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.800000011920929,
+          "enumValues": [],
+          "label": "Intensity",
+          "max": 3.0,
+          "min": 0.0,
+          "name": "intensity",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.012000000104308128,
+          "enumValues": [],
+          "label": "Radius",
+          "max": 0.05999999865889549,
+          "min": 0.0,
+          "name": "radius",
+          "step": 0.0010000000474974513,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.film-grain",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Film Grain",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.18000000715255737,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.399999976158142,
+          "enumValues": [],
+          "label": "Size",
+          "max": 6.0,
+          "min": 0.5,
+          "name": "size",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.rgb-split",
+      "inputs": [],
+      "kind": "effect",
+      "label": "RGB Split",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "linear",
+            "radial"
+          ],
+          "label": "Mode",
+          "max": null,
+          "min": null,
+          "name": "mode",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": 0.004999999888241291,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 0.05000000074505806,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 360.0,
+          "min": -360.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.glitch",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Glitch",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.05000000074505806,
+          "enumValues": [],
+          "label": "Block Size",
+          "max": 0.5,
+          "min": 0.004999999888241291,
+          "name": "block_size",
+          "step": 0.004999999888241291,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 10.0,
+          "enumValues": [],
+          "label": "Speed",
+          "max": 60.0,
+          "min": 0.0,
+          "name": "speed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.009999999776482582,
+          "enumValues": [],
+          "label": "Color Split",
+          "max": 0.05000000074505806,
+          "min": 0.0,
+          "name": "color_split",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Seed",
+          "max": 1000.0,
+          "min": 0.0,
+          "name": "seed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.crt",
+      "inputs": [],
+      "kind": "effect",
+      "label": "CRT",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Curvature",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "curvature",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.3499999940395355,
+          "enumValues": [],
+          "label": "Scanlines",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "scanlines",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 240.0,
+          "enumValues": [],
+          "label": "Line Count",
+          "max": 1080.0,
+          "min": 50.0,
+          "name": "line_count",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.20000000298023224,
+          "enumValues": [],
+          "label": "Mask",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "mask",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.30000001192092896,
+          "enumValues": [],
+          "label": "Vignette",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "vignette",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.vhs",
+      "inputs": [],
+      "kind": "effect",
+      "label": "VHS",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.15000000596046448,
+          "enumValues": [],
+          "label": "Noise",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "noise",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Bleed",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "bleed",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Speed",
+          "max": 10.0,
+          "min": 0.0,
+          "name": "speed",
+          "step": 0.05000000074505806,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Seed",
+          "max": 1000.0,
+          "min": 0.0,
+          "name": "seed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.halftone",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Halftone",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "mono",
+            "color"
+          ],
+          "label": "Mode",
+          "max": null,
+          "min": null,
+          "name": "mode",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": 80.0,
+          "enumValues": [],
+          "label": "Cells",
+          "max": 400.0,
+          "min": 10.0,
+          "name": "cells",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 45.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 90.0,
+          "min": -90.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.emboss",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Emboss",
+      "params": [
+        {
+          "animatable": true,
+          "default": 135.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 360.0,
+          "min": -360.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 0.001500000013038516,
+          "enumValues": [],
+          "label": "Distance",
+          "max": 0.009999999776482582,
+          "min": 0.0,
+          "name": "distance",
+          "step": 0.00009999999747378752,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Strength",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "strength",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Keep Color",
+          "max": null,
+          "min": null,
+          "name": "keep_color",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.edge-detect",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Edge Detect",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.0010000000474974513,
+          "enumValues": [],
+          "label": "Width",
+          "max": 0.009999999776482582,
+          "min": 0.00019999999494757503,
+          "name": "width",
+          "step": 0.00009999999747378752,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Strength",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "strength",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Invert",
+          "max": null,
+          "min": null,
+          "name": "invert",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Colored",
+          "max": null,
+          "min": null,
+          "name": "colored",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.drop-shadow",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Drop Shadow",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Color",
+          "max": null,
+          "min": null,
+          "name": "color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": 0.6000000238418579,
+          "enumValues": [],
+          "label": "Opacity",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "opacity",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": -45.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 360.0,
+          "min": -360.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 0.009999999776482582,
+          "enumValues": [],
+          "label": "Distance",
+          "max": 0.20000000298023224,
+          "min": 0.0,
+          "name": "distance",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.009999999776482582,
+          "enumValues": [],
+          "label": "Softness",
+          "max": 0.20000000298023224,
+          "min": 0.0,
+          "name": "softness",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Shadow Only",
+          "max": null,
+          "min": null,
+          "name": "shadow_only",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.outline",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Outline",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Color",
+          "max": null,
+          "min": null,
+          "name": "color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": 0.004000000189989805,
+          "enumValues": [],
+          "label": "Width",
+          "max": 0.029999999329447746,
+          "min": 0.0,
+          "name": "width",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.light-leak",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Light Leak",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            0.550000011920929,
+            0.20000000298023224,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Color",
+          "max": null,
+          "min": null,
+          "name": "color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": 0.6000000238418579,
+          "enumValues": [],
+          "label": "Intensity",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "intensity",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.15000000596046448,
+            0.20000000298023224
+          ],
+          "enumValues": [],
+          "label": "Position",
+          "max": 1.5,
+          "min": -0.5,
+          "name": "position",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.6000000238418579,
+          "enumValues": [],
+          "label": "Size",
+          "max": 2.0,
+          "min": 0.05000000074505806,
+          "name": "size",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.20000000298023224,
+          "enumValues": [],
+          "label": "Speed",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "speed",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Seed",
+          "max": 1000.0,
+          "min": 0.0,
+          "name": "seed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.letterbox",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Letterbox",
+      "params": [
+        {
+          "animatable": true,
+          "default": 2.390000104904175,
+          "enumValues": [],
+          "label": "Aspect",
+          "max": 4.0,
+          "min": 1.0,
+          "name": "aspect",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Color",
+          "max": null,
+          "min": null,
+          "name": "color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Stylize",
+      "id": "alpha2.effect.oil-paint",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Oil Paint",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.004000000189989805,
+          "enumValues": [],
+          "label": "Radius",
+          "max": 0.014999999664723873,
+          "min": 0.0,
+          "name": "radius",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.pixelate",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Pixelate",
+      "params": [
+        {
+          "animatable": true,
+          "default": 48.0,
+          "enumValues": [],
+          "label": "Blocks",
+          "max": 400.0,
+          "min": 2.0,
+          "name": "blocks",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "square",
+            "hexagon"
+          ],
+          "label": "Shape",
+          "max": null,
+          "min": null,
+          "name": "shape",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.crop",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Crop",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Top Left",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "top_left",
+          "step": 0.004999999888241291,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Bottom Right",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "bottom_right",
+          "step": 0.004999999888241291,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.004000000189989805,
+          "enumValues": [],
+          "label": "Feather",
+          "max": 0.20000000298023224,
+          "min": 0.0,
+          "name": "feather",
+          "step": 0.0020000000949949026,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.mirror",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Mirror",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "horizontal",
+            "vertical"
+          ],
+          "label": "Axis",
+          "max": null,
+          "min": null,
+          "name": "axis",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Keep Second Half",
+          "max": null,
+          "min": null,
+          "name": "keep_second_half",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.swirl",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Swirl",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.4000000059604645,
+          "enumValues": [],
+          "label": "Radius",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "radius",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 180.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 1080.0,
+          "min": -1080.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "transparent",
+            "clamp",
+            "repeat",
+            "mirror"
+          ],
+          "label": "Edge",
+          "max": null,
+          "min": null,
+          "name": "edge",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.bulge",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Bulge",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.4000000059604645,
+          "enumValues": [],
+          "label": "Radius",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "radius",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Strength",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "strength",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "transparent",
+            "clamp",
+            "repeat",
+            "mirror"
+          ],
+          "label": "Edge",
+          "max": null,
+          "min": null,
+          "name": "edge",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.wave-warp",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Wave Warp",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.009999999776482582,
+          "enumValues": [],
+          "label": "Amplitude",
+          "max": 0.20000000298023224,
+          "min": 0.0,
+          "name": "amplitude",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.20000000298023224,
+          "enumValues": [],
+          "label": "Wavelength",
+          "max": 2.0,
+          "min": 0.009999999776482582,
+          "name": "wavelength",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 360.0,
+          "min": -360.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Speed",
+          "max": 10.0,
+          "min": -10.0,
+          "name": "speed",
+          "step": 0.05000000074505806,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Phase",
+          "max": 360.0,
+          "min": -360.0,
+          "name": "phase",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": false,
+          "default": 1,
+          "enumValues": [
+            "transparent",
+            "clamp",
+            "repeat",
+            "mirror"
+          ],
+          "label": "Edge",
+          "max": null,
+          "min": null,
+          "name": "edge",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.ripple",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Ripple",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.009999999776482582,
+          "enumValues": [],
+          "label": "Amplitude",
+          "max": 0.10000000149011612,
+          "min": 0.0,
+          "name": "amplitude",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.05000000074505806,
+          "enumValues": [],
+          "label": "Wavelength",
+          "max": 1.0,
+          "min": 0.004999999888241291,
+          "name": "wavelength",
+          "step": 0.0010000000474974513,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Speed",
+          "max": 10.0,
+          "min": -10.0,
+          "name": "speed",
+          "step": 0.05000000074505806,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 2.0,
+          "enumValues": [],
+          "label": "Decay",
+          "max": 10.0,
+          "min": 0.0,
+          "name": "decay",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": 1,
+          "enumValues": [
+            "transparent",
+            "clamp",
+            "repeat",
+            "mirror"
+          ],
+          "label": "Edge",
+          "max": null,
+          "min": null,
+          "name": "edge",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.lens-distortion",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Lens Distortion",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.20000000298023224,
+          "enumValues": [],
+          "label": "K1",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "k1",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "K2",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "k2",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Zoom",
+          "max": 2.0,
+          "min": 0.5,
+          "name": "zoom",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "transparent",
+            "clamp",
+            "repeat",
+            "mirror"
+          ],
+          "label": "Edge",
+          "max": null,
+          "min": null,
+          "name": "edge",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.polar-coordinates",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Polar Coordinates",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "rect_to_polar",
+            "polar_to_rect"
+          ],
+          "label": "Mode",
+          "max": null,
+          "min": null,
+          "name": "mode",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "transparent",
+            "clamp",
+            "repeat",
+            "mirror"
+          ],
+          "label": "Edge",
+          "max": null,
+          "min": null,
+          "name": "edge",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.offset",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Offset",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Shift",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "shift",
+          "step": 0.0010000000474974513,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": 2,
+          "enumValues": [
+            "transparent",
+            "clamp",
+            "repeat",
+            "mirror"
+          ],
+          "label": "Edge",
+          "max": null,
+          "min": null,
+          "name": "edge",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.corner-pin",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Corner Pin",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Top Left",
+          "max": 2.0,
+          "min": -1.0,
+          "name": "top_left",
+          "step": 0.0010000000474974513,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Top Right",
+          "max": 2.0,
+          "min": -1.0,
+          "name": "top_right",
+          "step": 0.0010000000474974513,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Bottom Right",
+          "max": 2.0,
+          "min": -1.0,
+          "name": "bottom_right",
+          "step": 0.0010000000474974513,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Bottom Left",
+          "max": 2.0,
+          "min": -1.0,
+          "name": "bottom_left",
+          "step": 0.0010000000474974513,
+          "type": "vec2",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.shake",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Shake",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.019999999552965164,
+          "enumValues": [],
+          "label": "Amplitude",
+          "max": 0.20000000298023224,
+          "min": 0.0,
+          "name": "amplitude",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 8.0,
+          "enumValues": [],
+          "label": "Frequency",
+          "max": 30.0,
+          "min": 0.10000000149011612,
+          "name": "frequency",
+          "step": 0.10000000149011612,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Rotation",
+          "max": 30.0,
+          "min": 0.0,
+          "name": "rotation",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 1.0499999523162842,
+          "enumValues": [],
+          "label": "Zoom",
+          "max": 2.0,
+          "min": 1.0,
+          "name": "zoom",
+          "step": 0.004999999888241291,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Seed",
+          "max": 1000.0,
+          "min": 0.0,
+          "name": "seed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": 1,
+          "enumValues": [
+            "transparent",
+            "clamp",
+            "repeat",
+            "mirror"
+          ],
+          "label": "Edge",
+          "max": null,
+          "min": null,
+          "name": "edge",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.turbulent-displace",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Turbulent Displace",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.019999999552965164,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 0.20000000298023224,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.20000000298023224,
+          "enumValues": [],
+          "label": "Size",
+          "max": 2.0,
+          "min": 0.009999999776482582,
+          "name": "size",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 3.0,
+          "enumValues": [],
+          "label": "Complexity",
+          "max": 4.0,
+          "min": 1.0,
+          "name": "complexity",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Evolution",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "evolution",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Seed",
+          "max": 1000.0,
+          "min": 0.0,
+          "name": "seed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": 1,
+          "enumValues": [
+            "transparent",
+            "clamp",
+            "repeat",
+            "mirror"
+          ],
+          "label": "Edge",
+          "max": null,
+          "min": null,
+          "name": "edge",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.displacement-map",
+      "inputs": [
+        {
+          "name": "map"
+        }
+      ],
+      "kind": "effect",
+      "label": "Displacement Map",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "red",
+            "green",
+            "blue",
+            "alpha",
+            "luma"
+          ],
+          "label": "Channel X",
+          "max": null,
+          "min": null,
+          "name": "channel_x",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": false,
+          "default": 1,
+          "enumValues": [
+            "red",
+            "green",
+            "blue",
+            "alpha",
+            "luma"
+          ],
+          "label": "Channel Y",
+          "max": null,
+          "min": null,
+          "name": "channel_y",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": 0.019999999552965164,
+          "enumValues": [],
+          "label": "Amount X",
+          "max": 0.20000000298023224,
+          "min": -0.20000000298023224,
+          "name": "amount_x",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.019999999552965164,
+          "enumValues": [],
+          "label": "Amount Y",
+          "max": 0.20000000298023224,
+          "min": -0.20000000298023224,
+          "name": "amount_y",
+          "step": 0.0005000000237487257,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": 1,
+          "enumValues": [
+            "transparent",
+            "clamp",
+            "repeat",
+            "mirror"
+          ],
+          "label": "Edge",
+          "max": null,
+          "min": null,
+          "name": "edge",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.kaleidoscope",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Kaleidoscope",
+      "params": [
+        {
+          "animatable": true,
+          "default": 6.0,
+          "enumValues": [],
+          "label": "Segments",
+          "max": 32.0,
+          "min": 2.0,
+          "name": "segments",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 360.0,
+          "min": -360.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": 3,
+          "enumValues": [
+            "transparent",
+            "clamp",
+            "repeat",
+            "mirror"
+          ],
+          "label": "Edge",
+          "max": null,
+          "min": null,
+          "name": "edge",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "group": "Distort",
+      "id": "alpha2.effect.tile",
+      "inputs": [],
+      "kind": "effect",
+      "label": "Tile",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            2.0,
+            2.0
+          ],
+          "enumValues": [],
+          "label": "Tiles",
+          "max": 32.0,
+          "min": 0.10000000149011612,
+          "name": "tiles",
+          "step": 0.10000000149011612,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Offset",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "offset",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Mirror",
+          "max": null,
+          "min": null,
+          "name": "mirror",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    }
+  ],
+  "transitions": [
+    {
+      "coverage_commutes": true,
+      "group": "Classic",
+      "id": "alpha2.transition.fade",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Fade",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.directional",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Directional",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Direction",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "direction",
+          "step": 0.10000000149011612,
+          "type": "vec2",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Classic",
+      "id": "alpha2.transition.circle-open",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Circle Open",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.30000001192092896,
+          "enumValues": [],
+          "label": "Smoothness",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "smoothness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": true,
+          "enumValues": [],
+          "label": "Opening",
+          "max": null,
+          "min": null,
+          "name": "opening",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Classic",
+      "id": "alpha2.transition.angular",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Angular",
+      "params": [
+        {
+          "animatable": true,
+          "default": 90.0,
+          "enumValues": [],
+          "label": "Starting Angle",
+          "max": 360.0,
+          "min": -360.0,
+          "name": "starting_angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.pixelize",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Pixelize",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            20.0,
+            20.0
+          ],
+          "enumValues": [],
+          "label": "Squares Min",
+          "max": 100.0,
+          "min": 1.0,
+          "name": "squares_min",
+          "step": 1.0,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 50.0,
+          "enumValues": [],
+          "label": "Steps",
+          "max": 200.0,
+          "min": 0.0,
+          "name": "steps",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Classic",
+      "id": "alpha2.transition.directional-wipe",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Directional Wipe",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            -1.0
+          ],
+          "enumValues": [],
+          "label": "Direction",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "direction",
+          "step": 0.10000000149011612,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Smoothness",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "smoothness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.circle",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Circle",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.10000000149011612,
+            0.10000000149011612,
+            0.10000000149011612,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Back Color",
+          "max": null,
+          "min": null,
+          "name": "back_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.cross-warp",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Cross Warp",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.dreamy",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Dreamy",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Classic",
+      "id": "alpha2.transition.radial",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Radial",
+      "params": [
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Smoothness",
+          "max": 2.0,
+          "min": 0.00009999999747378752,
+          "name": "smoothness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.bounce",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Bounce",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            0.6000000238418579
+          ],
+          "enumValues": [],
+          "label": "Shadow Color",
+          "max": null,
+          "min": null,
+          "name": "shadow_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": 0.07500000298023224,
+          "enumValues": [],
+          "label": "Shadow Height",
+          "max": 0.5,
+          "min": 0.0010000000474974513,
+          "name": "shadow_height",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 3.0,
+          "enumValues": [],
+          "label": "Bounces",
+          "max": 10.0,
+          "min": 0.0,
+          "name": "bounces",
+          "step": 0.5,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.directional-scaled",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Directional Scaled",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Direction",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "direction",
+          "step": 0.10000000149011612,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.699999988079071,
+          "enumValues": [],
+          "label": "Scale",
+          "max": 2.0,
+          "min": 0.10000000149011612,
+          "name": "scale",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.slides",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Slides",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "top",
+            "right",
+            "bottom",
+            "left",
+            "top_right",
+            "bottom_right",
+            "bottom_left",
+            "top_left",
+            "center"
+          ],
+          "label": "Origin",
+          "max": null,
+          "min": null,
+          "name": "origin",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Slide In",
+          "max": null,
+          "min": null,
+          "name": "slide_in",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.fold",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Fold",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.directional-easing",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Directional Easing",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Direction",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "direction",
+          "step": 0.10000000149011612,
+          "type": "vec2",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Classic",
+      "id": "alpha2.transition.hsv-fade",
+      "inputs": [],
+      "kind": "transition",
+      "label": "HSV Fade",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.left-right",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Left Right",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Back Color",
+          "max": null,
+          "min": null,
+          "name": "back_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.top-bottom",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Top Bottom",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Back Color",
+          "max": null,
+          "min": null,
+          "name": "back_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.multiply-blend",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Multiply Blend",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.rolls",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Rolls",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "bottom_right",
+            "bottom_left",
+            "top_left",
+            "top_right"
+          ],
+          "label": "Corner",
+          "max": null,
+          "min": null,
+          "name": "corner",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Rot Down",
+          "max": null,
+          "min": null,
+          "name": "rot_down",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.split-slide-in-horizontal",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Split Slide In Horizontal",
+      "params": [
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Reversed",
+          "max": null,
+          "min": null,
+          "name": "reversed",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.split-slide-in-vertical",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Split Slide In Vertical",
+      "params": [
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Reversed",
+          "max": null,
+          "min": null,
+          "name": "reversed",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.split-slide-out-horizontal",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Split Slide Out Horizontal",
+      "params": [
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Reversed",
+          "max": null,
+          "min": null,
+          "name": "reversed",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.split-slide-out-vertical",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Split Slide Out Vertical",
+      "params": [
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Reversed",
+          "max": null,
+          "min": null,
+          "name": "reversed",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.split-slide-in-out-horizontal",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Split Slide In Out Horizontal",
+      "params": [
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Reversed",
+          "max": null,
+          "min": null,
+          "name": "reversed",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.split-slide-in-out-vertical",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Split Slide In Out Vertical",
+      "params": [
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Reversed",
+          "max": null,
+          "min": null,
+          "name": "reversed",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.rotate",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Rotate",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.x-axis-translation",
+      "inputs": [],
+      "kind": "transition",
+      "label": "X Axis Translation",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.cover",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Cover",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "left",
+            "right",
+            "up",
+            "down"
+          ],
+          "label": "Direction",
+          "max": null,
+          "min": null,
+          "name": "direction",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Classic",
+      "id": "alpha2.transition.uncover",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Uncover",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "left",
+            "right",
+            "up",
+            "down"
+          ],
+          "label": "Direction",
+          "max": null,
+          "min": null,
+          "name": "direction",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.wipe-up",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Wipe Up",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.wipe-down",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Wipe Down",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.wipe-left",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Wipe Left",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.wipe-right",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Wipe Right",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.window-blinds",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Window Blinds",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.window-slice",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Window Slice",
+      "params": [
+        {
+          "animatable": true,
+          "default": 10.0,
+          "enumValues": [],
+          "label": "Count",
+          "max": 100.0,
+          "min": 1.0,
+          "name": "count",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Smoothness",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "smoothness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.wind",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Wind",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.20000000298023224,
+          "enumValues": [],
+          "label": "Size",
+          "max": 1.0,
+          "min": 0.00009999999747378752,
+          "name": "size",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Reversed",
+          "max": null,
+          "min": null,
+          "name": "reversed",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.pinwheel",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Pinwheel",
+      "params": [
+        {
+          "animatable": true,
+          "default": 2.0,
+          "enumValues": [],
+          "label": "Speed",
+          "max": 20.0,
+          "min": 0.0,
+          "name": "speed",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.heart",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Heart",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.horizontal-open",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Horizontal Open",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.horizontal-close",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Horizontal Close",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.vertical-open",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Vertical Open",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.vertical-close",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Vertical Close",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Wipes",
+      "id": "alpha2.transition.screen-melt",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Screen Melt",
+      "params": [
+        {
+          "animatable": true,
+          "default": 30.0,
+          "enumValues": [],
+          "label": "Bars",
+          "max": 200.0,
+          "min": 2.0,
+          "name": "bars",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 2.0,
+          "enumValues": [],
+          "label": "Amplitude",
+          "max": 10.0,
+          "min": 0.0,
+          "name": "amplitude",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Noise",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "noise",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Frequency",
+          "max": 10.0,
+          "min": 0.0,
+          "name": "frequency",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Drip Scale",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "drip_scale",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.squares-wire",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Squares Wire",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            10.0,
+            10.0
+          ],
+          "enumValues": [],
+          "label": "Squares",
+          "max": 100.0,
+          "min": 1.0,
+          "name": "squares",
+          "step": 1.0,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            -0.5
+          ],
+          "enumValues": [],
+          "label": "Direction",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "direction",
+          "step": 0.10000000149011612,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.600000023841858,
+          "enumValues": [],
+          "label": "Smoothness",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "smoothness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Wipes",
+      "id": "alpha2.transition.static-wipe",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Static Wipe",
+      "params": [
+        {
+          "animatable": false,
+          "default": true,
+          "enumValues": [],
+          "label": "Up To Down",
+          "max": null,
+          "min": null,
+          "name": "up_to_down",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Max Static Span",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "max_static_span",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Wipes",
+      "id": "alpha2.transition.zoom-left-wipe",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Zoom Left Wipe",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Zoom Quickness",
+          "max": 0.5,
+          "min": 0.009999999776482582,
+          "name": "zoom_quickness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Wipes",
+      "id": "alpha2.transition.zoom-right-wipe",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Zoom Right Wipe",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Zoom Quickness",
+          "max": 0.5,
+          "min": 0.009999999776482582,
+          "name": "zoom_quickness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Wipes",
+      "id": "alpha2.transition.gradient-wipe",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Gradient Wipe",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "linear",
+            "radial",
+            "conic",
+            "diamond",
+            "noise"
+          ],
+          "label": "Pattern",
+          "max": null,
+          "min": null,
+          "name": "pattern",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 360.0,
+          "min": -360.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Softness",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "softness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Noise Scale",
+          "max": 1.0,
+          "min": 0.009999999776482582,
+          "name": "noise_scale",
+          "step": 0.004999999888241291,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Seed",
+          "max": 1000.0,
+          "min": 0.0,
+          "name": "seed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Reversed",
+          "max": null,
+          "min": null,
+          "name": "reversed",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Stylized",
+      "id": "alpha2.transition.color-phase",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Color Phase",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.20000000298023224,
+            0.4000000059604645,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "From Step",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "from_step",
+          "step": 0.009999999776482582,
+          "type": "vec4",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.6000000238418579,
+            0.800000011920929,
+            1.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "To Step",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "to_step",
+          "step": 0.009999999776482582,
+          "type": "vec4",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.fade-color",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Fade Color",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Color",
+          "max": null,
+          "min": null,
+          "name": "color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": 0.4000000059604645,
+          "enumValues": [],
+          "label": "Color Phase",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "color_phase",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Stylized",
+      "id": "alpha2.transition.fade-grayscale",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Fade Grayscale",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.30000001192092896,
+          "enumValues": [],
+          "label": "Intensity",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "intensity",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.morph",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Morph",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Strength",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "strength",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.ripple",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Ripple",
+      "params": [
+        {
+          "animatable": true,
+          "default": 100.0,
+          "enumValues": [],
+          "label": "Amplitude",
+          "max": 200.0,
+          "min": 0.0,
+          "name": "amplitude",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 50.0,
+          "enumValues": [],
+          "label": "Speed",
+          "max": 100.0,
+          "min": 0.0,
+          "name": "speed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.squeeze",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Squeeze",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.03999999910593033,
+          "enumValues": [],
+          "label": "Color Separation",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "color_separation",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.simple-zoom",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Simple Zoom",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.800000011920929,
+          "enumValues": [],
+          "label": "Zoom Quickness",
+          "max": 1.0,
+          "min": 0.20000000298023224,
+          "name": "zoom_quickness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.circle-crop",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Circle Crop",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Back Color",
+          "max": null,
+          "min": null,
+          "name": "back_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.colour-distance",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Colour Distance",
+      "params": [
+        {
+          "animatable": true,
+          "default": 5.0,
+          "enumValues": [],
+          "label": "Power",
+          "max": 20.0,
+          "min": 0.0,
+          "name": "power",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Stylized",
+      "id": "alpha2.transition.polka-dots-curtain",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Polka Dots Curtain",
+      "params": [
+        {
+          "animatable": true,
+          "default": 20.0,
+          "enumValues": [],
+          "label": "Dots",
+          "max": 100.0,
+          "min": 1.0,
+          "name": "dots",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.directional-warp",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Directional Warp",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Smoothness",
+          "max": 1.0,
+          "min": 0.00009999999747378752,
+          "name": "smoothness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            -1.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Direction",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "direction",
+          "step": 0.10000000149011612,
+          "type": "vec2",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Stylized",
+      "id": "alpha2.transition.block-dissolve",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Block Dissolve",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.019999999552965164,
+          "enumValues": [],
+          "label": "Block Size",
+          "max": 0.5,
+          "min": 0.0020000000949949026,
+          "name": "block_size",
+          "step": 0.0010000000474974513,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Stylized",
+      "id": "alpha2.transition.random-squares",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Random Squares",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            10.0,
+            10.0
+          ],
+          "enumValues": [],
+          "label": "Size",
+          "max": 100.0,
+          "min": 1.0,
+          "name": "size",
+          "step": 1.0,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Smoothness",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "smoothness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.burn-noise",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Burn Noise",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            0.5,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Burn Color",
+          "max": null,
+          "min": null,
+          "name": "burn_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Stylized",
+      "id": "alpha2.transition.perlin",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Perlin",
+      "params": [
+        {
+          "animatable": true,
+          "default": 4.0,
+          "enumValues": [],
+          "label": "Scale",
+          "max": 50.0,
+          "min": 0.5,
+          "name": "scale",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.009999999776482582,
+          "enumValues": [],
+          "label": "Smoothness",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "smoothness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 12.989800453186035,
+          "enumValues": [],
+          "label": "Seed",
+          "max": 100.0,
+          "min": 0.0,
+          "name": "seed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.film-burn",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Film Burn",
+      "params": [
+        {
+          "animatable": true,
+          "default": 2.309999942779541,
+          "enumValues": [],
+          "label": "Seed",
+          "max": 100.0,
+          "min": 0.0,
+          "name": "seed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Stylized",
+      "id": "alpha2.transition.overexposure",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Overexposure",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.6000000238418579,
+          "enumValues": [],
+          "label": "Strength",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "strength",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.advanced-mosaic",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Advanced Mosaic",
+      "params": [
+        {
+          "animatable": true,
+          "default": 50.0,
+          "enumValues": [],
+          "label": "Pixel Size",
+          "max": 200.0,
+          "min": 1.0,
+          "name": "pixel_size",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Stylized",
+      "id": "alpha2.transition.burn",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Burn",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.8999999761581421,
+            0.4000000059604645,
+            0.20000000298023224,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Color",
+          "max": null,
+          "min": null,
+          "name": "color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Stylized",
+      "id": "alpha2.transition.crosshatch",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Crosshatch",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 3.0,
+          "enumValues": [],
+          "label": "Threshold",
+          "max": 10.0,
+          "min": 0.10000000149011612,
+          "name": "threshold",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Fade Edge",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "fade_edge",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.butterfly-wave-scrawler",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Butterfly Wave Scrawler",
+      "params": [
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amplitude",
+          "max": 3.0,
+          "min": 0.0,
+          "name": "amplitude",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 30.0,
+          "enumValues": [],
+          "label": "Waves",
+          "max": 100.0,
+          "min": 0.0,
+          "name": "waves",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.30000001192092896,
+          "enumValues": [],
+          "label": "Color Separation",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "color_separation",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.crazy-parametric-fun",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Crazy Parametric Fun",
+      "params": [
+        {
+          "animatable": true,
+          "default": 4.0,
+          "enumValues": [],
+          "label": "A",
+          "max": 10.0,
+          "min": 0.10000000149011612,
+          "name": "a",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "B",
+          "max": 10.0,
+          "min": 0.10000000149011612,
+          "name": "b",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 120.0,
+          "enumValues": [],
+          "label": "Amplitude",
+          "max": 500.0,
+          "min": 0.0,
+          "name": "amplitude",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Smoothness",
+          "max": 1.0,
+          "min": 0.009999999776482582,
+          "name": "smoothness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.edge",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Edge",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.0010000000474974513,
+          "enumValues": [],
+          "label": "Edge Thickness",
+          "max": 0.009999999776482582,
+          "min": 0.0,
+          "name": "edge_thickness",
+          "step": 0.00009999999747378752,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 8.0,
+          "enumValues": [],
+          "label": "Edge Brightness",
+          "max": 20.0,
+          "min": 0.0,
+          "name": "edge_brightness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.fly-eye",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Fly Eye",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.03999999910593033,
+          "enumValues": [],
+          "label": "Size",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "size",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 50.0,
+          "enumValues": [],
+          "label": "Zoom",
+          "max": 200.0,
+          "min": 0.0,
+          "name": "zoom",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.30000001192092896,
+          "enumValues": [],
+          "label": "Color Separation",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "color_separation",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.hexagonalize",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Hexagonalize",
+      "params": [
+        {
+          "animatable": true,
+          "default": 50.0,
+          "enumValues": [],
+          "label": "Steps",
+          "max": 200.0,
+          "min": 0.0,
+          "name": "steps",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 20.0,
+          "enumValues": [],
+          "label": "Horizontal Hexagons",
+          "max": 100.0,
+          "min": 1.0,
+          "name": "horizontal_hexagons",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.kaleidoscope",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Kaleidoscope",
+      "params": [
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Speed",
+          "max": 10.0,
+          "min": 0.0,
+          "name": "speed",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 6.2831854820251465,
+          "min": -6.2831854820251465,
+          "name": "angle",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.5,
+          "enumValues": [],
+          "label": "Power",
+          "max": 10.0,
+          "min": 0.10000000149011612,
+          "name": "power",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.luma-burn",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Luma Burn",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Line Width",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "line_width",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Spread Color",
+          "max": null,
+          "min": null,
+          "name": "spread_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.8999999761581421,
+            0.8999999761581421,
+            0.20000000298023224,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Hot Color",
+          "max": null,
+          "min": null,
+          "name": "hot_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": 5.0,
+          "enumValues": [],
+          "label": "Power",
+          "max": 10.0,
+          "min": 0.10000000149011612,
+          "name": "power",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Intensity",
+          "max": 5.0,
+          "min": 0.0,
+          "name": "intensity",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.luminance-melt",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Luminance Melt",
+      "params": [
+        {
+          "animatable": false,
+          "default": 1,
+          "enumValues": [
+            "up",
+            "down"
+          ],
+          "label": "Direction",
+          "max": null,
+          "min": null,
+          "name": "direction",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": 0.800000011920929,
+          "enumValues": [],
+          "label": "L Threshold",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "l_threshold",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Above",
+          "max": null,
+          "min": null,
+          "name": "above",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.power-kaleido",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Power Kaleido",
+      "params": [
+        {
+          "animatable": true,
+          "default": 2.0,
+          "enumValues": [],
+          "label": "Scale",
+          "max": 10.0,
+          "min": 0.10000000149011612,
+          "name": "scale",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.5,
+          "enumValues": [],
+          "label": "Z",
+          "max": 10.0,
+          "min": 0.10000000149011612,
+          "name": "z",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 5.0,
+          "enumValues": [],
+          "label": "Speed",
+          "max": 20.0,
+          "min": 0.0,
+          "name": "speed",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Stylized",
+      "id": "alpha2.transition.random-noise",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Random Noise",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.swirl",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Swirl",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.undulating-burn-out",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Undulating Burn Out",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.029999999329447746,
+          "enumValues": [],
+          "label": "Smoothness",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "smoothness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Color",
+          "max": null,
+          "min": null,
+          "name": "color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Stylized",
+      "id": "alpha2.transition.water-drop",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Water Drop",
+      "params": [
+        {
+          "animatable": true,
+          "default": 30.0,
+          "enumValues": [],
+          "label": "Amplitude",
+          "max": 100.0,
+          "min": 0.0,
+          "name": "amplitude",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 30.0,
+          "enumValues": [],
+          "label": "Speed",
+          "max": 100.0,
+          "min": 0.0,
+          "name": "speed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Shapes",
+      "id": "alpha2.transition.box",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Box",
+      "params": [
+        {
+          "animatable": false,
+          "default": true,
+          "enumValues": [],
+          "label": "Rect In",
+          "max": null,
+          "min": null,
+          "name": "rect_in",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        },
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "center",
+            "left_top",
+            "left_bottom",
+            "right_top",
+            "right_bottom"
+          ],
+          "label": "Location",
+          "max": null,
+          "min": null,
+          "name": "location",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Shapes",
+      "id": "alpha2.transition.chessboard",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Chessboard",
+      "params": [
+        {
+          "animatable": true,
+          "default": 10.0,
+          "enumValues": [],
+          "label": "Grid Num",
+          "max": 50.0,
+          "min": 1.0,
+          "name": "grid_num",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Shapes",
+      "id": "alpha2.transition.bow-tie",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Bow Tie",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Adjust",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "adjust",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Reversed",
+          "max": null,
+          "min": null,
+          "name": "reversed",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Shapes",
+      "id": "alpha2.transition.bow-tie-horizontal",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Bow Tie Horizontal",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Shapes",
+      "id": "alpha2.transition.bow-tie-vertical",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Bow Tie Vertical",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Shapes",
+      "id": "alpha2.transition.fragment",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Fragment",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Shapes",
+      "id": "alpha2.transition.polar-function",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Polar Function",
+      "params": [
+        {
+          "animatable": true,
+          "default": 5.0,
+          "enumValues": [],
+          "label": "Segments",
+          "max": 20.0,
+          "min": 1.0,
+          "name": "segments",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Shapes",
+      "id": "alpha2.transition.rectangle",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Rectangle",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Bg Color",
+          "max": null,
+          "min": null,
+          "name": "bg_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Shapes",
+      "id": "alpha2.transition.rectangle-crop",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Rectangle Crop",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Bg Color",
+          "max": null,
+          "min": null,
+          "name": "bg_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Shapes",
+      "id": "alpha2.transition.star-wipe",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Star Wipe",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.009999999776482582,
+          "enumValues": [],
+          "label": "Border Thickness",
+          "max": 0.10000000149011612,
+          "min": 0.0,
+          "name": "border_thickness",
+          "step": 0.0010000000474974513,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.75,
+          "enumValues": [],
+          "label": "Star Rotation",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "star_rotation",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Border Color",
+          "max": null,
+          "min": null,
+          "name": "border_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Star Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "star_center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": true,
+      "group": "Shapes",
+      "id": "alpha2.transition.shape-wipe",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Shape Wipe",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "circle",
+            "ellipse",
+            "diamond",
+            "rectangle",
+            "star",
+            "cross"
+          ],
+          "label": "Shape",
+          "max": null,
+          "min": null,
+          "name": "shape",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Aspect",
+          "max": 10.0,
+          "min": 0.10000000149011612,
+          "name": "aspect",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Rotation",
+          "max": 360.0,
+          "min": -360.0,
+          "name": "rotation",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Softness",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "softness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Closing",
+          "max": null,
+          "min": null,
+          "name": "closing",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "3D",
+      "id": "alpha2.transition.cube",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Cube",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.699999988079071,
+          "enumValues": [],
+          "label": "Persp",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "persp",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.30000001192092896,
+          "enumValues": [],
+          "label": "Unzoom",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "unzoom",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.4000000059604645,
+          "enumValues": [],
+          "label": "Reflection",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "reflection",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 3.0,
+          "enumValues": [],
+          "label": "Floating",
+          "max": 100.0,
+          "min": 0.0,
+          "name": "floating",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Back Color",
+          "max": null,
+          "min": null,
+          "name": "back_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "3D",
+      "id": "alpha2.transition.doorway",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Doorway",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.4000000059604645,
+          "enumValues": [],
+          "label": "Reflection",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "reflection",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.4000000059604645,
+          "enumValues": [],
+          "label": "Perspective",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "perspective",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 3.0,
+          "enumValues": [],
+          "label": "Depth",
+          "max": 10.0,
+          "min": 1.0,
+          "name": "depth",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Back Color",
+          "max": null,
+          "min": null,
+          "name": "back_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "3D",
+      "id": "alpha2.transition.swap",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Swap",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.4000000059604645,
+          "enumValues": [],
+          "label": "Reflection",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "reflection",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.20000000298023224,
+          "enumValues": [],
+          "label": "Perspective",
+          "max": 0.30000001192092896,
+          "min": 0.0,
+          "name": "perspective",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 3.0,
+          "enumValues": [],
+          "label": "Depth",
+          "max": 3.0,
+          "min": 1.0,
+          "name": "depth",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Back Color",
+          "max": null,
+          "min": null,
+          "name": "back_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "3D",
+      "id": "alpha2.transition.grid-flip",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Grid Flip",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            4.0,
+            4.0
+          ],
+          "enumValues": [],
+          "label": "Size",
+          "max": 20.0,
+          "min": 1.0,
+          "name": "size",
+          "step": 1.0,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Pause",
+          "max": 0.44999998807907104,
+          "min": 0.009999999776482582,
+          "name": "pause",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.05000000074505806,
+          "enumValues": [],
+          "label": "Divider Width",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "divider_width",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Bg Color",
+          "max": null,
+          "min": null,
+          "name": "bg_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Randomness",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "randomness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "3D",
+      "id": "alpha2.transition.tiles-wave",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Tiles Wave",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            8.0,
+            8.0
+          ],
+          "enumValues": [],
+          "label": "Tile Count",
+          "max": 50.0,
+          "min": 1.0,
+          "name": "tile_count",
+          "step": 1.0,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": true,
+          "enumValues": [],
+          "label": "Flip X",
+          "max": null,
+          "min": null,
+          "name": "flip_x",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Flip Y",
+          "max": null,
+          "min": null,
+          "name": "flip_y",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "3D",
+      "id": "alpha2.transition.book-flip",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Book Flip",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "3D",
+      "id": "alpha2.transition.simple-flip",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Simple Flip",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Back Color",
+          "max": null,
+          "min": null,
+          "name": "back_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "3D",
+      "id": "alpha2.transition.page-peel",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Page Peel",
+      "params": [
+        {
+          "animatable": true,
+          "default": 135.0,
+          "enumValues": [],
+          "label": "Angle",
+          "max": 360.0,
+          "min": -360.0,
+          "name": "angle",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Radius",
+          "max": 0.5,
+          "min": 0.009999999776482582,
+          "name": "radius",
+          "step": 0.004999999888241291,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.6000000238418579,
+          "enumValues": [],
+          "label": "Back Shade",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "back_shade",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.defocus-blur",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Defocus Blur",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.019999999552965164,
+          "enumValues": [],
+          "label": "Blur Size",
+          "max": 0.20000000298023224,
+          "min": 0.0,
+          "name": "blur_size",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.dreamy-zoom",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Dreamy Zoom",
+      "params": [
+        {
+          "animatable": true,
+          "default": 13.5,
+          "enumValues": [],
+          "label": "Rotation",
+          "max": 180.0,
+          "min": -180.0,
+          "name": "rotation",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 1.2000000476837158,
+          "enumValues": [],
+          "label": "Scale",
+          "max": 5.0,
+          "min": 0.10000000149011612,
+          "name": "scale",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.revolve",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Revolve",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.46000000834465027,
+            0.5199999809265137
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": -1.0,
+          "enumValues": [],
+          "label": "Direction",
+          "max": 1.0,
+          "min": -1.0,
+          "name": "direction",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 111.72699737548828,
+          "enumValues": [],
+          "label": "Max Rotation",
+          "max": 360.0,
+          "min": 0.0,
+          "name": "max_rotation",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 163.29299926757812,
+          "enumValues": [],
+          "label": "Swirl",
+          "max": 720.0,
+          "min": 0.0,
+          "name": "swirl",
+          "step": 1.0,
+          "type": "float",
+          "unit": "degrees"
+        },
+        {
+          "animatable": true,
+          "default": 2.2200000286102295,
+          "enumValues": [],
+          "label": "Peak Zoom",
+          "max": 5.0,
+          "min": 0.10000000149011612,
+          "name": "peak_zoom",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.3799999952316284,
+          "enumValues": [],
+          "label": "Barrel",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "barrel",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Motion Blur",
+          "max": 3.0,
+          "min": 0.0,
+          "name": "motion_blur",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.30000001192092896,
+          "enumValues": [],
+          "label": "Switch Start",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "switch_start",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Switch End",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "switch_end",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.1599999964237213,
+          "enumValues": [],
+          "label": "Shadow",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "shadow",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.linear-blur",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Linear Blur",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.10000000149011612,
+          "enumValues": [],
+          "label": "Intensity",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "intensity",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.mosaic-tiles",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Mosaic Tiles",
+      "params": [
+        {
+          "animatable": true,
+          "default": 2.0,
+          "enumValues": [],
+          "label": "End X",
+          "max": 5.0,
+          "min": -5.0,
+          "name": "end_x",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": -1.0,
+          "enumValues": [],
+          "label": "End Y",
+          "max": 5.0,
+          "min": -5.0,
+          "name": "end_y",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.rotate-scale-fade",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Rotate Scale Fade",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Rotations",
+          "max": 5.0,
+          "min": -5.0,
+          "name": "rotations",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 8.0,
+          "enumValues": [],
+          "label": "Scale",
+          "max": 20.0,
+          "min": 0.10000000149011612,
+          "name": "scale",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.15000000596046448,
+            0.15000000596046448,
+            0.15000000596046448,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Back Color",
+          "max": null,
+          "min": null,
+          "name": "back_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.rotate-scale-vanish",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Rotate Scale Vanish",
+      "params": [
+        {
+          "animatable": false,
+          "default": true,
+          "enumValues": [],
+          "label": "Fade In Second",
+          "max": null,
+          "min": null,
+          "name": "fade_in_second",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Reverse Effect",
+          "max": null,
+          "min": null,
+          "name": "reverse_effect",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        },
+        {
+          "animatable": false,
+          "default": false,
+          "enumValues": [],
+          "label": "Reverse Rotation",
+          "max": null,
+          "min": null,
+          "name": "reverse_rotation",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        },
+        {
+          "animatable": true,
+          "default": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "enumValues": [],
+          "label": "Back Color",
+          "max": null,
+          "min": null,
+          "name": "back_color",
+          "step": null,
+          "type": "color",
+          "unit": "color"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.scale-in",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Scale In",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.simple-zoom-out",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Simple Zoom Out",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.800000011920929,
+          "enumValues": [],
+          "label": "Zoom Quickness",
+          "max": 1.0,
+          "min": 0.20000000298023224,
+          "name": "zoom_quickness",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": false,
+          "default": true,
+          "enumValues": [],
+          "label": "Fade",
+          "max": null,
+          "min": null,
+          "name": "fade",
+          "step": null,
+          "type": "bool",
+          "unit": "bool"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.zoom-in-circles",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Zoom In Circles",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.zoom-in-out",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Zoom In Out",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.zoom-blur",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Zoom Blur",
+      "params": [
+        {
+          "animatable": true,
+          "default": [
+            0.5,
+            0.5
+          ],
+          "enumValues": [],
+          "label": "Center",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "center",
+          "step": 0.009999999776482582,
+          "type": "vec2",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.4000000059604645,
+          "enumValues": [],
+          "label": "Strength",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "strength",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Zoom & Blur",
+      "id": "alpha2.transition.whip-pan",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Whip Pan",
+      "params": [
+        {
+          "animatable": false,
+          "default": 0,
+          "enumValues": [
+            "left",
+            "right",
+            "up",
+            "down"
+          ],
+          "label": "Direction",
+          "max": null,
+          "min": null,
+          "name": "direction",
+          "step": null,
+          "type": "enum",
+          "unit": "enum"
+        },
+        {
+          "animatable": true,
+          "default": 0.5,
+          "enumValues": [],
+          "label": "Blur",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "blur",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Glitch",
+      "id": "alpha2.transition.strip-datamosh-glitch",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Strip Datamosh Glitch",
+      "params": [
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Strength",
+          "max": 2.0,
+          "min": 0.0,
+          "name": "strength",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 42.0,
+          "enumValues": [],
+          "label": "Horizontal Bars",
+          "max": 200.0,
+          "min": 1.0,
+          "name": "horizontal_bars",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 18.0,
+          "enumValues": [],
+          "label": "Vertical Slits",
+          "max": 100.0,
+          "min": 1.0,
+          "name": "vertical_slits",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.18000000715255737,
+          "enumValues": [],
+          "label": "Tear",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "tear",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.03200000151991844,
+          "enumValues": [],
+          "label": "Chroma",
+          "max": 0.20000000298023224,
+          "min": 0.0,
+          "name": "chroma",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.6200000047683716,
+          "enumValues": [],
+          "label": "Residue",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "residue",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.1599999964237213,
+          "enumValues": [],
+          "label": "Noise Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "noise_amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.12999999523162842,
+          "enumValues": [],
+          "label": "Scan Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "scan_amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.20000000298023224,
+          "enumValues": [],
+          "label": "Flash Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "flash_amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Glitch",
+      "id": "alpha2.transition.drop-zone-flicker",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Drop Zone Flicker",
+      "params": [
+        {
+          "animatable": true,
+          "default": 24.0,
+          "enumValues": [],
+          "label": "Frame Rate",
+          "max": 60.0,
+          "min": 1.0,
+          "name": "frame_rate",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.014000000432133675,
+          "enumValues": [],
+          "label": "Rgb Offset",
+          "max": 0.10000000149011612,
+          "min": 0.0,
+          "name": "rgb_offset",
+          "step": 0.0010000000474974513,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.7200000286102295,
+          "enumValues": [],
+          "label": "Block Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "block_amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.6200000047683716,
+          "enumValues": [],
+          "label": "Ghost Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "ghost_amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.5799999833106995,
+          "enumValues": [],
+          "label": "Red Cyan",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "red_cyan",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.07500000298023224,
+          "enumValues": [],
+          "label": "Scanline",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "scanline",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Glitch",
+      "id": "alpha2.transition.glitch-displace",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Glitch Displace",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Glitch",
+      "id": "alpha2.transition.old-tv-lost-signal",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Old TV Lost Signal",
+      "params": [],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Glitch",
+      "id": "alpha2.transition.static-fade",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Static Fade",
+      "params": [
+        {
+          "animatable": true,
+          "default": 200.0,
+          "enumValues": [],
+          "label": "N Noise Pixels",
+          "max": 1000.0,
+          "min": 1.0,
+          "name": "n_noise_pixels",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.800000011920929,
+          "enumValues": [],
+          "label": "Static Luminosity",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "static_luminosity",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Glitch",
+      "id": "alpha2.transition.tv-static",
+      "inputs": [],
+      "kind": "transition",
+      "label": "TV Static",
+      "params": [
+        {
+          "animatable": true,
+          "default": 0.05000000074505806,
+          "enumValues": [],
+          "label": "Offset",
+          "max": 0.5,
+          "min": 0.0,
+          "name": "offset",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Glitch",
+      "id": "alpha2.transition.parametric-glitch",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Parametric Glitch",
+      "params": [
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amp X",
+          "max": 10.0,
+          "min": 0.0,
+          "name": "amp_x",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amp Y",
+          "max": 10.0,
+          "min": 0.0,
+          "name": "amp_y",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    },
+    {
+      "coverage_commutes": false,
+      "group": "Glitch",
+      "id": "alpha2.transition.glitch",
+      "inputs": [],
+      "kind": "transition",
+      "label": "Glitch",
+      "params": [
+        {
+          "animatable": true,
+          "default": 1.0,
+          "enumValues": [],
+          "label": "Amount",
+          "max": 1.0,
+          "min": 0.0,
+          "name": "amount",
+          "step": 0.009999999776482582,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.05000000074505806,
+          "enumValues": [],
+          "label": "Block Size",
+          "max": 0.5,
+          "min": 0.004999999888241291,
+          "name": "block_size",
+          "step": 0.004999999888241291,
+          "type": "float",
+          "unit": "normalized"
+        },
+        {
+          "animatable": true,
+          "default": 0.0,
+          "enumValues": [],
+          "label": "Seed",
+          "max": 1000.0,
+          "min": 0.0,
+          "name": "seed",
+          "step": 1.0,
+          "type": "float",
+          "unit": "normalized"
+        }
+      ],
+      "resources": [],
+      "version": 1
+    }
+  ]
+}

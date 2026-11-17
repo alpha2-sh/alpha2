@@ -129,8 +129,9 @@ export class Sha256 {
 }
 
 const HASH_SLICE_MS = 8;
-// About 5 ms of hashing between clock checks.
-const HASH_PIECE_BYTES = 1 << 20;
+const HASH_PIECE_MS = HASH_SLICE_MS / 4;
+const LEAST_PIECE_BYTES = 16 << 10;
+const MOST_PIECE_BYTES = 1 << 20;
 
 // A channel message avoids the timer minimum delay. `scheduler.yield()` is not used because Chrome
 // runs its continuation ahead of timers and the next frame, which starves rendering.
@@ -151,8 +152,9 @@ function yieldToEventLoop(): Promise<void> {
 /**
  * Streams a blob through SHA-256 and returns 64 lowercase hex digits.
  *
- * `onProgress` receives the bytes hashed so far after each piece of at most 1 MiB. Hashing yields
- * to the event loop about every 8 ms so the page stays responsive and `signal` can abort it.
+ * `onProgress` receives the bytes hashed so far after each piece of at most 1 MiB, sized to take
+ * about 2 ms. Hashing yields to the event loop about every 8 ms so the page stays responsive and
+ * `signal` can abort it.
  *
  * Rejects with `signal.reason` on abort, or with the stream's error when the blob cannot be read.
  */
@@ -166,22 +168,37 @@ export async function sha256Blob(
   const hash = new Sha256();
   const reader = blob.stream().getReader();
   let read = 0;
+  let pieceBytes = LEAST_PIECE_BYTES;
   let sliceStart = performance.now();
   try {
     for (;;) {
       options.signal?.throwIfAborted();
       const { done, value } = await reader.read();
       if (done) break;
-      for (let at = 0; at < value.length; at += HASH_PIECE_BYTES) {
+      for (let at = 0; at < value.length;) {
         if (performance.now() - sliceStart >= HASH_SLICE_MS) {
           await yieldToEventLoop();
           options.signal?.throwIfAborted();
           sliceStart = performance.now();
         }
-        const piece = value.subarray(at, at + HASH_PIECE_BYTES);
+        const piece = value.subarray(at, at + pieceBytes);
+        const begun = performance.now();
         hash.update(piece);
+        const took = performance.now() - begun;
+        at += piece.length;
         read += piece.length;
         options.onProgress?.(read);
+        if (piece.length === pieceBytes)
+          pieceBytes = Math.round(
+            Math.min(
+              MOST_PIECE_BYTES,
+              2 * pieceBytes,
+              Math.max(
+                LEAST_PIECE_BYTES,
+                took > 0 ? (pieceBytes * HASH_PIECE_MS) / took : Infinity,
+              ),
+            ),
+          );
       }
     }
   } finally {

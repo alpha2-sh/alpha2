@@ -9,8 +9,8 @@ use super::encoder::{
 };
 use super::ffi::EncParamExt;
 use super::library::{
-    Lookup, MACOS_SYSTEM_CANDIDATES, OpenH264Provider, OpenH264Status, cached_library_path,
-    resolve, system_candidates,
+    Lookup, MACOS_SYSTEM_CANDIDATES, OPENH264_NOTICE, OPENH264_VERSION, OpenH264Provider,
+    OpenH264Status, PINS, cached_library_path, resolve, system_candidates,
 };
 
 fn settings(rate: OpenH264Rate) -> OpenH264Settings {
@@ -494,4 +494,73 @@ fn tempdir(name: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+/// `key = "value"` lines of the manifest by `[section]`, the top level as `""`.
+fn manifest_values() -> Vec<(String, String, String)> {
+    let manifest = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../release/openh264/manifest.toml"),
+    )
+    .expect("the OpenH264 manifest");
+    let mut section = String::new();
+    let mut values = Vec::new();
+    for line in manifest.lines() {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
+            section = name.to_owned();
+        } else if let Some((key, value)) = line.split_once(" = ")
+            && let Some(value) = value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_suffix('"'))
+        {
+            values.push((section.clone(), key.to_owned(), value.to_owned()));
+        }
+    }
+    values
+}
+
+#[test]
+fn the_pinned_libraries_are_the_ones_the_openh264_manifest_names() {
+    let values = manifest_values();
+    let value = |section: &str, key: &str| {
+        values
+            .iter()
+            .find(|(at, name, _)| at == section && name == key)
+            .map(|(_, _, value)| value.as_str())
+    };
+    assert_eq!(value("", "version"), Some(OPENH264_VERSION));
+    assert_eq!(value("", "notice"), Some(OPENH264_NOTICE));
+    let mut targets = values
+        .iter()
+        .filter_map(|(section, _, _)| section.strip_prefix("targets."))
+        .collect::<Vec<_>>();
+    targets.dedup();
+    assert_eq!(
+        targets,
+        PINS.iter().map(|pin| pin.target).collect::<Vec<_>>()
+    );
+    for pin in PINS {
+        let section = format!("targets.{}", pin.target);
+        assert_eq!(value(&section, "library"), Some(pin.library), "{section}");
+        assert_eq!(
+            value(&section, "library_sha256"),
+            Some(pin.sha256),
+            "{section}"
+        );
+        let named = pin
+            .system_candidates
+            .iter()
+            .map(|candidate| candidate.rsplit('/').next().unwrap_or(candidate))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            named.into_iter().collect::<Vec<_>>(),
+            value(&section, "system_library")
+                .into_iter()
+                .collect::<Vec<_>>(),
+            "{section}"
+        );
+    }
 }

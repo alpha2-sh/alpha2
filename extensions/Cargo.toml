@@ -19,17 +19,45 @@ include = [
 
 [features]
 default = ["svg", "animated-image", "image-sequence", "lottie", "exr", "latex", "pdf"]
-# Uses only host-registered fonts, never system fonts. Pixels can still differ by a code value
-# between CPU families and wasm.
-svg = ["dep:resvg", "dep:imagesize", "dep:flate2", "dep:simplecss", "dep:svgtypes", "dep:kurbo"]
+svg = [
+  "dep:resvg",
+  "dep:imagesize",
+  "dep:flate2",
+  "dep:simplecss",
+  "dep:svgtypes",
+  "dep:kurbo",
+  "dep:roxmltree",
+  "dep:usvg",
+  "dep:tiny-skia",
+  "dep:tiny-skia-path",
+]
 animated-image = ["dep:gif", "dep:image-webp", "dep:png"]
 image-sequence = ["dep:png"]
 exr = ["dep:exr", "dep:half"]
-# Typesets with the bundled STIX Two Math font only.
 latex = ["svg", "dep:latex-rust"]
-# Draws fonts a PDF does not embed with hayro's bundled standard 14 and reports any it substitutes.
-pdf = ["svg", "dep:hayro-svg"]
-lottie = ["dep:velato", "dep:kurbo", "dep:peniko", "dep:resvg", "dep:zip", "dep:serde_json", "dep:png", "dep:base64"]
+pdf = [
+  "svg",
+  "dep:hayro-svg",
+  "dep:hayro-interpret",
+  "dep:hayro-syntax",
+  "dep:hayro-jpeg2000",
+  "dep:hayro-jbig2",
+  "dep:hayro-ccitt",
+]
+lottie = [
+  "dep:velato",
+  "dep:kurbo",
+  "dep:peniko",
+  "dep:resvg",
+  "dep:zip",
+  "dep:serde_json",
+  "dep:png",
+  "dep:base64",
+  "dep:roxmltree",
+  "dep:usvg",
+  "dep:tiny-skia",
+  "dep:tiny-skia-path",
+]
 
 [dependencies]
 alpha2-model.workspace = true
@@ -41,23 +69,32 @@ png = { workspace = true, optional = true }
 hayro-svg = { version = "=0.9.0", optional = true }
 imagesize = { version = "0.14.0", optional = true }
 latex-rust = { version = "=3.0.1", optional = true, default-features = false, features = ["std"] }
-resvg = { version = "0.47.0", optional = true, default-features = false, features = ["text", "raster-images"] }
+resvg = { version = "=0.47.0", optional = true, default-features = false, features = ["text", "raster-images"] }
 serde_json = { workspace = true, optional = true }
-velato = { version = "0.12.0", optional = true, default-features = false }
-kurbo = { version = "0.13.1", optional = true }
+velato = { version = "=0.12.0", optional = true, default-features = false }
+kurbo = { version = "=0.13.1", optional = true }
 peniko = { version = "0.6.1", optional = true }
 base64 = { version = "0.22.1", optional = true }
-exr = { version = "1.74.2", optional = true, default-features = false }
+exr = { version = "=1.74.3", optional = true, default-features = false }
 half = { version = "2.6.0", optional = true }
 flate2 = { version = "1.1.10", optional = true }
-simplecss = { version = "0.2.2", optional = true }
-svgtypes = { version = "0.16.1", optional = true }
-zip = { version = "9.0.5", optional = true, default-features = false, features = ["deflate"] }
+simplecss = { version = "=0.2.2", optional = true }
+svgtypes = { version = "=0.16.1", optional = true }
+zip = { version = "=9.0.5", optional = true, default-features = false, features = ["deflate"] }
+# The cost models are written against these versions of the converters; a pin moves with a re-read.
+roxmltree = { version = "=0.21.1", optional = true, default-features = false }
+usvg = { version = "=0.47.0", optional = true, default-features = false }
+tiny-skia = { version = "=0.12.0", optional = true, default-features = false }
+tiny-skia-path = { version = "=0.12.0", optional = true, default-features = false }
+hayro-interpret = { version = "=0.9.0", optional = true, default-features = false }
+hayro-syntax = { version = "=0.9.0", optional = true, default-features = false }
+hayro-jpeg2000 = { version = "=0.5.0", optional = true, default-features = false }
+hayro-jbig2 = { version = "=0.4.0", optional = true, default-features = false }
+hayro-ccitt = { version = "=0.5.0", optional = true, default-features = false }
 
 [dev-dependencies]
 alpha2-scaling-support.workspace = true
 serde_json.workspace = true
-# Tests encode their own fixtures, so each format's tests build with that format alone.
 base64 = "0.22.1"
 gif = { version = "0.14.2", default-features = false, features = ["std", "color_quant"] }
 png.workspace = true

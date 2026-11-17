@@ -371,6 +371,7 @@ function findLayoutBox(
     if (box.type === "stsd") {
       // Skip the full-box header and entry count.
       for (const entry of boxes(bytes, box.payload + 8, box.end)) {
+        if (entry.payload + 10 > entry.end) continue;
         const view = new DataView(bytes.buffer, bytes.byteOffset);
         const version = view.getUint16(entry.payload + 8);
         // QuickTime sound descriptions grow by 16 (v1) or 36 (v2) bytes; ISO v1 does not, so try
@@ -394,9 +395,9 @@ function findLayoutBox(
 function trackId(bytes: Uint8Array, trak: { payload: number; end: number }) {
   for (const box of boxes(bytes, trak.payload, trak.end)) {
     if (box.type !== "tkhd") continue;
-    const view = new DataView(bytes.buffer, bytes.byteOffset);
-    const version = bytes[box.payload];
-    return view.getUint32(box.payload + (version === 1 ? 20 : 12));
+    const at = box.payload + (bytes[box.payload] === 1 ? 20 : 12);
+    if (at + 4 > box.end) return null;
+    return new DataView(bytes.buffer, bytes.byteOffset).getUint32(at);
   }
   return null;
 }

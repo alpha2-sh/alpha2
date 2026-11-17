@@ -9,18 +9,25 @@ cargo-fuzz = true
 
 [dependencies]
 alpha2-audio = { path = "../crates/alpha2-audio" }
+alpha2-compose = { path = "../crates/alpha2-compose" }
+alpha2-container = { path = "../crates/alpha2-container" }
 alpha2-engine = { path = "../crates/alpha2-engine" }
 alpha2-eval = { path = "../crates/alpha2-eval" }
 alpha2-extensions = { path = "../extensions" }
 alpha2-geometry = { path = "../crates/alpha2-geometry" }
+alpha2-gpu = { path = "../crates/alpha2-gpu" }
+alpha2-host-core = { path = "../bindings/alpha2-host-core", default-features = false, features = ["requests"] }
 alpha2-media = { path = "../crates/alpha2-media" }
 alpha2-model = { path = "../crates/alpha2-model" }
+alpha2-plugin-abi = { path = "../crates/alpha2-plugin-abi" }
+alpha2-render = { path = "../crates/alpha2-render" }
 alpha2-text = { path = "../bindings/alpha2-text" }
 alpha2-time = { path = "../crates/alpha2-time" }
 libfuzzer-sys = "0.4"
 serde = "1.0.229"
 serde_json = "1.0.149"
 typed-arena = "2"
+wgpu = { version = "30.0.1", default-features = false, features = ["wgsl"] }
 
 [[bin]]
 name = "project_from_json"
@@ -109,6 +116,10 @@ bench = false
 [workspace]
 members = ["."]
 
+# Matches the product's release profile, so arithmetic that panics there panics here.
+[profile.release]
+overflow-checks = true
+
 [[bin]]
 name = "vector_raster"
 path = "fuzz_targets/vector_raster.rs"
@@ -129,3 +140,122 @@ path = "fuzz_targets/layout_values.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "container_mp4"
+path = "fuzz_targets/container_mp4.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "container_audio"
+path = "fuzz_targets/container_audio.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "container_matroska"
+path = "fuzz_targets/container_matroska.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "still_decode"
+path = "fuzz_targets/still_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "host_frames"
+path = "fuzz_targets/host_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "project_data"
+path = "fuzz_targets/project_data.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extract_emits"
+path = "fuzz_targets/extract_emits.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plugin_records"
+path = "fuzz_targets/plugin_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "plugin_manifest"
+path = "fuzz_targets/plugin_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "edit_apply"
+path = "fuzz_targets/edit_apply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compose_compile"
+path = "fuzz_targets/compose_compile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "effect_validate"
+path = "fuzz_targets/effect_validate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lut_cube"
+path = "fuzz_targets/lut_cube.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text_raster"
+path = "fuzz_targets/text_raster.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "font_bytes"
+path = "fuzz_targets/font_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "host_requests"
+path = "fuzz_targets/host_requests.rs"
+test = false
+doc = false
+bench = false
+
+# exr's B44 decoder is a port of C code that relies on wrapping arithmetic on crafted blocks.
+[profile.release.package.exr]
+overflow-checks = false
+
+[profile.dev.package.exr]
+overflow-checks = false

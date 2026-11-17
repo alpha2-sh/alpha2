@@ -732,7 +732,7 @@ fn a_surface_that_cannot_be_imported_reaches_the_frame_through_a_download() {
     // Without the shared context the import fails like a failed per-frame allocation; the frame
     // must still arrive from the CPU.
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let frames = NativeGpuFrames::new(size);
+    let frames = NativeGpuFrames::new(size, crate::frames::next_cache_scope());
     let mut metrics = FrameInstallMetrics::default();
     let (upload, imported) = frames
         .upload_or_download(&renderer, &frame, &mut metrics)
@@ -776,7 +776,7 @@ fn a_surface_that_cannot_be_imported_reaches_the_frame_through_a_download() {
         "the frame has content to compare"
     );
 
-    let mut strict = NativeGpuFrames::new(size);
+    let mut strict = NativeGpuFrames::new(size, crate::frames::next_cache_scope());
     strict.import_fallback = false;
     let Err(error) =
         strict.upload_or_download(&renderer, &frame, &mut FrameInstallMetrics::default())
@@ -854,7 +854,7 @@ fn export_with_a_surface_fault(
         }]}]}
     });
     let request = json!({
-        "protocolVersion": 1, "requestId": "surface-fault", "operation": "export",
+        "protocolVersion": 2, "requestId": "surface-fault", "operation": "export",
         "project": project,
         "assets": {"video": corpus("h264-bt709-transcode.mp4")},
         "startTicks": 0, "endTicks": end,
@@ -1023,7 +1023,7 @@ fn a_synchronous_export_decodes_in_software() {
     let directory = scratch_directory("pipeline-off-decode");
     let request = |name: &str| {
         let mut request = json!({
-            "protocolVersion": 1, "requestId": name, "operation": "export",
+            "protocolVersion": 2, "requestId": name, "operation": "export",
             "project": conform_project(&json!({})),
             "assets": {"video": corpus("h264-bt709-copy.mp4")},
             "startTicks": 0, "endTicks": 120_000,
@@ -1140,4 +1140,143 @@ fn a_build_without_hardware_decode_refuses_hardware_required_at_startup() {
         ),
         _ => {}
     }
+}
+
+#[cfg(all(target_os = "linux", feature = "hwdecode"))]
+fn open_hardware(
+    name: &str,
+    context: &alpha2_native_gpu::SharedVulkanContext,
+) -> alpha2_native::NativeExportDecoder {
+    alpha2_native::NativeExportDecoder::open_vulkan(corpus(name), 1, context, 1)
+        .expect("a hardware decoder")
+}
+
+#[cfg(all(target_os = "macos", feature = "hwdecode"))]
+fn open_hardware(
+    name: &str,
+    context: &alpha2_native_gpu::SharedMetalContext,
+) -> alpha2_native::NativeExportDecoder {
+    alpha2_native::NativeExportDecoder::open_videotoolbox(corpus(name), 1, context, 1)
+        .expect("a hardware decoder")
+}
+
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwdecode"))]
+#[test]
+fn extraction_reads_the_same_bytes_from_hardware_and_software_decode() {
+    // H.264 and HEVC decode bit-exactly, so a downloaded surface presents as the software frame,
+    // at 8 and 10 bits and with surfaces taller than the picture.
+    let _gpu = gpu_test_lock();
+    let Some(context) = parity_device() else {
+        return;
+    };
+    let renderer = alpha2_render::CpuRenderer::new(1);
+    let cancel = CancelToken::default();
+    let present = |frame: alpha2_media::DecodedVideoFrame| {
+        alpha2_engine::extract::present_for_extraction(&renderer, Arc::new(frame), 96)
+            .expect("the frame presents")
+    };
+    for (name, codec, ten_bit) in [
+        ("h264-long-gop.mp4", "h264", false),
+        ("h264-padded.mp4", "h264", false),
+        ("hevc-padded.mp4", "hevc", false),
+        ("hevc-main10-padded.mp4", "hevc", true),
+    ] {
+        if decodes_in_hardware(&context, codec, ten_bit) != Some(true) {
+            eprintln!("{name}: this device does not decode it in hardware");
+            continue;
+        }
+        let mut hardware = open_hardware(name, &context);
+        let mut software = alpha2_native::NativeExportDecoder::open_with_threads(corpus(name), 1)
+            .expect("a software decoder");
+        for index in 0..10 {
+            let surface = hardware
+                .decode_video_next(&cancel)
+                .expect("hardware decodes")
+                .expect("a hardware frame");
+            let frame = software
+                .decode_video_next(&cancel)
+                .expect("software decodes")
+                .expect("a software frame");
+            assert!(surface.is_hardware(), "{name}");
+            let downloaded = present(surface.to_cpu().expect("the surface downloads"));
+            let decoded = present(frame.as_cpu().expect("a CPU frame").clone());
+            assert_eq!(downloaded.pts, decoded.pts, "{name} frame {index}");
+            assert!(
+                downloaded.rgba == decoded.rgba,
+                "{name} frame {index} differs"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_strict_export_with_a_software_frame_fails_before_its_output_exists() {
+    let _gpu = gpu_test_lock();
+    let mut host = match create_gpu_media_host(VideoDecodePolicy::HardwareRequired) {
+        Ok(host) => host,
+        Err(error) => {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::HardwareDecodeImport,
+                "the hardware-required host was refused: {}",
+                error.message
+            );
+            return;
+        }
+    };
+    let directory = scratch_directory("strict-software-frame");
+    let end = alpha2_time::TICKS_PER_SECOND / 2;
+    let request = |input_policy: &str, codec: &str| {
+        json!({
+            "protocolVersion": 2, "operation": "export", "requestId": "strict",
+            "project": {
+                "schema_version": 1, "id": "strict", "name": "Strict",
+                "settings": {"width": 640, "height": 360, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+                "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+                "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                    "id": "clip", "source_id": "video",
+                    "timeline_range": {"start": 0, "end": end},
+                    "source_range": {"start": 0, "end": end}
+                }]}]}
+            },
+            "assets": {"video": corpus("h264-long-gop.mp4")},
+            "startTicks": 0, "endTicks": end,
+            "frameRate": {"num": 30, "den": 1},
+            "includeAudio": false,
+            "videoCodec": codec,
+            "inputPolicy": input_policy,
+            "output": directory.join("strict.mp4")
+        })
+        .to_string()
+    };
+    #[allow(unused_mut)]
+    let mut paths = vec![("cpu-readback", "mpeg4-part2")];
+    #[cfg(all(
+        any(target_os = "linux", target_os = "macos", target_os = "windows"),
+        feature = "hwencode"
+    ))]
+    if h264_gpu_output(&host).is_ok() {
+        paths.push(("gpu-required", "h264"));
+    }
+    for (input_policy, codec) in paths {
+        crate::host::INJECT_SOFTWARE_FRAMES.with(|frames| frames.set(1));
+        let error = host
+            .handle(
+                parse_request(&request(input_policy, codec)).expect("request"),
+                &mut |_| Ok(()),
+            )
+            .expect_err("a software frame under hardware-required");
+        assert!(
+            error
+                .message
+                .contains("hardware decode is required but 1 of"),
+            "{input_policy}: {}",
+            error.message
+        );
+        let left: Vec<_> = std::fs::read_dir(&directory)
+            .expect("directory")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert!(left.is_empty(), "{input_policy}: {left:?}");
+    }
+    std::fs::remove_dir_all(&directory).ok();
 }

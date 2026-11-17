@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { ExportFailureError } from "alpha2/export-failure";
 import { createEditor, EditorError } from "../dist/index.js";
 import { ExportJob } from "../dist/browser/jobs.js";
@@ -30,6 +31,73 @@ function job(backend, options = noWait) {
     options,
   );
 }
+
+const corpus = JSON.parse(
+  await readFile(
+    new URL("../../../tests/cases/retry-decisions.json", import.meta.url),
+    "utf8",
+  ),
+);
+
+test("the job loop follows the retry decisions corpus", async () => {
+  for (const { name, history, options, decision } of corpus.cases) {
+    const attempts = [];
+    const delays = [];
+    const exported = job(
+      {
+        async run(_doc, _signal, _progress, attempt) {
+          attempts.push(attempt);
+          const failed = history[attempt.number - 1];
+          if (failed === undefined) return artifact;
+          throw failure(failed.failure.code, {
+            origin: "native-host",
+            ...failed.failure,
+          });
+        },
+      },
+      {
+        retry: { ...options, pageGpuLosses: options.pageGpuLosses ?? 0 },
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+      },
+    );
+    const settled = await exported.result.then(
+      () => undefined,
+      (error) => error,
+    );
+    const ran = attempts.map(({ profile, renderer, videoEncoder }) => ({
+      profile: profile.name,
+      renderer,
+      videoEncoder,
+    }));
+    assert.deepEqual(
+      ran.slice(0, history.length),
+      history.map(({ profile, renderer, videoEncoder }) => ({
+        profile,
+        renderer,
+        videoEncoder,
+      })),
+      `${name}: attempts`,
+    );
+    if (decision.retry) {
+      assert.equal(settled, undefined, name);
+      assert.deepEqual(
+        { delayMs: delays.at(-1), ...ran[history.length] },
+        {
+          delayMs: decision.delayMs,
+          profile: decision.profile,
+          renderer: decision.renderer,
+          videoEncoder: decision.videoEncoder,
+        },
+        name,
+      );
+    } else {
+      assert.equal(attempts.length, history.length, name);
+      assert.equal(settled.failure.code, decision.failureCode, name);
+    }
+  }
+});
 
 test("a lost device is retried whole on a fresh run, and the job records why", async () => {
   const attempts = [];

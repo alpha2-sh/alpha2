@@ -303,9 +303,15 @@ pub fn check_audio_provider<P: AudioBlockProvider>(
     }
 }
 
+/// The repository's `tests/`, or `ALPHA2_TESTS_DIR` where a device runs the tests from a copy.
 fn tests_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("tests/")
-        .to_owned()
+    std::env::var_os("ALPHA2_TESTS_DIR").map_or_else(
+        || {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("tests/")
+                .to_owned()
+        },
+        PathBuf::from,
+    )
 }

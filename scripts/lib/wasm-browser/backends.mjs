@@ -365,6 +365,31 @@ report({
 `;
 }
 
+// naga recurses once per arm of an else-if chain, and the WebGL2 module has a 1 MiB stack: a
+// 900-arm chain must fail its registration with a diagnostic, not trap the module.
+export function webgl2ElseIfChain() {
+  return `
+Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(16, 16));
+const effect = (id, body) => JSON.stringify({ id, version: 1, kind: "effect", params: [], wgslBody: body });
+const chain = (arms) => "fn effect(uv: vec2f, src: vec4f) -> vec4f { let b = src.a > 2.0; var x = src.r; if b { x += 1.0; }" +
+  "else if b { x += 1.0; }".repeat(arms - 1) + " return vec4f(x); }";
+const attempt = async (definition) => {
+  try { return { registered: engine.registerCompiledEffect(await engine.compileEffect(definition)) }; } catch (error) {
+    return { name: error?.name ?? null, code: error?.code ?? null, message: String(error?.message ?? error).slice(0, 300) };
+  }
+};
+const long = await attempt(effect("test.long", chain(900)));
+const short = await attempt(effect("test.short", chain(40)));
+report({
+  ok: long.code === "EFFECT_ERROR" && long.message.includes("switch") && short.registered === "test.short@1",
+  long, short,
+});
+`;
+}
+
 // Without EXT_color_buffer_float, uploads must not ask for RENDER_ATTACHMENT on RGBA16F or
 // R16F/RG16F textures, which invalidates them.
 export function webgl2WithoutFloatColorBuffers() {
@@ -476,7 +501,7 @@ await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
 webgpuAdapter(engine);
 const adapter = JSON.parse(engine.diagnostics()).adapter;
-const info = (await navigator.gpu.requestAdapter())?.info ?? {};
+const info = /** @type {Partial<GPUAdapterInfo>} */ ((await navigator.gpu.requestAdapter())?.info ?? {});
 const texts = ["vendor", "architecture", "device", "description"];
 const keys = texts.every((key) => typeof adapter[key] === "string") &&
   typeof adapter.isFallbackAdapter === "boolean";
@@ -587,15 +612,32 @@ const prepare = (engine) => {
   engine.loadProject(JSON.stringify(project));
   engine.uploadRgbaImage("image-source", 64, 48, new Uint8Array(64 * 48 * 4).fill(255));
 };
+const panics = [];
+const consoleError = console.error;
+console.error = (...args) => {
+  if (args.some((arg) => /Alpha2Panic|panicked/.test(String(arg?.name ?? "") + String(arg?.message ?? arg)))) panics.push(String(args[0]));
+  consoleError.apply(console, args);
+};
+/** @type {{ name: string | null, code: string | null, fatal: boolean | null } | null} */
+let rejection = null;
 const exportFrame = async (engine) => {
   try {
     const ticket = engine.beginExportAt(0n, "h264");
     if (ticket.kind === "rendered") await ticket.readback;
     return ticket.kind;
   } catch (error) {
+    rejection = { name: error?.name ?? null, code: error?.code ?? null, fatal: error?.fatal ?? null };
     return "rejected: " + String(error?.message ?? error);
   }
 };
+// Which WebGL calls return null on a lost context, per browser; wgpu's GL backend unwraps them.
+const nullProbe = (gl) => ({
+  createTexture: gl.createTexture() === null,
+  createShader: gl.createShader(gl.VERTEX_SHADER) === null,
+  createProgram: gl.createProgram() === null,
+  createRenderbuffer: gl.createRenderbuffer() === null,
+  createSampler: gl.createSampler() === null,
+});
 const settle = (promise, ms) => Promise.race([
   promise.then((value) => ({ value }), (error) => ({ error })),
   new Promise((resolve) => setTimeout(() => resolve({ unsettled: true }), ms)),
@@ -609,6 +651,7 @@ if (!lose) throw new Error("this browser offers no WEBGL_lose_context");
 lose.loseContext();
 await new Promise((resolve) => setTimeout(resolve, 50));
 const after = engine.deviceLost;
+const nulls = nullProbe(gl);
 const exported = await exportFrame(engine);
 engine.free();
 // The browser restores a context only when its loss was cancelled.
@@ -633,12 +676,16 @@ if (again.value) {
 }
 report({
   ok: before === false && after === true && exported.startsWith("rejected") &&
+    rejection?.code === "GPU_DEVICE_LOST" && rejection.fatal === true &&
     recreated === "resolved" && reexported === "rendered" && lostAgain === false &&
     unrestored?.settled === true && unrestored.code === "GPU_DEVICE_LOST" && !unrestored.resolved &&
-    pageErrors.length === 0,
+    pageErrors.length === 0 && panics.length === 0,
   before,
   after,
   exported,
+  rejection,
+  nulls,
+  panics,
   recreated,
   reexported,
   lostAgain,
@@ -731,7 +778,8 @@ await new Promise((resolve, reject) => {
   worker.postMessage({ type: "test-lose" });
 });
 await new Promise((resolve) => setTimeout(resolve, 50));
-const duringLoss = await settle(backend.present(0n), 10000);
+// Another time than the last, so the lost renderer must draw rather than answer "unchanged".
+const duringLoss = await settle(backend.present(24000n), 10000);
 const lostBeforeRecover = backend.isDeviceLost();
 const recovered = await settle(backend.recover({ renderer: "gpu", surface: "same", reason: "restored" }), 15000);
 const lostAfterRecover = backend.isDeviceLost();
@@ -776,7 +824,7 @@ const exportFrame = async () => {
 };
 const first = await exportFrame();
 const submit = GPUQueue.prototype.submit;
-GPUQueue.prototype.submit = function () {};
+GPUQueue.prototype.submit = function () { return undefined; };
 const dropped = await exportFrame();
 GPUQueue.prototype.submit = submit;
 const lost = engine.deviceLost;
@@ -798,6 +846,7 @@ export function webgpuRejectedFrame() {
   return `
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const requestDevice = GPUAdapter.prototype.requestDevice;
+/** @type {GPUDevice | null} */
 let device = null;
 GPUAdapter.prototype.requestDevice = async function (...args) {
   device = await requestDevice.apply(this, args);
@@ -1115,6 +1164,148 @@ report({
     && uncaptured.length === 0 && !engine.deviceLost,
   luma,
   ...(uncaptured.length ? { uncaptured } : {}),
+});
+`;
+}
+
+// Calls made right after a WebGL context is lost, before its event is dispatched, are refused
+// with a coded fatal loss: an upload of a new size, a new effect and a draw of another time.
+export function webglWorkerLostCalls() {
+  return `
+const origin = location.origin;
+const source = \`
+Object.defineProperty(WorkerNavigator.prototype, "gpu", { get: () => undefined });
+const wasm = await import("\${origin}/packages/alpha2/wasm/alpha2_wasm.js");
+await wasm.default();
+const project = await fetch("\${origin}/tests/cases/host-parity-project.json").then((response) => response.text());
+const outcome = (work) => {
+  try {
+    const value = work();
+    return { ok: true, value: value instanceof Promise ? "promise" : typeof value };
+  } catch (error) {
+    return { name: error?.name ?? null, code: error?.code ?? null, fatal: error?.fatal ?? null, message: String(error?.message ?? error) };
+  }
+};
+let result;
+try {
+  const canvas = new OffscreenCanvas(64, 48);
+  const engine = await wasm.WebEffectRegistry.createForCanvas(canvas).catch((error) => {
+    if (new OffscreenCanvas(1, 1).getContext("webgl2") === null) return null;
+    throw error;
+  });
+  if (engine === null) result = { skipped: "no WebGL2 in the worker" };
+  else if (engine.backend !== "webgl2") result = { skipped: "the worker renderer is " + engine.backend };
+  else {
+    engine.loadProject(project);
+    engine.uploadRgbaImage("image-source", 64, 48, new Uint8Array(64 * 48 * 4).fill(255));
+    const before = outcome(() => engine.renderAt(0n));
+    const compiled = await engine.compileEffect(JSON.stringify({ id: "test.lost", version: 1, kind: "effect", params: [],
+      wgslBody: "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src; }" }));
+    canvas.getContext("webgl2").getExtension("WEBGL_lose_context").loseContext();
+    // Synchronously after the loss: the context-lost event has not been dispatched yet.
+    const lostFlag = engine.deviceLost;
+    const upload = outcome(() => engine.uploadRgbaImage("image-source", 96, 72, new Uint8Array(96 * 72 * 4).fill(128)));
+    const register = outcome(() => engine.registerCompiledEffect(compiled));
+    const compile = outcome(() => engine.compileEffect(JSON.stringify({ id: "test.other", version: 1, kind: "effect", params: [],
+      wgslBody: "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src.bgra; }" })));
+    const render = outcome(() => engine.renderAt(24000n));
+    const resize = outcome(() => engine.resizeSurface(96, 72));
+    const exported = outcome(() => engine.beginExportAt(0n, "h264"));
+    result = { before, lostFlag, upload, register, compile, render, resize, exported, deviceLost: engine.deviceLost };
+  }
+} catch (error) {
+  result = { thrown: { name: error?.name ?? null, code: error?.code ?? null, message: String(error?.message ?? error) } };
+}
+self.postMessage({ type: "test-result", result });
+\`;
+const worker = new Worker(URL.createObjectURL(new Blob([source], { type: "text/javascript" })), { type: "module" });
+const workerErrors = [];
+const result = await new Promise((resolve) => {
+  worker.addEventListener("message", (event) => {
+    if (event.data?.type === "test-result") resolve(event.data.result);
+  });
+  worker.addEventListener("error", (event) => {
+    workerErrors.push(String(event.message));
+    resolve({ thrown: { message: String(event.message) } });
+  });
+});
+worker.terminate();
+if (result.skipped) skip("webgl2", result.skipped);
+const refused = (entry) => entry?.code === "GPU_DEVICE_LOST" && entry.fatal === true;
+const calls = ["upload", "register", "compile", "render", "resize", "exported"];
+report({
+  ok: result.before?.ok === true && calls.every((name) => refused(result[name])) && result.deviceLost === true
+    && workerErrors.length === 0,
+  ...result, workerErrors,
+});
+`;
+}
+
+// A browser exception at the binding's frame import (WebGL2) or readback copy-out comes back as a
+// coded error, and the renderer keeps working after it.
+export function bindingBrowserExceptions() {
+  return `
+Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.text());
+const describe = (error) => ({ name: error?.name ?? null, code: error?.code ?? null, failure: error?.failure?.code ?? null,
+  stage: error?.failure?.stage ?? null, message: String(error?.message ?? error) });
+const attempt = async (work) => {
+  try {
+    await work();
+    return { ok: true };
+  } catch (error) {
+    return describe(error);
+  }
+};
+const frame = (value, width = 64, height = 48) => new VideoFrame(new Uint8Array(width * height * 4).fill(value),
+  { format: "RGBA", codedWidth: width, codedHeight: height, timestamp: 0 });
+const throwOnce = (target, name, error) => {
+  const original = target[name];
+  target[name] = function () {
+    target[name] = original;
+    throw error;
+  };
+  return () => (target[name] = original);
+};
+const exportOnce = async (engine) => {
+  const ticket = engine.beginExportAt(0n, "h264");
+  if (ticket.kind !== "rendered") throw new Error("the frame waits: " + ticket.kind);
+  await ticket.readback;
+};
+const results = {};
+const gpu = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+if (gpu.backend !== "webgl2") skip("webgl2", "the GPU renderer is " + gpu.backend);
+gpu.loadProject(project);
+results.firstUpload = await attempt(() => gpu.uploadVideoFrame("image-source", 0n, frame(200)));
+let restore = throwOnce(OffscreenCanvasRenderingContext2D.prototype, "drawImage", new TypeError("injected drawImage failure"));
+results.importThrows = await attempt(() => gpu.uploadVideoFrame("image-source", 0n, frame(100)));
+restore();
+results.importAfter = await attempt(() => gpu.uploadVideoFrame("image-source", 0n, frame(150)));
+results.renderAfter = await attempt(() => gpu.renderAt(0n));
+restore = throwOnce(Uint8Array.prototype, "slice", new RangeError("injected copy-out failure"));
+results.copyOutThrows = await Promise.race([
+  attempt(() => exportOnce(gpu)),
+  new Promise((resolve) => setTimeout(() => resolve({ unsettled: true }), 10000)),
+]);
+restore();
+results.exportAfter = await attempt(() => exportOnce(gpu));
+gpu.free();
+const cpu = WebEffectRegistry.createCpu(new OffscreenCanvas(64, 48));
+cpu.loadProject(project);
+cpu.uploadRgbaImage("image-source", 64, 48, new Uint8Array(64 * 48 * 4).fill(255));
+restore = throwOnce(Uint8Array.prototype, "slice", new RangeError("injected copy-out failure"));
+results.cpuCopyOutThrows = await attempt(() => exportOnce(cpu));
+restore();
+results.cpuExportAfter = await attempt(() => exportOnce(cpu));
+cpu.free();
+const coded = (entry, code) => entry?.code === code;
+report({
+  ok: results.firstUpload.ok && coded(results.importThrows, "INVALID_INPUT") && results.importAfter.ok && results.renderAfter.ok
+    && results.copyOutThrows.failure === "OUT_OF_MEMORY" && results.copyOutThrows.stage === "copy-out" && results.exportAfter.ok
+    && results.cpuCopyOutThrows.failure === "OUT_OF_MEMORY" && results.cpuExportAfter.ok,
+  ...results,
 });
 `;
 }

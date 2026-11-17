@@ -60,9 +60,11 @@ pub(crate) fn encoder_capability(name: &str) -> Option<alpha2_test_support::Capa
 
 mod alpha;
 mod audio_io;
+mod conformance;
 mod containers;
 mod copies;
 mod damaged_input;
+mod decoders;
 mod encoders;
 mod frame_metadata;
 mod hardware_decode;
@@ -70,7 +72,9 @@ mod muxing;
 mod openh264;
 mod outputs;
 mod pixel_outputs;
+mod project_audio;
 mod seeking;
+mod stills;
 
 /// A scratch file named for `label` and the running test, with characters Windows refuses (such as
 /// `:` in the thread name) replaced by `-`.
@@ -120,9 +124,7 @@ fn rgba_frame_sized(pts: MediaTime, color: [u8; 4], width: u32, height: u32) -> 
 /// A corpus file. Like [`output_path`], it first stops a run on anything but the pinned SDK.
 fn corpus(name: &str) -> PathBuf {
     crate::require_pinned_ffmpeg_for_tests();
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/corpus")
-        .join(name)
+    alpha2_test_support::corpus(name)
 }
 
 /// A fixture's pixel aspect ratio by `av_guess_sample_aspect_ratio`: the container's `pasp` if any,

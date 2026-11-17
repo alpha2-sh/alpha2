@@ -23,6 +23,7 @@ mod backgrounds;
 mod cache;
 mod captions_and_text;
 mod composition;
+mod data_driven;
 mod effects_and_transitions;
 mod export_steps;
 mod layers;
@@ -32,6 +33,7 @@ mod player;
 mod shapes;
 mod submissions;
 mod text_animators;
+mod text_fit;
 mod text_look;
 mod timing;
 mod transition_quality;
@@ -69,6 +71,7 @@ fn chain(effects: &'static [ClipEffect], time: MediaTime) -> Option<ActiveCompos
         id: alpha2_model::CompositionId::new("chain").expect("valid ID"),
         output: steps.len() - 1,
         steps,
+        media: Vec::new(),
     });
     Some(ActiveComposition::new(plan, time))
 }

@@ -20,7 +20,7 @@ use alpha2_audio::{
     LoudnessReport, PeakLimiter, ProcessCtx, Processor, ProcessorChain, SchroederReverb, Stretch,
     TransportState,
 };
-use alpha2_eval::{ActiveAudioClip, AudioSpanScratch, sample_scalar};
+use alpha2_eval::{ActiveAudioClip, AudioSpanScratch, SampleContext, sample_scalar};
 use alpha2_media::{AudioBlock, AudioBlockProvider, SourceId, SpeakerLayout};
 use alpha2_model::{
     Animated, AudioEffect, ClipId, EqBandKind, LOOP_FADE_SECONDS, LoopMode, MAX_GAIN, MasterAudio,
@@ -782,6 +782,7 @@ impl AudioRenderer {
         missing_sources: &mut Vec<SourceId>,
     ) -> Result<(), EngineError> {
         let channels = self.layout.channels();
+        let context = snapshot.sample_context();
         let frames_i64 = i64::try_from(frames).map_err(|_| EngineError::OutOfRange)?;
         let stages = Stages {
             target: replay_target,
@@ -837,6 +838,7 @@ impl AudioRenderer {
                 window.offset,
                 window.count,
                 frames,
+                &context,
             );
         }
         self.span_scratch = scratch;
@@ -847,7 +849,7 @@ impl AudioRenderer {
         self.process_buses(master_input, transport, frames, stages);
         self.apply_ducking(&self.ctx(master_input, transport), frames, stages);
         if stages.run(self.master_lead) {
-            self.sum_buses(master_input, frames);
+            self.sum_buses(master_input, frames, &context);
             self.finish_master(
                 start,
                 master_input,
@@ -855,6 +857,7 @@ impl AudioRenderer {
                 frames,
                 stages,
                 complete_block,
+                &context,
             );
         }
         self.blocks_mixed += 1;
@@ -1459,6 +1462,7 @@ impl AudioRenderer {
 
     /// Applies gain, fades, and panning, then sums into the bus. Constant gain and pan with no
     /// fade in the window are evaluated once; otherwise they follow [`fill_envelope`].
+    #[allow(clippy::too_many_arguments)]
     fn mix_clip_into_bus(
         &mut self,
         clip: &ActiveAudioClip,
@@ -1467,6 +1471,7 @@ impl AudioRenderer {
         offset: usize,
         count: usize,
         frames: usize,
+        context: &SampleContext<'_>,
     ) {
         let channels = self.layout.channels();
         let sample_rate = self.sample_rate;
@@ -1497,16 +1502,16 @@ impl AudioRenderer {
             |ticks| {
                 earliest(
                     earliest(
-                        next_keyframe(&audio.gain, ticks),
-                        next_keyframe(&audio.pan, ticks),
+                        next_keyframe(&audio.gain, ticks, context),
+                        next_keyframe(&audio.pan, ticks, context),
                     ),
                     next_fade_edge(clip, ticks),
                 )
             },
             |time| {
-                let gain =
-                    sample_scalar(&audio.gain, time).clamp(0.0, MAX_GAIN) * fade_gain(clip, time);
-                let [left, right] = pan_gains(sample_scalar(&audio.pan, time), channels);
+                let gain = sample_scalar(&audio.gain, time, context).clamp(0.0, MAX_GAIN)
+                    * fade_gain(clip, time);
+                let [left, right] = pan_gains(sample_scalar(&audio.pan, time, context), channels);
                 [gain, left, right]
             },
         );
@@ -1623,7 +1628,7 @@ impl AudioRenderer {
         }
     }
 
-    fn sum_buses(&mut self, start_sample: i64, frames: usize) {
+    fn sum_buses(&mut self, start_sample: i64, frames: usize, context: &SampleContext<'_>) {
         let channels = self.layout.channels();
         for bus_index in 0..self.buses.len() {
             // Skipping an idle bus is exact: adding `+0.0` to a sum that is never `-0.0` is a no-op.
@@ -1654,13 +1659,14 @@ impl AudioRenderer {
                 self.sample_rate,
                 |ticks| {
                     earliest(
-                        next_keyframe(&audio.gain, ticks),
-                        next_keyframe(&audio.pan, ticks),
+                        next_keyframe(&audio.gain, ticks, context),
+                        next_keyframe(&audio.pan, ticks, context),
                     )
                 },
                 |time| {
-                    let gain = sample_scalar(&audio.gain, time).clamp(0.0, MAX_GAIN);
-                    let [left, right] = pan_gains(sample_scalar(&audio.pan, time), channels);
+                    let gain = sample_scalar(&audio.gain, time, context).clamp(0.0, MAX_GAIN);
+                    let [left, right] =
+                        pan_gains(sample_scalar(&audio.pan, time, context), channels);
                     [gain, left, right]
                 },
             );
@@ -1677,6 +1683,7 @@ impl AudioRenderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn finish_master(
         &mut self,
         start_sample: i64,
@@ -1685,6 +1692,7 @@ impl AudioRenderer {
         frames: usize,
         stages: Stages,
         complete: bool,
+        context: &SampleContext<'_>,
     ) {
         let channels = self.layout.channels();
         let input_ctx = self.ctx(master_input, transport);
@@ -1719,8 +1727,8 @@ impl AudioRenderer {
                 start_sample,
                 frames,
                 self.sample_rate,
-                |ticks| next_keyframe(gain, ticks),
-                |time| [sample_scalar(gain, time).clamp(0.0, MAX_GAIN)],
+                |ticks| next_keyframe(gain, ticks, context),
+                |time| [sample_scalar(gain, time, context).clamp(0.0, MAX_GAIN)],
             );
             for channel in 0..channels {
                 let envelope = &self.envelope[0][..frames];
@@ -2647,8 +2655,15 @@ fn earliest(left: Option<i64>, right: Option<i64>) -> Option<i64> {
 }
 
 /// The first keyframe of `animation` after `ticks`; none for a constant or single keyframe.
-fn next_keyframe(animation: &Animated<f32>, ticks: i64) -> Option<i64> {
+fn next_keyframe(
+    animation: &Animated<f32>,
+    ticks: i64,
+    context: &SampleContext<'_>,
+) -> Option<i64> {
     match animation {
+        Animated::Data(binding) => {
+            alpha2_eval::next_data_change(binding, MediaTime(ticks), context).map(MediaTime::ticks)
+        }
         Animated::Keyframes { keyframes } if keyframes.len() > 1 => {
             let next = keyframes.partition_point(|keyframe| keyframe.time.ticks() <= ticks);
             keyframes.get(next).map(|keyframe| keyframe.time.ticks())
@@ -2685,6 +2700,7 @@ fn next_fade_edge(clip: &ActiveAudioClip, ticks: i64) -> Option<i64> {
 fn constant_value(animation: &Animated<f32>) -> Option<f32> {
     match animation {
         Animated::Constant { value } => Some(*value),
+        Animated::Data(_) => None,
         Animated::Keyframes { keyframes } => match keyframes.as_slice() {
             [only] => Some(only.value),
             _ => None,

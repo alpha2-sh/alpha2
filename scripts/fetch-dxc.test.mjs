@@ -109,10 +109,13 @@ async function release() {
       response.writeHead(404).end();
     }
   });
-  await new Promise((resolveListen) =>
-    server.listen(0, "127.0.0.1", resolveListen),
+  await /** @type {Promise<void>} */ (
+    new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen))
   );
-  served.url = `http://127.0.0.1:${server.address().port}`;
+  const { port } = /** @type {import("node:net").AddressInfo} */ (
+    server.address()
+  );
+  served.url = `http://127.0.0.1:${port}`;
   served.close = () =>
     new Promise((resolveClose) => server.close(resolveClose));
   return served;
@@ -155,13 +158,16 @@ test("the pinned release is fetched, verified, and its dxcompiler.dll printed", 
 test("an archive or a file whose checksum differs is refused", async () => {
   const served = await release();
   try {
-    for (const [options, what] of [
+    for (const [
+      options,
+      what,
+    ] of /** @type {[{ archiveSha?: string, dllSha?: string }, string][]} */ ([
       [{ archiveSha: "0".repeat(64) }, "checksum mismatch for dxc.zip"],
       [
         { dllSha: "1".repeat(64) },
         "checksum mismatch for bin/x64/dxcompiler.dll",
       ],
-    ]) {
+    ])) {
       const dir = workspace(options);
       try {
         const target = join(dir, "cache");

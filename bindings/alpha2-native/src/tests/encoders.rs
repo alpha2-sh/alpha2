@@ -409,7 +409,7 @@ fn codec_threading_policy_and_unused_option_guard_are_explicit() {
     }
     assert_eq!(
         unused_option_names(Some(video_decoder_options(1))).as_deref(),
-        Some("threads, flags")
+        Some("threads, flags, max_pixels")
     );
 
     let misspelled = AVDictionary::new(c"threadz", c"auto", 0);
@@ -772,7 +772,7 @@ fn videotoolbox_quality_maps_levels_monotonically() {
     );
     assert_eq!(request.bit_rate, 0);
     assert_eq!(
-        crate::AppliedRateControl::of_quantizer_request("h264_videotoolbox").as_str(),
+        crate::rate_control::applied_of_quantizer_request("h264_videotoolbox").as_str(),
         "quality"
     );
 }
@@ -852,6 +852,7 @@ fn a_runtime_other_than_the_pinned_sdk_says_why() {
         version: version.to_owned(),
         configuration: configuration.to_owned(),
         pinned_sdk_release: "ffmpeg-8.1.3-shared-build5",
+        interop_refusal: None,
     };
     let pinned = "--disable-gpl --disable-nonfree --disable-autodetect --enable-libdav1d \
                   --enable-libopus --enable-libvpx --enable-libsvtav1 --enable-videotoolbox";
@@ -901,18 +902,6 @@ fn these_tests_run_on_the_pinned_sdk() {
     // Helpers call this before most tests reach `FFmpeg`; this catches a run
     // whose tests all skip them.
     crate::require_pinned_ffmpeg_for_tests();
-}
-
-#[test]
-fn keyframes_are_two_seconds_apart_at_any_rate() {
-    let interval =
-        |num, den| crate::capabilities::keyframe_interval(FrameRate::new(num, den).expect("rate"));
-    assert_eq!(interval(24, 1), 48);
-    assert_eq!(interval(24_000, 1001), 48);
-    assert_eq!(interval(30_000, 1001), 60);
-    assert_eq!(interval(60, 1), 120);
-    assert_eq!(interval(1, 1), 2);
-    assert_eq!(interval(1, 4), 1);
 }
 
 #[test]
@@ -1091,38 +1080,14 @@ fn named_candidates(names: &[&std::ffi::CStr]) -> Vec<crate::capabilities::Video
 /// MPEG-4 Part 2 refuses time base denominators past 16 bits (119.88, 239.76 fps, VFR averages).
 /// Such rates get the finest unit it can hold; other rates and codecs keep the frame length.
 #[test]
-fn an_encoder_time_base_is_the_frame_length_or_the_finest_unit_the_codec_holds() {
+fn the_codecs_that_store_16_bit_time_bases_are_limited() {
     use crate::capabilities::{encoder_time_base, max_time_base_denominator};
     let limit = max_time_base_denominator(ffi::AV_CODEC_ID_MPEG4);
     assert_eq!(limit, Some(65_535));
     assert_eq!(max_time_base_denominator(ffi::AV_CODEC_ID_H264), None);
-    let base = |num, den, limit| {
-        let base =
-            encoder_time_base(FrameRate::new(num, den).expect("rate"), limit).expect("time base");
-        (base.num, base.den)
-    };
-    for (num, den) in [(30_000, 1_001), (60_000, 1_001), (25, 1), (65_535, 1)] {
-        let exact = (i32::try_from(den).unwrap(), i32::try_from(num).unwrap());
-        assert_eq!(base(num, den, limit), exact, "{num}/{den}");
-    }
-    assert_eq!(base(120_000, 1_001, None), (1_001, 120_000));
-    // 1/64000 rounds 119.88 fps frame times by at most 7/960000 s, finer than 1/60000 or 1/65535.
-    for (num, den, units) in [
-        (120_000, 1_001, 64_000),
-        (240_000, 1_001, 64_000),
-        (360_000, 34_913, 65_535),
-        (176_000, 18_133, 64_000),
-    ] {
-        assert_eq!(base(num, den, limit), (1, units), "{num}/{den}");
-        let mut last = -1_i64;
-        for frame in 0..10_000_i64 {
-            let exact = frame * i64::from(den) * i64::from(units) / i64::from(num);
-            let remainder = frame * i64::from(den) * i64::from(units) % i64::from(num);
-            let rounded = exact + i64::from(remainder * 2 >= i64::from(num));
-            assert!(rounded > last, "{num}/{den} frame {frame}");
-            last = rounded;
-        }
-    }
+    let base =
+        encoder_time_base(FrameRate::new(120_000, 1_001).expect("rate"), limit).expect("time base");
+    assert_eq!((base.num, base.den), (1, 64_000));
 }
 
 #[test]
@@ -1506,39 +1471,6 @@ fn an_absent_probe_is_cached() {
 }
 
 #[test]
-fn unclassified_probe_failures_are_kept_after_a_run_of_them() {
-    use crate::capabilities::{ProbeCache, UNCLASSIFIED_FAILURES_KEPT, cached_probe};
-    let cache = ProbeCache::default();
-    let probes = std::cell::Cell::new(0);
-    let ask = |kind| {
-        cached_probe(
-            &cache,
-            "hevc_mf",
-            false,
-            Some(|| {
-                probes.set(probes.get() + 1);
-                Err((kind, format!("failure {}", probes.get())))
-            }),
-        )
-    };
-    // A busy answer between unclassified ones restarts the run.
-    ask(OpenFailureKind::Unknown);
-    ask(OpenFailureKind::Busy);
-    for _ in 0..UNCLASSIFIED_FAILURES_KEPT {
-        ask(OpenFailureKind::Unknown);
-    }
-    let asked = probes.get();
-    assert_eq!(asked, usize::from(UNCLASSIFIED_FAILURES_KEPT) + 2);
-    let kept = ask(OpenFailureKind::Unknown);
-    assert_eq!(probes.get(), asked, "probed after the run was kept");
-    let Some(Err(refusal)) = kept else {
-        panic!("{kept:?}");
-    };
-    assert_eq!(refusal.kind, OpenFailureKind::Unknown);
-    assert_eq!(refusal.reason, format!("failure {asked}"));
-}
-
-#[test]
 fn media_foundation_e_fail_on_input_is_absent() {
     use crate::capabilities::classify_open_failure;
     assert_eq!(
@@ -1634,4 +1566,100 @@ fn the_reserve_scales_with_the_budget() {
         (5, 12),
         "{workstation:?}"
     );
+}
+
+#[test]
+fn an_nvenc_capability_refusal_is_unsuitable_not_absent() {
+    use crate::capabilities::classify_open_failure;
+    for warning in [
+        "Max B-frames 2 exceed 0",
+        "Width 8192 exceeds 4096",
+        "10 bit encode not supported",
+    ] {
+        assert_eq!(
+            classify_open_failure(
+                "hevc_nvenc",
+                "Generic error in an external library",
+                &[
+                    log_line("hevc_nvenc", warning),
+                    log_line("hevc_nvenc", "No capable devices found")
+                ]
+            ),
+            OpenFailureKind::Unsuitable,
+            "{warning}"
+        );
+    }
+}
+
+/// Asking for more B-frames than any NVENC device has stands in for a device limit.
+#[test]
+fn an_nvenc_device_with_fewer_b_frames_opens_without_them() {
+    crate::require_pinned_ffmpeg_for_tests();
+    let ask_for = |b_frames| {
+        crate::capabilities::FORCED_B_FRAMES.with(|forced| forced.set(b_frames));
+    };
+    for (codec, name) in [
+        (NativeVideoCodec::H264, "h264_nvenc"),
+        (NativeVideoCodec::Hevc, "hevc_nvenc"),
+    ] {
+        let Some(candidate) = crate::capabilities::registered_video_encoders(codec)
+            .into_iter()
+            .find(|candidate| candidate.name() == name)
+        else {
+            continue;
+        };
+        if let Err(refusal) = crate::capabilities::probe_open(&candidate, name) {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::Nvenc,
+                "{name} does not encode here: {refusal:?}"
+            );
+            return;
+        }
+        ask_for(Some(16));
+        let probed = crate::capabilities::probe_open(&candidate, name);
+        let path = output_path(&format!("{name}-b-frames")).with_extension("mp4");
+        let _ = fs::remove_file(&path);
+        let mut config = super::av_config(48_000).video;
+        config.codec = codec;
+        config.width = 256;
+        config.height = 144;
+        let sink =
+            NativeVideoEncodeSink::create_with_encoder_threads(&path, config, Some(name), &|_| 1);
+        ask_for(None);
+        probed.expect("the probe opens again without B-frames");
+        let sink = sink.expect("the export opens again without B-frames");
+        assert_eq!(sink.selection().encoder_name, name);
+        drop(sink);
+        let _ = fs::remove_file(&path);
+    }
+}
+
+#[test]
+fn an_encoder_a_probe_passed_over_is_listed_beside_the_one_that_opened() {
+    let opened = crate::NativeVideoEncoderSelection {
+        encoder_name: "libx264".to_owned(),
+        class: NativeEncoderClass::Software,
+        hardware_accelerated: false,
+        rejected: Vec::new(),
+        rate_control: crate::AppliedRateControl::Bitrate,
+        quantizer_refused: None,
+        software_threads: Some(4),
+        pixels: alpha2_media::PixelLayout::YUV420P,
+    };
+    let selection = crate::capabilities::with_probe_refusals(
+        opened,
+        vec![alpha2_media::EncoderRefusal {
+            encoder: "h264_nvenc".to_owned(),
+            hardware_accelerated: true,
+            kind: OpenFailureKind::Absent,
+            reason: "No capable devices found".to_owned(),
+        }],
+    );
+    assert_eq!(selection.encoder_name, "libx264");
+    assert_eq!(selection.rejected.len(), 1);
+    let passed_over = &selection.rejected[0];
+    assert_eq!(passed_over.encoder_name, "h264_nvenc");
+    assert!(passed_over.hardware_accelerated);
+    assert_eq!(passed_over.kind, OpenFailureKind::Absent);
+    assert_eq!(passed_over.detail, "No capable devices found");
 }

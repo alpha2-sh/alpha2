@@ -414,7 +414,7 @@ test("a ripple delete of a dissolve's incoming clip closes only its own time, ma
     fromId: "one",
     toId: "two",
     duration: S / 4,
-    effect: { id: "alpha2.transition.crossfade", version: 1 },
+    effect: { id: "alpha2.transition.fade", version: 1 },
   });
   assert.equal(added.ok, true, added.error?.message);
   const { end } = range(e, "two");
@@ -570,4 +570,60 @@ test("a placed copy of a clip, or a clip a new track brings, edits its own copy 
     (id) => e.query().clips.get(id).clip.composition.id,
   );
   assert.equal(new Set(ids).size, 3);
+});
+
+test("a ripple that reaches every track moves markers and timeline data with it", () => {
+  const single = document();
+  const project = {
+    ...single.project,
+    timeline: { tracks: [single.project.timeline.tracks[0]] },
+    data: [
+      {
+        id: "level",
+        kind: "scalars",
+        anchor: { type: "timeline" },
+        channels: ["level"],
+        interpolation: "hold",
+        times: [0, 3 * S],
+        values: [0.25, 0.75],
+      },
+    ],
+  };
+  const e = createEditor({ document: createDocument(project) });
+  e.dispatch({
+    type: "metadata.update",
+    patch: { markers: [{ id: "m", time: 3 * S, name: "After" }] },
+  });
+  const deleted = e.dispatch({ type: "clip.delete", id: "one", ripple: true });
+  assert.equal(deleted.ok, true, deleted.error?.message);
+  assert.deepEqual(
+    e.document.metadata.markers.map((m) => m.time),
+    [S],
+  );
+  assert.deepEqual(e.document.project.data[0].times, [0, S]);
+});
+
+test("a ripple that leaves a track behind moves neither markers nor timeline data", () => {
+  const three = document();
+  const project = {
+    ...three.project,
+    timeline: {
+      tracks: [
+        ...three.project.timeline.tracks,
+        { id: "A2", name: "More", kind: "audio", clips: [] },
+      ],
+    },
+  };
+  const e = createEditor({ document: createDocument(project) });
+  e.dispatch({ type: "track.metadata", id: "A1", patch: { syncLock: true } });
+  e.dispatch({
+    type: "metadata.update",
+    patch: { markers: [{ id: "m", time: 3 * S, name: "After" }] },
+  });
+  e.dispatch({ type: "clip.delete", id: "one", ripple: true });
+  assert.deepEqual(range(e, "two"), { start: 0, end: 2 * S });
+  assert.deepEqual(
+    e.document.metadata.markers.map((m) => m.time),
+    [3 * S],
+  );
 });

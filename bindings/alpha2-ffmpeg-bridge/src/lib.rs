@@ -1,7 +1,5 @@
-//! The `unsafe` boundary between the native binding and `FFmpeg`.
-//!
-//! It holds what rsmpeg's safe surface lacks (frame and packet copies, codec and side-data helpers,
-//! container I/O, hardware-frame shims) so the rest of the binding can forbid `unsafe`.
+//! The `FFmpeg` calls rsmpeg's safe surface lacks, for the native binding: frame and packet
+//! copies, codec and side-data helpers, container I/O and hardware-frame shims.
 
 use std::{error::Error, ffi::CStr, fmt, ptr, slice};
 
@@ -624,6 +622,8 @@ pub struct VulkanDeviceInfo {
     pub encode_video_caps: u32,
     /// Enabled core feature bits required by `FFmpeg`'s context contract.
     pub core_features: [u32; 4],
+    /// Whether `timelineSemaphore` is enabled on the device; the context is refused without it.
+    pub timeline_semaphore: u32,
     /// Whether `synchronization2` is enabled on the device.
     pub synchronization2: u32,
     /// Whether `samplerYcbcrConversion` is enabled on the device.
@@ -814,6 +814,7 @@ pub unsafe fn create_vulkan_device_context(
         fragment_stores_and_atomics: info.core_features[1],
         shader_int64: info.core_features[2],
         vertex_pipeline_stores_and_atomics: info.core_features[3],
+        timeline_semaphore: info.timeline_semaphore,
         synchronization2: info.synchronization2,
         sampler_ycbcr_conversion: info.sampler_ycbcr_conversion,
         video_maintenance1: info.video_maintenance1,
@@ -1251,6 +1252,7 @@ fn alloc_hwdevice(
     kind: ffi::AVHWDeviceType,
     name: &'static str,
 ) -> Result<AVHWDeviceContext, BridgeError> {
+    check_hardware_interop()?;
     if !hwdevice_available(kind) {
         return Err(BridgeError::MissingHwDevice(name));
     }
@@ -1272,6 +1274,9 @@ pub enum BridgeError {
     NativeGpu(NativeGpuFailure),
     /// The loaded `FFmpeg` runtime was built without this hardware device type.
     MissingHwDevice(&'static str),
+    /// The loaded libavutil is not the release the shims were compiled for, so hardware interop
+    /// is off; the text names both versions.
+    RuntimeMismatch(&'static str),
     /// A decoded surface the GPU interop does not take, with its description and the reason.
     UnsupportedSurface(String),
 }
@@ -1338,6 +1343,7 @@ impl fmt::Display for BridgeError {
                 write!(formatter, "the loaded FFmpeg has no {kind} hardware device")
             }
             Self::UnsupportedSurface(description) => formatter.write_str(description),
+            Self::RuntimeMismatch(reason) => formatter.write_str(reason),
         }
     }
 }
@@ -1346,10 +1352,7 @@ impl fmt::Display for BridgeError {
 ///
 /// Coefficient arguments are `SWS_CS_*` constants. RGB endpoints still need
 /// an explicit full-range flag.
-///
-/// # Errors
-/// Returns an error when `libswscale` rejects the configuration.
-pub fn configure_colorspace(
+fn configure_colorspace(
     context: &mut SwsContext,
     source_coefficients: i32,
     source_full_range: bool,
@@ -1377,62 +1380,227 @@ pub fn configure_colorspace(
     }
 }
 
-/// Converts `frame` into `output` as `target`'s planes packed without row padding (the
-/// `av_image_copy_to_buffer` layout at alignment 1).
+/// Row alignment in bytes of every `sws_scale` destination, the widest SIMD store (16 RGBA pixels).
+const SCALER_DESTINATION_ALIGN: i32 = 64;
+
+/// Converts frames of one size and pixel format into another pixel format at the same size.
 ///
-/// # Errors
-/// Returns an error when `output` is not exactly that layout's size, or when `libswscale` fails.
-pub fn scale_frame_packed(
-    context: &mut SwsContext,
-    frame: &AVFrame,
+/// `sws_scale` writes only into this type's own frame, with rows padded to 64 bytes and zero
+/// filled, because some converters write whole blocks past a row's last pixel or skip the last
+/// columns.
+pub struct PackedScaler {
+    context: SwsContext,
+    width: i32,
+    height: i32,
+    source: ffi::AVPixelFormat,
     target: ffi::AVPixelFormat,
-    output: &mut [u8],
-) -> Result<(), BridgeError> {
-    // SAFETY: a pure size computation over plain values.
-    let size = unsafe { ffi::av_image_get_buffer_size(target, frame.width, frame.height, 1) };
-    if size < 0 {
-        return Err(BridgeError::FfmpegCode(size));
-    }
-    if usize::try_from(size).ok() != Some(output.len()) {
-        return Err(BridgeError::InvalidInput(
-            "packed output is not the size of the converted frame",
-        ));
-    }
-    let mut data = [ptr::null_mut::<u8>(); 4];
-    let mut linesize = [0; 4];
-    // SAFETY: `output` holds exactly the bytes this layout needs, and the arrays fit every plane.
-    let filled = unsafe {
-        ffi::av_image_fill_arrays(
-            data.as_mut_ptr(),
-            linesize.as_mut_ptr(),
-            output.as_mut_ptr(),
+    destination: AVFrame,
+}
+
+impl PackedScaler {
+    /// A scaler from `source` to `target` at `width`x`height`, with bilinear filtering.
+    ///
+    /// # Errors
+    /// Returns an error when `libswscale` has no conversion between the formats or a frame of that
+    /// size cannot be allocated.
+    pub fn new(
+        width: i32,
+        height: i32,
+        source: ffi::AVPixelFormat,
+        target: ffi::AVPixelFormat,
+    ) -> Result<Self, BridgeError> {
+        if width <= 0 || height <= 0 {
+            return Err(BridgeError::InvalidInput("scaler size is not positive"));
+        }
+        let context = SwsContext::get_context(
+            width,
+            height,
+            source,
+            width,
+            height,
             target,
-            frame.width,
-            frame.height,
-            1,
+            scaler_flags(width, height, source, target),
+            None,
+            None,
+            None,
         )
-    };
-    if filled < 0 {
-        return Err(BridgeError::FfmpegCode(filled));
+        .ok_or(BridgeError::InvalidInput(
+            "libswscale has no conversion between these pixel formats",
+        ))?;
+        let destination = padded_zeroed_frame(width, height, target)?;
+        Ok(Self {
+            context,
+            width,
+            height,
+            source,
+            target,
+            destination,
+        })
     }
-    // SAFETY: the context is exclusively borrowed, the source planes belong to the live `frame`,
-    // and every destination pointer lies inside the exclusively borrowed `output`.
+
+    /// Applies explicit matrix and range coefficients (`SWS_CS_*` constants) to the conversion.
+    /// RGB endpoints still need an explicit full-range flag.
+    ///
+    /// # Errors
+    /// Returns an error when `libswscale` rejects the configuration.
+    pub fn configure_colorspace(
+        &mut self,
+        source_coefficients: i32,
+        source_full_range: bool,
+        destination_coefficients: i32,
+        destination_full_range: bool,
+    ) -> Result<(), BridgeError> {
+        configure_colorspace(
+            &mut self.context,
+            source_coefficients,
+            source_full_range,
+            destination_coefficients,
+            destination_full_range,
+        )
+    }
+
+    /// Converts `frame` and returns the target's planes packed without row padding, in plane
+    /// order (the `av_image_copy_to_buffer` layout at alignment 1).
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for a frame of another size or format than the scaler's, and an
+    /// error when `libswscale` fails.
+    pub fn convert(&mut self, frame: &AVFrame) -> Result<Vec<u8>, BridgeError> {
+        self.check_source(frame)?;
+        scale_into(&mut self.context, frame, &mut self.destination, self.height)?;
+        // SAFETY: a pure size computation over plain values.
+        let size =
+            unsafe { ffi::av_image_get_buffer_size(self.target, self.width, self.height, 1) };
+        let len = usize::try_from(size).map_err(|_| BridgeError::FfmpegCode(size))?;
+        let mut packed = vec![0_u8; len];
+        // SAFETY: `packed` holds exactly `size` bytes, and the destination frame's planes hold
+        // `height` rows of the target format at their linesizes.
+        let copied = unsafe {
+            ffi::av_image_copy_to_buffer(
+                packed.as_mut_ptr(),
+                size,
+                self.destination.data.as_ptr().cast(),
+                self.destination.linesize.as_ptr(),
+                self.target,
+                self.width,
+                self.height,
+                1,
+            )
+        };
+        if copied < 0 {
+            return Err(BridgeError::FfmpegCode(copied));
+        }
+        Ok(packed)
+    }
+
+    /// Converts `frame` into a new frame of the target format with padded rows, for an encoder
+    /// that keeps references to its input.
+    ///
+    /// # Errors
+    /// As [`Self::convert`], and when the new frame cannot be allocated.
+    pub fn convert_to_frame(&mut self, frame: &AVFrame) -> Result<AVFrame, BridgeError> {
+        self.check_source(frame)?;
+        let mut output = padded_zeroed_frame(self.width, self.height, self.target)?;
+        scale_into(&mut self.context, frame, &mut output, self.height)?;
+        Ok(output)
+    }
+
+    fn check_source(&self, frame: &AVFrame) -> Result<(), BridgeError> {
+        if frame.width != self.width || frame.height != self.height || frame.format != self.source {
+            return Err(BridgeError::InvalidInput(
+                "frame size or format differs from the scaler's",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for PackedScaler {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PackedScaler")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("source", &self.source)
+            .field("target", &self.target)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Bilinear, plus accurate rounding where `libswscale` would otherwise pick its unscaled
+/// 4:2:0/4:2:2-to-RGB converter for an odd width: its C version never writes the last column.
+fn scaler_flags(
+    width: i32,
+    height: i32,
+    source: ffi::AVPixelFormat,
+    target: ffi::AVPixelFormat,
+) -> ffi::SwsFlags {
+    let unscaled_rgb_source = matches!(
+        source,
+        ffi::AV_PIX_FMT_YUV420P | ffi::AV_PIX_FMT_YUV422P | ffi::AV_PIX_FMT_YUVA420P
+    );
+    // SAFETY: `av_pix_fmt_desc_get` accepts any value and returns null or a static descriptor.
+    let rgb_target = unsafe { ffi::av_pix_fmt_desc_get(target).as_ref() }
+        .is_some_and(|descriptor| descriptor.flags & u64::from(ffi::AV_PIX_FMT_FLAG_RGB) != 0);
+    if unscaled_rgb_source && rgb_target && height % 2 == 0 && width % 2 == 1 {
+        ffi::SWS_BILINEAR | ffi::SWS_ACCURATE_RND
+    } else {
+        ffi::SWS_BILINEAR
+    }
+}
+
+/// A frame of `format` with rows aligned to [`SCALER_DESTINATION_ALIGN`], every byte zero.
+fn padded_zeroed_frame(
+    width: i32,
+    height: i32,
+    format: ffi::AVPixelFormat,
+) -> Result<AVFrame, BridgeError> {
+    let mut frame = AVFrame::new();
+    frame.set_format(format);
+    frame.set_width(width);
+    frame.set_height(height);
+    frame.get_buffer(SCALER_DESTINATION_ALIGN)?;
+    for buffer in frame.buf {
+        // SAFETY: a non-null `AVFrame::buf` entry is live, and this new frame is its only owner.
+        if let Some(buffer) = unsafe { buffer.as_ref() } {
+            // SAFETY: as above.
+            unsafe { ptr::write_bytes(buffer.data, 0, buffer.size) };
+        }
+    }
+    Ok(frame)
+}
+
+/// The workspace's only `sws_scale` call. `destination` is a frame from [`padded_zeroed_frame`]
+/// of the context's target format and size.
+fn scale_into(
+    context: &mut SwsContext,
+    source: &AVFrame,
+    destination: &mut AVFrame,
+    height: i32,
+) -> Result<(), BridgeError> {
+    // SAFETY: the context is exclusively borrowed and was made for this size and both formats,
+    // the source planes belong to the live `source`, and the destination planes belong to a frame
+    // this crate allocated for the target format and size with padded rows.
     let rows = unsafe {
         ffi::sws_scale(
             context.as_mut_ptr(),
-            frame.data.as_ptr().cast(),
-            frame.linesize.as_ptr(),
+            source.data.as_ptr().cast(),
+            source.linesize.as_ptr(),
             0,
-            frame.height,
-            data.as_ptr(),
-            linesize.as_ptr(),
+            height,
+            destination.data.as_ptr().cast(),
+            destination.linesize.as_ptr(),
         )
     };
     if rows < 0 {
-        Err(BridgeError::FfmpegCode(rows))
-    } else {
-        Ok(())
+        return Err(BridgeError::FfmpegCode(rows));
     }
+    if rows != height {
+        return Err(BridgeError::InvalidInput(
+            "libswscale wrote fewer rows than the frame has",
+        ));
+    }
+    Ok(())
 }
 
 impl Error for BridgeError {}
@@ -1523,6 +1691,50 @@ impl From<RsmpegError> for BridgeError {
     fn from(error: RsmpegError) -> Self {
         Self::Ffmpeg(error)
     }
+}
+
+unsafe extern "C" {
+    fn alpha2_ffmpeg_shim_avutil_version() -> std::ffi::c_uint;
+}
+
+/// Why hardware interop is off in this process, or `None` when the loaded libavutil has the
+/// major and minor version the shims were compiled against.
+///
+/// The shims read `FFmpeg` structures at offsets of one minor release, so every hardware device
+/// constructor of this crate refuses with [`BridgeError::RuntimeMismatch`] while this is `Some`.
+#[must_use]
+pub fn hardware_interop_refusal() -> Option<&'static str> {
+    static REFUSAL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    REFUSAL
+        .get_or_init(|| {
+            // SAFETY: returns a constant compiled into the shim.
+            let compiled = unsafe { alpha2_ffmpeg_shim_avutil_version() };
+            // SAFETY: a pure query of the loaded library.
+            let loaded = unsafe { ffi::avutil_version() };
+            interop_version_refusal(compiled, loaded)
+        })
+        .as_deref()
+}
+
+/// Refuses interop across a major or minor `AV_VERSION_INT` difference; micro versions may differ.
+fn interop_version_refusal(compiled: u32, loaded: u32) -> Option<String> {
+    let version = |value: u32| format!("{}.{}.{}", value >> 16, (value >> 8) & 0xff, value & 0xff);
+    (compiled >> 8 != loaded >> 8).then(|| {
+        format!(
+            "hardware interop is off: the FFmpeg shims were compiled for libavutil {} and the \
+             loaded libavutil is {}",
+            version(compiled),
+            version(loaded)
+        )
+    })
+}
+
+/// The refusal of [`hardware_interop_refusal`] as an error.
+///
+/// # Errors
+/// Returns [`BridgeError::RuntimeMismatch`] when the loaded libavutil is another minor release.
+pub fn check_hardware_interop() -> Result<(), BridgeError> {
+    hardware_interop_refusal().map_or(Ok(()), |reason| Err(BridgeError::RuntimeMismatch(reason)))
 }
 
 /// Returns the linked `FFmpeg` runtime version string.
@@ -2322,14 +2534,7 @@ fn frame_yuv_planes(frame: &AVFrame, share: bool) -> Result<Option<YuvPlanes>, B
             });
         }
         Ok(FramePlane {
-            bytes: copy_video_plane(
-                frame.data[index],
-                frame.linesize[index],
-                row_bytes,
-                rows,
-                context,
-            )?
-            .into(),
+            bytes: copy_video_plane(frame, index, row_bytes, rows, context)?.into(),
             stride: row_bytes,
             width: samples,
             height: rows,
@@ -2385,19 +2590,7 @@ impl PlaneView {
             return None;
         }
         let len = stride.checked_mul(usize::try_from(rows).ok()?)?;
-        let start = data as usize;
-        let end = start.checked_add(len)?;
-        let inside = inner.buf.iter().any(|buffer| {
-            // SAFETY: a non-null `AVFrame::buf` entry is a live `AVBufferRef` the frame holds.
-            let Some(buffer) = (unsafe { buffer.as_ref() }) else {
-                return false;
-            };
-            let buffer_start = buffer.data as usize;
-            buffer_start
-                .checked_add(buffer.size)
-                .is_some_and(|buffer_end| buffer_start <= start && end <= buffer_end)
-        });
-        inside.then(|| Self {
+        in_frame_buffer(inner, data as usize, len).then(|| Self {
             frame: std::sync::Arc::clone(frame),
             data,
             len,
@@ -2414,7 +2607,56 @@ impl AsRef<[u8]> for PlaneView {
     }
 }
 
+/// Copies plane `index` of `frame`, refusing rows outside the frame's buffers when it has any.
 fn copy_video_plane(
+    frame: &AVFrame,
+    index: usize,
+    width: u32,
+    height: u32,
+    context: &'static str,
+) -> Result<Vec<u8>, BridgeError> {
+    let (data, linesize) = (frame.data[index].cast_const(), frame.linesize[index]);
+    let has_buffers = frame.buf.iter().any(|buffer| !buffer.is_null());
+    if has_buffers && !plane_rows_in_frame_buffer(frame, data, linesize, width, height) {
+        return Err(BridgeError::InvalidInput(context));
+    }
+    // SAFETY: the rows lie in one of the frame's buffers, or a frame without buffers vouches for
+    // its own planes.
+    unsafe { copy_plane_rows(data, linesize, width, height, context) }
+}
+
+/// Whether `height` rows of `width` bytes at the signed `linesize` from `data` lie in one buffer.
+fn plane_rows_in_frame_buffer(
+    frame: &AVFrame,
+    data: *const u8,
+    linesize: i32,
+    width: u32,
+    height: u32,
+) -> bool {
+    let (Ok(row_bytes), Ok(rows)) = (usize::try_from(width), usize::try_from(height)) else {
+        return false;
+    };
+    let Ok(stride) = usize::try_from(linesize.unsigned_abs()) else {
+        return false;
+    };
+    let Some(span) = stride
+        .checked_mul(rows.saturating_sub(1))
+        .and_then(|before| before.checked_add(row_bytes))
+    else {
+        return false;
+    };
+    // A negative linesize walks back from the first row, so the lowest address is the last row.
+    let start = if linesize < 0 {
+        (data as usize).checked_sub(span - row_bytes)
+    } else {
+        Some(data as usize)
+    };
+    !data.is_null() && rows > 0 && start.is_some_and(|start| in_frame_buffer(frame, start, span))
+}
+
+/// # Safety
+/// A non-null `data` must have `height` rows at the signed `linesize`, each `width` bytes long.
+unsafe fn copy_plane_rows(
     data: *const u8,
     linesize: i32,
     width: u32,
@@ -2440,8 +2682,7 @@ fn copy_video_plane(
         let offset = row
             .checked_mul(signed_stride)
             .ok_or(BridgeError::InvalidInput(context))?;
-        // SAFETY: a non-null plane has `height` rows at its signed linesize, whose absolute value
-        // was checked to cover `row_bytes`.
+        // SAFETY: delegated to this function's contract; the linesize covers `row_bytes`.
         let source = unsafe { slice::from_raw_parts(data.offset(offset), row_bytes) };
         output.extend_from_slice(source);
     }
@@ -2979,7 +3220,7 @@ pub struct Yuv420pFrameBuffer {
     frame: AVFrame,
     width: usize,
     height: usize,
-    /// Each plane's visible bytes per row and rows; empty for YUV420P.
+    /// Each plane's visible bytes per row and rows, from the pixel format descriptor.
     planes: Vec<(usize, usize)>,
 }
 
@@ -3003,46 +3244,34 @@ impl Yuv420pFrameBuffer {
     /// # Errors
     /// Returns an error for a non-positive size or a failed allocation.
     pub fn new(width: i32, height: i32) -> Result<Self, BridgeError> {
-        let coded_width =
-            usize::try_from(width).map_err(|_| BridgeError::InvalidInput("negative YUV width"))?;
-        let coded_height = usize::try_from(height)
-            .map_err(|_| BridgeError::InvalidInput("negative YUV height"))?;
-        if coded_width == 0 || coded_height == 0 {
-            return Err(BridgeError::InvalidInput("empty YUV frame"));
-        }
-        Ok(Self {
-            frame: zeroed_frame(width, height, ffi::AV_PIX_FMT_YUV420P)?,
-            width: coded_width,
-            height: coded_height,
-            planes: Vec::new(),
-        })
+        Self::with_format(width, height, ffi::AV_PIX_FMT_YUV420P)
     }
 
-    /// Allocates one reusable frame of `format`; `planes` gives each plane's visible bytes per row
-    /// and rows in `FFmpeg` order.
+    /// Allocates one reusable frame of `format`; each plane's row bytes and rows come from the
+    /// format's descriptor.
     ///
     /// # Errors
-    /// Returns an error for a non-positive size, a failed allocation, or planes the format lacks.
+    /// Returns an error for a non-positive size, a format without planes, or a failed allocation.
     pub fn with_format(
         width: i32,
         height: i32,
         format: ffi::AVPixelFormat,
-        planes: &[(usize, usize)],
     ) -> Result<Self, BridgeError> {
         let coded_width = usize::try_from(width)
             .map_err(|_| BridgeError::InvalidInput("negative frame width"))?;
         let coded_height = usize::try_from(height)
             .map_err(|_| BridgeError::InvalidInput("negative frame height"))?;
-        if coded_width == 0 || coded_height == 0 || planes.is_empty() || planes.len() > 4 {
+        if coded_width == 0 || coded_height == 0 {
             return Err(BridgeError::InvalidInput("empty frame"));
         }
+        let planes = plane_geometry(format, width, height)?;
         let frame = zeroed_frame(width, height, format)?;
         for (index, &(row_bytes, _)) in planes.iter().enumerate() {
             if frame.data[index].is_null()
                 || plane_stride(frame.linesize[index], row_bytes).is_err()
             {
                 return Err(BridgeError::InvalidInput(
-                    "the frame's planes are not the ones described",
+                    "the frame's planes do not match its pixel format",
                 ));
             }
         }
@@ -3050,8 +3279,14 @@ impl Yuv420pFrameBuffer {
             frame,
             width: coded_width,
             height: coded_height,
-            planes: planes.to_vec(),
+            planes,
         })
+    }
+
+    /// Each plane's visible bytes per row and rows, in `FFmpeg`'s plane order.
+    #[must_use]
+    pub fn planes(&self) -> &[(usize, usize)] {
+        &self.planes
     }
 
     /// Each plane's memory and stride after making the frame unshared, for any format.
@@ -3059,22 +3294,13 @@ impl Yuv420pFrameBuffer {
     /// # Errors
     /// As [`Self::begin_write`].
     pub fn begin_write_planes(&mut self) -> Result<Vec<(&mut [u8], usize)>, BridgeError> {
-        if self.planes.is_empty() {
-            let planes = self.begin_write()?;
-            let chroma = planes.chroma_stride;
-            return Ok(vec![
-                (planes.y, planes.y_stride),
-                (planes.u, chroma),
-                (planes.v, chroma),
-            ]);
-        }
         self.make_writable()?;
         let mut written = Vec::with_capacity(self.planes.len());
         for (index, &(row_bytes, rows)) in self.planes.iter().enumerate() {
             let stride = plane_stride(self.frame.linesize[index], row_bytes)?;
-            // SAFETY: `zeroed_frame` allocated `rows` rows of `linesize` bytes per plane, and
-            // `make_writable` left this frame the sole owner.
-            let plane = unsafe { writable_plane(self.frame.data[index], stride, row_bytes, rows)? };
+            // SAFETY: `writable_plane` checks the rows lie in one of the frame's buffers, and
+            // `make_writable` left this frame their sole owner.
+            let plane = unsafe { writable_plane(&self.frame, index, stride, row_bytes, rows)? };
             written.push((plane, stride));
         }
         Ok(written)
@@ -3114,27 +3340,18 @@ impl Yuv420pFrameBuffer {
     /// # Errors
     /// Returns an error when the buffer cannot be made writable or its planes changed layout.
     pub fn begin_write(&mut self) -> Result<Yuv420pFramePlanes<'_>, BridgeError> {
-        if !self.planes.is_empty() {
+        if self.frame.format != ffi::AV_PIX_FMT_YUV420P {
             return Err(BridgeError::InvalidInput("the frame is not YUV420P"));
         }
-        self.make_writable()?;
-        let chroma_width = self.width.div_ceil(2);
-        let chroma_height = self.height.div_ceil(2);
-        let y_stride = plane_stride(self.frame.linesize[0], self.width)?;
-        let u_stride = plane_stride(self.frame.linesize[1], chroma_width)?;
-        let v_stride = plane_stride(self.frame.linesize[2], chroma_width)?;
+        let mut planes = self.begin_write_planes()?.into_iter();
+        let (Some((y, y_stride)), Some((u, u_stride)), Some((v, v_stride))) =
+            (planes.next(), planes.next(), planes.next())
+        else {
+            return Err(BridgeError::InvalidInput("the frame is not YUV420P"));
+        };
         if u_stride != v_stride {
             return Err(BridgeError::InvalidInput("mismatched chroma strides"));
         }
-        // SAFETY: `zeroed_frame` allocated and wrote `height` rows of `linesize` bytes per plane,
-        // and the writability check makes this frame the sole owner.
-        let y = unsafe { writable_plane(self.frame.data[0], y_stride, self.width, self.height)? };
-        // SAFETY: as above, for the two half-resolution chroma planes.
-        let u =
-            unsafe { writable_plane(self.frame.data[1], u_stride, chroma_width, chroma_height)? };
-        // SAFETY: as above.
-        let v =
-            unsafe { writable_plane(self.frame.data[2], v_stride, chroma_width, chroma_height)? };
         Ok(Yuv420pFramePlanes {
             y,
             y_stride,
@@ -3154,6 +3371,19 @@ impl Yuv420pFrameBuffer {
     #[must_use]
     pub const fn frame(&self) -> &AVFrame {
         &self.frame
+    }
+
+    /// Bytes of the visible planes, without row padding.
+    #[must_use]
+    pub fn visible_bytes(&self) -> usize {
+        if self.planes.is_empty() {
+            let chroma = self.width.div_ceil(2) * self.height.div_ceil(2);
+            return self.width * self.height + 2 * chroma;
+        }
+        self.planes
+            .iter()
+            .map(|&(row_bytes, rows)| row_bytes * rows)
+            .sum()
     }
 
     /// Coded luma dimensions this buffer was allocated for.
@@ -3205,23 +3435,82 @@ fn plane_stride(linesize: i32, width: usize) -> Result<usize, BridgeError> {
     Ok(stride)
 }
 
+/// Plane `index` of `frame` as `rows` rows of `stride` bytes, the last one `row_bytes` long.
+///
 /// # Safety
-/// `data` must point at `height` rows of `stride` bytes the caller solely owns.
+/// The caller must solely own the frame's buffers for the slice's lifetime.
 unsafe fn writable_plane<'a>(
-    data: *mut u8,
+    frame: &AVFrame,
+    index: usize,
     stride: usize,
-    width: usize,
-    height: usize,
+    row_bytes: usize,
+    rows: usize,
 ) -> Result<&'a mut [u8], BridgeError> {
+    let data = frame.data[index];
     if data.is_null() {
         return Err(BridgeError::InvalidInput("frame plane is null"));
     }
     let len = stride
-        .checked_mul(height.saturating_sub(1))
-        .and_then(|rows| rows.checked_add(width))
+        .checked_mul(rows.saturating_sub(1))
+        .and_then(|before| before.checked_add(row_bytes))
         .ok_or(BridgeError::InvalidInput("frame plane size overflow"))?;
-    // SAFETY: delegated to this function's contract.
+    if !in_frame_buffer(frame, data as usize, len) {
+        return Err(BridgeError::InvalidInput(
+            "frame plane extends past its buffer",
+        ));
+    }
+    // SAFETY: the range lies in one of the frame's buffers; exclusivity is the caller's.
     Ok(unsafe { slice::from_raw_parts_mut(data, len) })
+}
+
+/// Whether `len` bytes from address `start` lie inside one of `frame`'s buffers.
+fn in_frame_buffer(frame: &AVFrame, start: usize, len: usize) -> bool {
+    let Some(end) = start.checked_add(len) else {
+        return false;
+    };
+    frame.buf.iter().any(|buffer| {
+        // SAFETY: a non-null `AVFrame::buf` entry is a live `AVBufferRef` the frame holds.
+        let Some(buffer) = (unsafe { buffer.as_ref() }) else {
+            return false;
+        };
+        let buffer_start = buffer.data as usize;
+        buffer_start
+            .checked_add(buffer.size)
+            .is_some_and(|buffer_end| buffer_start <= start && end <= buffer_end)
+    })
+}
+
+/// Visible bytes per row and rows of each plane of a `width` by `height` frame of `format`.
+fn plane_geometry(
+    format: ffi::AVPixelFormat,
+    width: i32,
+    height: i32,
+) -> Result<Vec<(usize, usize)>, BridgeError> {
+    // SAFETY: `av_pix_fmt_desc_get` accepts any value and returns null or a static descriptor.
+    let descriptor = unsafe { ffi::av_pix_fmt_desc_get(format).as_ref() }
+        .ok_or(BridgeError::InvalidInput("pixel format has no descriptor"))?;
+    // SAFETY: a pure computation over plain values.
+    let count = unsafe { ffi::av_pix_fmt_count_planes(format) };
+    let count = usize::try_from(count)
+        .ok()
+        .filter(|count| (1..=4).contains(count))
+        .ok_or(BridgeError::InvalidInput("pixel format has no planes"))?;
+    let rows = usize::try_from(height).map_err(|_| BridgeError::InvalidInput("negative height"))?;
+    (0..count)
+        .map(|index| {
+            let plane = i32::try_from(index).unwrap_or(i32::MAX);
+            // SAFETY: a pure computation over plain values.
+            let row_bytes = unsafe { ffi::av_image_get_linesize(format, width, plane) };
+            let row_bytes =
+                usize::try_from(row_bytes).map_err(|_| BridgeError::FfmpegCode(row_bytes))?;
+            let rows = if index == 1 || index == 2 {
+                rows.div_ceil(1 << descriptor.log2_chroma_h)
+            } else {
+                rows
+            };
+            Ok((row_bytes, rows))
+        })
+        .collect()
 }
 
 #[cfg(all(test, target_os = "linux", feature = "hwdevice"))]

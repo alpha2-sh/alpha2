@@ -12,10 +12,16 @@ import {
   providerReadsFile,
 } from "alpha2/project";
 import { containerPolicy } from "alpha2/containers";
-import { PlanarDecodeUnavailableError } from "alpha2/hdr-frames";
+import { applyEdit as applyEngineEdit } from "alpha2/apply-edit";
+import { runExtractor } from "alpha2/extract";
+import { loadPlugin } from "alpha2/plugins";
+import {
+  DecodeUnavailableError,
+  PlanarDecodeUnavailableError,
+} from "alpha2/hdr-frames";
 import { drawnEffectResources, shownSources } from "../core/compositions.js";
 import { ResourceRegistry } from "./resources.js";
-import { ExportJob, requireExportFrameRate } from "./jobs.js";
+import { ExportJob, ExtractionJob, requireExportFrameRate } from "./jobs.js";
 import {
   GpuRecoveryLadder,
   lossReportFromJson,
@@ -25,7 +31,7 @@ import { attemptOptions } from "./runtime/budget.js";
 import { readUserText } from "./runtime/text.js";
 import { createWorkerPreview } from "./worker.js";
 import { registerCaptionFonts } from "./runtime/caption-fonts.js";
-import { AssetLibrary, streamPeaks } from "./runtime/assets.js";
+import { AssetLibrary, audioDecoding, streamPeaks } from "./runtime/assets.js";
 import {
   SourcePixels,
   providerSettings,
@@ -303,6 +309,7 @@ export function createBrowserBridge(options) {
     mediaAdapter = createMediaAdapter({ ...runtimeAssets, hdrWithoutPlanes }),
     resourceLimit = 128,
     audio = true,
+    workerRequestTimeoutMs,
     onError = () => {},
     assetDecisions,
     previewScale: initialPreviewScale = 0.5,
@@ -484,11 +491,9 @@ export function createBrowserBridge(options) {
       let staged;
       try {
         // Proxies are keyed by their original's hash, so skip hashing their own bytes.
-        staged = await mediaAdapter.stage(
-          found.file,
-          new AbortController().signal,
-          { fingerprint: false },
-        );
+        staged = await mediaAdapter.stage(found.file, lifetime.signal, {
+          fingerprint: false,
+        });
       } catch (error) {
         void hold.release();
         throw error;
@@ -502,10 +507,17 @@ export function createBrowserBridge(options) {
       try {
         const runtime = { ...staged.runtime, id: `proxy:${hash}` };
         proxy.revision = issue(runtime.id);
-        proxy.lease = registry.put(runtime.id, proxy.revision, runtime, () => {
-          staged.dispose();
-          proxy.unlocked = hold.release();
-        });
+        // At most one proxy per original, so it does not count against the import limit.
+        proxy.lease = registry.put(
+          runtime.id,
+          proxy.revision,
+          runtime,
+          () => {
+            staged.dispose();
+            proxy.unlocked = hold.release();
+          },
+          { counted: false },
+        );
         proxies.set(hash, proxy);
       } catch (error) {
         staged.dispose();
@@ -518,7 +530,12 @@ export function createBrowserBridge(options) {
   }
   /** Hashes with no stored proxy, not asked again this session. */
   let absentProxies = new Set();
-  /** Finds kept proxies for offline sources, and for every source while preview prefers proxies. */
+  /** Kept proxies that failed to adopt, by hash, not tried again in this project. */
+  let failedProxies = new Map();
+  /**
+   * Finds kept proxies for offline sources, and for every source while preview prefers proxies. A
+   * proxy that fails to adopt is reported once and its source reads the original.
+   */
   async function discoverProxies(document) {
     for (const source of document.project.sources) {
       const descriptor = document.assets[source.id];
@@ -527,6 +544,7 @@ export function createBrowserBridge(options) {
         !hash ||
         proxies.has(hash) ||
         absentProxies.has(hash) ||
+        failedProxies.has(hash) ||
         (preferredPreviewMedia === "original" &&
           originalOf(document, source.id))
       )
@@ -534,10 +552,27 @@ export function createBrowserBridge(options) {
       // Hold before reading so no other page removes it in between.
       const hold = await proxyStore.hold(hash);
       const found = await proxyStore.find(hash).catch(() => null);
-      if (found) await adoptProxy(hash, found, hold);
-      else {
+      if (!found) {
         absentProxies.add(hash);
         void hold.release();
+        continue;
+      }
+      try {
+        await adoptProxy(hash, found, hold);
+      } catch (error) {
+        if (failedProxies.has(hash)) continue;
+        failedProxies.set(hash, error);
+        if (!disposed)
+          onError(
+            new EditorError(
+              "proxy_unavailable",
+              `The kept proxy of ${source.id} cannot be used (${error instanceof Error ? error.message : String(error)})`,
+              "proxy",
+              source.id,
+              true,
+              { cause: error },
+            ),
+          );
       }
     }
   }
@@ -548,12 +583,43 @@ export function createBrowserBridge(options) {
     const compiled = compileEditorDocument(document);
     if (compiled.diagnostics.length) throw compiled.diagnostics[0];
     requireShownText(document, compiled.project);
+    if (purpose === "export_original" || purpose === "export_proxy")
+      await reprobeAudio(document, compiled.project, purpose);
     return conformProject(
       binding,
       compiled.project,
       catalogOf(document),
       purpose,
     );
+  }
+  /**
+   * Decodes a trial again of each shown source's audio the import found undecodable (its probe has
+   * a 2 s limit), so `startExport` decides by facts taken at export time. Updates the runtimes.
+   */
+  async function reprobeAudio(document, project, purpose) {
+    const used = shownSources(project);
+    for (const source of project.sources) {
+      if (!used.has(source.id)) continue;
+      const runtimes = [originalOf(document, source.id)];
+      if (purpose === "export_proxy")
+        runtimes.push(
+          proxies.get(hashOf(document.assets[source.id]))?.lease.value,
+        );
+      for (const runtime of runtimes) {
+        if (
+          !runtime?.file ||
+          !runtime.hasAudio ||
+          runtime.audioDecodable !== false ||
+          runtime.audioBuffer
+        )
+          continue;
+        const fresh = await audioDecoding(runtime.file).catch(() => null);
+        if (!fresh) continue;
+        runtime.audioDecodable = fresh.decodable;
+        if (fresh.decodable) delete runtime.audioDecodeFacts;
+        else if (fresh.facts) runtime.audioDecodeFacts = fresh.facts;
+      }
+    }
   }
   const pendingImports = new Set();
   const assetListeners = new Set();
@@ -601,6 +667,8 @@ export function createBrowserBridge(options) {
       .catch(() => {});
   };
   const jobs = new Set();
+  /** Running extractions, kept apart from `jobs` so an export never waits for one. */
+  const extractions = new Set();
   let disposed = false,
     engine = null,
     workerPreview = null,
@@ -854,9 +922,14 @@ export function createBrowserBridge(options) {
           { id: asset.id },
         );
         const revision = issue(asset.id);
+        // Bounded by the document's own limits, so it does not count against the import limit.
         owners.set(resourceKey, {
-          lease: registry.put(asset.id, revision, runtime, () =>
-            staged.dispose(),
+          lease: registry.put(
+            asset.id,
+            revision,
+            runtime,
+            () => staged.dispose(),
+            { counted: false },
           ),
           revision,
         });
@@ -1078,6 +1151,7 @@ export function createBrowserBridge(options) {
               "duration",
               "hasAudio",
               "audioDecodable",
+              "audioStreams",
               "text",
               "fit",
               "provider",
@@ -1125,7 +1199,14 @@ export function createBrowserBridge(options) {
   const off = editor.subscribe(() => {
     if (editor.generation !== sessionGeneration) {
       sessionGeneration = editor.generation;
-      for (const abort of pendingImports) abort.abort();
+      for (const abort of pendingImports)
+        abort.abort(
+          new EditorError(
+            "stale_import",
+            "Project changed during import",
+            "import",
+          ),
+        );
       pause();
       renderKey = null;
       workerSent = new Map();
@@ -1136,6 +1217,7 @@ export function createBrowserBridge(options) {
       previewSelection = new Map();
       previewConformKey = null;
       absentProxies = new Set();
+      failedProxies = new Map();
     }
     scheduleSweep();
     scheduleTextReports();
@@ -1455,17 +1537,18 @@ export function createBrowserBridge(options) {
    * Gives up the preview worker after `error` (failed start, load or draw). Until the next binding
    * the main renderer, which loads every project the worker does, draws off screen and each frame
    * is copied to the bound surface. `onError` hears once why, unless the worker lost its GPU, which
-   * recovers silently and lets a rebuilt preview try a worker again.
+   * recovers silently and lets a rebuilt preview try a worker again. `starting` is set while a
+   * binding makes its worker, which may have failed before there was one to give up.
    */
-  async function abandonWorker(error) {
+  async function abandonWorker(error, starting = false) {
     const failed = workerPreview;
-    if (!failed) return;
+    if (!failed && !starting) return;
     workerPreview = null;
     workerSent = new Map();
     workerFonts = null;
     copySurface = true;
-    await failed.dispose().catch(() => {});
-    if (isGpuLoss(error)) return;
+    await failed?.dispose().catch(() => {});
+    if (isGpuLoss(error) || disposed) return;
     workerGivenUp = true;
     const reason = error instanceof Error ? error.message : String(error ?? "");
     onError(
@@ -1515,16 +1598,40 @@ export function createBrowserBridge(options) {
   // An audio start that missed its deadline and has not settled. A context that never resumes
   // (Firefox without usable output) or a stuck worklet would block Play, so video plays silent.
   let stalledAudio = null;
-  /** Whether `starting` settled within the deadline; a rejection propagates. */
+  /**
+   * Whether `starting` settled within the deadline. Sound that fails or misses it is reported once
+   * and playback goes on silent.
+   */
   async function audioStarts(starting) {
     let timer = 0;
     const started = await Promise.race([
-      starting.then(() => true),
+      starting.then(
+        () => true,
+        (error) => ({ error }),
+      ),
       new Promise((resolve) => {
         timer = setTimeout(() => resolve(false), AUDIO_START_TIMEOUT_MS);
       }),
     ]).finally(() => clearTimeout(timer));
-    if (started) return true;
+    if (started === true) return true;
+    if (started) {
+      mixer?.stop();
+      const reason =
+        started.error instanceof Error
+          ? started.error.message
+          : String(started.error);
+      onError(
+        new EditorError(
+          "audio_unavailable",
+          `Audio output could not start (${reason}); playing without sound`,
+          "play",
+          undefined,
+          true,
+          { cause: started.error },
+        ),
+      );
+      return false;
+    }
     stalledAudio = starting;
     const settle = () => {
       if (stalledAudio === starting) stalledAudio = null;
@@ -1708,7 +1815,7 @@ export function createBrowserBridge(options) {
     mixer.setMasterVolume(monitorVolume);
     mixer.setLatencyOffset(audioOffsetMs);
     stalledAudio = null;
-    supplier = new AudioWindowSupplier(library);
+    supplier = new AudioWindowSupplier(library, { onError });
     try {
       await engine.start();
       engine.setPreviewScale(previewScale);
@@ -1723,24 +1830,27 @@ export function createBrowserBridge(options) {
             : {}),
           extensionModuleUrls: extensionWasmUrls(runtimeAssets),
         };
-        workerPreview = createWorkerPreview(runtimeAssets.workerFactory(), {
-          runtimeAssets: workerRuntime,
-          bitmapOutput: true,
-          width: canvas.width,
-          height: canvas.height,
-          videoConversion,
-          opaqueEngineFrames,
-          // Match the main renderer: the CPU once recovery or `auto` moved there.
-          renderer: onCpu() ? "cpu" : rendererMode,
-        });
-        // A worker that cannot start leaves the surface to the main renderer.
+        // A worker that cannot be made or started leaves the surface to the main renderer.
         try {
+          workerPreview = createWorkerPreview(runtimeAssets.workerFactory(), {
+            runtimeAssets: workerRuntime,
+            bitmapOutput: true,
+            width: canvas.width,
+            height: canvas.height,
+            videoConversion,
+            opaqueEngineFrames,
+            // The main renderer's mode, which is the CPU once recovery or `auto` moved there.
+            renderer: onCpu() ? "cpu" : rendererMode,
+            ...(workerRequestTimeoutMs === undefined
+              ? {}
+              : { requestTimeoutMs: workerRequestTimeoutMs }),
+          });
           await workerPreview.ready;
           await workerPreview.setPreviewScale(previewScale);
           if (effectDefinitions.size)
             await workerPreview.registerEffects(keptEffects());
         } catch (error) {
-          await abandonWorker(error);
+          await abandonWorker(error, true);
         }
       }
       if (passTiming || traceUploads) applyTracing();
@@ -2042,14 +2152,43 @@ export function createBrowserBridge(options) {
     };
   }
   /**
+   * The project an operation started in. `assert` throws once its result no longer belongs there:
+   * `signal`'s reason when aborted, `disposed` after the bridge or the session is disposed, and
+   * `stale_import` once another project was opened. Call it after the operation's last await,
+   * directly before it changes the document.
+   */
+  function projectScope(signal) {
+    const generation = editor.generation;
+    return {
+      assert(operation, entityId) {
+        signal?.throwIfAborted();
+        if (disposed || editor.disposed)
+          throw new EditorError(
+            "disposed",
+            "Bridge is disposed",
+            operation,
+            entityId,
+          );
+        if (editor.generation !== generation)
+          throw new EditorError(
+            "stale_import",
+            "Project changed during import",
+            operation,
+            entityId,
+          );
+      },
+    };
+  }
+  /**
    * Stages `units` (at most {@link IMPORT_STAGE_CONCURRENCY} at once) and adds them to the document
    * in order as one undo step. A relink has exactly one unit.
    */
   async function importUnits(units, { signal, relinkId } = {}) {
     if (disposed)
       throw new EditorError("disposed", "Bridge is disposed", "import");
-    const generation = editor.generation,
-      controller = new AbortController();
+    const controller = new AbortController(),
+      scope = projectScope(controller.signal),
+      operation = relinkId ? "relink" : "import";
     pendingImports.add(controller);
     const abort = () => controller.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });
@@ -2092,16 +2231,13 @@ export function createBrowserBridge(options) {
         Array.from({ length: Math.min(limit, units.length) }, stageNext),
       );
       if (failure) throw failure.error;
+      // Loaded before the commit loop, which must not await.
+      const binding =
+        relinkId && staged[0]?.fingerprint ? await decisions() : null;
       for (const [index, unit] of units.entries()) {
         const item = staged[index];
         const fileName = unit.name ?? item.name ?? item.runtime.name;
-        controller.signal.throwIfAborted();
-        if (disposed || editor.disposed || editor.generation !== generation)
-          throw new EditorError(
-            "stale_import",
-            "Project changed during import",
-            "import",
-          );
+        scope.assert(operation);
         const old = relinkId ? editor.document.assets[relinkId] : null;
         if (relinkId && !old)
           throw new EditorError(
@@ -2114,7 +2250,7 @@ export function createBrowserBridge(options) {
         // means other media.
         if (old?.fingerprint && item.fingerprint) {
           const match = compareFingerprints(
-            await decisions(),
+            binding,
             old.fingerprint,
             item.fingerprint,
           );
@@ -2164,10 +2300,23 @@ export function createBrowserBridge(options) {
           ...(item.fingerprint ? { fingerprint: item.fingerprint } : {}),
           authoring,
         };
-        // Call as a method, since a staged asset may be a class instance.
-        const lease = registry.put(id, contentRevision, runtime, () =>
-          item.dispose(),
-        );
+        let lease;
+        try {
+          // Call as a method, since a staged asset may be a class instance.
+          lease = registry.put(id, contentRevision, runtime, () =>
+            item.dispose(),
+          );
+        } catch (error) {
+          if (error?.code !== "resource_budget") throw error;
+          throw new EditorError(
+            "resource_budget",
+            `${fileName} is not imported: this session holds ${registry.limit} imported media files, its resourceLimit. Removed media counts while undo can still reach it`,
+            "import",
+            id,
+            true,
+            { cause: error },
+          );
+        }
         leases.push({ id, contentRevision, lease });
         commands.push({
           type: "asset.put",
@@ -2196,6 +2345,7 @@ export function createBrowserBridge(options) {
           lease: entry.lease,
           revision: entry.contentRevision,
         });
+      scope.assert(operation);
       const result = editor.dispatch({ type: "transaction", commands });
       if (!result.ok) throw result.error;
       for (const entry of leases) analyze(entry.lease.value);
@@ -2211,6 +2361,13 @@ export function createBrowserBridge(options) {
       pendingImports.delete(controller);
       signal?.removeEventListener("abort", abort);
     }
+  }
+  /** Whether a document the session can return to has media with content hash `hash`. */
+  function readsMedia(hash) {
+    for (const document of editor.reachableDocuments())
+      for (const asset of Object.values(document.assets))
+        if (hashOf(asset) === hash) return true;
+    return false;
   }
   /** The running proxy conversion: `preempt` stops it for an export, `done` settles at its end. */
   let proxyRun = null;
@@ -2268,6 +2425,51 @@ export function createBrowserBridge(options) {
       },
     );
   }
+  /**
+   * The audible sources an export reads whose audio this browser cannot decode, by the runtime it
+   * reads (`map`), as `{ id, name, facts }`. None when the export writes no audio.
+   */
+  function undecodableAudioOf(document, project, used, map, options) {
+    if (options.includeAudio === false) return [];
+    return project.sources
+      .filter(
+        (source) =>
+          used.has(source.id) &&
+          (source.kind === "audio" || source.has_audio === true),
+      )
+      .filter((source) => {
+        const runtime = map.get(source.id);
+        return (
+          runtime?.hasAudio === true &&
+          runtime.audioDecodable === false &&
+          !runtime.audioBuffer
+        );
+      })
+      .map((source) => ({
+        id: source.id,
+        name: document.assets[source.id]?.name ?? source.id,
+        facts: map.get(source.id).audioDecodeFacts ?? null,
+      }));
+  }
+  /** Throws the refusal of an export whose audible audio this browser cannot decode. */
+  function refuseUndecodableAudio(undecodable) {
+    const [first] = undecodable;
+    const names = undecodable.map((source) => source.name).join(", ");
+    throw new EditorError(
+      "unsupported_media",
+      `This browser cannot decode the sound of ${names}; export with undecodableAudio: "silence" to write them silent, or with the native host`,
+      "export",
+      first.id,
+      true,
+      {
+        cause: new DecodeUnavailableError(
+          `${first.name}: no audio decoder in this browser`,
+          first.facts ?? { kind: "audio", codec: null },
+        ),
+        details: { sources: undecodable },
+      },
+    );
+  }
   let sweptExports = false;
   /** Settles when the running export does. */
   let exportSettled = Promise.resolve();
@@ -2299,6 +2501,13 @@ export function createBrowserBridge(options) {
       options.videoConversion ?? videoConversion,
       "export",
     );
+    const undecodableAudio = options.undecodableAudio ?? "refuse";
+    if (undecodableAudio !== "refuse" && undecodableAudio !== "silence")
+      throw new EditorError(
+        "invalid_undecodable_audio",
+        `Export undecodableAudio must be "refuse" or "silence"; received ${JSON.stringify(undecodableAudio)}`,
+        "export",
+      );
     materializeText(editor.document);
     const snapshot = editor.document,
       revision = editor.revision,
@@ -2338,6 +2547,17 @@ export function createBrowserBridge(options) {
     } catch (error) {
       held.forEach((l) => l.release());
       throw error;
+    }
+    const silentAudio = undecodableAudioOf(
+      snapshot,
+      compiled.project,
+      used,
+      map,
+      options,
+    );
+    if (silentAudio.length > 0 && undecodableAudio !== "silence") {
+      held.forEach((l) => l.release());
+      refuseUndecodableAudio(silentAudio);
     }
     let fontsReported = false;
     const backend = {
@@ -2450,6 +2670,7 @@ export function createBrowserBridge(options) {
               videoDecode,
               videoConversion: exportConversion,
               decodeFallbacks: pixels.decodeFallbacks,
+              silentAudioSources: silentAudio.map((source) => source.id),
               renderer: renderer.rendererChoice,
             },
           };
@@ -2525,10 +2746,20 @@ export function createBrowserBridge(options) {
           ? cancelAnimationFrame
           : clearTimeout)(refreshFrame);
       ++binding;
-      for (const controller of pendingImports) controller.abort();
+      for (const controller of pendingImports)
+        controller.abort(
+          new EditorError("disposed", "Bridge is disposed", "import"),
+        );
       for (const controller of analyses.values()) controller.abort();
       globalThis.document?.removeEventListener("visibilitychange", visibility);
       await Promise.all([...jobs].map((job) => job.cancel()));
+      await Promise.all([...extractions].map((job) => job.cancel()));
+      // Its conversion stops on `lifetime`; nothing may write after teardown.
+      await proxyRun?.done;
+      // Before the queue drains, so a queued render waiting on the worker is rejected.
+      const worker = workerPreview;
+      workerPreview = null;
+      await worker?.dispose();
       await queue;
       await mixer?.close();
       await supplier?.close();
@@ -2567,7 +2798,7 @@ export function createBrowserBridge(options) {
           "provider",
           id,
         );
-      const generation = editor.generation;
+      const scope = projectScope(signal);
       let read;
       try {
         read = await describeProvider(provider, signal);
@@ -2580,13 +2811,7 @@ export function createBrowserBridge(options) {
           id,
         );
       }
-      if (disposed || editor.disposed || editor.generation !== generation)
-        throw new EditorError(
-          "stale_import",
-          "Project changed while the source opened",
-          "provider",
-          id,
-        );
+      scope.assert("provider", id);
       const assetId = id ?? crypto.randomUUID();
       const descriptor = editor.document.assets[assetId];
       const previous = editor.document.project.sources.find(
@@ -2676,7 +2901,9 @@ export function createBrowserBridge(options) {
     pause,
     startExport,
     async importCaptions(file) {
-      const generation = editor.generation;
+      if (disposed)
+        throw new EditorError("disposed", "Bridge is disposed", "import");
+      const scope = projectScope();
       // A larger file holds more cues than a project can, so refuse it unread.
       if (file.size > MAX_CAPTION_FILE_BYTES)
         throw new EditorError(
@@ -2701,8 +2928,7 @@ export function createBrowserBridge(options) {
           { cause: error },
         );
       }
-      if (disposed || editor.generation !== generation)
-        throw Error("Project changed during caption import");
+      scope.assert("import");
       const assetId = crypto.randomUUID();
       const result = editor.dispatch({
         type: "asset.put",
@@ -2747,7 +2973,84 @@ export function createBrowserBridge(options) {
       );
     },
     conform,
+    async applyEdit(request, { then, label, signal } = {}) {
+      if (disposed)
+        throw new EditorError("disposed", "Bridge is disposed", "edit");
+      const { project, read } = editor.editProject();
+      const binding = await loadWasm();
+      signal?.throwIfAborted();
+      if (disposed)
+        throw new EditorError("disposed", "Bridge is disposed", "edit");
+      const applied = applyEngineEdit(binding, project, request);
+      const result = editor.applyEdit(applied, { read, request, then, label });
+      if (!result.ok) throw result.error;
+      return result.value;
+    },
+    async extract(run, { plugin, extractor, signal, onProgress } = {}) {
+      if (disposed)
+        throw new EditorError("disposed", "Bridge is disposed", "extract");
+      if ((plugin === undefined) === (extractor === undefined))
+        throw new EditorError(
+          "invalid_command",
+          "Pass a plugin or an extractor",
+          "extract",
+        );
+      if (run.input.from !== "source")
+        throw new EditorError(
+          "unsupported_media",
+          "The browser runtime extracts from source media; it draws no timeline frames for an extractor",
+          "extract",
+        );
+      const id = run.input.source_id ?? "";
+      const { project, read } = editor.extractionProject();
+      const document = editor.document;
+      const file = originalOf(document, id)?.file;
+      if (!file)
+        throw new EditorError(
+          "missing_asset",
+          "Relink the original to extract from it",
+          "extract",
+          id,
+        );
+      const madeFrom =
+        project.sources.find((source) => source.id === id)?.fingerprint ??
+        document.assets[id]?.fingerprint;
+      const job = new ExtractionJob(
+        async (aborted) => {
+          const binding = await loadWasm();
+          const loaded = plugin
+            ? await loadPlugin(plugin.manifest, plugin.sha256, {
+                ...(plugin.memoryBytes === undefined
+                  ? {}
+                  : { memoryBytes: plugin.memoryBytes }),
+                signal: aborted,
+              })
+            : undefined;
+          const result = await runExtractor(
+            {
+              binding,
+              audioBinding: binding,
+              project,
+              request: run,
+              media: { [id]: file },
+              ...(madeFrom ? { madeFrom } : {}),
+              ...(loaded ? { plugin: loaded } : {}),
+              signal: aborted,
+              ...(onProgress ? { onProgress } : {}),
+            },
+            loaded ? loaded.extractor(run.params) : extractor,
+          );
+          return { result, read };
+        },
+        signal,
+        () => extractions.delete(job),
+      );
+      extractions.add(job);
+      return job.result;
+    },
     async generateProxy(id, { signal } = {}) {
+      if (disposed)
+        throw new EditorError("disposed", "Bridge is disposed", "proxy", id);
       const descriptor = editor.document.assets[id];
       // No single video file for the proxy maker to read.
       const provider = editor.document.project.sources.find(
@@ -2778,11 +3081,16 @@ export function createBrowserBridge(options) {
         );
       proxyJobs.set(id, 0);
       notifyAssets();
+      // A conversion lives as long as the bridge, not the project: a proxy serves every project
+      // with the same media.
+      const stop = signal
+        ? AbortSignal.any([lifetime.signal, signal])
+        : lifetime.signal;
       let hold = null;
       try {
         for (;;) {
           // One proxy at a time and none during an export; a starting export preempts it.
-          const turn = await proxyTurn(signal);
+          const turn = await proxyTurn(stop);
           try {
             // Held until its runtime is released so no page removes it meanwhile.
             hold = await proxyStore.hold(hash);
@@ -2792,9 +3100,7 @@ export function createBrowserBridge(options) {
               runtime.file,
               descriptor.fingerprint,
               {
-                signal: signal
-                  ? AbortSignal.any([signal, turn.signal])
-                  : turn.signal,
+                signal: AbortSignal.any([stop, turn.signal]),
                 onProgress: (fraction) => {
                   proxyJobs.set(id, fraction);
                   const next = Math.floor(fraction * 100);
@@ -2804,12 +3110,23 @@ export function createBrowserBridge(options) {
                 },
               },
             );
+            if (disposed)
+              throw new EditorError(
+                "disposed",
+                "Bridge is disposed",
+                "proxy",
+                id,
+              );
+            // Kept on disk either way; adopted only while a document this session can show has
+            // that media.
+            if (!readsMedia(hash)) break;
             const adopted = adoptProxy(hash, found, hold);
             hold = null;
             await adopted;
+            failedProxies.delete(hash);
             break;
           } catch (error) {
-            if (!turn.signal.aborted || signal?.aborted) throw error;
+            if (!turn.signal.aborted || stop.aborted) throw error;
             void hold?.release();
             hold = null;
             proxyJobs.set(id, 0);
@@ -2872,6 +3189,7 @@ export function createBrowserBridge(options) {
     async removeProxies(hashes) {
       const wanted = new Set(hashes);
       const unlocked = [];
+      for (const hash of wanted) failedProxies.delete(hash);
       for (const [hash, proxy] of proxies)
         if (wanted.has(hash)) {
           proxies.delete(hash);

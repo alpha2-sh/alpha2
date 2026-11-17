@@ -2,7 +2,7 @@ use super::*;
 
 fn export_line(video_quality: Option<Value>) -> String {
     let mut request = json!({
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "operation": "export",
         "requestId": "quality",
         "project": {},
@@ -21,7 +21,12 @@ fn export_line(video_quality: Option<Value>) -> String {
 fn parsed_video_quality(video_quality: Option<Value>) -> Result<VideoQualityRequest, HostError> {
     match parse_request(&export_line(video_quality))? {
         Request::Export(export) => Ok(export.video_quality),
-        Request::Capabilities { .. } | Request::Conform(_) | Request::Still(_) => {
+        Request::Capabilities { .. }
+        | Request::Conform(_)
+        | Request::Still(_)
+        | Request::Compose(_)
+        | Request::Edit(_)
+        | Request::Extract(_) => {
             unreachable!("an export line parses as an export")
         }
     }
@@ -31,7 +36,7 @@ fn parsed_video_quality(video_quality: Option<Value>) -> Result<VideoQualityRequ
 #[cfg(target_os = "linux")]
 fn line_with_a_project_of_small_objects(objects: usize) -> String {
     let mut line = String::from(
-        r#"{"protocolVersion":1,"operation":"export","requestId":"wide","assets":{},"startTicks":0,"endTicks":1,"frameRate":{"num":30,"den":1},"output":"out.mp4","project":{"cues":["#,
+        r#"{"protocolVersion":2,"operation":"export","requestId":"wide","assets":{},"startTicks":0,"endTicks":1,"frameRate":{"num":30,"den":1},"output":"out.mp4","project":{"cues":["#,
     );
     for index in 0..objects {
         if index > 0 {
@@ -113,7 +118,9 @@ fn run_with_a_hung_release(test: &str, input: &str) -> (Option<i32>, String, Str
         .spawn()
         .expect("child");
     let mut stdin = child.stdin.take().expect("stdin");
-    stdin.write_all(input.as_bytes()).expect("write the input");
+    stdin
+        .write_all(&crate::serve_io::frames_of_lines(input.as_bytes()))
+        .expect("write the input");
     drop(stdin);
     let readers = [
         child
@@ -128,9 +135,9 @@ fn run_with_a_hung_release(test: &str, input: &str) -> (Option<i32>, String, Str
     .map(|pipe| {
         let mut pipe = pipe.expect("pipe");
         std::thread::spawn(move || {
-            let mut output = String::new();
-            let _ = pipe.read_to_string(&mut output);
-            output
+            let mut output = Vec::new();
+            let _ = pipe.read_to_end(&mut output);
+            String::from_utf8_lossy(&output).into_owned()
         })
     });
     let started = Instant::now();
@@ -202,7 +209,7 @@ fn serve_exits_at_the_end_of_its_input_when_its_device_never_goes_idle() {
     let _gpu = gpu_test_lock();
     let (status, stdout, stderr) = run_with_a_hung_release(
         "tests::requests::serve_with_a_hung_release",
-        "{\"protocolVersion\":1,\"requestId\":\"caps\",\"operation\":\"capabilities\"}\n",
+        "{\"protocolVersion\":2,\"requestId\":\"caps\",\"operation\":\"capabilities\"}\n",
     );
     assert_eq!(status, Some(0), "{stderr}");
     assert!(
@@ -217,7 +224,7 @@ fn serve_exits_at_the_end_of_its_input_when_its_device_never_goes_idle() {
 fn serve_with_a_hung_release() {
     crate::teardown::injected::stall_host_drops();
     let mut host = None;
-    let result = serve(&mut host);
+    let result = serve(&mut host, test_serve_limits());
     assert!(host.is_some(), "the request started no host");
     let code = conclude(result, host);
     panic!("the release returned (status {code}) although it never finishes");
@@ -257,7 +264,7 @@ fn parse_a_wide_request_under_a_heap_limit() {
         panic!("an export line parses as an export");
     };
     println!("project text: {} bytes", export.project.text().len());
-    assert_eq!(crate::protocol::request_id_from_line(&line), "wide");
+    assert_eq!(crate::protocol::request_id_from_header(&line), "wide");
 }
 
 /// The project stays text until the engine's budget sees it; as a tree, a 15 MiB project of small
@@ -287,31 +294,66 @@ fn a_request_is_read_without_a_tree_of_its_project() {
 }
 
 #[test]
-fn a_request_line_over_the_limit_is_skipped_and_the_next_is_read_whole() {
-    let mut bytes = "x".repeat(100).into_bytes();
-    bytes.extend_from_slice(b"\n{\"next\":1}\r\n\n\xFF\n{\"last\":true}");
-    let mut input = std::io::BufReader::with_capacity(7, bytes.as_slice());
-    let mut buffer = Vec::new();
-    let mut lines = Vec::new();
+fn a_frame_over_the_limit_is_skipped_and_the_next_is_read_whole() {
+    use alpha2_host_core::host_frames::frame_bytes;
+    let header_limit = crate::protocol::MAX_REQUEST_HEADER_BYTES as usize;
+    let mut input = frame_bytes(&vec![b'x'; header_limit + 1], &[]).expect("frame");
+    input.extend(frame_bytes(br#"{"next":1}"#, &[]).expect("frame"));
+    input.extend(frame_bytes(b"\xFF", &[]).expect("frame"));
+    input.extend(
+        frame_bytes(br#"{"attachments":[{"type":"a/b","bytes":3}]}"#, &[b"abc"]).expect("frame"),
+    );
+    input.extend(frame_bytes(br#"{"attachments":[]}"#, &[b"abc"]).expect("frame"));
+    let out = crate::serve_io::Captured::default().responder();
+    let lifecycle = crate::lifecycle::Lifecycle::new(crate::lifecycle::SoftLimits::OFF);
+    let requests = crate::serve_io::requests_of(&input, &out, &lifecycle);
+    let mut read = Vec::new();
     loop {
-        let line = match read_request_line(&mut input, 64, &mut buffer).expect("read") {
-            RequestLine::End => break,
-            RequestLine::Line(line) => format!("line {line}"),
-            RequestLine::TooLong(bytes) => format!("too long {bytes}"),
-            RequestLine::NotUtf8 => "not utf-8".to_owned(),
-        };
-        lines.push(line);
+        read.push(match requests.next() {
+            InputFrame::End => break,
+            InputFrame::Request {
+                header,
+                attachments: Ok(attachments),
+            } => format!("{header} with {}", attachments.len()),
+            InputFrame::Request {
+                attachments: Err(reason),
+                ..
+            } => format!("refused: {reason}"),
+            InputFrame::TooLarge(bytes) => format!("too large {bytes}"),
+            InputFrame::NotUtf8 => "not utf-8".to_owned(),
+            InputFrame::Failed(error) => format!("failed: {}", error.message),
+        });
     }
     assert_eq!(
-        lines,
+        read,
         [
-            "too long 100",
-            r#"line {"next":1}"#,
-            "line ",
-            "not utf-8",
-            r#"line {"last":true}"#,
+            format!("too large {}", header_limit + 1),
+            r#"{"next":1} with 0"#.to_owned(),
+            "not utf-8".to_owned(),
+            r#"{"attachments":[{"type":"a/b","bytes":3}]} with 1"#.to_owned(),
+            "refused: the attachments list 0 bytes; the frame carries 3".to_owned(),
         ]
     );
+}
+
+#[test]
+fn a_request_with_attachments_is_refused_by_its_id() {
+    use alpha2_host_core::host_frames::frame_bytes;
+    let input = frame_bytes(
+        br#"{"protocolVersion":2,"requestId":"attached","operation":"compose","action":"templates","attachments":[{"type":"a/b","bytes":1}]}"#,
+        &[b"x"],
+    )
+    .expect("frame");
+    let captured = crate::serve_io::Captured::default();
+    let out = captured.responder();
+    let mut serving = Serving::new(VideoDecodePolicy::Software);
+    serving.create = no_gpu;
+    let requests = crate::serve_io::requests_of(&input, &out, &serving.lifecycle);
+    serve_requests(&mut serving, &requests, &out, &|_| None).expect("serve");
+    let answers = answers_of(&captured.bytes());
+    assert_eq!(answers.len(), 1, "{answers:?}");
+    assert_eq!(answers[0]["requestId"], "attached");
+    assert_eq!(answers[0]["error"]["code"], "INVALID_REQUEST");
 }
 
 #[test]
@@ -320,7 +362,7 @@ fn serve_answers_oversized_requests_and_then_the_next() {
     let host = create_host(VideoDecodePolicy::Software).expect("host");
     let request = |id: &str, operation: &str, project: Option<String>| {
         let mut line =
-            format!(r#"{{"protocolVersion":1,"requestId":"{id}","operation":"{operation}""#);
+            format!(r#"{{"protocolVersion":2,"requestId":"{id}","operation":"{operation}""#);
         if let Some(project) = project {
             line.push_str(r#","project":"#);
             line.push_str(&project);
@@ -337,29 +379,28 @@ fn serve_answers_oversized_requests_and_then_the_next() {
     input.push_str(&request(
         "too-long",
         "conform",
-        Some(format!(r#""{}""#, "x".repeat(MAX_REQUEST_LINE_BYTES))),
+        Some(format!(
+            r#""{}""#,
+            "x".repeat(crate::protocol::MAX_REQUEST_HEADER_BYTES as usize)
+        )),
     ));
     input.push_str(&request("over-budget", "conform", Some(over_budget)));
     input.push_str(&request("next", "capabilities", None));
     let (served, output) = serve_input(
         &mut Serving::started(host),
         input.as_bytes(),
-        // Other tests leave decode threads behind on purpose; `serve` would exit for them.
-        &mut |_| {},
+        // Other tests leave decode threads behind on purpose; `serve` would retire for them.
+        &|_| None,
     );
     served.expect("serve");
-    let answers: Vec<Value> = String::from_utf8(output)
-        .expect("UTF-8")
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("an answer is JSON"))
-        .collect();
+    let answers = answers_of(&output);
     assert_eq!(answers.len(), 3, "{answers:?}");
     assert_eq!(answers[0]["requestId"], "unknown");
     assert_eq!(answers[0]["error"]["code"], "INVALID_REQUEST");
     assert!(
         answers[0]["error"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("the request line is")),
+            .is_some_and(|message| message.contains("the request frame is")),
         "{}",
         answers[0]
     );
@@ -386,14 +427,14 @@ fn serve_answers_conform_without_a_gpu_and_reports_a_failed_start_on_the_first_r
 {
     let clip = corpus("parity-rgb.mov");
     let conform = json!({
-        "protocolVersion": 1, "requestId": "conform", "operation": "conform",
+        "protocolVersion": 2, "requestId": "conform", "operation": "conform",
         "project": conform_project(&json!({})),
         "assets": {"video": clip}
     });
     let input = format!(
         "{conform}\n{}\n{}\n",
-        r#"{"protocolVersion":1,"requestId":"caps","operation":"capabilities"}"#,
-        r#"{"protocolVersion":1,"requestId":"after","operation":"capabilities"}"#
+        r#"{"protocolVersion":2,"requestId":"caps","operation":"capabilities"}"#,
+        r#"{"protocolVersion":2,"requestId":"after","operation":"capabilities"}"#
     );
     for policy in [
         VideoDecodePolicy::Software,
@@ -401,15 +442,16 @@ fn serve_answers_conform_without_a_gpu_and_reports_a_failed_start_on_the_first_r
     ] {
         let mut serving = Serving::new(policy);
         serving.create = no_gpu;
-        let mut answered = 0;
-        let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
+        let answered = std::sync::atomic::AtomicUsize::new(0);
+        let (served, output) = serve_input(&mut serving, input.as_bytes(), &|host| {
             assert!(host.is_none(), "conform made no host");
-            answered += 1;
+            answered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            None
         });
         let error = served.expect_err("capabilities needs the GPU host");
         assert_eq!(error.code, "GPU_INIT_FAILED");
-        assert_eq!(answered, 1);
-        let answers = answers_of(output);
+        assert_eq!(answered.into_inner(), 1);
+        let answers = answers_of(&output);
         assert_eq!(answers.len(), 2, "{answers:?}");
         assert_eq!(answers[0]["requestId"], "conform", "{}", answers[0]);
         assert_eq!(answers[0]["ok"], true, "{}", answers[0]);
@@ -443,7 +485,7 @@ fn serve_refuses_a_composition_scale_with_a_zero_term_as_invalid_input() {
         project["timeline"]["tracks"][0]["clips"][0]["composition"] =
             json!({"id": "g", "scale": {"num": num, "den": den}});
         let request = json!({
-            "protocolVersion": 1, "requestId": id, "operation": "conform",
+            "protocolVersion": 2, "requestId": id, "operation": "conform",
             "project": project, "assets": {}
         });
         input.push_str(&request.to_string());
@@ -451,11 +493,12 @@ fn serve_refuses_a_composition_scale_with_a_zero_term_as_invalid_input() {
     }
     let mut serving = Serving::new(VideoDecodePolicy::Software);
     serving.create = no_gpu;
-    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &|host| {
         assert!(host.is_none(), "conform made no host");
+        None
     });
     served.expect("serve");
-    let answers = answers_of(output);
+    let answers = answers_of(&output);
     assert_eq!(answers.len(), 2, "{answers:?}");
     for (answer, id) in answers.iter().zip(["num-zero", "den-zero"]) {
         assert_eq!(answer["requestId"], id, "{answer}");
@@ -476,26 +519,27 @@ fn serve_answers_each_edge_line_by_its_id_and_serves_the_rest() {
     let host = create_host(VideoDecodePolicy::Software).expect("host");
     let mut input = Vec::new();
     for line in [
-        &br#"{"protocolVersion":1,"requestId":"first","operation":"capabilities"}"#[..],
-        br#"{"protocolVersion":1,"requestId":"bad-operation","operation":"render"}"#,
-        br#"{"protocolVersion":1,"requestId":"truncated","operation":"capabilities","#,
+        &br#"{"protocolVersion":2,"requestId":"first","operation":"capabilities"}"#[..],
+        br#"{"protocolVersion":2,"requestId":"bad-operation","operation":"render"}"#,
+        br#"{"protocolVersion":2,"requestId":"truncated","operation":"capabilities","#,
         b"",
         b"   ",
-        br#"{"protocolVersion":1,"requestId":"","operation":"capabilities"}"#,
-        b"{\"protocolVersion\":1,\"requestId\":\"latin-1\",\"path\":\"caf\xe9\"}",
+        br#"{"protocolVersion":2,"requestId":"","operation":"capabilities"}"#,
+        b"{\"protocolVersion\":2,\"requestId\":\"latin-1\",\"path\":\"caf\xe9\"}",
         b"not JSON",
-        br#"{"protocolVersion":1,"requestId":"last","operation":"capabilities"}"#,
+        br#"{"protocolVersion":2,"requestId":"last","operation":"capabilities"}"#,
     ] {
         input.extend_from_slice(line);
         input.push(b'\n');
     }
-    let mut answered = 0;
-    let (served, output) = serve_input(&mut Serving::started(host), input.as_slice(), &mut |_| {
-        answered += 1;
+    let answered = std::sync::atomic::AtomicUsize::new(0);
+    let (served, output) = serve_input(&mut Serving::started(host), input.as_slice(), &|_| {
+        answered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        None
     });
     served.expect("serve");
-    let answers = answers_of(output);
-    assert_eq!(answered, answers.len());
+    let answers = answers_of(&output);
+    assert_eq!(answered.into_inner(), answers.len());
     let summary: Vec<(String, Value)> = answers
         .iter()
         .map(|answer| {
@@ -556,7 +600,7 @@ fn a_device_wgpu_reported_lost_retires_the_host() {
 }
 
 #[test]
-#[ignore = "run by a_host_that_cannot_take_another_request_exits_after_answering"]
+#[ignore = "run by a_host_that_cannot_take_another_request_drains_and_exits_after_answering"]
 fn serve_pipelined_requests_on_an_unusable_host() {
     let _gpu = gpu_test_lock();
     let host = create_host(VideoDecodePolicy::Software).expect("host");
@@ -578,24 +622,22 @@ fn serve_pipelined_requests_on_an_unusable_host() {
         other => panic!("ALPHA2_TEST_UNUSABLE={other:?}"),
     }
     let input = [
-        r#"{"protocolVersion":1,"requestId":"first","operation":"capabilities"}"#,
-        r#"{"protocolVersion":1,"requestId":"second","operation":"capabilities"}"#,
+        r#"{"protocolVersion":2,"requestId":"first","operation":"capabilities"}"#,
+        r#"{"protocolVersion":2,"requestId":"second","operation":"capabilities"}"#,
     ]
     .join("\n");
-    let out = crate::serve_io::Responder::stdout();
-    let lines = crate::serve_io::lines_of(input.as_bytes(), &out);
-    serve_requests(
-        &mut Serving::started(host),
-        &lines,
-        &out,
-        &mut exit_if_unusable,
-    )
-    .expect("serve");
-    panic!("the host answered every request instead of exiting after the first");
+    let out = crate::serve_io::Responder::new(Box::new(std::io::stdout()));
+    out.start().expect("magic");
+    let mut serving = Serving::started(host);
+    let frames = crate::serve_io::frames_of_lines(input.as_bytes());
+    let requests = crate::serve_io::requests_of(&frames, &out, &serving.lifecycle);
+    let served = serve_requests(&mut serving, &requests, &out, &unusable_reason);
+    exit_if_retired(&served);
+    panic!("the host answered every request instead of exiting after the first: {served:?}");
 }
 
 #[test]
-fn a_host_that_cannot_take_another_request_exits_after_answering() {
+fn a_host_that_cannot_take_another_request_drains_and_exits_after_answering() {
     for unusable in ["device-lost", "threads-abandoned"] {
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
             .args([
@@ -616,21 +658,175 @@ fn a_host_that_cannot_take_another_request_exits_after_answering() {
             Some(1),
             "{unusable}\n{stdout}\n{stderr}"
         );
-        let answers: Vec<Value> = stdout
-            .lines()
-            .filter_map(|line| line.find("{\"").map(|at| &line[at..]))
-            .map(|line| serde_json::from_str(line).expect("an answer is JSON"))
-            .collect();
-        assert_eq!(answers.len(), 1, "{unusable}\n{stdout}");
-        assert_eq!(answers[0]["requestId"], "first", "{unusable}\n{stdout}");
-        assert_eq!(answers[0]["ok"], true, "{unusable}\n{stdout}");
+        let messages = child_messages(&output.stdout);
+        assert_eq!(messages.len(), 3, "{unusable}\n{stdout}");
+        assert_eq!(messages[0]["type"], "state", "{unusable}\n{stdout}");
+        assert_eq!(messages[0]["state"], "draining", "{unusable}\n{stdout}");
+        assert_eq!(messages[0]["reason"], unusable, "{unusable}\n{stdout}");
+        assert_eq!(messages[1]["requestId"], "first", "{unusable}\n{stdout}");
+        assert_eq!(messages[1]["ok"], true, "{unusable}\n{stdout}");
+        assert_eq!(messages[1]["hostState"], "draining", "{unusable}\n{stdout}");
+        assert_eq!(messages[2]["requestId"], "second", "{unusable}\n{stdout}");
+        assert_eq!(
+            messages[2]["error"]["code"], "HOST_RETIRING",
+            "{unusable}\n{stdout}"
+        );
     }
+}
+
+#[test]
+fn a_retiring_host_answers_what_it_read_then_stops_and_answers_what_runs() {
+    let _gpu = gpu_test_lock();
+    let running = scratch_directory("retire-running");
+    let stalled = scratch_directory("retire-stalled");
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_SLOW_ENCODE_MS", "100"),
+            ("ALPHA2_TEST_SECOND_EXPORT_STALLS", "1"),
+            ("ALPHA2_TEST_SERVE_ARGS", "--max-running 2"),
+        ],
+    );
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    // 150 frames at 100 ms each: still running long after the second export stalls.
+    serving.write(&slow_export("running", &running.join("out.mp4"), 5));
+    let progress = serving.message(Duration::from_secs(60));
+    assert_eq!(progress["requestId"], "running", "{progress}");
+    serving.write(&slow_export("stalls", &stalled.join("out.mp4"), 1));
+    // The first waits for a slot in the dispatcher, the second in the queue.
+    serving.write(&templates("waiting"));
+    serving.write(&templates("queued"));
+    let mut order = Vec::new();
+    let mut answers = HashMap::new();
+    let mut states = Vec::new();
+    while !answers.contains_key("running") {
+        let message = serving.message(Duration::from_secs(60));
+        if message["type"] == "state" {
+            states.push(message);
+        } else if message.get("ok").is_some() {
+            let id = message["requestId"].as_str().unwrap_or_default().to_owned();
+            order.push(id.clone());
+            answers.insert(id, message);
+        }
+    }
+    assert_eq!(states.len(), 1, "{states:?}");
+    assert_eq!(states[0]["reason"], "threads-abandoned", "{states:?}");
+    assert_eq!(order, ["stalls", "waiting", "queued", "running"]);
+    assert_eq!(answers["stalls"]["error"]["code"], "ENCODE_STALLED");
+    for id in ["waiting", "queued"] {
+        assert_eq!(
+            answers[id]["error"]["code"], "HOST_RETIRING",
+            "{}",
+            answers[id]
+        );
+    }
+    let stopped = &answers["running"];
+    assert_eq!(stopped["error"]["code"], "CANCELLED", "{stopped}");
+    assert_eq!(
+        stopped["error"]["failure"]["code"], "CANCELLED",
+        "{stopped}"
+    );
+    assert_eq!(
+        stopped["error"]["details"]["hostRetiring"], "threads-abandoned",
+        "{stopped}"
+    );
+    assert!(
+        stopped["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("the host is retiring (threads-abandoned)")),
+        "{stopped}"
+    );
+    assert_eq!(stopped["hostState"], "draining", "{stopped}");
+    assert_eq!(serving.finish(), Some(1));
+    let left = std::fs::read_dir(&running)
+        .expect("directory")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect::<Vec<_>>();
+    assert!(left.is_empty(), "the stopped export left {left:?}");
+}
+
+/// Fails with `Other` after the bytes it was given, as a broken pipe would.
+struct FailingInput(std::io::Cursor<Vec<u8>>);
+
+impl std::io::Read for FailingInput {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        match self.0.read(buffer)? {
+            0 => Err(std::io::Error::other("injected read failure")),
+            read => Ok(read),
+        }
+    }
+}
+
+#[test]
+fn a_read_error_in_the_middle_of_a_frame_is_answered_with_a_fatal_and_ends_serve() {
+    let mut input = crate::serve_io::frames_of_lines(templates("first").as_bytes());
+    let second = crate::serve_io::frames_of_lines(templates("second").as_bytes());
+    input.extend_from_slice(&second[..second.len() / 2]);
+    let output = crate::serve_io::Captured::default();
+    let out = output.responder();
+    let mut serving = Serving::new(VideoDecodePolicy::Software);
+    serving.create = no_gpu;
+    let requests = crate::serve_io::requests_from(
+        &mut FailingInput(std::io::Cursor::new(input)),
+        &out,
+        &serving.lifecycle,
+    );
+    let error = serve_requests(&mut serving, &requests, &out, &|_| None)
+        .expect_err("a read error is no end of input");
+    assert_eq!(error.code, "IO_ERROR");
+    assert!(
+        error.message.contains("injected read failure"),
+        "{}",
+        error.message
+    );
+    let messages = crate::serve_io::messages_of(&output.bytes());
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_eq!(messages[0].0["requestId"], "first");
+    assert_eq!(messages[0].0["ok"], true);
+    assert_eq!(messages[1].0["type"], "fatal");
+    assert_eq!(messages[1].0["error"]["code"], "IO_ERROR");
+}
+
+#[test]
+fn a_drain_between_the_dispatchers_reads_is_not_missed() {
+    let limits = SoftLimits {
+        max_requests: Some(1),
+        ..SoftLimits::OFF
+    };
+    let mut serving = Serving::with_lifecycle(
+        VideoDecodePolicy::Software,
+        Arc::new(Lifecycle::new(limits)),
+        1,
+    );
+    serving.create = no_gpu;
+    serving.pause_between_reads = true;
+    let (sender, requests) = crate::serve_io::request_queue();
+    assert!(sender.send(crate::serve_io::InputFrame::Request {
+        header: templates(BETWEEN_READS_REQUEST),
+        attachments: Ok(Vec::new()),
+    }));
+    let output = crate::serve_io::Captured::default();
+    let out = output.responder();
+    let (done, served) = mpsc::channel();
+    // The input stays open, so only the drain can end the dispatcher.
+    std::thread::spawn(move || {
+        let _ = done.send(serve_requests(&mut serving, &requests, &out, &|_| None));
+    });
+    let served = served
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the dispatcher missed the drain");
+    assert_eq!(served.ok(), Some(Served::Drained(DrainReason::Requests)));
+    let messages = crate::serve_io::messages_of(&output.bytes());
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_eq!(messages[0].0["reason"], "requests");
+    assert_eq!(messages[1].0["ok"], true);
+    drop(sender);
 }
 
 #[test]
 #[ignore = "run by an_unknown_decode_mode_is_a_fatal_invalid_input with ALPHA2_VIDEO_DECODE set"]
 fn serve_with_an_unknown_decode_mode() {
-    let error = serve(&mut None).expect_err("an unknown mode");
+    let error = serve(&mut None, test_serve_limits()).expect_err("an unknown mode");
     assert_eq!(error.code, "INVALID_INPUT");
 }
 
@@ -648,17 +844,13 @@ fn an_unknown_decode_mode_is_a_fatal_invalid_input() {
         .stdin(std::process::Stdio::null())
         .output()
         .expect("child");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("1 passed"), "{stdout}");
-    let fatal: Value = stdout
-        .lines()
-        // libtest writes the test's name on the same line before the JSON.
-        .filter(|line| !line.contains(r#""type":"ready""#))
-        .find_map(|line| line.find("{\"").map(|at| &line[at..]))
-        .map_or_else(
-            || panic!("no fatal notification: {stdout}"),
-            |line| serde_json::from_str(line).expect("JSON"),
-        );
+    // Once `serve` owns stdout, libtest's summary goes to stderr.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("1 passed"), "{stderr}");
+    let fatal = child_messages(&output.stdout)
+        .into_iter()
+        .find(|message| message["type"] != "state")
+        .expect("a fatal notification");
     assert_eq!(fatal["type"], "fatal", "{fatal}");
     assert_eq!(fatal["error"]["code"], "INVALID_INPUT", "{fatal}");
     assert!(
@@ -678,24 +870,20 @@ fn a_refused_export_and_a_failed_start_carry_a_failure_report() {
     let _gpu = gpu_test_lock();
     let host = create_host(VideoDecodePolicy::Software).expect("host");
     let lines = [
-        r#"{"protocolVersion":1,"requestId":"json","operation":"export","#.to_owned(),
+        r#"{"protocolVersion":2,"requestId":"json","operation":"export","#.to_owned(),
         r#"{"protocolVersion":9,"requestId":"version","operation":"export"}"#.to_owned(),
-        r#"{"protocolVersion":1,"requestId":"quality","operation":"export","videoQuality":{"bitrate":-1}}"#.to_owned(),
-        r#"{"protocolVersion":1,"requestId":"conform","operation":"conform"}"#.to_owned(),
+        r#"{"protocolVersion":2,"requestId":"quality","operation":"export","videoQuality":{"bitrate":-1}}"#.to_owned(),
+        r#"{"protocolVersion":2,"requestId":"conform","operation":"conform"}"#.to_owned(),
         format!(
-            r#"{{"protocolVersion":1,"requestId":"long","operation":"export","project":"{}"}}"#,
-            "x".repeat(MAX_REQUEST_LINE_BYTES)
+            r#"{{"protocolVersion":2,"requestId":"long","operation":"export","project":"{}"}}"#,
+            "x".repeat(crate::protocol::MAX_REQUEST_HEADER_BYTES as usize)
         ),
-        r#"{"protocolVersion":1,"requestId":"next","operation":"capabilities"}"#.to_owned(),
+        r#"{"protocolVersion":2,"requestId":"next","operation":"capabilities"}"#.to_owned(),
     ];
     let input = lines.join("\n") + "\n";
-    let (served, output) = serve_input(&mut Serving::started(host), input.as_bytes(), &mut |_| {});
+    let (served, output) = serve_input(&mut Serving::started(host), input.as_bytes(), &|_| None);
     served.expect("serve");
-    let answers: Vec<Value> = String::from_utf8(output)
-        .expect("UTF-8")
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("an answer is JSON"))
-        .collect();
+    let answers = answers_of(&output);
     assert_eq!(answers.len(), lines.len(), "{answers:?}");
     for (answer, code) in answers.iter().zip([
         Some("INVALID_REQUEST"),
@@ -773,7 +961,12 @@ fn an_export_includes_audio_unless_the_request_says_not_to() {
         }
         match parse_request(&request.to_string()).expect("export") {
             Request::Export(export) => export.include_audio,
-            Request::Capabilities { .. } | Request::Conform(_) | Request::Still(_) => {
+            Request::Capabilities { .. }
+            | Request::Conform(_)
+            | Request::Still(_)
+            | Request::Compose(_)
+            | Request::Edit(_)
+            | Request::Extract(_) => {
                 unreachable!("an export line parses as an export")
             }
         }
@@ -909,7 +1102,7 @@ fn a_cli_export_is_checked_as_the_protocol_checks_it() {
         for (key, value) in fields.as_object().expect("fields") {
             request[key] = value.clone();
         }
-        crate::protocol::parse_request(&request.to_string()).map(|_| ())
+        parse_request(&request.to_string()).map(|_| ())
     };
     let loudness = json!({"targetLufs": -14, "truePeakCeilingDbtp": -1});
     assert_eq!(
@@ -967,7 +1160,12 @@ fn audio_quality_takes_a_level_or_a_bitrate_and_names_itself_when_wrong() {
         }
         match parse_request(&request.to_string())? {
             Request::Export(export) => Ok(export.audio_quality),
-            Request::Capabilities { .. } | Request::Conform(_) | Request::Still(_) => {
+            Request::Capabilities { .. }
+            | Request::Conform(_)
+            | Request::Still(_)
+            | Request::Compose(_)
+            | Request::Edit(_)
+            | Request::Extract(_) => {
                 unreachable!("an export line parses as an export")
             }
         }
@@ -1026,6 +1224,13 @@ fn shared_rust_and_node_protocol_corpus_agrees() {
                 fixture["requestValid"].as_bool() == Some(true),
                 "{name}: {cancel:?}"
             );
+        } else if fixture["request"]["operation"] == "status" {
+            let status = crate::protocol::parse_status(&line);
+            assert_eq!(
+                status.is_ok(),
+                fixture["requestValid"].as_bool() == Some(true),
+                "{name}: {status:?}"
+            );
         } else if fixture["requestValid"].as_bool() == Some(true) {
             let request = parse_request(&line).unwrap_or_else(|error| panic!("{name}: {error:?}"));
             assert_eq!(request.protocol_version(), PROTOCOL_VERSION, "{name}");
@@ -1047,12 +1252,19 @@ fn shared_rust_and_node_protocol_corpus_agrees() {
                 Some(u64::from(PROTOCOL_VERSION)),
                 "{name}"
             );
-            if message["type"] == "ready" {
-                assert_eq!(
-                    message.as_object().map(serde_json::Map::len),
-                    Some(2),
+            if message.get("ok").is_some() {
+                assert!(
+                    ["ready", "draining"].contains(&message["hostState"].as_str().unwrap_or("")),
                     "{name}"
                 );
+            }
+            if message["type"] == "state" {
+                assert!(
+                    ["ready", "draining"].contains(&message["state"].as_str().unwrap_or("")),
+                    "{name}"
+                );
+                assert!(message["reason"].as_str().is_some(), "{name}");
+                assert!(message["details"]["limits"].is_object(), "{name}");
             } else if message["type"] == "progress" {
                 assert!(message["completed"].as_u64().is_some(), "{name}");
                 assert!(message["total"].as_u64().is_some(), "{name}");
@@ -1119,6 +1331,23 @@ fn an_effect_request_lists_its_named_inputs_or_leaves_them_out() {
     assert!(error.to_string().contains("unknown field"), "{error}");
 }
 
+#[test]
+fn no_request_can_allow_every_decoder() {
+    for line in [
+        format_line(&json!({"allowEveryDecoder": true})),
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "operation": "capabilities",
+            "requestId": "decoders",
+            "allowEveryDecoder": true
+        })
+        .to_string(),
+    ] {
+        let error = parse_request(&line).map(drop).expect_err("refused");
+        assert!(error.message.contains("unknown field"), "{}", error.message);
+    }
+}
+
 fn format_line(fields: &Value) -> String {
     let mut request = json!({
         "protocolVersion": PROTOCOL_VERSION,
@@ -1139,8 +1368,13 @@ fn format_line(fields: &Value) -> String {
 
 fn resolved_format(fields: &Value) -> Result<crate::protocol::ResolvedFormat, HostError> {
     match parse_request(&format_line(fields))? {
-        Request::Export(export) => export.format(),
-        Request::Capabilities { .. } | Request::Conform(_) | Request::Still(_) => {
+        Request::Export(export) => export.format().map_err(HostError::from),
+        Request::Capabilities { .. }
+        | Request::Conform(_)
+        | Request::Still(_)
+        | Request::Compose(_)
+        | Request::Edit(_)
+        | Request::Extract(_) => {
             unreachable!("an export line parses as an export")
         }
     }
@@ -1262,8 +1496,13 @@ fn a_cli_export_resolves_its_container_as_the_protocol_does() {
         crate::cli::parse_export_args(args)
             .and_then(crate::cli::export_request)
             .and_then(|(request, _)| match request {
-                Request::Export(export) => export.format(),
-                Request::Capabilities { .. } | Request::Conform(_) | Request::Still(_) => {
+                Request::Export(export) => export.format().map_err(HostError::from),
+                Request::Capabilities { .. }
+                | Request::Conform(_)
+                | Request::Still(_)
+                | Request::Compose(_)
+                | Request::Edit(_)
+                | Request::Extract(_) => {
                     unreachable!("an export")
                 }
             })
@@ -1368,7 +1607,7 @@ fn capabilities_are_the_shared_capability_report() {
     let _gpu = gpu_test_lock();
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let request = parse_request(
-        &json!({"protocolVersion": 1, "operation": "capabilities", "requestId": "caps"})
+        &json!({"protocolVersion": 2, "operation": "capabilities", "requestId": "caps"})
             .to_string(),
     )
     .expect("request");
@@ -1422,6 +1661,9 @@ fn capabilities_are_the_shared_capability_report() {
     }
     assert!(report["encode"]["gpuOutputPath"].is_object());
     assert_eq!(report["decode"]["mode"], json!("software"));
+    // What the extensions crate was built with decides availability; this crate's `extensions`
+    // feature turns every format on, and another package of the same build can as well.
+    let providers = alpha2_extensions::Registry::with_defaults().names();
     for format in [
         "svg",
         "animated-image",
@@ -1431,9 +1673,15 @@ fn capabilities_are_the_shared_capability_report() {
         "pdf",
         "image-sequence",
     ] {
+        let built = match format {
+            "image-sequence" => alpha2_extensions::Registry::reads_image_sequences(),
+            "latex" => alpha2_extensions::Registry::reads_latex(),
+            _ => providers.contains(&format),
+        };
+        assert!(built || !cfg!(feature = "extensions"), "{format}");
         assert_eq!(
             report["features"][format!("extensions.{format}")]["available"],
-            json!(cfg!(feature = "extensions")),
+            json!(built),
             "extensions.{format}"
         );
     }
@@ -1446,15 +1694,15 @@ fn capabilities_are_the_shared_capability_report() {
 }
 
 /// A child of this test binary running `serve` on its stdin, as `main` runs it.
-struct ServeChild {
+pub(super) struct ServeChild {
     child: std::process::Child,
-    stdin: Option<std::process::ChildStdin>,
-    lines: mpsc::Receiver<String>,
+    pub(super) stdin: Option<std::process::ChildStdin>,
+    messages: mpsc::Receiver<(Value, Vec<u8>)>,
 }
 
 impl ServeChild {
-    fn start(test: &str, env: &[(&str, &str)]) -> Self {
-        use std::io::BufRead as _;
+    pub(super) fn start(test: &str, env: &[(&str, &str)]) -> Self {
+        use alpha2_host_core::host_frames::{FrameLimits, ReadFrame, read_frame, skip_to_magic};
         let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
         command
             .args([
@@ -1473,11 +1721,21 @@ impl ServeChild {
         let mut child = command.spawn().expect("child");
         let stdin = child.stdin.take();
         let stdout = child.stdout.take().expect("stdout");
-        let (sender, lines) = mpsc::channel();
+        let (sender, messages) = mpsc::channel();
         std::thread::spawn(move || {
-            for line in std::io::BufReader::new(stdout).lines() {
-                let Ok(line) = line else { return };
-                if sender.send(line).is_err() {
+            let mut stdout = std::io::BufReader::new(stdout);
+            // libtest writes the test's name before `serve` takes stdout.
+            if !matches!(skip_to_magic(&mut stdout, 1 << 20), Ok(Some(_))) {
+                return;
+            }
+            let limits = FrameLimits {
+                header_bytes: u32::MAX,
+                attachment_bytes: u32::MAX,
+            };
+            while let Ok(ReadFrame::Frame(frame)) = read_frame(&mut stdout, limits) {
+                let header: Value =
+                    serde_json::from_slice(&frame.header).expect("a header is JSON");
+                if sender.send((header, frame.attachments)).is_err() {
                     return;
                 }
             }
@@ -1485,33 +1743,56 @@ impl ServeChild {
         Self {
             child,
             stdin,
-            lines,
+            messages,
         }
     }
 
-    /// libtest writes the test's name on the line where the first message starts.
-    fn message(&self, limit: Duration) -> Value {
-        let deadline = Instant::now() + limit;
-        loop {
-            let left = deadline.saturating_duration_since(Instant::now());
-            let line = self
-                .lines
-                .recv_timeout(left)
-                .unwrap_or_else(|error| panic!("no message within {limit:?}: {error}"));
-            if let Some(at) = line.find("{\"") {
-                return serde_json::from_str(&line[at..]).expect("a message is JSON");
-            }
-        }
+    pub(super) fn message(&self, limit: Duration) -> Value {
+        self.message_with_attachments(limit).0
     }
 
-    fn write(&mut self, line: &str) {
+    /// A header and its attachments' bytes, not split.
+    pub(super) fn message_with_attachments(&self, limit: Duration) -> (Value, Vec<u8>) {
+        self.messages
+            .recv_timeout(limit)
+            .unwrap_or_else(|error| panic!("no message within {limit:?}: {error}"))
+    }
+
+    pub(super) fn write(&mut self, header: &str) {
         let stdin = self.stdin.as_mut().expect("stdin open");
-        stdin.write_all(line.as_bytes()).expect("write");
-        stdin.write_all(b"\n").expect("write");
+        let frame =
+            alpha2_host_core::host_frames::frame_bytes(header.as_bytes(), &[]).expect("frame");
+        stdin.write_all(&frame).expect("write");
         stdin.flush().expect("flush");
     }
 
-    fn finish(mut self) -> Option<i32> {
+    #[cfg(unix)]
+    /// The exit status if the child ends within `limit`.
+    pub(super) fn exited_within(&mut self, limit: Duration) -> Option<std::process::ExitStatus> {
+        let started = Instant::now();
+        loop {
+            if let Some(status) = self.child.try_wait().expect("child status") {
+                return Some(status);
+            }
+            if started.elapsed() > limit {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[cfg(unix)]
+    pub(super) fn terminate(&self) {
+        let killed = std::process::Command::new("kill")
+            .args(["-TERM", &self.child.id().to_string()])
+            .status()
+            .expect("kill");
+        assert!(killed.success());
+    }
+
+    pub(super) fn finish(mut self) -> Option<i32> {
         drop(self.stdin.take());
         let started = Instant::now();
         loop {
@@ -1528,20 +1809,80 @@ impl ServeChild {
     }
 }
 
-/// `ALPHA2_TEST_SLOW_ENCODE_MS` makes the first export's encoder take that long over each frame.
+/// `ALPHA2_TEST_SLOW_ENCODE_MS` makes the first export's encoder take that long over each frame;
+/// `ALPHA2_TEST_TEARDOWN_STALL` makes it stall in its teardown, after the output is in place;
+/// `ALPHA2_TEST_SECOND_EXPORT_STALLS` makes the second export's encoder stall.
 #[test]
 #[ignore = "run by the tests that start a ServeChild"]
 fn serve_standard_input() {
-    if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_SLOW_ENCODE_MS") {
-        let milliseconds = milliseconds.parse().expect("milliseconds");
-        crate::encode::INJECT_SLOW_ENCODE
-            .with(|slow| slow.set(Some(Duration::from_millis(milliseconds))));
+    if std::env::var_os("ALPHA2_TEST_STRAY_STDOUT").is_some() {
+        // Native code that prints to stdout, before and after `serve` owns the stream.
+        std::thread::spawn(|| {
+            for _ in 0..200 {
+                print!("stray {{\"protocolVersion\":2}}\n\0\x01\x02");
+                let _ = std::io::stdout().flush();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        std::thread::sleep(Duration::from_millis(20));
     }
+    if std::env::var_os("ALPHA2_TEST_REQUEST_PARK").is_some() {
+        crate::compose_request::INJECT_REQUEST_PARK
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_TERMINATION_GRACE_MS") {
+        *crate::termination::TEST_GRACE.lock().expect("grace") =
+            Some(Duration::from_millis(milliseconds.parse().expect("ms")));
+    }
+    if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_REQUEST_STALL_MS") {
+        *crate::heartbeat::TEST_REQUEST_STALL_LIMIT
+            .lock()
+            .expect("limit") = Some(Duration::from_millis(milliseconds.parse().expect("ms")));
+    }
+    if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_HASH_CHUNK_DELAY_MS") {
+        crate::assets::INJECT_HASH_CHUNK_DELAY_MS.store(
+            milliseconds.parse().expect("ms"),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+    if let Ok(step) = std::env::var("ALPHA2_TEST_REQUEST_STALL_AT") {
+        *crate::heartbeat::INJECT_REQUEST_STALL
+            .lock()
+            .expect("stall") = Some(Box::leak(step.into_boxed_str()));
+    }
+    if std::env::var_os("ALPHA2_TEST_REQUEST_PANIC").is_some() {
+        crate::compose_request::INJECT_REQUEST_PANIC
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    let mut first = crate::encode::ServeExportHooks::default();
+    if std::env::var_os("ALPHA2_TEST_TEARDOWN_STALL").is_some() {
+        first.stall = Some((
+            crate::heartbeat::InjectedStall::OnTeardown,
+            Duration::from_millis(500),
+        ));
+    }
+    if let Ok(milliseconds) = std::env::var("ALPHA2_TEST_SLOW_ENCODE_MS") {
+        first.slow = Some(Duration::from_millis(
+            milliseconds.parse().expect("milliseconds"),
+        ));
+    }
+    first.panic = std::env::var_os("ALPHA2_TEST_EXPORT_PANIC").is_some();
+    let mut hooks = vec![first];
+    if std::env::var_os("ALPHA2_TEST_SECOND_EXPORT_STALLS").is_some() {
+        hooks.push(crate::encode::ServeExportHooks {
+            stall: Some((
+                crate::heartbeat::InjectedStall::AfterOperations(2),
+                Duration::from_millis(500),
+            )),
+            ..crate::encode::ServeExportHooks::default()
+        });
+    }
+    *crate::encode::SERVE_EXPORT_HOOKS.lock().expect("hooks") = hooks;
     let mut host = None;
-    serve(&mut host).expect("serve");
+    serve(&mut host, test_serve_limits()).expect("serve");
 }
 
-const SERVE_CHILD: &str = "tests::requests::serve_standard_input";
+pub(super) const SERVE_CHILD: &str = "tests::requests::serve_standard_input";
 
 /// A client that sees no ready line in time knows the process is held before `main` (a security
 /// scan, an approval prompt) rather than busy.
@@ -1549,24 +1890,489 @@ const SERVE_CHILD: &str = "tests::requests::serve_standard_input";
 fn serve_writes_ready_before_reading_input() {
     let serving = ServeChild::start(SERVE_CHILD, &[]);
     let ready = serving.message(Duration::from_secs(30));
-    assert_eq!(ready, json!({"protocolVersion": 1, "type": "ready"}));
+    assert_eq!(ready["type"], "state", "{ready}");
+    assert_eq!(ready["state"], "ready", "{ready}");
+    assert_eq!(ready["reason"], "started", "{ready}");
+    assert_eq!(ready["details"]["requestsServed"], 0, "{ready}");
     assert_eq!(serving.finish(), Some(0));
 }
 
 #[test]
 fn the_end_of_input_finishes_queued_requests_before_exiting() {
     let _gpu = gpu_test_lock();
-    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
-    serving.write(r#"{"protocolVersion":1,"requestId":"one","operation":"capabilities"}"#);
-    serving.write(r#"{"protocolVersion":1,"requestId":"two","operation":"capabilities"}"#);
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[("ALPHA2_TEST_SERVE_ARGS", "--max-running 2")],
+    );
+    serving.write(r#"{"protocolVersion":2,"requestId":"one","operation":"capabilities"}"#);
+    serving.write(r#"{"protocolVersion":2,"requestId":"two","operation":"capabilities"}"#);
     drop(serving.stdin.take());
-    assert_eq!(serving.message(Duration::from_secs(30))["type"], "ready");
-    for id in ["one", "two"] {
-        let answer = serving.message(Duration::from_secs(60));
-        assert_eq!(answer["requestId"], id, "{answer}");
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    // Both run at once, so either may answer first.
+    let mut answered = (0..2)
+        .map(|_| {
+            let answer = serving.message(Duration::from_secs(60));
+            assert_eq!(answer["ok"], true, "{answer}");
+            answer["requestId"].as_str().unwrap_or_default().to_owned()
+        })
+        .collect::<Vec<_>>();
+    answered.sort();
+    assert_eq!(answered, ["one", "two"]);
+    assert_eq!(serving.finish(), Some(0));
+}
+
+const TEMPLATES: &str =
+    r#"{"protocolVersion":2,"requestId":"REQUEST","operation":"compose","action":"templates"}"#;
+
+fn templates(id: &str) -> String {
+    TEMPLATES.replace("REQUEST", id)
+}
+
+#[test]
+fn stray_writes_to_stdout_do_not_reach_the_protocol_stream() {
+    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_STRAY_STDOUT", "1")]);
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    for index in 0..20 {
+        let id = format!("templates-{index}");
+        serving.write(&templates(&id));
+        let answer = serving.message(Duration::from_secs(30));
+        assert_eq!(answer["requestId"], id.as_str(), "{answer}");
         assert_eq!(answer["ok"], true, "{answer}");
+        std::thread::sleep(Duration::from_millis(20));
     }
     assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
+fn each_soft_limit_drains_the_host_and_later_requests_are_retired() {
+    for (flags, reason) in [
+        ("--max-running 1 --max-requests 1", "requests"),
+        ("--max-running 1 --max-memory-share 0.000001", "memory"),
+        ("--max-running 1 --max-handles 1", "handles"),
+    ] {
+        let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SERVE_ARGS", flags)]);
+        assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+        serving.write(&templates("first"));
+        serving.write(&templates("second"));
+        let state = serving.message(Duration::from_secs(30));
+        assert_eq!(state["type"], "state", "{flags}: {state}");
+        assert_eq!(state["state"], "draining", "{flags}: {state}");
+        assert_eq!(state["reason"], reason, "{flags}: {state}");
+        assert_eq!(state["details"]["requestsServed"], 1, "{flags}: {state}");
+        let first = serving.message(Duration::from_secs(30));
+        assert_eq!(first["requestId"], "first", "{flags}: {first}");
+        assert_eq!(first["ok"], true, "{flags}: {first}");
+        assert_eq!(first["hostState"], "draining", "{flags}: {first}");
+        let second = serving.message(Duration::from_secs(30));
+        assert_eq!(second["requestId"], "second", "{flags}: {second}");
+        assert_eq!(
+            second["error"]["code"], "HOST_RETIRING",
+            "{flags}: {second}"
+        );
+        assert_eq!(second["hostState"], "draining", "{flags}: {second}");
+        assert_eq!(serving.finish(), Some(0), "{flags}");
+    }
+}
+
+fn slow_export(id: &str, output: &Path, seconds: i64) -> String {
+    let end = seconds * alpha2_time::TICKS_PER_SECOND;
+    json!({
+        "protocolVersion": 2, "operation": "export", "requestId": id,
+        "project": {
+            "schema_version": 1, "id": "slow", "name": "Slow",
+            "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": end},
+                "source_range": {"start": 0, "end": end}
+            }]}]}
+        },
+        "assets": {"video": corpus("h264-long-gop.mp4")},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "inputPolicy": "cpu-readback",
+        "output": output
+    })
+    .to_string()
+}
+
+/// Reads up to the answer to `id`, returning it and the `state` messages before it.
+fn answer_and_states(serving: &ServeChild, id: &str) -> (Value, Vec<Value>) {
+    let mut states = Vec::new();
+    loop {
+        let message = serving.message(Duration::from_secs(120));
+        if message["requestId"] == id && message.get("ok").is_some() {
+            return (message, states);
+        }
+        if message["type"] == "state" {
+            states.push(message);
+        }
+    }
+}
+
+#[test]
+fn soft_limits_on_the_whole_process_wait_until_nothing_runs() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("soft-limits-busy");
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_SLOW_ENCODE_MS", "100"),
+            (
+                "ALPHA2_TEST_SERVE_ARGS",
+                "--max-running 2 --max-handles 1 --max-memory-share 0 --max-memory-growth 0 \
+                 --max-requests 0",
+            ),
+        ],
+    );
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    serving.write(&slow_export("export", &directory.join("out.mp4"), 3));
+    let progress = serving.message(Duration::from_secs(60));
+    assert_eq!(progress["type"], "progress", "{progress}");
+    serving.write(&templates("beside"));
+    let (beside, states) = answer_and_states(&serving, "beside");
+    assert_eq!(beside["ok"], true, "{beside}");
+    assert_eq!(beside["hostState"], "ready", "{beside}");
+    assert!(states.is_empty(), "{states:?}");
+    let (export, states) = answer_and_states(&serving, "export");
+    assert_eq!(export["ok"], true, "{export}");
+    assert_eq!(export["hostState"], "draining", "{export}");
+    assert_eq!(states.len(), 1, "{states:?}");
+    assert_eq!(states[0]["reason"], "handles", "{states:?}");
+    assert_eq!(serving.finish(), Some(0));
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn an_encoder_teardown_that_stalls_after_the_publish_answers_ok_and_retires_the_host() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("teardown-stall");
+    let output = directory.join("out.mp4");
+    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_TEARDOWN_STALL", "1")]);
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    serving.write(&slow_export("export", &output, 1));
+    let (answer, states) = answer_and_states(&serving, "export");
+    assert_eq!(answer["ok"], true, "{answer}");
+    let failure = answer["result"]["encoderTeardownFailure"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no teardown failure: {answer}"));
+    assert!(failure.contains("past the 500 ms limit"), "{failure}");
+    assert_eq!(answer["hostState"], "draining", "{answer}");
+    assert_eq!(states.len(), 1, "{states:?}");
+    assert_eq!(states[0]["reason"], "threads-abandoned", "{states:?}");
+    let mut decoder = alpha2_native::NativeDecoder::open(&output).expect("the output opens");
+    let cancel = CancelToken::default();
+    let mut frames = 0;
+    loop {
+        match decoder.decode_next(&cancel).expect("the output decodes") {
+            alpha2_media::DecodeEvent::Video(_) => frames += 1,
+            alpha2_media::DecodeEvent::EndOfStream => break,
+            _ => {}
+        }
+    }
+    assert_eq!(frames, 30);
+    assert!(serving.finish().is_some(), "the retired host did not exit");
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn the_memory_baseline_is_taken_after_the_first_request_that_makes_the_device() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("soft-limit-baseline");
+    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    let baseline = |serving: &mut ServeChild, id: &str| {
+        serving.write(
+            &json!({"protocolVersion": 2, "requestId": id, "operation": "status"}).to_string(),
+        );
+        let (answer, _) = answer_and_states(serving, id);
+        answer["result"]["details"]["memory"]["baselineBytes"].as_u64()
+    };
+    serving.write(&templates("compose"));
+    assert_eq!(answer_and_states(&serving, "compose").0["ok"], true);
+    let before = baseline(&mut serving, "before").expect("a baseline after the first answer");
+    serving.write(&slow_export("export", &directory.join("out.mp4"), 1));
+    let (export, _) = answer_and_states(&serving, "export");
+    assert_eq!(export["ok"], true, "{export}");
+    let after = baseline(&mut serving, "after").expect("a baseline after the export");
+    assert!(
+        after > before,
+        "the baseline {after} still predates the device ({before} after compose)"
+    );
+    assert_eq!(serving.finish(), Some(0));
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+#[test]
+fn an_idle_host_drains_and_exits_on_its_own() {
+    let serving = ServeChild::start(
+        SERVE_CHILD,
+        &[("ALPHA2_TEST_SERVE_ARGS", "--idle-timeout 100")],
+    );
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    let state = serving.message(Duration::from_secs(30));
+    assert_eq!(state["state"], "draining", "{state}");
+    assert_eq!(state["reason"], "idle", "{state}");
+    assert_eq!(state["details"]["activity"], "idle", "{state}");
+    let mut serving = serving;
+    serving.write(&templates("late"));
+    let late = serving.message(Duration::from_secs(30));
+    assert_eq!(late["requestId"], "late", "{late}");
+    assert_eq!(late["error"]["code"], "HOST_RETIRING", "{late}");
+    let started = Instant::now();
+    let child = &mut serving.child;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("child status") {
+            break status;
+        }
+        assert!(
+            started.elapsed() < crate::lifecycle::DRAIN_GRACE + Duration::from_secs(30),
+            "a draining host with open input outlived its grace"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(status.code(), Some(0));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_termination_while_idle_reports_draining_before_the_exit() {
+    let mut serving = ServeChild::start(SERVE_CHILD, &[]);
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    let killed = std::process::Command::new("kill")
+        .args(["-TERM", &serving.child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(killed.success());
+    let state = serving.message(Duration::from_secs(30));
+    assert_eq!(state["state"], "draining", "{state}");
+    assert_eq!(state["reason"], "terminating", "{state}");
+    drop(serving.stdin.take());
+    assert_eq!(serving.child.wait().expect("exit").code(), Some(143));
+}
+
+#[test]
+fn status_answers_at_once_while_an_export_runs() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("status-line");
+    let output = directory.join("busy.mp4");
+    let end = 4 * alpha2_time::TICKS_PER_SECOND;
+    let export = json!({
+        "protocolVersion": 2, "operation": "export", "requestId": "long",
+        "project": {
+            "schema_version": 1, "id": "cancel", "name": "Cancel",
+            "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": end},
+                "source_range": {"start": 0, "end": end}
+            }]}]}
+        },
+        "assets": {"video": corpus("h264-long-gop.mp4")},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "output": output
+    });
+    let renderer = if create_host(VideoDecodePolicy::Software)
+        .expect("host")
+        .device()
+        .renderer
+        .gpu()
+        .is_some()
+    {
+        "gpu"
+    } else {
+        "cpu"
+    };
+    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SLOW_ENCODE_MS", "100")]);
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    serving.write(&export.to_string());
+    let progress = serving.message(Duration::from_secs(60));
+    assert_eq!(progress["type"], "progress", "{progress}");
+    serving.write(r#"{"protocolVersion":2,"requestId":"status","operation":"status"}"#);
+    let status = std::iter::repeat_with(|| serving.message(Duration::from_secs(60)))
+        .find(|message| message["type"] != "progress")
+        .expect("an answer");
+    assert_eq!(status["requestId"], "status", "{status}");
+    assert_eq!(status["hostState"], "ready", "{status}");
+    assert_eq!(status["result"]["state"], "ready", "{status}");
+    assert_eq!(status["result"]["details"]["activity"], "busy", "{status}");
+    assert_eq!(
+        status["result"]["details"]["renderer"], renderer,
+        "{status}"
+    );
+    serving.write(
+        r#"{"protocolVersion":2,"requestId":"long:cancel","operation":"cancel","target":"long"}"#,
+    );
+    assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
+fn an_export_a_still_and_capabilities_run_at_once_on_one_host() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("concurrent-requests");
+    let end = alpha2_time::TICKS_PER_SECOND;
+    let export = json!({
+        "protocolVersion": 2, "operation": "export", "requestId": "export",
+        "project": {
+            "schema_version": 1, "id": "cancel", "name": "Cancel",
+            "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": end},
+                "source_range": {"start": 0, "end": end}
+            }]}]}
+        },
+                "assets": {"video": corpus("h264-long-gop.mp4")},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "output": directory.join("slow.mp4")
+    });
+    let mut still = json!({
+        "protocolVersion": 2, "operation": "still", "requestId": "still",
+        "project": export["project"].clone(),
+        "assets": export["assets"].clone(),
+        "stills": [{"time": 0}],
+    });
+    still["size"] = json!({"width": 32, "height": 18});
+    // 30 frames at 100 ms each keep the export running while the others are answered.
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_SLOW_ENCODE_MS", "100"),
+            ("ALPHA2_TEST_SERVE_ARGS", "--max-running 3"),
+        ],
+    );
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    // The first capabilities probes the encoders, which can outlast the export.
+    serving.write(r#"{"protocolVersion":2,"requestId":"warm","operation":"capabilities"}"#);
+    assert_eq!(
+        serving.message(Duration::from_secs(120))["requestId"],
+        "warm"
+    );
+    serving.write(&export.to_string());
+    let progress = serving.message(Duration::from_secs(60));
+    assert_eq!(progress["requestId"], "export", "{progress}");
+    serving.write(&still.to_string());
+    serving.write(r#"{"protocolVersion":2,"requestId":"caps","operation":"capabilities"}"#);
+    let answers =
+        std::iter::repeat_with(|| serving.message_with_attachments(Duration::from_secs(120)))
+            .filter(|(message, _)| message["type"] != "progress")
+            .take(3)
+            .collect::<Vec<_>>();
+    let order = answers
+        .iter()
+        .map(|(answer, _)| {
+            assert_eq!(answer["ok"], true, "{answer}");
+            answer["requestId"].as_str().unwrap_or_default().to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order.last().map(String::as_str),
+        Some("export"),
+        "{order:?}"
+    );
+    let (_, png) = answers
+        .iter()
+        .find(|(answer, _)| answer["requestId"] == "still")
+        .expect("the still");
+    assert!(
+        png.starts_with(b"\x89PNG"),
+        "the still's attachment is a PNG"
+    );
+    assert_eq!(serving.finish(), Some(0));
+}
+
+#[test]
+fn concurrent_requests_hold_their_own_definition_of_one_effect() {
+    let _gpu = gpu_test_lock();
+    let host = create_host(VideoDecodePolicy::Software).expect("host");
+    let device = std::sync::Arc::clone(host.device());
+    let effect = |body: &str| -> EffectRequest {
+        serde_json::from_value(json!({
+            "id": "test.isolated", "version": 1, "kind": "effect", "wgslBody": body
+        }))
+        .expect("an effect request")
+    };
+    let red = "fn effect(uv: vec2f, src: vec4f) -> vec4f { return vec4f(1.0, 0.0, 0.0, 1.0); }";
+    let blue = "fn effect(uv: vec2f, src: vec4f) -> vec4f { return vec4f(0.0, 0.0, 1.0, 1.0); }";
+    let id = alpha2_render::EffectId::new("test.isolated".to_owned(), 1);
+    let body = |device: &crate::host::HostDevice| {
+        device
+            .renderer
+            .gpu()
+            .and_then(|renderer| renderer.effect_definition(&id))
+            .map(|definition| definition.wgsl_body.clone())
+    };
+    // The CPU renderer refuses runtime effects but holds them the same way.
+    let gpu = device.renderer.gpu().is_some();
+    let usable = |request: &Host| {
+        let used = request.require_effect("test.isolated", 1);
+        if gpu {
+            assert_eq!(used, Ok(()));
+        } else {
+            let refusal = used.expect_err("refused on the CPU");
+            assert!(refusal.contains("no CPU implementation"), "{refusal}");
+        }
+    };
+    let mut first = Host::for_request(std::sync::Arc::clone(&device));
+    first
+        .register_request_effects(vec![effect(red)])
+        .expect("first");
+    let (sender, registered) = mpsc::channel();
+    let waiting = {
+        let device = std::sync::Arc::clone(&device);
+        let effect = effect(blue);
+        std::thread::spawn(move || {
+            let mut second = Host::for_request(device);
+            second
+                .register_request_effects(vec![effect])
+                .expect("second");
+            sender.send(()).expect("send");
+            second
+        })
+    };
+    assert!(
+        registered.recv_timeout(Duration::from_millis(300)).is_err(),
+        "another definition waits while the first request holds its own"
+    );
+    let mut sharing = Host::for_request(std::sync::Arc::clone(&device));
+    sharing
+        .register_request_effects(vec![effect(red)])
+        .expect("the same definition is shared at once");
+    assert_eq!(body(&device).as_deref(), gpu.then_some(red));
+    usable(&first);
+    usable(&sharing);
+    drop(first);
+    assert!(registered.recv_timeout(Duration::from_millis(300)).is_err());
+    drop(sharing);
+    registered
+        .recv_timeout(Duration::from_secs(30))
+        .expect("registered once the first definition is released");
+    let second = waiting.join().expect("join");
+    assert_eq!(body(&device).as_deref(), gpu.then_some(blue));
+    usable(&second);
+    drop(second);
+    let mut plain = Host::for_request(std::sync::Arc::clone(&device));
+    plain.register_request_effects(Vec::new()).expect("none");
+    let unasked = plain
+        .require_effect("test.isolated", 1)
+        .expect_err("a request that did not define it");
+    assert!(unasked.contains("unregistered effect"), "{unasked}");
+    assert_eq!(
+        body(&device),
+        None,
+        "an effect nobody holds goes when a request wants others"
+    );
 }
 
 #[test]
@@ -1576,7 +2382,7 @@ fn a_cancel_line_stops_the_running_export_and_the_host_serves_the_next_request()
     let output = directory.join("cancelled.mp4");
     let end = 4 * alpha2_time::TICKS_PER_SECOND;
     let export = json!({
-        "protocolVersion": 1, "operation": "export", "requestId": "long",
+        "protocolVersion": 2, "operation": "export", "requestId": "long",
         "project": {
             "schema_version": 1, "id": "cancel", "name": "Cancel",
             "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
@@ -1595,27 +2401,36 @@ fn a_cancel_line_stops_the_running_export_and_the_host_serves_the_next_request()
         "output": output
     });
     // 120 frames at 100 ms each: far longer than the cancel takes to arrive.
-    let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SLOW_ENCODE_MS", "100")]);
-    assert_eq!(serving.message(Duration::from_secs(30))["type"], "ready");
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_SLOW_ENCODE_MS", "100"),
+            ("ALPHA2_TEST_SERVE_ARGS", "--max-running 2"),
+        ],
+    );
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
     serving.write(&export.to_string());
     let progress = serving.message(Duration::from_secs(60));
     assert_eq!(progress["type"], "progress", "{progress}");
     assert_eq!(progress["requestId"], "long", "{progress}");
     serving.write(
-        r#"{"protocolVersion":1,"requestId":"long:cancel","operation":"cancel","target":"long"}"#,
+        r#"{"protocolVersion":2,"requestId":"long:cancel","operation":"cancel","target":"long"}"#,
     );
-    serving.write(r#"{"protocolVersion":1,"requestId":"next","operation":"capabilities"}"#);
-    let answers: Vec<Value> = std::iter::repeat_with(|| serving.message(Duration::from_secs(60)))
-        .filter(|message| message["type"] != "progress")
-        .take(3)
-        .collect();
+    serving.write(r#"{"protocolVersion":2,"requestId":"next","operation":"capabilities"}"#);
+    let mut answers: Vec<Value> =
+        std::iter::repeat_with(|| serving.message(Duration::from_secs(60)))
+            .filter(|message| message["type"] != "progress")
+            .take(3)
+            .collect();
     assert_eq!(
         answers[0],
         json!({
-            "protocolVersion": 1, "requestId": "long:cancel", "ok": true,
-            "result": {"target": "long", "state": "running"}
+            "protocolVersion": 2, "requestId": "long:cancel", "ok": true,
+            "result": {"target": "long", "state": "running"}, "hostState": "ready"
         })
     );
+    // The next request runs beside the stopping export, so either may answer first.
+    answers[1..].sort_by_key(|answer| answer["requestId"] != "long");
     assert_eq!(answers[1]["requestId"], "long", "{}", answers[1]);
     assert_eq!(answers[1]["error"]["code"], "CANCELLED", "{}", answers[1]);
     assert_eq!(
@@ -1644,17 +2459,18 @@ fn a_cancel_line_stops_the_running_export_and_the_host_serves_the_next_request()
 #[test]
 fn a_cancel_for_a_request_not_yet_read_answers_it_cancelled_without_running_it() {
     let input = [
-        r#"{"protocolVersion":1,"requestId":"later:cancel","operation":"cancel","target":"later-request"}"#,
-        r#"{"protocolVersion":1,"requestId":"later-request","operation":"capabilities"}"#,
+        r#"{"protocolVersion":2,"requestId":"later:cancel","operation":"cancel","target":"later-request"}"#,
+        r#"{"protocolVersion":2,"requestId":"later-request","operation":"capabilities"}"#,
     ]
     .join("\n");
     let mut serving = Serving::new(VideoDecodePolicy::Software);
     serving.create = no_gpu;
-    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |host| {
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &|host| {
         assert!(host.is_none(), "a cancelled request made no host");
+        None
     });
     served.expect("serve");
-    let answers = answers_of(output);
+    let answers = answers_of(&output);
     assert_eq!(answers.len(), 2, "{answers:?}");
     assert_eq!(answers[0]["result"]["state"], "pending", "{answers:?}");
     assert_eq!(answers[1]["requestId"], "later-request", "{answers:?}");
@@ -1665,17 +2481,17 @@ fn a_cancel_for_a_request_not_yet_read_answers_it_cancelled_without_running_it()
 #[test]
 fn a_cancel_without_a_target_is_an_invalid_request() {
     let input = [
-        r#"{"protocolVersion":1,"requestId":"no-target","operation":"cancel"}"#,
-        r#"{"protocolVersion":1,"requestId":"empty-target","operation":"cancel","target":""}"#,
-        r#"{"protocolVersion":1,"operation":"cancel","target":"something"}"#,
-        r#"{"protocolVersion":2,"requestId":"version","operation":"cancel","target":"something"}"#,
+        r#"{"protocolVersion":2,"requestId":"no-target","operation":"cancel"}"#,
+        r#"{"protocolVersion":2,"requestId":"empty-target","operation":"cancel","target":""}"#,
+        r#"{"protocolVersion":2,"operation":"cancel","target":"something"}"#,
+        r#"{"protocolVersion":3,"requestId":"version","operation":"cancel","target":"something"}"#,
     ]
     .join("\n");
     let mut serving = Serving::new(VideoDecodePolicy::Software);
     serving.create = no_gpu;
-    let (served, output) = serve_input(&mut serving, input.as_bytes(), &mut |_| {});
+    let (served, output) = serve_input(&mut serving, input.as_bytes(), &|_| None);
     served.expect("serve");
-    let summary: Vec<(Value, Value)> = answers_of(output)
+    let summary: Vec<(Value, Value)> = answers_of(&output)
         .iter()
         .map(|answer| (answer["requestId"].clone(), answer["error"]["code"].clone()))
         .collect();
@@ -1708,9 +2524,136 @@ fn a_command_runs_on_a_thread_with_room_for_deep_recursion() {
     assert_eq!(on_command_thread(|| deep(48)).expect("no overflow"), 152);
 }
 
+#[test]
+fn an_answer_whose_header_is_over_the_limit_is_refused_and_the_host_serves_the_next() {
+    let input = format!(
+        "{}\n{}\n",
+        r#"{"protocolVersion":2,"requestId":"templates","operation":"compose","action":"templates"}"#,
+        json!({
+            "protocolVersion": 2, "requestId": "conform", "operation": "conform",
+            "project": conform_project(&json!({})),
+            "assets": {"video": corpus("parity-rgb.mov")}
+        })
+    );
+    let captured = crate::serve_io::Captured::default();
+    let out = captured.responder_with_header_limit(4096);
+    let mut serving = Serving::new(VideoDecodePolicy::Software);
+    serving.create = no_gpu;
+    let frames = crate::serve_io::frames_of_lines(input.as_bytes());
+    let requests = crate::serve_io::requests_of(&frames, &out, &serving.lifecycle);
+    serve_requests(&mut serving, &requests, &out, &|_| None).expect("serve");
+    let answers = answers_of(&captured.bytes());
+    assert_eq!(answers.len(), 2, "{answers:?}");
+    assert_eq!(answers[0]["requestId"], "templates");
+    assert_eq!(
+        answers[0]["error"]["code"], "RESOURCE_LIMIT",
+        "{}",
+        answers[0]
+    );
+    assert_eq!(answers[0]["error"]["details"]["limit"], 4096);
+    assert!(
+        answers[0]["error"]["details"]["headerBytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > 4096),
+        "{}",
+        answers[0]
+    );
+    assert_eq!(answers[0]["hostState"], "ready");
+    assert_eq!(answers[1]["requestId"], "conform");
+    assert_eq!(answers[1]["ok"], true, "{}", answers[1]);
+}
+
+#[test]
+fn a_compile_answer_and_a_conform_report_feed_export_and_conform_as_they_are() {
+    let compose = json!({
+        "protocolVersion": 2, "requestId": "c", "operation": "compose", "action": "compile",
+        "spec": {"duration": 1, "body": {"type": "color", "color": "#336699"}, "loudness": -14}
+    });
+    let Ok(Request::Compose(compose)) = parse_request(&compose.to_string()) else {
+        panic!("a compose request");
+    };
+    let answer = crate::compose_request::answer(&compose).expect("compiled");
+    assert_eq!(
+        answer["loudness"],
+        json!({"targetLufs": -14.0, "truePeakCeilingDbtp": -1.0})
+    );
+    let export = |loudness: &Value| {
+        let request = json!({
+            "protocolVersion": 2, "requestId": "e", "operation": "export",
+            "project": {}, "assets": {}, "startTicks": 0, "endTicks": 120_000,
+            "frameRate": {"num": 30, "den": 1}, "output": "/tmp/out.mp4", "loudness": loudness
+        });
+        match parse_request(&request.to_string()) {
+            Ok(Request::Export(export)) => export.loudness,
+            _ => panic!("an export request"),
+        }
+    };
+    let expected = LoudnessRequest::new(-14.0, -1.0).expect("in range");
+    assert_eq!(export(&answer["loudness"]), Some(expected));
+    assert_eq!(export(&json!({"targetLufs": -14})), Some(expected));
+    let purpose = serde_json::to_value(alpha2_assets::MediaPurpose::ExportProxy).expect("JSON");
+    let conform = json!({
+        "protocolVersion": 2, "requestId": "f", "operation": "conform",
+        "project": {}, "purpose": purpose
+    });
+    let Ok(Request::Conform(conform)) = parse_request(&conform.to_string()) else {
+        panic!("a conform request");
+    };
+    assert_eq!(conform.purpose, alpha2_assets::MediaPurpose::ExportProxy);
+    // The shared corpus chains the same two answers to the requests that take them.
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../../../tests/cases/host-protocol-corpus.json"
+    ))
+    .expect("protocol corpus is JSON");
+    let fixture = |name: &str| {
+        fixtures
+            .as_array()
+            .expect("an array")
+            .iter()
+            .find(|fixture| fixture["name"] == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .clone()
+    };
+    assert_eq!(
+        fixture("a compile answer carries the loudness export takes")["messages"][0]["result"]["loudness"],
+        fixture("export takes a compile answer's loudness")["request"]["loudness"]
+    );
+    let conformed = fixture("conform takes the purpose a report names");
+    assert_eq!(
+        conformed["messages"][0]["result"]["report"]["purpose"],
+        conformed["request"]["purpose"]
+    );
+}
+
+#[test]
+fn every_corpus_answer_is_framed_as_its_utf8_json() {
+    let fixtures: Value = serde_json::from_str(include_str!(
+        "../../../../tests/cases/host-protocol-corpus.json"
+    ))
+    .expect("protocol corpus is JSON");
+    let mut unescaped = 0;
+    for fixture in fixtures.as_array().expect("protocol corpus is an array") {
+        for message in fixture["messages"].as_array().expect("fixture messages") {
+            let captured = crate::serve_io::Captured::default();
+            captured.responder().send(message).expect("sent");
+            let written = captured.bytes();
+            let expected = serde_json::to_vec(message).expect("JSON");
+            assert_eq!(&written[8..], expected.as_slice(), "{}", fixture["name"]);
+            assert_eq!(crate::serve_io::messages_of(&written)[0].0, *message);
+            if !expected.is_ascii() {
+                unescaped += 1;
+            }
+        }
+    }
+    assert!(
+        unescaped > 0,
+        "the corpus has an answer with non-ASCII text"
+    );
+}
+
 /// A reader that decodes the output in a legacy code page reads the same characters back.
 #[test]
-fn every_line_the_host_writes_is_ascii_and_reads_back_the_same() {
+fn every_line_a_command_writes_is_ascii_and_reads_back_the_same() {
     let value = json!({
         "output": "C:\\exports\\\u{d55c}\u{ad6d}\u{c5b4}-\u{1f3ac}.mp4",
         "message": "caf\u{e9} \"quoted\"\n\u{7f}",
@@ -1723,4 +2666,317 @@ fn every_line_the_host_writes_is_ascii_and_reads_back_the_same() {
         "{text}"
     );
     assert_eq!(serde_json::from_str::<Value>(text).expect("JSON"), value);
+}
+
+#[test]
+fn a_request_that_panics_is_answered_and_the_host_retires() {
+    let directory = scratch_directory("panic-retires");
+    let export = json!({
+        "protocolVersion": 2, "requestId": "P", "operation": "export",
+        "project": conform_project(&json!({})),
+        "assets": {"video": corpus("parity-rgb.mov")},
+        "startTicks": 0, "endTicks": 30_000,
+        "frameRate": {"num": 12, "den": 1},
+        "videoCodec": "mpeg4-part2",
+        "output": directory.join("out.mp4")
+    });
+    let edit = json!({
+        "protocolVersion": 2, "requestId": "P", "operation": "edit",
+        "project": {
+            "schema_version": 1, "id": "p", "name": "P",
+            "settings": {"width": 64, "height": 48, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [], "timeline": {"tracks": []}
+        },
+        "edit": {"op": "remove_ranges", "ranges": []}
+    });
+    let compose =
+        r#"{"protocolVersion":2,"requestId":"P","operation":"compose","action":"templates"}"#;
+    for (first, hook) in [
+        (compose.to_owned(), "ALPHA2_TEST_REQUEST_PANIC"),
+        (edit.to_string(), "ALPHA2_TEST_REQUEST_PANIC"),
+        (export.to_string(), "ALPHA2_TEST_EXPORT_PANIC"),
+    ] {
+        let _gpu = gpu_test_lock();
+        let mut serving = ServeChild::start(SERVE_CHILD, &[(hook, "1")]);
+        assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+        serving.write(&first);
+        let state = serving.message(Duration::from_secs(60));
+        assert_eq!(state["state"], "draining", "{state}");
+        assert_eq!(state["reason"], "defect", "{state}");
+        let answer = serving.message(Duration::from_secs(10));
+        assert_eq!(answer["requestId"], "P", "{answer}");
+        assert_eq!(answer["error"]["code"], "INTERNAL", "{answer}");
+        assert_eq!(answer["hostState"], "draining", "{answer}");
+        // The clients read an export's class from its report and derive it from the code otherwise.
+        if hook == "ALPHA2_TEST_EXPORT_PANIC" {
+            assert_eq!(answer["error"]["failure"]["code"], "DEFECT", "{answer}");
+        } else {
+            assert!(answer["error"].get("failure").is_none(), "{answer}");
+        }
+        assert!(
+            answer["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("injected")),
+            "{answer}"
+        );
+        serving.write(r#"{"protocolVersion":2,"requestId":"st","operation":"status"}"#);
+        let status = serving.message(Duration::from_secs(10));
+        assert_eq!(
+            status["result"]["details"]["runningRequests"], 0,
+            "{status}"
+        );
+        serving.write(&templates("next"));
+        let next = serving.message(Duration::from_secs(10));
+        assert_eq!(next["requestId"], "next", "{next}");
+        assert_eq!(next["error"]["code"], "HOST_RETIRING", "{next}");
+        assert_eq!(serving.finish(), Some(0));
+    }
+}
+
+#[test]
+fn only_a_caught_panic_retires_the_host_not_a_returned_internal_error() {
+    let lifecycle = Lifecycle::new(SoftLimits::OFF);
+    let output = crate::serve_io::Captured::default();
+    let out = output.responder();
+    let internal = || Err(HostError::new("INTERNAL", "returned as a value"));
+    lifecycle.begin_request();
+    answer(&lifecycle, None, &out, "returned", internal(), &[], &|_| {
+        None
+    })
+    .expect("answer");
+    assert_eq!(lifecycle.state(), crate::lifecycle::HostState::Ready);
+    lifecycle.begin_request();
+    lifecycle.record_defect();
+    answer(&lifecycle, None, &out, "panicked", internal(), &[], &|_| {
+        None
+    })
+    .expect("answer");
+    assert_eq!(
+        lifecycle.draining_since().map(|(reason, _)| reason),
+        Some(DrainReason::Defect)
+    );
+}
+
+#[test]
+fn an_unknown_operation_names_every_operation_the_host_takes() {
+    let error = parse_request(r#"{"protocolVersion":2,"requestId":"x","operation":"bogus"}"#)
+        .err()
+        .expect("refused");
+    assert_eq!(error.code, "INVALID_REQUEST");
+    for operation in [
+        "capabilities",
+        "export",
+        "conform",
+        "still",
+        "compose",
+        "edit",
+        "extract",
+        "cancel",
+        "status",
+    ] {
+        assert!(
+            error.message.contains(&format!("`{operation}`")),
+            "{operation}: {}",
+            error.message
+        );
+    }
+}
+
+/// An adapter whose intermediate is 8-bit refuses a 10-bit export with a code the protocol lists.
+#[test]
+fn ten_bit_output_on_an_eight_bit_renderer_is_invalid_input() {
+    let _gpu = gpu_test_lock();
+    crate::INJECT_RGBA8_INTERMEDIATE.with(|inject| inject.set(true));
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
+    assert_eq!(
+        host.device().renderer.intermediate_format(),
+        wgpu::TextureFormat::Rgba8Unorm
+    );
+    let directory = scratch_directory("ten-bit-on-eight");
+    let end = alpha2_time::TICKS_PER_SECOND / 10;
+    let request = json!({
+        "protocolVersion": 2, "operation": "export", "requestId": "U",
+        "project": {
+            "schema_version": 1, "id": "p", "name": "P",
+            "settings": {"width": 64, "height": 48, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [], "timeline": {"tracks": []}
+        },
+        "assets": {},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "prores",
+        "bitDepth": 10,
+        "output": directory.join("out.mov")
+    });
+    let error = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |_| Ok(()),
+        )
+        .expect_err("refused");
+    assert_eq!(error.code, "INVALID_INPUT", "{}", error.message);
+}
+
+#[test]
+fn every_operation_refuses_an_unknown_field_and_takes_an_attachment_list() {
+    let project = json!({
+        "schema_version": 1, "id": "p", "name": "P",
+        "settings": {"width": 64, "height": 48, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+        "sources": [], "timeline": {"tracks": []}
+    });
+    let requests = [
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "export", "project": project,
+               "assets": {}, "startTicks": 0, "endTicks": 4000, "frameRate": {"num": 30, "den": 1},
+               "output": "/nowhere/out.mp4"}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "conform", "project": project}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "compose", "action": "templates"}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "edit", "project": project,
+               "edit": {"op": "split_at", "time": 0}}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "capabilities"}),
+        json!({"protocolVersion": 2, "requestId": "r", "operation": "still", "project": project,
+               "assets": {}, "stills": [{"time": 0}]}),
+    ];
+    let refusal = |result: Result<(), HostError>, what: &str| {
+        let error = result.err().unwrap_or_else(|| panic!("{what}: accepted"));
+        assert_eq!(error.code, "INVALID_REQUEST", "{what}: {}", error.message);
+        assert!(
+            error.message.contains("aUnknownField"),
+            "{what}: {}",
+            error.message
+        );
+    };
+    for request in &requests {
+        let operation = request["operation"].as_str().expect("operation");
+        let mut with_attachments = request.clone();
+        with_attachments["attachments"] = json!([]);
+        assert!(
+            parse_request(&with_attachments.to_string()).is_ok(),
+            "{operation} with an attachment list"
+        );
+        let mut unknown = request.clone();
+        unknown["aUnknownField"] = json!(true);
+        refusal(parse_request(&unknown.to_string()).map(|_| ()), operation);
+    }
+    let cancel =
+        json!({"protocolVersion": 2, "requestId": "c", "operation": "cancel", "target": "r"});
+    let status = json!({"protocolVersion": 2, "requestId": "s", "operation": "status"});
+    for (name, request) in [("cancel", &cancel), ("status", &status)] {
+        let mut unknown = request.clone();
+        unknown["aUnknownField"] = json!(true);
+        let parse = |line: &str| {
+            if name == "cancel" {
+                crate::protocol::parse_cancel(line).map(|_| ())
+            } else {
+                crate::protocol::parse_status(line).map(|_| ())
+            }
+            .map_err(HostError::from)
+        };
+        let mut with_attachments = request.clone();
+        with_attachments["attachments"] = json!([]);
+        assert!(parse(&with_attachments.to_string()).is_ok(), "{name}");
+        refusal(parse(&unknown.to_string()), name);
+    }
+    for (field, value) in [
+        ("includeaudio", json!(false)),
+        ("overWrite", json!(true)),
+        ("bitdepth", json!(10)),
+        ("inputpolicy", json!("cpu-readback")),
+        ("loudnes", json!({"targetLufs": -16.0})),
+        ("rendercache", json!({"directory": "/nowhere"})),
+        ("proxys", json!({})),
+    ] {
+        let mut request = requests[0].clone();
+        request[field] = value;
+        let error = parse_request(&request.to_string())
+            .err()
+            .unwrap_or_else(|| panic!("{field}: accepted"));
+        assert_eq!(error.code, "INVALID_REQUEST", "{field}");
+        assert!(error.message.contains(field), "{field}: {}", error.message);
+    }
+    let mut rate = requests[0].clone();
+    rate["frameRate"]["denominator"] = json!(1);
+    assert_eq!(
+        parse_request(&rate.to_string())
+            .err()
+            .map(|error| error.code),
+        Some("INVALID_REQUEST")
+    );
+}
+
+/// A request thread that never returns cannot keep a terminated host alive past its grace.
+#[cfg(unix)]
+#[test]
+fn a_terminated_host_whose_request_never_returns_exits_at_its_deadline() {
+    let mut serving = ServeChild::start(
+        SERVE_CHILD,
+        &[
+            ("ALPHA2_TEST_REQUEST_PARK", "1"),
+            ("ALPHA2_TEST_TERMINATION_GRACE_MS", "1000"),
+        ],
+    );
+    assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
+    serving.write(&templates("parked"));
+    std::thread::sleep(Duration::from_millis(300));
+    serving.terminate();
+    let status = serving
+        .exited_within(Duration::from_secs(10))
+        .expect("the host outlived its deadline");
+    assert_eq!(status.code(), Some(143));
+}
+
+/// A client that stops reading cannot hold the exit: the deadline writes nothing.
+#[cfg(unix)]
+#[test]
+fn a_terminated_host_whose_output_nobody_reads_exits_at_its_deadline() {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            SERVE_CHILD,
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("ALPHA2_TEST_TERMINATION_GRACE_MS", "1000")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("child");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let frame = alpha2_host_core::host_frames::frame_bytes(
+        br#"{"protocolVersion":2,"requestId":"st","operation":"status"}"#,
+        &[],
+    )
+    .expect("frame");
+    // Under a pipe's worth of requests, whose answers are far more than a pipe holds.
+    for _ in 0..800 {
+        if stdin.write_all(&frame).is_err() {
+            break;
+        }
+    }
+    let _ = stdin.flush();
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status()
+            .expect("kill")
+            .success()
+    );
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("child status") {
+            break Some(status);
+        }
+        if started.elapsed() > Duration::from_secs(10) {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    drop(stdin);
+    assert_eq!(status.and_then(|status| status.code()), Some(143));
 }

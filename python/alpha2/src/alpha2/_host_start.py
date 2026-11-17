@@ -11,7 +11,7 @@ from pathlib import Path
 from .install import LINUX_GLIBC_FLOOR, _linux_libc
 
 DEFAULT_HOST_START_TIMEOUT = 30.0
-"""Seconds a started host has to write its first line, by default."""
+"""Seconds a started host has to report that it is ready, by default."""
 
 # CreateProcess errors for policy refusals: ERROR_INVALID_IMAGE_HASH,
 # ERROR_ACCESS_DISABLED_BY_POLICY, ERROR_VIRUS_INFECTED, ERROR_VIRUS_DELETED and the
@@ -30,6 +30,29 @@ def start_timeout_message(binary: Path, seconds: float) -> str:
     else:
         hint = ""
     return f"alpha2-host did not start within {seconds:g} s: {binary}{hint}"
+
+
+_MISMATCH_REMEDY = (
+    "install the alpha2-host of this release (python -m alpha2 install) or correct the path"
+)
+
+
+def protocol_mismatch_message(binary: Path, host_protocol: int, client_protocol: int) -> str:
+    """``HOST_VERSION_MISMATCH`` for a host whose first line announces another protocol."""
+    return (
+        f"alpha2-host speaks protocol {host_protocol} and this client protocol {client_protocol}, "
+        f"so it is from another alpha2 release: {binary}; {_MISMATCH_REMEDY}"
+    )
+
+
+def version_mismatch_message(binary: Path, host_version: object, client_version: str) -> str:
+    """``HOST_VERSION_MISMATCH`` for a host whose ``ready`` state names another release, or none."""
+    host = (
+        f"alpha2-host is release {host_version}"
+        if isinstance(host_version, str)
+        else "alpha2-host names no release"
+    )
+    return f"{host} and this client is {client_version}: {binary}; {_MISMATCH_REMEDY}"
 
 
 def blocked_message(what: str) -> str:

@@ -19,6 +19,56 @@ export function previewFrameIndex(seconds, fps) {
   return Math.floor(seconds * fps + 1e-7);
 }
 
+/** Active time a media element may take to load its first frame. */
+export const MEDIA_LOAD_TIMEOUT_MS = 10_000;
+
+/**
+ * Loads `video` and resolves once its first frame is available. Rejects with the element's error,
+ * with a timeout after `timeoutMs` of active time (a frozen page does not count), or with
+ * `signal`'s reason once it aborts. Its listeners are removed on every path.
+ */
+export function loadedOrFailed(
+  video,
+  { signal, timeoutMs = MEDIA_LOAD_TIMEOUT_MS } = {},
+) {
+  return new Promise((resolve, reject) => {
+    const timer = new AbortController();
+    const cleanup = () => {
+      timer.abort();
+      video.removeEventListener("loadeddata", ready);
+      video.removeEventListener("error", failed);
+      signal?.removeEventListener("abort", aborted);
+    };
+    const ready = () => {
+      cleanup();
+      resolve();
+    };
+    const failed = () => {
+      cleanup();
+      reject(video.error ?? new Error("video load failed"));
+    };
+    const aborted = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    if (signal?.aborted) return reject(signal.reason);
+    void activeTimeout(timeoutMs, timer.signal).then(() => {
+      cleanup();
+      reject(new Error("video load timed out"));
+    });
+    video.addEventListener("loadeddata", ready, { once: true });
+    video.addEventListener("error", failed, { once: true });
+    signal?.addEventListener("abort", aborted, { once: true });
+    video.load();
+  });
+}
+
+/** Releases a media element's media. */
+export function unloadVideo(video) {
+  video.removeAttribute("src");
+  video.load();
+}
+
 export async function seekVideoFrame(video, seconds, tolerance = 0.001) {
   if (
     !video.seeking &&

@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn evaluated_frame_executes_the_clip_effect_chain() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -14,8 +14,11 @@ fn evaluated_frame_executes_the_clip_effect_chain() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            data: alpha2_eval::SampleContext::NONE,
+            correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
             source_id: leak(source.clone()),
             track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -67,7 +70,7 @@ fn keyframed_effect_parameters_render_at_the_frame_time_and_clamp_only_overshoot
     use alpha2_model::{CubicBezier, Interpolation, Keyframe};
 
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     // `gain` scales the source; its catalog range is 0..=1.
     pollster::block_on(renderer.register_effect(EffectDef {
         params: vec![ParamSpec {
@@ -116,8 +119,11 @@ fn keyframed_effect_parameters_render_at_the_frame_time_and_clamp_only_overshoot
         let frame = FrameDesc {
             background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::LinearLight,
+            canvas: None,
             time: MediaTime(time),
             visual: vec![ActiveClip {
+                data: alpha2_eval::SampleContext::NONE,
+                correction: None,
                 clip_id: leak(ClipId::new("clip").expect("valid ID")),
                 source_id: leak(source.clone()),
                 track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -179,7 +185,7 @@ fn keyframed_effect_parameters_render_at_the_frame_time_and_clamp_only_overshoot
 #[test]
 fn evaluated_frame_executes_active_transition_nodes() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let transition = pollster::block_on(renderer.register_effect(EffectDef {
         id: "test.frame-fade".into(),
         version: 1,
@@ -196,6 +202,8 @@ fn evaluated_frame_executes_active_transition_nodes() {
     let from_clip = ClipId::new("from").expect("valid ID");
     let to_clip = ClipId::new("to").expect("valid ID");
     let active = |clip_id: ClipId, source_time: MediaTime| ActiveClip {
+        data: alpha2_eval::SampleContext::NONE,
+        correction: None,
         clip_id: leak(clip_id),
         source_id: leak(source.clone()),
         track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -214,6 +222,7 @@ fn evaluated_frame_executes_active_transition_nodes() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![
             active(from_clip.clone(), MediaTime::ZERO),
@@ -232,6 +241,7 @@ fn evaluated_frame_executes_active_transition_nodes() {
                     params: BTreeMap::new(),
                 }),
                 MediaTime::ZERO,
+                alpha2_eval::SampleContext::NONE,
             ),
             progress: 0.5,
         }],
@@ -261,4 +271,25 @@ fn evaluated_frame_executes_active_transition_nodes() {
     let expected: Vec<u8> =
         serde_json::from_value(reference["transition_midpoint"].clone()).expect("RGBA reference");
     assert_rgba8_near(&read_rgba8(&renderer, &output), &expected, 1);
+}
+
+#[test]
+fn effects_get_the_render_scale_of_the_project_canvas() {
+    let project = one_clip_snapshot();
+    let frame = project.evaluate(MediaTime::ZERO).expect("frame");
+    let settings = &project.project().settings;
+    assert_eq!(frame.canvas, Some((settings.width, settings.height)));
+    let at = |width, height| {
+        crate::frame::frame_runtime(&frame, RenderSize::new(width, height).expect("size")).scale
+    };
+    assert_eq!(at(settings.width, settings.height), 1.0);
+    assert_eq!(at(settings.width / 2, settings.height / 2), 0.5);
+    let without_canvas = FrameDesc {
+        canvas: None,
+        ..frame.clone()
+    };
+    assert_eq!(
+        crate::frame::frame_runtime(&without_canvas, RenderSize::new(7, 5).expect("size")).scale,
+        1.0
+    );
 }

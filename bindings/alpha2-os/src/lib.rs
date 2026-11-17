@@ -2,12 +2,12 @@
 //! does not offer at the minimum Rust version: file locks, no-replace publishing, termination
 //! handling, parent and child lifetime, clocks, memory, and the OS version.
 //!
-//! The rest of the workspace forbids `unsafe`; this crate and `alpha2-ffmpeg-bridge` hold the few
-//! calls that need it.
+//! In iOS and Android apps the system owns the process, so the termination, parent-exit and
+//! child-lifetime calls have no use there; files, clocks, memory and the version do.
 
 use std::fs::File;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod lifetime;
@@ -23,11 +23,13 @@ mod windows;
 use windows as platform;
 
 pub use lifetime::{
-    KillOnCloseJob, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
+    KillOnCloseJob, claim_stdout, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
+};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub use memory::{
+    CgroupMemory, CgroupMemoryWatch, cgroup_memory, cgroup_memory_at, memory_capacity_at,
 };
 pub use memory::{MemoryCapacity, memory_capacity};
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub use memory::{cgroup_v2_usage, memory_capacity_at};
 pub use os_version::os_version;
 
 /// Takes an exclusive advisory lock on `file` without waiting. Returns `Ok(false)` when another
@@ -352,6 +354,12 @@ impl Termination {
     pub const fn closing(self) -> bool {
         self.closing
     }
+
+    /// Whether the process that started this one exited ([`crate::watch_parent`]).
+    #[must_use]
+    pub fn parent_exited(self) -> bool {
+        self.name == crate::lifetime::PARENT_EXITED_NAME
+    }
 }
 
 /// Calls `handler` on its own thread when the process is asked to terminate, instead of ending
@@ -503,6 +511,33 @@ pub fn process_memory() -> ProcessMemory {
     }
 }
 
+/// Handles the process holds open: file descriptors on Unix, kernel handles on Windows. `None`
+/// where unavailable.
+#[must_use]
+pub fn open_handles() -> Option<u64> {
+    #[cfg(any(unix, windows))]
+    {
+        platform::open_handles()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
+    }
+}
+
+/// The soft limit on open file descriptors; `None` on Windows or where unlimited or unknown.
+#[must_use]
+pub fn open_file_limit() -> Option<u64> {
+    #[cfg(unix)]
+    {
+        platform::open_file_limit()
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 /// The calling thread's CPU work so far, comparable only with other readings on the same thread:
 /// CPU nanoseconds on Unix, cycles on Windows (`QueryThreadCycleTime`). Excludes time spent
 /// waiting for a CPU. `None` where unavailable.
@@ -519,10 +554,10 @@ pub fn thread_cpu_work() -> Option<u64> {
 }
 
 /// Asks the scheduler to keep the calling thread on the fastest cores, so [`thread_cpu_work`]
-/// readings come from one kind of core: `QOS_CLASS_USER_INTERACTIVE` on macOS, no `EcoQoS`
-/// throttling on Windows, nothing elsewhere. Best effort; failures are silent.
+/// readings come from one kind of core: `QOS_CLASS_USER_INTERACTIVE` on Apple systems, no
+/// `EcoQoS` throttling on Windows, nothing elsewhere. Best effort; failures are silent.
 pub fn prefer_fast_cores() {
-    #[cfg(any(target_os = "macos", windows))]
+    #[cfg(any(target_vendor = "apple", windows))]
     platform::prefer_fast_cores();
 }
 
@@ -550,14 +585,101 @@ pub fn process_cpu_time() -> Option<std::time::Duration> {
     }
 }
 
-/// Writes one line to standard error like `eprintln!`, but drops it instead of panicking when the
-/// stream is closed, so a client closing the pipe cannot abort an export. Use [`diagnostic!`].
-pub fn write_diagnostic(line: std::fmt::Arguments<'_>) {
-    use std::io::Write;
-    let _ = writeln!(io::stderr().lock(), "{line}");
+/// The host's cache directory, as the Node and Python clients name it, or `None` without a home.
+///
+/// That is `ALPHA2_HOST_CACHE_DIR` (relative to the working directory), else `alpha2` under
+/// `$XDG_CACHE_HOME` (when absolute) or `~/.cache` on Linux, `~/Library/Caches` on macOS, and
+/// `%LOCALAPPDATA%` on Windows.
+#[must_use]
+pub fn host_cache_directory() -> Option<PathBuf> {
+    host_cache_directory_from(|name| std::env::var_os(name))
 }
 
-/// `eprintln!` that drops the line instead of panicking ([`write_diagnostic`]).
+/// [`host_cache_directory`] with the environment read through `variable`.
+#[must_use]
+pub fn host_cache_directory_from(
+    variable: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let variable = |name: &str| {
+        variable(name)
+            .filter(|value| !value.to_string_lossy().trim().is_empty())
+            .map(PathBuf::from)
+    };
+    if let Some(cache) = variable("ALPHA2_HOST_CACHE_DIR") {
+        return Some(if cache.is_absolute() {
+            cache
+        } else {
+            std::env::current_dir().ok()?.join(cache)
+        });
+    }
+    if cfg!(target_os = "windows") {
+        let base = variable("LOCALAPPDATA")
+            .or_else(|| variable("USERPROFILE").map(|home| home.join("AppData").join("Local")))?;
+        return Some(base.join("alpha2"));
+    }
+    let home = variable("HOME");
+    if cfg!(target_os = "macos") {
+        return Some(home?.join("Library").join("Caches").join("alpha2"));
+    }
+    let base = variable("XDG_CACHE_HOME")
+        .filter(|path| path.is_absolute())
+        .or_else(|| home.map(|home| home.join(".cache")))?;
+    Some(base.join("alpha2"))
+}
+
+/// Creates `path` and its missing parents for files only this user may change.
+///
+/// On Unix new directories get mode 0700, and a directory is refused when another user owns it or
+/// group or others can write it.
+///
+/// # Errors
+/// When a directory cannot be created, or the existing one is refused (`PermissionDenied`).
+pub fn create_private_directory(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        platform::create_private_directory(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(path)
+    }
+}
+
+/// Receives each diagnostic line in place of the default output.
+pub type DiagnosticSink = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
+
+static DIAGNOSTIC_SINK: std::sync::RwLock<Option<DiagnosticSink>> = std::sync::RwLock::new(None);
+
+/// Sends every later diagnostic line of the process to `sink`, or with `None` back to standard
+/// error, or on Android, which discards an app's standard error, to the system log as `alpha2`.
+pub fn set_diagnostic_sink(sink: Option<DiagnosticSink>) {
+    *DIAGNOSTIC_SINK
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = sink;
+}
+
+/// Writes one diagnostic line to the sink [`set_diagnostic_sink`] chose. The default output drops
+/// the line instead of panicking when standard error is closed, so a client closing the pipe
+/// cannot abort an export. Use [`diagnostic!`].
+pub fn write_diagnostic(line: std::fmt::Arguments<'_>) {
+    // Called outside the lock, so a sink may write diagnostics or replace itself.
+    let sink = DIAGNOSTIC_SINK
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    match sink {
+        Some(sink) => sink(&line.to_string()),
+        #[cfg(target_os = "android")]
+        None => platform::android_log(&line.to_string()),
+        #[cfg(not(target_os = "android"))]
+        None => {
+            use std::io::Write;
+            let _ = writeln!(io::stderr().lock(), "{line}");
+        }
+    }
+}
+
+/// `eprintln!` through the process's diagnostic sink ([`write_diagnostic`]).
 #[macro_export]
 macro_rules! diagnostic {
     ($($argument:tt)*) => {
@@ -569,6 +691,22 @@ macro_rules! diagnostic {
 mod tests {
     use super::*;
     use std::fs::{self, OpenOptions};
+
+    #[test]
+    fn a_diagnostic_sink_receives_each_line_until_it_is_removed() {
+        let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept = std::sync::Arc::clone(&lines);
+        // Other tests of this process may write while the sink is set; only marked lines count.
+        set_diagnostic_sink(Some(std::sync::Arc::new(move |line: &str| {
+            if line.contains("sink-test") {
+                kept.lock().expect("lines").push(line.to_owned());
+            }
+        })));
+        diagnostic!("sink-test {}", 1);
+        set_diagnostic_sink(None);
+        diagnostic!("sink-test 2");
+        assert_eq!(*lines.lock().expect("lines"), ["sink-test 1"]);
+    }
 
     #[test]
     fn the_awake_clock_advances_with_time_and_never_goes_back() {
@@ -594,7 +732,73 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[cfg(unix)]
+    fn a_claimed_stream_keeps_stray_writes_out() {
+        use std::io::{Read, Write};
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        let pipe = || {
+            let mut ends = [0; 2];
+            // SAFETY: `ends` holds the two descriptors `pipe` writes.
+            assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+            // SAFETY: both descriptors are new and owned here.
+            unsafe { (File::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])) }
+        };
+        let stray = |fd: i32| {
+            // SAFETY: the bytes are valid for the call; a write to a closed fd fails harmlessly.
+            unsafe { libc::write(fd, b"stray".as_ptr().cast(), 5) }
+        };
+        for diagnostics_open in [true, false] {
+            let (mut protocol_read, protocol_write) = pipe();
+            let (mut diagnostics_read, diagnostics_write) = pipe();
+            let diagnostics_fd = if diagnostics_open {
+                diagnostics_write.as_raw_fd()
+            } else {
+                -1
+            };
+            let mut claimed =
+                platform::claim_stream(protocol_write.as_raw_fd(), diagnostics_fd).expect("claim");
+            stray(protocol_write.as_raw_fd());
+            claimed.write_all(b"frame").expect("frame");
+            drop((claimed, protocol_write, diagnostics_write));
+            let mut protocol = String::new();
+            protocol_read
+                .read_to_string(&mut protocol)
+                .expect("protocol");
+            assert_eq!(protocol, "frame", "diagnostics open: {diagnostics_open}");
+            let mut diagnostics = String::new();
+            diagnostics_read
+                .read_to_string(&mut diagnostics)
+                .expect("diagnostics");
+            let expected = if diagnostics_open { "stray" } else { "" };
+            assert_eq!(diagnostics, expected);
+        }
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn opened_files_count_as_open_handles() {
+        let path = std::env::temp_dir().join(format!("alpha2-os-handles-{}", std::process::id()));
+        fs::write(&path, b"x").expect("write");
+        let before = open_handles().expect("open handles");
+        // Other test threads open and close handles meanwhile, so a margin absorbs them.
+        let opened = (0..64)
+            .map(|_| File::open(&path).expect("open"))
+            .collect::<Vec<_>>();
+        let during = open_handles().expect("open handles");
+        assert!(during >= before + 32, "{before} then {during}");
+        drop(opened);
+        fs::remove_file(&path).expect("remove");
+        #[cfg(unix)]
+        assert!(open_file_limit().is_none_or(|limit| limit >= during));
+    }
+
+    #[test]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_vendor = "apple",
+        windows
+    ))]
     fn the_process_reports_its_resident_memory() {
         let memory = process_memory();
         let resident = memory.resident_bytes.expect("resident bytes");
@@ -805,6 +1009,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "android",
+        ignore = "SELinux denies hard links to apps and the shell"
+    )]
     fn a_hard_link_and_a_path_through_a_linked_directory_are_the_same_file() {
         let directory = scratch("identity-paths");
         let _ = fs::remove_dir_all(&directory);

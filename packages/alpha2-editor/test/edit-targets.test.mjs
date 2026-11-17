@@ -10,7 +10,7 @@ import {
 } from "../dist/index.js";
 
 const S = 120000;
-const crossfade = { id: "alpha2.transition.crossfade", version: 1 };
+const crossfade = { id: "alpha2.transition.fade", version: 1 };
 const blur = { id: "alpha2.effect.gaussian-blur", version: 1 };
 const clip = (id, start, end) => ({
   id,
@@ -362,7 +362,7 @@ test("a pasted, duplicated or split clip edits its own groups", () => {
     ok({
       type: "graph.node.update",
       compositionId: look,
-      node: { ...node, op: { ...node.op, effect: radius(40) } },
+      node: { ...node, op: { ...node.op, effect: radius(0.4) } },
     });
     const original = e.document.project.compositions
       .find((x) => x.id === "look")
@@ -383,16 +383,19 @@ test("a pasted, duplicated or split clip edits its own groups", () => {
 
 test("a clip copied, then deleted, pastes with the composition it had", () => {
   const { e, ok } = editor([clip("c", 0, S)]);
-  ok({ type: "effect.add", id: "c", instanceId: "fx", effect: radius(3) });
+  ok({ type: "effect.add", id: "c", instanceId: "fx", effect: radius(0.3) });
   e.copy(["c"]);
-  ok({ type: "effect.update", id: "c", instanceId: "fx", effect: radius(9) });
+  ok({ type: "effect.update", id: "c", instanceId: "fx", effect: radius(0.9) });
   ok({ type: "clip.delete", id: "c" });
   assert.deepEqual(compositionIds(e), []);
   const pasted = e.paste(2 * S, () => "p");
   assert.equal(pasted.ok, true, pasted.error?.message);
   const p = e.query().clips.get("p").clip;
   const shown = composition(e, p.composition.id);
-  assert.deepEqual(shown.nodes.find((n) => n.id === "fx").op.effect, radius(3));
+  assert.deepEqual(
+    shown.nodes.find((n) => n.id === "fx").op.effect,
+    radius(0.3),
+  );
   const g = grouped();
   g.e.copy(["c"]);
   g.ok({ type: "clip.delete", id: "c" });

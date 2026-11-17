@@ -22,16 +22,22 @@ pub(crate) struct Terminations {
     state: Mutex<State>,
     /// Called when a termination was requested and the last request being handled is answered.
     on_idle: fn(Termination),
+    /// Called when a termination's grace runs out, whatever still runs.
+    on_deadline: fn(Termination),
+    deadline_started: std::sync::atomic::AtomicBool,
 }
 
 struct State {
     requested: Option<Termination>,
-    /// Requests from their line being read until answered.
+    /// Requests from their frame being read until answered.
     busy: usize,
-    running: Vec<(u64, CancelToken)>,
+    /// Export cancel tokens and the request each belongs to, if known.
+    running: Vec<(u64, Option<u64>, CancelToken)>,
     next: u64,
-    current: Option<String>,
-    cancelled_current: bool,
+    /// Requests being handled, from [`Terminations::begin_request`] until answered.
+    active: Vec<Active>,
+    /// Set once the host retires: every export starts cancelled.
+    retiring: Option<&'static str>,
     /// Ids cancelled before they were read or started, oldest first. A cancel for a request that
     /// already ended stays until newer ones push it out.
     pending: VecDeque<String>,
@@ -39,19 +45,64 @@ struct State {
 
 const MAX_PENDING_CANCELS: usize = 1024;
 
+struct Active {
+    sequence: u64,
+    id: String,
+    stop: Option<Stop>,
+}
+
+/// Why a request being handled was stopped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Stop {
+    /// A `cancel` line named it.
+    Client,
+    /// The host retires for this drain reason ([`Terminations::retire`]).
+    Retiring(&'static str),
+    /// Its cause is recorded as the export's failure ([`Terminations::stop_for_recorded_cause`]).
+    Recorded,
+}
+
+thread_local! {
+    /// The request this thread handles, set by [`Terminations::begin_request`].
+    static CURRENT: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
 impl Terminations {
-    pub(crate) const fn new(on_idle: fn(Termination)) -> Self {
+    pub(crate) const fn new(on_idle: fn(Termination), on_deadline: fn(Termination)) -> Self {
         Self {
             state: Mutex::new(State {
                 requested: None,
                 busy: 0,
                 running: Vec::new(),
                 next: 0,
-                current: None,
-                cancelled_current: false,
+                active: Vec::new(),
+                retiring: None,
                 pending: VecDeque::new(),
             }),
             on_idle,
+            on_deadline,
+            deadline_started: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Once per process: calls `on_deadline` after `grace` on a thread of its own, so a request
+    /// that cannot stop, or an output nobody reads, cannot keep the process alive.
+    pub(crate) fn start_deadline(&'static self, termination: Termination, grace: Duration) {
+        if self
+            .deadline_started
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        let spawned = std::thread::Builder::new()
+            .name("alpha2-termination-deadline".to_owned())
+            .spawn(move || {
+                std::thread::sleep(grace);
+                (self.on_deadline)(termination);
+            });
+        if spawned.is_err() {
+            self.deadline_started
+                .store(false, std::sync::atomic::Ordering::Release);
         }
     }
 
@@ -63,7 +114,7 @@ impl Terminations {
     pub(crate) fn request(&self, termination: Termination) -> bool {
         let mut state = self.lock();
         state.requested.get_or_insert(termination);
-        for (_, token) in &state.running {
+        for (_, _, token) in &state.running {
             token.cancel();
         }
         state.busy == 0
@@ -73,17 +124,24 @@ impl Terminations {
         self.lock().requested
     }
 
-    /// Held until the guard drops. A cancel that named `id` earlier is taken now
-    /// ([`RequestGuard::cancelled_before_start`]).
+    /// Held until the guard drops, on the thread that handles the request. A cancel that named
+    /// `id` earlier is taken now ([`RequestGuard::cancelled_before_start`]).
     pub(crate) fn begin_request(&'static self, id: &str) -> RequestGuard {
         let mut state = self.lock();
         state.busy += 1;
         let cancelled = take_pending(&mut state.pending, id);
-        state.current = Some(id.to_owned());
-        state.cancelled_current = cancelled;
+        let sequence = state.next;
+        state.next += 1;
+        state.active.push(Active {
+            sequence,
+            id: id.to_owned(),
+            stop: cancelled.then_some(Stop::Client),
+        });
+        drop(state);
+        CURRENT.with(|current| current.set(Some(sequence)));
         RequestGuard {
             owner: self,
-            id: id.to_owned(),
+            sequence,
             cancelled_before_start: cancelled,
         }
     }
@@ -92,15 +150,20 @@ impl Terminations {
         take_pending(&mut self.lock().pending, id)
     }
 
-    /// `running` when `target` is the request being handled (a request with nothing to cancel
-    /// finishes); otherwise `pending`, kept for a later request with that id.
+    /// `running` when a request with id `target` is being handled (a request with nothing to
+    /// cancel finishes); otherwise `pending`, kept for a later request with that id.
     pub(crate) fn cancel_request(&self, target: &str) -> &'static str {
         let mut state = self.lock();
-        if state.current.as_deref() == Some(target) {
-            state.cancelled_current = true;
-            for (_, token) in &state.running {
-                token.cancel();
-            }
+        let State {
+            active, running, ..
+        } = &mut *state;
+        let mut found = false;
+        for request in active.iter_mut().filter(|request| request.id == target) {
+            request.stop.get_or_insert(Stop::Client);
+            found = true;
+            cancel_tokens_of(running, Some(request.sequence));
+        }
+        if found {
             return "running";
         }
         if state.pending.len() >= MAX_PENDING_CANCELS {
@@ -110,12 +173,51 @@ impl Terminations {
         "pending"
     }
 
-    /// For a cause the caller already recorded as the failure (the Linux memory watchdog), so the
-    /// exports report that cause, not a cancel.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
-    pub(crate) fn cancel_running(&self) {
-        for (_, token) in &self.lock().running {
+    /// Stops `request` for a cause the caller recorded as its failure (the Linux memory watchdog),
+    /// so the export reports that cause, not a cancel: its running exports are cancelled and
+    /// those it starts later begin cancelled. Cancels every running export when `request` is
+    /// unknown.
+    pub(crate) fn stop_for_recorded_cause(&self, request: Option<u64>) {
+        let mut state = self.lock();
+        let State {
+            active, running, ..
+        } = &mut *state;
+        match request {
+            Some(_) => {
+                for entry in active
+                    .iter_mut()
+                    .filter(|entry| Some(entry.sequence) == request)
+                {
+                    entry.stop.get_or_insert(Stop::Recorded);
+                }
+                cancel_tokens_of(running, request);
+            }
+            None => {
+                for (_, _, token) in running.iter() {
+                    token.cancel();
+                }
+            }
+        }
+    }
+
+    /// Stops every request being handled and makes every later export start cancelled, for a host
+    /// that cannot take another request. Unlike [`Self::request`] it leaves the exit status alone.
+    pub(crate) fn retire(&self, reason: &'static str) {
+        let mut state = self.lock();
+        state.retiring.get_or_insert(reason);
+        for request in &mut state.active {
+            request.stop.get_or_insert(Stop::Retiring(reason));
+        }
+        for (_, _, token) in &state.running {
             token.cancel();
+        }
+    }
+
+    /// The drain reason, when the host stopped request `sequence` because it retires.
+    fn retired(&self, sequence: u64) -> Option<&'static str> {
+        match stop_of(&self.lock(), Some(sequence)) {
+            Some(Stop::Retiring(reason)) => Some(reason),
+            _ => None,
         }
     }
 
@@ -124,16 +226,19 @@ impl Terminations {
         self.lock().busy += 1;
     }
 
-    /// Already cancelled when a termination was asked for.
+    /// Belongs to the request this thread handles. Already cancelled when a termination was asked
+    /// for or a cancel named the request.
     pub(crate) fn export_cancel(&'static self) -> ExportCancel {
         let token = CancelToken::default();
+        let request = current_request();
         let mut state = self.lock();
-        if state.requested.is_some() || state.cancelled_current {
+        let stopped = stop_of(&state, request).is_some();
+        if state.requested.is_some() || state.retiring.is_some() || stopped {
             token.cancel();
         }
         let id = state.next;
         state.next += 1;
-        state.running.push((id, token.clone()));
+        state.running.push((id, request, token.clone()));
         ExportCancel {
             token,
             id,
@@ -149,6 +254,28 @@ impl Terminations {
     }
 }
 
+fn stop_of(state: &State, request: Option<u64>) -> Option<Stop> {
+    state
+        .active
+        .iter()
+        .find(|active| Some(active.sequence) == request)
+        .and_then(|active| active.stop)
+}
+
+/// Tokens of no known request are cancelled with any request, as they may be its.
+fn cancel_tokens_of(running: &[(u64, Option<u64>, CancelToken)], request: Option<u64>) {
+    for (_, owner, token) in running {
+        if owner.is_none() || *owner == request {
+            token.cancel();
+        }
+    }
+}
+
+/// The request the calling thread handles, if it handles one.
+pub(crate) fn current_request() -> Option<u64> {
+    CURRENT.with(std::cell::Cell::get)
+}
+
 fn take_pending(pending: &mut VecDeque<String>, id: &str) -> bool {
     match pending.iter().position(|cancelled| cancelled == id) {
         Some(at) => {
@@ -161,7 +288,7 @@ fn take_pending(pending: &mut VecDeque<String>, id: &str) -> bool {
 
 pub(crate) struct RequestGuard {
     owner: &'static Terminations,
-    id: String,
+    sequence: u64,
     cancelled_before_start: bool,
 }
 
@@ -169,16 +296,29 @@ impl RequestGuard {
     pub(crate) const fn cancelled_before_start(&self) -> bool {
         self.cancelled_before_start
     }
+
+    pub(crate) const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// The drain reason, when the host stopped this request because it retires.
+    pub(crate) fn retired(&self) -> Option<&'static str> {
+        self.owner.retired(self.sequence)
+    }
 }
 
 impl Drop for RequestGuard {
     fn drop(&mut self) {
+        CURRENT.with(|current| {
+            if current.get() == Some(self.sequence) {
+                current.set(None);
+            }
+        });
         let mut state = self.owner.lock();
         state.busy = state.busy.saturating_sub(1);
-        if state.current.as_deref() == Some(self.id.as_str()) {
-            state.current = None;
-            state.cancelled_current = false;
-        }
+        state
+            .active
+            .retain(|active| active.sequence != self.sequence);
         let idle = (state.busy == 0).then_some(state.requested).flatten();
         drop(state);
         if let Some(termination) = idle {
@@ -203,15 +343,53 @@ impl std::ops::Deref for ExportCancel {
 
 impl Drop for ExportCancel {
     fn drop(&mut self) {
-        self.owner.lock().running.retain(|(id, _)| *id != self.id);
+        self.owner
+            .lock()
+            .running
+            .retain(|(id, _, _)| *id != self.id);
     }
 }
 
-static TERMINATIONS: Terminations = Terminations::new(exit_on_termination);
+static TERMINATIONS: Terminations = Terminations::new(exit_on_termination, exit_at_deadline);
 
 fn exit_on_termination(termination: Termination) {
+    crate::lifecycle::announce_termination();
     crate::exit_unflushed(termination.exit_code());
 }
+
+/// Writes and flushes nothing: a blocked writer may hold either stream.
+fn exit_at_deadline(termination: Termination) {
+    alpha2_os::exit_without_handlers(termination.exit_code());
+}
+
+/// How long a termination waits for running requests: past the stall limit the host itself calls a
+/// step stuck. After the parent's exit nobody reads the answers, so only a healthy stop is awaited.
+fn grace(termination: Termination) -> Duration {
+    #[cfg(test)]
+    if let Some(grace) = *TEST_GRACE.lock().unwrap_or_else(PoisonError::into_inner) {
+        return grace;
+    }
+    if termination.parent_exited() {
+        PARENT_EXIT_GRACE
+    } else {
+        stop_grace()
+    }
+}
+
+fn stop_grace() -> Duration {
+    #[cfg(test)]
+    if let Some(grace) = *TEST_GRACE.lock().unwrap_or_else(PoisonError::into_inner) {
+        return grace;
+    }
+    crate::config::configured_stall_timeout().saturating_add(SIGNAL_GRACE_MARGIN)
+}
+
+const PARENT_EXIT_GRACE: Duration = Duration::from_secs(5);
+const SIGNAL_GRACE_MARGIN: Duration = Duration::from_secs(5);
+
+/// A short grace for the serve children of the tests.
+#[cfg(test)]
+pub(crate) static TEST_GRACE: Mutex<Option<Duration>> = Mutex::new(None);
 
 pub(crate) fn terminations() -> &'static Terminations {
     &TERMINATIONS
@@ -228,28 +406,51 @@ pub(crate) fn export_cancel() -> ExportCancel {
 /// Once the request was cancelled or a termination asked for, the failure is reported as the
 /// cancel, whatever the export stopped at.
 pub(crate) fn cancelled_by_request_or_termination(message: String) -> String {
+    let request = current_request();
+    let state = TERMINATIONS.lock();
+    let stop = stop_of(&state, request);
+    if let Some(Stop::Retiring(reason)) = stop {
+        return crate::protocol::cancelled(retiring_message(reason));
+    }
     if crate::protocol::is_cancelled(&message) {
         return message;
     }
-    let state = TERMINATIONS.lock();
     if let Some(termination) = state.requested {
         return crate::protocol::cancelled(format!(
             "native export was cancelled: the host was asked to terminate ({})",
             termination.name()
         ));
     }
-    match (&state.current, state.cancelled_current) {
-        (Some(id), true) => crate::protocol::cancelled(format!(
-            "native export was cancelled: the client cancelled request {id}"
-        )),
+    match (stop, request) {
+        (Some(Stop::Client), Some(request)) => {
+            let id = state
+                .active
+                .iter()
+                .find(|active| active.sequence == request)
+                .map_or("", |active| active.id.as_str());
+            crate::protocol::cancelled(format!(
+                "native export was cancelled: the client cancelled request {id}"
+            ))
+        }
         _ => message,
     }
+}
+
+/// The answer of a request the host stopped because it retires for `reason`.
+pub(crate) fn retiring_message(reason: &str) -> String {
+    format!("the host is retiring ({reason}); the request was stopped and left no output")
+}
+
+/// How long a retiring host waits for the requests it stopped: as long as a termination does.
+pub(crate) fn retire_grace() -> Duration {
+    stop_grace()
 }
 
 /// # Errors
 /// When the operating system refuses the handler.
 pub(crate) fn install() -> std::io::Result<()> {
     alpha2_os::on_termination(|termination| {
+        TERMINATIONS.start_deadline(termination, grace(termination));
         // A client may have closed the pipe already, so nothing may depend on this line.
         let _ = writeln!(
             std::io::stderr(),
@@ -277,8 +478,17 @@ mod tests {
         IDLE.lock().expect("idle").push(termination.name());
     }
 
+    static DEADLINES: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+    fn record_deadline(termination: Termination) {
+        DEADLINES
+            .lock()
+            .expect("deadlines")
+            .push(termination.exit_code());
+    }
+
     fn leaked() -> &'static Terminations {
-        Box::leak(Box::new(Terminations::new(record_idle)))
+        Box::leak(Box::new(Terminations::new(record_idle, record_deadline)))
     }
 
     fn sigterm() -> Termination {
@@ -345,6 +555,55 @@ mod tests {
         }
         assert!(!terminations.take_pending_cancel("0"), "the oldest goes");
         assert!(terminations.take_pending_cancel("1"));
+    }
+
+    #[test]
+    fn retiring_stops_what_runs_and_every_later_export_without_a_termination() {
+        let terminations = leaked();
+        let first = terminations.begin_request("first");
+        let running = terminations.export_cancel();
+        terminations.retire("threads-abandoned");
+        assert!(running.is_cancelled());
+        assert_eq!(first.retired(), Some("threads-abandoned"));
+        assert_eq!(terminations.requested(), None, "the exit status stays");
+        let later = terminations.begin_request("later");
+        assert!(terminations.export_cancel().is_cancelled());
+        assert_eq!(
+            later.retired(),
+            None,
+            "it was not running when the host retired"
+        );
+    }
+
+    #[test]
+    fn a_deadline_ends_a_busy_process_once_whatever_runs() {
+        // Its own idle hook: the shared one is asserted on by tests that run beside it.
+        fn ignore_idle(_: Termination) {}
+        let terminations: &'static Terminations =
+            Box::leak(Box::new(Terminations::new(ignore_idle, record_deadline)));
+        let _request = terminations.begin_request("stuck");
+        assert!(!terminations.request(sigterm()));
+        terminations.start_deadline(sigterm(), Duration::from_millis(50));
+        terminations.start_deadline(sigterm(), Duration::from_millis(50));
+        let started = Instant::now();
+        while DEADLINES.lock().expect("deadlines").is_empty() {
+            assert!(started.elapsed() < Duration::from_secs(10), "no deadline");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(*DEADLINES.lock().expect("deadlines"), [143]);
+    }
+
+    #[test]
+    fn the_parent_exit_takes_the_short_grace() {
+        let parent = Termination::new("PARENT_EXITED", 143, false);
+        assert!(parent.parent_exited());
+        assert_eq!(grace(parent), PARENT_EXIT_GRACE);
+        assert!(!sigterm().parent_exited());
+        assert_eq!(
+            grace(sigterm()),
+            crate::config::configured_stall_timeout() + SIGNAL_GRACE_MARGIN
+        );
     }
 
     #[test]

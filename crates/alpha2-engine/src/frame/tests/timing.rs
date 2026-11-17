@@ -30,8 +30,11 @@ fn effect_timing_instrumentation_never_changes_the_rendered_result() {
         FrameDesc {
             background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::LinearLight,
+            canvas: None,
             time: MediaTime::ZERO,
             visual: vec![ActiveClip {
+                data: alpha2_eval::SampleContext::NONE,
+                correction: None,
                 clip_id: leak(ClipId::new("clip").expect("valid ID")),
                 source_id: leak(source.clone()),
                 track_id: leak(TrackId::new("track").expect("valid ID")),
@@ -99,7 +102,7 @@ fn effect_timing_instrumentation_never_changes_the_rendered_result() {
 #[test]
 fn pass_timing_is_off_by_default_and_never_alters_the_result() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -115,8 +118,11 @@ fn pass_timing_is_off_by_default_and_never_alters_the_result() {
     let frame = FrameDesc {
         background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
+        canvas: None,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
+            data: alpha2_eval::SampleContext::NONE,
+            correction: None,
             clip_id: leak(ClipId::new("clip").expect("valid ID")),
             source_id: leak(source.clone()),
             track_id: leak(TrackId::new("track").expect("valid ID")),

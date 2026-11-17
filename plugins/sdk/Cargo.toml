@@ -1,0 +1,20 @@
+[package]
+name = "alpha2-plugin-sdk"
+description = "Builds an alpha2 extractor plugin as a wasm module and a C-ABI library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+alpha2-plugin-abi.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# An in-process host that drives a native plugin table, for plugin tests.
+testing = []

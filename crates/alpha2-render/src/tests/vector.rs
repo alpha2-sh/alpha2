@@ -208,7 +208,7 @@ fn a_shape_is_filled_and_stroked_on_its_outline_and_transparent_outside() {
 #[test]
 fn a_fill_over_the_canvas_paints_what_the_generator_paints() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(crate::generator_definition()))
         .expect("the generator compiles");
     let size = RenderSize::new(96, 48).expect("size");

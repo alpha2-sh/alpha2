@@ -353,3 +353,140 @@ fn antialiasing_preserves_patterned_transition_endpoints() {
         }
     }
 }
+
+/// Alternating opaque black and white columns, `width` x 8.
+fn columns(width: u32) -> Vec<u8> {
+    (0..8)
+        .flat_map(|_| (0..width).flat_map(|x| if x % 2 == 0 { [0, 0, 0, 255] } else { [255; 4] }))
+        .collect()
+}
+
+fn at_x(position_x: f32) -> LayerTransform {
+    LayerTransform {
+        position: [position_x, 0.5],
+        ..visual([1.0, 1.0], 1.0)
+    }
+}
+
+/// The first column with a channel more than `tolerance` off, if any.
+fn first_wrong_column(width: u32, drawn: &[u8], expected: &[u8], tolerance: u8) -> Option<u32> {
+    let row = (width * 4) as usize;
+    (0..8)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            let at = y * row + x as usize * 4;
+            (0..4).any(|channel| drawn[at + channel].abs_diff(expected[at + channel]) > tolerance)
+        })
+        .map(|(x, _)| x)
+}
+
+#[test]
+fn a_layer_drawn_one_to_one_keeps_every_column_at_any_width() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let largest = renderer.gpu.capabilities().max_texture_dimension_2d;
+    let composite = |source: RenderSize, canvas: RenderSize, bytes: &[u8], visual| {
+        let texture = rgba_image_texture(&renderer, source, bytes);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let output = renderer
+            .render_layers(
+                canvas,
+                &[CompositeLayer {
+                    texture: &view,
+                    visual,
+                    blend_mode: BlendMode::Normal,
+                }],
+            )
+            .expect("draws");
+        read_rgba8(&renderer, &output)
+    };
+    for width in [16_u32, 1280, 1920, 2560, 3840, 4096, 7680] {
+        if width > largest {
+            eprintln!("skipped: width {width} is past this adapter's {largest}-texel textures");
+            continue;
+        }
+        let size = RenderSize::new(width, 8).expect("size");
+        let bytes = columns(width);
+        let drawn = composite(size, size, &bytes, at_x(0.5));
+        // Past 4096 texels some GPUs' fixed-point bilinear weights miss a texel centre by a code.
+        let tolerance = u8::from(width > 4096);
+        assert_eq!(
+            first_wrong_column(width, &drawn, &bytes, tolerance),
+            None,
+            "{width} wide"
+        );
+    }
+    // At x 0.75 a layer moves a quarter of the canvas right, a whole number of pixels.
+    for width in [1920_u32, 3840] {
+        let size = RenderSize::new(width, 8).expect("size");
+        let shift = width / 4;
+        let expected: Vec<u8> = (0..8)
+            .flat_map(|_| {
+                (0..width).flat_map(move |x| match x {
+                    x if x < shift => [0; 4],
+                    x if (x - shift) % 2 == 0 => [0, 0, 0, 255],
+                    _ => [255; 4],
+                })
+            })
+            .collect();
+        let drawn = composite(size, size, &columns(width), at_x(0.75));
+        assert_eq!(
+            first_wrong_column(width, &drawn, &expected, 0),
+            None,
+            "{width} at x 0.75"
+        );
+    }
+    // Reduced 2:1, every pixel averages one black and one white column.
+    for (source_width, width) in [(1920_u32, 960_u32), (3840, 1920), (7680, 3840)] {
+        if source_width > largest {
+            eprintln!(
+                "skipped: width {source_width} is past this adapter's {largest}-texel textures"
+            );
+            continue;
+        }
+        let drawn = composite(
+            RenderSize::new(source_width, 8).expect("size"),
+            RenderSize::new(width, 8).expect("size"),
+            &columns(source_width),
+            at_x(0.5),
+        );
+        for (index, pixel) in drawn.as_chunks::<4>().0.iter().enumerate() {
+            assert!(
+                pixel[..3]
+                    .iter()
+                    .all(|channel| matches!(channel, 127 | 128))
+                    && pixel[3] == 255,
+                "{source_width} to {width}, pixel {index}: {pixel:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_cpu_renderer_draws_one_to_one_layers_exactly_at_any_width() {
+    use std::sync::Arc;
+    let cpu = crate::CpuRenderer::new(1);
+    for width in [16_u32, 1920, 3840, 4096, 7680] {
+        let size = RenderSize::new(width, 8).expect("size");
+        let bytes = columns(width);
+        let source = crate::CpuSource::image(Arc::new(
+            crate::CpuImage::from_premultiplied_rgba8(size, &bytes).expect("picture"),
+        ));
+        let mut graph = RenderGraph::new(size);
+        let node = graph.add_source(SourceView::cpu(&source));
+        let output = graph
+            .add_composite(vec![GraphLayer {
+                source: node,
+                visual: at_x(0.5),
+                blend_mode: BlendMode::Normal,
+            }])
+            .expect("composite");
+        graph.set_output(output).expect("output");
+        let drawn = cpu.execute_graph(&graph).expect("CPU draws").read_rgba8();
+        assert_eq!(
+            first_wrong_column(width, &drawn, &bytes, 0),
+            None,
+            "{width} wide"
+        );
+    }
+}

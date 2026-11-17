@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["text", "layout", "flexbox", "measure", "video"]
 categories = ["text-processing", "multimedia::video"]
-# Tests stay out of the published package.
 include = [
   "/src/**",
   "/README.md",
@@ -25,7 +24,6 @@ alpha2-media.workspace = true
 alpha2-model.workspace = true
 alpha2-text.workspace = true
 alpha2-time.workspace = true
-# The sRGB curve of animator colors goes through `libm`, as in `alpha2-text`, so wasm agrees.
 libm = "0.2.16"
 serde_json.workspace = true
 # Pinned exactly: minor versions break the API and a patch can move pixels.

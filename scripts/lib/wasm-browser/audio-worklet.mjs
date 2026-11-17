@@ -9,6 +9,7 @@ let skipped;
 for (const hint of [undefined, 256, 1024, 8192]) {
   const options = { numberOfChannels: 2, length: 24_000, sampleRate: 48_000 };
   if (hint !== undefined) options.renderSizeHint = hint;
+  /** @type {OfflineAudioContext & { renderQuantumSize?: number }} */
   const context = new OfflineAudioContext(options);
   if (hint !== undefined && context.renderQuantumSize !== hint) {
     skipped = "this browser does not render the quantum it is asked for (renderSizeHint " + hint + ", renderQuantumSize " + context.renderQuantumSize + ")";
@@ -96,8 +97,9 @@ report({ ok, results });
 `;
 }
 
-// The playback clock against getOutputTimestamp().contextTime: spread and drift within one frame
-// over `?seconds` (default 20).
+// The playback clock against getOutputTimestamp().contextTime: no underrun, and drift within one
+// frame over `?seconds` (default 20). The spread is reported only, since it follows how often the
+// output timestamp updates (`stampAgeMs`).
 //
 // Lip-sync offset is the clock minus (contextTime * contextRate - firstFrame) * rate / contextRate,
 // and must stay within base latency, one render quantum and 2 ms (capability
@@ -122,6 +124,7 @@ const node = await Alpha2AudioWorkletHost.create(context, await loadAlpha2AudioW
   numberOfInputs: 0, outputChannelCount: [2], projectSampleRate: rate, onDiagnostic: () => {},
 });
 node.connect(context.destination);
+/** @type {number | null} */
 let firstFrame = null;
 node.port.addEventListener("message", (event) => {
   if (event.data?.type === "alpha2-first-read") firstFrame = event.data.frame;
@@ -149,13 +152,19 @@ await configureEngineMixedAudio(node);
 const clock = new AudioPlaybackClock(pump, ring, context, { processing: Alpha2AudioWorkletHost.latency(node) });
 const timer = setInterval(() => void pump.fill(), 20);
 const errors = [];
+const errorTimes = [];
+const stampAges = [];
 const offsets = [];
 const started = performance.now();
 while (performance.now() - started < seconds * 1000) {
   await new Promise((resolve) => setTimeout(resolve, 250));
   const timestamp = context.getOutputTimestamp();
   const device = timestamp.contextTime * rate;
-  if (device > 0) errors.push(clock.sample - device);
+  if (device > 0) {
+    errors.push(clock.sample - device);
+    errorTimes.push(performance.now() / 1000);
+    stampAges.push(performance.now() - timestamp.performanceTime);
+  }
   if (device > 0 && firstFrame !== null) {
     const heard = ((timestamp.contextTime * context.sampleRate - firstFrame) * rate) / context.sampleRate;
     offsets.push(clock.sample - heard);
@@ -167,8 +176,14 @@ await context.close();
 if (errors.length < 8) throw new Error("the audio device did not advance");
 if (firstFrame === null) throw new Error("the worklet never reported its first ring read");
 const settled = errors.slice(4);
-const first = settled.slice(0, 4).reduce((a, b) => a + b) / 4;
-const last = settled.slice(-4).reduce((a, b) => a + b) / 4;
+const settledTimes = errorTimes.slice(4);
+const mean = (values) => values.reduce((a, b) => a + b) / values.length;
+const meanTime = mean(settledTimes);
+const meanError = mean(settled);
+const slope =
+  settled.reduce((sum, error, index) => sum + (settledTimes[index] - meanTime) * (error - meanError), 0) /
+  settledTimes.reduce((sum, time) => sum + (time - meanTime) ** 2, 0);
+const drift = slope * (settledTimes.at(-1) - settledTimes[0]);
 const frame = rate / 30;
 const spread = Math.max(...settled) - Math.min(...settled);
 const settledOffsets = offsets.slice(4);
@@ -182,16 +197,17 @@ const details = {
   underruns,
   underrunsAtMs,
   samples: settled.length,
-  meanErrorMs: +((settled.reduce((a, b) => a + b) / settled.length / rate) * 1000).toFixed(2),
+  meanErrorMs: +((meanError / rate) * 1000).toFixed(2),
   spreadMs: +((spread / rate) * 1000).toFixed(2),
-  driftMs: +(((last - first) / rate) * 1000).toFixed(2),
+  driftMs: +((drift / rate) * 1000).toFixed(2),
+  stampAgeMs: { min: +Math.min(...stampAges).toFixed(2), max: +Math.max(...stampAges).toFixed(2) },
   firstFrame,
   meanOffsetMs: meanOffsetMs === null ? null : +meanOffsetMs.toFixed(2),
   offsetBoundMs: +offsetBoundMs.toFixed(2),
   latencySource: clock.latencySource,
   latencyMs: +(clock.latencySeconds * 1000).toFixed(2),
 };
-const tracked = underruns === 0 && spread <= frame && Math.abs(last - first) <= frame;
+const tracked = underruns === 0 && Math.abs(drift) <= frame;
 if (tracked && (meanOffsetMs === null || Math.abs(meanOffsetMs) > offsetBoundMs))
   skip(
     "audio-output-timestamp",

@@ -6,10 +6,14 @@
 // uses of one source cannot seek each other. An `HTMLVideoElement` seek is the fallback for codecs
 // WebCodecs cannot open or frames that keep failing.
 
-import { activeTimeout } from "alpha2/active-clock";
 import { decoderCursorKey } from "alpha2/frame-supply";
 import { MediabunnyVideoDecoder } from "alpha2/mediabunny";
-import { containRect, seekVideoFrame } from "./preview-utils.js";
+import {
+  containRect,
+  loadedOrFailed,
+  seekVideoFrame,
+  unloadVideo,
+} from "./preview-utils.js";
 import { decodeStill, stillRaster } from "./still.js";
 
 const TICKS_PER_SECOND = 120_000;
@@ -788,7 +792,15 @@ export class SourcePixels {
       });
       fallback = { sourceId, asset, consumerId, video };
       this.#seekVideos.set(cursor, fallback);
-      await waitForLoad(video);
+      try {
+        await loadedOrFailed(video);
+      } catch (error) {
+        // A broken element would cost every later frame the seek timeout; the next one tries anew.
+        if (this.#seekVideos.get(cursor) === fallback)
+          this.#seekVideos.delete(cursor);
+        unloadVideo(video);
+        throw error;
+      }
     }
     const { video } = fallback;
     const duration = Number.isFinite(video.duration)
@@ -879,12 +891,6 @@ function closeOpened(decoder) {
   decoder.opening = null;
 }
 
-/** Releases a fallback seek element's media. */
-function unloadVideo(video) {
-  video.removeAttribute("src");
-  video.load();
-}
-
 function premultiplyInPlace(pixels) {
   for (let index = 0; index < pixels.length; index += 4) {
     const alpha = pixels[index + 3];
@@ -893,33 +899,6 @@ function premultiplyInPlace(pixels) {
     pixels[index + 1] = Math.round((pixels[index + 1] * alpha) / 255);
     pixels[index + 2] = Math.round((pixels[index + 2] * alpha) / 255);
   }
-}
-
-function waitForLoad(video) {
-  return new Promise((resolve, reject) => {
-    const timer = new AbortController();
-    const cleanup = () => {
-      timer.abort();
-      video.removeEventListener("loadeddata", ready);
-      video.removeEventListener("error", failed);
-    };
-    const ready = () => {
-      cleanup();
-      resolve();
-    };
-    const failed = () => {
-      cleanup();
-      reject(video.error ?? new Error("video load failed"));
-    };
-    // Active time, so a page frozen while the element loads does not time out.
-    void activeTimeout(10_000, timer.signal).then(() => {
-      cleanup();
-      reject(new Error("video load timed out"));
-    });
-    video.addEventListener("loadeddata", ready, { once: true });
-    video.addEventListener("error", failed, { once: true });
-    video.load();
-  });
 }
 
 /**

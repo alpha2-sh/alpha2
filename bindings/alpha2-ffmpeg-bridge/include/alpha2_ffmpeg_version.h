@@ -17,6 +17,11 @@
 #error "these libavutil headers are not the major version alpha2's FFmpeg shims are written for; build against the pinned SDK (scripts/fetch-ffmpeg-sdk.sh)"
 #endif
 
+/* The D3D12VA frame layouts the shims read first appear in libavutil 60.13.100. */
+#if LIBAVUTIL_VERSION_INT < AV_VERSION_INT(60, 13, 100)
+#error "these libavutil headers are older than 60.13.100, the first with the layouts alpha2's FFmpeg shims read; build against the pinned SDK (scripts/fetch-ffmpeg-sdk.sh)"
+#endif
+
 #if LIBAVCODEC_VERSION_MAJOR != ALPHA2_FFMPEG_AVCODEC_MAJOR
 #error "these libavcodec headers are not the major version alpha2's FFmpeg shims are written for; build against the pinned SDK (scripts/fetch-ffmpeg-sdk.sh)"
 #endif

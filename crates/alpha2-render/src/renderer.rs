@@ -11,8 +11,8 @@ use std::time::Duration;
 pub struct Renderer {
     pub(crate) gpu: GpuContext,
     pub(crate) blend_space: BlendSpace,
-    pub(crate) effects: crate::registry::EffectRegistry,
-    pub(crate) effect_resources: crate::effect_resource::EffectResourceRegistry,
+    pub(crate) effects: std::sync::RwLock<crate::registry::EffectRegistry>,
+    pub(crate) effect_resources: std::sync::RwLock<crate::effect_resource::EffectResourceRegistry>,
     pub(crate) textures: crate::Shared<crate::pool::TexturePool>,
     pub(crate) upload_textures: crate::Shared<crate::pool::UploadTexturePool>,
     /// Device memory budget in bytes, 0 when unknown.
@@ -41,6 +41,9 @@ pub struct Renderer {
     /// Test-only: composite pipeline log.
     #[cfg(test)]
     pub(crate) composite_pipelines: Mutex<crate::composite::CompositePipelineLog>,
+    /// Test-only: the next lazily created composite or effect pipeline fails to create.
+    #[cfg(test)]
+    pub(crate) fail_next_pipeline: std::sync::atomic::AtomicBool,
     pub(crate) retired_leases: Arc<crate::yuv::RetiredLeases>,
     pub(crate) gpu_wait_timeout: Duration,
     /// Read once because every field read crosses into JavaScript on the browser backend.
@@ -343,8 +346,8 @@ impl Renderer {
         Self {
             gpu,
             blend_space: BlendSpace::default(),
-            effects: crate::registry::EffectRegistry::default(),
-            effect_resources: crate::effect_resource::EffectResourceRegistry::default(),
+            effects: std::sync::RwLock::default(),
+            effect_resources: std::sync::RwLock::default(),
             textures: crate::Shared::new(crate::pool::TexturePool::new(crate::Shared::clone(
                 &retirement,
             ))),
@@ -376,6 +379,8 @@ impl Renderer {
             vector_page_rows: std::sync::atomic::AtomicU32::new(0),
             #[cfg(test)]
             composite_pipelines: Mutex::new(crate::composite::CompositePipelineLog::default()),
+            #[cfg(test)]
+            fail_next_pipeline: std::sync::atomic::AtomicBool::new(false),
             retired_leases: Arc::new(crate::yuv::RetiredLeases::default()),
             gpu_wait_timeout: crate::error::DEFAULT_GPU_WAIT_TIMEOUT,
             limits,
@@ -1078,7 +1083,7 @@ impl Renderer {
     #[must_use]
     pub fn pipeline_cache_stats(&self) -> crate::PipelineCacheStats {
         crate::PipelineCacheStats {
-            runtime_effects: self.effects.len(),
+            runtime_effects: self.effects().len(),
             builtins: self.pipelines.builtin_count(),
         }
     }

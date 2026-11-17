@@ -2,41 +2,47 @@
 // A protocol-only host for the GPU export harness's tests; GPU_EXPORT_FIXTURE picks the scenario.
 import { readFileSync, writeFileSync } from "node:fs";
 
+import { encodeFrame, HOST_MAGIC, readFrames } from "../lib/host-frames.mjs";
+
 const scenario = process.env.GPU_EXPORT_FIXTURE ?? "clean";
 const hang = () => setInterval(() => {}, 1 << 30);
 const reason = "Fixture Adapter reports no D3D12 video encoder for h264";
+let magicWritten = false;
+const answer = (message) => {
+  const frame = encodeFrame(message);
+  process.stdout.write(
+    magicWritten ? frame : Buffer.concat([HOST_MAGIC, frame]),
+  );
+  magicWritten = true;
+};
 
 if (process.argv[2] === "serve" && scenario.startsWith("unavailable")) {
-  for (const line of readFileSync(0, "utf8").split("\n").filter(Boolean)) {
-    const request = JSON.parse(line);
+  const { messages } = readFrames(readFileSync(0), { magic: false });
+  for (const { header: request } of messages) {
     if (request.operation === "capabilities") {
-      console.log(
-        JSON.stringify({
-          requestId: request.requestId,
-          ok: true,
-          result: {
-            capabilities: {
-              encode: {
-                gpuOutputPath: { available: false, reason },
-                video: [{ id: "h264" }],
-              },
+      answer({
+        requestId: request.requestId,
+        ok: true,
+        result: {
+          capabilities: {
+            encode: {
+              gpuOutputPath: { available: false, reason },
+              video: [{ id: "h264" }],
             },
           },
-        }),
-      );
+        },
+      });
     } else {
       if (scenario === "unavailable-broken")
         writeFileSync(request.output, "fixture");
-      console.log(
-        JSON.stringify({
-          requestId: request.requestId,
-          ok: false,
-          error: {
-            code: "GPU_OUTPUT_UNAVAILABLE",
-            message: `GPU-resident output is required but unavailable: ${reason}`,
-          },
-        }),
-      );
+      answer({
+        requestId: request.requestId,
+        ok: false,
+        error: {
+          code: "GPU_OUTPUT_UNAVAILABLE",
+          message: `GPU-resident output is required but unavailable: ${reason}`,
+        },
+      });
     }
   }
 } else if (scenario.startsWith("unavailable")) {
@@ -56,24 +62,22 @@ if (process.argv[2] === "serve" && scenario.startsWith("unavailable")) {
 } else if (process.argv[2] === "serve") {
   if (scenario === "hang-capabilities") hang();
   else
-    console.log(
-      JSON.stringify({
-        requestId: "gpu-export-capabilities",
-        ok: true,
-        result: {
-          capabilities: {
-            encode: {
-              gpuOutputPath: {
-                available: true,
-                encoder: "h264_fixture",
-                videoCodec: "h264",
-              },
-              video: [{ id: "h264" }],
+    answer({
+      requestId: "gpu-export-capabilities",
+      ok: true,
+      result: {
+        capabilities: {
+          encode: {
+            gpuOutputPath: {
+              available: true,
+              encoder: "h264_fixture",
+              videoCodec: "h264",
             },
+            video: [{ id: "h264" }],
           },
         },
-      }),
-    );
+      },
+    });
 } else {
   const args = process.argv.slice(2);
   const output = args[args.indexOf("--out") + 1];

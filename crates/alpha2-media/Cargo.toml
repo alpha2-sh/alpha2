@@ -8,7 +8,6 @@ license.workspace = true
 repository.workspace = true
 keywords = ["video", "audio", "media", "codec"]
 categories = ["multimedia"]
-# Tests, benches and fixtures stay out of the published crate.
 include = [
   "/src/**",
   "/README.md",

@@ -27,7 +27,7 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
         left[i] = AMPLITUDE * Math.sin((2 * Math.PI * 997 * (Number(start) + i)) / projectRate);
       return { sourceId: "mix", startSample: start, generation: 0, sampleRate: projectRate, channels: [left, left.slice()] };
     }, sink);
-    const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+    const input = new mb.Input({ source: new mb.BufferSource(/** @type {{ readonly buffer: ArrayBuffer }} */ (sink.output).buffer), formats: mb.ALL_FORMATS });
     const track = await input.getPrimaryAudioTrack();
     const duration = await track.computeDuration();
     let sum = 0;
@@ -51,7 +51,7 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
   const results = {};
   const exported = new Set();
   for (const projectRate of [8000, 22050, 44100, 50000, 96000]) {
-    for (const codec of ["aac", "opus"]) {
+    for (const codec of /** @type {const} */ (["aac", "opus"])) {
       const encoderRate = await audioEncoderSampleRate(codec, { sampleRate: projectRate, numberOfChannels: 2, bitrate: 128000 });
       const key = codec + "@" + projectRate;
       if (encoderRate === null) { results[key] = "no encoder"; continue; }
@@ -90,10 +90,12 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
   const WIDTH = 320;
   const HEIGHT = 240;
   const FRAMES = 30;
+  const FRAME_RATE = { num: 30, den: 1 };
+  /** @type {import("/packages/alpha2/dist/rate-control.js").VideoRateControl} */
   const videoRateControl = { bitrate: 1000000, bitrateMode: "variable" };
   const formats = { mp4: "MP4", mov: "QuickTime File Format", mkv: "Matroska", webm: "WebM" };
   const exportOne = async (container, videoCodec, audioCodecs) => {
-    const videoEncoding = await canEncodeVideoTrack(videoCodec, { width: WIDTH, height: HEIGHT, rate: videoRateControl });
+    const videoEncoding = await canEncodeVideoTrack(videoCodec, { width: WIDTH, height: HEIGHT, frameRate: FRAME_RATE, rate: videoRateControl });
     if (videoEncoding === null) return "no " + videoCodec + " encoder";
     let audioCodec;
     for (const codec of audioCodecs) {
@@ -107,7 +109,7 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
       videoCodec,
       videoRateControl,
       ...(videoEncoding.codecString === undefined ? {} : { videoCodecString: videoEncoding.codecString }),
-      frameRate: { num: 30, den: 1 },
+      frameRate: FRAME_RATE,
       ...(audioCodec === undefined ? {} : { audioCodec, audioBitrate: 128000 }),
       destination: { kind: "memory", maxBytes: 1 << 24 },
     });
@@ -128,7 +130,7 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
       return { sourceId: "mix", startSample: start, generation: 0, sampleRate: 48000, channels: [left, left.slice()] };
     }, track);
     await Promise.all([writeVideo(sink.videoTrack), ...(audioCodec === undefined ? [] : [writeAudio(sink.audioTrack)])]);
-    const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+    const input = new mb.Input({ source: new mb.BufferSource(/** @type {{ readonly buffer: ArrayBuffer }} */ (sink.output).buffer), formats: mb.ALL_FORMATS });
     try {
       const format = (await input.getFormat()).name;
       const video = await input.getPrimaryVideoTrack();
@@ -180,7 +182,7 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
     refused = error instanceof RangeError ? error.message : String(error);
   }
   const ran = Object.values(results).filter((value) => typeof value !== "string");
-  const ok = results.webm.ok === true && ran.every((value) => value.ok) && refused !== null;
+  const ok = /** @type {{ ok?: boolean }} */ (results.webm).ok === true && ran.every((value) => value.ok) && refused !== null;
   report({ ok, results, refused });
 }
 `;
@@ -201,7 +203,7 @@ if (rate === null) {
   const probe = await aacEncoderPrimingProbe({ ...config, sampleRate: rate });
   const delay = probe.delay;
   const results = {};
-  for (const container of ["mp4", "mov", "mkv"]) {
+  for (const container of /** @type {const} */ (["mp4", "mov", "mkv"])) {
     const sink = new MediabunnySink({
       container, audioCodec: "aac", audioBitrate: 128000,
       destination: { kind: "memory", maxBytes: 1 << 24 },
@@ -211,7 +213,7 @@ if (rate === null) {
       for (let i = 0; i < frames; i += 1) left[i] = 0.25 * Math.sin((2 * Math.PI * 997 * (Number(start) + i)) / rate);
       return { sourceId: "mix", startSample: start, generation: 0, sampleRate: rate, channels: [left, left.slice()] };
     }, sink);
-    const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+    const input = new mb.Input({ source: new mb.BufferSource(/** @type {{ readonly buffer: ArrayBuffer }} */ (sink.output).buffer), formats: mb.ALL_FORMATS });
     try {
       const track = await input.getPrimaryAudioTrack();
       let onset = null;
@@ -414,7 +416,7 @@ if (probes.vp9Ten) {
     await sink.videoTrack.writeVideo({ index: BigInt(index), timeTicks: BigInt(index * 4000), frame });
   }
   await sink.videoTrack.finish();
-  const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+  const input = new mb.Input({ source: new mb.BufferSource(/** @type {{ readonly buffer: ArrayBuffer }} */ (sink.output).buffer), formats: mb.ALL_FORMATS });
   try {
     const video = await input.getPrimaryVideoTrack();
     encoded = { codec: video.codec, codecString: await video.getCodecParameterString() };
@@ -468,8 +470,9 @@ const { Alpha2Exporter, exportToSink } = await import("/packages/alpha2/dist/exp
 const { classifyBrowserFailure } = await import("/packages/alpha2/dist/export-failure.js");
 const { canEncodeVideoTrack, MediabunnySink, MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
 const { decoderConsumerId } = await import("/packages/alpha2/dist/media.js");
+/** @type {import("/packages/alpha2/dist/rate-control.js").VideoRateControl} */
 const rateControl = { bitrate: 1_000_000, bitrateMode: "variable" };
-const encoding = await canEncodeVideoTrack("avc", { width: 128, height: 96, rate: rateControl });
+const encoding = await canEncodeVideoTrack("avc", { width: 128, height: 96, frameRate: project.settings.frame_rate, rate: rateControl });
 if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder");
 const origin = location.origin;
 const worker = new Worker(URL.createObjectURL(new Blob([\`
@@ -537,6 +540,79 @@ report({
   softwareFallback,
   wallMs: Math.round(performance.now() - started),
   failure: failure && { code: failure.code, stage: failure.stage ?? null, message: failure.message.slice(0, 300) },
+});
+`;
+}
+
+// A cancel that lands while `finish` is pending commits nothing to the OPFS file.
+export function exportCancelDuringFinish() {
+  return `
+const { Alpha2Exporter, exportToSink } = await import("/packages/alpha2/dist/exporter.js");
+const { WritableFileDestination } = await import("/packages/alpha2/dist/export-destination.js");
+const { canEncodeVideoTrack, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
+/** @type {import("/packages/alpha2/dist/rate-control.js").VideoRateControl} */
+const rate = { bitrate: 1_000_000, bitrateMode: "variable" };
+const frameRate = { num: 30, den: 1 };
+const encoding = await canEncodeVideoTrack("avc", { width: 128, height: 96, frameRate, rate });
+if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder");
+const root = await navigator.storage.getDirectory();
+if (typeof FileSystemFileHandle.prototype.createWritable !== "function")
+  skip("opfs-writable", "this browser has no writable OPFS file stream on the page");
+const exportOnce = async (name, cancel) => {
+  await root.removeEntry(name).catch(() => {});
+  const handle = await root.getFileHandle(name, { create: true });
+  const sink = new MediabunnySink({
+    container: "mp4",
+    videoCodec: "avc",
+    videoRateControl: rate,
+    ...(encoding.codecString === undefined ? {} : { videoCodecString: encoding.codecString }),
+    frameRate,
+    destination: { kind: "stream", writable: new WritableFileDestination(
+      /** @type {import("/packages/alpha2/dist/export-destination.js").PositionalFile} */ (await handle.createWritable()),
+    ).writable },
+  });
+  let index = 0;
+  /** @type {import("/packages/alpha2/dist/exporter.js").ExportBackend} */
+  const backend = {
+    begin: async () => {
+      // Memory-backed frames: some GPU processes restart while encoding canvas-backed ones.
+      const pixels = new Uint8Array(128 * 96 * 4).fill((index * 20) & 255);
+      const frame = new VideoFrame(pixels, { format: "RGBA", codedWidth: 128, codedHeight: 96, timestamp: Math.round((index * 1e6) / 30) });
+      index += 1;
+      return { kind: "rendered", retainedBytes: 128 * 96 * 4, readback: Promise.resolve(frame) };
+    },
+    isDeviceLost: () => false,
+    abort() {},
+  };
+  const controller = new AbortController();
+  const wrapped = {
+    writeVideo: (frame) => sink.writeVideo(frame),
+    finish: () => {
+      const finishing = sink.finish();
+      if (cancel) controller.abort();
+      return finishing;
+    },
+    abort: (reason) => sink.abort(reason),
+  };
+  let outcome;
+  try {
+    await exportToSink(new Alpha2Exporter(backend, { num: 30n, den: 1n }, 0n, 40_000n), wrapped, async () => {}, { signal: controller.signal });
+    outcome = "finished";
+  } catch (error) {
+    outcome = error?.name + ":" + (error?.code ?? "");
+  }
+  // A late finalize must not commit the file after the export rejected.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const size = (await (await root.getFileHandle(name)).getFile()).size;
+  await root.removeEntry(name).catch(() => {});
+  return { outcome, size, output: sink.output };
+};
+const cancelled = await exportOnce("alpha2-cancel-during-finish.mp4", true);
+const finished = await exportOnce("alpha2-finished.mp4", false);
+report({
+  ok: cancelled.outcome === "ExportAbortedError:cancelled" && cancelled.size === 0 && cancelled.output === null
+    && finished.outcome === "finished" && finished.size > 0,
+  cancelled, finished,
 });
 `;
 }

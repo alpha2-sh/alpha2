@@ -1,36 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createEditor } from "../dist/index.js";
-import {
-  createBrowserBridge,
-  createMediaAdapter,
-} from "../dist/browser/index.js";
 import {
   MAX_LOTTIE_DOCUMENT_BYTES,
   MAX_PROVIDER_DOCUMENT_BYTES,
   MAX_SVG_DOCUMENT_BYTES,
 } from "alpha2/project";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
-const wasmDirectory = join(
-  resolve(import.meta.dirname, "..", ".."),
-  "alpha2",
-  "wasm",
-);
-const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-const skip =
-  !packaged &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const skip = wasmSkip(import.meta.url);
+const { createBrowserBridge, createMediaAdapter } = skip
+  ? {}
+  : await import("../dist/browser/index.js");
 
 let wasm = null;
 async function engineWasm() {
@@ -158,57 +142,65 @@ function hugeFile(name, head, size) {
   return file;
 }
 
-test("a ZIP, JSON or SVG file past what the engine parses is refused before it is read", async () => {
-  const adapter = createMediaAdapter();
-  for (const [name, head, limit] of [
-    ["footage.zip", "PK\u0003\u0004", MAX_PROVIDER_DOCUMENT_BYTES],
-    ["export.json", '{"items": []}', MAX_LOTTIE_DOCUMENT_BYTES],
-    [
-      "drawing.svg",
-      '<svg xmlns="http://www.w3.org/2000/svg">',
-      MAX_SVG_DOCUMENT_BYTES,
-    ],
-  ]) {
-    const file = hugeFile(name, head, limit + 1);
-    await assert.rejects(
-      adapter.stage(file, new AbortController().signal),
-      (error) =>
-        error.code === "too_large" &&
-        error.message.includes(name) &&
-        error.message.includes(String(limit)),
-      name,
-    );
-    assert.equal(file.wholeReads, 0, name);
-  }
-});
+test(
+  "a ZIP, JSON or SVG file past what the engine parses is refused before it is read",
+  { skip },
+  async () => {
+    const adapter = createMediaAdapter();
+    for (const [name, head, limit] of [
+      ["footage.zip", "PK\u0003\u0004", MAX_PROVIDER_DOCUMENT_BYTES],
+      ["export.json", '{"items": []}', MAX_LOTTIE_DOCUMENT_BYTES],
+      [
+        "drawing.svg",
+        '<svg xmlns="http://www.w3.org/2000/svg">',
+        MAX_SVG_DOCUMENT_BYTES,
+      ],
+    ]) {
+      const file = hugeFile(name, head, limit + 1);
+      await assert.rejects(
+        adapter.stage(file, new AbortController().signal),
+        (error) =>
+          error.code === "too_large" &&
+          error.message.includes(name) &&
+          error.message.includes(String(limit)),
+        name,
+      );
+      assert.equal(file.wholeReads, 0, name);
+    }
+  },
+);
 
-test("a file that does not import says why: not media, or what its decoder found", async () => {
-  const adapter = createMediaAdapter();
-  const signal = new AbortController().signal;
-  await assert.rejects(
-    adapter.stage(new File(["notes"], "notes.txt"), signal),
-    {
-      code: "unsupported_media",
-      message: "Cannot import notes.txt: not an image, video or audio file",
-    },
-  );
-  const damaged = new File([new Uint8Array(4096).fill(7)], "voice.wav", {
-    type: "audio/wav",
-  });
-  await assert.rejects(adapter.stage(damaged, signal), (error) => {
-    assert.equal(error.code, "unreadable_media");
-    assert.ok(error.cause, "the decoder's error is the cause");
-    assert.ok(
-      error.message.startsWith("Cannot read voice.wav as audio: ") &&
-        error.message.includes(String(error.cause.message)),
-      error.message,
+test(
+  "a file that does not import says why: not media, or what its decoder found",
+  { skip },
+  async () => {
+    const adapter = createMediaAdapter();
+    const signal = new AbortController().signal;
+    await assert.rejects(
+      adapter.stage(new File(["notes"], "notes.txt"), signal),
+      {
+        code: "unsupported_media",
+        message: "Cannot import notes.txt: not an image, video or audio file",
+      },
     );
-    return true;
-  });
-  const staged = await adapter.stage(toneWav(0.5), signal);
-  assert.equal(staged.runtime.kind, "audio");
-  staged.dispose();
-});
+    const damaged = new File([new Uint8Array(4096).fill(7)], "voice.wav", {
+      type: "audio/wav",
+    });
+    await assert.rejects(adapter.stage(damaged, signal), (error) => {
+      assert.equal(error.code, "unreadable_media");
+      assert.ok(error.cause, "the decoder's error is the cause");
+      assert.ok(
+        error.message.startsWith("Cannot read voice.wav as audio: ") &&
+          error.message.includes(String(error.cause.message)),
+        error.message,
+      );
+      return true;
+    });
+    const staged = await adapter.stage(toneWav(0.5), signal);
+    assert.equal(staged.runtime.kind, "audio");
+    staged.dispose();
+  },
+);
 
 const hash = (digit) => digit.repeat(64);
 
@@ -278,21 +270,25 @@ test(
   },
 );
 
-test("the default adapter computes no fingerprint when none is wanted", async () => {
-  const workers = countedHashWorkers();
-  const adapter = createMediaAdapter({ hashWorkerFactory: workers.factory });
-  const signal = new AbortController().signal;
-  const plain = await adapter.stage(toneWav(0.5), signal);
-  assert.match(plain.fingerprint?.content_sha256 ?? "", /^[0-9a-f]{64}$/);
-  plain.dispose();
-  const bare = await adapter.stage(toneWav(0.5), signal, {
-    fingerprint: false,
-  });
-  assert.equal(bare.fingerprint, undefined);
-  assert.equal(bare.runtime.kind, "audio");
-  bare.dispose();
-  assert.equal(workers.posts, 1);
-});
+test(
+  "the default adapter computes no fingerprint when none is wanted",
+  { skip },
+  async () => {
+    const workers = countedHashWorkers();
+    const adapter = createMediaAdapter({ hashWorkerFactory: workers.factory });
+    const signal = new AbortController().signal;
+    const plain = await adapter.stage(toneWav(0.5), signal);
+    assert.match(plain.fingerprint?.content_sha256 ?? "", /^[0-9a-f]{64}$/);
+    plain.dispose();
+    const bare = await adapter.stage(toneWav(0.5), signal, {
+      fingerprint: false,
+    });
+    assert.equal(bare.fingerprint, undefined);
+    assert.equal(bare.runtime.kind, "audio");
+    bare.dispose();
+    assert.equal(workers.posts, 1);
+  },
+);
 
 function countedHashWorkers() {
   const workers = { posts: 0, terminated: 0 };
@@ -315,42 +311,50 @@ function countedHashWorkers() {
   return workers;
 }
 
-test("the default adapter hashes each file once, from the start of its import", async () => {
-  const workers = countedHashWorkers();
-  const adapter = createMediaAdapter({ hashWorkerFactory: workers.factory });
-  const staging = adapter.stage(toneWav(0.5), new AbortController().signal);
-  assert.equal(workers.posts, 1);
-  const staged = await staging;
-  assert.equal(staged.fingerprint?.content_sha256, hash("c"));
-  assert.equal(workers.posts, 1);
-  assert.equal(workers.terminated, 1);
-  staged.dispose();
-});
+test(
+  "the default adapter hashes each file once, from the start of its import",
+  { skip },
+  async () => {
+    const workers = countedHashWorkers();
+    const adapter = createMediaAdapter({ hashWorkerFactory: workers.factory });
+    const staging = adapter.stage(toneWav(0.5), new AbortController().signal);
+    assert.equal(workers.posts, 1);
+    const staged = await staging;
+    assert.equal(staged.fingerprint?.content_sha256, hash("c"));
+    assert.equal(workers.posts, 1);
+    assert.equal(workers.terminated, 1);
+    staged.dispose();
+  },
+);
 
-test("a file the default adapter refuses stops its hash", async () => {
-  const workers = { posts: 0, terminated: 0 };
-  const adapter = createMediaAdapter({
-    hashWorkerFactory: () => ({
-      onmessage: null,
-      onerror: null,
-      postMessage() {
-        workers.posts++;
-      },
-      terminate() {
-        workers.terminated++;
-      },
-    }),
-  });
-  await assert.rejects(
-    adapter.stage(
-      new File(["notes"], "notes.txt"),
-      new AbortController().signal,
-    ),
-    { code: "unsupported_media" },
-  );
-  assert.equal(workers.posts, 1);
-  assert.equal(workers.terminated, 1);
-});
+test(
+  "a file the default adapter refuses stops its hash",
+  { skip },
+  async () => {
+    const workers = { posts: 0, terminated: 0 };
+    const adapter = createMediaAdapter({
+      hashWorkerFactory: () => ({
+        onmessage: null,
+        onerror: null,
+        postMessage() {
+          workers.posts++;
+        },
+        terminate() {
+          workers.terminated++;
+        },
+      }),
+    });
+    await assert.rejects(
+      adapter.stage(
+        new File(["notes"], "notes.txt"),
+        new AbortController().signal,
+      ),
+      { code: "unsupported_media" },
+    );
+    assert.equal(workers.posts, 1);
+    assert.equal(workers.terminated, 1);
+  },
+);
 
 test(
   "making a proxy notifies asset listeners once per whole percent, not per frame",

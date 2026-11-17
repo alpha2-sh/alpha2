@@ -248,7 +248,16 @@ fn ten_bit_outputs_keep_more_luma_codes_than_eight_bits_have() {
         (NativeVideoCodec::Hevc, Container::Mp4, "hevc-ten"),
     ] {
         if !crate::encodes_pixels(&capabilities, codec, pixels) {
-            eprintln!("skipped {label}: this runtime lists no encoder of 10-bit pictures");
+            // Only NVENC encodes 10-bit HEVC here; VP9 and AV1 have software encoders.
+            let capability = if codec == NativeVideoCodec::Hevc {
+                alpha2_test_support::Capability::Nvenc
+            } else {
+                alpha2_test_support::Capability::WebmEncode
+            };
+            alpha2_test_support::skip!(
+                capability,
+                "{label}: this runtime lists no encoder of 10-bit pictures"
+            );
             continue;
         }
         let path = output_path(label).with_extension(container.extensions()[0]);
@@ -309,4 +318,161 @@ fn an_encoder_without_the_pixel_format_is_passed_over() {
     .err()
     .expect("refused");
     assert!(error.to_string().contains("pixel-format"), "{error}");
+}
+
+#[test]
+fn vp9_alpha_off_the_16_pixel_grid_decodes_every_column_opaque() {
+    for (width, height) in [(64, 32), (38, 16), (250, 100), (854, 32), (1080, 64)] {
+        let pixels = layout(Chroma::Yuv420, BitDepth::Eight, true);
+        let path = output_path(&format!("vp9-alpha-{width}x{height}")).with_extension("webm");
+        let selection = encode(
+            &path,
+            config(
+                NativeVideoCodec::Vp9,
+                Container::Webm,
+                pixels,
+                width,
+                height,
+            ),
+            1,
+            |plane, _, _| match plane {
+                0 => 126,
+                1 | 2 => 128,
+                _ => 255,
+            },
+        );
+        assert_eq!(selection.encoder_name, "libvpx-vp9");
+        let mut decoder = NativeExportDecoder::open_with_threads(&path, 1).expect("decoder");
+        let frame = decoder
+            .decode_video_next(&CancelToken::default())
+            .expect("decodes")
+            .expect("a frame");
+        let frame = frame.as_cpu().expect("a software frame").clone();
+        drop(decoder);
+        fs::remove_file(&path).expect("remove");
+        assert_eq!(frame.pixel_format, PixelFormat::Rgba8);
+        let plane = &frame.planes[0];
+        let (w, h) = (width as usize, height as usize);
+        assert_eq!(plane.stride as usize, 4 * w);
+        assert_eq!(plane.bytes.len(), 4 * w * h);
+        for y in 0..h {
+            let row = &plane.bytes[y * 4 * w..(y + 1) * 4 * w];
+            for x in 0..w {
+                assert!(row[4 * x + 3] >= 250, "{width}x{height} at ({x}, {y})");
+            }
+            for channel in 0..3 {
+                let (first, last) = (row[channel], row[4 * (w - 1) + channel]);
+                assert!(
+                    first.abs_diff(last) <= 3,
+                    "{width}x{height} row {y}: {first} and {last}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn tiny_rgba_frames_encode_through_the_event_path() {
+    for (width, height) in [(4, 4), (6, 4)] {
+        let path = output_path(&format!("tiny-{width}x{height}")).with_extension("mp4");
+        let _ = fs::remove_file(&path);
+        let mut sink = NativeVideoEncodeSink::create(
+            &path,
+            config(
+                NativeVideoCodec::Mpeg4Part2,
+                Container::Mp4,
+                alpha2_media::PixelLayout::YUV420P,
+                width,
+                height,
+            ),
+        )
+        .expect("sink");
+        let cancel = CancelToken::default();
+        sink.write(
+            EncodeEvent::Video(rgba_frame_sized(
+                MediaTime::ZERO,
+                [200, 20, 20, 255],
+                width,
+                height,
+            )),
+            &cancel,
+        )
+        .expect("frame");
+        sink.finish(&cancel).expect("finish");
+        let probed = probe(&path).expect("probe");
+        let stream = probed.selected_video_stream().expect("video");
+        assert_eq!(stream.dimensions, Some((width, height)));
+        fs::remove_file(&path).expect("remove");
+    }
+}
+
+#[test]
+fn a_prepared_frame_of_another_pixel_format_is_refused_by_both_sinks() {
+    crate::require_pinned_ffmpeg_for_tests();
+    let (width, height) = (64, 64);
+    let opened = layout(Chroma::Yuv422, BitDepth::Ten, false);
+    let video = config(
+        NativeVideoCodec::ProRes,
+        Container::Mov,
+        opened,
+        width,
+        height,
+    );
+    let refusal = "encoder input pixel format does not match its configuration";
+
+    let path = output_path("prepared-format-video").with_extension("mov");
+    let _ = fs::remove_file(&path);
+    let mut sink = NativeVideoEncodeSink::create_with_encoder_threads(&path, video, None, &|_| 1)
+        .expect("a sink");
+    assert_eq!(sink.selection().pixels, opened);
+    let mut frame = crate::packed_frame(width, height, PixelLayout::YUV420P).expect("frame");
+    let error = sink
+        .write_prepared_video(&mut frame, MediaTime::ZERO)
+        .expect_err("a 4:2:0 8-bit frame for a 4:2:2 10-bit encoder");
+    assert!(error.to_string().contains(refusal), "{error}");
+    let mut frame = crate::packed_frame(width, height, opened).expect("frame");
+    sink.write_prepared_video(&mut frame, MediaTime::ZERO)
+        .expect("the configured format");
+    sink.finish(&CancelToken::default()).expect("trailer");
+    let _ = fs::remove_file(&path);
+
+    let path = output_path("prepared-format-av").with_extension("mov");
+    let _ = fs::remove_file(&path);
+    let mut config = super::av_config(48_000);
+    config.video = video;
+    let mut sink = NativeAvEncodeSink::create(&path, config).expect("a sink");
+    let mut frame = crate::packed_frame(width, height, PixelLayout::YUV420P).expect("frame");
+    let error = sink
+        .write_prepared_video(&mut frame, MediaTime::ZERO)
+        .expect_err("a 4:2:0 8-bit frame for a 4:2:2 10-bit encoder");
+    assert!(error.to_string().contains(refusal), "{error}");
+    drop(sink);
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn a_pixel_layout_name_without_an_ffmpeg_format_is_an_error() {
+    assert!(crate::convert::pixel_format_named("yuv420p12le").is_err());
+    for name in [
+        "yuv420p",
+        "yuva420p",
+        "yuv420p10le",
+        "yuva420p10le",
+        "yuv422p",
+        "yuva422p",
+        "yuv422p10le",
+        "yuva422p10le",
+        "yuv444p",
+        "yuva444p",
+        "yuv444p10le",
+        "yuva444p10le",
+        "p010le",
+    ] {
+        let layout = PixelLayout::from_ffmpeg_name(name).expect("a layout");
+        let format = crate::convert::pixel_format(layout).expect("a format");
+        assert_eq!(
+            alpha2_ffmpeg_bridge::pixel_format_name(format).as_deref(),
+            Some(name)
+        );
+    }
 }

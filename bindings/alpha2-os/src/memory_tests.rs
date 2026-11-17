@@ -21,7 +21,7 @@ fn memory_capacity_reports_physical_memory() {
         "{capacity:?}"
     );
     assert!(
-        ["cgroup-v2", "cgroup-v1", "job", "physical"].contains(&capacity.limit_source),
+        ["cgroup-v2", "cgroup-v1", "job", "app", "physical"].contains(&capacity.limit_source),
         "{capacity:?}"
     );
     let process = crate::process_memory();
@@ -122,4 +122,147 @@ fn a_missing_root_reports_nothing() {
     assert_eq!(capacity.physical_bytes, None);
     assert_eq!(capacity.limit_source, "physical");
     assert_eq!(capacity.effective_limit(), None);
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const PAGE_CACHE_STAT: &str =
+    "anon 761856\nfile 2146484224\nactive_file 8228864\ninactive_file 2138255360\n";
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn page_cache_under_a_cgroup_v2_limit_is_not_counted_as_used() {
+    let dir = root(
+        "v2-cache",
+        &[
+            ("proc/meminfo", MEMINFO),
+            ("proc/self/cgroup", "0::/app\n"),
+            ("sys/fs/cgroup/app/memory.max", "2147483648\n"),
+            ("sys/fs/cgroup/app/memory.current", "2147250176\n"),
+            ("sys/fs/cgroup/app/memory.stat", PAGE_CACHE_STAT),
+        ],
+    );
+    let working_set = 2_147_250_176 - 2_138_255_360 - 8_228_864;
+    let capacity = memory_capacity_at(&dir);
+    assert_eq!(capacity.charged_in_limit_bytes, Some(2_147_250_176));
+    assert_eq!(capacity.used_in_limit_bytes, Some(working_set));
+    assert_eq!(capacity.headroom(), Some((2 << 30) - working_set));
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn page_cache_under_a_cgroup_v1_limit_is_not_counted_as_used() {
+    let dir = root(
+        "v1-cache",
+        &[
+            ("proc/meminfo", MEMINFO),
+            ("proc/self/cgroup", "4:memory:/job\n"),
+            (
+                "sys/fs/cgroup/memory/job/memory.limit_in_bytes",
+                "2147483648\n",
+            ),
+            (
+                "sys/fs/cgroup/memory/job/memory.usage_in_bytes",
+                "2000000000\n",
+            ),
+            (
+                "sys/fs/cgroup/memory/job/memory.stat",
+                "cache 1900000000\ntotal_inactive_file 1500000000\ntotal_active_file 400000000\n",
+            ),
+        ],
+    );
+    let capacity = memory_capacity_at(&dir);
+    assert_eq!(capacity.used_in_limit_bytes, Some(100_000_000));
+    assert_eq!(capacity.charged_in_limit_bytes, Some(2_000_000_000));
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_limit_on_an_ancestor_gives_the_same_working_set_to_admission_and_the_watchdog() {
+    let dir = root(
+        "v2-ancestor",
+        &[
+            ("proc/meminfo", MEMINFO),
+            ("proc/self/cgroup", "0::/scope/leaf\n"),
+            ("sys/fs/cgroup/scope/leaf/memory.max", "max\n"),
+            ("sys/fs/cgroup/scope/leaf/memory.current", "5\n"),
+            ("sys/fs/cgroup/scope/memory.max", "2147483648\n"),
+            ("sys/fs/cgroup/scope/memory.current", "2147250176\n"),
+            ("sys/fs/cgroup/scope/memory.stat", PAGE_CACHE_STAT),
+        ],
+    );
+    let memory = cgroup_memory_at(&dir).expect("a limit");
+    assert_eq!(memory.limit_bytes, 2 << 30);
+    assert_eq!(memory.source, "cgroup-v2");
+    assert_eq!(
+        memory.working_set_bytes,
+        memory_capacity_at(&dir).used_in_limit_bytes
+    );
+    assert_eq!(
+        memory.working_set_bytes,
+        Some(2_147_250_176 - 2_138_255_360 - 8_228_864)
+    );
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn without_memory_stat_the_working_set_is_the_charge() {
+    let dir = root(
+        "v2-no-stat",
+        &[
+            ("proc/meminfo", MEMINFO),
+            ("proc/self/cgroup", "0::/app\n"),
+            ("sys/fs/cgroup/app/memory.max", "2147483648\n"),
+            ("sys/fs/cgroup/app/memory.current", "1073741824\n"),
+        ],
+    );
+    let capacity = memory_capacity_at(&dir);
+    assert_eq!(capacity.used_in_limit_bytes, Some(1 << 30));
+    assert_eq!(capacity.charged_in_limit_bytes, Some(1 << 30));
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn a_watch_reads_the_page_cache_only_near_the_limit_and_finds_its_level_again_after_an_error() {
+    let dir = root(
+        "v2-watch",
+        &[
+            ("proc/meminfo", MEMINFO),
+            ("proc/self/cgroup", "0::/scope/leaf\n"),
+            ("sys/fs/cgroup/scope/leaf/memory.max", "max\n"),
+            ("sys/fs/cgroup/scope/leaf/memory.current", "5\n"),
+            ("sys/fs/cgroup/scope/memory.max", "2147483648\n"),
+            ("sys/fs/cgroup/scope/memory.current", "1073741824\n"),
+            ("sys/fs/cgroup/scope/memory.stat", PAGE_CACHE_STAT),
+        ],
+    );
+    let scope = dir.join("sys/fs/cgroup/scope");
+    let mut watch = CgroupMemoryWatch::at(&dir);
+    let half = watch.read().expect("a limit");
+    assert_eq!(half.limit_bytes, 2 << 30);
+    assert_eq!(
+        half.working_set_bytes,
+        Some(1 << 30),
+        "the charge below 90 %"
+    );
+    std::fs::write(scope.join("memory.current"), "2147250176\n").expect("charge");
+    assert_eq!(
+        watch.read().expect("a limit").working_set_bytes,
+        cgroup_memory_at(&dir).expect("a limit").working_set_bytes,
+        "near the limit the page cache is left out, as admission does"
+    );
+    // The process moves under a limit of its own: the watch keeps its level until a read fails.
+    std::fs::write(
+        dir.join("sys/fs/cgroup/scope/leaf/memory.max"),
+        "1073741824\n",
+    )
+    .expect("leaf limit");
+    assert_eq!(watch.read().expect("a limit").limit_bytes, 2 << 30);
+    std::fs::remove_file(scope.join("memory.current")).expect("remove");
+    assert_eq!(watch.read(), None);
+    assert_eq!(watch.read().expect("found again").limit_bytes, 1 << 30);
+    std::fs::remove_dir_all(dir).expect("cleanup");
 }

@@ -33,6 +33,9 @@ pub struct CompositionPlan {
     pub steps: Vec<Step>,
     /// The step whose image is the composition's picture.
     pub output: usize,
+    /// Every `media` node of the compositions the steps come from, drawn or not, by inlined path,
+    /// with its start: what a value bound to data reads through.
+    pub media: Vec<(String, MediaTime)>,
 }
 
 impl CompositionPlan {
@@ -41,6 +44,17 @@ impl CompositionPlan {
         self.steps.iter().filter_map(|step| match &step.op {
             StepOp::Effect { effect, .. } | StepOp::Transition { effect, .. } => Some(effect),
             _ => None,
+        })
+    }
+
+    /// The start of the `media` node `via` beside step `step`, found as the step of that id in the
+    /// same inlined composition.
+    #[must_use]
+    pub fn media_start(&self, step: usize, via: &alpha2_model::NodeId) -> Option<MediaTime> {
+        let path = self.steps.get(step)?.node.as_str();
+        let prefix = path.rfind('/').map_or("", |slash| &path[..=slash]);
+        self.media.iter().find_map(|(node, start)| {
+            (node.strip_prefix(prefix) == Some(via.as_str())).then_some(*start)
         })
     }
 
@@ -309,6 +323,7 @@ fn plan<'a>(
     let mut planner = Planner {
         lookup,
         steps: Vec::new(),
+        media: Vec::new(),
         budget,
     };
     let scope = Scope {
@@ -326,6 +341,7 @@ fn plan<'a>(
         id: composition.id.clone(),
         steps: planner.steps,
         output,
+        media: planner.media,
     })
 }
 
@@ -351,6 +367,7 @@ struct Scope<'a> {
 struct Planner<'a, 'b> {
     lookup: &'b Lookup<'a>,
     steps: Vec<Step>,
+    media: Vec<(String, MediaTime)>,
     budget: &'b mut PlanBudget,
 }
 
@@ -362,6 +379,12 @@ impl<'a> Planner<'a, '_> {
             .output
             .as_ref()
             .ok_or(PlanError::NoOutput)?;
+        for node in &scope.composition.nodes {
+            if let NodeOp::Media { start, .. } = &node.op {
+                self.media
+                    .push((format!("{}{}", scope.prefix, node.id), *start));
+            }
+        }
         let nodes: HashMap<&NodeId, &'a alpha2_model::CompositionNode> = scope
             .composition
             .nodes
@@ -669,6 +692,7 @@ fn keyframe_bytes<T>(value: &Animated<T>) -> usize {
     match value {
         Animated::Constant { .. } => 0,
         Animated::Keyframes { keyframes } => keyframes.len() * size_of::<Keyframe<T>>(),
+        Animated::Data(binding) => binding.channel.len(),
     }
 }
 
@@ -701,7 +725,7 @@ fn mask_bytes(mask: &ShapeMask) -> usize {
 
 fn point_bytes(point: &AnimatedPoint) -> usize {
     match point {
-        AnimatedPoint::Constant { .. } => 0,
+        AnimatedPoint::Constant { .. } | AnimatedPoint::Data(_) => 0,
         AnimatedPoint::Keyframes { keyframes } => {
             keyframes.len() * size_of::<alpha2_model::PointKeyframe>()
         }
@@ -714,6 +738,7 @@ fn path_bytes(path: &Animated<alpha2_model::Path>) -> usize {
             + path.vertex_count() * size_of::<alpha2_model::PathVertex>()
     };
     match path {
+        Animated::Data(_) => 0,
         Animated::Constant { value } => one(value),
         Animated::Keyframes { keyframes } => keyframes
             .iter()
@@ -762,6 +787,7 @@ fn paint_bytes(paint: &Paint) -> usize {
 
 fn animated_paint_bytes(paint: &Animated<Paint>) -> usize {
     match paint {
+        Animated::Data(_) => 0,
         Animated::Constant { value } => paint_bytes(value),
         Animated::Keyframes { keyframes } => keyframes
             .iter()
@@ -881,13 +907,30 @@ pub(crate) struct IndexedComposition {
 pub struct ActiveComposition<'a> {
     plan: &'a CompositionPlan,
     time: MediaTime,
+    data: crate::SampleContext<'a>,
 }
 
 impl<'a> ActiveComposition<'a> {
-    /// `plan` at composition time `time`.
+    /// `plan` at composition time `time`, reading no data.
     #[must_use]
     pub const fn new(plan: &'a CompositionPlan, time: MediaTime) -> Self {
-        Self { plan, time }
+        Self {
+            plan,
+            time,
+            data: crate::SampleContext::NONE,
+        }
+    }
+
+    /// The same composition reading data through `data`.
+    #[must_use]
+    pub const fn with_data(self, data: crate::SampleContext<'a>) -> Self {
+        Self { data, ..self }
+    }
+
+    /// What step `step`'s settings read data through.
+    #[must_use]
+    pub fn step_data(&self, step: usize) -> crate::SampleContext<'a> {
+        self.data.for_step(self.plan, step)
     }
 
     /// The compiled composition.

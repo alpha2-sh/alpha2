@@ -77,7 +77,7 @@ fn frame(renderer: &Renderer, tint: &crate::EffectId, size: RenderSize, frame: u
 #[test]
 fn a_warm_frame_creates_no_texture_view() {
     let _lock = gpu_test_lock();
-    let mut renderer = Renderer::new(gpu());
+    let renderer = Renderer::new(gpu());
     let tint = pollster::block_on(renderer.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
@@ -108,14 +108,14 @@ fn a_texture_back_from_the_pool_draws_through_its_kept_view() {
     // Different pixels each frame into the same pooled textures; the kept views must read back each
     // frame's own picture.
     let _lock = gpu_test_lock();
-    let mut warm = Renderer::new(gpu());
+    let warm = Renderer::new(gpu());
     let tint = pollster::block_on(warm.register_effect(runtime_tint_effect(
         "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
     )))
     .expect("tint effect compiles");
     let size = RenderSize::new(64, 32).expect("size");
     for index in 0..4 {
-        let mut fresh = Renderer::new(gpu());
+        let fresh = Renderer::new(gpu());
         let fresh_tint = pollster::block_on(fresh.register_effect(runtime_tint_effect(
             "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src * params.tint; }",
         )))

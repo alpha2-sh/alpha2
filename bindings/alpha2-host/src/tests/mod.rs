@@ -13,14 +13,13 @@ use crate::decode::{
     backward_run, unique_decoded_frame_bytes,
 };
 use crate::decode::{DecodeBudget, DecodeJob, DecodedSourceFrame};
-use crate::effect_request::EffectRequest;
 use crate::encode::EncodeWorker;
 use crate::encode::{EncodeChannelDepth, EncodeCommand, PipelineFailure};
 use crate::memory::InFlightBudget;
 use crate::metrics::{ExportMetrics, add_stage_split_metrics, export_pipeline_limits};
+use crate::protocol::EffectRequest;
 use crate::protocol::{
     AudioQualityRequest, HostError, LoudnessRequest, RateRequest, Request, VideoQualityRequest,
-    parse_request,
 };
 use crate::trace::{AudioBlockTrace, ExportTrace, VideoFrameTrace};
 use alpha2_engine::{ExportFrameNeeds, ExportStepTimings};
@@ -37,9 +36,15 @@ use alpha2_render::{FrameSubmitTimings, InputSpec, RenderSize};
 use alpha2_time::{MediaTime, TimeRange};
 use serde_json::{Value, json};
 
+/// A refusal as the host answers it.
+fn parse_request(line: &str) -> Result<Request, HostError> {
+    crate::protocol::parse_request(line).map_err(HostError::from)
+}
+
 mod alpha_sources;
 mod audio;
 mod conform;
+mod conformance;
 mod copy;
 mod cpu_renderer;
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
@@ -47,8 +52,10 @@ mod d3d12va_encode;
 mod decode_plan;
 mod decoder_sessions;
 mod device_hung;
+mod edit;
 mod encoder_refusal;
 mod export_pipeline;
+mod extract;
 mod failures;
 mod gpu_encode;
 mod gpu_resident;
@@ -56,16 +63,20 @@ mod hardware_decode;
 mod openh264;
 mod outputs;
 mod paths;
+mod plugins;
 mod providers;
 mod render_cache;
 mod rendering;
+mod request_isolation;
+mod request_watch;
 mod requests;
 mod stalls;
 mod stills;
 
 /// Devices created and named from many threads at once crash inside the Vulkan loader
 /// (`vkSetDebugUtilsObjectNameEXT`).
-fn gpu_test_lock() -> alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard<'static, ()>> {
+pub(crate) fn gpu_test_lock()
+-> alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard<'static, ()>> {
     static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
     alpha2_native::require_pinned_ffmpeg_for_tests();
     alpha2_gpu::validation_log::TestTurn::new(
@@ -110,30 +121,50 @@ fn assert_unrequested(budget: &Value) {
 /// Stops the run on anything but the pinned `FFmpeg` SDK.
 fn corpus(name: &str) -> PathBuf {
     alpha2_native::require_pinned_ffmpeg_for_tests();
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/corpus")
-        .join(name)
+    alpha2_test_support::corpus(name)
 }
 
-/// Cancels are answered first, as they would be when the input is written at once.
+/// `input` is JSON lines, each sent as one frame. Cancels are answered first, as they would be when
+/// the input is written at once.
 fn serve_input(
     serving: &mut Serving,
     input: &[u8],
-    answered: &mut dyn FnMut(Option<&Host>),
-) -> (Result<(), HostError>, Vec<u8>) {
+    unusable: &crate::Unusable<'_>,
+) -> (Result<crate::Served, HostError>, Vec<u8>) {
     let captured = crate::serve_io::Captured::default();
     let out = captured.responder();
-    let lines = crate::serve_io::lines_of(input, &out);
-    let served = serve_requests(serving, &lines, &out, answered);
+    let frames = crate::serve_io::frames_of_lines(input);
+    let requests = crate::serve_io::requests_of(&frames, &out, &serving.lifecycle);
+    let served = serve_requests(serving, &requests, &out, unusable);
     (served, captured.bytes())
 }
 
-fn answers_of(output: Vec<u8>) -> Vec<Value> {
-    String::from_utf8(output)
-        .expect("UTF-8")
-        .lines()
-        .map(|line| serde_json::from_str(line).expect("an answer is JSON"))
+/// The answers' headers, without `state` messages.
+fn answers_of(output: &[u8]) -> Vec<Value> {
+    crate::serve_io::messages_of(output)
+        .into_iter()
+        .map(|(header, _)| header)
+        .filter(|message| message["type"] != "state")
         .collect()
+}
+
+/// The headers of what a child wrote to stdout after the frames' magic; libtest writes before it.
+fn child_messages(stdout: &[u8]) -> Vec<Value> {
+    let mut stdout = stdout;
+    alpha2_host_core::host_frames::skip_to_magic(&mut stdout, usize::MAX)
+        .expect("a slice reads")
+        .unwrap_or_else(|| panic!("no magic in {}", String::from_utf8_lossy(stdout)));
+    crate::serve_io::messages_of(stdout)
+        .into_iter()
+        .map(|(header, _)| header)
+        .collect()
+}
+
+/// `serve`'s flags from `ALPHA2_TEST_SERVE_ARGS`, for a child that runs `serve`.
+fn test_serve_limits() -> crate::lifecycle::ServeOptions {
+    let args = std::env::var("ALPHA2_TEST_SERVE_ARGS").unwrap_or_default();
+    crate::lifecycle::ServeOptions::from_args(args.split_whitespace().map(str::to_owned))
+        .expect("ALPHA2_TEST_SERVE_ARGS")
 }
 
 fn no_gpu(_: VideoDecodePolicy) -> Result<Host, HostError> {
@@ -333,86 +364,6 @@ fn decoded_planes(path: &Path) -> Vec<Vec<Vec<u8>>> {
     }
 }
 
-/// Every hardware encoder stays above this on the transcode test's frames; a chroma plane swapped,
-/// shifted by a row or offset by a column falls far below it.
-pub(crate) const PLANE_PSNR_FLOOR_DB: f64 = 38.0;
-
-pub(crate) fn plane_psnr(exported: &[u8], original: &[u8]) -> f64 {
-    let squared = exported
-        .iter()
-        .zip(original)
-        .map(|(a, b)| {
-            let difference = f64::from(*a) - f64::from(*b);
-            difference * difference
-        })
-        .sum::<f64>();
-    if squared == 0.0 {
-        return f64::INFINITY;
-    }
-    #[allow(clippy::cast_precision_loss)]
-    let samples = exported.len() as f64;
-    10.0 * (255.0 * 255.0 * samples / squared).log10()
-}
-
-fn plane_sad(exported: &[u8], original: &[u8], width: usize, row_offset: usize) -> u64 {
-    exported
-        .chunks(width)
-        .zip(original.chunks(width).skip(row_offset))
-        .flat_map(|(a, b)| a.iter().zip(b))
-        .map(|(a, b)| u64::from(a.abs_diff(*b)))
-        .sum()
-}
-
-/// Each chroma plane must also be closer to its own source plane than to the other one or to
-/// itself one row down, which catches swaps and shifts that pass the PSNR floor.
-pub(crate) fn plane_check(
-    exported: &[Vec<Vec<u8>>],
-    original: &[Vec<Vec<u8>>],
-    width: u32,
-    height: u32,
-) -> Result<(), String> {
-    if exported.len() != original.len() {
-        return Err(format!(
-            "{} frames exported for {} source frames",
-            exported.len(),
-            original.len()
-        ));
-    }
-    let chroma_width = width.div_ceil(2) as usize;
-    for (index, (frame, source)) in exported.iter().zip(original).enumerate() {
-        if frame.len() != 3 || source.len() != 3 {
-            return Err(format!("frame {index}: not three planes"));
-        }
-        for plane in 0..3 {
-            if frame[plane].len() != source[plane].len() {
-                return Err(format!("frame {index} plane {plane}: another size"));
-            }
-            let psnr = plane_psnr(&frame[plane], &source[plane]);
-            if psnr < PLANE_PSNR_FLOOR_DB {
-                return Err(format!(
-                    "frame {index} plane {plane}: {psnr:.2} dB, below the {PLANE_PSNR_FLOOR_DB} dB floor"
-                ));
-            }
-        }
-        for (plane, other) in [(1, 2), (2, 1)] {
-            let own = plane_sad(&frame[plane], &source[plane], chroma_width, 0);
-            let swapped = plane_sad(&frame[plane], &source[other], chroma_width, 0);
-            let shifted = plane_sad(&frame[plane], &source[plane], chroma_width, 1);
-            // A swap or shift that leaves the source unchanged cannot be detected.
-            let swap_visible = plane_sad(&source[plane], &source[other], chroma_width, 0) > 0;
-            let shift_visible = plane_sad(&source[plane], &source[plane], chroma_width, 1) > 0;
-            if (swap_visible && own >= swapped) || (shift_visible && own >= shifted) {
-                return Err(format!(
-                    "frame {index} plane {plane}: {own} from its source plane, {swapped} from the \
-                     other chroma plane, {shifted} from its own one row down"
-                ));
-            }
-        }
-    }
-    let _ = height;
-    Ok(())
-}
-
 fn conform_project(recorded: &Value) -> Value {
     json!({
         "schema_version": 1, "id": "conform", "name": "Conform",
@@ -496,37 +447,9 @@ fn names_written_file(named: &Path, written: &Path) -> bool {
         && named.is_file()
 }
 
-/// A panicked run keeps its directory and a later process can reuse the pid, so leftovers are
-/// removed first.
-fn scratch_directory(name: &str) -> ScratchDirectory {
+fn scratch_directory(name: &str) -> alpha2_test_support::ScratchDir {
     alpha2_native::require_pinned_ffmpeg_for_tests();
-    let directory = env::temp_dir().join(format!("alpha2-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).expect("scratch directory");
-    ScratchDirectory(directory)
-}
-
-/// Removed on drop so that a failed assertion does not leave the directory behind.
-struct ScratchDirectory(PathBuf);
-
-impl std::ops::Deref for ScratchDirectory {
-    type Target = Path;
-
-    fn deref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl AsRef<Path> for ScratchDirectory {
-    fn as_ref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for ScratchDirectory {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+    alpha2_test_support::scratch_dir(name)
 }
 
 fn stream_spans(path: &Path) -> ((i64, i64), (i64, i64)) {
@@ -574,7 +497,7 @@ fn decode_worker_over(
     .expect("video export project");
     let assets = HashMap::from([("video-source".to_owned(), asset)]);
     let mut config = crate::decode::DecodeWorkerConfig {
-        providers: crate::providers::ProviderMedia::none(),
+        providers: alpha2_host_core::providers::ProviderMedia::none(),
         decoding: std::sync::Arc::default(),
         depth: 2,
         byte_budget: crate::memory::ByteBudget::exact(256 << 20),
@@ -637,75 +560,4 @@ fn within<T>(limit: Duration, what: &str, body: impl FnOnce() -> T) -> T {
     drop(done);
     watchdog.join().expect("watchdog");
     value
-}
-
-#[test]
-fn the_plane_check_refuses_a_swapped_or_shifted_chroma_plane() {
-    let (width, height) = (256_usize, 144_usize);
-    let (chroma_width, chroma_height) = (width / 2, height / 2);
-    // U varies along rows and V along columns, so a swap, row shift or column offset each show.
-    let plane = |w: usize, h: usize, sample: &dyn Fn(usize, usize) -> u8| -> Vec<u8> {
-        (0..h)
-            .flat_map(|y| (0..w).map(move |x| sample(x, y)))
-            .collect()
-    };
-    let frame = |noise: u8| -> Vec<Vec<u8>> {
-        vec![
-            plane(width, height, &|x, y| {
-                u8::try_from((x * 3 + y * 5) % 200 + 16).expect("luma")
-                    ^ (noise & u8::try_from(x % 2).expect("bit"))
-            }),
-            plane(chroma_width, chroma_height, &|_, y| {
-                u8::try_from(16 + y * 3 % 200).expect("u")
-            }),
-            plane(chroma_width, chroma_height, &|x, _| {
-                u8::try_from(16 + x * 2 % 200).expect("v")
-            }),
-        ]
-    };
-    let (w32, h32) = (
-        u32::try_from(width).expect("w"),
-        u32::try_from(height).expect("h"),
-    );
-    let source = vec![frame(0); 3];
-    assert_eq!(plane_check(&source, &source, w32, h32), Ok(()));
-    assert_eq!(
-        plane_check(&vec![frame(1); 3], &source, w32, h32),
-        Ok(()),
-        "one code of noise"
-    );
-    let swapped: Vec<Vec<Vec<u8>>> = source
-        .iter()
-        .map(|planes| vec![planes[0].clone(), planes[2].clone(), planes[1].clone()])
-        .collect();
-    assert!(
-        plane_check(&swapped, &source, w32, h32).is_err(),
-        "U and V swapped"
-    );
-    let shift = |plane: &[u8], rows: usize, columns: usize| -> Vec<u8> {
-        (0..chroma_height)
-            .flat_map(|y| {
-                (0..chroma_width).map(move |x| {
-                    plane[(y + rows).min(chroma_height - 1) * chroma_width
-                        + (x + columns).min(chroma_width - 1)]
-                })
-            })
-            .collect()
-    };
-    for (rows, columns, what) in [(1, 0, "one row"), (0, 1, "one column")] {
-        let moved: Vec<Vec<Vec<u8>>> = source
-            .iter()
-            .map(|planes| {
-                vec![
-                    planes[0].clone(),
-                    shift(&planes[1], rows, columns),
-                    shift(&planes[2], rows, columns),
-                ]
-            })
-            .collect();
-        assert!(
-            plane_check(&moved, &source, w32, h32).is_err(),
-            "chroma moved {what}"
-        );
-    }
 }

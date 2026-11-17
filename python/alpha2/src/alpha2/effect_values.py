@@ -3,7 +3,7 @@
     from alpha2 import effect, fx
 
     blur = effect("alpha2.effect.gaussian-blur", radius=0.02)
-    tint = effect("alpha2.effect.color-overlay", color=fx.color("#ff8800"), mode=fx.enum(1))
+    key = effect("alpha2.effect.chroma-key", key_color=fx.color("#0f0"), distance_mode=fx.enum(1))
 
 Effect parameters are typed in the document (``{"type": "float", "value": 0.2}``) because a number
 could be a scalar or an enum index, and four could be a vector or a color. :func:`param` lifts

@@ -23,6 +23,7 @@ mod effect_resource;
 mod error;
 mod frame_gpu_time;
 pub use frame_gpu_time::FrameGpuTimes;
+pub use present::SurfacePresenter;
 mod gaussian_blur;
 mod generator;
 mod gpu_errors;
@@ -38,10 +39,10 @@ mod masking;
 mod paint_wgsl;
 mod pipeline;
 mod pool;
-mod quad;
+mod present;
 mod readback;
 mod registry;
-pub use registry::{CompiledEffect, MAX_EFFECT_INPUTS, PendingEffect};
+pub use registry::{CheckedEffect, CompiledEffect, MAX_EFFECT_INPUTS, PendingEffect, check_effect};
 mod renderer;
 mod repack;
 mod result_cache;
@@ -74,14 +75,15 @@ pub use builtins::{
     builtin_transition_definitions, chroma_key_definition, gaussian_blur_definition,
     glow_definition, lut_3d_definition,
 };
-pub use catalog::{builtin_catalog, builtin_catalog_json};
+pub use catalog::{builtin_catalog, builtin_catalog_document, builtin_catalog_json};
 pub use color::{
     Color, ColorDiagnostic, ColorError, ColorPolicy, SdrOutputTransfer, YuvSample,
     convert_yuv_to_linear_rgba, encode_linear_rgb, is_hdr,
 };
 pub use composite::{CompositeLayer, LayerTransform};
 pub use cpu::{
-    CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, pack_cpu_image,
+    BandProgress, CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, decoded,
+    report_band_progress,
 };
 pub use diagnostics::{
     AdapterDiagnostics, BenchmarkMetadata, GpuSubmissionStats, PassTiming, PipelineCreation,
@@ -117,7 +119,7 @@ pub use pipeline::{PipelineCacheStats, WarmupReport};
 pub use pool::{ReadbackBufferPoolStats, TexturePoolStats, UploadTexture, UploadTexturePoolStats};
 pub use readback::{
     EncodedNv12Pack, Nv12PlaneTargets, PlaneTarget, Rgba8Readback, StagingPlane, Yuv420pPlanes,
-    Yuv420pReadback, Yuv420pTargets, yuv420p_staging_bytes,
+    Yuv420pReadback, Yuv420pTargets, layout_staging_bytes, yuv420p_staging_bytes,
 };
 pub use renderer::{LossClassifier, RenderQualityControls, Renderer};
 pub use repack::RepackSource;

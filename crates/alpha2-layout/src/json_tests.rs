@@ -255,3 +255,66 @@ fn text_measurements_match_the_pinned_answers() {
         std::fs::write(path, text).expect("golden written");
     }
 }
+
+/// A layout child with every bounded value at its bound.
+const AT_BOUNDS: &str = r#"{ "type": "layout", "root": { "children": [{
+    "width": { "mode": "constant", "value": "16777216px" },
+    "height": { "mode": "constant", "value": 1024 },
+    "min_width": { "mode": "constant", "value": "100000%" },
+    "margin": { "mode": "constant", "value": { "top": -1024, "right": 1024, "bottom": "-16777216px", "left": 0 } },
+    "padding": { "mode": "constant", "value": { "top": 1024, "right": 0, "bottom": 0, "left": 0 } },
+    "flex_grow": { "mode": "constant", "value": 1000000 },
+    "flex_shrink": { "mode": "constant", "value": 1000000 },
+    "aspect_ratio": 10000,
+    "translate": { "mode": "constant", "value": { "x": -1024, "y": "16777216px" } },
+    "text": { "mode": "constant", "value": "Far" }
+}] } }"#;
+
+/// Whether every number in `value` is finite; a non-finite one is written as `null`, so every
+/// rectangle edge must be a number.
+fn numbers_only(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(rect) if rect.contains_key("left") => {
+            ["left", "top", "right", "bottom"]
+                .iter()
+                .all(|edge| rect[*edge].as_f64().is_some_and(f64::is_finite))
+        }
+        serde_json::Value::Number(number) => number.as_f64().is_some_and(f64::is_finite),
+        serde_json::Value::Array(items) => items.iter().all(numbers_only),
+        serde_json::Value::Object(fields) => fields.values().all(numbers_only),
+        _ => true,
+    }
+}
+
+#[test]
+fn values_at_their_bounds_measure_to_finite_numbers() {
+    let bytes = std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture font");
+    let mut rasterizer = TextRasterizer::empty();
+    rasterizer.add_font(fixture(bytes)).expect("valid font");
+    // The widest picture, as tall as the pixel limit lets it be.
+    let (width, height) = (alpha2_model::MAX_CANVAS_DIMENSION, 4_096);
+    let layout = measure_layout_json(&rasterizer, AT_BOUNDS, width, height, MediaTime(0), None)
+        .expect("valid");
+    let layout: serde_json::Value = serde_json::from_str(&layout).expect("JSON");
+    assert!(numbers_only(&layout), "{layout}");
+    let past = AT_BOUNDS.replace("\"aspect_ratio\": 10000", "\"aspect_ratio\": 10001");
+    assert!(matches!(
+        measure_layout_json(&rasterizer, &past, width, height, MediaTime(0), None),
+        Err(MeasureError::Input(_))
+    ));
+    // An eased keyframe overshoots its values far past the bound; sampling clamps it.
+    let overshoot = r#"{ "type": "layout", "root": { "children": [{ "text": { "mode": "constant", "value": "a" },
+        "width": { "mode": "keyframes", "keyframes": [
+            { "time": 0, "value": 0, "interpolation": { "type": "cubic_bezier", "x1": 0.5, "y1": 1e35, "x2": 0.5, "y2": 1e35 } },
+            { "time": 1000, "value": 1024, "interpolation": { "type": "hold" } }] } }] } }"#;
+    let eased = measure_layout_json(&rasterizer, overshoot, width, height, MediaTime(500), None)
+        .expect("valid");
+    let eased: serde_json::Value = serde_json::from_str(&eased).expect("JSON");
+    assert!(numbers_only(&eased), "{eased}");
+    let text = r#"{ "type": "text", "text": "Far", "style": {
+        "position": { "x": 1024, "y": -1024 }, "anchor": { "x": -1024, "y": 1024 } } }"#;
+    let text: serde_json::Value =
+        serde_json::from_str(&measure_text_json(&rasterizer, text, width, height).expect("valid"))
+            .expect("JSON");
+    assert!(numbers_only(&text), "{text}");
+}

@@ -43,7 +43,7 @@ try {
       await sink.writeVideo({ index: BigInt(index), timeTicks: BigInt(index * 4000), frame });
     }
     await sink.finish();
-    results[level] = { videoRateControl, applied: sink.appliedVideoRateControl, encodedQuantizers: [...encodedQuantizers], bytes: sink.output.buffer.byteLength };
+    results[level] = { videoRateControl, applied: sink.appliedVideoRateControl, encodedQuantizers: [...encodedQuantizers], bytes: /** @type {Extract<import("/packages/alpha2/dist/mediabunny.js").ExportOutput, { kind: "memory" }>} */ (sink.output).buffer.byteLength };
   }
   document.title = encodeURIComponent(JSON.stringify(results));
 } catch (error) {

@@ -31,10 +31,67 @@ editor.dispose();
 ```
 
 - An editor document holds an engine project (`document.project`), the editor's metadata, and a descriptor of each asset. `serializeDocument` and `parseDocument` write and read it as JSON; `parseDocument` also reads a plain engine project.
-- `dispatch` applies one `Command` (the typed union covers the project, tracks, clips, effects, transitions, caption cues, composition graphs, assets and markers); a `transaction` applies several and is checked once, by the document it ends with. A command the document's rules refuse returns `{ ok: false, error }` and changes nothing. `canExecute` asks without applying.
+- `dispatch` applies one `Command` (the typed union covers the project, tracks, clips, effects, transitions, caption cues, composition graphs, assets, data sets and markers); a `transaction` applies several and is checked once, by the document it ends with. A command the document's rules refuse returns `{ ok: false, error }` and changes nothing. `canExecute` asks without applying.
 - Every change that commits is one undo step. The history keeps up to 120 steps and 64 MiB by default (`createEditor({ historyLimit, historyByteLimit })`).
 - `beginGesture()` previews a drag: each `update(command)` shows a candidate in `editor.draft` without touching the document or the history, and `commit()` adds one undo step (`cancel()` adds none).
 - `subscribe`, `getSnapshot` and `subscribeSelector` notify views of changes. A refusal is an `EditorError`, whose `code` says which check failed.
+
+## Data sets
+
+A project's data sets (tracking points, levels, words, intervals an extractor returned) are changed by commands, so adding one and binding to it is one undo step.
+
+```js
+import { dataValue } from "@alpha2-sh/editor";
+
+editor.dispatch({
+  type: "transaction",
+  commands: [
+    { type: "data.put", dataSet: faceTrack }, // replaces the set with its id in place
+    {
+      type: "clip.update",
+      id: "title",
+      patch: { visual: { position: dataValue({ data: faceTrack.id, channel: "face", via: { clip: "interview" }, space: "canvas" }) } },
+    },
+  ],
+});
+```
+
+- `data.remove` is refused with `data_referenced` while anything reads the set; `error.details.references` lists the places (`dataReferences` from `alpha2/project` lists them for any project). `asset.remove`, `clip.delete` and `track.remove` are refused the same way while a data set is anchored to the source or a binding reads through the clip.
+- Timeline commands keep data consistent as the engine's edit operations do: a ripple that reaches every track (every other track sync-locked) cuts or opens timeline-anchored sets with the timeline, a split points the right part's bindings that read through the clip at the new part, and a pasted clip's bindings through itself read through its new id. Source-anchored sets never change.
+- Keyframe helpers throw `data_bound` on a value that follows data (`isDataBound`).
+- A replaced set is held whole in the undo history, so a put of a set near `MAX_DATA_VALUES` can evict most of it under the 64 MiB default.
+
+## Edit operations
+
+The engine's edit operations (`remove_ranges`, `split_at`, `bake`) run in the runtime you already have; the session applies the result as one undo step, refusing it (`stale_edit`) when the document changed after the project was read.
+
+```js
+// Desktop: @alpha2-sh/node computes, no WebAssembly in the app.
+const request = { op: "remove_ranges", ranges: { data: "silence" }, target: { track: "v1" } };
+const { project, read } = editor.editProject();
+const applied = await client.edit(project, request);
+const result = editor.applyEdit(applied, { read, request }); // { document, report }
+
+// Bake a binding and drop its data set in the same step.
+editor.applyEdit(baked, { read, request: bakeRequest, then: [{ type: "data.remove", id: "face" }] });
+```
+
+- In a page, `bridge.applyEdit(request, { then, label })` does all of it with the bridge's own engine and waits for the engine to load.
+- Refusals (`unknown_data`, `nothing_to_bake`, ...) come from the engine call itself. Clips the operation creates keep the editor metadata of the clip they were cut from (`report.created[].from`).
+- A step applied with a label (by default the operation's name) shows it as `snapshot.undoLabel` and `snapshot.redoLabel`.
+
+## Extraction
+
+Extractors run in the runtime too; the session puts their data sets in as one undo step. A timeline-anchored result is refused (`stale_extraction`) when the timeline changed while the extractor ran; data put in between does not count.
+
+```js
+const { project, read } = editor.extractionProject();
+const { dataSets } = await client.extract({ project, assets, request, plugin: { manifest, sha256 } });
+editor.applyExtraction({ dataSets, timings: {} }, { read });
+```
+
+- In a page, `bridge.extract(run, { plugin, signal, onProgress })` reads the source's original media held by the bridge and resolves with `{ result, read }` for `applyExtraction`. It reads source input; timeline input is refused there.
+- `bridge.conform()` lists data sets made from media that has since changed in `stale_data`; their `made_by` says how to run them again.
 
 ## Browser bridge
 

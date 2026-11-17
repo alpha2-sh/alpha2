@@ -60,6 +60,11 @@ pub(crate) fn effect_cache_key_with_resources(
     hash.u64(runtime.time.ticks().cast_unsigned());
     hash.f32(runtime.progress);
     hash.f32(runtime.ratio);
+    // Absent at scale 1 so keys drawn at the project's size keep their values.
+    if runtime.scale.to_bits() != 1.0_f32.to_bits() {
+        hash.bytes(b"scale");
+        hash.f32(runtime.scale);
+    }
     RenderCacheKey(hash.finish())
 }
 
@@ -167,7 +172,7 @@ pub(crate) fn cpu_renderer_cache_key(
     hash.f32(blend_space);
     hash.u32(quality.max_filter_samples);
     hash.u32(quality.motion_blur_subframes);
-    hash.string("cpu/rgba16float/1");
+    hash.string("cpu/rgba16float/2");
     RenderCacheKey(hash.finish())
 }
 

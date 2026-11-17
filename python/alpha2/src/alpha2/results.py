@@ -144,6 +144,9 @@ class ExportResult(TypedDict):
     gpuOutputPathFallback: dict[str, Any] | None
     publish: PublishReport
     """How the finished file was moved to ``output``."""
+    encoderTeardownFailure: str | None
+    """What failed after the file was in place (an encoder teardown), which does not fail the
+    export; ``None`` when nothing did."""
     videoTranscode: Literal["yuv-repack"] | None
     yuvTranscodeIneligible: str | None
     videoEncoderLibrary: NotRequired[dict[str, Any] | None]
@@ -157,7 +160,9 @@ class ExportResult(TypedDict):
     """What each source read, by source id."""
     memoryPolicy: dict[str, Any]
     performance: dict[str, Any]
-    """Timings and counters; the decoder session keys among them are documented in the protocol."""
+    """Timings and counters, documented in the protocol. Among them ``renderMs`` is split into
+    ``setupMs`` (with ``encoderProbeMs``, ``encoderOpenMs`` and ``loudnessMs`` inside it),
+    ``firstFrameMs`` and ``finishMs``, beside the encode rate ``steadyFps``."""
     providerDiagnostics: list[dict[str, Any]]
     providerDiagnosticsOmitted: int
     decodeDiagnostics: list[Any]
@@ -167,16 +172,20 @@ class ExportResult(TypedDict):
 
 
 class StillFrame(TypedDict):
-    """One PNG a still request wrote."""
+    """One PNG a still request rendered."""
 
-    output: str
-    """The absolute path of the file written."""
+    output: str | None
+    """The absolute path of the file written, or ``None`` for a still asked without one."""
     frameTime: int
     """The time of the grid frame holding the requested time, in ticks."""
     width: int
     height: int
-    publish: PublishReport
-    """How the PNG was moved to ``output``."""
+    publish: NotRequired[PublishReport]
+    """How the PNG was moved to ``output``; absent without one."""
+    attachment: NotRequired[int]
+    """The index of the PNG among the response's attachments, without an ``output``."""
+    png: NotRequired[bytes]
+    """The PNG, without an ``output``."""
 
 
 class StillTimings(TypedDict):

@@ -32,18 +32,42 @@ print(result["output"], result["videoPipeline"], result["frames"])
 
 - `alpha2.export`, `alpha2.conform` and `alpha2.capabilities` run on a shared `HostClient`; make
   your own (`alpha2.HostClient(concurrency=2)`) to bound or separate them.
+- `export` renders from time 0 to where the project ends (its last clip or caption cue) at the
+  project's frame rate unless `start_ticks`, `end_ticks` or `frame_rate` say otherwise, and returns
+  the host's export result (`alpha2.results.ExportResult`, with `output`). `on_progress` receives
+  `ExportProgress(phase, completed, total, restarted)`: `restarted` is true on the first report
+  after the export started over (the host moved a GPU-resident export to the readback path, or the
+  client reran it with software decode after a hardware decoder stalled), the only report in which
+  `completed` goes back to 0.
+- The package installs no command. Its command line is `python -m alpha2` with `install`,
+  `export`, `still`, `mcp` and `capabilities`. The `alpha2` program in a
+  [native archive](https://github.com/alpha2-sh/alpha2/blob/main/docs/native.md) is another
+  program, a media tool.
+- A client keeps up to `concurrency` `alpha2-host` processes and sends each one request at a
+  time, so later requests skip the start. A host serves until it decides a new process would do
+  better (memory, request count, idle time) and drains; the client then starts another. A host
+  takes only requests that would start a host with its environment, decode and renderer modes
+  included, so changing `os.environ` starts new hosts. `client.close()`, or a `with` block, ends
+  them; an idle host never keeps Python from exiting.
+- A forked child (`os.fork`, or `multiprocessing` with the `fork` start method) does not use the
+  hosts it inherits: it starts its own on its first request, and the parent keeps its hosts.
+  Capability reports the parent already had stay cached in the child.
 - An existing `output` is refused unless you pass `overwrite=True`, which replaces it only once
   the export is whole. An output that is one of the export's inputs is always refused.
 - Setting a `cancel` event (`threading.Event`) or pressing Ctrl-C cancels the request: the client
-  writes a cancel line, the host stops the export, removes its partial output and answers, and the
-  host ends, all before the call returns. A host that does not answer within 5 s is ended; a second
-  Ctrl-C ends it at once. The host also exits when the process that started it dies.
+  sends a cancel message, and the host stops the export, removes its partial output and answers
+  before the call returns. A host that does not answer within 5 s is ended; a second Ctrl-C ends
+  it at once. The host also exits when the process that started it dies.
 - Every failure is an `alpha2.Alpha2HostError` with a machine-readable `code` and a classified
-  `failure` dict for retry policies. A host that writes nothing within `host_start_timeout`
+  `failure` dict for retry policies. A host that is not ready within `host_start_timeout`
   (seconds, a `HostClient` argument, 30 by default, `None` to wait forever) is killed and the
   request fails with `HOST_START_TIMEOUT`; a host macOS has quarantined is refused before it starts
   with `HOST_QUARANTINED`, one Windows refuses by policy is `HOST_BLOCKED`, and a Linux host whose
-  program interpreter is missing (musl) or whose glibc is too old is `HOST_LOAD_FAILED`.
+  program interpreter is missing (musl) or whose glibc is too old is `HOST_LOAD_FAILED`. A host of
+  another alpha2 release (an older `alpha2-host` on `PATH` or in `ALPHA2_HOST_PATH`) is ended at
+  once and the request fails with `HOST_VERSION_MISMATCH`.
+- An engine defect inside an in-process call (validation, compose, edit operations, measuring)
+  raises `alpha2.Alpha2InternalError`, a `RuntimeError` with `code` `INTERNAL`.
 - Options you write use snake_case (`loudness={"target_lufs": -14, ...}`); what the host reports
   keeps the protocol's camelCase keys (`result["effectiveRange"]`).
 
@@ -168,7 +192,93 @@ print(result["stills"][0]["frameTime"])  # the grid frame that holds 1.5 s, in t
   host, decoding once; `size=(width, height)` renders the project at another canvas size.
 - The PNG is 8-bit RGBA, the picture before any video encoding. `overwrite=True` replaces an
   existing file, as for `export`.
+- Without a path (`alpha2.still(project, 1.5)`, or `None` in a `stills` pair) nothing is written:
+  the PNG comes back as bytes in `result["stills"][i]["png"]`, and `output` is `None`.
 - From a shell: `python -m alpha2 still project.json check.png --at 1.5 --asset title=title.png`.
+
+## Extract data
+
+`HostClient.extract(project, request, extractor, assets=...)` runs an extractor of your own over a
+source or the timeline and returns `{"dataSets", "timings"}`, data sets ready to put in the
+project's `data`. The host decodes and presents the input and calls the extractor step by step;
+every value it emits is validated as the project validates data:
+
+```python
+class Brightness:
+    def describe(self):
+        return {
+            "id": "com.example.brightness",
+            "version": 1,
+            "input": {"media": "video", "from": ["source"], "format": "luma8"},
+            "outputs": [{"name": "level", "kind": "scalars", "channels": ["y"]}],
+        }
+
+    def video(self, frame, out):
+        out.sample("level", frame.time, [sum(frame.data) / len(frame.data) / 255])
+
+
+with alpha2.HostClient() as client:
+    result = client.extract(
+        project,
+        {
+            "extractor": "com.example.brightness",
+            "version": 1,
+            "input": {
+                "from": "source",
+                "source_id": "interview",
+                "range": {"start": 0, "end": 600_000},
+                "size": 64,
+            },
+            "outputs": {"level": "interview-brightness"},
+        },
+        Brightness(),
+        assets={"interview": "interview.mp4"},
+    )
+```
+
+- `begin(context)`, `pass_(index, direction)`, `audio(block, out)` and `end(out)` are the other
+  steps (`alpha2.extract` has the types). `request["params"]` is checked against the
+  descriptor's `params_schema` first.
+- Output the project would refuse fails with `INVALID_EMIT`, a step that raises with
+  `EXTRACTOR_FAILED`, and a step slower than the host's `--extract-step-timeout` with
+  `EXTRACTOR_TIMEOUT`. `cancel=` and `on_progress=` work as for `export`.
+- A [plugin](../../docs/plugin-abi.md) runs inside the host instead: pass
+  `plugin={"manifest": ..., "sha256": ...}` and no extractor. The host fetches the manifest (an
+  `https:` URL or a path), checks every file against its pinned SHA-256 and runs the wasm artifact
+  sandboxed. A plugin that is refused, does not load, traps or runs past its limits fails with a
+  `PLUGIN_*` code.
+- `HostClient(plugins={...})` decides what the client's hosts allow: `"mode"` (`"off"`, `"wasm"`
+  by default, or `"native"`), `"origins"` (`"none"` or the `https:` origins manifests and files
+  may come from) and `"root"` (the directory local manifests must lie under, or `"none"`). Only
+  under `"mode": "native"` does a request's `"allow_native": True` let a native artifact run,
+  with the host's rights.
+
+## Apply data with edit operations
+
+`alpha2.edit.apply(project, request)` runs one of the engine's edit operations in this process, no
+host needed, and returns `Edited(project, project_json, report)`. `remove_ranges` drops ranges
+(silences from an extractor, or a list on a source or the timeline) and closes the gaps,
+`split_at` cuts at times, and `bake` turns data bindings into keyframes and words into cues:
+
+```python
+edited = alpha2.edit.apply(
+    project,
+    {
+        "op": "remove_ranges",
+        "ranges": {"data": "interview-silence"},
+        "target": {"track": "v1"},
+        "padding": 12_000,
+        "min_duration": 36_000,
+    },
+)
+```
+
+Kept moments render as before for clip picture and sound, clip keyframes, captions,
+timeline-anchored data and track and master automation; a matte or a binding read through another clip follows the part beside it
+or the edit is refused (`matte_source`, `read_through`). The host protocol lists what is not exact
+in this release. `project_json` is the same bytes on every surface.
+A refusal raises `alpha2.Alpha2EditError`, whose `refusal` names why (`unknown_data`,
+`empty_target`, ...). [The host protocol](../../docs/host-protocol.md#edit) lists the fields.
 
 ## Renderer and video decode
 
@@ -216,6 +326,11 @@ alpha2.export(compiled, "summer.mp4")
   `Slideshow`, `CaptionedVideo`, `Title`, `TitleCard`, `LowerThird`, `EndCard`,
   `ComparisonGrid`, `Reframe`, `Logo`, `MusicBed`. Themes `clean-dark` and `clean-light`, or your
   own (`theme={"base": "clean-light", "accent": "#e63946"}`).
+- Wrappers combine any nodes: `Group` (one layer, with `effects=[Effect("gaussian-blur",
+  radius=8)]`, a transform and a blend mode), `Matte` (one node shown through another's alpha or
+  luma), `Mask` (shapes cut out of a node), `Shape` (rectangles, ellipses, polygons and SVG paths)
+  and `Box` (CSS flexbox or grid around text, shapes and any other node). Any value may move:
+  `Ramp(0, 1, ease="ease-out")` or `Keys((0, 0), (1, 1))`.
 - Motion: `enter=` and `exit=` on visual nodes and containers take `Fade`, `Rise`, `Slide` or
   `Scale`, timed from the node's own start and back from its own end; `Stack` and `Grid` take
   `stagger=` to move children one after another; `Text` takes `reveal=Reveal("word")` (or
@@ -226,11 +341,50 @@ alpha2.export(compiled, "summer.mp4")
 - Compiling needs each file's size and length. `compile` asks the host's `conform` for them (no
   GPU), or takes them as `facts=`; with every fact given it runs without a host. The same spec,
   facts and fonts compile to the same project.
-- Templates are Python: loops, conditions and arithmetic build the lists the nodes take. A spec is
-  JSON (`video.to_json()`, typed as `alpha2.compose_types.VideoSpec`) that every binding compiles
-  the same way.
+- A spec is JSON (`video.to_json()`, typed as `alpha2.compose_types.VideoSpec`, schema
+  `https://alpha2.sh/schema/compose.v1.json`) that every binding compiles the same way.
 - An error names where in the spec it lies (`alpha2.Alpha2ComposeError`, `.path ==
   "spec.body.items[3].path"`).
+
+## Templates
+
+A template is a spec with parameters: `{"template": {"id": "acme/promo", "version": 1}, "params":
+[...], ...}`, its text, files and colors taken from its data. `c.bind(template, data)` fills it in
+and checks the data, `c.data_schema(template)` is the JSON Schema of its data (for a form, an API
+or a model), and `c.lint(template)` finds what a template should take from its data but does not.
+A `node` template is a node type of its own, `{"type": "acme/card", "with": {...}}`, in any spec
+compiled with `templates=[...]`. `c.TEMPLATES` are the built-in `alpha2/` ones, such as
+`alpha2/circle-reveal`.
+
+```python
+spec = c.bind(promo, {"headline": "Summer sale", "photo": "beach.jpg"})
+alpha2.export(c.compile(spec, fonts=["Inter.ttf"]), "promo.mp4")
+```
+
+## MCP server
+
+`python -m alpha2 mcp` serves compose, templates and rendering as MCP tools on standard input and
+output, for an agent to list templates, fill in their data, check, look at a frame and render the
+video, or write a spec from the compose schema one node type at a time.
+
+```sh
+claude mcp add alpha2 -- python -m alpha2 mcp --font Inter.ttf --templates ./templates
+```
+
+`--font` gives the fonts text is drawn with (text needs one), `--templates` a directory of template
+JSON files beside the built-in ones, and `--host` the `alpha2-host` binary. Relative paths in specs
+are read from the server's working directory. `render_frame` (given an `output`, which must be a
+`.png` file) and `render_video` write files, replacing one only with `overwrite`, and are marked
+destructive; the other tools only read. A call that fails, however malformed, is answered with an
+error and the server keeps serving.
+
+The tools read and write only under the server's roots: the working directory, or each `--root DIR`
+given instead. That covers spec, template and project files, the media and caption files a spec
+names, and outputs, with links resolved; a link as an output is refused. The `--templates`
+directories and `--font` files are read at start without a root. A file argument must be a regular
+file no larger than a project document may be. `--read-only` leaves out the two writing tools.
+`--max-seconds` (default 3600) bounds the range `render_video` renders and `--max-pixels` (default
+7680 x 4320) the canvas of either render tool.
 
 ## Finding `alpha2-host`
 
@@ -273,7 +427,10 @@ This downloads Cisco's OpenH264 2.7.0 binary for the platform from
 SHA-256s, and puts the library in the shared cache, in `openh264-2.7.0-<target>/`, where
 `alpha2-host` finds it. It installs only the library, not `alpha2-host`. `--force` downloads again,
 `alpha2.install_openh264()` does the same from code, and `ALPHA2_OPENH264_DOWNLOAD_URL` (or the
-`download_url` argument) names a mirror. Every run prints Cisco's notice:
+`download_url` argument) names a mirror. A `HostClient` made with `cache_directory` gives its hosts
+that directory, so they find a library installed there. After `install_openh264()` downloads, the
+clients of this process start new hosts and probe capabilities again; an install made by another
+process is not seen by a running client. Every run prints Cisco's notice:
 
 ```text
 OpenH264 Video Codec provided by Cisco Systems, Inc.

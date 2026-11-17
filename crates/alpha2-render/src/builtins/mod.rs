@@ -91,6 +91,49 @@ pub(crate) fn builtin_effect_groups() -> Vec<(&'static str, Vec<EffectDef>)> {
     ]
 }
 
+/// Transitions that mix the two pictures at each pixel's own place and add nothing, for every
+/// parameter value, so a matte or mask may apply to each side. A render test checks the list.
+pub const COVERAGE_COMMUTING_TRANSITIONS: [&str; 38] = [
+    "alpha2.transition.fade",
+    "alpha2.transition.circle-open",
+    "alpha2.transition.angular",
+    "alpha2.transition.directional-wipe",
+    "alpha2.transition.radial",
+    "alpha2.transition.hsv-fade",
+    "alpha2.transition.wipe-up",
+    "alpha2.transition.wipe-down",
+    "alpha2.transition.wipe-left",
+    "alpha2.transition.wipe-right",
+    "alpha2.transition.window-blinds",
+    "alpha2.transition.window-slice",
+    "alpha2.transition.wind",
+    "alpha2.transition.pinwheel",
+    "alpha2.transition.heart",
+    "alpha2.transition.horizontal-open",
+    "alpha2.transition.horizontal-close",
+    "alpha2.transition.vertical-open",
+    "alpha2.transition.vertical-close",
+    "alpha2.transition.squares-wire",
+    "alpha2.transition.gradient-wipe",
+    "alpha2.transition.color-phase",
+    "alpha2.transition.fade-grayscale",
+    "alpha2.transition.polka-dots-curtain",
+    "alpha2.transition.block-dissolve",
+    "alpha2.transition.random-squares",
+    "alpha2.transition.perlin",
+    "alpha2.transition.overexposure",
+    "alpha2.transition.burn",
+    "alpha2.transition.crosshatch",
+    "alpha2.transition.random-noise",
+    "alpha2.transition.box",
+    "alpha2.transition.chessboard",
+    "alpha2.transition.bow-tie",
+    "alpha2.transition.bow-tie-horizontal",
+    "alpha2.transition.bow-tie-vertical",
+    "alpha2.transition.polar-function",
+    "alpha2.transition.shape-wipe",
+];
+
 /// Returns fresh, data-only definitions for all built-in transitions.
 #[must_use]
 pub fn builtin_transition_definitions() -> Vec<EffectDef> {
@@ -345,7 +388,7 @@ impl Renderer {
         definition: EffectDef,
     ) -> Result<EffectId, ShaderDiagnostics> {
         let id = self.register_lazily(definition)?;
-        self.effects.mark_builtin(id.clone());
+        self.effects_mut().mark_builtin(id.clone());
         Ok(id)
     }
 
@@ -357,7 +400,7 @@ impl Renderer {
     pub fn register_builtins(&mut self) -> Result<Vec<EffectId>, ShaderDiagnostics> {
         for definition in internal_effect_definitions() {
             let internal = self.register_builtin_definition(definition)?;
-            self.effects.mark_internal(internal);
+            self.effects_mut().mark_internal(internal);
         }
         let mut definitions = builtin_effect_definitions();
         definitions.extend(builtin_transition_definitions());
@@ -382,7 +425,7 @@ impl Renderer {
     /// Returns schema diagnostics when registration fails.
     pub fn register_builtin_gaussian_blur(&mut self) -> Result<EffectId, ShaderDiagnostics> {
         let internal = self.register_builtin_definition(gaussian_blur_pass_definition())?;
-        self.effects.mark_internal(internal);
+        self.effects_mut().mark_internal(internal);
         self.register_builtin_definition(gaussian_blur_definition())
     }
 

@@ -183,6 +183,89 @@ fn validation_finds_sources_and_compositions_in_time_linear_in_the_document() {
     );
 }
 
+/// `count` clips of one source; each follows the next in canvas space with its position and,
+/// when `back` is set, clip 0 with its scale.
+fn follow_chain(count: usize, back: bool) -> Project {
+    let mut project = project();
+    project.timeline.tracks.truncate(1);
+    let source = project.sources[0].id.clone();
+    let template = project.timeline.tracks[0].clips[0].clone();
+    project.data = vec![
+        serde_json::from_value(serde_json::json!({
+            "id": "face", "anchor": { "type": "source", "source_id": source.as_str() },
+            "kind": "points", "interpolation": "hold", "channels": ["nose"], "times": [0],
+            "values": [0.5, 0.5] }))
+        .expect("data set"),
+    ];
+    let binding = |clip: usize| {
+        serde_json::json!({ "mode": "data", "data": "face", "channel": "nose",
+            "via": { "clip": format!("c{clip}") }, "space": "canvas" })
+    };
+    let mut tracks = Vec::new();
+    for index in 0..count {
+        let at = index % crate::MAX_CLIPS_PER_TRACK;
+        if at == 0 {
+            tracks.push(Track::new(
+                id(TrackId::new, &format!("t{}", tracks.len())),
+                "V",
+                TrackKind::Video,
+            ));
+        }
+        let start = MediaTime(i64::try_from(at).expect("index") * 10);
+        let mut clip = template.clone();
+        clip.id = id(ClipId::new, &format!("c{index}"));
+        clip.timeline_range = TimeRange::new(start, MediaTime(start.0 + 10)).expect("range");
+        clip.source_range = TimeRange::new(MediaTime(0), MediaTime(10)).expect("range");
+        if index + 1 < count {
+            clip.visual.position = serde_json::from_value(binding(index + 1)).expect("binding");
+        }
+        if back && index > 0 {
+            clip.visual.scale = serde_json::from_value(binding(0)).expect("binding");
+        }
+        tracks.last_mut().expect("a track").clips.push(clip);
+    }
+    project.timeline = Timeline { tracks };
+    project
+}
+
+#[test]
+fn canvas_follows_chain_at_most_eight_deep() {
+    follow_chain(crate::MAX_FOLLOW_DEPTH + 1, false)
+        .validate()
+        .expect("eight links");
+    let error = follow_chain(crate::MAX_FOLLOW_DEPTH + 2, false)
+        .validate()
+        .expect_err("nine links");
+    assert_eq!(
+        error.to_string(),
+        "clip c0 visual.position follows clips in canvas space more than 8 deep"
+    );
+}
+
+#[test]
+fn canvas_follows_are_checked_in_time_linear_in_the_clips() {
+    let cycle = |project: &Project| match project.validate() {
+        Err(crate::ModelError::InvalidDataBinding {
+            owner,
+            problem: crate::BindingProblem::Cycle,
+            ..
+        }) => owner,
+        other => panic!("expected a cycle, got {other:?}"),
+    };
+    assert_eq!(
+        cycle(&follow_chain(20_000, true)),
+        crate::DataOwner::Clip(id(ClipId::new, "c0"))
+    );
+    alpha2_scaling_support::assert_linear_shared(
+        "follow check",
+        2_500,
+        |count| follow_chain(count, true),
+        |project| {
+            std::hint::black_box(cycle(project));
+        },
+    );
+}
+
 /// A document at a count limit, built rather than stored: `count` sources, clips, clips on
 /// one track, transitions on one track, or compositions. The TypeScript tests build the same
 /// documents.
@@ -242,45 +325,36 @@ fn document_with(limit: &str, count: usize) -> String {
 #[test]
 fn count_limits_admit_their_maximum_and_refuse_one_more() {
     use crate::{ModelError, ProjectLoadError};
-    let refused = |result: Result<Project, ProjectLoadError>| match result {
-        Err(ProjectLoadError::InvalidProject(error)) => Some(error),
-        _ => None,
-    };
+    // The parser refuses a sequence over its own limit, validation a total across sequences.
     for (limit, maximum) in [
         ("sources", crate::MAX_CLIPS),
         ("clips_on_a_track", crate::MAX_CLIPS_PER_TRACK),
-        ("clips", crate::MAX_CLIPS),
         ("transitions_on_a_track", crate::MAX_TRANSITIONS_PER_TRACK),
         ("compositions", crate::MAX_COMPOSITIONS),
     ] {
-        let at = Project::from_json(&document_with(limit, maximum));
-        let over = refused(Project::from_json(&document_with(limit, maximum + 1)));
-        let over_the_limit = |error: &Option<ModelError>| {
-            matches!(
-                (limit, error),
-                ("sources", Some(ModelError::TooManySources { .. }))
-                    | (
-                        "clips_on_a_track",
-                        Some(ModelError::TooManyClipsOnTrack { .. })
-                    )
-                    | ("clips", Some(ModelError::TooManyClips { .. }))
-                    | (
-                        "transitions_on_a_track",
-                        Some(ModelError::TooManyTransitions { .. })
-                    )
-                    | ("compositions", Some(ModelError::TooManyCompositions { .. }))
-            )
-        };
+        let over = Project::from_json(&document_with(limit, maximum + 1));
         assert!(
-            over_the_limit(&over),
+            matches!(&over, Err(ProjectLoadError::Json(error))
+                if error.to_string().contains(&format!("at most {maximum} elements"))),
             "{limit} at {}: {over:?}",
             maximum + 1
         );
+        let at = Project::from_json(&document_with(limit, maximum));
         // Two clips hold one transition, so a full track of them is refused, but not for its count.
         if limit == "transitions_on_a_track" {
-            assert!(!over_the_limit(&refused(at)), "{limit} at {maximum}");
+            assert!(
+                matches!(at, Err(ProjectLoadError::InvalidProject(_))),
+                "{limit} at {maximum}"
+            );
         } else {
             assert!(at.is_ok(), "{limit} at {maximum}: {:?}", at.err());
         }
     }
+    Project::from_json(&document_with("clips", crate::MAX_CLIPS)).expect("all clips");
+    assert!(matches!(
+        Project::from_json(&document_with("clips", crate::MAX_CLIPS + 1)),
+        Err(ProjectLoadError::InvalidProject(
+            ModelError::TooManyClips { .. }
+        ))
+    ));
 }

@@ -87,10 +87,12 @@ test(
     if (wasm === undefined) return t.skip("the worklet wasm is not built");
     // Nothing reachable from the host panics, so the trap is planted.
     const instantiate = WebAssembly.instantiate;
+    let moduleCalls = 0;
     WebAssembly.instantiate = async (bytes, imports) => {
       const { instance } = await instantiate(bytes, imports);
       const exports = { ...instance.exports };
       exports.alpha2_worklet_process = () => {
+        moduleCalls += 1;
         const text = new TextEncoder().encode("panicked at audio.rs:1:1: boom");
         new Uint8Array(
           exports.memory.buffer,
@@ -108,12 +110,30 @@ test(
     } finally {
       WebAssembly.instantiate = instantiate;
     }
-    const reported = nextMessages(processor.hostPort);
+    const reported = nextMessages(processor.hostPort, 3);
     const stereo = [[new Float32Array(128), new Float32Array(128)]];
     assert.equal(processor.process([[]], stereo), false);
-    const [message] = await reported;
-    assert.equal(message?.type, "alpha2-error", "the trap must be reported");
-    assert.match(message.message, /boom/);
+    // A connected input makes the browser call `process` again; the dead module is left alone.
+    assert.equal(processor.process([[]], stereo), false);
+    assert.equal(processor.process([[]], stereo), false);
+    processor.port.onmessage({
+      data: { type: "alpha2-reset", id: 7 },
+    });
+    const messages = await reported;
+    assert.equal(
+      messages[0]?.type,
+      "alpha2-error",
+      "the trap must be reported",
+    );
+    assert.match(messages[0].message, /boom/);
+    assert.equal(
+      messages.filter((message) => message.type === "alpha2-error").length,
+      1,
+      "reported once",
+    );
+    assert.equal(messages[1]?.type, "alpha2-applied");
+    assert.match(messages[1]?.error ?? "", /boom/);
+    assert.equal(moduleCalls, 1);
   },
 );
 

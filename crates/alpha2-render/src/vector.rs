@@ -218,17 +218,16 @@ enum Step {
 }
 
 impl Renderer {
-    /// Whether vector scenes draw in linear light: the graph blends in linear light and half floats
-    /// are renderable and blendable.
+    /// Whether vector scenes draw in linear light: the graph blends in linear light into a
+    /// half-float intermediate, which is blendable wherever it is chosen.
     pub(crate) fn vector_linear(&self, blend_space: crate::BlendSpace) -> bool {
         blend_space == crate::BlendSpace::LinearLight
             && self.intermediate_format() == wgpu::TextureFormat::Rgba16Float
-            && self.gpu.capabilities().half_float_blendable
     }
 
-    fn vector_pipeline(&self) -> &CachedVectorPipeline {
-        self.pipelines.vector.get_or_init(|| {
-            let device = self.gpu.device();
+    fn vector_pipeline(&self) -> Result<&CachedVectorPipeline, RenderError> {
+        let device = self.gpu.device();
+        crate::gpu_errors::checked_cell(&self.pipelines.vector, device, || {
             let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("alpha2 vector layout"),
                 entries: &[
@@ -272,14 +271,17 @@ impl Renderer {
         })
     }
 
-    fn vector_pipelines(&self, format: wgpu::TextureFormat) -> crate::Shared<VectorPipelines> {
-        let cached = self.vector_pipeline();
+    fn vector_pipelines(
+        &self,
+        format: wgpu::TextureFormat,
+    ) -> Result<crate::Shared<VectorPipelines>, RenderError> {
+        let cached = self.vector_pipeline()?;
         let mut by_format = cached
             .by_format
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((_, pipelines)) = by_format.iter().find(|(held, _)| *held == format) {
-            return crate::Shared::clone(pipelines);
+            return Ok(crate::Shared::clone(pipelines));
         }
         let device = self.gpu.device();
         let make = |label: &'static str,
@@ -330,7 +332,7 @@ impl Renderer {
             ],
         })];
         let over = Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
-        let pipelines = crate::Shared::new(VectorPipelines {
+        let pipelines = crate::gpu_errors::create_checked(device, || VectorPipelines {
             tile: make(
                 "alpha2 vector tile pipeline",
                 "vs_tile",
@@ -352,17 +354,20 @@ impl Renderer {
                 &[],
                 None,
             ),
-        });
+        })
+        .map_err(|kind| RenderError::Gpu { kind })?;
+        let pipelines = crate::Shared::new(pipelines);
         by_format.push((format, crate::Shared::clone(&pipelines)));
-        pipelines
+        Ok(pipelines)
     }
 
-    pub(crate) fn warm_vector(&self, blend_space: crate::BlendSpace) {
+    pub(crate) fn warm_vector(&self, blend_space: crate::BlendSpace) -> Result<(), RenderError> {
         let format = self.intermediate_format();
-        self.vector_pipelines(format);
+        self.vector_pipelines(format)?;
         if self.vector_linear(blend_space) {
-            self.vector_pipelines(wgpu::TextureFormat::Rgba16Float);
+            self.vector_pipelines(wgpu::TextureFormat::Rgba16Float)?;
         }
+        Ok(())
     }
 
     fn scene_coverage(&self, scene: &VectorScene) -> Vec<Option<Arc<TileCoverage>>> {
@@ -429,8 +434,8 @@ impl Renderer {
                 crate::TimingSource::CpuEncoding,
             );
         }
-        let pipelines = self.vector_pipelines(format);
-        let cached = self.vector_pipeline();
+        let pipelines = self.vector_pipelines(format)?;
+        let cached = self.vector_pipeline()?;
         // Pages no taller than wide, nor than the device's largest texture.
         let max_rows = (self.limits.max_texture_dimension_2d.min(ATLAS_WIDTH) / 16).max(1);
         #[cfg(test)]

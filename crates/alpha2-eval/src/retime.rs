@@ -140,3 +140,169 @@ pub fn picture_source_time(
 ) -> Option<MediaTime> {
     map_source_time(timeline, source, time_map, Mirror::frame(frame_rate), time)
 }
+
+/// One stretch of a clip's timeline over which the shown source time moves one way.
+#[derive(Copy, Clone)]
+enum Direction {
+    Rising,
+    Falling,
+    Still,
+}
+
+/// The stretches of `timeline` over which `time_map` moves the shown source time one way: the
+/// whole clip, or one per loop pass, made as they are read. `None` when a pass would end past
+/// the `i64` tick range.
+fn monotone_stretches(
+    timeline: TimeRange,
+    source: TimeRange,
+    time_map: TimeMap,
+) -> Option<impl Iterator<Item = (i64, i64, Direction)>> {
+    let (start, end) = (timeline.start().ticks(), timeline.end().ticks());
+    let source_length = source.duration()?.ticks();
+    let empty = start >= end || source_length <= 0;
+    let step = match time_map {
+        TimeMap::Loop { .. } if !empty => {
+            let passes = (i128::from(end) - i128::from(start) - 1) / i128::from(source_length);
+            let last_end = i128::from(start) + (passes + 1) * i128::from(source_length);
+            i64::try_from(last_end).ok()?;
+            source_length
+        }
+        _ => i64::MAX,
+    };
+    let mut from = if empty { end } else { start };
+    let mut pass = 0_i64;
+    Some(std::iter::from_fn(move || {
+        if from >= end {
+            return None;
+        }
+        let to = from.saturating_add(step).min(end);
+        let direction = match time_map {
+            TimeMap::Freeze { .. } => Direction::Still,
+            TimeMap::Reverse => Direction::Falling,
+            TimeMap::Loop {
+                mode: LoopMode::PingPong,
+            } if pass % 2 == 1 => Direction::Falling,
+            TimeMap::Forward | TimeMap::Loop { .. } => Direction::Rising,
+        };
+        let stretch = (from, to, direction);
+        from = to;
+        pass += 1;
+        Some(stretch)
+    }))
+}
+
+/// The first tick in `from..to` at which `reached` holds, for a `reached` that never stops
+/// holding once it does; `to` when it never holds.
+fn first_reached(from: i64, to: i64, reached: impl Fn(i64) -> bool) -> i64 {
+    let (mut low, mut high) = (from, to);
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if reached(middle) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    low
+}
+
+/// The timeline ranges of a clip at which its picture shows a source time in
+/// `[range_start, range_end)`, the full preimage of [`picture_source_time`].
+///
+/// Forward and stretched clips give one range, reversed clips one mirrored range, loops one per
+/// pass that reaches the interval, and a freeze the whole clip when its instant lies inside the
+/// interval. Ranges are in timeline order and disjoint. `None` for a time beyond ticks.
+#[must_use]
+pub fn source_range_to_timeline(
+    timeline: TimeRange,
+    source: TimeRange,
+    time_map: TimeMap,
+    frame_rate: FrameRate,
+    range_start: MediaTime,
+    range_end: MediaTime,
+) -> Option<Vec<TimeRange>> {
+    if range_start >= range_end {
+        return Some(Vec::new());
+    }
+    let shown = |tick: i64| {
+        picture_source_time(timeline, source, time_map, frame_rate, MediaTime(tick))
+            .map_or(i64::MIN, MediaTime::ticks)
+    };
+    let (low, high) = (range_start.ticks(), range_end.ticks());
+    // Every map but a freeze shows only times inside the source range, so an interval covering
+    // it is the whole clip, found without walking loop passes.
+    if !matches!(time_map, TimeMap::Freeze { .. })
+        && low <= source.start().ticks()
+        && high >= source.end().ticks()
+    {
+        return Some(if timeline.is_empty() || source.is_empty() {
+            Vec::new()
+        } else {
+            vec![timeline]
+        });
+    }
+    let mut ranges: Vec<TimeRange> = Vec::new();
+    for (from, to, direction) in monotone_stretches(timeline, source, time_map)? {
+        let (first, last) = match direction {
+            Direction::Rising => (
+                first_reached(from, to, |tick| shown(tick) >= low),
+                first_reached(from, to, |tick| shown(tick) >= high),
+            ),
+            Direction::Falling => (
+                first_reached(from, to, |tick| shown(tick) < high),
+                first_reached(from, to, |tick| shown(tick) < low),
+            ),
+            Direction::Still => {
+                if (low..high).contains(&shown(from)) {
+                    (from, to)
+                } else {
+                    (from, from)
+                }
+            }
+        };
+        if first < last {
+            let range = TimeRange::new(MediaTime(first), MediaTime(last)).ok()?;
+            match ranges.last_mut() {
+                Some(previous) if previous.end() == range.start() => {
+                    *previous = TimeRange::new(previous.start(), range.end()).ok()?;
+                }
+                _ => ranges.push(range),
+            }
+        }
+    }
+    Some(ranges)
+}
+
+/// The timeline times at which a clip's picture reaches source time `instant`: per stretch over
+/// which the shown time moves one way, the first tick at which it has reached `instant` in that
+/// stretch's direction, if the stretch passes it. A freeze passes nothing.
+#[must_use]
+pub fn source_instant_to_timeline(
+    timeline: TimeRange,
+    source: TimeRange,
+    time_map: TimeMap,
+    frame_rate: FrameRate,
+    instant: MediaTime,
+) -> Option<Vec<MediaTime>> {
+    let shown = |tick: i64| {
+        picture_source_time(timeline, source, time_map, frame_rate, MediaTime(tick))
+            .map_or(i64::MIN, MediaTime::ticks)
+    };
+    let at = instant.ticks();
+    let mut times = Vec::new();
+    for (from, to, direction) in monotone_stretches(timeline, source, time_map)? {
+        let found = match direction {
+            Direction::Rising if shown(from) <= at => {
+                first_reached(from, to, |tick| shown(tick) >= at)
+            }
+            Direction::Falling if shown(from) >= at => {
+                first_reached(from, to, |tick| shown(tick) <= at)
+            }
+            _ => to,
+        };
+        if found < to {
+            times.push(MediaTime(found));
+        }
+    }
+    Some(times)
+}

@@ -35,13 +35,13 @@ if TYPE_CHECKING:
     from .types import (
         AlignContent,
         AlignItems,
-        Animated,
         Display,
         FlexDirection,
         FlexWrap,
         GeneratorLayout,
         GridAutoFlow,
         JustifyContent,
+        Keyframed,
         LayoutNode,
         Overflow,
         Paint,
@@ -70,22 +70,22 @@ Offset = str | tuple[Size, Size] | Mapping[str, Size]
 
 
 class Border(TypedDict):
-    width: Size | Animated[Size]
-    paint: Paint | Animated[Paint]
+    width: Size | Keyframed[Size]
+    paint: Paint | Keyframed[Paint]
 
 
 class Inset(TypedDict, total=False):
-    left: Length | Animated[Length]
-    top: Length | Animated[Length]
-    right: Length | Animated[Length]
-    bottom: Length | Animated[Length]
+    left: Length | Keyframed[Length]
+    top: Length | Keyframed[Length]
+    right: Length | Keyframed[Length]
+    bottom: Length | Keyframed[Length]
 
 
 class ItemProps(TypedDict, total=False):
     """The fields of any box: its text style, its box and its place in its parent."""
 
     font_family: str
-    font_size: Size | Animated[Size]
+    font_size: Size | Keyframed[Size]
     font_weight: int
     fill: Paint
     line_height: float
@@ -93,32 +93,32 @@ class ItemProps(TypedDict, total=False):
     text_align: TextAlign
     strokes: list[TextStroke]
     shadows: list[TextShadow]
-    padding: Sides | Animated[Any]
-    background: Paint | Animated[Paint]
+    padding: Sides | Keyframed[Any]
+    background: Paint | Keyframed[Paint]
     border: Border
-    border_radius: Size | Animated[Size]
+    border_radius: Size | Keyframed[Size]
     overflow: Overflow
-    width: Length | Animated[Length]
-    height: Length | Animated[Length]
-    min_width: Length | Animated[Length]
-    min_height: Length | Animated[Length]
-    max_width: Length | Animated[Length]
-    max_height: Length | Animated[Length]
+    width: Length | Keyframed[Length]
+    height: Length | Keyframed[Length]
+    min_width: Length | Keyframed[Length]
+    min_height: Length | Keyframed[Length]
+    max_width: Length | Keyframed[Length]
+    max_height: Length | Keyframed[Length]
     aspect_ratio: float
-    margin: Sides | Animated[Any]
-    flex_grow: float | Animated[float]
-    flex_shrink: float | Animated[float]
-    flex_basis: Length | Animated[Length]
+    margin: Sides | Keyframed[Any]
+    flex_grow: float | Keyframed[float]
+    flex_shrink: float | Keyframed[float]
+    flex_basis: Length | Keyframed[Length]
     align_self: AlignItems
     justify_self: AlignItems
     grid_column: int | str
     grid_row: int | str
     position: Position
     inset: Inset
-    opacity: float | Animated[float]
-    translate: Offset | Animated[Any]
-    scale: float | tuple[float, float] | Vec2 | Animated[Any]
-    rotation_degrees: float | Animated[float]
+    opacity: float | Keyframed[float]
+    translate: Offset | Keyframed[Any]
+    scale: float | tuple[float, float] | Vec2 | Keyframed[Any]
+    rotation_degrees: float | Keyframed[float]
 
 
 class BoxProps(ItemProps, total=False):
@@ -132,9 +132,9 @@ class BoxProps(ItemProps, total=False):
     grid_auto_columns: str
     grid_auto_rows: str
     grid_auto_flow: GridAutoFlow
-    gap: Size | Animated[Size]
-    row_gap: Size | Animated[Size]
-    column_gap: Size | Animated[Size]
+    gap: Size | Keyframed[Size]
+    row_gap: Size | Keyframed[Size]
+    column_gap: Size | Keyframed[Size]
     justify_content: JustifyContent
     align_items: AlignItems
     align_content: AlignContent
@@ -154,7 +154,7 @@ def box(*children: LayoutNode, **props: Unpack[BoxProps]) -> LayoutNode:
     return cast("LayoutNode", fields)
 
 
-def text(content: str | Animated[str], **props: Unpack[ItemProps]) -> LayoutNode:
+def text(content: str | Keyframed[str], **props: Unpack[ItemProps]) -> LayoutNode:
     """A box holding one paragraph of text, wrapped at its content width and drawn in the style it
     sets or inherits; ``\\n`` starts a line.
 

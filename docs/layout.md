@@ -24,7 +24,8 @@ Every node of the tree is one kind of box. A box is a container when it has `chi
 | Item | `width`, `height`, `min_width`, `min_height`, `max_width`, `max_height`, `aspect_ratio`, `margin`, `align_self`, `position` (`relative`, `absolute`), `inset` | Not on the root. Absent sizes are `auto`; `min_*` auto is the CSS automatic minimum size. No `auto` margins. |
 | Flex item | `flex_grow`, `flex_shrink`, `flex_basis` | In a flex container only. |
 | Grid item | `grid_column`, `grid_row`, `justify_self` | In a grid only. |
-| Text style | `font_family`, `font_size`, `fill`, `line_height`, `text_align`, `strokes`, `shadows` | On any box; inherited. See [Text](#text). |
+| Text style | `font_family`, `font_size`, `font_weight`, `fill`, `line_height`, `letter_spacing`, `text_align`, `strokes`, `shadows` | On any box; inherited. See [Text](#text). |
+| Own text | `font_size_fit`, `line_clamp`, `text_animators` | The box's own text only; not inherited. See [Fitting and clamping](#fitting-and-clamping). |
 | Drawn after layout | `opacity`, `translate`, `scale`, `rotation_degrees` | About the border box's centre; they never move other boxes. A box with any of them, or with hidden overflow, is drawn as one group: its opacity is group opacity. |
 
 The root is the picture: its border box is the canvas, so it takes no size, margin or item field. Place its content with its own `justify_content`, `align_items` and `padding`, as with Remotion's `AbsoluteFill`.
@@ -43,7 +44,7 @@ A length is written three ways:
 
 Every layout length takes the first two: sizes, padding, margin, gap, inset, `border_radius`, border width, `font_size`, `translate`. Percent is refused where CSS and the layout give it no meaning (`gap: "5%"` is `percent is not allowed here`). Pixels are converted once, against the project canvas: a preview at half size draws `"12px"` as 6 preview pixels, keeping the picture's proportions. Within one keyframe sequence, pixels and numbers mix freely; a percent does not mix with either.
 
-`padding`, `margin` and `inset` take the CSS shorthand: one length for every side, or a string of one to four (`"8px 16px"`: top and bottom 8, left and right 16; `"1px 2px 3px 4px"`: top, right, bottom, left), or the sides object (missing sides 0). `translate` takes one or two lengths as CSS writes them (`"10px 20px"`, y 0 when missing) or `{ "x", "y" }`.
+`padding` and `margin` take the CSS shorthand: one length for every side, or a string of one to four (`"8px 16px"`: top and bottom 8, left and right 16; `"1px 2px 3px 4px"`: top, right, bottom, left), or the sides object (missing sides 0). `inset` takes no shorthand: it is an object of up to four sides, `{ "left", "top", "right", "bottom" }`, each its own animated length, and a missing side is `auto`. `translate` takes one or two lengths as CSS writes them (`"10px 20px"`, y 0 when missing) or `{ "x", "y" }`.
 
 Colors, here and everywhere in a project, may be CSS hex (`"#1e2230"`, `"#fff"`, `"#000000c0"`) or the `{ red, green, blue, alpha }` object. Where a paint is read (`background`, a border's `paint`, a shape's fill), a color is a solid paint of it: `"background": { "mode": "constant", "value": "#1e2230" }`. A gradient stays tagged. The engine writes colors back as objects and paints tagged. Code that reads a document (an editor, a converter) can take it in that one form: `canonicalProject` from `alpha2/project` returns the document with every color the object, every paint tagged, every padding and margin the four sides and every `translate` `{ x, y }`, typed `CanonicalProject`; `canonicalRgba` and `canonicalPaint` do the same for one value.
 
@@ -77,13 +78,34 @@ Lines are `line_height` font sizes apart, baseline to baseline. Each line's em b
 }
 ```
 
-A text may be empty (it then takes no room) and may change over time, but its keyframes must all `hold`: strings do not interpolate. Text is never shrunk to fit.
+A text may be empty (it then takes no room) and may change over time, but its keyframes must all `hold`: strings do not interpolate.
+
+### Fitting and clamping
+
+A text box's own `font_size_fit` and `line_clamp` keep its text inside its content box. Text styles of captions and text generators take the same two fields, with `max_width` and `max_height` as their box.
+
+`line_clamp` is CSS `line-clamp`: `max_lines` is CSS `max-lines`, and `block_ellipsis` is CSS `block-ellipsis`, `"ellipsis"` (U+2026, the default, as the CSS shorthand sets it), `"no_ellipsis"`, or `{ "string": " ..." }` (1 to 64 bytes on one line). Lines after the clamp point are not drawn. The clamp point is after the last line within `max_lines` that fits in the content box's height, and never before the first line; where CSS clamps at the height only for `max-lines: auto`, the height always counts here, so a clamped text stays inside a box that has a height. A box whose height is `auto` ends at the clamp point, as a CSS line-clamp container does. When text is cut, the last kept line gives up its end until the ellipsis fits after it: back to its last soft wrap opportunity (a word's end) at which it fits, else to its last character that fits, and the ellipsis is drawn at the line's end (the left of a right-to-left line) in the text's style. Text animators count no unit for the ellipsis; it moves, scales and fades with the character before it. The scales of several text animators multiply, and a character's combined scale is at most 10 on each axis.
+
+`font_size_fit` has no CSS standard (the CSS Working Group's `text-fit` sketch fits widths only). `{ "min": 0.02, "max": 0.1 }` draws the text at the largest font size from `min` to `max` at which it fits its box: no line breaks inside a word, the lines fit the content height, and there are no more lines than `line_clamp.max_lines`. `max` defaults to the box's `font_size`, so the text only shrinks; `min` wins over a smaller `max`. Both take a number or `"<n>px"`. Sizes are tried by bisection on steps of 1/8192 of the shorter side between them, so every platform picks the same one. Text that fits at no size draws at `min`; its clamp, if any, then cuts it, and measuring reports it.
+
+The box is laid out at `font_size` first; the fit never changes the box's size. A fit fills a box whose size is set (`width` and `height`, `flex_grow`, `stretch`, a grid area); in a box whose height is `auto`, it can only shrink the text to fit the width or the line count. An animated `font_size` is fitted again at each frame. Text animators never change the fit. Caption cues are fitted one by one.
+
+```json
+{
+  "width": { "mode": "constant", "value": "60%" },
+  "height": { "mode": "constant", "value": "240px" },
+  "font_size": { "mode": "constant", "value": "64px" },
+  "font_size_fit": { "min": "24px" },
+  "line_clamp": { "max_lines": 3 },
+  "text": { "mode": "constant", "value": "A headline that may be longer than the card" }
+}
+```
 
 ## Grid
 
 `"display": "grid"` lays a box's children out in a CSS grid.
 
-- `grid_template_columns` and `grid_template_rows` are track lists as CSS writes them: lengths (a bare number is a fraction), percents, `<n>fr`, `auto`, `min-content`, `max-content`, `minmax(min, max)`, `fit-content(length)`, and `repeat(count, tracks)` with a count of 1 to 64, `auto-fill` or `auto-fit`. At most 64 tracks on an axis, counts expanded. `auto-fill` and `auto-fit` repeat tracks of a fixed size only, as CSS requires, once per list, beside fixed-size tracks.
+- `grid_template_columns` and `grid_template_rows` are track lists as CSS writes them: lengths (a bare number is a fraction), percents, `<n>fr`, `auto`, `min-content`, `max-content`, `minmax(min, max)`, `fit-content(length)`, and `repeat(count, tracks)` with a count of 1 to 64, `auto-fill` or `auto-fit`. At most 64 tracks are written on an axis, `repeat()` counts expanded; an `auto-fill` or `auto-fit` repeat counts its tracks once, and lays out as many as fit the container. `auto-fill` and `auto-fit` repeat tracks of a fixed size only, as CSS requires, once per list, beside fixed-size tracks.
 - `grid_auto_columns` and `grid_auto_rows` size the implicit tracks (no `repeat()`); `grid_auto_flow` (`row`, `column`, `row_dense`, `column_dense`) places the items without a placement.
 - An item's `grid_column` and `grid_row` are lines as CSS writes them: `2`, `"1 / 3"`, `"span 2"`, `"2 / span 3"`, `"1 / -1"`, `"auto"`. Lines count from 1, or from -1 at the end, up to 65 either way; spans are 1 to 64.
 - `justify_items` and `align_items` place the items in their areas; `justify_self` and `align_self` place one. `justify_content` and `align_content` place the tracks in the grid.
@@ -120,13 +142,19 @@ A shape box draws a shapes content tree (the `items` a shapes generator takes) o
 
 Paints of a box's background and border are normalized to its border box: a linear gradient from `x` 0 to 1 spans the box, and a radial radius is a fraction of the box's shorter side.
 
+## Limits
+
+A layout tree holds at most 256 boxes, the root included, nested at most 16 deep (the root is depth 1). Of them, at most 64 have text and at most 16 are drawn as one group (a box with `opacity`, `translate`, `scale`, `rotation_degrees` or hidden overflow). Its shape boxes hold at most 1,024 shape items together. A tree past a limit is refused.
+
+A text box is drawn at most 16,384 pixels wide and tall at the size the picture is drawn at. A frame with a wider or taller text box fails; measuring reports that box as overflowing.
+
 ## Animation
 
 Numeric values are keyframed in the picture's time, as shapes are: a clip's source time, a generator node's composition time, a media node's composition time plus its `start`. Keywords, track lists, grid lines and booleans do not animate. A layout without keyframes is laid out once and every later frame reuses it.
 
 ## Measuring
 
-`measureLayout` (from `alpha2/layout`, on `alpha2/wasm`'s `WasmTextMeasurer`) lays a layout out with the given fonts, at the given picture size and time, as a frame lays it out, and answers each node's border and content box as fractions of the picture, its text's line count and first and last baselines (`baselines: { first, last }`, fractions of the picture's height; `null` without text), and whether it overflows: its text is taller than its box or splits a word, or an in-flow child reaches past its padding box. Rendering draws overflowing boxes anyway; measure at the size the picture is drawn at, and fix the document. Its `"<n>px"` lengths are pixels of the project canvas: pass the project's size as `canvas` when measuring at another size.
+`measureLayout` (from `alpha2/layout`, on `alpha2/wasm`'s `WasmTextMeasurer`) lays a layout out with the given fonts, at the given picture size and time, as a frame lays it out, and answers each node's border and content box as fractions of the picture, its text's line count and first and last baselines (`baselines: { first, last }`, fractions of the picture's height; `null` without text), its text's font size as drawn (`fontSize`, fitted by `font_size_fit`; `null` without text), whether `line_clamp` cut its text (`truncated`), and whether it overflows: its text, at that size and once clamped, is taller than its box or splits a word, or an in-flow child reaches past its padding box, or its text box is larger than a frame can draw (see Limits). A text with a fit that still overflows did not fit at its `min`. Rendering draws overflowing boxes anyway; measure at the size the picture is drawn at, and fix the document. Its `"<n>px"` lengths are pixels of the project canvas: pass the project's size as `canvas` when measuring at another size.
 
 ```ts
 import init, { WasmTextMeasurer } from "alpha2/wasm";
@@ -206,7 +234,7 @@ const titleCard = layout(
 
 ### Lower third
 
-A card that sizes to its text up to 60% of the picture's content width, where the subtitle wraps. The accent bar stretches to the card's inner height; `flex_shrink: 0` keeps it from giving up its width when the text is long. The card fades and rises in as one group over 0.3 s, without laying out again.
+A card that sizes to its text up to 60% of the picture's content width, where the subtitle wraps. The accent bar stretches to the card's inner height; `flex_shrink: 0` keeps it from giving up its width when the text is long. The card fades and rises in as one group over 0.3 s, without moving any other box.
 
 ```json
 {
@@ -327,4 +355,4 @@ Two text cards, a bar column spanning both rows, and a bar chart that is itself 
 
 ## Not supported
 
-Block and inline layout; named grid lines and `grid_template_areas`; subgrid; baseline alignment; `auto` margins; `em` and `rem`; color names and color functions; animated text color; rich-text spans; per-side border widths and per-corner radii; box shadows; ellipsis and line clamping; right-to-left flex direction; percent padding and margin; and image or video boxes. Bidirectional text inside a paragraph is shaped as text generators shape it.
+Block and inline layout; named grid lines and `grid_template_areas`; subgrid; baseline alignment; `auto` margins; `em` and `rem`; color names and color functions; animated text color; rich-text spans; per-side border widths and per-corner radii; box shadows; `text-overflow` (a line never overflows its box sideways: a word wider than the line is broken between characters); right-to-left flex direction; percent padding and margin; and image or video boxes. Bidirectional text inside a paragraph is shaped as text generators shape it.

@@ -1,0 +1,1621 @@
+{
+ "$comment": "Written by tests/corpus/generate/container-audio.py from ffprobe. Packets are [pts, dts, duration, keyframe, size, sha256 of data, skip samples, discard padding]; packets_sha256 hashes every packet's fields joined by spaces, one line each. ADTS packets exclude their ADTS header and CRC.",
+ "files": {
+  "audio-3.0.wav": {
+   "codec": "pcm_s16le",
+   "sample_rate": 48000,
+   "channels": 3,
+   "layout": [
+    "FL",
+    "FR",
+    "FC"
+   ],
+   "timescale": 48000,
+   "duration": 4800,
+   "bits_per_sample": 16,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 2,
+   "packets_sha256": "dbec61c1276682e7e5761ecc93f0c2368f3349390709bce5e897292ca5b88d1a",
+   "packets": [
+    [
+     0,
+     0,
+     4096,
+     true,
+     24576,
+     "6e84f6718d2c8abbc29617bff67965173772b99c17e9251f3ef0fcca48f3883f",
+     0,
+     0
+    ],
+    [
+     4096,
+     4096,
+     704,
+     true,
+     4224,
+     "ffa1db87631f963a4def02dd674079d3c613a42b2e19776abca6cf114f5ace3e",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-5.1.4.wav": {
+   "codec": "pcm_s16le",
+   "sample_rate": 48000,
+   "channels": 10,
+   "layout": [
+    "FL",
+    "FR",
+    "FC",
+    "LFE",
+    "SL",
+    "SR",
+    "TFL",
+    "TFR",
+    "TBL",
+    "TBR"
+   ],
+   "timescale": 48000,
+   "duration": 4800,
+   "bits_per_sample": 16,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 2,
+   "packets_sha256": "4fa758097c3d52d87a9a647e6f736164f5269eb1d7846a18a96f2668518fd4cf",
+   "packets": [
+    [
+     0,
+     0,
+     4096,
+     true,
+     81920,
+     "5d39c861b0030a8923085ce6b795743f3c1ee0a5042cadd312c166f7c1822b0a",
+     0,
+     0
+    ],
+    [
+     4096,
+     4096,
+     704,
+     true,
+     14080,
+     "36db8382d39aa7e83159ff12001e56877673bb47b67aa2c65f76bf3193b34d51",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-adts-3.0.aac": {
+   "codec": "aac",
+   "sample_rate": 48000,
+   "channels": 3,
+   "layout": [
+    "FL",
+    "FR",
+    "FC"
+   ],
+   "timescale": 28224000,
+   "duration": 15052880,
+   "bits_per_sample": null,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 25,
+   "packets_sha256": "b200e4c587588017f69c12c06888d0bcb60ee44fc00e1fe7b6011f40ed3a6d6a",
+   "packets": [
+    [
+     0,
+     0,
+     602112,
+     true,
+     510,
+     "69830ed6ceae43d069ab718555530242611ad165c4d52b61408a23556d2de237",
+     0,
+     0
+    ],
+    [
+     602112,
+     602112,
+     602112,
+     true,
+     601,
+     "61bfe6011753b121ff92f51197e841b578b3544c00f40fe852bd8e3f842becaa",
+     0,
+     0
+    ],
+    [
+     1204224,
+     1204224,
+     602112,
+     true,
+     390,
+     "569186174ff5cc89d10f493cce02fc8310329536a874a3e42ef2eb036a042051",
+     0,
+     0
+    ],
+    [
+     1806336,
+     1806336,
+     602112,
+     true,
+     440,
+     "b0e4e80c300ec700435a97328424602ef4a2ca6c588e0b135bbf988e731b00f6",
+     0,
+     0
+    ],
+    [
+     2408448,
+     2408448,
+     602112,
+     true,
+     443,
+     "60c35ab8450b853cffb00cbc3b6712deb7579cd1047c1ba8961dfadd184a49c7",
+     0,
+     0
+    ],
+    [
+     3010560,
+     3010560,
+     602112,
+     true,
+     439,
+     "a031150fc088fdf60db6013cadecadd44c2ca98c83b2174b979b79d69691c87e",
+     0,
+     0
+    ],
+    [
+     3612672,
+     3612672,
+     602112,
+     true,
+     512,
+     "e7014aca4775c848da50a27297f5d4cb1247676180bda28688f3c310de503057",
+     0,
+     0
+    ],
+    [
+     4214784,
+     4214784,
+     602112,
+     true,
+     457,
+     "9b0492db8d947d7520390318de9e654e3cfdaa60223402f5d60aa67192d128ba",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-adts-rate-change.aac": {
+   "codec": "aac",
+   "sample_rate": 44100,
+   "channels": 1,
+   "layout": [
+    "FC"
+   ],
+   "timescale": 28224000,
+   "duration": 30135955,
+   "bits_per_sample": null,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 48,
+   "packets_sha256": "ed67cc95fd8638626f686b6c851a4b9f715bfc15e605809597efe57b43aa12d3",
+   "packets": [
+    [
+     0,
+     0,
+     655360,
+     true,
+     416,
+     "06900e78a3e6e0c0412beaafb71f829ba79cdf51e7182066787fe2f2db6e85f9",
+     0,
+     0
+    ],
+    [
+     655360,
+     655360,
+     655360,
+     true,
+     366,
+     "a4ae8d8c994d4a253fe2f5affac981fcf89d9607d4dc5ea3ef1a49c83909c8cf",
+     0,
+     0
+    ],
+    [
+     1310720,
+     1310720,
+     655360,
+     true,
+     202,
+     "219c76b6aff46b00ce9c0dcb19d568bd52297560dfc49436b7623417245c52a3",
+     0,
+     0
+    ],
+    [
+     1966080,
+     1966080,
+     655360,
+     true,
+     295,
+     "9adcab5814525b375f21f36cf8f234c1f23088137639676c7cfb844a8cc1a399",
+     0,
+     0
+    ],
+    [
+     2621440,
+     2621440,
+     655360,
+     true,
+     286,
+     "17901312d5f570774ef8cccb587392d2b0e15e4fb8cf9692f4ea3f83ff9c94fd",
+     0,
+     0
+    ],
+    [
+     3276800,
+     3276800,
+     655360,
+     true,
+     345,
+     "95db5100083e644576f5826acf53fcb2611c820953bfa82f90848665323bade2",
+     0,
+     0
+    ],
+    [
+     3932160,
+     3932160,
+     655360,
+     true,
+     263,
+     "b6fad2fded3af30e2228eae5a6a68e6b6c285a7c3ae44cb180519cd4f19d93d9",
+     0,
+     0
+    ],
+    [
+     4587520,
+     4587520,
+     655360,
+     true,
+     288,
+     "201d88e3972d600d323af44f90047dab5315052de56c8a13ba85ea0785d5703d",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-adts.aac": {
+   "codec": "aac",
+   "sample_rate": 48000,
+   "channels": 1,
+   "layout": [
+    "FC"
+   ],
+   "timescale": 28224000,
+   "duration": 12041824,
+   "bits_per_sample": null,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 20,
+   "packets_sha256": "7accf70227173f83cdf95751645960e785286abfbb3672768be088bfa70b113e",
+   "packets": [
+    [
+     0,
+     0,
+     602112,
+     true,
+     375,
+     "981beac00a6482836ec373bcd9bcb15382b421519d2f9577f888594e500d2936",
+     0,
+     0
+    ],
+    [
+     602112,
+     602112,
+     602112,
+     true,
+     367,
+     "2725a351f11ad39ae492c557061f524ddfda5168b015001827443d4a76f966bf",
+     0,
+     0
+    ],
+    [
+     1204224,
+     1204224,
+     602112,
+     true,
+     178,
+     "8ab6246e38e2ed484d681a94aa0bd535ff3200797bc6f835333bb8fd8a6773be",
+     0,
+     0
+    ],
+    [
+     1806336,
+     1806336,
+     602112,
+     true,
+     254,
+     "02c2489184cc0ac9aa64f0cf65ffd57da0d1a0106215c7606cba0c60dcfd3265",
+     0,
+     0
+    ],
+    [
+     2408448,
+     2408448,
+     602112,
+     true,
+     259,
+     "a203e6df6bba6cfcd94c0e48b78b511fa2b133aecc4db5dcb62f37e120f9fefd",
+     0,
+     0
+    ],
+    [
+     3010560,
+     3010560,
+     602112,
+     true,
+     236,
+     "c7de815f7ca7fb08eb8eea7d57dcf4f33768e427c642e4fe02fab744ca537e02",
+     0,
+     0
+    ],
+    [
+     3612672,
+     3612672,
+     602112,
+     true,
+     264,
+     "cb6b3cca76346189e2c349bbf3ef6044e04902d22727622ae54d89ac65c14b71",
+     0,
+     0
+    ],
+    [
+     4214784,
+     4214784,
+     602112,
+     true,
+     235,
+     "1d937a5a653c5e952b93ad981d5248cef01ad3b71859575f960ac2b1f14a059c",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-f32-list.wav": {
+   "codec": "pcm_f32le",
+   "sample_rate": 8000,
+   "channels": 1,
+   "layout": null,
+   "timescale": 8000,
+   "duration": 400,
+   "bits_per_sample": 32,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 1,
+   "packets_sha256": "86554c66aca48335ede836af2e8e4c396702688113f6a3f7f7c5cdbb41d805b8",
+   "packets": [
+    [
+     0,
+     0,
+     400,
+     true,
+     1600,
+     "999f515ec2e678105e2cf4bcc7a38e85ff1dc42a713fb15f1903ff08b511e964",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-flac-4.0.flac": {
+   "codec": "flac",
+   "sample_rate": 48000,
+   "channels": 4,
+   "layout": [
+    "FL",
+    "FR",
+    "FC",
+    "BC"
+   ],
+   "timescale": 48000,
+   "duration": 14400,
+   "bits_per_sample": 24,
+   "initial_padding": 0,
+   "extradata_sha256": "0fe9b3cf392937541c82c32b78cfcefa54f1f5d053b2cfaa62a2828ca1563f50",
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 4,
+   "packets_sha256": "ad0ddcb75a7bd293db3a4a48756419ef4cd6a8a5d8f5634d218c0f712b0577a6",
+   "packets": [
+    [
+     0,
+     0,
+     4608,
+     true,
+     23202,
+     "4e6ccdd3e9dd2b73695f3c44b2c418ea22194ed7cf2481d07ccf2ae142c61c48",
+     0,
+     0
+    ],
+    [
+     4608,
+     4608,
+     4608,
+     true,
+     22538,
+     "7f0cf4080958685df716163b273a54735bef9a2b5111c3bb0178bf0e43d80199",
+     0,
+     0
+    ],
+    [
+     9216,
+     9216,
+     4608,
+     true,
+     20927,
+     "574c01c5416a1f11fafe0e1605fac0576623cd94261ba66e14a58f768e8bd4de",
+     0,
+     0
+    ],
+    [
+     13824,
+     13824,
+     576,
+     true,
+     2970,
+     "8c4aa24fe5611e10b66561610e1aab679d230bce299772506b3c9af4880767c7",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-flac.ogg": {
+   "codec": "flac",
+   "sample_rate": 48000,
+   "channels": 1,
+   "layout": [
+    "FC"
+   ],
+   "timescale": 48000,
+   "duration": 4800,
+   "bits_per_sample": 16,
+   "initial_padding": 0,
+   "extradata_sha256": "23c19e11c1a5137e9e22f8557245f1ae64f89bbf2b93ec1c6560880f3418698d",
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 2,
+   "packets_sha256": "be6be6bbc4dbf0aed03f15178305dacf622132b5688144d101f620ad610733fd",
+   "packets": [
+    [
+     0,
+     0,
+     4608,
+     true,
+     1260,
+     "8941f5c0ae387ccab38215c061a1e10d1e4c5e0f2133d63ca41a4657b94a5656",
+     0,
+     0
+    ],
+    [
+     4608,
+     4608,
+     192,
+     true,
+     118,
+     "040dde79fb561ef1ab0470d47ae705b537093e813d6c2a5977f3e4d2a8dc1564",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-mp3-lame.mp3": {
+   "codec": "mp3",
+   "sample_rate": 44100,
+   "channels": 1,
+   "layout": [
+    "FC"
+   ],
+   "timescale": 14112000,
+   "duration": 7056000,
+   "bits_per_sample": null,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 21,
+   "packets_sha256": "cb26d58e19da9cc39ceb9b395af75dad10e0b5b1d5bf8270d662a7d45a745ad0",
+   "packets": [
+    [
+     0,
+     0,
+     368640,
+     true,
+     626,
+     "534c2514cb1b20e38fbcdcf4e1a08ff21786b72073d22733be8bfc165f801ba0",
+     1105,
+     0
+    ],
+    [
+     368640,
+     368640,
+     368640,
+     true,
+     156,
+     "748e6f7c3e4845fdaf7aaca88fb1062ea7292d472885deb1bc561e932e337472",
+     0,
+     0
+    ],
+    [
+     737280,
+     737280,
+     368640,
+     true,
+     104,
+     "ce1899411de541d74aa4ad325bf049bdcbe63b10718ea05a49fd05ae5fa28776",
+     0,
+     0
+    ],
+    [
+     1105920,
+     1105920,
+     368640,
+     true,
+     104,
+     "3488f2f6c4285deb7d6509222e4b70a890b8cc44cd244ef7854295cdd635d93b",
+     0,
+     0
+    ],
+    [
+     1474560,
+     1474560,
+     368640,
+     true,
+     104,
+     "034f1474d2e0a9e9d4f2f365574664bebe627dba09fe7b93b85429cc39365744",
+     0,
+     0
+    ],
+    [
+     1843200,
+     1843200,
+     368640,
+     true,
+     104,
+     "4ff9aba58087cb37518dfb21c61ae219d0cbeec5e5c2644aa6c1551a27784d8f",
+     0,
+     0
+    ],
+    [
+     2211840,
+     2211840,
+     368640,
+     true,
+     104,
+     "310f92dba4aa7b8412d129fca396a69cd044966527160d39c3b0f70a1857205a",
+     0,
+     0
+    ],
+    [
+     2580480,
+     2580480,
+     368640,
+     true,
+     104,
+     "cd9495fbe66879a9781c8b77cf1ddaddf0a42ed7eb383395f28a6b92c0399ff4",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-mp3-mpeg2-id3v1.mp3": {
+   "codec": "mp3",
+   "sample_rate": 22050,
+   "channels": 2,
+   "layout": [
+    "FL",
+    "FR"
+   ],
+   "timescale": 14112000,
+   "duration": 8110872,
+   "bits_per_sample": null,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 22,
+   "packets_sha256": "ef7b77f21e3e1bee8b09f3a6ca9364dff98f2da446607cee549b2b45224db9e7",
+   "packets": [
+    [
+     0,
+     0,
+     368640,
+     true,
+     104,
+     "bc9de3081e8948d9612e9b7cf0fe6d5ae9bb4efd43e61bb1569ee9a68b804361",
+     0,
+     0
+    ],
+    [
+     368640,
+     368640,
+     368640,
+     true,
+     105,
+     "9d8b33dd4f1385d7fc20361c875103f947fdfb49ab9bb062c1bc8a0e988b972e",
+     0,
+     0
+    ],
+    [
+     737280,
+     737280,
+     368640,
+     true,
+     104,
+     "869390ad0300ebf66d384c76d2194213077598ae51bc35bc723161e67d299de5",
+     0,
+     0
+    ],
+    [
+     1105920,
+     1105920,
+     368640,
+     true,
+     105,
+     "fb58dcd0545c38c1a2212836e11400830720481dd1b5712a3612ce1c4405498d",
+     0,
+     0
+    ],
+    [
+     1474560,
+     1474560,
+     368640,
+     true,
+     104,
+     "da571f73a7d2be559bc24b68e36251120a4656cd46413e9480de3482f3dd60bd",
+     0,
+     0
+    ],
+    [
+     1843200,
+     1843200,
+     368640,
+     true,
+     105,
+     "18fbe548a4ba978707a755a3de608ceb5c59dd653f97cb6418b1a3d529fe5276",
+     0,
+     0
+    ],
+    [
+     2211840,
+     2211840,
+     368640,
+     true,
+     104,
+     "c0bf1479c3a4e0f74659421c6c8d316c9e53a839a0cb59109984391ae46cb79b",
+     0,
+     0
+    ],
+    [
+     2580480,
+     2580480,
+     368640,
+     true,
+     105,
+     "ea8194c0901ee75e4aa3c497f8d801fc48bf9dc87096c1ddc80e7ff80e0ed296",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-mp3-mpeg25-info.mp3": {
+   "codec": "mp3",
+   "sample_rate": 8000,
+   "channels": 1,
+   "layout": [
+    "FC"
+   ],
+   "timescale": 14112000,
+   "duration": 7056000,
+   "bits_per_sample": null,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 9,
+   "packets_sha256": "969042f5b2e9b489a20a8dcb1bce156bf09161b63d8a2fa60d48b796fcbaca97",
+   "packets": [
+    [
+     0,
+     0,
+     1016064,
+     true,
+     144,
+     "8cf24665a2b2330a316b63bebbdedbe251c5cf3e767d47bb564b755f5b6d05c0",
+     1105,
+     0
+    ],
+    [
+     1016064,
+     1016064,
+     1016064,
+     true,
+     144,
+     "a3069990fb58c14d13f880209f74972e0f0b37b627fabdb0e4fc5fdce4971776",
+     0,
+     0
+    ],
+    [
+     2032128,
+     2032128,
+     1016064,
+     true,
+     144,
+     "fa5f33a848bcefbfb2536667f03502db479ae5f6406ca6727ff77f771606be1b",
+     0,
+     0
+    ],
+    [
+     3048192,
+     3048192,
+     1016064,
+     true,
+     144,
+     "43c209d1563e268ef2396b1a166ea59ea68fa93acb2f81bbf66d0d5501635c3e",
+     0,
+     0
+    ],
+    [
+     4064256,
+     4064256,
+     1016064,
+     true,
+     144,
+     "513681b9e583797676114c94a67316729ea76869697fc7d9a20a1583d6113706",
+     0,
+     0
+    ],
+    [
+     5080320,
+     5080320,
+     1016064,
+     true,
+     144,
+     "e7a92eb519eac1d49a8ac6d24395bb1e11158bf3ab2b96619d8692ede895b6f4",
+     0,
+     0
+    ],
+    [
+     6096384,
+     6096384,
+     1016064,
+     true,
+     144,
+     "43af73578407e13430bddba56958212c5473f7c0f80be20f15514ded89e5cd4b",
+     0,
+     0
+    ],
+    [
+     7112448,
+     7112448,
+     1016064,
+     true,
+     144,
+     "faac302013da34647dec4829d5754dd0a67f37158f13ecdadb88e739a5c4f4e9",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-opus-5.1-continued.ogg": {
+   "codec": "opus",
+   "sample_rate": 48000,
+   "channels": 6,
+   "layout": [
+    "FL",
+    "FR",
+    "FC",
+    "LFE",
+    "BL",
+    "BR"
+   ],
+   "timescale": 48000,
+   "duration": 15720,
+   "bits_per_sample": null,
+   "initial_padding": 312,
+   "extradata_sha256": "abfdad27f1038d32ec058f2f3d64dfb8d83bde84e6bf1a8d72e4b2a8c7c0b23f",
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 16,
+   "packets_sha256": "4be77b972c3b538e7311e574febe55da59767ade8192f8212ba3e012aa150cf8",
+   "packets": [
+    [
+     -312,
+     -312,
+     960,
+     true,
+     638,
+     "8394af3205bd869d04832941d44e690f70cd51265ecbd944a206362bfd04a4cf",
+     312,
+     0
+    ],
+    [
+     648,
+     648,
+     960,
+     true,
+     757,
+     "1792609201d4b40a90747580ca6b348918dc208d0b6096ae04097ef748d36d5f",
+     0,
+     0
+    ],
+    [
+     1608,
+     1608,
+     960,
+     true,
+     592,
+     "bd13746bb166c5a5cd0fb5c408ad595b1a5ac33416718fa7c5e7e7f3dc3284aa",
+     0,
+     0
+    ],
+    [
+     2568,
+     2568,
+     960,
+     true,
+     622,
+     "5b5200a5ce9b11e8382e0ab01c7361d36f52caa17e859e42c77e448870e7cb72",
+     0,
+     0
+    ],
+    [
+     3528,
+     3528,
+     960,
+     true,
+     640,
+     "4e834dac0c4317b0294d42aef983bdf5c12c2a5d5e65a6fa4188b5ee0096f709",
+     0,
+     0
+    ],
+    [
+     4488,
+     4488,
+     960,
+     true,
+     653,
+     "2997d25d1879832b54968e5281039a112c403692d83ae2ade6f505d17a72a74b",
+     0,
+     0
+    ],
+    [
+     5448,
+     5448,
+     960,
+     true,
+     654,
+     "16df22839a34e17d562d58dae69aa0ddff608f26e8c17281b601ba041254fe11",
+     0,
+     0
+    ],
+    [
+     6408,
+     6408,
+     960,
+     true,
+     656,
+     "c1277f1ee9c62ca5e7731c55e8517383527805eb84b5fc15a62b7e97a8d84a04",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-opus-5.1.ogg": {
+   "codec": "opus",
+   "sample_rate": 48000,
+   "channels": 6,
+   "layout": [
+    "FL",
+    "FR",
+    "FC",
+    "LFE",
+    "BL",
+    "BR"
+   ],
+   "timescale": 48000,
+   "duration": 15720,
+   "bits_per_sample": null,
+   "initial_padding": 312,
+   "extradata_sha256": "abfdad27f1038d32ec058f2f3d64dfb8d83bde84e6bf1a8d72e4b2a8c7c0b23f",
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 16,
+   "packets_sha256": "4be77b972c3b538e7311e574febe55da59767ade8192f8212ba3e012aa150cf8",
+   "packets": [
+    [
+     -312,
+     -312,
+     960,
+     true,
+     638,
+     "8394af3205bd869d04832941d44e690f70cd51265ecbd944a206362bfd04a4cf",
+     312,
+     0
+    ],
+    [
+     648,
+     648,
+     960,
+     true,
+     757,
+     "1792609201d4b40a90747580ca6b348918dc208d0b6096ae04097ef748d36d5f",
+     0,
+     0
+    ],
+    [
+     1608,
+     1608,
+     960,
+     true,
+     592,
+     "bd13746bb166c5a5cd0fb5c408ad595b1a5ac33416718fa7c5e7e7f3dc3284aa",
+     0,
+     0
+    ],
+    [
+     2568,
+     2568,
+     960,
+     true,
+     622,
+     "5b5200a5ce9b11e8382e0ab01c7361d36f52caa17e859e42c77e448870e7cb72",
+     0,
+     0
+    ],
+    [
+     3528,
+     3528,
+     960,
+     true,
+     640,
+     "4e834dac0c4317b0294d42aef983bdf5c12c2a5d5e65a6fa4188b5ee0096f709",
+     0,
+     0
+    ],
+    [
+     4488,
+     4488,
+     960,
+     true,
+     653,
+     "2997d25d1879832b54968e5281039a112c403692d83ae2ade6f505d17a72a74b",
+     0,
+     0
+    ],
+    [
+     5448,
+     5448,
+     960,
+     true,
+     654,
+     "16df22839a34e17d562d58dae69aa0ddff608f26e8c17281b601ba041254fe11",
+     0,
+     0
+    ],
+    [
+     6408,
+     6408,
+     960,
+     true,
+     656,
+     "c1277f1ee9c62ca5e7731c55e8517383527805eb84b5fc15a62b7e97a8d84a04",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-opus-pages.ogg": {
+   "codec": "opus",
+   "sample_rate": 48000,
+   "channels": 1,
+   "layout": [
+    "FC"
+   ],
+   "timescale": 48000,
+   "duration": 28920,
+   "bits_per_sample": null,
+   "initial_padding": 120,
+   "extradata_sha256": "f86e23aff6bca23b04be06fde14005ece46ec18d79858e0b039d31ba01d35097",
+   "default": false,
+   "title": null,
+   "language": "und",
+   "packet_count": 31,
+   "packets_sha256": "fd0f256d3e8fadc3a9c5d1fe443bd89777a2c677b7a1c36ddcb88e9f8285f698",
+   "packets": [
+    [
+     -120,
+     -120,
+     960,
+     true,
+     241,
+     "2523bd64414705e0acf6f06222f78af1f928bfc2776dfc97d3386c45cbbc0e82",
+     120,
+     0
+    ],
+    [
+     840,
+     840,
+     960,
+     true,
+     241,
+     "0713a2096830d1b9d3c13c0b1e7115d6718f598779b1e8e6fbeb2468ba93cc99",
+     0,
+     0
+    ],
+    [
+     1800,
+     1800,
+     960,
+     true,
+     241,
+     "05bc2c27c78ed35616b6429510b53e5081954c476af969b5d9c61d1ba49852c8",
+     0,
+     0
+    ],
+    [
+     2760,
+     2760,
+     960,
+     true,
+     241,
+     "607e52e1f49adedf39aeb38f3f47a2015fc0d771c4ebf8ea1c9b9f6f39ef7c3b",
+     0,
+     0
+    ],
+    [
+     3720,
+     3720,
+     960,
+     true,
+     241,
+     "506536d282853d09dc7bfa9de4670b70df8849d428c07e0a4ee8867fd6dbf381",
+     0,
+     0
+    ],
+    [
+     4680,
+     4680,
+     960,
+     true,
+     241,
+     "399ecc28b64b0bacb1eaf175f5256fc862bf98d0dfee08c5501cca4e3d4b9c67",
+     0,
+     0
+    ],
+    [
+     5640,
+     5640,
+     960,
+     true,
+     241,
+     "fd20a3b4bf88fac6075f0d2ee71e8384f83853d09216dc309388af587a21790c",
+     0,
+     0
+    ],
+    [
+     6600,
+     6600,
+     960,
+     true,
+     241,
+     "9139eaf16ec4cd6fdf9feac0ab691c60831565e0e48aacc7f53483923668f68d",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-opus.ogg": {
+   "codec": "opus",
+   "sample_rate": 48000,
+   "channels": 1,
+   "layout": [
+    "FC"
+   ],
+   "timescale": 48000,
+   "duration": 28920,
+   "bits_per_sample": null,
+   "initial_padding": 120,
+   "extradata_sha256": "f86e23aff6bca23b04be06fde14005ece46ec18d79858e0b039d31ba01d35097",
+   "default": false,
+   "title": null,
+   "language": "und",
+   "packet_count": 31,
+   "packets_sha256": "fd0f256d3e8fadc3a9c5d1fe443bd89777a2c677b7a1c36ddcb88e9f8285f698",
+   "packets": [
+    [
+     -120,
+     -120,
+     960,
+     true,
+     241,
+     "2523bd64414705e0acf6f06222f78af1f928bfc2776dfc97d3386c45cbbc0e82",
+     120,
+     0
+    ],
+    [
+     840,
+     840,
+     960,
+     true,
+     241,
+     "0713a2096830d1b9d3c13c0b1e7115d6718f598779b1e8e6fbeb2468ba93cc99",
+     0,
+     0
+    ],
+    [
+     1800,
+     1800,
+     960,
+     true,
+     241,
+     "05bc2c27c78ed35616b6429510b53e5081954c476af969b5d9c61d1ba49852c8",
+     0,
+     0
+    ],
+    [
+     2760,
+     2760,
+     960,
+     true,
+     241,
+     "607e52e1f49adedf39aeb38f3f47a2015fc0d771c4ebf8ea1c9b9f6f39ef7c3b",
+     0,
+     0
+    ],
+    [
+     3720,
+     3720,
+     960,
+     true,
+     241,
+     "506536d282853d09dc7bfa9de4670b70df8849d428c07e0a4ee8867fd6dbf381",
+     0,
+     0
+    ],
+    [
+     4680,
+     4680,
+     960,
+     true,
+     241,
+     "399ecc28b64b0bacb1eaf175f5256fc862bf98d0dfee08c5501cca4e3d4b9c67",
+     0,
+     0
+    ],
+    [
+     5640,
+     5640,
+     960,
+     true,
+     241,
+     "fd20a3b4bf88fac6075f0d2ee71e8384f83853d09216dc309388af587a21790c",
+     0,
+     0
+    ],
+    [
+     6600,
+     6600,
+     960,
+     true,
+     241,
+     "9139eaf16ec4cd6fdf9feac0ab691c60831565e0e48aacc7f53483923668f68d",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-quad.wav": {
+   "codec": "pcm_s16le",
+   "sample_rate": 48000,
+   "channels": 4,
+   "layout": [
+    "FL",
+    "FR",
+    "BL",
+    "BR"
+   ],
+   "timescale": 48000,
+   "duration": 4800,
+   "bits_per_sample": 16,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 2,
+   "packets_sha256": "344f5dd075fcbd318a27eab886568177c644bb99573ff3773c180956278cba0d",
+   "packets": [
+    [
+     0,
+     0,
+     4096,
+     true,
+     32768,
+     "73533a3f000be24644698601e299500350dfb70df0d7c528100b8b070574a317",
+     0,
+     0
+    ],
+    [
+     4096,
+     4096,
+     704,
+     true,
+     5632,
+     "0b763aa3cddf2687bb850dad682783e554255c6b0c48c25eafe06cb416d1fc65",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-u8-odd.wav": {
+   "codec": "pcm_u8",
+   "sample_rate": 8000,
+   "channels": 1,
+   "layout": null,
+   "timescale": 8000,
+   "duration": 101,
+   "bits_per_sample": 8,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 1,
+   "packets_sha256": "2475f9877278852aa0537d43a203a415904696bbc24028f67d53fa74f7639ce7",
+   "packets": [
+    [
+     0,
+     0,
+     101,
+     true,
+     101,
+     "170cffa3f7b85746d940eb675a873b0fbd8e56c1a67927b45618cbc6e270475c",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-vorbis-5.1-pages.ogg": {
+   "codec": "vorbis",
+   "sample_rate": 48000,
+   "channels": 6,
+   "layout": [
+    "FL",
+    "FR",
+    "FC",
+    "LFE",
+    "BL",
+    "BR"
+   ],
+   "timescale": 48000,
+   "duration": 14400,
+   "bits_per_sample": null,
+   "initial_padding": 0,
+   "extradata_sha256": "ab3b2ea36be201083eef6d0240a74fd083d5c2aaf95ea5d4420e5cc444653efc",
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 16,
+   "packets_sha256": "79b721157aa02955f0b125644ecb0896c1f1ebae7a5914d93e1a78072f8026b7",
+   "packets": [
+    [
+     0,
+     0,
+     128,
+     true,
+     123,
+     "16822773b565d4ddc21d1b4b40727023b84c224f94beb18ad5908bf2583f7de1",
+     0,
+     0
+    ],
+    [
+     128,
+     128,
+     576,
+     true,
+     315,
+     "9ec1621e4ec621cb4ae4d26ff7366131a26183dda9e44c78960ff04b69b61e79",
+     0,
+     0
+    ],
+    [
+     704,
+     704,
+     1024,
+     true,
+     273,
+     "c449ac2ea559ee0955f9bdad94338da62a84a770e241560bd4e63a0e4f57a3f3",
+     0,
+     0
+    ],
+    [
+     1728,
+     1728,
+     1024,
+     true,
+     281,
+     "e3d5d0be4072abd14332f629c4344f8a8cf840478acdb79de1d6d9b287b55da6",
+     0,
+     0
+    ],
+    [
+     2752,
+     2752,
+     1024,
+     true,
+     284,
+     "412c30ae61ec5085596d4367c8cf3511e55e0fba6bc2762e58f0a592d9f7433e",
+     0,
+     0
+    ],
+    [
+     3776,
+     3776,
+     1024,
+     true,
+     272,
+     "d4c6a78db98ee95f2e187aea19445d7e1da597080ea211a55191ae921c65db3e",
+     0,
+     0
+    ],
+    [
+     4800,
+     4800,
+     1024,
+     true,
+     273,
+     "74885eb45be787d0b749e5c4724e9ecf1d530173601e0511207225d966e9646a",
+     0,
+     0
+    ],
+    [
+     5824,
+     5824,
+     1024,
+     true,
+     276,
+     "72b93174119d3b93c55e954efb969ca557854e081250a17465cd137c510f488a",
+     0,
+     0
+    ]
+   ]
+  },
+  "audio-vorbis-5.1.ogg": {
+   "codec": "vorbis",
+   "sample_rate": 48000,
+   "channels": 6,
+   "layout": [
+    "FL",
+    "FR",
+    "FC",
+    "LFE",
+    "BL",
+    "BR"
+   ],
+   "timescale": 48000,
+   "duration": 14400,
+   "bits_per_sample": null,
+   "initial_padding": 0,
+   "extradata_sha256": "ab3b2ea36be201083eef6d0240a74fd083d5c2aaf95ea5d4420e5cc444653efc",
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 16,
+   "packets_sha256": "79b721157aa02955f0b125644ecb0896c1f1ebae7a5914d93e1a78072f8026b7",
+   "packets": [
+    [
+     0,
+     0,
+     128,
+     true,
+     123,
+     "16822773b565d4ddc21d1b4b40727023b84c224f94beb18ad5908bf2583f7de1",
+     0,
+     0
+    ],
+    [
+     128,
+     128,
+     576,
+     true,
+     315,
+     "9ec1621e4ec621cb4ae4d26ff7366131a26183dda9e44c78960ff04b69b61e79",
+     0,
+     0
+    ],
+    [
+     704,
+     704,
+     1024,
+     true,
+     273,
+     "c449ac2ea559ee0955f9bdad94338da62a84a770e241560bd4e63a0e4f57a3f3",
+     0,
+     0
+    ],
+    [
+     1728,
+     1728,
+     1024,
+     true,
+     281,
+     "e3d5d0be4072abd14332f629c4344f8a8cf840478acdb79de1d6d9b287b55da6",
+     0,
+     0
+    ],
+    [
+     2752,
+     2752,
+     1024,
+     true,
+     284,
+     "412c30ae61ec5085596d4367c8cf3511e55e0fba6bc2762e58f0a592d9f7433e",
+     0,
+     0
+    ],
+    [
+     3776,
+     3776,
+     1024,
+     true,
+     272,
+     "d4c6a78db98ee95f2e187aea19445d7e1da597080ea211a55191ae921c65db3e",
+     0,
+     0
+    ],
+    [
+     4800,
+     4800,
+     1024,
+     true,
+     273,
+     "74885eb45be787d0b749e5c4724e9ecf1d530173601e0511207225d966e9646a",
+     0,
+     0
+    ],
+    [
+     5824,
+     5824,
+     1024,
+     true,
+     276,
+     "72b93174119d3b93c55e954efb969ca557854e081250a17465cd137c510f488a",
+     0,
+     0
+    ]
+   ]
+  },
+  "recovery-truncated.aac": {
+   "codec": "aac",
+   "sample_rate": 48000,
+   "channels": 1,
+   "layout": [
+    "FC"
+   ],
+   "timescale": 28224000,
+   "duration": 11729310,
+   "bits_per_sample": null,
+   "initial_padding": 0,
+   "extradata_sha256": null,
+   "default": false,
+   "title": null,
+   "language": null,
+   "packet_count": 20,
+   "packets_sha256": "3eaae3e23d3dc82f8c709463c0f3872aa67be0ee470e2696f54d86cb906d5477",
+   "packets": [
+    [
+     0,
+     0,
+     602112,
+     true,
+     375,
+     "981beac00a6482836ec373bcd9bcb15382b421519d2f9577f888594e500d2936",
+     0,
+     0
+    ],
+    [
+     602112,
+     602112,
+     602112,
+     true,
+     367,
+     "2725a351f11ad39ae492c557061f524ddfda5168b015001827443d4a76f966bf",
+     0,
+     0
+    ],
+    [
+     1204224,
+     1204224,
+     602112,
+     true,
+     178,
+     "8ab6246e38e2ed484d681a94aa0bd535ff3200797bc6f835333bb8fd8a6773be",
+     0,
+     0
+    ],
+    [
+     1806336,
+     1806336,
+     602112,
+     true,
+     254,
+     "02c2489184cc0ac9aa64f0cf65ffd57da0d1a0106215c7606cba0c60dcfd3265",
+     0,
+     0
+    ],
+    [
+     2408448,
+     2408448,
+     602112,
+     true,
+     259,
+     "a203e6df6bba6cfcd94c0e48b78b511fa2b133aecc4db5dcb62f37e120f9fefd",
+     0,
+     0
+    ],
+    [
+     3010560,
+     3010560,
+     602112,
+     true,
+     236,
+     "c7de815f7ca7fb08eb8eea7d57dcf4f33768e427c642e4fe02fab744ca537e02",
+     0,
+     0
+    ],
+    [
+     3612672,
+     3612672,
+     602112,
+     true,
+     264,
+     "cb6b3cca76346189e2c349bbf3ef6044e04902d22727622ae54d89ac65c14b71",
+     0,
+     0
+    ],
+    [
+     4214784,
+     4214784,
+     602112,
+     true,
+     235,
+     "1d937a5a653c5e952b93ad981d5248cef01ad3b71859575f960ac2b1f14a059c",
+     0,
+     0
+    ]
+   ]
+  }
+ }
+}

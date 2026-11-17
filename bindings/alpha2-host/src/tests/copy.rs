@@ -61,7 +61,7 @@ fn progress_never_goes_back_when_the_export_finishes() {
 }
 
 #[test]
-fn a_failed_copy_reports_its_step_and_its_output_path() {
+fn a_failed_copy_reports_its_step_and_a_finished_one_its_file() {
     let _gpu = gpu_test_lock();
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("copy-failure");
@@ -69,7 +69,7 @@ fn a_failed_copy_reports_its_step_and_its_output_path() {
     let request = |output: &Path| {
         parse_request(
             &json!({
-                "protocolVersion": 1, "requestId": "copy-failure", "operation": "export",
+                "protocolVersion": 2, "requestId": "copy-failure", "operation": "export",
                 "project": {
                     "schema_version": 1, "id": "copy", "name": "Copy",
                     "settings": {"width": 128, "height": 96, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
@@ -106,7 +106,8 @@ fn a_failed_copy_reports_its_step_and_its_output_path() {
         "{failure}"
     );
     assert_eq!(failure["diagnostics"]["audioStrategy"], json!("copy"));
-    let finishing = host
+    // The publish follows the last packet, and a progress message that fails then does not stop it.
+    let finished = host
         .handle(request(&directory.join("b.mp4")), &mut |event| {
             if event.completed == event.total {
                 Err(stop())
@@ -114,10 +115,9 @@ fn a_failed_copy_reports_its_step_and_its_output_path() {
                 Ok(())
             }
         })
-        .expect_err("stopped while finishing");
-    let failure = finishing.failure.as_ref().expect("failure report");
-    assert_eq!(failure["phase"], json!("mux"), "{failure}");
-    assert_eq!(failure["frameIndex"], Value::Null, "{failure}");
+        .expect("a copy whose last progress message failed");
+    assert_eq!(finished["frames"], json!(60), "{finished}");
+    assert!(directory.join("b.mp4").is_file());
     std::fs::remove_dir_all(&directory).ok();
 }
 
@@ -206,6 +206,7 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
     assert_eq!(whole["frames"], json!(60));
     assert_eq!(whole["audio"], json!(true));
     assert!(whole["performance"]["copiedAudioPackets"].as_u64() > Some(0));
+    super::export_pipeline::assert_phase_timings(&whole, false);
     let times = decoded_frames("whole.mp4");
     assert_eq!(times.len(), 60);
     assert_eq!(times.first(), Some(&0));

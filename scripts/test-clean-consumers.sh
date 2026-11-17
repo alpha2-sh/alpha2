@@ -32,6 +32,14 @@ node --input-type=module -e 'import("@alpha2-sh/node")'
 node --input-type=module -e 'const { createEditor } = await import("@alpha2-sh/editor"); createEditor().dispose(); await import("@alpha2-sh/editor/browser");'
 (cd "$workspace" && npm run test:editor:package)
 
+# Servers install with --omit=optional; the client must not need mediabunny.
+mkdir "$scratch/server-consumer"
+cd "$scratch/server-consumer"
+npm init --yes --silent >/dev/null
+npm install --ignore-scripts --omit=optional "$scratch/$package" "$scratch/$node_package" --silent
+test ! -e node_modules/mediabunny
+node --input-type=module -e 'await import("@alpha2-sh/node")'
+
 mkdir "$scratch/react-consumer"
 cd "$scratch/react-consumer"
 npm init --yes --silent >/dev/null

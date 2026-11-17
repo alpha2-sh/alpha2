@@ -177,8 +177,10 @@ fn tiling_clips(project: &Project, range: TimeRange) -> Result<Vec<(&Track, &Cli
     for track in &project.timeline.tracks {
         match track.kind {
             TrackKind::Caption => {
+                // Cues built from words are not resolved here, so a track with words may show text.
                 if track.captions.as_ref().is_some_and(|captions| {
-                    captions.cues.iter().any(|cue| overlaps(cue.timeline_range))
+                    captions.from_words.is_some()
+                        || captions.cues.iter().any(|cue| overlaps(cue.timeline_range))
                 }) {
                     return Err(format!(
                         "caption track {} shows text in the range",
@@ -287,10 +289,11 @@ fn shows_source_untouched(clip: &Clip, source: &alpha2_model::MediaSource) -> Re
     ) && clip.visual.anchor == Vec2::new(0.5, 0.5)
         && constant(&clip.visual.scale) == Some(Vec2::new(1.0, 1.0))
         && constant(&clip.visual.rotation_degrees) == Some(0.0)
-        && constant(&clip.visual.opacity) == Some(1.0);
+        && constant(&clip.visual.opacity) == Some(1.0)
+        && clip.visual.correction.is_none();
     if !visual_identity {
         return Err(format!(
-            "clip {} is moved, scaled, rotated, or faded; only a constant identity transform is copied",
+            "clip {} is moved, scaled, rotated, faded or corrected; only a constant identity transform is copied",
             clip.id
         ));
     }
@@ -341,7 +344,7 @@ fn heard_untouched(project: &Project, track: &Track, clip: &Clip) -> Result<(), 
 fn constant<T: Copy>(animated: &Animated<T>) -> Option<T> {
     match animated {
         Animated::Constant { value } => Some(*value),
-        Animated::Keyframes { .. } => None,
+        Animated::Keyframes { .. } | Animated::Data(_) => None,
     }
 }
 

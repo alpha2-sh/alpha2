@@ -19,18 +19,25 @@ export function isDecoderFailure(error: unknown): boolean {
 
 /**
  * Runs `decodeOnce`; on a decoder failure, if `reopenSoftware` is given, reopens in software and
- * runs it once more.
+ * runs it once more. When that attempt fails in its decoder too, `restore` runs before the
+ * rejection, so the next request starts from the original choice.
  */
 export async function withSoftwareFallback<T>(
   decodeOnce: () => Promise<T>,
   reopenSoftware: ((cause: DOMException) => Promise<void>) | undefined,
+  restore?: () => Promise<void>,
 ): Promise<T> {
   try {
     return await decodeOnce();
   } catch (error) {
     if (reopenSoftware === undefined || !isDecoderFailure(error)) throw error;
     await reopenSoftware(error as DOMException);
-    return decodeOnce();
+    try {
+      return await decodeOnce();
+    } catch (retry) {
+      if (restore !== undefined && isDecoderFailure(retry)) await restore();
+      throw retry;
+    }
   }
 }
 

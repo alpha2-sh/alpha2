@@ -20,9 +20,20 @@ import { missingCapability, suiteOf } from "./lib/capabilities.mjs";
 const root = resolve(import.meta.dirname, "..");
 const buildRelease = join(root, "scripts/build-native-release.sh");
 const smokeArchive = join(root, "release/ffmpeg-lgpl/smoke-archive.sh");
-const version = readFileSync(join(root, "Cargo.toml"), "utf8").match(
+const version = captured(
   /^version = "([^"]+)"$/m,
-)[1];
+  readFileSync(join(root, "Cargo.toml"), "utf8"),
+);
+
+/**
+ * @param {RegExp} pattern
+ * @param {string} text
+ */
+function captured(pattern, text) {
+  const match = pattern.exec(text);
+  if (match === null) throw new Error(`${pattern} does not match`);
+  return match[1];
+}
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, { encoding: "utf8", ...options });
@@ -176,7 +187,7 @@ test(
   () => {
     withScratch((scratch) => {
       const { archive } = elfBundle(scratch, "linux-x64", { direct: true });
-      const result = run(smokeArchive, [archive, "linux-x64"]);
+      const result = run(smokeArchive, [archive, "linux-x64", "--loader-only"]);
       assert.equal(result.status, 0, result.stderr);
       assert.match(
         result.stdout,
@@ -203,9 +214,13 @@ test(
       );
       assert.match(hidden.stdout, /usage: alpha2/);
 
-      const result = run(smokeArchive, [archive, "linux-x64"], {
-        env: { ...process.env, LD_LIBRARY_PATH: lib },
-      });
+      const result = run(
+        smokeArchive,
+        [archive, "linux-x64", "--loader-only"],
+        {
+          env: { ...process.env, LD_LIBRARY_PATH: lib },
+        },
+      );
       assert.notEqual(result.status, 0, result.stdout);
       for (const name of ["alpha2", "alpha2-host"]) {
         assert.match(
@@ -235,6 +250,7 @@ function stubOtool(scratch, installName) {
   );
   chmodSync(otool, 0o755);
   // The macOS branch unsets only DYLD_*, so a caller's LD_LIBRARY_PATH would leak in.
+  /** @type {NodeJS.ProcessEnv} */
   const env = { ...process.env, PATH: `${stubs}:${process.env.PATH}` };
   delete env.LD_LIBRARY_PATH;
   return env;
@@ -246,17 +262,25 @@ test(
   () => {
     withScratch((scratch) => {
       const { archive } = elfBundle(scratch, "macos-arm64", { direct: true });
-      const rpath = run(smokeArchive, [archive, "macos-arm64"], {
-        env: stubOtool(scratch, "@rpath/libavcodec.62.dylib"),
-      });
+      const rpath = run(
+        smokeArchive,
+        [archive, "macos-arm64", "--loader-only"],
+        {
+          env: stubOtool(scratch, "@rpath/libavcodec.62.dylib"),
+        },
+      );
       assert.equal(rpath.status, 0, rpath.stderr);
 
-      const homebrew = run(smokeArchive, [archive, "macos-arm64"], {
-        env: stubOtool(
-          scratch,
-          "/opt/homebrew/opt/ffmpeg/lib/libavcodec.62.dylib",
-        ),
-      });
+      const homebrew = run(
+        smokeArchive,
+        [archive, "macos-arm64", "--loader-only"],
+        {
+          env: stubOtool(
+            scratch,
+            "/opt/homebrew/opt/ffmpeg/lib/libavcodec.62.dylib",
+          ),
+        },
+      );
       assert.notEqual(homebrew.status, 0, homebrew.stdout);
       assert.match(
         homebrew.stderr,
@@ -317,7 +341,11 @@ test(
   () => {
     withScratch((scratch) => {
       const archive = machoBundle(join(scratch, "rpath"), { rpath: true });
-      const passed = run(smokeArchive, [archive, "macos-arm64"]);
+      const passed = run(smokeArchive, [
+        archive,
+        "macos-arm64",
+        "--loader-only",
+      ]);
       assert.equal(passed.status, 0, passed.stderr);
       assert.match(
         passed.stdout,
@@ -327,7 +355,11 @@ test(
     withScratch((scratch) => {
       // The build folder still exists, so only the install names reveal the outside dependency.
       const archive = machoBundle(join(scratch, "absolute"), { rpath: false });
-      const failed = run(smokeArchive, [archive, "macos-arm64"]);
+      const failed = run(smokeArchive, [
+        archive,
+        "macos-arm64",
+        "--loader-only",
+      ]);
       assert.notEqual(failed.status, 0, failed.stdout);
       assert.match(
         failed.stderr,
@@ -564,14 +596,16 @@ function fakeMacRelease(scratch) {
     join(ws, "release/ffmpeg-lgpl/smoke-archive.sh"),
     "#!/bin/sh\nexit 0\n",
   );
-  const report = /^report = "(.*)"$/m.exec(
+  const report = captured(
+    /^report = "(.*)"$/m,
     read(join(ws, "release/ffmpeg-lgpl/manifest.toml")).split(
       "[assets.macos-arm64]",
     )[1],
-  )[1];
-  const tag = /^release_tag = "(.*)"$/m.exec(
+  );
+  const tag = captured(
+    /^release_tag = "(.*)"$/m,
     read(join(ws, "release/ffmpeg-lgpl/manifest.toml")),
-  )[1];
+  );
   mkdirSync(join(scratch, "cache", tag, "downloads"), { recursive: true });
   writeFileSync(join(scratch, "cache", tag, "downloads", report), "");
 
@@ -618,6 +652,7 @@ function fakeMacRelease(scratch) {
       "",
     ].join("\n"),
   );
+  /** @type {NodeJS.ProcessEnv} */
   const env = {
     ...process.env,
     PATH: `${stubs}:${process.env.PATH}`,

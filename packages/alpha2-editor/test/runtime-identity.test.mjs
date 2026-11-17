@@ -1,31 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createEditor } from "../dist/index.js";
-import * as browser from "../dist/browser/index.js";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
+const skip = wasmSkip(import.meta.url);
+const browser = skip ? {} : await import("../dist/browser/index.js");
 const { createBrowserBridge } = browser;
-
-const wasmDirectory = join(
-  resolve(import.meta.dirname, "..", ".."),
-  "alpha2",
-  "wasm",
-);
-const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-// Skipped before `npm run build`, failed when ALPHA2_REQUIRE=wasm finds no package.
-const skip =
-  !packaged &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
 
 async function engine() {
   const wasm = await import(
@@ -130,7 +113,11 @@ const mediaAdapter = {
   },
 };
 
-async function session({ kept = new Map(), runtimeAssets } = {}) {
+async function session({
+  kept = new Map(),
+  runtimeAssets,
+  resourceLimit,
+} = {}) {
   const assetDecisions = await engine();
   const editor = createEditor();
   const bridge = createBrowserBridge({
@@ -138,6 +125,7 @@ async function session({ kept = new Map(), runtimeAssets } = {}) {
     audio: false,
     assetDecisions,
     mediaAdapter,
+    ...(resourceLimit === undefined ? {} : { resourceLimit }),
     ...(runtimeAssets ? { runtimeAssets } : {}),
     proxyStore: {
       async hold() {
@@ -471,6 +459,94 @@ test(
     editText(editor, "wide", { maxWidth: 400 });
     await bridge.conform("preview");
     assert.equal(bridge.getAsset("wide").text.maxWidth, 400);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+const keptProxy = (digit) => ({
+  record: { made_from: fingerprint(digit), width: 32, height: 18 },
+  file: { name: `${digit}.proxy`, fingerprint: {} },
+});
+
+/** Shows each of `ids` for one second on a track of its own. */
+function show(editor, ids) {
+  for (const id of ids)
+    ok(
+      editor.dispatch({
+        type: "track.add",
+        track: {
+          id: `track-${id}`,
+          name: id,
+          kind: "video",
+          clips: [
+            {
+              id: `clip-${id}`,
+              source_id: id,
+              timeline_range: { start: 0, end: 120000 },
+              source_range: { start: 0, end: 120000 },
+            },
+          ],
+        },
+      }),
+    );
+}
+
+test(
+  "titles and proxies draw past the runtime limit, which refuses only imported media",
+  { skip },
+  async () => {
+    const digits = ["a", "b", "c"];
+    const { editor, bridge } = await session({
+      resourceLimit: 3,
+      kept: new Map(digits.map((d) => [d.repeat(64), keptProxy(d)])),
+    });
+    await bridge.importFiles(
+      digits.map((d) => ({ name: d, fingerprint: fingerprint(d) })),
+    );
+    for (const n of [1, 2, 3, 4])
+      addText(editor, `t${n}`, { ...TEXT, content: `Title ${n}` });
+    show(editor, [...digits, "t1", "t2", "t3", "t4"]);
+    bridge.setPreviewMedia("proxies");
+    const report = await bridge.conform("preview_proxy");
+    for (const d of digits) {
+      assert.equal(bridge.proxyStatus(d).available, true, d);
+      assert.equal(
+        report.sources.find((s) => s.source_id === d).selection.media,
+        "proxy",
+      );
+    }
+    for (const n of [1, 2, 3, 4])
+      assert.equal(bridge.getAsset(`t${n}`).text.content, `Title ${n}`);
+    assert.equal(bridge.resourceCount, 10);
+    await assert.rejects(
+      bridge.importFiles([{ name: "d", fingerprint: fingerprint("d") }]),
+      (error) => error.code === "resource_budget",
+    );
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "removed media that undo can still reach counts against the runtime limit",
+  { skip },
+  async () => {
+    const { editor, bridge } = await session({ resourceLimit: 1 });
+    await bridge.importFiles([{ name: "a", fingerprint: fingerprint("a") }]);
+    ok(editor.dispatch({ type: "asset.remove", id: "a" }));
+    await settle();
+    await assert.rejects(
+      bridge.importFiles([{ name: "b", fingerprint: fingerprint("b") }]),
+      (error) =>
+        error.code === "resource_budget" &&
+        /1 imported media/.test(error.message) &&
+        /undo/.test(error.message),
+    );
+    editor.open(createEditor().document);
+    await settle();
+    await bridge.importFiles([{ name: "b", fingerprint: fingerprint("b") }]);
+    assert.ok(bridge.getAsset("b"));
     await bridge.dispose();
     editor.dispose();
   },

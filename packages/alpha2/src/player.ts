@@ -40,6 +40,15 @@ export interface DecodedVideoFrame {
   readonly decode?: "software";
 }
 
+interface WaitingPresentation {
+  readonly timeTicks: bigint;
+  readonly request: number;
+  /** Seeks issued before it; a later seek ends it even while it is the one running. */
+  readonly seeks: number;
+  readonly resolve: (result: PresentedFrame | undefined) => void;
+  readonly reject: (error: unknown) => void;
+}
+
 /** A source frame a presentation needed and did not have. */
 export interface MissingFrame {
   readonly clipId: string;
@@ -113,6 +122,10 @@ export interface Alpha2PlayerOptions {
  * It keeps no clock: `present` shows the time it is given. For playback with audio, pass
  * `AudioPlaybackClock.timelineTicks` so the picture follows the audio device.
  *
+ * At most one presentation runs on the backend at a time, and at most one waits: a `present` or
+ * `seek` that arrives while another is waiting replaces it, so a caller may present on every
+ * animation frame without building a backlog.
+ *
  * A presentation that lacks source frames asks `onRefill` for them, then presents the same time
  * again. Frames uploaded after `onRefill` resolves show only on the next presentation.
  *
@@ -126,8 +139,16 @@ export interface Alpha2PlayerOptions {
 export class Alpha2Player {
   readonly #backend: RenderBackend;
   #initialized = false;
+  #disposed = false;
   #latestRequest = 0;
   #generation = 0;
+  #waiting?: WaitingPresentation;
+  #running = false;
+  // A seek's backend reset still to run; a later request that supersedes the seek runs it.
+  #resetOwed = false;
+  #seeks = 0;
+  // A recovery finished and no presentation ran since, so the next refills are recovery refills.
+  #recovered = false;
   // Skips re-presenting after a refill that uploaded nothing.
   #uploads = 0;
   // Shared by every presentation that finds the device lost.
@@ -194,7 +215,8 @@ export class Alpha2Player {
 
   /**
    * Presents `timeTicks`, recovering a lost device first and refilling missing frames through
-   * `onRefill`. Resolves `undefined` when a later `present` or `seek` superseded this one.
+   * `onRefill`. Resolves `undefined` when a later `present` or `seek` superseded this one, whether
+   * it was still waiting (then the backend never saw it) or already running.
    *
    * Rejects with a fatal `GPU_DEVICE_LOST` when no renderer can be made (or a fresh surface was
    * needed without `replaceSurface`); every later presentation rejects the same way.
@@ -204,19 +226,13 @@ export class Alpha2Player {
   async present(timeTicks: bigint): Promise<PresentedFrame | undefined> {
     this.#assertInitialized();
     if (this.#terminal !== undefined) throw this.#terminal;
-    const request = ++this.#latestRequest;
-    let reason: DecoderRefillReason = "prefetch";
-    if (this.#recovering !== undefined || this.#backend.isDeviceLost()) {
-      await this.#recover();
-      reason = "device-recovery";
-    }
-    const result = await this.#presentFilled(timeTicks, request, reason);
-    return request === this.#latestRequest ? result : undefined;
+    return this.#enqueue(timeTicks);
   }
 
   /**
    * Seeks to `timeTicks`, dropping frames decoded for earlier requests, and presents the target
-   * once `onRefill` has delivered. Resolves `undefined` when a later request superseded it.
+   * once `onRefill` has delivered, recovering a lost device first as `present` does. Resolves
+   * `undefined` when a later request superseded it.
    *
    * @throws Before {@link Alpha2Player.initialize} has resolved.
    */
@@ -225,16 +241,100 @@ export class Alpha2Player {
     this.#generation += 1;
     this.#softwareFrames.clear();
     this.#reissued.clear();
-    const request = ++this.#latestRequest;
-    await this.#backend.reset();
-    return this.#presentFilled(timeTicks, request, "seek");
+    this.#resetOwed = true;
+    this.#seeks += 1;
+    return this.#enqueue(timeTicks);
   }
 
-  /** Disposes the backend; a presentation in flight resolves `undefined`. */
+  /** Disposes the backend; presentations waiting or in flight resolve `undefined`. */
   dispose(): void {
+    this.#disposed = true;
     this.#latestRequest += 1;
+    const waiting = this.#waiting;
+    this.#waiting = undefined;
+    waiting?.resolve(undefined);
     this.#backend.dispose();
     this.#initialized = false;
+  }
+
+  #enqueue(timeTicks: bigint): Promise<PresentedFrame | undefined> {
+    const request = ++this.#latestRequest;
+    const replaced = this.#waiting;
+    const done = new Promise<PresentedFrame | undefined>((resolve, reject) => {
+      this.#waiting = {
+        timeTicks,
+        request,
+        seeks: this.#seeks,
+        resolve,
+        reject,
+      };
+    });
+    replaced?.resolve(undefined);
+    if (!this.#running) void this.#run();
+    return done;
+  }
+
+  async #run(): Promise<void> {
+    this.#running = true;
+    try {
+      for (let next = this.#waiting; next !== undefined; next = this.#waiting) {
+        this.#waiting = undefined;
+        try {
+          next.resolve(await this.#presentOne(next));
+        } catch (error) {
+          // A disposed backend rejects its pending calls.
+          if (this.#disposed) next.resolve(undefined);
+          else next.reject(error);
+        }
+      }
+    } finally {
+      this.#running = false;
+    }
+  }
+
+  async #presentOne(
+    presentation: WaitingPresentation,
+  ): Promise<PresentedFrame | undefined> {
+    try {
+      return await this.#presentOnce(presentation);
+    } catch (error) {
+      // A device lost during the presentation is refused by the renderer; recover and retry once.
+      if (
+        (error as { code?: unknown } | null)?.code !== "GPU_DEVICE_LOST" ||
+        error === this.#terminal ||
+        this.#disposed ||
+        !this.#backend.isDeviceLost()
+      )
+        throw error;
+      return this.#presentOnce(presentation);
+    }
+  }
+
+  async #presentOnce({
+    timeTicks,
+    request,
+    seeks,
+  }: WaitingPresentation): Promise<PresentedFrame | undefined> {
+    if (this.#disposed) return undefined;
+    if (this.#terminal !== undefined) throw this.#terminal;
+    if (this.#recovering !== undefined || this.#backend.isDeviceLost()) {
+      await this.#recover();
+      this.#recovered = true;
+    }
+    if (request !== this.#latestRequest || this.#disposed) return undefined;
+    let reason: DecoderRefillReason = this.#recovered
+      ? "device-recovery"
+      : "prefetch";
+    if (this.#resetOwed) {
+      this.#resetOwed = false;
+      await this.#backend.reset();
+      reason = "seek";
+    }
+    this.#recovered = false;
+    const result = await this.#presentFilled(timeTicks, request, seeks, reason);
+    return request === this.#latestRequest && !this.#disposed
+      ? result
+      : undefined;
   }
 
   #recover(): Promise<void> {
@@ -310,24 +410,33 @@ export class Alpha2Player {
   }
 
   // Re-presents after each refill while frames are missing. Each round must lack fewer frames
-  // than the last, so a source that never arrives ends the loop.
+  // than the last, so a source that never arrives ends the loop. A presentation superseded by a
+  // later `present` still shows the frames it refilled once, so a caller that presents faster than
+  // frames arrive sees the picture advance; a seek or recovery ends it at once.
   async #presentFilled(
     timeTicks: bigint,
     request: number,
+    seeks: number,
     reason: DecoderRefillReason,
   ): Promise<PresentedFrame> {
+    const generation = this.#generation;
+    const current = (): boolean =>
+      generation === this.#generation &&
+      seeks === this.#seeks &&
+      !this.#disposed;
     let result = await this.#backend.present(timeTicks);
     let lacking = Number.POSITIVE_INFINITY;
     while (
       result.missingFrames.length > 0 &&
       result.missingFrames.length < lacking &&
-      request === this.#latestRequest
+      current()
     ) {
       lacking = result.missingFrames.length;
       const uploads = this.#uploads;
       await this.#requestMissing(result, reason);
-      if (uploads === this.#uploads || request !== this.#latestRequest) break;
+      if (uploads === this.#uploads || !current()) break;
       result = await this.#backend.present(timeTicks);
+      if (request !== this.#latestRequest) break;
     }
     return result;
   }

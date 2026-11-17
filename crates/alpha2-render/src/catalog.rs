@@ -24,6 +24,22 @@ pub fn builtin_catalog() -> Value {
     })
 }
 
+/// [`builtin_catalog`] with its `$id`, pretty-printed as `schema/effects.v1.json` holds it.
+#[must_use]
+pub fn builtin_catalog_document() -> String {
+    let mut catalog = builtin_catalog();
+    if let Some(object) = catalog.as_object_mut() {
+        object.insert(
+            "$id".to_owned(),
+            "https://alpha2.sh/schema/effects.v1.json".into(),
+        );
+    }
+    // A `Value` always serializes.
+    let mut text = serde_json::to_string_pretty(&catalog).unwrap_or_default();
+    text.push('\n');
+    text
+}
+
 /// Serializes [`builtin_catalog`] for process and WebAssembly boundaries.
 #[must_use]
 pub fn builtin_catalog_json() -> String {
@@ -32,7 +48,7 @@ pub fn builtin_catalog_json() -> String {
 
 fn catalog_entry(definition: &EffectDef, group: &str) -> Value {
     let label = label(&definition.id);
-    json!({
+    let mut entry = json!({
         "id": definition.id,
         "version": definition.version,
         "kind": match definition.kind {
@@ -52,7 +68,13 @@ fn catalog_entry(definition: &EffectDef, group: &str) -> Value {
             "name": resource.name,
             "kind": match resource.kind { EffectResourceKind::Lut3d => "lut3d" },
         })).collect::<Vec<_>>(),
-    })
+    });
+    if definition.kind == EffectKind::Transition {
+        entry["coverage_commutes"] = json!(
+            crate::builtins::COVERAGE_COMMUTING_TRANSITIONS.contains(&definition.id.as_str())
+        );
+    }
+    entry
 }
 
 fn param(spec: &ParamSpec) -> Value {

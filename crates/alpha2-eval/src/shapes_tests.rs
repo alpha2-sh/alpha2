@@ -101,8 +101,8 @@ fn a_position_without_tangents_samples_bit_for_bit_as_a_vector_does() {
         };
         for ticks in [0, 1, 137, 500, 999, 1_000, 2_000] {
             let time = MediaTime(ticks);
-            let a = sample_point(&point, time, 16.0 / 9.0);
-            let b = crate::sample_vec2(&vector, time);
+            let a = sample_point(&point, time, 16.0 / 9.0, &crate::SampleContext::NONE);
+            let b = crate::sample_vec2(&vector, time, &crate::SampleContext::NONE);
             assert_eq!(
                 (a.x.to_bits(), a.y.to_bits()),
                 (b.x.to_bits(), b.y.to_bits()),
@@ -120,17 +120,17 @@ fn a_curved_position_moves_at_constant_speed_and_overshoots_along_its_tangent() 
         Vec2::new(0.0, -0.3),
         Interpolation::Linear,
     );
-    let at = |ticks| sample_point(&point, MediaTime(ticks), 1.0);
+    let at = |ticks| sample_point(&point, MediaTime(ticks), 1.0, &crate::SampleContext::NONE);
     let middle = at(500);
     assert!((middle.x - 0.5).abs() < 1e-4, "{middle:?}");
     assert!(middle.y < 0.4, "{middle:?}");
-    // Equal times, equal distances along the arch.
+    // Equal times, equal distances along the arch; steps this short make chord and arc agree.
     let step = |a: Vec2, b: Vec2| {
         let (dx, dy) = (f64::from(b.x - a.x), f64::from(b.y - a.y));
         (dx * dx + dy * dy).sqrt()
     };
-    let (d1, d2) = (step(at(100), at(200)), step(at(400), at(500)));
-    assert!((d1 - d2).abs() < 2e-3, "{d1} {d2}");
+    let (d1, d2) = (step(at(100), at(101)), step(at(400), at(401)));
+    assert!((d1 - d2).abs() < 1e-6, "{d1} {d2}");
     // An overshooting curve continues past the end along the end tangent: straight down.
     let curve = alpha2_model::CubicBezier::new(0.3, 0.0, 0.5, 1.6);
     let point = point_keys(
@@ -139,7 +139,7 @@ fn a_curved_position_moves_at_constant_speed_and_overshoots_along_its_tangent() 
         Interpolation::CubicBezier(curve),
     );
     let past = (1..1_000)
-        .map(|ticks| sample_point(&point, MediaTime(ticks), 1.0))
+        .map(|ticks| sample_point(&point, MediaTime(ticks), 1.0, &crate::SampleContext::NONE))
         .find(|value| value.y > 0.5 + 1e-3)
         .expect("overshoots past the end");
     assert!((past.x - 0.9).abs() < 1e-4, "{past:?}");

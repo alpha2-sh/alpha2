@@ -262,7 +262,12 @@ pub(crate) fn webgl2_uploads() -> Result<WebGl2Uploads, JsValue> {
     if let Some(measured) = WEBGL2_UPLOADS.with(std::cell::Cell::get) {
         return Ok(measured);
     }
-    let probe = bitmap_upload_probe()?;
+    let probe = bitmap_upload_probe().map_err(|error| {
+        internal_error(format!(
+            "the WebGL2 upload probe failed: {}",
+            error_message(&error)
+        ))
+    })?;
     let flag = |name: &str| {
         web_sys::js_sys::Reflect::get(&probe, &JsValue::from_str(name))
             .map(|value| value.as_bool() == Some(true))
@@ -294,7 +299,8 @@ pub(crate) fn upload_frame_through_canvas(
 ) -> Result<alpha2_render::SourceAlpha, JsValue> {
     match webgl2_uploads()? {
         WebGl2Uploads::Bitmap { premultiplied } => {
-            let bitmap = frame_bitmap(frame, width, height)?;
+            let bitmap = frame_bitmap(frame, width, height)
+                .map_err(|error| browser_rejected("canvas", &error))?;
             upload_bitmap_through_gl(gpu, &bitmap, texture, width, height);
             bitmap.close();
             Ok(if premultiplied {
@@ -319,7 +325,8 @@ fn upload_pixels_through_canvas(
     width: u32,
     height: u32,
 ) -> Result<(), JsValue> {
-    let pixels = image_pixels(image, width, height)?;
+    let pixels =
+        image_pixels(image, width, height).map_err(|error| browser_rejected("canvas", &error))?;
     gpu.queue().write_texture(
         wgpu::TexelCopyTextureInfo {
             texture,
@@ -395,6 +402,45 @@ extern "C" {
         width: u32,
         height: u32,
     ) -> Result<(), JsValue>;
+}
+
+// Copies bytes out of wasm memory or a mapping into a new array. A failed allocation throws
+// `RangeError`, which an undeclared import would unwind through wasm as an unsettled promise.
+#[wasm_bindgen(inline_js = r#"
+export function alpha2CopyOutBytes(bytes) {
+  return bytes.slice();
+}
+export function alpha2CopyOutView(view) {
+  return view.slice(0, view.length);
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen(js_name = alpha2CopyOutBytes, catch)]
+    fn copy_out_bytes_js(bytes: &[u8]) -> Result<web_sys::js_sys::Uint8Array, JsValue>;
+    #[wasm_bindgen(js_name = alpha2CopyOutView, catch)]
+    fn copy_out_view_js(
+        view: &web_sys::js_sys::Uint8Array,
+    ) -> Result<web_sys::js_sys::Uint8Array, JsValue>;
+}
+
+/// `bytes` in a new JavaScript array, or the browser's error when it cannot allocate one.
+pub(crate) fn copy_out_bytes(bytes: &[u8]) -> Result<web_sys::js_sys::Uint8Array, JsValue> {
+    copy_out_bytes_js(bytes)
+}
+
+/// The coded readback failure (`OUT_OF_MEMORY` at stage `copy-out`) for a [`copy_out_bytes`] error.
+pub(crate) fn copy_out_failure(error: &JsValue) -> JsValue {
+    let message = format!(
+        "the browser could not copy the frame out: {}",
+        error_message(error)
+    );
+    let coded = internal_error(message);
+    let failure = web_sys::js_sys::Object::new();
+    let _ = set(&failure, "code", &JsValue::from_str("OUT_OF_MEMORY"));
+    let _ = set(&failure, "phase", &JsValue::from_str("readback"));
+    let _ = set(&failure, "stage", &JsValue::from_str("copy-out"));
+    let _ = web_sys::js_sys::Reflect::set(&coded, &JsValue::from_str("failure"), &failure);
+    coded
 }
 
 /// How browser WebGPU takes a `VideoFrame`. Firefox rejects a direct
@@ -482,14 +528,18 @@ pub(crate) fn upload_bitmap(
 }
 
 fn browser_rejected(source: &str, error: &JsValue) -> JsValue {
-    let message = web_sys::js_sys::Reflect::get(error, &JsValue::from_str("message"))
+    invalid_input(format!(
+        "the browser rejected the {source} upload: {}",
+        error_message(error)
+    ))
+}
+
+fn error_message(error: &JsValue) -> String {
+    web_sys::js_sys::Reflect::get(error, &JsValue::from_str("message"))
         .ok()
         .and_then(|message| message.as_string())
         .or_else(|| error.as_string())
-        .unwrap_or_else(|| format!("{error:?}"));
-    invalid_input(format!(
-        "the browser rejected the {source} upload: {message}"
-    ))
+        .unwrap_or_else(|| format!("{error:?}"))
 }
 
 /// Checks a texture size against the device's `max_texture_dimension_2d`. Callers pass
@@ -632,7 +682,8 @@ pub(crate) fn export_readback_promise(
             readback
                 .finish_into_planes(&mut plane_targets(&mut memory, &offsets))
                 .map_err(|error| finish_failure(&health, error, &failure))?;
-            (layout, web_sys::js_sys::Uint8Array::from(&memory[..]))
+            let pixels = copy_out_bytes(&memory).map_err(|error| copy_out(&failure, &error))?;
+            (layout, pixels)
         } else {
             let layout = plane_layout_js(&readback)?;
             // Keep the GPU's padded rows and describe them in `layout`: one copy instead of a
@@ -642,13 +693,13 @@ pub(crate) fn export_readback_promise(
                     if browser_webgpu {
                         // Reading the JS `ArrayBuffer` from Rust, even its `len`, would copy it
                         // into the wasm heap first.
-                        let mapping = mapped.as_uint8array();
-                        mapping.slice(0, mapping.length())
+                        copy_out_view_js(mapped.as_uint8array())
                     } else {
-                        web_sys::js_sys::Uint8Array::from(&mapped[..])
+                        copy_out_bytes(&mapped[..])
                     }
                 })
-                .map_err(|error| finish_failure(&health, error, &failure))?;
+                .map_err(|error| finish_failure(&health, error, &failure))?
+                .map_err(|error| copy_out(&failure, &error))?;
             (layout, pixels)
         };
         let result = web_sys::js_sys::Object::new();
@@ -696,6 +747,17 @@ fn loss_failure(
         }
         _ => failure(code, stage, message),
     }
+}
+
+fn copy_out(failure: &impl Fn(&str, &str, &str) -> JsValue, error: &JsValue) -> JsValue {
+    failure(
+        "OUT_OF_MEMORY",
+        "copy-out",
+        &format!(
+            "the browser could not copy the frame out: {}",
+            error_message(error)
+        ),
+    )
 }
 
 fn finish_failure(

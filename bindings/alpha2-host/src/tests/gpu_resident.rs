@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(feature = "hwencode")]
+use alpha2_test_support::media::{PLANE_PSNR_FLOOR_DB, plane_check, plane_psnr};
 
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
@@ -391,6 +393,7 @@ fn a_software_decoded_export_still_encodes_on_the_gpu() {
     let _ = std::fs::remove_dir_all(directory);
     assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
     assert_eq!(result["hardwareDecodeReady"], json!(false), "{result}");
+    super::export_pipeline::assert_phase_timings(&result, true);
     assert_eq!(result.get("renderCache"), Some(&Value::Null), "{result}");
     let performance = &result["performance"];
     assert_eq!(
@@ -643,7 +646,7 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
         if std::env::var_os("ALPHA2_PLANE_PSNR_REPORT").is_some() {
             report_plane_psnr(name, &exported, &original, 128);
         }
-        if let Err(problem) = plane_check(&exported, &original, 256, 144) {
+        if let Err(problem) = plane_check(&exported, &original, 256, PLANE_PSNR_FLOOR_DB) {
             panic!("{name}: {problem}");
         }
     }
@@ -1219,7 +1222,7 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
             result["audioEncoder"],
             json!(match audio {
                 NativeAudioCodec::Opus => "libopus",
-                _ => "aac",
+                NativeAudioCodec::Aac => "aac",
             }),
             "{result}"
         );

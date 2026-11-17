@@ -310,6 +310,14 @@ pub fn generate_interop_bindings(headers: &[PathBuf], types: &[&str], output: &s
         .derive_default(true)
         .generate_comments(false)
         .layout_tests(true);
+    if let Some(target) = std::env::var("TARGET").ok().and_then(|target| {
+        clang_target_override(&target, |key| {
+            println!("cargo:rerun-if-env-changed={key}");
+            std::env::var(key).ok()
+        })
+    }) {
+        builder = builder.clang_arg(format!("--target={target}"));
+    }
     for header in headers {
         let header = header
             .to_str()
@@ -327,6 +335,70 @@ pub fn generate_interop_bindings(headers: &[PathBuf], types: &[&str], output: &s
     bindings
         .write_to_file(directory.join(output))
         .unwrap_or_else(|error| panic!("could not write {output}: {error}"));
+}
+
+/// The Android API level declarations are parsed at when the toolchain names none: the supported
+/// minimum.
+const MIN_ANDROID_API_LEVEL: u32 = 29;
+
+/// The clang triple for targets whose Rust spelling clang rejects. Bindgen 0.71 passes
+/// `aarch64-apple-ios-sim` where clang wants `arm64-apple-ios-simulator`, and NDK r28+ headers
+/// refuse an Android triple without an API level ([`android_api_level`]).
+fn clang_target_override(
+    target: &str,
+    variable: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    if target.ends_with("-linux-android") || target.ends_with("-linux-androideabi") {
+        return Some(format!("{target}{}", android_api_level(target, variable)));
+    }
+    let (arch, rest) = target.split_once("-apple-")?;
+    let os = rest.strip_suffix("-sim")?;
+    let arch = if arch == "aarch64" { "arm64" } else { arch };
+    Some(format!("{arch}-apple-{os}-simulator"))
+}
+
+/// The API level the build targets for Android `target`: an explicit `ANDROID_PLATFORM`
+/// (`android-29` or `29`), else the level in the C toolchain cargo-ndk or the NDK's compiler
+/// wrappers configure (`--target=aarch64-linux-android29`, `aarch64-linux-android29-clang`), else
+/// [`MIN_ANDROID_API_LEVEL`].
+fn android_api_level(target: &str, variable: impl Fn(&str) -> Option<String>) -> u32 {
+    let underscored = target.replace('-', "_");
+    let platform = ["CARGO_NDK_ANDROID_PLATFORM", "ANDROID_PLATFORM"]
+        .into_iter()
+        .filter_map(&variable)
+        .find_map(|value| {
+            let digits = value.trim().trim_start_matches("android-");
+            digits.parse::<u32>().ok()
+        });
+    let toolchain = || {
+        [
+            "_CARGO_NDK_LINK_TARGET".to_owned(),
+            format!("CFLAGS_{target}"),
+            format!("CFLAGS_{underscored}"),
+            "TARGET_CFLAGS".to_owned(),
+            format!("CC_{target}"),
+            format!("CC_{underscored}"),
+            "TARGET_CC".to_owned(),
+        ]
+        .iter()
+        .filter_map(|key| variable(key))
+        .find_map(|value| api_level_after_triple(&value))
+    };
+    platform.or_else(toolchain).unwrap_or(MIN_ANDROID_API_LEVEL)
+}
+
+/// The digits right after an Android triple in `value`, as clang spells an API level into it.
+fn api_level_after_triple(value: &str) -> Option<u32> {
+    value
+        .match_indices("-linux-android")
+        .find_map(|(at, triple)| {
+            let rest = &value[at + triple.len()..];
+            let rest = rest.strip_prefix("eabi").unwrap_or(rest);
+            let digits = rest
+                .find(|character: char| !character.is_ascii_digit())
+                .map_or(rest, |end| &rest[..end]);
+            digits.parse().ok()
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -436,6 +508,61 @@ pub fn emit_ffmpeg_dev_rpath() {
             println!("{directive}");
         }
     }
+}
+
+/// Puts the pinned `FFmpeg`'s libdir on the link search path of every package that links it.
+///
+/// Cargo passes search paths inside a build script's `OUT_DIR` ahead of all others, which follow
+/// the dependency graph. A system directory another dependency adds (`alsa-sys` adds
+/// `/usr/lib/<triple>`) can therefore precede the libdir and link a distribution's older `FFmpeg`,
+/// so on Unix the path added is a link to the libdir inside `OUT_DIR`. Only a pinned `FFmpeg`
+/// (`FFMPEG_PKG_CONFIG_PATH` or `FFMPEG_LIBS_DIR`) is added.
+///
+/// # Panics
+/// Panics when the link cannot be made.
+pub fn emit_ffmpeg_link_search() {
+    if docs_rs() {
+        return;
+    }
+    let source = this_builds_ffmpeg_source();
+    if matches!(source, FfmpegSource::PkgConfig(None) | FfmpegSource::Unset) {
+        return;
+    }
+    let Some(libdir) = ffmpeg_libdir(source) else {
+        return;
+    };
+    #[cfg(unix)]
+    let libdir = {
+        let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
+        libdir_link(&out_dir, &libdir).unwrap_or_else(|error| {
+            panic!(
+                "could not link {} into {}: {error}",
+                libdir.display(),
+                out_dir.display()
+            )
+        })
+    };
+    println!("cargo:rustc-link-search=native={}", libdir.display());
+}
+
+#[cfg(unix)]
+fn libdir_link(out_dir: &Path, libdir: &Path) -> std::io::Result<PathBuf> {
+    let libdir = std::path::absolute(libdir)?;
+    if !libdir.is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{} is not a directory", libdir.display()),
+        ));
+    }
+    let link = out_dir.join("ffmpeg-lib");
+    match std::fs::symlink_metadata(&link) {
+        Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(&link)?,
+        Ok(_) => std::fs::remove_file(&link)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    std::os::unix::fs::symlink(&libdir, &link)?;
+    Ok(link)
 }
 
 fn ffmpeg_libdir(source: FfmpegSource) -> Option<PathBuf> {

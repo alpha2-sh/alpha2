@@ -19,6 +19,8 @@ pub(crate) struct EncodedGraph {
     /// Results to keep after the submission is accepted; keeping them earlier could leave
     /// unwritten textures after a failure.
     cache_inserts: Vec<(RenderCacheKey, RenderedTexture, bool)>,
+    /// The result cache's clear count at lookup; a later clear drops `cache_inserts`.
+    cache_clears: u64,
     uniforms: UniformArenaLease,
     pending_timings: Vec<PendingEffectTiming>,
     encoded_nodes: u64,
@@ -56,7 +58,7 @@ impl Renderer {
     /// Initializes all pipelines referenced by one graph.
     ///
     /// # Errors
-    /// Returns graph validation errors or diagnostics for an unknown effect.
+    /// Returns graph validation errors, or diagnostics for an unknown effect or a failed pipeline.
     pub fn warmup_graph(&self, graph: &RenderGraph<'_>) -> Result<WarmupReport, ShaderDiagnostics> {
         self.warmup_graphs(&[graph])
     }
@@ -64,7 +66,7 @@ impl Renderer {
     /// Initializes the deduplicated pipeline set referenced by project graphs.
     ///
     /// # Errors
-    /// Returns diagnostics for a malformed graph or an unknown effect.
+    /// Returns diagnostics for a malformed graph, an unknown effect or a failed pipeline.
     pub fn warmup_graphs(
         &self,
         graphs: &[&RenderGraph<'_>],
@@ -102,11 +104,12 @@ impl Renderer {
             }
         }
         self.warmup(&effects)?;
+        let failed = |error: crate::RenderError| ShaderDiagnostics::error(error.to_string());
         for layers in composite_layers {
-            self.warm_composite(layers);
+            self.warm_composite(layers).map_err(failed)?;
         }
         for space in &vector_spaces {
-            self.warm_vector(*space);
+            self.warm_vector(*space).map_err(failed)?;
         }
         Ok(WarmupReport {
             runtime_effects: effects.len(),
@@ -405,6 +408,7 @@ impl Renderer {
         Ok(EncodedGraph {
             texture,
             cache_inserts,
+            cache_clears: cached.clears,
             uniforms,
             pending_timings,
             encoded_nodes,
@@ -418,7 +422,7 @@ impl Renderer {
             RenderNode::Effect { effect, .. }
             | RenderNode::Transition { effect, .. }
             | RenderNode::Generator { effect, .. } => {
-                self.effects.get(effect).map(|registered| registered.cost)
+                self.effects().get(effect).map(|registered| registered.cost)
             }
             RenderNode::Composite { layers, .. } => Some(
                 crate::submission_planner::COMPOSITE_LAYER_COST
@@ -437,6 +441,7 @@ impl Renderer {
         let EncodedGraph {
             texture,
             cache_inserts,
+            cache_clears,
             uniforms,
             pending_timings,
             encoded_nodes,
@@ -445,8 +450,11 @@ impl Renderer {
         uniforms.recycle();
         if !cache_inserts.is_empty() {
             let mut cache = self.lock_result_cache();
-            for (key, result, pinned) in &cache_inserts {
-                cache.insert(*key, result, *pinned);
+            // A clear since the lookup may have changed what these results should show.
+            if cache.clears() == cache_clears {
+                for (key, result, pinned) in &cache_inserts {
+                    cache.insert(*key, result, *pinned);
+                }
             }
         }
         crate::diagnostics::record_graph_work(
@@ -475,7 +483,7 @@ fn graph_uniform_capacity(
             | RenderNode::Transition { effect, .. }
             | RenderNode::Generator { effect, .. } => {
                 let parameter_bytes = renderer
-                    .effects
+                    .effects()
                     .get(effect)
                     .map_or(0, |registered| registered.definition.params.len());
                 let parameter_bytes =
@@ -556,6 +564,8 @@ struct CachedResults {
     hits: Vec<Option<RenderedTexture>>,
     store: Vec<Option<(RenderCacheKey, bool)>>,
     needed: Vec<bool>,
+    /// The cache's clear count read with the lookups.
+    clears: u64,
 }
 
 impl Renderer {
@@ -573,6 +583,7 @@ impl Renderer {
             hits: vec![None; count],
             store: vec![None; count],
             needed: vec![true; count],
+            clears: 0,
         };
         if graph.intents.iter().all(Option::is_none) {
             return cached;
@@ -581,6 +592,7 @@ impl Renderer {
         if !cache.enabled() {
             return cached;
         }
+        cached.clears = cache.clears();
         let eligibility = graph.eligibility();
         let (mut hits, mut misses, mut ineligible) = (0, 0, 0);
         // From the output down: look a node up only if still needed; a hit's inputs are then needed

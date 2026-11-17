@@ -2,70 +2,15 @@
 //! space, background and intermediate format, on every device. Small layers always use the
 //! loop pipeline and large layers the one-layer pipeline.
 
-use super::{gpu_test_lock, gpus_by_intermediate, rgba_image_texture};
+use super::{gpu_test_lock, gpus_by_intermediate, read_stored, rgba_image_texture};
 use crate::composite::{
     COMPOSITE_BATCH_LAYERS, CompositeProgram, LayerTier, composite_batches, layer_bounds,
 };
 use crate::{
     BlendMode, BlendSpace, Color, CompositeLayer, GraphLayer, LayerTransform, RenderGraph,
-    RenderSize, RenderedTexture, Renderer, SourceView,
+    RenderSize, Renderer, SourceView,
 };
 use std::sync::atomic::Ordering;
-
-fn read_stored(renderer: &Renderer, target: &RenderedTexture) -> Vec<u8> {
-    let texel = match target.format {
-        wgpu::TextureFormat::Rgba16Float => 8,
-        wgpu::TextureFormat::Rgba8Unorm => 4,
-        other => panic!("unexpected intermediate {other:?}"),
-    };
-    let device = renderer.gpu.device();
-    let row = target.size.width * texel;
-    let padded =
-        row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("alpha2 test stored readback"),
-        size: u64::from(padded * target.size.height),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &target.texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded),
-                rows_per_image: Some(target.size.height),
-            },
-        },
-        wgpu::Extent3d {
-            width: target.size.width,
-            height: target.size.height,
-            depth_or_array_layers: 1,
-        },
-    );
-    renderer.gpu.submit([encoder.finish()]);
-    buffer
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, |result| result.expect("map"));
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })
-        .expect("poll");
-    let mapped = buffer.slice(..).get_mapped_range().expect("mapped");
-    mapped
-        .chunks(padded as usize)
-        .flat_map(|line| line[..row as usize].iter().copied())
-        .collect()
-}
 
 /// Largest per-channel difference between two stored texels in 8-bit codes, for messages.
 fn channel_step(format: wgpu::TextureFormat, left: &[u8], right: &[u8]) -> f32 {
@@ -319,9 +264,13 @@ fn a_small_layer_draws_with_the_batch_pipeline_alone_and_a_large_one_with_one_st
     // Small layers a pass each, two and eight to a pass, then one each again.
     let passes = [1, 2, COMPOSITE_BATCH_LAYERS, 1].map(draw);
     assert_eq!(passes, [12, 7, 5, 12]);
-    let cached = renderer.composite_pipeline();
-    let looped = renderer.composite_program_pipeline(cached, CompositeProgram::Loop);
-    let one_layer = renderer.composite_program_pipeline(cached, CompositeProgram::OneLayer);
+    let cached = renderer.composite_pipeline().expect("created");
+    let looped = renderer
+        .composite_program_pipeline(cached, CompositeProgram::Loop)
+        .expect("created");
+    let one_layer = renderer
+        .composite_program_pipeline(cached, CompositeProgram::OneLayer)
+        .expect("created");
     assert_ne!(looped, one_layer);
     {
         let log = renderer.composite_pipelines.lock().expect("log");

@@ -45,13 +45,6 @@ impl RendererBackend {
         }
     }
 
-    pub fn gpu_mut(&mut self) -> Option<&mut Renderer> {
-        match self {
-            Self::Gpu(renderer) => Some(renderer),
-            Self::Cpu(_) => None,
-        }
-    }
-
     pub fn cpu(&self) -> Option<&CpuRenderer> {
         match self {
             Self::Cpu(renderer) => Some(renderer),
@@ -132,14 +125,14 @@ impl RendererBackend {
         }
     }
 
-    pub fn clear_effect_resources(&mut self) {
+    pub fn unregister_effect_resource(&self, id: &str) {
         match self {
-            Self::Gpu(renderer) => renderer.clear_effect_resources(),
-            Self::Cpu(renderer) => renderer.clear_effect_resources(),
-        }
+            Self::Gpu(renderer) => renderer.unregister_effect_resource(id),
+            Self::Cpu(renderer) => renderer.unregister_effect_resource(id),
+        };
     }
 
-    pub fn register_lut3d(&mut self, id: &str, data: &Lut3dData) -> Result<(), RenderError> {
+    pub fn register_lut3d(&self, id: &str, data: &Lut3dData) -> Result<(), RenderError> {
         match self {
             Self::Gpu(renderer) => renderer.register_lut3d(id, data),
             Self::Cpu(renderer) => renderer.register_lut3d(id, data),

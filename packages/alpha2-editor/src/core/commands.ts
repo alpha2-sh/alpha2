@@ -16,6 +16,7 @@ import {
   acceptsInput,
   correspondingCompositions,
   ownComposition,
+  detachComposition,
   withEffectStack,
   withoutUndrawn,
   withInput,
@@ -33,10 +34,21 @@ import type {
   CompositionNode,
   MediaSource,
   EffectResource,
+  DataSet,
+  DataReference,
 } from "alpha2/project";
+import { dataReferences, shareUnchangedParts } from "alpha2/project";
+import type { AppliedEdit } from "alpha2/apply-edit";
+import {
+  assertClipsUnread,
+  assertDataUnread,
+  assertSourceUnanchored,
+  changedDataSets,
+} from "./data.js";
 import { rememberValid, withValidated } from "./validated.js";
 import {
   EditorError,
+  freeze,
   validateDocument,
   validateDocumentShape,
   canonicalDocument,
@@ -278,6 +290,12 @@ export type Command =
       readonly id: string;
       readonly ids: readonly string[];
     }
+  /**
+   * Gives clip `id` its own copy of its composition tree when another clip, source or group draws
+   * part of it, so a graph command on it changes only this clip. Effect commands do this
+   * themselves; graph commands name a composition and change every clip that shows it.
+   */
+  | { readonly type: "clip.detachComposition"; readonly id: string }
   /** Gives a clip without one a composition that shows its picture. */
   | {
       readonly type: "graph.create";
@@ -436,8 +454,23 @@ export type Command =
       readonly source?: MediaSource;
       readonly resource?: EffectResource;
     }
-  /** Removes a bin asset and its source or effect resource; refused while a clip reads it. */
+  /**
+   * Removes a bin asset and its source or effect resource; refused while a clip reads it, and
+   * (`data_referenced`, with the set ids as `details.dataSets`) while data sets are anchored to it.
+   */
   | { readonly type: "asset.remove"; readonly id: string }
+  /**
+   * Adds a data set, or replaces the set with its id in place. Undo history keeps a replaced set
+   * whole, about its JSON size, so one put of a set near `MAX_DATA_VALUES` (tens of MB) can evict
+   * most or all earlier steps under the default `historyByteLimit`.
+   */
+  | { readonly type: "data.put"; readonly dataSet: DataSet }
+  /**
+   * Removes a data set. Refused (`data_referenced`, with the places as `details.references`) while
+   * a binding, correction or caption track reads it. To keep what they show, apply a `bake` with
+   * this command in its `then` (`EditorSession.applyEdit`).
+   */
+  | { readonly type: "data.remove"; readonly id: string }
   /** Replaces the document metadata fields the patch has. */
   | {
       readonly type: "metadata.update";
@@ -605,6 +638,26 @@ function shiftMarkers(
   if (markers.some((m) => m.time < 0))
     fail("The edit would move a marker before the timeline start");
   return { ...document, metadata: { ...document.metadata, markers } };
+}
+/**
+ * `document` with its markers moved as `result`'s ripple moved time. Like timeline-anchored data,
+ * markers move only when the ripple reached every track.
+ */
+function followTimeline(
+  document: DraftDocument,
+  result: edit.EditResult,
+): DraftDocument {
+  const change = result.ok ? result.timeline : undefined;
+  if (!change?.everyTrack) return document;
+  if (change.removed)
+    return shiftMarkers(
+      document,
+      change.removed.end,
+      change.removed.start - change.removed.end,
+    );
+  return change.opened
+    ? shiftMarkers(document, change.opened.at, change.opened.length)
+    : document;
 }
 /** The metadata right part `newId` of split clip `leftId` inherits. */
 function afterSplit(
@@ -844,6 +897,11 @@ function reduce(
       return withCopiedGraphs({ ...document, project: next }, copies);
     }
     case "track.remove":
+      assertClipsUnread(
+        project,
+        new Set((track!.clips ?? []).map((c) => c.id)),
+        command.type,
+      );
       return {
         ...document,
         project: {
@@ -976,12 +1034,7 @@ function reduce(
         );
         if (cut) next = afterSplit(next, command.splitId, cut.id);
       }
-      if (command.mode === "insert" && syncTracks.length)
-        next = shiftMarkers(
-          next,
-          command.at,
-          command.clip.timeline_range.end - command.clip.timeline_range.start,
-        );
+      next = followTimeline(next, result);
       return withCopiedGraphs(next, owned.copies);
     }
     case "clip.slip":
@@ -1005,16 +1058,7 @@ function reduce(
         ...(command.keyframes ? { keyframes: command.keyframes } : {}),
       });
       const made = edited(result, command, command.id);
-      const next = { ...document, project: made };
-      // Timeline markers move with a ripple that reaches other tracks.
-      const before = found.clip.timeline_range;
-      return syncTracks.length
-        ? shiftMarkers(
-            next,
-            before.end,
-            before.start + command.duration - before.end,
-          )
-        : next;
+      return followTimeline({ ...document, project: made }, result);
     }
     case "marker.add":
       if (document.metadata.markers.some((m) => m.id === command.marker.id))
@@ -1067,6 +1111,8 @@ function reduce(
     case "clip.delete": {
       let result: edit.EditResult;
       const found = indexDocument(document).clips.get(command.id);
+      if (command.type === "clip.delete")
+        assertClipsUnread(project, new Set([command.id]), command.type);
       const syncTracks =
         "ripple" in command && command.ripple && found
           ? syncTrackIds(document, found.trackId)
@@ -1104,21 +1150,7 @@ function reduce(
         command.type === "clip.delete" && !command.ripple && result.ok
           ? result.project
           : edited(result, command, command.id);
-      let next = { ...document, project: made };
-      // Timeline markers move with a ripple that reaches other tracks.
-      if (syncTracks.length && found) {
-        const before = found.clip.timeline_range;
-        if (command.type === "clip.trim") {
-          const delta =
-            command.edge === "end"
-              ? command.at - before.end
-              : before.start - command.at;
-          next = shiftMarkers(next, before.end, delta);
-        } else if (command.type === "clip.delete") {
-          const gap = edit.rippleDeleteSpan(project, command.id)!;
-          next = shiftMarkers(next, gap.end, gap.start - gap.end);
-        }
-      }
+      let next = followTimeline({ ...document, project: made }, result);
       if (command.type === "clip.split")
         next = afterSplit(next, command.newId, command.id);
       return next;
@@ -1136,7 +1168,9 @@ function reduce(
     case "effect.reorder": {
       const found = indexDocument(document).clips.get(command.id);
       if (!found) fail("Unknown clip", command.id);
-      const current = effectStack(project, found.clip);
+      // Another clip may show the same composition; the edit is this clip's alone.
+      const detached = detachComposition(project, command.id);
+      const current = effectStack(detached.project, found.clip);
       if (!current)
         fail(
           "The clip's composition is a graph, not an effect stack; edit it as a graph",
@@ -1166,10 +1200,22 @@ function reduce(
             bypass: command.bypass ?? stack[i].bypass,
           };
       }
-      return {
-        ...document,
-        project: withEffectStack(project, command.id, stack),
-      };
+      return withCopiedGraphs(
+        {
+          ...document,
+          project: withEffectStack(detached.project, command.id, stack),
+        },
+        detached.copies,
+      );
+    }
+    case "clip.detachComposition": {
+      if (!indexDocument(document).clips.has(command.id))
+        fail("Unknown clip", command.id);
+      const detached = detachComposition(project, command.id);
+      return withCopiedGraphs(
+        { ...document, project: detached.project },
+        detached.copies,
+      );
     }
     case "graph.create": {
       const found = indexDocument(document).clips.get(command.clipId);
@@ -1516,7 +1562,7 @@ function reduce(
       if (!track?.captions) fail("Not a caption track", command.trackId);
       const key = `${track.id}/cues`;
       const nextIds = [...(document.metadata.instanceIds[key] ?? [])];
-      const cues = [...track.captions.cues];
+      const cues = [...(track.captions.cues ?? [])];
       // Cues stay in start order; overlaps are for validation to report.
       const place = (instanceId: string, cue: CaptionCue) => {
         const at = cues.findIndex(
@@ -1557,6 +1603,35 @@ function reduce(
         nextIds,
       );
     }
+    case "data.put": {
+      const sets = project.data ?? [];
+      const at = sets.findIndex((set) => set.id === command.dataSet.id);
+      return {
+        ...document,
+        project: {
+          ...project,
+          data:
+            at < 0
+              ? [...sets, command.dataSet]
+              : sets.map((set, index) =>
+                  index === at ? command.dataSet : set,
+                ),
+        },
+      };
+    }
+    case "data.remove": {
+      const sets = project.data ?? [];
+      if (!sets.some((set) => set.id === command.id))
+        fail("Unknown data set", command.id);
+      assertDataUnread(project, command.id, command.type);
+      const data = sets.filter((set) => set.id !== command.id);
+      // The engine writes no data list when it is empty.
+      const { data: _removed, ...rest } = project;
+      return {
+        ...document,
+        project: data.length ? { ...rest, data } : rest,
+      };
+    }
     case "asset.put": {
       const previous = document.assets[command.asset.id];
       if (previous && command.asset.contentRevision < previous.contentRevision)
@@ -1586,6 +1661,7 @@ function reduce(
       };
     }
     case "asset.remove": {
+      assertSourceUnanchored(project, command.id, command.type);
       const assets = { ...document.assets };
       delete assets[command.id];
       return {
@@ -1655,7 +1731,7 @@ function apply(document: DraftDocument, command: Command): DraftDocument {
 function assertLocksKept(
   document: DraftDocument,
   next: DraftDocument,
-  command: Command,
+  command: Command | { readonly type: "edit" },
 ): void {
   const locked = document.project.timeline.tracks.filter(
     (t) => document.metadata.tracks[t.id]?.locked,
@@ -1668,6 +1744,8 @@ function assertLocksKept(
   const resourcesSame =
     assetsSame && after.effect_resources === before.effect_resources;
   const compositionsSame = after.compositions === before.compositions;
+  const dataChanged = changedDataSets(before, after);
+  let references: readonly DataReference[] | null = null;
   const tracksAfter =
     after.timeline.tracks === before.timeline.tracks
       ? null
@@ -1710,6 +1788,30 @@ function assertLocksKept(
         )
           return true;
       }
+      if (dataChanged.size) {
+        references ??= dataReferences(before);
+        const clips = new Set((track.clips ?? []).map((c) => c.id));
+        const compositions = reachedCompositions(before, track.clips ?? []);
+        const sources = shownSources(before, [track]);
+        const reads = (r: DataReference) => {
+          const owner = r.owner;
+          switch (owner.kind) {
+            case "clip":
+              return clips.has(owner.clip);
+            case "track":
+            case "transition":
+              return owner.track === track.id;
+            case "node":
+              return compositions.has(owner.composition);
+            case "source":
+              return sources.has(owner.source);
+            case "master":
+              return false;
+          }
+        };
+        if (references.some((r) => dataChanged.has(r.data) && reads(r)))
+          return true;
+      }
       if (!resourcesSame) {
         resources ??= [
           byId(before.effect_resources ?? []),
@@ -1735,12 +1837,147 @@ function assertLocksKept(
   }
 }
 /**
+ * `next` without the editor metadata (entries and instance id lists) of the clips and tracks
+ * `before` has and `next` lost. A clip that moved keeps its id and its metadata. Only tracks that
+ * are not the same objects in both are walked.
+ */
+function withoutRemovedMetadata(
+  before: DraftDocument,
+  next: DraftDocument,
+): DraftDocument {
+  const old = before.project.timeline.tracks;
+  const now = next.project.timeline.tracks;
+  if (old === now) return next;
+  const kept = new Set<Track>(now);
+  const changed = old.filter((track) => !kept.has(track));
+  if (!changed.length) return next;
+  const unchanged = new Set<Track>(old);
+  const added = now.filter((track) => !unchanged.has(track));
+  const byId = new Map(added.map((track) => [track.id, track]));
+  // A track whose clips keep their ids in place (a move or trim) loses no clip.
+  const sameIds = (before: Track) => {
+    const track = byId.get(before.id);
+    const after = track?.clips ?? [];
+    const clips = before.clips ?? [];
+    return (
+      track !== undefined &&
+      clips.length === after.length &&
+      clips.every((clip, index) => clip.id === after[index].id)
+    );
+  };
+  const losing = changed.filter((track) => !sameIds(track));
+  if (!losing.length) return next;
+  const present = new Set<string>();
+  for (const track of added)
+    for (const clip of track.clips ?? []) present.add(clip.id);
+  const trackIds = new Set(now.map((track) => track.id));
+  const clips = losing
+    .flatMap((track) => (track.clips ?? []).map((clip) => clip.id))
+    .filter((id) => !present.has(id));
+  const tracks = losing
+    .map((track) => track.id)
+    .filter((id) => !trackIds.has(id));
+  const { metadata } = next;
+  const stale = [
+    ...clips.map((id) => `${id}/masks`),
+    ...tracks.flatMap((id) => [`${id}/cues`, `${id}/transitions`]),
+  ].filter((key) => key in metadata.instanceIds);
+  const named = clips.filter((id) => id in metadata.clips);
+  const flagged = tracks.filter((id) => id in metadata.tracks);
+  if (!stale.length && !named.length && !flagged.length) return next;
+  const instanceIds = { ...metadata.instanceIds };
+  for (const key of stale) delete instanceIds[key];
+  const clipMetadata = { ...metadata.clips };
+  for (const id of named) delete clipMetadata[id];
+  const trackMetadata = { ...metadata.tracks };
+  for (const id of flagged) delete trackMetadata[id];
+  return {
+    ...next,
+    metadata: {
+      ...metadata,
+      instanceIds,
+      clips: clipMetadata,
+      tracks: trackMetadata,
+    },
+  };
+}
+/**
+ * Puts an engine edit result (`alpha2/apply-edit` `AppliedEdit`, computed from `document`'s
+ * project) in `document`, then runs `then` on it as one transaction. Clips the edit created get the
+ * editor metadata of the clip each was cut from (`report.created[].from`); removed clips lose
+ * theirs. Every part the edit left equal to `document`'s keeps `document`'s object, so a locked
+ * track the edit did not touch passes the lock check; the rest is the engine's project as written.
+ *
+ * Never throws. A refusal is `{ ok: false }` with an `EditorError`, `locked` for a change to a
+ * locked track, `invalid_result` for a result that does not validate (an engine defect), or the
+ * refusal of a `then` command. `document` is not modified, and the result is deep-frozen.
+ */
+export function executeEditResult(
+  document: EditorDocument,
+  applied: Pick<AppliedEdit, "projectJson" | "report">,
+  then: readonly Command[] = [],
+): Result<EditorDocument> {
+  let edited: EditorDocument;
+  try {
+    edited = withValidated(() => {
+      let next: DraftDocument = withoutRemovedMetadata(document, {
+        ...document,
+        project: shareUnchangedParts(
+          document.project,
+          JSON.parse(applied.projectJson) as Project,
+        ),
+      });
+      for (const created of applied.report.created)
+        next = afterSplit(next, created.id, created.from);
+      // What the edit stopped drawing goes, with its graph layout and names.
+      const undrawn = withoutUndrawn(document.project, next.project);
+      if (undrawn.removed.size)
+        next = withoutGraphs(
+          { ...next, project: undrawn.project },
+          undrawn.removed,
+        );
+      assertLocksKept(document, next, { type: "edit" });
+      const result = freeze(withInstanceIds(canonicalDocument(next)));
+      try {
+        validateDocument(result);
+      } catch (cause) {
+        throw new EditorError(
+          "invalid_result",
+          `The engine's edit result does not validate: ${cause instanceof Error ? cause.message : String(cause)}`,
+          "edit",
+          undefined,
+          true,
+          { cause },
+        );
+      }
+      return result;
+    });
+  } catch (cause) {
+    return { ok: false, error: asEditorError(cause) };
+  }
+  return then.length
+    ? executeCommand(edited, { type: "transaction", commands: then })
+    : { ok: true, value: edited };
+}
+function asEditorError(cause: unknown): EditorError {
+  return cause instanceof EditorError
+    ? cause
+    : new EditorError(
+        "invalid_command",
+        String(cause),
+        "dispatch",
+        undefined,
+        true,
+        { cause },
+      );
+}
+/**
  * Applies `command` to `document` and validates the result. `gesture` checks only what a pointer
  * move can change (see `validateDocumentShape`); the gesture validates in full when it commits.
  *
  * Never throws: a refusal is `{ ok: false }` with an `EditorError` (`invalid_command`, `locked`, a
  * validation code, or an edit code from `alpha2/edit`). `document` and `command` are not modified;
- * compositions the edit leaves undrawn are removed from the result.
+ * compositions the edit leaves undrawn are removed from the result, which is deep-frozen.
  */
 export function executeCommand(
   document: EditorDocument,
@@ -1749,17 +1986,23 @@ export function executeCommand(
 ): Result<EditorDocument> {
   try {
     return withValidated(() => {
-      const reduced = apply(document, structuredClone(command));
+      const reduced = withoutRemovedMetadata(
+        document,
+        apply(document, structuredClone(command)),
+      );
       // A clip owns the composition it shows: what the command stopped drawing goes.
       const undrawn = withoutUndrawn(document.project, reduced.project);
       // Canonicalize what the command brought in.
-      const next = withInstanceIds(
-        canonicalDocument(
-          withoutGraphs(
-            undrawn.removed.size
-              ? { ...reduced, project: undrawn.project }
-              : reduced,
-            undrawn.removed,
+      // Frozen before validation, so validation caches its walk of new parts for later commands.
+      const next = freeze(
+        withInstanceIds(
+          canonicalDocument(
+            withoutGraphs(
+              undrawn.removed.size
+                ? { ...reduced, project: undrawn.project }
+                : reduced,
+              undrawn.removed,
+            ),
           ),
         ),
       );
@@ -1770,19 +2013,6 @@ export function executeCommand(
       return { ok: true, value: next } as const;
     });
   } catch (cause) {
-    return {
-      ok: false,
-      error:
-        cause instanceof EditorError
-          ? cause
-          : new EditorError(
-              "invalid_command",
-              String(cause),
-              "dispatch",
-              undefined,
-              true,
-              { cause },
-            ),
-    };
+    return { ok: false, error: asEditorError(cause) };
   }
 }

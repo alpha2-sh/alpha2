@@ -1,0 +1,59 @@
+{
+  "compose_version": 1,
+  "template": {
+    "id": "alpha2/wipe-reveal",
+    "version": 1,
+    "kind": "node",
+    "title": "Wipe reveal",
+    "description": "Shows a node as an edge sweeps across its area."
+  },
+  "params": [
+    { "name": "content", "type": "node", "title": "What is revealed" },
+    {
+      "name": "from",
+      "type": "enum",
+      "values": ["left", "right", "top", "bottom"],
+      "default": "left",
+      "title": "The side the edge starts at"
+    },
+    { "name": "seconds", "type": "number", "min": 0.05, "max": 10, "default": 0.6, "title": "How long the sweep takes" },
+    {
+      "name": "ease",
+      "type": "enum",
+      "values": ["linear", "ease", "ease-in", "ease-out", "ease-in-out"],
+      "default": "ease-in-out",
+      "title": "Timing curve"
+    }
+  ],
+  "node": {
+    "type": "mask",
+    "content": { "$param": "content" },
+    "shapes": [
+      {
+        "$switch": "from",
+        "cases": {
+          "left": {
+            "shape": "rect",
+            "center": { "from": [0, 0.5], "to": [0.5, 0.5], "duration": { "$param": "seconds" }, "ease": { "$param": "ease" } },
+            "size": { "from": [0, 1], "to": [1, 1], "duration": { "$param": "seconds" }, "ease": { "$param": "ease" } }
+          },
+          "right": {
+            "shape": "rect",
+            "center": { "from": [1, 0.5], "to": [0.5, 0.5], "duration": { "$param": "seconds" }, "ease": { "$param": "ease" } },
+            "size": { "from": [0, 1], "to": [1, 1], "duration": { "$param": "seconds" }, "ease": { "$param": "ease" } }
+          },
+          "top": {
+            "shape": "rect",
+            "center": { "from": [0.5, 0], "to": [0.5, 0.5], "duration": { "$param": "seconds" }, "ease": { "$param": "ease" } },
+            "size": { "from": [1, 0], "to": [1, 1], "duration": { "$param": "seconds" }, "ease": { "$param": "ease" } }
+          },
+          "bottom": {
+            "shape": "rect",
+            "center": { "from": [0.5, 1], "to": [0.5, 0.5], "duration": { "$param": "seconds" }, "ease": { "$param": "ease" } },
+            "size": { "from": [1, 0], "to": [1, 1], "duration": { "$param": "seconds" }, "ease": { "$param": "ease" } }
+          }
+        }
+      }
+    ]
+  }
+}
