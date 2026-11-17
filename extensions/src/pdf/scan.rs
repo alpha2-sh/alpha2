@@ -510,12 +510,9 @@ impl Walk<'_> {
         } else {
             decoded_left
         };
-        let decoded = decode(stream, left, keep).map_err(|error| {
-            if keep && content_left < decoded_left {
-                too_much_content()
-            } else {
-                error
-            }
+        let decoded = decode(stream, left, keep).map_err(|error| match error {
+            ExtensionError::Budget(_) if keep && content_left < decoded_left => too_much_content(),
+            error => error,
         })?;
         match decoded {
             Decoded::Bytes(bytes) => {
@@ -992,10 +989,9 @@ fn decode(stream: &Stream<'_>, left: u64, keep: bool) -> Result<Decoded, Extensi
 }
 
 /// Inflates zlib data, or raw deflate when zlib fails as hayro does, and answers the length and,
-/// when `keep`, the bytes. Output before a corrupt end counts, since hayro keeps it too, and so
-/// does a zlib stream whose checksum is wrong, which hayro's last decoder does not check.
+/// when `keep`, the bytes. hayro's last decoder ignores the zlib checksum and reads past damage,
+/// so a wrong checksum reads as the deflate after the header and damaged data is refused.
 fn inflated(data: &[u8], left: u64, keep: bool) -> Result<(u64, Vec<u8>), ExtensionError> {
-    let mut best = (0, Vec::new());
     let after_header = data.get(2..).unwrap_or_default();
     for attempt in 0..3 {
         let mut reader: Box<dyn std::io::Read> = match attempt {
@@ -1021,14 +1017,13 @@ fn inflated(data: &[u8], left: u64, keep: bool) -> Result<(u64, Vec<u8>), Extens
                 Err(_) => break false,
             }
         };
-        if total >= best.0 {
-            best = (total, kept);
-        }
         if finished {
-            break;
+            return Ok((total, kept));
         }
     }
-    Ok(best)
+    Err(ExtensionError::Malformed(
+        "a FlateDecode stream of the page is damaged".into(),
+    ))
 }
 
 fn inflated_length(data: &[u8], left: u64) -> Result<Decoded, ExtensionError> {

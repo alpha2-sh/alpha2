@@ -198,6 +198,19 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 #[test]
+fn a_page_whose_form_stream_does_not_inflate_to_its_end_is_refused() {
+    let file = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/corpus/hostile/extension_pdf/form-stream-invalid-distance.pdf"),
+    )
+    .expect("the hostile page");
+    match open(file.into(), &pdf_source(1, WHITE)) {
+        Err(ExtensionError::Malformed(reason)) if reason.contains("damaged") => {}
+        other => panic!("expected a damaged stream, got {:?}", other.err()),
+    }
+}
+
+#[test]
 fn a_form_whose_checksum_is_wrong_still_counts_what_it_invokes() {
     refused_saying(
         with_bad_checksums(pdf_forms(100, 3, PDF_RECTANGLE)),
