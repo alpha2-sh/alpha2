@@ -447,7 +447,6 @@ fn names_written_file(named: &Path, written: &Path) -> bool {
         && named.is_file()
 }
 
-/// Stops the run on anything but the pinned `FFmpeg` SDK.
 fn scratch_directory(name: &str) -> alpha2_test_support::ScratchDir {
     alpha2_native::require_pinned_ffmpeg_for_tests();
     alpha2_test_support::scratch_dir(name)

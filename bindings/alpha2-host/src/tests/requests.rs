@@ -2179,7 +2179,6 @@ fn status_answers_at_once_while_an_export_runs() {
         "videoCodec": "mpeg4-part2",
         "output": output
     });
-    // The serve child chooses its renderer from the same environment as this process.
     let renderer = if create_host(VideoDecodePolicy::Software)
         .expect("host")
         .device()
@@ -2314,8 +2313,7 @@ fn concurrent_requests_hold_their_own_definition_of_one_effect() {
             .and_then(|renderer| renderer.effect_definition(&id))
             .map(|definition| definition.wgsl_body.clone())
     };
-    // The CPU renderer holds runtime effects the same way, and refuses them to the requests
-    // that hold them.
+    // The CPU renderer refuses runtime effects but holds them the same way.
     let gpu = device.renderer.gpu().is_some();
     let usable = |request: &Host| {
         let used = request.require_effect("test.isolated", 1);

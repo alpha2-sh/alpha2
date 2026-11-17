@@ -373,8 +373,6 @@ fn sources_are_refused_exactly_when_the_build_has_no_provider_for_them() {
     )
     .expect("request");
     let read = extension_sources_read();
-    // This crate's feature turns every provider on, so then nothing may be refused; only a build
-    // without it (`cargo test -p alpha2-host --no-default-features` on its own) runs the refusals.
     if cfg!(feature = "extensions") {
         assert!(read.iter().all(|(_, read)| *read), "{read:?}");
     }

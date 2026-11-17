@@ -684,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn a_cancel_ends_a_held_export_at_once() {
+    fn a_cancel_ends_a_held_export_while_the_engine_stays_paused() {
         use std::time::{Duration, Instant};
 
         let engine = cpu();
@@ -697,8 +697,6 @@ mod tests {
             ..ExportRequest::default()
         };
         let handle = engine.export(request, Arc::new(Quiet)).expect("started");
-        // The engine stays paused to the end, so an export the cancel does not wake stays held and
-        // misses the deadline however fast the machine is.
         let deadline = Duration::from_secs(10);
         let until = Instant::now() + deadline;
         while !handle.is_held() && Instant::now() < until {

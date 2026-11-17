@@ -593,8 +593,6 @@ fn the_steady_rate_follows_the_encoder_and_leaves_out_set_up_and_finish() {
     let end = 2 * alpha2_time::TICKS_PER_SECOND;
     let slow = Duration::from_millis(40);
     crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(Some(slow)));
-    // Render work this long makes a pipeline that overlaps the two stages and one that runs them in
-    // turn differ by 15 ms per frame or more, whatever the machine adds to either.
     crate::host::INJECT_SLOW_RENDER.with(|injected| injected.set(Some(Duration::from_millis(30))));
     let request = json!({
         "protocolVersion": 2, "operation": "export", "requestId": "steady-rate",
@@ -641,18 +639,15 @@ fn the_steady_rate_follows_the_encoder_and_leaves_out_set_up_and_finish() {
         steady >= overall,
         "steady {steady:.1} fps below the whole export's {overall:.1} fps"
     );
-    // Each stage's work per frame in this run: the encoder's span, and the render thread's time
-    // between the first and last hand-offs less its waits on the encoder.
     let performance = &result["performance"];
     let number = |key: &str| performance[key].as_f64().expect(key);
     let encode = number("videoEncodeMs") / 60.0;
     let handoffs = render_ms - number("finishMs") - number("firstFrameMs");
     let render = (handoffs - number("encodeQueueWaitMs")) / 59.0;
-    // Overlapped, a frame takes the longer stage's time; in turn, the sum. The bound is halfway.
-    let bound = 1000.0 / (encode.max(render) + encode.min(render) / 2.0);
+    let halfway_to_in_turn = 1000.0 / (encode.max(render) + encode.min(render) / 2.0);
     assert!(
-        steady >= bound,
-        "steady {steady:.1} fps below {bound:.1} fps: encode {encode:.1} ms and render \
+        steady >= halfway_to_in_turn,
+        "steady {steady:.1} fps below {halfway_to_in_turn:.1} fps: encode {encode:.1} ms and render \
          {render:.1} ms per frame do not overlap: {performance}"
     );
 }
