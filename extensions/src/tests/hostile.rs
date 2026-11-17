@@ -459,10 +459,13 @@ fn pdf_flate(data: &[u8]) -> Vec<u8> {
     encoder.finish().expect("compressed")
 }
 
-/// A page that invokes a form `fan` times, each form the next one `fan` times, `levels` forms
-/// deep; the last fills one rectangle.
 #[cfg(feature = "pdf")]
-pub(crate) fn pdf_forms(fan: usize, levels: usize) -> Vec<u8> {
+pub(crate) const PDF_RECTANGLE: &[u8] = b"0 0 1 1 re f";
+
+/// A page that invokes a form `fan` times, each form the next one `fan` times, `levels` forms
+/// deep; the last has the content `leaf`.
+#[cfg(feature = "pdf")]
+pub(crate) fn pdf_forms(fan: usize, levels: usize, leaf: &[u8]) -> Vec<u8> {
     let invoke = |form: usize| format!("/F{form} Do\n").repeat(fan).into_bytes();
     let forms: Vec<Vec<u8>> = (1..=levels)
         .map(|level| {
@@ -472,7 +475,7 @@ pub(crate) fn pdf_forms(fan: usize, levels: usize) -> Vec<u8> {
                     invoke(level + 1),
                 )
             } else {
-                ("<< >>".to_owned(), b"0 0 1 1 re f".to_vec())
+                ("<< >>".to_owned(), leaf.to_vec())
             };
             pdf_stream(
                 &format!(

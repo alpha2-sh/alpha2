@@ -107,12 +107,13 @@ fn lottie_seeds() -> Seeds {
 #[cfg(feature = "pdf")]
 fn pdf_seeds() -> Seeds {
     use hostile::{
-        j2k_codestream, jbig2_page, pdf_coded_image, pdf_content_bomb, pdf_far_path, pdf_forms,
-        pdf_image_draws, pdf_self_invoking_form, pdf_type3_glyphs,
+        PDF_RECTANGLE, j2k_codestream, jbig2_page, pdf_coded_image, pdf_content_bomb, pdf_far_path,
+        pdf_forms, pdf_image_draws, pdf_self_invoking_form, pdf_type3_glyphs,
     };
     vec![
-        ("forms-1000.pdf", pdf_forms(1000, 3)),
-        ("forms-46.pdf", pdf_forms(46, 3)),
+        ("forms-1000.pdf", pdf_forms(1000, 3, PDF_RECTANGLE)),
+        ("forms-46.pdf", pdf_forms(46, 3, PDF_RECTANGLE)),
+        ("empty-forms-1000.pdf", pdf_forms(1000, 3, b"")),
         ("self-invoking-form.pdf", pdf_self_invoking_form()),
         ("image-draws.pdf", pdf_image_draws(1000, false, true, 1000)),
         ("type3-glyphs.pdf", pdf_type3_glyphs(1000, 10_000)),

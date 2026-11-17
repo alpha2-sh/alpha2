@@ -3,8 +3,9 @@ use alpha2_model::Rgba;
 use std::io::Write as _;
 
 use super::hostile::{
-    j2k_codestream, jbig2_page, pdf_coded_image, pdf_content_bomb, pdf_far_path, pdf_forms,
-    pdf_image_draws, pdf_one_page, pdf_self_invoking_form, pdf_stream as stream, pdf_type3_glyphs,
+    PDF_RECTANGLE, j2k_codestream, jbig2_page, pdf_coded_image, pdf_content_bomb, pdf_far_path,
+    pdf_forms, pdf_image_draws, pdf_one_page, pdf_self_invoking_form, pdf_stream as stream,
+    pdf_type3_glyphs,
 };
 use super::*;
 
@@ -160,14 +161,30 @@ fn refused_saying(file: Vec<u8>, says: &str) {
 #[test]
 fn a_page_is_held_to_what_its_forms_draw_each_time_they_are_invoked() {
     // 97,336 rectangles open; a million are refused before hayro converts the page.
-    open(pdf_forms(46, 3).into(), &pdf_source(1, WHITE)).expect("46^3 draws open");
-    refused_saying(pdf_forms(100, 3), "the page draws more than 262144");
+    open(
+        pdf_forms(46, 3, PDF_RECTANGLE).into(),
+        &pdf_source(1, WHITE),
+    )
+    .expect("46^3 draws open");
+    refused_saying(
+        pdf_forms(100, 3, PDF_RECTANGLE),
+        "the page draws more than 262144",
+    );
     refused_saying(pdf_self_invoking_form(), "draws itself");
 }
 
 #[test]
 fn a_page_of_a_billion_form_invocations_is_refused_before_it_is_converted() {
-    refused_saying(pdf_forms(1000, 3), "the page draws more than 262144");
+    refused_saying(
+        pdf_forms(1000, 3, PDF_RECTANGLE),
+        "the page draws more than 262144",
+    );
+}
+
+#[test]
+fn every_form_invocation_counts_even_of_a_form_that_draws_nothing() {
+    open(pdf_forms(46, 3, b"").into(), &pdf_source(1, WHITE)).expect("46^3 invocations open");
+    refused_saying(pdf_forms(1000, 3, b""), "the page draws more than 262144");
 }
 
 #[test]
