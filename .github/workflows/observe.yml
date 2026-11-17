@@ -34,6 +34,9 @@ jobs:
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
     outputs:
       native: ${{ steps.areas.outputs.native }}
       browser: ${{ steps.areas.outputs.browser }}
@@ -43,6 +46,8 @@ jobs:
           fetch-depth: 0
       - id: areas
         uses: ./.github/actions/changes
+        with:
+          workflow: observe.yml
 
   build-wasm:
     if: >-

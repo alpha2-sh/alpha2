@@ -25,10 +25,16 @@ env:
 jobs:
   validate:
     if: ${{ !inputs.skip-validate }}
+    permissions:
+      actions: read
+      contents: read
     uses: ./.github/workflows/ci.yml
 
   observe:
     if: ${{ !inputs.skip-validate }}
+    permissions:
+      actions: read
+      contents: read
     uses: ./.github/workflows/observe.yml
 
   version:

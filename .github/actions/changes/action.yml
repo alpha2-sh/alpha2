@@ -1,5 +1,9 @@
 name: Change areas
-description: Which areas of the repository the change touches; every area outside pull requests.
+description: Which areas of the repository a pull request or branch push touches.
+inputs:
+  workflow:
+    description: This workflow's file, to skip a main push that already passed it on another branch
+    required: true
 outputs:
   native:
     description: Rust crates, bindings, tests and their pins
@@ -21,40 +25,72 @@ runs:
   steps:
     - name: Areas this change touches
       id: areas
+      shell: bash
       env:
         EVENT: ${{ github.event_name }}
+        REF: ${{ github.ref }}
+        SHA: ${{ github.sha }}
         BASE: ${{ github.event.pull_request.base.sha }}
-      shell: bash
+        BEFORE: ${{ github.event.before }}
+        STANDALONE: ${{ github.workflow == 'ci' || github.workflow == 'observe' }}
+        WORKFLOW: ${{ inputs.workflow }}
+        REPO: ${{ github.repository }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         native=false js=false e2e=false packaging=false
-        if [ "$EVENT" != pull_request ]; then
-          native=true js=true e2e=true packaging=true
+        everything() { native=true js=true e2e=true packaging=true; }
+        changed=()
+        if [ "$EVENT" = pull_request ]; then
+          mapfile -t changed < <(git diff --name-only "$BASE...HEAD")
+        elif [ "$EVENT" = push ] && [[ "$REF" == refs/heads/* ]] &&
+          [[ -n "$BEFORE" && ! "$BEFORE" =~ ^0+$ ]] && git cat-file -e "$BEFORE^{commit}" 2> /dev/null; then
+          mapfile -t changed < <(git diff --name-only "$BEFORE" "$SHA")
         else
-          while IFS= read -r path; do
-            case $path in
-              Cargo.toml | Cargo.lock | rust-toolchain.toml | crates/* | bindings/* | extensions/* | \
-                tests/* | release/ffmpeg-lgpl/* | release/openh264/* | scripts/fetch-*.sh | \
-                .github/workflows/ci.yml)
-                native=true ;;
-            esac
-            case $path in
-              packages/* | scripts/* | package.json | package-lock.json) js=true ;;
-            esac
-            case $path in
-              python/* | packages/alpha2-node/* | scripts/run-node-e2e.mjs) e2e=true ;;
-            esac
-            case $path in
-              release/* | scripts/build-native-release.sh | scripts/fetch-ffmpeg-sdk.sh | \
-                scripts/fetch-ffmpeg-tools.sh | scripts/lib/pinned-download.sh | \
-                scripts/packaging/* | scripts/release/* | python/alpha2-host/* | \
-                python/alpha2/pyproject.toml | python/alpha2/src/alpha2/install.py | \
-                packages/alpha2-node/src/install.ts | packages/alpha2-node/src/archive.ts | \
-                packages/alpha2-node/src/http.ts | Cargo.lock | rust-toolchain.toml | \
-                .github/workflows/package.yml | .github/workflows/release.yml)
-                packaging=true ;;
-            esac
-          done < <(git diff --name-only "$BASE...HEAD")
-          [ "$native" = true ] && js=true && e2e=true
+          everything
+        fi
+        for path in "${changed[@]}"; do
+          case $path in
+            docs/* | README.md | CHANGELOG.md | SECURITY.md) continue ;;
+            .github/* | scripts/test-report-summary.mjs | scripts/lib/test-report.mjs | \
+              scripts/provenance.mjs | scripts/lib/provenance.mjs | scripts/skip-log-summary.mjs | \
+              scripts/lib/capabilities.mjs | tests/capabilities.json | scripts/preflight.sh)
+              everything; continue ;;
+          esac
+          known=false
+          case $path in
+            Cargo.toml | Cargo.lock | rust-toolchain.toml | .cargo/* | clippy.toml | deny.toml | \
+              crates/* | bindings/* | extensions/* | fuzz/* | plugins/* | tests/* | schema/* | \
+              release/ffmpeg-lgpl/* | release/ffmpeg-tools/* | release/openh264/* | release/dxc/* | \
+              scripts/*.sh | scripts/test-gpu-validation.mjs | scripts/lib/gpu-validation-summary.mjs)
+              native=true known=true ;;
+          esac
+          case $path in
+            packages/* | scripts/* | package.json | package-lock.json | eslint.config.mjs | \
+              tsconfig*.json | .prettierrc.json | .prettierignore)
+              js=true known=true ;;
+          esac
+          case $path in
+            python/* | packages/alpha2-node/* | scripts/run-node-e2e.mjs) e2e=true known=true ;;
+          esac
+          case $path in
+            release/* | scripts/build-native-release.sh | scripts/fetch-ffmpeg-sdk.sh | \
+              scripts/fetch-ffmpeg-tools.sh | scripts/lib/pinned-download.sh | \
+              scripts/packaging/* | scripts/release/* | python/alpha2-host/* | \
+              python/alpha2/pyproject.toml | python/alpha2/src/alpha2/install.py | \
+              packages/alpha2-node/src/install.ts | packages/alpha2-node/src/archive.ts | \
+              packages/alpha2-node/src/http.ts | Cargo.lock | rust-toolchain.toml)
+              packaging=true known=true ;;
+          esac
+          [ "$known" = true ] || everything
+        done
+        [ "$native" = true ] && js=true && e2e=true
+        if [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ] && [ "$STANDALONE" = true ]; then
+          green="$(gh api "repos/$REPO/actions/workflows/$WORKFLOW/runs?head_sha=$SHA&status=success" \
+            --jq '[.workflow_runs[] | select(.head_branch != "main")] | length')"
+          if [ "$green" -gt 0 ]; then
+            echo "$WORKFLOW already passed at $SHA on another branch"
+            native=false js=false e2e=false packaging=false
+          fi
         fi
         {
           echo "native=$native"

@@ -37,6 +37,9 @@ jobs:
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
     outputs:
       native: ${{ steps.areas.outputs.native }}
       js: ${{ steps.areas.outputs.js }}
@@ -49,9 +52,14 @@ jobs:
           fetch-depth: 0
       - id: areas
         uses: ./.github/actions/changes
+        with:
+          workflow: ci.yml
 
   rust-checks:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',rust-checks,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',rust-checks,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -112,7 +120,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   rust-tests:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',rust-tests,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',rust-tests,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     name: Rust tests (--${{ matrix.features }})
     strategy:
       fail-fast: false
@@ -171,8 +182,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   js:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',js,') }}
-    needs: release-wasm
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',js,')) &&
+      needs.changes.outputs.js == 'true' }}
+    needs: [changes, release-wasm]
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -234,8 +247,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   host:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',host,') }}
-    needs: release-wasm
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',host,')) &&
+      needs.changes.outputs.js == 'true' }}
+    needs: [changes, release-wasm]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -299,7 +314,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   openh264:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',openh264,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',openh264,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     name: OpenH264 (${{ matrix.target }})
     strategy:
       fail-fast: false
@@ -420,7 +438,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   cpu-renderer:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',cpu-renderer,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',cpu-renderer,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     name: CPU renderer
     runs-on: ubuntu-24.04
     timeout-minutes: 70
@@ -512,8 +533,10 @@ jobs:
 
   wasm-audio:
     if: >-
-      ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',wasm-audio,') ||
-      contains(format(',{0},', inputs.jobs), ',host,') }}
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',wasm-audio,') ||
+      contains(format(',{0},', inputs.jobs), ',host,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -534,7 +557,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   msrv:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',msrv,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',msrv,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -565,7 +591,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   valgrind:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',valgrind,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',valgrind,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -606,7 +635,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   wasm-lint:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',wasm-lint,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',wasm-lint,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -624,7 +656,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   fuzz-check:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',fuzz-check,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',fuzz-check,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -664,7 +699,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   plugins-check:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',plugins-check,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',plugins-check,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -700,7 +738,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   platform-lint:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-lint,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-lint,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     name: Platform lint (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
@@ -1096,7 +1137,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   python:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',python,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',python,')) &&
+      needs.changes.outputs.e2e == 'true' }}
+    needs: changes
     name: Python package (${{ matrix.runner }}, ${{ matrix.python }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
@@ -1146,7 +1190,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   determinism:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',determinism,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',determinism,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     name: Determinism pins (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
@@ -1193,7 +1240,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   security:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',security,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',security,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -1217,11 +1267,13 @@ jobs:
 
   release-wasm:
     if: >-
-      ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',release-wasm,') ||
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',release-wasm,') ||
       contains(format(',{0},', inputs.jobs), ',js,') || contains(format(',{0},', inputs.jobs), ',host,') ||
       contains(format(',{0},', inputs.jobs), ',browser,') ||
       contains(format(',{0},', inputs.jobs), ',platform-js,') ||
-      contains(format(',{0},', inputs.jobs), ',platform-e2e,') }}
+      contains(format(',{0},', inputs.jobs), ',platform-e2e,')) &&
+      (needs.changes.outputs.js == 'true' || needs.changes.outputs.e2e == 'true') }}
+    needs: changes
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -1274,7 +1326,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   render-goldens:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',render-goldens,') }}
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',render-goldens,')) &&
+      needs.changes.outputs.native == 'true' }}
+    needs: changes
     name: Render goldens (${{ matrix.backend }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 50
@@ -1361,8 +1416,10 @@ jobs:
           steps: ${{ toJSON(steps) }}
 
   browser:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser,') }}
-    needs: release-wasm
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser,')) &&
+      needs.changes.outputs.browser == 'true' }}
+    needs: [changes, release-wasm]
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
