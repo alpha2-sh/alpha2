@@ -9,8 +9,6 @@ const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("S
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 const codeOf = (promise) => promise.then(() => "resolved", (error) => error?.code ?? String(error));
 const { ALL_FORMATS, BlobSource, Input } = await import("mediabunny");
-// Skips where the editor refuses the clip as DECODE_UNAVAILABLE and, probed as extraction does,
-// this browser has no software decoder for it either.
 const importVideo = async (bridge, bytes) => {
   const input = new Input({ source: new BlobSource(bytes), formats: ALL_FORMATS });
   let codec = "no video track";
@@ -29,7 +27,7 @@ const importVideo = async (bridge, bytes) => {
     const { assetIds } = await bridge.importFiles([new File([bytes], "clip.mp4", { type: "video/mp4" })]);
     return assetIds[0];
   } catch (error) {
-    if (!decodes && error?.code === "unreadable_media" && error.cause?.code === "DECODE_UNAVAILABLE")
+    if (!decodes && error?.cause?.code === "DECODE_UNAVAILABLE")
       skip("webcodecs-video", "this browser does not decode the case's source: " + codec);
     throw error;
   }
@@ -133,8 +131,6 @@ await bridge.dispose();
 `;
 }
 
-// A ProRes clip, which only Safari on macOS decodes, is refused at import as DECODE_UNAVAILABLE
-// with the track's facts, as extraction refuses it.
 export function editorImportUndecodable() {
   return `${prelude}
 const editor = createEditor();
@@ -145,7 +141,7 @@ const caught = await bridge
   .then(() => null, (error) => error);
 if (caught === null) skip("webcodecs-video", "this browser decodes ProRes");
 report({
-  ok: caught?.code === "unreadable_media" && caught.cause?.code === "DECODE_UNAVAILABLE"
+  ok: caught?.code === "unsupported_media" && caught.cause?.code === "DECODE_UNAVAILABLE"
     && caught.cause.facts?.kind === "video" && Object.keys(editor.document.assets).length === 0,
   code: caught?.code ?? null, cause: caught?.cause?.code ?? null, facts: caught?.cause?.facts ?? null,
 });

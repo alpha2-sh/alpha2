@@ -129,10 +129,10 @@ export interface BrowserMediaAdapter {
   /**
    * Stages one file. The bridge stages at most four files of one import at once.
    *
-   * Rejects with an `EditorError` coded `unsupported_media` for a file the adapter does not import,
-   * `unreadable_media` when this browser or an extension provider cannot read it (the reason is the
-   * message and `cause`; a `DecodeUnavailableError` cause, `DECODE_UNAVAILABLE`, when this browser
-   * decodes none of a video), `too_large` for Lottie, dotLottie or SVG past the engine's parse limits
+   * Rejects with an `EditorError` coded `unsupported_media` for a file the adapter does not import
+   * or a video this browser decodes none of (its `cause` a `DecodeUnavailableError` with the
+   * track's `facts`), `unreadable_media` when this browser or an extension provider cannot read it
+   * (the reason is the message and `cause`), `too_large` for Lottie, dotLottie or SVG past the engine's parse limits
    * (`MAX_LOTTIE_DOCUMENT_BYTES`, `MAX_PROVIDER_DOCUMENT_BYTES`, `MAX_SVG_DOCUMENT_BYTES`),
    * `provider_stalled` past `EXTENSIONS_CALL_TIMEOUT_MS`, and when `signal` aborts.
    */

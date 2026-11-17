@@ -128,9 +128,10 @@ All notable changes to this project are documented in this file.
 - Builds link the pinned FFmpeg ahead of system library directories. A bundled archive's FFmpeg
   libraries may be replaced only by a build of the same 8.1.x series and configuration, and
   hardware interop is off when the loaded libavutil is another minor release.
-- An editor import refused because this browser decodes none of a video keeps the code
-  `unreadable_media`, and its `cause` is now a `DecodeUnavailableError` (`DECODE_UNAVAILABLE`, with
-  the track's `facts`), as extraction reports it.
+- An editor import refused because this browser decodes none of a video is `unsupported_media`, as
+  an HDR import or an export refused for the same reason is, and its `cause` is a
+  `DecodeUnavailableError` (`DECODE_UNAVAILABLE`, with the track's `facts`); it was
+  `unreadable_media` with the browser's error.
 
 ### Fixed
 

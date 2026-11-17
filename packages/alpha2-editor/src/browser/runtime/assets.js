@@ -243,7 +243,6 @@ export class AssetLibrary {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof EditorError) throw error;
       const facts = probe?.video?.facts;
-      // As extraction does, a video WebCodecs refuses and the element cannot read is undecodable.
       const refused =
         as === "video" && facts && !probe.video.decodable && undecodable(error)
           ? new DecodeUnavailableError(
@@ -253,7 +252,7 @@ export class AssetLibrary {
             )
           : null;
       throw new EditorError(
-        "unreadable_media",
+        refused ? "unsupported_media" : "unreadable_media",
         `Cannot read ${file.name} as ${as}: ${importFailureReason(error, as, facts)}`,
         "import",
         undefined,
@@ -638,11 +637,10 @@ function mediaOrBrowserError(error) {
   );
 }
 
-/** Whether `error` is a decoder's or the media element's refusal to decode. */
 function undecodable(error) {
   if (!mediaOrBrowserError(error)) return false;
   return (
-    error instanceof Error ||
+    (typeof DOMException !== "undefined" && error instanceof DOMException) ||
     error?.code === MEDIA_ERR_DECODE ||
     error?.code === MEDIA_ERR_SRC_NOT_SUPPORTED
   );
