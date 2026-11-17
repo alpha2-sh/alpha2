@@ -520,10 +520,12 @@ jobs:
         run: |
           echo "image: $ImageOS $ImageVersion"
           rustc --version
-      - name: Install native media build dependencies
+      # The build must link the pinned SDK even with the distro's FFmpeg development files present.
+      - name: Install native media build dependencies and the distro FFmpeg
         run: >-
           sudo apt-get update && sudo apt-get install --yes
           libasound2-dev pkg-config clang mesa-vulkan-drivers
+          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -580,6 +582,15 @@ jobs:
           assert result["frames"] == 36, result["frames"]
           EOF
           done
+      - name: The host links the pinned FFmpeg, not the distro's
+        run: |
+          shopt -s inherit_errexit
+          linked="$(ldd target/release/alpha2-host | grep -E 'libav(codec|format|util)|libsw(resample|scale)')"
+          echo "$linked"
+          if grep -v "=> $LD_LIBRARY_PATH/" <<< "$linked"; then
+            echo "alpha2-host links an FFmpeg library outside the pinned SDK" >&2
+            exit 1
+          fi
       # On its own: under --workspace another package turns the extensions' providers on.
       - name: The host suite without extensions or hardware video, on the CPU renderer
         env:
