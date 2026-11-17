@@ -191,24 +191,27 @@ fn compare<T>(
         reading
     };
     let mut repeats = 1;
-    let mut least_small = loop {
+    let mut smalls = vec![loop {
         let reading = read(small, repeats);
         if reading.measured >= LEAST_RUN
             || (reading.setup > MOST_SETUP && reading.measured >= LEAST_MEASURED)
             || repeats >= 1 << 16
         {
-            break reading.work;
+            break reading;
         }
         repeats *= 2;
-    };
-    let mut least_large = u64::MAX;
+    }];
+    let mut larges = Vec::with_capacity(READINGS);
     // Alternate sizes so a slow stretch affects both.
     for reading in 0..READINGS {
-        least_large = least_large.min(read(large, repeats).work);
+        larges.push(read(large, repeats));
         if reading + 1 < READINGS {
-            least_small = least_small.min(read(small, repeats).work);
+            smalls.push(read(small, repeats));
         }
     }
+    let least = |readings: &[Reading]| readings.iter().map(|reading| reading.work).min();
+    let least_small = least(&smalls).unwrap_or(0);
+    let least_large = least(&larges).unwrap_or(u64::MAX);
     #[allow(clippy::cast_precision_loss)]
     let ratio = least_large as f64 / least_small.max(1) as f64;
     let (setup_ms, measured_ms) = (setup_total.as_millis(), measured_total.as_millis());
@@ -220,9 +223,26 @@ fn compare<T>(
         least_large < least_small.saturating_mul(bound),
         "{what}: {GROWTH}x the input ({small} -> {large}, {repeats} runs each) took {ratio:.1}x the \
          work ({least_small} -> {least_large}); the bound is {bound}x (linear work takes about \
-         {GROWTH}x, quadratic {}x); setup {setup_ms} ms / measured {measured_ms} ms",
-        GROWTH * GROWTH
+         {GROWTH}x, quadratic {}x); setup {setup_ms} ms / measured {measured_ms} ms; readings \
+         as work / wall ms: small {}, large {}",
+        GROWTH * GROWTH,
+        describe(&smalls),
+        describe(&larges)
     );
+}
+
+/// Each reading's work and wall time in milliseconds; the work is CPU time where the OS reports
+/// it, so a wall time far above it is time the thread did not run.
+fn describe(readings: &[Reading]) -> String {
+    readings
+        .iter()
+        .map(|reading| {
+            #[allow(clippy::cast_precision_loss)]
+            let work = reading.work as f64 / 1e6;
+            format!("{work:.2} / {:.2}", reading.measured.as_secs_f64() * 1e3)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -308,8 +328,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "a sum over every pair")]
-    fn quadratic_work_fails() {
+    #[should_panic(expected = "readings as work / wall ms: small ")]
+    fn quadratic_work_fails_naming_each_readings_work_and_wall_time() {
         assert_linear(
             "a sum over every pair",
             500,
