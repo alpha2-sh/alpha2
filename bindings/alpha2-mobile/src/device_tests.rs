@@ -1117,7 +1117,10 @@ mod reader_window {
 
     /// An image reader whose window stands in for an app's surface, so a test can read back what was
     /// presented.
-    struct WindowReader(std::ptr::NonNull<ndk_sys::AImageReader>);
+    struct WindowReader {
+        reader: std::ptr::NonNull<ndk_sys::AImageReader>,
+        newest: std::cell::Cell<Option<[f64; 3]>>,
+    }
 
     impl WindowReader {
         fn new(width: i32, height: i32) -> Self {
@@ -1137,7 +1140,10 @@ mod reader_window {
                 )
             };
             assert_eq!(status.0, 0, "AImageReader_newWithUsage");
-            Self(std::ptr::NonNull::new(reader).expect("reader"))
+            Self {
+                reader: std::ptr::NonNull::new(reader).expect("reader"),
+                newest: std::cell::Cell::new(None),
+            }
         }
 
         /// The window, with a reference of its own for the player to take over.
@@ -1145,22 +1151,23 @@ mod reader_window {
             let mut window = std::ptr::null_mut();
             // SAFETY: the reader is live; the window it returns belongs to it.
             let status =
-                unsafe { ndk_sys::AImageReader_getWindow(self.0.as_ptr(), &raw mut window) };
+                unsafe { ndk_sys::AImageReader_getWindow(self.reader.as_ptr(), &raw mut window) };
             assert_eq!(status.0, 0, "AImageReader_getWindow");
             // SAFETY: the window is live; the player releases this reference.
             unsafe { ndk_sys::ANativeWindow_acquire(window) };
             window as u64
         }
 
-        /// The mean of the red, green and blue samples of the newest presented image.
+        /// The mean of the red, green and blue samples of the newest presented image, read now or
+        /// by an earlier call.
         fn latest_mean(&self) -> Option<[f64; 3]> {
             let mut image = std::ptr::null_mut();
             // SAFETY: the reader is live and the image is deleted below.
             let status = unsafe {
-                ndk_sys::AImageReader_acquireLatestImage(self.0.as_ptr(), &raw mut image)
+                ndk_sys::AImageReader_acquireLatestImage(self.reader.as_ptr(), &raw mut image)
             };
             if status.0 != 0 || image.is_null() {
-                return None;
+                return self.newest.get();
             }
             let (mut data, mut length, mut stride) = (std::ptr::null_mut(), 0, 0);
             // SAFETY: the image is live; the plane stays mapped until the image is deleted.
@@ -1184,19 +1191,22 @@ mod reader_window {
             };
             // SAFETY: the image came from this reader and is not used after.
             unsafe { ndk_sys::AImage_delete(image) };
-            mean
+            if mean.is_some() {
+                self.newest.set(mean);
+            }
+            self.newest.get()
         }
     }
 
     impl Drop for WindowReader {
         fn drop(&mut self) {
             // SAFETY: the reader is owned and not used after.
-            unsafe { ndk_sys::AImageReader_delete(self.0.as_ptr()) };
+            unsafe { ndk_sys::AImageReader_delete(self.reader.as_ptr()) };
         }
     }
 
     /// Waits up to `seconds` for `done`, consuming what `reader` was shown as a compositor would, so
-    /// its window always has a buffer free (none to keep the newest image for a check).
+    /// its window always has a buffer free.
     fn wait_for(reader: Option<&WindowReader>, seconds: u64, done: impl Fn() -> bool) -> bool {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
         while std::time::Instant::now() < until {
