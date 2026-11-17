@@ -45,8 +45,13 @@ pub const PUBLISH_RETRY_BUDGET: Duration = Duration::from_secs(10);
 /// How long the claim's probe rename keeps trying the same way.
 const PROBE_RETRY_BUDGET: Duration = Duration::from_secs(2);
 /// How long a claim waits for a held lock: on macOS a child between `fork` and `exec` briefly holds
-/// a copy of a just-closed lock handle.
-const CLAIM_IN_USE_WAIT: Duration = Duration::from_millis(250);
+/// a copy of a just-closed lock handle; Windows releases the locks of a terminated process after a
+/// delay that depends on system resources (`LockFileEx`).
+const CLAIM_IN_USE_WAIT: Duration = if cfg!(windows) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_millis(250)
+};
 const CLAIM_IN_USE_POLL: Duration = Duration::from_millis(10);
 const STAGING_COPY_CHUNK: usize = 4 << 20;
 /// Bytes written between two syncs of an output, so the final sync flushes at most this much and
@@ -330,8 +335,13 @@ fn open_partial(path: &Path, create: bool) -> std::io::Result<Option<(File, bool
             Err(error) => return Err(error),
         }
     }
-    match options.open(path) {
-        Ok(file) => Ok(Some((file, false))),
+    let keep_trying = || true;
+    let retry = RetryPolicy {
+        budget: PROBE_RETRY_BUDGET,
+        on_wait: &keep_trying,
+    };
+    match alpha2_os::with_publish_retries(&retry, || options.open(path)) {
+        Ok((file, _)) => Ok(Some((file, false))),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
     }
@@ -448,8 +458,13 @@ impl PartialOutput {
                 other_names(&file)
             );
             // Remove without truncating: a stale partial may be a second name of a published file.
-            match fs::remove_file(&path) {
-                Ok(()) => {}
+            let keep_trying = || true;
+            let retry = RetryPolicy {
+                budget: PROBE_RETRY_BUDGET,
+                on_wait: &keep_trying,
+            };
+            match alpha2_os::with_publish_retries(&retry, || fs::remove_file(&path)) {
+                Ok(_) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(output_error_at(&path, error)),
             }
@@ -1391,6 +1406,33 @@ mod tests {
         released.join().expect("holder");
         drop(claimed);
         assert!(!partial.exists());
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_partial_another_program_holds_open_briefly_is_claimed() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 1;
+        const FILE_SHARE_WRITE: u32 = 2;
+        for share in [FILE_SHARE_READ, FILE_SHARE_READ | FILE_SHARE_WRITE] {
+            let path = final_path(&format!("held-open-{share}"));
+            let partial = partial_output_path(&path).expect("partial path");
+            fs::write(&partial, b"").expect("partial");
+            let reader = OpenOptions::new()
+                .read(true)
+                .share_mode(share)
+                .open(&partial)
+                .expect("reader");
+            let released = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                drop(reader);
+            });
+            let claimed = PartialOutput::claim(&OutputTarget::from(&path), SeekNeed::Required)
+                .unwrap_or_else(|error| panic!("share {share}: {error}"));
+            released.join().expect("reader");
+            drop(claimed);
+            assert!(!partial.exists(), "share {share}");
+        }
     }
 
     #[test]

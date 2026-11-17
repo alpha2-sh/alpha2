@@ -194,6 +194,9 @@ All notable changes to this project are documented in this file.
   pieces, so the page stays responsive on slow machines.
 - OpenEXR sources are read with exr 1.74.3, which no longer panics on damaged B44 blocks or reserves
   unbounded memory for damaged DWA data.
+- Windows: an export to an output whose previous host was just killed waits up to 2 seconds for
+  Windows to let go of the old partial file, instead of failing with `OUTPUT_IN_USE` or a sharing
+  violation (`os error 32`).
 
 ## [0.5.3] - 2026-11-04
 
