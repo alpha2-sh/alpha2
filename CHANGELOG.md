@@ -189,6 +189,8 @@ All notable changes to this project are documented in this file.
 - Editor: one kept proxy that cannot be staged no longer blocks the whole project, waits on workers
   and media elements are bounded, and preview audio failures stay with their lane.
 - H.264 levels account for macroblocks per second, not only frame size.
+- Android: a forced keyframe waits for the encoder to emit the frames before it, so keyframes land
+  on their frame and a repeated export is byte-identical.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.
 - `sha256Blob` hashes in pieces sized to about 2 ms at the measured rate instead of fixed 1 MiB
   pieces, so the page stays responsive on slow machines.

@@ -6,6 +6,7 @@
 //! stores, and frames as Annex B, rewritten with NAL lengths.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use alpha2_host_core::encode::{
     AudioEncodeBackend, AudioEncodeConfig, AudioEncoders, EncodePoll, EncodedPacket, PlaneBuffer,
@@ -47,6 +48,7 @@ const HEVC_PROFILE_MAIN10: i32 = 2;
 /// `MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR` and `BITRATE_MODE_CBR`.
 const BITRATE_MODE_VBR: i32 = 1;
 const BITRATE_MODE_CBR: i32 = 2;
+const KEYFRAME_DRAIN_LIMIT: Duration = Duration::from_secs(1);
 
 /// `AudioFormat.ENCODING_PCM_16BIT`.
 const PCM_16: i32 = 2;
@@ -229,6 +231,13 @@ impl Geometry {
     }
 }
 
+#[derive(Clone, Copy)]
+enum KeyframeDrain {
+    Idle,
+    Since(Instant),
+    GivenUp,
+}
+
 /// A `MediaCodec` video encoder session.
 pub struct MediaCodecVideoEncoder {
     codec: Codec,
@@ -239,6 +248,8 @@ pub struct MediaCodecVideoEncoder {
     record: Option<Bytes>,
     times: HashMap<i64, i64>,
     frames_in: u64,
+    frames_out: u64,
+    keyframe_drain: KeyframeDrain,
     /// The codec time of the last frame queued.
     last_us: Option<i64>,
     eos_pending: bool,
@@ -365,6 +376,8 @@ impl MediaCodecVideoEncoder {
             record: (config.codec == VideoCodec::Vp9).then(Bytes::new),
             times: HashMap::new(),
             frames_in: 0,
+            frames_out: 0,
+            keyframe_drain: KeyframeDrain::Idle,
             last_us: None,
             eos_pending: false,
             drained: false,
@@ -774,9 +787,27 @@ impl VideoEncodeBackend for MediaCodecVideoEncoder {
         planes: &[PlaneBuffer],
         keyframe: bool,
     ) -> Result<Submit, EncodeError> {
+        // MediaCodec applies `request-sync` to a frame it encodes "soon", which may be one queued
+        // before it.
+        if keyframe && self.frames_out < self.frames_in {
+            match self.keyframe_drain {
+                KeyframeDrain::Idle => {
+                    self.keyframe_drain = KeyframeDrain::Since(Instant::now());
+                    return Ok(Submit::Busy);
+                }
+                KeyframeDrain::Since(since) if since.elapsed() < KEYFRAME_DRAIN_LIMIT => {
+                    return Ok(Submit::Busy);
+                }
+                KeyframeDrain::Since(_) => self.keyframe_drain = KeyframeDrain::GivenUp,
+                KeyframeDrain::GivenUp => {}
+            }
+        }
         let Some(index) = self.codec.dequeue_input(0).map_err(adapter)? else {
             return Ok(Submit::Busy);
         };
+        if let KeyframeDrain::Since(_) = self.keyframe_drain {
+            self.keyframe_drain = KeyframeDrain::Idle;
+        }
         if keyframe && self.frames_in > 0 {
             let mut request = Format::new();
             request.set_i32("request-sync", 0);
@@ -833,6 +864,7 @@ impl VideoEncodeBackend for MediaCodecVideoEncoder {
                     match bytes {
                         Some(bytes) if flags & FLAG_CODEC_CONFIG != 0 => self.configure(&bytes),
                         Some(bytes) if !bytes.is_empty() => {
+                            self.frames_out += 1;
                             let pts = self.times.remove(&pts_us).unwrap_or_else(|| {
                                 from_codec_us(pts_us, i64::from(self.timescale))
                             });
