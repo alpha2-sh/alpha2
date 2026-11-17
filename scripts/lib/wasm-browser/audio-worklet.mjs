@@ -9,6 +9,7 @@ let skipped;
 for (const hint of [undefined, 256, 1024, 8192]) {
   const options = { numberOfChannels: 2, length: 24_000, sampleRate: 48_000 };
   if (hint !== undefined) options.renderSizeHint = hint;
+  /** @type {OfflineAudioContext & { renderQuantumSize?: number }} */
   const context = new OfflineAudioContext(options);
   if (hint !== undefined && context.renderQuantumSize !== hint) {
     skipped = "this browser does not render the quantum it is asked for (renderSizeHint " + hint + ", renderQuantumSize " + context.renderQuantumSize + ")";
@@ -123,6 +124,7 @@ const node = await Alpha2AudioWorkletHost.create(context, await loadAlpha2AudioW
   numberOfInputs: 0, outputChannelCount: [2], projectSampleRate: rate, onDiagnostic: () => {},
 });
 node.connect(context.destination);
+/** @type {number | null} */
 let firstFrame = null;
 node.port.addEventListener("message", (event) => {
   if (event.data?.type === "alpha2-first-read") firstFrame = event.data.frame;

@@ -184,6 +184,11 @@ export function pythonComposeTypes(composeSchema, projectSchema) {
   });
 }
 
+/**
+ * @param {{ $defs?: Record<string, object> }} schema
+ * @param {{ root: string, header: string, limits: Record<string, any>, shared?: Set<string>,
+ *   sharedModule?: string }} options
+ */
 function pythonTypes(
   schema,
   { root, header, limits, shared = new Set(), sharedModule },

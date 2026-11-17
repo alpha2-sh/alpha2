@@ -27,7 +27,7 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
         left[i] = AMPLITUDE * Math.sin((2 * Math.PI * 997 * (Number(start) + i)) / projectRate);
       return { sourceId: "mix", startSample: start, generation: 0, sampleRate: projectRate, channels: [left, left.slice()] };
     }, sink);
-    const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+    const input = new mb.Input({ source: new mb.BufferSource(/** @type {{ readonly buffer: ArrayBuffer }} */ (sink.output).buffer), formats: mb.ALL_FORMATS });
     const track = await input.getPrimaryAudioTrack();
     const duration = await track.computeDuration();
     let sum = 0;
@@ -51,7 +51,7 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
   const results = {};
   const exported = new Set();
   for (const projectRate of [8000, 22050, 44100, 50000, 96000]) {
-    for (const codec of ["aac", "opus"]) {
+    for (const codec of /** @type {const} */ (["aac", "opus"])) {
       const encoderRate = await audioEncoderSampleRate(codec, { sampleRate: projectRate, numberOfChannels: 2, bitrate: 128000 });
       const key = codec + "@" + projectRate;
       if (encoderRate === null) { results[key] = "no encoder"; continue; }
@@ -91,6 +91,7 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
   const HEIGHT = 240;
   const FRAMES = 30;
   const FRAME_RATE = { num: 30, den: 1 };
+  /** @type {import("/packages/alpha2/dist/rate-control.js").VideoRateControl} */
   const videoRateControl = { bitrate: 1000000, bitrateMode: "variable" };
   const formats = { mp4: "MP4", mov: "QuickTime File Format", mkv: "Matroska", webm: "WebM" };
   const exportOne = async (container, videoCodec, audioCodecs) => {
@@ -129,7 +130,7 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
       return { sourceId: "mix", startSample: start, generation: 0, sampleRate: 48000, channels: [left, left.slice()] };
     }, track);
     await Promise.all([writeVideo(sink.videoTrack), ...(audioCodec === undefined ? [] : [writeAudio(sink.audioTrack)])]);
-    const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+    const input = new mb.Input({ source: new mb.BufferSource(/** @type {{ readonly buffer: ArrayBuffer }} */ (sink.output).buffer), formats: mb.ALL_FORMATS });
     try {
       const format = (await input.getFormat()).name;
       const video = await input.getPrimaryVideoTrack();
@@ -181,7 +182,7 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
     refused = error instanceof RangeError ? error.message : String(error);
   }
   const ran = Object.values(results).filter((value) => typeof value !== "string");
-  const ok = results.webm.ok === true && ran.every((value) => value.ok) && refused !== null;
+  const ok = /** @type {{ ok?: boolean }} */ (results.webm).ok === true && ran.every((value) => value.ok) && refused !== null;
   report({ ok, results, refused });
 }
 `;
@@ -202,7 +203,7 @@ if (rate === null) {
   const probe = await aacEncoderPrimingProbe({ ...config, sampleRate: rate });
   const delay = probe.delay;
   const results = {};
-  for (const container of ["mp4", "mov", "mkv"]) {
+  for (const container of /** @type {const} */ (["mp4", "mov", "mkv"])) {
     const sink = new MediabunnySink({
       container, audioCodec: "aac", audioBitrate: 128000,
       destination: { kind: "memory", maxBytes: 1 << 24 },
@@ -212,7 +213,7 @@ if (rate === null) {
       for (let i = 0; i < frames; i += 1) left[i] = 0.25 * Math.sin((2 * Math.PI * 997 * (Number(start) + i)) / rate);
       return { sourceId: "mix", startSample: start, generation: 0, sampleRate: rate, channels: [left, left.slice()] };
     }, sink);
-    const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+    const input = new mb.Input({ source: new mb.BufferSource(/** @type {{ readonly buffer: ArrayBuffer }} */ (sink.output).buffer), formats: mb.ALL_FORMATS });
     try {
       const track = await input.getPrimaryAudioTrack();
       let onset = null;
@@ -415,7 +416,7 @@ if (probes.vp9Ten) {
     await sink.videoTrack.writeVideo({ index: BigInt(index), timeTicks: BigInt(index * 4000), frame });
   }
   await sink.videoTrack.finish();
-  const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+  const input = new mb.Input({ source: new mb.BufferSource(/** @type {{ readonly buffer: ArrayBuffer }} */ (sink.output).buffer), formats: mb.ALL_FORMATS });
   try {
     const video = await input.getPrimaryVideoTrack();
     encoded = { codec: video.codec, codecString: await video.getCodecParameterString() };
@@ -469,6 +470,7 @@ const { Alpha2Exporter, exportToSink } = await import("/packages/alpha2/dist/exp
 const { classifyBrowserFailure } = await import("/packages/alpha2/dist/export-failure.js");
 const { canEncodeVideoTrack, MediabunnySink, MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
 const { decoderConsumerId } = await import("/packages/alpha2/dist/media.js");
+/** @type {import("/packages/alpha2/dist/rate-control.js").VideoRateControl} */
 const rateControl = { bitrate: 1_000_000, bitrateMode: "variable" };
 const encoding = await canEncodeVideoTrack("avc", { width: 128, height: 96, frameRate: project.settings.frame_rate, rate: rateControl });
 if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder");
@@ -548,6 +550,7 @@ export function exportCancelDuringFinish() {
 const { Alpha2Exporter, exportToSink } = await import("/packages/alpha2/dist/exporter.js");
 const { WritableFileDestination } = await import("/packages/alpha2/dist/export-destination.js");
 const { canEncodeVideoTrack, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
+/** @type {import("/packages/alpha2/dist/rate-control.js").VideoRateControl} */
 const rate = { bitrate: 1_000_000, bitrateMode: "variable" };
 const frameRate = { num: 30, den: 1 };
 const encoding = await canEncodeVideoTrack("avc", { width: 128, height: 96, frameRate, rate });
@@ -564,9 +567,12 @@ const exportOnce = async (name, cancel) => {
     videoRateControl: rate,
     ...(encoding.codecString === undefined ? {} : { videoCodecString: encoding.codecString }),
     frameRate,
-    destination: { kind: "stream", writable: new WritableFileDestination(await handle.createWritable()).writable },
+    destination: { kind: "stream", writable: new WritableFileDestination(
+      /** @type {import("/packages/alpha2/dist/export-destination.js").PositionalFile} */ (await handle.createWritable()),
+    ).writable },
   });
   let index = 0;
+  /** @type {import("/packages/alpha2/dist/exporter.js").ExportBackend} */
   const backend = {
     begin: async () => {
       // Memory-backed frames: some GPU processes restart while encoding canvas-backed ones.

@@ -41,7 +41,7 @@ export function frameReader(onMessage, { magic = true } = {}) {
         const headerBytes = pending.readUInt32LE(0);
         const end = 8 + headerBytes + pending.readUInt32LE(4);
         if (pending.length < end) return;
-        const header = JSON.parse(pending.subarray(8, 8 + headerBytes));
+        const header = JSON.parse(String(pending.subarray(8, 8 + headerBytes)));
         let offset = 8 + headerBytes;
         const attachments = (header.attachments ?? []).map(
           ({ type, bytes }) => {

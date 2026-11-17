@@ -51,12 +51,14 @@ const run = { ...fixture.request, input: { ...fixture.request.input, source_id: 
 const removing = bridge.extract(run, { plugin });
 const removed = editor.dispatch({ type: "asset.remove", id });
 const late = await removing;
-const refused = removed.ok ? editor.applyExtraction(late.result).error?.code : removed.error.code;
+const refused = removed.ok === true
+  ? /** @type {{ error?: { code: string } }} */ (editor.applyExtraction(late.result)).error?.code
+  : removed.error.code;
 editor.undo();
 
 const { result, read } = await bridge.extract(run, { plugin });
 const applied = editor.applyExtraction(result, { read });
-const found = applied.ok ? await dataHash(editor.document.project.data) : applied.error.code;
+const found = applied.ok === true ? await dataHash(editor.document.project.data) : applied.error.code;
 const set = editor.document.project.data?.[0];
 const madeFrom = set?.made_from?.content_sha256 === editor.document.assets[id].fingerprint?.content_sha256;
 
@@ -90,6 +92,7 @@ const editor = createEditor({ document: createDocument({
     interpolation: "linear", times: [0, 80000], values: [0, 1] }],
 }) });
 const bridge = createBrowserBridge({ editor, runtimeAssets, audio: false });
+/** @type {import("/packages/alpha2/dist/apply-edit.js").EditRequest} */
 const request = { op: "bake", targets: [{ clip: "c", property: "visual.opacity" }] };
 const { report: made } = await bridge.applyEdit(request, {
   then: [{ type: "data.remove", id: "level" }],
@@ -125,7 +128,7 @@ const stale = conform.stale_data;
 report({
   ok: put.ok && stale.length === 1 && stale[0].data === "old" && stale[0].source === id
     && stale[0].fields.includes("content"),
-  put: put.ok ? true : put.error.message, stale,
+  put: put.ok === true ? true : put.error.message, stale,
 });
 await bridge.dispose();
 `;
@@ -170,6 +173,7 @@ const editor = createEditor();
 const bridge = createBrowserBridge({ editor, runtimeAssets, mediaAdapter, onError: (error) => errors.push(error) });
 await bridge.importFiles([new File([""], "tone"), new File([twoStreams], "mics")]);
 const span = { start: 0, end: 240000 };
+/** @type {import("/packages/alpha2/dist/project.js").MediaSource} */
 const color = { id: "color", kind: "generated", generator: { type: "fill",
   paint: { type: "solid", color: { red: 0.2, green: 0.4, blue: 0.8, alpha: 1 } } } };
 const result = editor.dispatch({ type: "transaction", commands: [
@@ -180,13 +184,14 @@ const result = editor.dispatch({ type: "transaction", commands: [
     { id: "tone-clip", source_id: "tone", timeline_range: span, source_range: span },
     { id: "mics-clip", source_id: "mics", timeline_range: span, source_range: span, audio: { stream: 5 } } ] } },
 ] });
-if (!result.ok) throw result.error;
+if (result.ok === false) throw result.error;
 const canvas = document.createElement("canvas");
 await bridge.bindPreview(canvas);
 await bridge.play();
 const startTick = bridge.tick;
 await new Promise((resolve) => setTimeout(resolve, 1500));
-const playingWithSound = bridge.diagnostics?.host.audioLatencySource ?? null;
+const playingWithSound =
+  /** @type {{ host: { audioLatencySource?: string } } | null} */ (bridge.diagnostics)?.host.audioLatencySource ?? null;
 const advanced = bridge.tick - startTick;
 bridge.pause();
 const reported = errors.map((error) => [error.code, error.entityId ?? null]);
@@ -226,7 +231,7 @@ const result = editor.dispatch({ type: "transaction", commands: [
   { type: "track.add", track: { id: "b", kind: "audio", name: "B", clips: [
     { id: "voice-clip", source_id: voice, timeline_range: span, source_range: span }] } },
 ] });
-if (!result.ok) throw result.error;
+if (result.ok === false) throw result.error;
 await bridge.conform("export_original");
 let refused = null;
 try {
@@ -236,7 +241,7 @@ try {
 }
 const job = bridge.startExport({ output: { kind: "memory" }, undecodableAudio: "silence" });
 const artifact = await job.result;
-const blob = artifact.kind === "blob" ? artifact.blob : artifact.file;
+const blob = artifact.kind === "blob" ? artifact.blob : /** @type {{ readonly file: File }} */ (artifact).file;
 const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
 const audioTrack = await input.getPrimaryAudioTrack();
 input.dispose();
@@ -246,7 +251,7 @@ report({
     && audioTrack !== null,
   refused, silent: artifact.report?.silentAudioSources ?? null, audio: audioTrack !== null,
 });
-await artifact.release?.();
+await /** @type {{ release?: () => Promise<void> }} */ (artifact).release?.();
 await bridge.dispose();
 `;
 }

@@ -146,7 +146,10 @@ function probe({ name, fixture, frames }, adapter) {
       env: layerEnvironment(log),
     },
   );
-  if (result.error?.code === "ETIMEDOUT") {
+  if (
+    /** @type {NodeJS.ErrnoException | undefined} */ (result.error)?.code ===
+    "ETIMEDOUT"
+  ) {
     process.stdout.write(
       `FAIL ${name}: the probe did not finish within ${TIMEOUT_MS / 1000} s and was killed\n`,
     );
@@ -222,7 +225,10 @@ function serve({ name, fixture, exports }) {
     env: { ...layerEnvironment(log), ALPHA2_VIDEO_DECODE: "hardware-required" },
   });
   const stderr = result.stderr?.toString("utf8") ?? "";
-  if (result.error?.code === "ETIMEDOUT") {
+  if (
+    /** @type {NodeJS.ErrnoException | undefined} */ (result.error)?.code ===
+    "ETIMEDOUT"
+  ) {
     process.stdout.write(
       `FAIL ${name}: serve did not finish within ${(TIMEOUT_MS * exports) / 1000} s and was killed\n${stderr.slice(-2000)}\n`,
     );
@@ -258,6 +264,10 @@ function serve({ name, fixture, exports }) {
   return true;
 }
 
+/**
+ * @param {{ name: string, fixture: string, decode: string, size?: number[], ticks?: number,
+ *   transcode?: string | null }} testCase
+ */
 function run({
   name,
   fixture,
@@ -295,7 +305,10 @@ function run({
       env: layerEnvironment(log),
     },
   );
-  if (result.error?.code === "ETIMEDOUT") {
+  if (
+    /** @type {NodeJS.ErrnoException | undefined} */ (result.error)?.code ===
+    "ETIMEDOUT"
+  ) {
     process.stdout.write(
       `FAIL ${name}: the export did not finish within ${TIMEOUT_MS / 1000} s and was killed\n${(result.stderr ?? "").slice(-2000)}\n`,
     );

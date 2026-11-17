@@ -176,12 +176,16 @@ async function aacTrack(path) {
   });
   try {
     const track = await input.getPrimaryAudioTrack();
+    if (track === null) throw new Error(`${path} has no audio track`);
     const config = await track.getDecoderConfig();
+    if (config === null) throw new Error(`${path} has no decoder config`);
     const packets = [];
     for await (const packet of new EncodedPacketSink(track).packets())
       packets.push(packet);
     return {
-      description: new Uint8Array(config.description),
+      description: new Uint8Array(
+        /** @type {Uint8Array} */ (config.description),
+      ),
       channels: track.numberOfChannels,
       packets,
     };
@@ -213,7 +217,10 @@ async function writeAacMp4(path, description, channels, packets) {
   await output.finalize();
   // mediabunny stamps the time; FFmpeg's bit-exact remux does not.
   const staged = `${path}.staged.mp4`;
-  writeFileSync(staged, new Uint8Array(target.buffer));
+  writeFileSync(
+    staged,
+    new Uint8Array(/** @type {ArrayBuffer} */ (target.buffer)),
+  );
   execFileSync("ffmpeg", [
     ...["-hide_banner", "-loglevel", "error", "-y", "-i", staged],
     ...["-c", "copy", "-map_metadata", "-1", "-fflags", "+bitexact", path],
@@ -315,15 +322,17 @@ try {
             ),
           );
         const encoded = JSON.parse(
-          execFileSync(
-            "python3",
-            [
-              join(root, "scripts/lib/fdk-aac-encode.py"),
-              configuration,
-              String(channels),
-              String(16_000 * channels),
-            ],
-            { input: pcm, maxBuffer: 64 << 20 },
+          String(
+            execFileSync(
+              "python3",
+              [
+                join(root, "scripts/lib/fdk-aac-encode.py"),
+                configuration,
+                String(channels),
+                String(16_000 * channels),
+              ],
+              { input: pcm, maxBuffer: 64 << 20 },
+            ),
           ),
         );
         const packets = encoded.units.map((unit, index) => ({
@@ -355,14 +364,14 @@ try {
       1_024,
       ffmpegEncode("ffmpeg", layout, 0.064, ["-c:a", "aac", "-b:a", "48k"]),
     );
-  for (const [configuration, elements] of [
+  for (const [configuration, elements] of /** @type {[number, string][]} */ ([
     [3, "SF CF"],
     [4, "SF CF SB"],
     [5, "SF CF CB"],
     [6, "SF CF CB LL"],
     [11, "SF CF CB SB LL"],
     [12, "SF CF CB CB LL"],
-  ]) {
+  ])) {
     const source = fixtures.aac[`aac:${configuration}`];
     fixtures.aac[`aac:pce:${elements}`] = await orderedFixture(
       `aac-pce-${configuration}.mp4`,
@@ -400,7 +409,7 @@ try {
           "-mapping_family",
           "1",
           "-b:a",
-          `${24 * channels}k`,
+          `${24 * Number(channels)}k`,
           "-f",
           "ogg",
         ],

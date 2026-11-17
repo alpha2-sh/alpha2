@@ -136,21 +136,21 @@ test("a clean cancel passes the cancel check", () => {
 });
 
 test("a cancel whose teardown went wrong fails the check, whatever its status", () => {
-  for (const [scenario, reason] of [
+  for (const [scenario, reason] of /** @type {[string, RegExp][]} */ ([
     ["decode-left-running", /decode worker left running/],
     ["encode-panicked", /panicked/],
     ["cleanup-failed", /cleanup failed/],
     ["unknown-parked", /unknown parked decoder surfaces/],
     // A crash is a signal on POSIX and an access violation's status (0xC0000005) on Windows.
     ["crash", process.platform === "win32" ? /exited 3221225477\b/ : /SIGSEGV/],
-  ]) {
+  ])) {
     const { cancel, run } = againstFixture(scenario);
     assert.match(
       cancel ?? "",
       /^FAIL a cancel at frame 10/,
       `${scenario}: ${run.stdout}`,
     );
-    assert.match(cancel, reason, scenario);
+    assert.match(cancel ?? "", reason, scenario);
   }
 });
 
@@ -161,7 +161,7 @@ test("a host that hangs is killed and reported, and the run goes on", () => {
   assert.equal(run.error, undefined, `the harness itself hung: ${run.stdout}`);
   assert.ok(seconds < 45, `${seconds} s`);
   assert.match(cancel ?? "", /^FAIL a cancel at frame 10/, run.stdout);
-  assert.match(cancel, /did not finish within 2 s.*frames 10\/100/s);
+  assert.match(cancel ?? "", /did not finish within 2 s.*frames 10\/100/s);
   // Windows has no SIGTERM to send a host, so the harness skips that check there.
   assert.match(
     run.stdout,
@@ -182,9 +182,9 @@ test("a host that never answers its capabilities is killed and reported", () => 
 });
 
 test("--expect-unavailable and a required gpu-resident capability contradict each other", () => {
-  for (const [args, env] of [
+  for (const [args, env] of /** @type {[string[], NodeJS.ProcessEnv][]} */ ([
     [["--expect-unavailable"], { ALPHA2_REQUIRE: "gpu-resident" }],
-  ]) {
+  ])) {
     const run = spawnSync(
       process.execPath,
       [
@@ -407,7 +407,7 @@ test("the unavailable checks hold on a host's refusal and fail on each way it ca
   };
   assert.equal(readbackFallbackProblem(fallback, 100), null);
   const result = (change) => ({ result: { ...fallback.result, ...change } });
-  for (const [change, expected] of [
+  for (const [change, expected] of /** @type {[object, RegExp][]} */ ([
     [{ status: 1 }, /exited 1/],
     [{ outputExists: false }, /left no output/],
     [
@@ -420,7 +420,7 @@ test("the unavailable checks hold on a host's refusal and fail on each way it ca
       /gpuOutputPathUnavailable is null/,
     ],
     [result({ frames: 99 }), /wrote 99 frames, expected 100/],
-  ]) {
+  ])) {
     assert.match(
       readbackFallbackProblem({ ...fallback, ...change }, 100) ?? "",
       expected,
@@ -436,7 +436,11 @@ test("the unavailable checks hold on a host's refusal and fail on each way it ca
   };
   const failed = (code, message) => ({ ok: false, error: { code, message } });
   assert.equal(gpuRequiredRefusalProblem(refusal, []), null);
-  for (const [answer, leftBehind, expected] of [
+  for (const [
+    answer,
+    leftBehind,
+    expected,
+  ] of /** @type {[unknown, string[], RegExp][]} */ ([
     [{ ok: true, result: {} }, [], /expected a refusal/],
     [null, [], /expected a refusal/],
     [
@@ -457,7 +461,7 @@ test("the unavailable checks hold on a host's refusal and fail on each way it ca
       ["required.mp4", "required.a2partial.mp4"],
       /left required\.mp4, required\.a2partial\.mp4 behind/,
     ],
-  ]) {
+  ])) {
     assert.match(gpuRequiredRefusalProblem(answer, leftBehind) ?? "", expected);
   }
 

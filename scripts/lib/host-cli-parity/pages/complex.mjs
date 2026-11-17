@@ -15,26 +15,27 @@ try {
   await init();
   const project = await fetch(${JSON.stringify(projectUrl)}).then((response) => response.json());
   const { width, height } = project.settings;
-  const native = parseY4m(new Uint8Array(await fetch("/native.y4m").then((response) => response.arrayBuffer())), width, height);
+  const native = parseY4m(new Uint8Array(await (await fetch("/native.y4m")).arrayBuffer()), width, height);
   const surface = document.createElement("canvas");
   surface.width = width;
   surface.height = height;
   document.body.append(surface);
   const engine = await WebEffectRegistry.createForHtmlCanvas(surface);
   for (const font of ${JSON.stringify(fonts)})
-    engine.addFont(font, new Uint8Array(await fetch(font).then((response) => response.arrayBuffer())), 0);
+    engine.addFont(font, new Uint8Array(await (await fetch(font)).arrayBuffer()), 0);
   for (const resource of project.effect_resources ?? [])
     engine.registerLut3d(resource.id, await fetch(\`/tests/corpus/\${resource.locator.replace("fixture://", "")}.cube\`).then((response) => response.text()));
   engine.loadProject(JSON.stringify(project));
   // At the still's own size, as the native host decodes it.
   const still = await image("/tests/corpus/parity-image.png");
-  engine.uploadRgbaImage("still", still.width, still.height, still.data);
+  engine.uploadRgbaImage("still", still.width, still.height, new Uint8Array(still.data.buffer));
   const catalog = JSON.parse(engine.builtinCatalog());
   const used = new Set([
     ...(project.compositions ?? []).flatMap((composition) => composition.nodes.map((node) => node.op.effect?.id)),
     ...project.timeline.tracks.flatMap((track) => (track.transitions ?? []).map((transition) => transition.effect.id)),
   ]);
   const unused = [...catalog.effects, ...catalog.transitions].map((entry) => entry.id).filter((id) => !used.has(id));
+  /** @type {Record<string, [number, number, number]>} */
   const totals = { y: [0, 0, 0], u: [0, 0, 0], v: [0, 0, 0] };
   const histogram = [0, 0, 0, 0];
   const worstFrames = [];
@@ -99,7 +100,7 @@ try {
 }
 // Straight RGBA with no colour management, as the native side decodes it.
 async function pixels(url) {
-  return (await image(url)).data;
+  return new Uint8Array((await image(url)).data.buffer);
 }
 async function image(url) {
   const blob = await fetch(url).then((response) => response.blob());

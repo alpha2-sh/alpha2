@@ -265,7 +265,7 @@ export const cases = {
     underSimulation(
       ["decode-order"],
       webcodecsDecodeOrder(),
-      `(result) => globalThis.decodeOrderOutputs > 0 ? { ...result, decodeOrderOutputs } : { ...result, ok: false, simulation: "no frame came out in decode order" }`,
+      `(result) => globalThis.decodeOrderOutputs > 0 ? { ...result, decodeOrderOutputs: globalThis.decodeOrderOutputs } : { ...result, ok: false, simulation: "no frame came out in decode order" }`,
     ),
 };
 

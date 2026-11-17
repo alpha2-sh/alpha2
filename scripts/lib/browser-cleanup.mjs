@@ -9,10 +9,15 @@ const tracked = new Set();
 let installed = false;
 
 /**
+ * @typedef {{ child?: Pick<import("node:child_process").ChildProcess, "pid" | "exitCode" |
+ *   "signalCode">, group?: boolean, profile?: string }} TrackedBrowser
+ */
+
+/**
  * The first call installs signal and exit handlers that clean up every tracked entry.
  *
- * @param {{ child?: import("node:child_process").ChildProcess, group?: boolean, profile?: string }} entry
- * @returns {typeof entry}
+ * @param {TrackedBrowser} entry
+ * @returns {TrackedBrowser}
  */
 export function track(entry) {
   tracked.add(entry);
@@ -32,6 +37,7 @@ export function track(entry) {
   return entry;
 }
 
+/** @param {TrackedBrowser} entry */
 export function untrack(entry) {
   tracked.delete(entry);
 }
@@ -40,8 +46,9 @@ export function untrack(entry) {
  * Synchronous so it can run in an exit handler. An exited process is skipped because its pid may
  * be reused.
  *
- * @param {Iterable<{ child?: import("node:child_process").ChildProcess, group?: boolean, profile?: string }>} entries
- * @param {{ platform?: string, spawnSyncProcess?: typeof spawnSync,
+ * @param {Iterable<TrackedBrowser>} entries
+ * @param {{ platform?: string, spawnSyncProcess?: (command: string, args: string[],
+ *   options: import("node:child_process").SpawnSyncOptions) => unknown,
  *   kill?: (pid: number, signal: string) => void }} [options]
  */
 export function cleanUp(

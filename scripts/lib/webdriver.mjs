@@ -64,7 +64,12 @@ const BROWSERS = {
   },
 };
 
-/** ALPHA2_FIREFOX, else the first installed Firefox, else null (geckodriver then searches). */
+/**
+ * ALPHA2_FIREFOX, else the first installed Firefox, else null (geckodriver then searches).
+ *
+ * @param {import("./chrome-cdp.mjs").BrowserLookup} [lookup]
+ * @returns {string | null}
+ */
 export function firefoxExecutable({
   env = process.env,
   platform = process.platform,
@@ -82,9 +87,9 @@ export function firefoxCandidates(
   if (platform === "darwin")
     return ["/Applications/Firefox.app/Contents/MacOS/firefox"];
   if (platform === "win32")
-    return [env.PROGRAMFILES ?? env.ProgramFiles]
-      .filter(Boolean)
-      .map((root) => win32.join(root, "Mozilla Firefox", "firefox.exe"));
+    return [env.PROGRAMFILES ?? env.ProgramFiles].flatMap((root) =>
+      root ? [win32.join(root, "Mozilla Firefox", "firefox.exe")] : [],
+    );
   return [
     "/usr/lib/firefox/firefox",
     "/snap/firefox/current/usr/lib/firefox/firefox",
@@ -98,6 +103,8 @@ export const WEBDRIVER_BROWSERS = Object.freeze(Object.keys(BROWSERS));
  *
  * @returns {{ name: string, driver: string, driverArguments: (port: number) => string[],
  *   capabilities: object, sessionHint: string }}
+ * @param {string} name
+ * @param {import("./chrome-cdp.mjs").BrowserLookup} [lookup]
  */
 export function webDriverBrowser(
   name,
@@ -261,7 +268,9 @@ function freePort() {
     const server = createServer();
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
+      const { port } = /** @type {import("node:net").AddressInfo} */ (
+        server.address()
+      );
       server.close(() => resolvePort(port));
     });
   });
@@ -270,7 +279,11 @@ function freePort() {
 class RequestTimeout extends Error {}
 
 class Driver {
-  /** Why the driver is gone, once it is. */
+  /**
+   * Why the driver is gone, once it is.
+   *
+   * @type {Error | null}
+   */
   #failure = null;
 
   constructor(base, child, output) {

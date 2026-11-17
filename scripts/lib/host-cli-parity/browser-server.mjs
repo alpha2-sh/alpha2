@@ -16,6 +16,23 @@ import { orientationPage } from "./pages/orientation.mjs";
 import { parityPage } from "./pages/parity.mjs";
 import { sinkPage } from "./pages/sink.mjs";
 
+export const parityPages = {
+  "/parity": parityPage,
+  "/sink": sinkPage,
+  "/complex": () =>
+    complexPage("/tests/cases/host-parity-complex-project.json"),
+  "/shapes": () => complexPage("/tests/cases/host-parity-shapes-project.json"),
+  "/layout": () =>
+    complexPage("/tests/cases/host-parity-layout-project.json", [
+      "/tests/fonts/Alpha2Fixture.ttf",
+    ]),
+  "/effects": () =>
+    complexPage("/tests/cases/host-parity-effects-project.json"),
+  "/hdr": hdrPage,
+  "/extensions": extensionsPage,
+  "/orientation": orientationPage,
+};
+
 /**
  * ALPHA2_CASE_TIMEOUT_MS defaults to 120 s because the effects page draws over 600 frames. A page
  * not on WebGPU records a `webgpu` skip but its checks still run.
@@ -27,34 +44,22 @@ export async function browserParity(
   files = {},
 ) {
   const routes = { "/native.png": nativeFramePath, ...files };
-  const pages = {
-    "/parity": parityPage,
-    "/sink": sinkPage,
-    "/complex": () =>
-      complexPage("/tests/cases/host-parity-complex-project.json"),
-    "/shapes": () =>
-      complexPage("/tests/cases/host-parity-shapes-project.json"),
-    "/layout": () =>
-      complexPage("/tests/cases/host-parity-layout-project.json", [
-        "/tests/fonts/Alpha2Fixture.ttf",
-      ]),
-    "/effects": () =>
-      complexPage("/tests/cases/host-parity-effects-project.json"),
-    "/hdr": hdrPage,
-    "/extensions": extensionsPage,
-    "/orientation": orientationPage,
-  };
   const server = createServer(async (request, response) => {
-    if (!fromThisMachine(request.headers.host, server.address().port)) {
+    if (
+      !fromThisMachine(
+        request.headers.host,
+        /** @type {import("node:net").AddressInfo} */ (server.address()).port,
+      )
+    ) {
       response.writeHead(403).end();
       return;
     }
     const url = new URL(request.url ?? "/", "http://localhost");
     response.setHeader("cross-origin-opener-policy", "same-origin");
     response.setHeader("cross-origin-embedder-policy", "require-corp");
-    if (pages[url.pathname] !== undefined) {
+    if (parityPages[url.pathname] !== undefined) {
       response.setHeader("content-type", "text/html; charset=utf-8");
-      response.end(pages[url.pathname]());
+      response.end(parityPages[url.pathname]());
       return;
     }
     const routed = routes[url.pathname];
@@ -84,14 +89,15 @@ export async function browserParity(
       response.writeHead(404).end();
     }
   });
-  await new Promise((resolveListen) =>
-    server.listen(0, "127.0.0.1", resolveListen),
+  await /** @type {Promise<void>} */ (
+    new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen))
   );
   try {
     const address = server.address();
     if (typeof address !== "object" || address === null)
       throw new Error("missing parity server address");
     const url = `http://127.0.0.1:${address.port}${page}`;
+    /** @type {import("../chrome-cdp.mjs").GpuProcessRecord | undefined} */
     let gpuProcess;
     let result;
     try {
@@ -126,8 +132,10 @@ export async function browserParity(
       });
     return result;
   } finally {
-    await new Promise((resolveClose, reject) =>
-      server.close((error) => (error ? reject(error) : resolveClose())),
+    await /** @type {Promise<void>} */ (
+      new Promise((resolveClose, reject) =>
+        server.close((error) => (error ? reject(error) : resolveClose())),
+      )
     );
   }
 }

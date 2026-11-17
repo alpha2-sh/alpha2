@@ -26,7 +26,7 @@
     "generate:goldens": "node scripts/generate-goldens.mjs",
     "generate:corpus": "node scripts/run-bash.mjs tests/corpus/generate/generate.sh",
     "version:set": "node scripts/set-version.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.scripts.json && node scripts/typecheck-browser-pages.mjs",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "lint:rust": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@webgpu/types": "0.1.74",
     "ajv": "8.20.0",
     "binaryen": "132.0.0",
     "eslint": "10.11.0",

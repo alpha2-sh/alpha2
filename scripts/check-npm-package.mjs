@@ -2,7 +2,6 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 const root = resolve(import.meta.dirname, "../packages/alpha2");
 const manifest = JSON.parse(
@@ -149,9 +148,7 @@ function targetFeatures(module) {
   return features;
 }
 
-const wasm = await import(
-  pathToFileURL(resolve(root, "wasm", "alpha2_wasm.js")).href
-);
+const wasm = await import("../packages/alpha2/wasm/alpha2_wasm.js");
 wasm.initSync({
   module: readFileSync(resolve(root, "wasm", "alpha2_wasm_bg.wasm")),
 });

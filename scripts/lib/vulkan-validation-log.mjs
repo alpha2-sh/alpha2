@@ -104,6 +104,8 @@ export function checkValidationLog(text, known) {
 
 // Known messages for FFmpeg 8.1.3 on NVIDIA driver 580; any other ID fails the run.
 const NAGA_LAYOUT = "VUID-StandaloneSpirv-None-10684";
+/** @type {KnownMessage} */
+const NAGA_LAYOUT_KNOWN = { source: "naga" };
 
 /** @type {Map<string, KnownMessage>} */
 export const KNOWN = new Map([
@@ -126,7 +128,7 @@ export const KNOWN = new Map([
   // format does not support as a whole.
   ["VUID-VkImageViewCreateInfo-usage-02275", { source: "FFmpeg" }],
   // naga emits ArrayStride on Function-storage arrays and Offset on Private-storage structs.
-  [NAGA_LAYOUT, { source: "naga" }],
+  [NAGA_LAYOUT, NAGA_LAYOUT_KNOWN],
 ]);
 
 // The pinned SDK fixes the `VUID-vkDestroyDevice-device-05137` teardown leak, so no run allows it.
@@ -143,7 +145,7 @@ export const LAYER_ENABLED = "CURRENT-VALIDATION-ENABLED";
 // Known messages for the render and engine suites on NVIDIA 580, RADV and lavapipe.
 /** @type {Map<string, KnownMessage>} */
 export const TEST_KNOWN = new Map([
-  [NAGA_LAYOUT, KNOWN.get(NAGA_LAYOUT)],
+  [NAGA_LAYOUT, NAGA_LAYOUT_KNOWN],
   [LAYER_ENABLED, { source: "the layer, at instance creation" }],
 ]);
 

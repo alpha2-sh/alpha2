@@ -35,12 +35,13 @@ try {
   result.webgpu = { present: "gpu" in navigator, adapter: null };
   const adapter = await navigator.gpu?.requestAdapter();
   if (adapter) {
-    const info = adapter.info ?? {};
+    const info = /** @type {Partial<GPUAdapterInfo>} */ (adapter.info ?? {});
     result.webgpu.adapter = {
       vendor: info.vendor ?? "",
       architecture: info.architecture ?? "",
       device: info.device ?? "",
       description: info.description ?? "",
+      // @ts-expect-error Older WebGPU implementations put isFallbackAdapter on the adapter.
       isFallbackAdapter: Boolean(info.isFallbackAdapter ?? adapter.isFallbackAdapter),
       features: [...adapter.features].sort(),
       limits: {
@@ -98,7 +99,12 @@ export async function probeBrowser(
   { engineModule, env = process.env } = {},
 ) {
   const server = createServer(async (request, response) => {
-    if (!fromThisMachine(request.headers.host, server.address().port)) {
+    if (
+      !fromThisMachine(
+        request.headers.host,
+        /** @type {import("node:net").AddressInfo} */ (server.address()).port,
+      )
+    ) {
       response.writeHead(403).end();
       return;
     }
@@ -130,12 +136,14 @@ export async function probeBrowser(
       response.writeHead(404).end();
     }
   });
-  await new Promise((resolveListen) =>
-    server.listen(0, "127.0.0.1", resolveListen),
+  await /** @type {Promise<void>} */ (
+    new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen))
   );
   let version = "";
   try {
-    const { port } = server.address();
+    const { port } = /** @type {import("node:net").AddressInfo} */ (
+      server.address()
+    );
     const encoded = await runBrowserPage(
       browser,
       `http://127.0.0.1:${port}/__probe`,

@@ -198,6 +198,8 @@ npm run typecheck
 
 `npm run format` and `npm run lint:fix` apply the fixes. Prettier covers the JavaScript and TypeScript files only.
 
+`npm run typecheck` also checks the harnesses in `scripts/` and the code of the browser test pages against the built packages, so it needs `npm run build` first.
+
 ## Before a push
 
 `scripts/preflight.sh quick` runs the checks CI's lint jobs run, under the same names, plus what this machine can check for other platforms: formatting, clippy on the workspace, `fuzz`, `plugins` and wasm, the Windows and macOS targets (`DOCS_RS=1`), Android when `ANDROID_NDK_HOME` names an NDK, `cargo check --no-default-features`, the schema and feature checks, cargo-deny, the TypeScript, ESLint and Prettier checks, the npm package check and ruff and mypy. `scripts/preflight.sh full` adds the Rust tests with both feature sets, the plugin and determinism tests, `npm run build`, `npm run test:js`, pytest and the browser cases in Chrome (SwiftShader) and Firefox, with lavapipe and `ALPHA2_RENDERER=gpu` as CI uses them. Run `full` before pushing a merge of more than a few commits. A check that needs something this machine lacks (a target, the NDK, the Python environment, a build) says so and is reported as skipped; `scripts/preflight.sh list` names the checks and `scripts/preflight.sh <check>...` runs some of them.

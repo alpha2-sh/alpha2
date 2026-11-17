@@ -64,7 +64,10 @@ for (let index = 0; index < own.length; index += 1) {
   const arg = own[index];
   if (arg === "-p" && index + 1 < own.length) crates.push(own[++index]);
   else if (arg === "--backend" && index + 1 < own.length)
-    backend = own[++index];
+    backend =
+      /** @type {import("./lib/gpu-validation-summary.mjs").Backend} */ (
+        own[++index]
+      );
   else if (arg === "--shader-validation") shaderValidation = true;
   else if (arg === "--gpu-based-validation") gpuBasedValidation = true;
   else {
@@ -178,7 +181,10 @@ for (const { executable, directory, opensDevice } of binaries) {
   const output = readFileSync(log, "utf8");
   const problems = [];
   const counted = [];
-  if (result.error?.code === "ETIMEDOUT")
+  if (
+    /** @type {NodeJS.ErrnoException | undefined} */ (result.error)?.code ===
+    "ETIMEDOUT"
+  )
     problems.push(`did not finish within ${TIMEOUT_MS / 1000} s`);
   else if (result.status !== 0)
     problems.push(
