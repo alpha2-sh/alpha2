@@ -1,7 +1,12 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 
-import { AudioWindowSupplier } from "../dist/browser/runtime/audio.js";
+import { testUnless, wasmSkip } from "./support/wasm.mjs";
+
+const skip = wasmSkip(import.meta.url);
+const test = testUnless(skip);
+const { AudioWindowSupplier } = skip
+  ? {}
+  : await import("../dist/browser/runtime/audio.js");
 
 const RATE = 48_000;
 const BLOCK = 4_096;

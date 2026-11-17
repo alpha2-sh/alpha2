@@ -1188,7 +1188,7 @@ let result;
 try {
   const canvas = new OffscreenCanvas(64, 48);
   const engine = await wasm.WebEffectRegistry.createForCanvas(canvas).catch((error) => {
-    if (error?.code === "GPU_INIT_FAILED" || error?.code === "INVALID_INPUT") return null;
+    if (new OffscreenCanvas(1, 1).getContext("webgl2") === null) return null;
     throw error;
   });
   if (engine === null) result = { skipped: "no WebGL2 in the worker" };

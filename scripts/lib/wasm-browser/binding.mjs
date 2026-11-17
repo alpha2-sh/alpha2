@@ -208,25 +208,38 @@ gaps.length = 0;
 last = performance.now();
 // The longest gap in a 10 ms timer chain is the longest the hash held the main thread. Animation
 // frames are reported but not judged, since headless pages may throttle them.
-let timers = 0, timing = true, lastTimer = performance.now(), timerGapMax = 0;
+let timers = 0, timing = true, lastTimer = performance.now(), timerGapMax = 0, longestGap = [0, 0];
 const arm = () => setTimeout(() => {
   const now = performance.now();
-  timerGapMax = Math.max(timerGapMax, now - lastTimer);
+  if (now - lastTimer > timerGapMax) {
+    timerGapMax = now - lastTimer;
+    longestGap = [lastTimer, now];
+  }
   lastTimer = now;
   timers++;
   if (timing) arm();
 }, 10);
 arm();
+const pieceEnds = [];
 const started = performance.now();
-await sha256Blob(file);
+await sha256Blob(file, { onProgress: () => pieceEnds.push(performance.now()) });
 const hashMs = performance.now() - started;
 timing = false;
 running = false;
 const sorted = [...gaps].sort((a, b) => a - b);
 const p50 = sorted[Math.floor((sorted.length - 1) / 2)] ?? null;
+const pieceMs = pieceEnds.slice(1).map((end, index) => end - pieceEnds[index]);
+const inGap = pieceEnds.filter((end) => end > longestGap[0] && end <= longestGap[1]);
+const hashingInGapMs = inGap.length < 2 ? 0 : inGap.at(-1) - inGap[0];
 report({
   ok: timers >= 5 && timerGapMax < 100,
   hashMs: Math.round(hashMs), timers, timerGapMaxMs: Math.round(timerGapMax),
+  pieces: pieceEnds.length, pieceMaxMs: Math.round(Math.max(0, ...pieceMs)),
+  timerGapMaxCause: {
+    pieces: inGap.length,
+    hashingMs: Math.round(hashingInGapMs),
+    outsideHashingMs: Math.round(timerGapMax - hashingInGapMs),
+  },
   frames: gaps.length, frameGapP50Ms: p50 === null ? null : Math.round(p50),
   frameGapMaxMs: Math.round(sorted.at(-1) ?? 0),
 });

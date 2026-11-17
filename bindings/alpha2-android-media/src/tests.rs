@@ -57,9 +57,6 @@ fn first_picture_decodes(name: &str) -> bool {
 /// The suite's video sessions. The emulator's Codec2 host-backed decoders (`c2.goldfish`) keep
 /// the left columns of a picture whose stream crops columns off the left, and nothing in their
 /// output format tells it apart from a correct crop, so those sessions decode in software here.
-/// Some platform software H.264 decoders and the emulator's OMX host-backed decoder
-/// (`OMX.android.goldfish`) take High 4:4:4 Predictive and deliver a wrong picture without an
-/// error, so the suite refuses that profile on them.
 #[derive(Clone, Copy, Debug, Default)]
 struct SuiteVideo;
 
@@ -70,19 +67,6 @@ impl VideoBackends for SuiteVideo {
         kind: BackendKind,
     ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
         let session = MediaCodecVideo::open(track, kind, VideoOutput::ByteBuffers)?;
-        let high_444 = track.video.as_ref().is_some_and(|video| {
-            video.codec == alpha2_container::VideoCodec::H264
-                && video.codec_private.get(1) == Some(&244)
-        });
-        let wrong_444 = ["c2.android.", "OMX.google.", "OMX.android.goldfish."]
-            .iter()
-            .any(|prefix| session.component().starts_with(prefix));
-        if high_444 && wrong_444 {
-            return Err(BackendError::Unsupported(format!(
-                "{} decodes H.264 High 4:4:4 Predictive to a wrong picture",
-                session.component()
-            )));
-        }
         if session.component().starts_with("c2.goldfish.") {
             return Err(BackendError::Unsupported(format!(
                 "{} crops leading columns off the wrong edge",
@@ -90,6 +74,50 @@ impl VideoBackends for SuiteVideo {
             )));
         }
         Ok(Box::new(session))
+    }
+}
+
+struct OnlyKind(BackendKind);
+
+impl VideoBackends for OnlyKind {
+    fn open(
+        &self,
+        track: &TrackInfo,
+        kind: BackendKind,
+    ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
+        if kind != self.0 {
+            return Err(BackendError::Unsupported(format!("not {:?}", self.0)));
+        }
+        Ok(Box::new(MediaCodecVideo::open(
+            track,
+            kind,
+            VideoOutput::ByteBuffers,
+        )?))
+    }
+}
+
+#[test]
+fn ten_bit_h264_is_refused_or_decoded_to_ten_bits() {
+    use alpha2_host_core::video_stream::{StreamOptions, VideoStream};
+    use alpha2_media::{CancelToken, DecodeEvent, Decoder as _, PixelFormat};
+
+    let high10_and_high444_predictive = ["h264-high10.mp4", "hdr-pq.mp4"];
+    for name in high10_and_high444_predictive {
+        for kind in [BackendKind::Hardware, BackendKind::Software] {
+            let path = alpha2_backend_conformance::corpus(name);
+            let Ok(mut stream) =
+                VideoStream::open_file(&path, Arc::new(OnlyKind(kind)), StreamOptions::default())
+            else {
+                continue;
+            };
+            if let Ok(DecodeEvent::Video(frame)) = stream.decode_next(&CancelToken::default()) {
+                let depth = match frame.pixel_format {
+                    PixelFormat::Yuv(format) => format.bit_depth,
+                    other => panic!("{name} {kind:?}: {other:?}"),
+                };
+                assert_eq!(depth, 10, "{name} {kind:?}");
+            }
+        }
     }
 }
 
@@ -189,8 +217,13 @@ mod encode {
         false
     }
 
-    /// Exports the clip into `name`, `WebM` when `webm`, else MP4.
-    fn export(name: &str, video: VideoCodec, audio: AudioCodec, webm: bool) -> std::path::PathBuf {
+    /// Exports the clip into `name`, `WebM` when `webm`, else MP4, and names the encoders used.
+    fn export(
+        name: &str,
+        video: VideoCodec,
+        audio: AudioCodec,
+        webm: bool,
+    ) -> (std::path::PathBuf, String) {
         let rate = FrameRate::new(30, 1).expect("rate");
         let config = VideoEncodeConfig {
             codec: video,
@@ -219,12 +252,13 @@ mod encode {
         let audio_encoder = AndroidAudioEncoders
             .open(&audio_config)
             .unwrap_or_else(|error| panic!("{name}: no {audio:?} encoder: {error}"));
-        eprintln!(
-            "{name}: {} (hardware {}), {}",
+        let encoders = format!(
+            "{} (hardware {}), {}",
             encoder.name(),
             encoder.hardware(),
             audio_encoder.name()
         );
+        eprintln!("{name}: {encoders}");
         let path = std::env::temp_dir().join(name);
         let file = std::fs::OpenOptions::new()
             .read(true)
@@ -253,7 +287,51 @@ mod encode {
         }
         tone(&mut sink);
         sink.finish().expect("finish");
-        path
+        (path, encoders)
+    }
+
+    fn stream_difference(first: &std::path::Path, second: &std::path::Path) -> Option<String> {
+        let open = |path: &std::path::Path| {
+            alpha2_container::open(path).map_err(|error| format!("{}: {error}", path.display()))
+        };
+        let (mut first, mut second) = match (open(first), open(second)) {
+            (Ok(first), Ok(second)) => (first, second),
+            (Err(error), _) | (_, Err(error)) => return Some(error),
+        };
+        let tracks = first.tracks().to_vec();
+        if tracks != second.tracks() {
+            return Some(format!("tracks {tracks:?} vs {:?}", second.tracks()));
+        }
+        for track in tracks {
+            for index in 0.. {
+                let packets = match (first.next_packet(track.id), second.next_packet(track.id)) {
+                    (Ok(a), Ok(b)) => (a, b),
+                    (Err(error), _) | (_, Err(error)) => {
+                        return Some(format!("{:?} packet {index}: {error}", track.kind));
+                    }
+                };
+                let (a, b) = match packets {
+                    (None, None) => break,
+                    (Some(a), Some(b)) if a == b => continue,
+                    (a, b) => (a, b),
+                };
+                let byte = a
+                    .as_ref()
+                    .zip(b.as_ref())
+                    .and_then(|(a, b)| a.data.iter().zip(&b.data).position(|(x, y)| x != y));
+                let describe = |packet: Option<alpha2_container::Packet>| {
+                    packet.map(|p| (p.pts, p.dts, p.duration, p.keyframe, p.data.len()))
+                };
+                return Some(format!(
+                    "{:?} packet {index}: (pts, dts, duration, keyframe, bytes) {:?} vs {:?}, \
+                     first different byte {byte:?}",
+                    track.kind,
+                    describe(a),
+                    describe(b)
+                ));
+            }
+        }
+        None
     }
 
     fn check(path: &std::path::Path) {
@@ -321,18 +399,26 @@ mod encode {
 
     #[test]
     fn h264_and_aac_export_reads_back_frame_for_frame() {
-        let path = export("a2-h264-aac.mp4", VideoCodec::H264, AudioCodec::Aac, false);
+        let (path, encoders) = export("a2-h264-aac.mp4", VideoCodec::H264, AudioCodec::Aac, false);
         check(&path);
-        let again = export(
+        let (again, encoders_again) = export(
             "a2-h264-aac-2.mp4",
             VideoCodec::H264,
             AudioCodec::Aac,
             false,
         );
         let same = std::fs::read(&path).ok() == std::fs::read(&again).ok();
+        let difference = (!same).then(|| {
+            stream_difference(&path, &again)
+                .unwrap_or_else(|| "the elementary streams match, the container differs".into())
+        });
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(again);
-        assert!(same, "a repeated export on the same device differs");
+        assert!(
+            difference.is_none(),
+            "a repeated export on the same device differs ({encoders}, then {encoders_again}): {}",
+            difference.unwrap_or_default()
+        );
     }
 
     #[test]
@@ -350,7 +436,7 @@ mod encode {
             ),
         ] {
             if encodes(video, capability) {
-                let path = export(name, video, AudioCodec::Opus, true);
+                let (path, _) = export(name, video, AudioCodec::Opus, true);
                 check(&path);
                 let _ = std::fs::remove_file(path);
             }
@@ -360,7 +446,7 @@ mod encode {
     #[test]
     fn hevc_and_opus_export_reads_back_where_the_device_has_them() {
         if encodes(VideoCodec::Hevc, Capability::MediacodecEncodeHevc) {
-            let path = export(
+            let (path, _) = export(
                 "a2-hevc-opus.mp4",
                 VideoCodec::Hevc,
                 AudioCodec::Opus,

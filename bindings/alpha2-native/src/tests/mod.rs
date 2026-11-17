@@ -124,9 +124,7 @@ fn rgba_frame_sized(pts: MediaTime, color: [u8; 4], width: u32, height: u32) -> 
 /// A corpus file. Like [`output_path`], it first stops a run on anything but the pinned SDK.
 fn corpus(name: &str) -> PathBuf {
     crate::require_pinned_ffmpeg_for_tests();
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/corpus")
-        .join(name)
+    alpha2_test_support::corpus(name)
 }
 
 /// A fixture's pixel aspect ratio by `av_guess_sample_aspect_ratio`: the container's `pasp` if any,

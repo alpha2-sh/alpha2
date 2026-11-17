@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { applyEdit } from "alpha2/apply-edit";
 import {
   createDocument,
@@ -11,26 +13,16 @@ import {
   effectStack,
   serializeDocument,
 } from "../dist/index.js";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
-const wasmDirectory = new URL("../../alpha2/wasm/", import.meta.url);
-const packaged = existsSync(new URL("alpha2_wasm_bg.wasm", wasmDirectory));
-// Skipped before `npm run build`; ALPHA2_REQUIRE=wasm makes that a failure.
-const skip =
-  !packaged &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const skip = wasmSkip(import.meta.url);
 
 async function engine() {
-  const wasm = await import(new URL("alpha2_wasm.js", wasmDirectory).href);
+  const wasm = await import(
+    pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href
+  );
   wasm.initSync({
-    module: readFileSync(new URL("alpha2_wasm_bg.wasm", wasmDirectory)),
+    module: readFileSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")),
   });
   return wasm;
 }

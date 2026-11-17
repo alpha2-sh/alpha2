@@ -16,7 +16,11 @@ import { tmpdir } from "node:os";
 import { resolve, join, extname } from "node:path";
 import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
 import { probeRun } from "./lib/browser-probe.mjs";
-import { recordSkip, virtualMachineEncoderStall } from "./lib/capabilities.mjs";
+import {
+  recordSkip,
+  virtualMachineEncoderStall,
+  virtualMachineWorkerDecoder,
+} from "./lib/capabilities.mjs";
 import {
   animatedGif,
   largeLottie,
@@ -309,6 +313,28 @@ try {
       ),
     );
   const proxyInMemory = await consumerPage("proxy=no-create-writable");
+  let proxyInMemoryOk = proxyInMemory.ok;
+  const decoderLosses = (proxyInMemory.reported ?? []).map(
+    virtualMachineWorkerDecoder,
+  );
+  if (
+    !proxyInMemoryOk &&
+    proxyInMemory.status?.available === true &&
+    decoderLosses.length > 0 &&
+    decoderLosses.every((loss) => loss !== null)
+  ) {
+    try {
+      recordSkip({
+        suite: "editor-package",
+        test: "proxyInMemory preview worker",
+        capability: "webcodecs-video",
+        reason: decoderLosses[0],
+      });
+      proxyInMemoryOk = true;
+    } catch (error) {
+      proxyInMemory.required = error.message;
+    }
+  }
   const noAudioDecoder = await consumerPage("import=no-audio-decoder");
   const exactRate = await exportPage("exact-rate");
   const exportButton = await exportPage("button");
@@ -350,7 +376,7 @@ export const app=<EditorProvider editor={editor}><Selected/><EditorPreview bridg
       webkitStorage.ok &&
       noAudioEncoder.ok &&
       noCreateWritable.ok &&
-      proxyInMemory.ok &&
+      proxyInMemoryOk &&
       noAudioDecoder.ok &&
       exactRate.ok &&
       exportButton.ok &&

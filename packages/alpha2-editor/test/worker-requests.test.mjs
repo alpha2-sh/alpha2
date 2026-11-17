@@ -1,10 +1,12 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import "./support/preview-stubs.mjs";
-import {
-  createWorkerPreview,
-  installEditorWorker,
-} from "../dist/browser/worker.js";
+import { testUnless, wasmSkip } from "./support/wasm.mjs";
+
+const skip = wasmSkip(import.meta.url);
+const test = testUnless(skip);
+const { createWorkerPreview, installEditorWorker } = skip
+  ? {}
+  : await import("../dist/browser/worker.js");
 
 function channel() {
   const scope = { onmessage: null, postMessage: null };

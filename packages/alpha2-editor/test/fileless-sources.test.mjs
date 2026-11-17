@@ -2,30 +2,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createDocument, createEditor } from "../dist/index.js";
-import { createBrowserBridge } from "../dist/browser/index.js";
 import { SourcePixels } from "../dist/browser/runtime/sources.js";
 import {
   missingCapability,
   suiteOf,
 } from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
-const wasmDirectory = join(
-  resolve(import.meta.dirname, "..", ".."),
-  "alpha2",
-  "wasm",
-);
-const packaged = existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm"));
-// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE=wasm fails instead.
 const skip =
-  !packaged &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm packages are not built",
-  );
+  wasmSkip(import.meta.url) ||
+  (!existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")) &&
+    missingCapability(
+      "wasm",
+      suiteOf(import.meta.url),
+      "the extension wasm package is not built",
+    ));
+const { createBrowserBridge } = skip
+  ? {}
+  : await import("../dist/browser/index.js");
 
 globalThis.OffscreenCanvas ??= class {
   constructor(width, height) {

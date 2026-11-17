@@ -44,6 +44,36 @@ test("an async step is measured once its promise settles", async () => {
   assert.ok(ratio > 4, `${ratio}`);
 });
 
+test("a step that is slow until its code warms up is read over many ticks of a coarse CPU clock", async () => {
+  const tick = 4_000;
+  const cpuUsage = process.cpuUsage;
+  process.cpuUsage = () => {
+    const { user, system } = cpuUsage.call(process);
+    return {
+      user: Math.floor(user / tick) * tick,
+      system: Math.floor(system / tick) * tick,
+    };
+  };
+  let runs = 0;
+  const spin = (ms) => {
+    const until = performance.now() + ms;
+    while (performance.now() < until);
+  };
+  try {
+    await assertScalesBelow(
+      "a step that warms up",
+      1,
+      (size) => size,
+      (size) => {
+        runs += 1;
+        spin(runs <= 2 ? 25 : size);
+      },
+    );
+  } finally {
+    process.cpuUsage = cpuUsage;
+  }
+});
+
 test("the least of several readings is returned", () => {
   let runs = 0;
   const least = minOf(5, () => {

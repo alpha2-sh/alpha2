@@ -4,12 +4,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { isRetryableFailure } from "alpha2/export-retry";
+import { wasmSkip } from "./support/wasm.mjs";
+
+const skip = wasmSkip(import.meta.url);
 
 const { openExportOutput, sweepStaleExports } =
   await import("../dist/browser/runtime/output.js");
 import { FakeLocks } from "./support/fake-locks.mjs";
-const { chooseAudioCodec, exportTimeline } =
-  await import("../dist/browser/runtime/exporter.js");
+const { chooseAudioCodec, exportTimeline } = skip
+  ? {}
+  : await import("../dist/browser/runtime/exporter.js");
 
 const GB = 1e9;
 
@@ -225,140 +229,156 @@ function audioEncoder(codecs) {
 let nextBitrate = 128_000;
 const freshBitrate = () => ({ bitrate: nextBitrate++ });
 
-test("AAC is chosen where the browser encodes it, Opus where it encodes only Opus", async () => {
-  try {
-    audioEncoder(["mp4a", "opus"]);
-    assert.deepEqual(await chooseAudioCodec(48_000, freshBitrate()), {
-      codec: "aac",
-      sampleRate: 48_000,
-    });
-    audioEncoder(["opus"]);
-    assert.deepEqual(await chooseAudioCodec(44_100, freshBitrate()), {
-      codec: "opus",
-      sampleRate: 44_100,
-    });
-  } finally {
-    audioEncoder(null);
-  }
-});
-
-test("the audio codec is chosen among the container's, or is the one asked for", async () => {
-  try {
-    audioEncoder(["mp4a", "opus"]);
-    for (const [container, codec] of [
-      ["mp4", "aac"],
-      ["mkv", "aac"],
-      ["mov", "aac"],
-      ["webm", "opus"],
-    ])
-      assert.equal(
-        (await chooseAudioCodec(48_000, freshBitrate(), { container })).codec,
-        codec,
-        container,
-      );
-    assert.equal(
-      (
-        await chooseAudioCodec(48_000, freshBitrate(), {
-          container: "mp4",
-          codec: "opus",
-        })
-      ).codec,
-      "opus",
-    );
-    // Firefox on Linux has no AAC encoder. MKV falls back to Opus; MOV has no alternative, and an
-    // AAC requested by name is not swapped for another codec.
-    audioEncoder(["opus"]);
-    assert.equal(
-      (await chooseAudioCodec(48_000, freshBitrate(), { container: "mkv" }))
-        .codec,
-      "opus",
-    );
-    for (const request of [
-      { container: "mov" },
-      { container: "mp4", codec: "aac" },
-    ])
-      await assert.rejects(
-        chooseAudioCodec(48_000, freshBitrate(), request),
-        (error) =>
-          error.failure?.code === "INVALID_INPUT" &&
-          error.failure.phase === "prepare" &&
-          new RegExp(
-            `cannot encode audio for ${request.container} \\(AAC,`,
-          ).test(error.failure.message),
-      );
-  } finally {
-    audioEncoder(null);
-  }
-});
-
-test("a project rate the browser's encoder does not take is exported at the rate a native host would pick", async () => {
-  try {
-    // Chrome on macOS: AAC at 44.1 and 48 kHz only. The mix converts to the next rate up, or to the
-    // highest below.
-    audioEncoder([["mp4a", [44_100, 48_000]]]);
-    assert.deepEqual(await chooseAudioCodec(22_051, freshBitrate()), {
-      codec: "aac",
-      sampleRate: 44_100,
-    });
-    assert.deepEqual(await chooseAudioCodec(96_001, freshBitrate()), {
-      codec: "aac",
-      sampleRate: 48_000,
-    });
-    audioEncoder([["opus", [8_000, 12_000, 16_000, 24_000, 48_000]]]);
-    assert.deepEqual(await chooseAudioCodec(22_052, freshBitrate()), {
-      codec: "opus",
-      sampleRate: 24_000,
-    });
-  } finally {
-    audioEncoder(null);
-  }
-});
-
-test("an export with audio is refused before it renders where the browser can encode no audio", async () => {
-  for (const [encoder, sampleRate] of [
-    [null, 32_000],
-    [[], 24_000],
-  ]) {
-    audioEncoder(encoder);
+test(
+  "AAC is chosen where the browser encodes it, Opus where it encodes only Opus",
+  { skip },
+  async () => {
     try {
-      await assert.rejects(
-        chooseAudioCodec(sampleRate, freshBitrate()),
-        (error) =>
-          error.failure?.code === "INVALID_INPUT" &&
-          error.failure.phase === "prepare" &&
-          !isRetryableFailure(error.failure) &&
-          /cannot encode audio/.test(error.failure.message),
-      );
-      let opened = false;
-      await assert.rejects(
-        exportTimeline({
-          engine: {},
-          project: { sources: [{ id: "voice", kind: "audio" }] },
-          doc: {
-            settings: {
-              width: 64,
-              height: 36,
-              fpsNum: 30,
-              fpsDen: 1,
-              sampleRate: sampleRate + 1,
-            },
-          },
-          library: { get: () => ({ hasAudio: true }) },
-          range: { start: 0, end: 1 },
-          options: { includeAudio: true, audioQuality: freshBitrate() },
-          openOutput: async () => {
-            opened = true;
-            throw new Error("opened the output");
-          },
-        }),
-        (error) => error.failure?.code === "INVALID_INPUT",
-      );
-      assert.equal(opened, false);
+      audioEncoder(["mp4a", "opus"]);
+      assert.deepEqual(await chooseAudioCodec(48_000, freshBitrate()), {
+        codec: "aac",
+        sampleRate: 48_000,
+      });
+      audioEncoder(["opus"]);
+      assert.deepEqual(await chooseAudioCodec(44_100, freshBitrate()), {
+        codec: "opus",
+        sampleRate: 44_100,
+      });
     } finally {
       audioEncoder(null);
     }
-  }
-});
+  },
+);
+
+test(
+  "the audio codec is chosen among the container's, or is the one asked for",
+  { skip },
+  async () => {
+    try {
+      audioEncoder(["mp4a", "opus"]);
+      for (const [container, codec] of [
+        ["mp4", "aac"],
+        ["mkv", "aac"],
+        ["mov", "aac"],
+        ["webm", "opus"],
+      ])
+        assert.equal(
+          (await chooseAudioCodec(48_000, freshBitrate(), { container })).codec,
+          codec,
+          container,
+        );
+      assert.equal(
+        (
+          await chooseAudioCodec(48_000, freshBitrate(), {
+            container: "mp4",
+            codec: "opus",
+          })
+        ).codec,
+        "opus",
+      );
+      // Firefox on Linux has no AAC encoder. MKV falls back to Opus; MOV has no alternative, and an
+      // AAC requested by name is not swapped for another codec.
+      audioEncoder(["opus"]);
+      assert.equal(
+        (await chooseAudioCodec(48_000, freshBitrate(), { container: "mkv" }))
+          .codec,
+        "opus",
+      );
+      for (const request of [
+        { container: "mov" },
+        { container: "mp4", codec: "aac" },
+      ])
+        await assert.rejects(
+          chooseAudioCodec(48_000, freshBitrate(), request),
+          (error) =>
+            error.failure?.code === "INVALID_INPUT" &&
+            error.failure.phase === "prepare" &&
+            new RegExp(
+              `cannot encode audio for ${request.container} \\(AAC,`,
+            ).test(error.failure.message),
+        );
+    } finally {
+      audioEncoder(null);
+    }
+  },
+);
+
+test(
+  "a project rate the browser's encoder does not take is exported at the rate a native host would pick",
+  { skip },
+  async () => {
+    try {
+      // Chrome on macOS: AAC at 44.1 and 48 kHz only. The mix converts to the next rate up, or to the
+      // highest below.
+      audioEncoder([["mp4a", [44_100, 48_000]]]);
+      assert.deepEqual(await chooseAudioCodec(22_051, freshBitrate()), {
+        codec: "aac",
+        sampleRate: 44_100,
+      });
+      assert.deepEqual(await chooseAudioCodec(96_001, freshBitrate()), {
+        codec: "aac",
+        sampleRate: 48_000,
+      });
+      audioEncoder([["opus", [8_000, 12_000, 16_000, 24_000, 48_000]]]);
+      assert.deepEqual(await chooseAudioCodec(22_052, freshBitrate()), {
+        codec: "opus",
+        sampleRate: 24_000,
+      });
+    } finally {
+      audioEncoder(null);
+    }
+  },
+);
+
+test(
+  "an export with audio is refused before it renders where the browser can encode no audio",
+  { skip },
+  async () => {
+    for (const [encoder, sampleRate] of [
+      [null, 32_000],
+      [[], 24_000],
+    ]) {
+      audioEncoder(encoder);
+      try {
+        await assert.rejects(
+          chooseAudioCodec(sampleRate, freshBitrate()),
+          (error) =>
+            error.failure?.code === "INVALID_INPUT" &&
+            error.failure.phase === "prepare" &&
+            !isRetryableFailure(error.failure) &&
+            /cannot encode audio/.test(error.failure.message),
+        );
+        let opened = false;
+        await assert.rejects(
+          exportTimeline({
+            engine: {},
+            project: { sources: [{ id: "voice", kind: "audio" }] },
+            doc: {
+              settings: {
+                width: 64,
+                height: 36,
+                fpsNum: 30,
+                fpsDen: 1,
+                sampleRate: sampleRate + 1,
+              },
+            },
+            library: { get: () => ({ hasAudio: true }) },
+            range: { start: 0, end: 1 },
+            options: { includeAudio: true, audioQuality: freshBitrate() },
+            openOutput: async () => {
+              opened = true;
+              throw new Error("opened the output");
+            },
+          }),
+          (error) => error.failure?.code === "INVALID_INPUT",
+        );
+        assert.equal(opened, false);
+      } finally {
+        audioEncoder(null);
+      }
+    }
+  },
+);
 
 async function finished(output) {
   const writer = output.destination.writable.getWriter();

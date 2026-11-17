@@ -2179,6 +2179,17 @@ fn status_answers_at_once_while_an_export_runs() {
         "videoCodec": "mpeg4-part2",
         "output": output
     });
+    let renderer = if create_host(VideoDecodePolicy::Software)
+        .expect("host")
+        .device()
+        .renderer
+        .gpu()
+        .is_some()
+    {
+        "gpu"
+    } else {
+        "cpu"
+    };
     let mut serving = ServeChild::start(SERVE_CHILD, &[("ALPHA2_TEST_SLOW_ENCODE_MS", "100")]);
     assert_eq!(serving.message(Duration::from_secs(30))["state"], "ready");
     serving.write(&export.to_string());
@@ -2192,12 +2203,8 @@ fn status_answers_at_once_while_an_export_runs() {
     assert_eq!(status["hostState"], "ready", "{status}");
     assert_eq!(status["result"]["state"], "ready", "{status}");
     assert_eq!(status["result"]["details"]["activity"], "busy", "{status}");
-    assert!(
-        ["gpu", "cpu"].contains(
-            &status["result"]["details"]["renderer"]
-                .as_str()
-                .unwrap_or("")
-        ),
+    assert_eq!(
+        status["result"]["details"]["renderer"], renderer,
         "{status}"
     );
     serving.write(
@@ -2308,6 +2315,15 @@ fn concurrent_requests_hold_their_own_definition_of_one_effect() {
     };
     // The CPU renderer refuses runtime effects but holds them the same way.
     let gpu = device.renderer.gpu().is_some();
+    let usable = |request: &Host| {
+        let used = request.require_effect("test.isolated", 1);
+        if gpu {
+            assert_eq!(used, Ok(()));
+        } else {
+            let refusal = used.expect_err("refused on the CPU");
+            assert!(refusal.contains("no CPU implementation"), "{refusal}");
+        }
+    };
     let mut first = Host::for_request(std::sync::Arc::clone(&device));
     first
         .register_request_effects(vec![effect(red)])
@@ -2334,6 +2350,8 @@ fn concurrent_requests_hold_their_own_definition_of_one_effect() {
         .register_request_effects(vec![effect(red)])
         .expect("the same definition is shared at once");
     assert_eq!(body(&device).as_deref(), gpu.then_some(red));
+    usable(&first);
+    usable(&sharing);
     drop(first);
     assert!(registered.recv_timeout(Duration::from_millis(300)).is_err());
     drop(sharing);
@@ -2342,9 +2360,14 @@ fn concurrent_requests_hold_their_own_definition_of_one_effect() {
         .expect("registered once the first definition is released");
     let second = waiting.join().expect("join");
     assert_eq!(body(&device).as_deref(), gpu.then_some(blue));
+    usable(&second);
     drop(second);
     let mut plain = Host::for_request(std::sync::Arc::clone(&device));
     plain.register_request_effects(Vec::new()).expect("none");
+    let unasked = plain
+        .require_effect("test.isolated", 1)
+        .expect_err("a request that did not define it");
+    assert!(unasked.contains("unregistered effect"), "{unasked}");
     assert_eq!(
         body(&device),
         None,

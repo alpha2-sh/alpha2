@@ -4,8 +4,6 @@ on:
   pull_request:
   push:
     branches: [main, "prerelease-v*"]
-  schedule:
-    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       jobs:
@@ -115,9 +113,16 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -177,16 +182,29 @@ jobs:
           key: ${{ matrix.features }}
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_LINK_MODE=dynamic"
             echo "LD_LIBRARY_PATH=$sdk_root/lib"
           } >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-tools
+          key: ffmpeg-tools-linux-x64-${{ hashFiles('release/ffmpeg-tools/manifest.toml', 'scripts/fetch-ffmpeg-tools.sh') }}
       - name: Pin the FFmpeg tools the container tests compare against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-tools
         run: |
           tools="$(scripts/fetch-ffmpeg-tools.sh linux-x64)"
           {
@@ -231,9 +249,16 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -295,9 +320,16 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -381,9 +413,16 @@ jobs:
           key: openh264
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -468,7 +507,7 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',cpu-renderer,') }}
     name: CPU renderer
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 70
     env:
       ALPHA2_REQUIRE: ""
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
@@ -479,10 +518,11 @@ jobs:
         run: |
           echo "image: $ImageOS $ImageVersion"
           rustc --version
-      - name: Install native media build dependencies
+      - name: Install native media build dependencies and the distro FFmpeg
         run: >-
           sudo apt-get update && sudo apt-get install --yes
           libasound2-dev pkg-config clang mesa-vulkan-drivers
+          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -493,9 +533,16 @@ jobs:
           key: cpu-renderer
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -532,6 +579,19 @@ jobs:
           assert result["frames"] == 36, result["frames"]
           EOF
           done
+      - name: The host links the pinned FFmpeg, not the distro's
+        run: |
+          shopt -s inherit_errexit
+          linked="$(ldd target/release/alpha2-host | grep -E 'libav(codec|format|util)|libsw(resample|scale)')"
+          echo "$linked"
+          if grep -v "=> $LD_LIBRARY_PATH/" <<< "$linked"; then
+            echo "alpha2-host links an FFmpeg library outside the pinned SDK" >&2
+            exit 1
+          fi
+      - name: The host suite without extensions or hardware video, on the CPU renderer
+        env:
+          ALPHA2_RENDERER: cpu
+        run: cargo test --release -p alpha2-host --no-default-features --no-fail-fast
       - name: Skips this run recorded
         if: always()
         shell: bash
@@ -594,9 +654,16 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -629,9 +696,16 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK the bridge builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -682,7 +756,7 @@ jobs:
   fuzz-check:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',fuzz-check,') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provenance
@@ -699,6 +773,19 @@ jobs:
           save-if: ${{ env.SAVE_RUST_CACHE }}
       - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - run: cargo clippy --manifest-path fuzz/Cargo.toml --locked --bins -- -D warnings
+      - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
+        with:
+          tool: cargo-fuzz@0.12.0
+      - name: Build and briefly run one fuzz target
+        run: scripts/fuzz.sh 60 evaluate
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: fuzz-check-evaluate
+          path: |
+            fuzz/artifacts/evaluate
+            fuzz/logs/evaluate.log
+          if-no-files-found: ignore
 
   plugins-check:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',plugins-check,') }}
@@ -760,9 +847,16 @@ jobs:
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         run: brew install pkg-config
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           if [ "${{ runner.os }}" = Windows ]; then
             sdk_root="$(cygpath -m "$sdk_root")"
             {
@@ -1107,7 +1201,7 @@ jobs:
     name: Native tests (${{ matrix.target }}, software adapter)
     needs: changes
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 110
     strategy:
       fail-fast: false
       matrix:
@@ -1140,9 +1234,16 @@ jobs:
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         run: brew install pkg-config
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           if [ "${{ runner.os }}" = Windows ]; then
             sdk_root="$(cygpath -m "$sdk_root")"
             {
@@ -1277,9 +1378,16 @@ jobs:
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         run: brew install pkg-config
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           if [ "${{ runner.os }}" = Windows ]; then
             sdk_root="$(cygpath -m "$sdk_root")"
             {
@@ -1625,7 +1733,7 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser,') }}
     needs: release-wasm
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       ALPHA2_REQUIRE: browser,wasm,webgpu,webgl2,webcodecs-audio,webcodecs-video,browser-gpu-process
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
@@ -1833,9 +1941,16 @@ jobs:
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         run: brew install pkg-config
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           if [ "${{ runner.os }}" = Windows ]; then
             sdk_root="$(cygpath -m "$sdk_root")"
             {

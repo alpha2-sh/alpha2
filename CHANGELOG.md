@@ -128,6 +128,10 @@ All notable changes to this project are documented in this file.
 - Builds link the pinned FFmpeg ahead of system library directories. A bundled archive's FFmpeg
   libraries may be replaced only by a build of the same 8.1.x series and configuration, and
   hardware interop is off when the loaded libavutil is another minor release.
+- An editor import refused because this browser decodes none of a video is `unsupported_media`, as
+  an HDR import or an export refused for the same reason is, and its `cause` is a
+  `DecodeUnavailableError` (`DECODE_UNAVAILABLE`, with the track's `facts`); it was
+  `unreadable_media` with the browser's error.
 
 ### Fixed
 
@@ -186,6 +190,10 @@ All notable changes to this project are documented in this file.
   and media elements are bounded, and preview audio failures stay with their lane.
 - H.264 levels account for macroblocks per second, not only frame size.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.
+- `sha256Blob` hashes in pieces sized to about 2 ms at the measured rate instead of fixed 1 MiB
+  pieces, so the page stays responsive on slow machines.
+- OpenEXR sources are read with exr 1.74.3, which no longer panics on damaged B44 blocks or reserves
+  unbounded memory for damaged DWA data.
 
 ## [0.5.3] - 2026-11-04
 

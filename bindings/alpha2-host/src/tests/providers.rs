@@ -373,6 +373,9 @@ fn sources_are_refused_exactly_when_the_build_has_no_provider_for_them() {
     )
     .expect("request");
     let read = extension_sources_read();
+    if cfg!(feature = "extensions") {
+        assert!(read.iter().all(|(_, read)| *read), "{read:?}");
+    }
     let result = host.handle(request, &mut |_| Ok(()));
     if read.iter().all(|(_, read)| *read) {
         result.expect("every source has a provider");

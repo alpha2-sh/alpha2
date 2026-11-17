@@ -1,11 +1,12 @@
-import test from "node:test";
 import assert from "node:assert/strict";
 import { createEditor } from "../dist/index.js";
-import {
-  ResourceRegistry,
-  ExportJob,
-  createBrowserBridge,
-} from "../dist/browser/index.js";
+import { testUnless, wasmSkip } from "./support/wasm.mjs";
+
+const skip = wasmSkip(import.meta.url);
+const test = testUnless(skip);
+const { ResourceRegistry, ExportJob, createBrowserBridge } = skip
+  ? {}
+  : await import("../dist/browser/index.js");
 const deferred = () => {
   let resolve;
   const promise = new Promise((r) => {

@@ -1,10 +1,6 @@
 use super::*;
 
-fn corpus(name: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/corpus")
-        .join(name)
-}
+use alpha2_test_support::corpus;
 
 /// A relative name with a colon is not taken for a protocol.
 #[test]

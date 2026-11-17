@@ -207,8 +207,9 @@ export class AssetLibrary {
 
   /**
    * Imports one browser file as an image, video or audio asset. Rejects with an `EditorError`:
-   * `unsupported_media` for a file that is none of those, `unreadable_media` when this browser
-   * cannot read it (with the decoder's or demuxer's reason as message and `cause`), or with
+   * `unsupported_media` for a file that is none of those or a video this browser decodes none of
+   * (its `cause` a `DecodeUnavailableError` with the track's `facts`), `unreadable_media` when this
+   * browser cannot read it (with the decoder's or demuxer's reason as message and `cause`), or with
    * `signal`'s reason once it aborts a decode.
    */
   async importFile(file, { signal } = {}) {
@@ -240,13 +241,22 @@ export class AssetLibrary {
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
       if (error instanceof EditorError) throw error;
+      const facts = probe?.video?.facts;
+      const refused =
+        as === "video" && facts && !probe.video.decodable && undecodable(error)
+          ? new DecodeUnavailableError(
+              decodeRefusalMessage(file.name, facts),
+              facts,
+              { cause: error },
+            )
+          : null;
       throw new EditorError(
-        "unreadable_media",
-        `Cannot read ${file.name} as ${as}: ${importFailureReason(error, as, probe?.video?.facts)}`,
+        refused ? "unsupported_media" : "unreadable_media",
+        `Cannot read ${file.name} as ${as}: ${importFailureReason(error, as, facts)}`,
         "import",
         undefined,
         true,
-        { cause: error },
+        { cause: refused ?? error },
       );
     }
   }
@@ -619,23 +629,31 @@ export async function probeVideo(file) {
 const MEDIA_ERR_DECODE = 3;
 const MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
 
+function mediaOrBrowserError(error) {
+  return (
+    (typeof DOMException !== "undefined" && error instanceof DOMException) ||
+    (!(error instanceof Error) && typeof error?.code === "number")
+  );
+}
+
+function undecodable(error) {
+  if (!mediaOrBrowserError(error)) return false;
+  return (
+    (typeof DOMException !== "undefined" && error instanceof DOMException) ||
+    error?.code === MEDIA_ERR_DECODE ||
+    error?.code === MEDIA_ERR_SRC_NOT_SUPPORTED
+  );
+}
+
 /**
  * Why an import failed, in this editor's words. Browser error text (`MediaError`, decoder
  * `DOMException`) exposes engine internals, so it is never shown and stays the error's cause.
  * `facts` describe the video track when the probe read one.
  */
 export function importFailureReason(error, kind, facts) {
-  const browserError =
-    typeof DOMException !== "undefined" && error instanceof DOMException;
-  const mediaError =
-    !(error instanceof Error) && typeof error?.code === "number";
-  if (!mediaError && !browserError && error instanceof Error)
+  if (!mediaOrBrowserError(error) && error instanceof Error)
     return error.message;
-  const undecodable =
-    browserError ||
-    error?.code === MEDIA_ERR_DECODE ||
-    error?.code === MEDIA_ERR_SRC_NOT_SUPPORTED;
-  if (!undecodable) return `this browser could not read the ${kind}`;
+  if (!undecodable(error)) return `this browser could not read the ${kind}`;
   if (kind !== "video" || !facts)
     return `this browser cannot decode this ${kind}`;
   const details = pictureDetails(facts);

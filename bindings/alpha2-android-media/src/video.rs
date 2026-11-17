@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use alpha2_container::{Packet, TrackInfo, VideoCodec};
-use alpha2_host_core::parameter_sets::vp9_format;
+use alpha2_host_core::parameter_sets::{ParameterSetCodec, sequence_facts, vp9_format};
 use alpha2_host_core::video_stream::{
     BackendError, BackendFrame, BackendImage, BackendKind, Poll, Submit, VideoBackends,
     VideoDecodeBackend,
@@ -210,6 +210,8 @@ fn plane_bytes(
 /// Whether the track's configuration record declares more than 8 bits per sample.
 fn high_bit_depth(codec: VideoCodec, record: &[u8]) -> bool {
     match codec {
+        VideoCodec::H264 => sequence_facts(ParameterSetCodec::H264, record)
+            .is_some_and(|facts| facts.bit_depth_luma > 8),
         // `hvcC`: bitDepthLumaMinus8 in the low three bits of byte 17.
         VideoCodec::Hevc => record.get(17).is_some_and(|byte| byte & 7 > 0),
         // `av1C`: high_bitdepth is bit 6 of byte 2.

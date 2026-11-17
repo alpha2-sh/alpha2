@@ -6,32 +6,18 @@ import {
 import { register } from "node:module";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createEditor, createEmptyDocument } from "../dist/index.js";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
 register("./support/gated-wasm-hook.mjs", import.meta.url);
+const skip = wasmSkip(import.meta.url);
 // Loaded after the module hooks are registered, which a static import would precede.
-const { createBrowserBridge } = await import("../dist/browser/index.js");
-
-const wasmDirectory = join(
-  resolve(import.meta.dirname, "..", ".."),
-  "alpha2",
-  "wasm",
-);
-const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-const skip =
-  !packaged &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const { createBrowserBridge } = skip
+  ? {}
+  : await import("../dist/browser/index.js");
 
 let wasm = null;
 async function engineWasm() {

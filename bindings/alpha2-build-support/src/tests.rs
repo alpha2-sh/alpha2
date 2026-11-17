@@ -272,6 +272,31 @@ fn version_headers_are_found_under_each_include_directory() {
 }
 
 #[test]
+#[cfg(unix)]
+fn the_libdir_is_searched_through_a_link_in_out_dir() {
+    let root = std::env::temp_dir().join(format!("alpha2-libdir-link-{}", std::process::id()));
+    let (out, sdk, other) = (
+        root.join("out"),
+        root.join("sdk/lib"),
+        root.join("other/lib"),
+    );
+    for directory in [&out, &sdk, &other] {
+        std::fs::create_dir_all(directory).expect("directory");
+    }
+    std::fs::write(sdk.join("libavcodec.so"), "").expect("library");
+    std::os::unix::fs::symlink(&other, out.join("ffmpeg-lib")).expect("stale link");
+    for _ in 0..2 {
+        let link = libdir_link(&out, &sdk).expect("link");
+        assert!(link.starts_with(&out), "{}", link.display());
+        assert!(link.join("libavcodec.so").is_file());
+        std::fs::remove_file(&link).expect("link");
+        std::fs::create_dir(&link).expect("directory");
+    }
+    assert!(libdir_link(&out, &root.join("missing")).is_err());
+    std::fs::remove_dir_all(&root).expect("cleanup");
+}
+
+#[test]
 fn the_directive_is_a_linker_argument_for_this_package() {
     assert_eq!(
         rpath_directives(Path::new("/sdk/lib")),

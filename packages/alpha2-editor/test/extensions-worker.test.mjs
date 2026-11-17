@@ -4,28 +4,30 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import * as browser from "../dist/browser/index.js";
-// Read off the namespace so each test, not the file, fails against a build without them.
-const { createMediaAdapter, EXTENSIONS_CALL_TIMEOUT_MS } = browser;
-const installExtensionsWorker = browser.installExtensionsWorker ?? (() => {});
-const { callExtensions } =
-  await import("../dist/browser/extensions-worker.js").catch(() => ({}));
 import { refusedProviderFiles } from "../../../scripts/lib/extension-import-fixtures.mjs";
 import {
   missingCapability,
   suiteOf,
 } from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
-const wasmDirectory = join(root, "packages", "alpha2", "wasm");
 const corpus = join(root, "tests", "corpus", "extensions");
 const skip =
-  !existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")) &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the extension wasm package is not built",
-  );
+  wasmSkip(import.meta.url) ||
+  (!existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")) &&
+    missingCapability(
+      "wasm",
+      suiteOf(import.meta.url),
+      "the extension wasm package is not built",
+    ));
+
+const browser = skip ? {} : await import("../dist/browser/index.js");
+// Read off the namespace so each test, not the file, fails against a build without them.
+const { createMediaAdapter, EXTENSIONS_CALL_TIMEOUT_MS } = browser;
+const installExtensionsWorker = browser.installExtensionsWorker ?? (() => {});
+const { callExtensions } =
+  await import("../dist/browser/extensions-worker.js").catch(() => ({}));
 
 globalThis.ImageData ??= class {
   constructor(data, width, height) {
@@ -167,28 +169,32 @@ test(
   },
 );
 
-test("a call past its time limit terminates its worker and fails as provider_stalled", async () => {
-  const { factory, made } = fakeWorkers({ silent: true });
-  assert.equal(EXTENSIONS_CALL_TIMEOUT_MS, 40_000);
-  const started = performance.now();
-  await assert.rejects(
-    callExtensions(
-      { factory },
-      { call: "read", file: new File([new Uint8Array(8)], "slow.json") },
-      { timeoutMs: 50 },
-    ),
-    (error) =>
-      error.name === "EditorError" &&
-      error.code === "provider_stalled" &&
-      error.failureCode === "RESOURCE_LIMIT" &&
-      /^slow\.json took the extension provider more than 0\.05 s to read/.test(
-        error.message,
+test(
+  "a call past its time limit terminates its worker and fails as provider_stalled",
+  { skip },
+  async () => {
+    const { factory, made } = fakeWorkers({ silent: true });
+    assert.equal(EXTENSIONS_CALL_TIMEOUT_MS, 40_000);
+    const started = performance.now();
+    await assert.rejects(
+      callExtensions(
+        { factory },
+        { call: "read", file: new File([new Uint8Array(8)], "slow.json") },
+        { timeoutMs: 50 },
       ),
-  );
-  // The call's own 50 ms limit, not the 40 s default; the slack is for a busy machine.
-  assert.ok(performance.now() - started < 50 + 10_000);
-  assert.equal(made[0].terminated, true);
-});
+      (error) =>
+        error.name === "EditorError" &&
+        error.code === "provider_stalled" &&
+        error.failureCode === "RESOURCE_LIMIT" &&
+        /^slow\.json took the extension provider more than 0\.05 s to read/.test(
+          error.message,
+        ),
+    );
+    // The call's own 50 ms limit, not the 40 s default; the slack is for a busy machine.
+    assert.ok(performance.now() - started < 50 + 10_000);
+    assert.equal(made[0].terminated, true);
+  },
+);
 
 test(
   "a file the provider refuses fails its import as unreadable_media with the provider's reason",

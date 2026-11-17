@@ -2517,6 +2517,8 @@ impl Host {
             started,
             crate::config::configured_stall_timeout(),
         )?;
+        #[cfg(test)]
+        let slow_render = INJECT_SLOW_RENDER.with(std::cell::Cell::take);
 
         // The output's zero is the first frame's start, not the requested start; audio too.
         let effective_range = exporter.effective_range();
@@ -3159,6 +3161,10 @@ impl Host {
             let event_bytes = event
                 .as_ref()
                 .map_or(packed_bytes_per_frame, encode_event_bytes);
+            #[cfg(test)]
+            if let (Some(slow), Some(_)) = (slow_render, video_index) {
+                std::thread::sleep(slow);
+            }
             self.failure
                 .enter(crate::failure::ExportPhase::Encode, video_index);
             let encode_started = Instant::now();
@@ -3738,6 +3744,10 @@ thread_local! {
         const { std::cell::Cell::new(false) };
     /// Counts this many more software-decoded frames in the next export's strict-mode check.
     pub static INJECT_SOFTWARE_FRAMES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Makes the next readback export on this thread spend this long on each video frame before
+    /// handing it to the encoder, as a slow render would.
+    pub static INJECT_SLOW_RENDER: std::cell::Cell<Option<std::time::Duration>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// Joins the encode worker after it reported `Finished`, when the output is in place. A failure

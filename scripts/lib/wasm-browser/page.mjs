@@ -12,9 +12,11 @@ export const LUMA_AT = `async function lumaAt(frame, x, y) {
 }`;
 
 // The skip for the engine's DECODE_UNAVAILABLE when WebCodecs, asked on its own, refuses the
-// track's codec too, or when the refusal's cause is the browser decoder's own exception (a failed
-// trial decode); null otherwise, so a refusal of a codec this browser decodes fails the case. The
-// sample rate is not in the facts and rarely decides support. Kept as source for a Node test.
+// track's codec too; null otherwise, so a refusal of a codec this browser decodes fails the case.
+// A refusal after the browser's decoder threw needs more, since browsers claim layouts they then
+// reject: `globalThis.trialDecodes(facts)` must find the case's own source failing a plain
+// WebCodecs decode. The sample rate is not in the facts and rarely decides support. Kept as source
+// for a Node test.
 export const DECODE_REFUSAL_SKIP = `async function decodeRefusalSkip(error) {
   const facts = error?.code === "DECODE_UNAVAILABLE" ? error.facts : undefined;
   if (!facts?.kind || !facts.codec) return null;
@@ -22,16 +24,77 @@ export const DECODE_REFUSAL_SKIP = `async function decodeRefusalSkip(error) {
   const config = facts.kind === "audio"
     ? { codec: facts.codec, sampleRate: 48000, numberOfChannels: facts.channels ?? 2 }
     : { codec: facts.codec };
-  const decodes = error.cause === undefined && (decoder
+  const supported = decoder
     ? await decoder.isConfigSupported(config).then(({ supported }) => supported === true, () => false)
-    : false);
-  if (decodes) return null;
+    : false;
+  if (supported && (error.cause === undefined || (await globalThis.trialDecodes?.(facts)) !== false))
+    return null;
   return {
     skipped: "this browser does not decode the case's source (WebCodecs refuses " + facts.codec + "): "
       + String(error.message ?? error),
     capability: facts.kind === "audio" ? "webcodecs-audio" : "webcodecs-video",
   };
 }`;
+
+// Whether a media file the page fetched has a track matching `facts` whose first packets decode
+// with plain WebCodecs: true if one does, false if every match fails, undefined with no match.
+const TRIAL_DECODES = `const fetchedMedia = new Set();
+const pageFetch = globalThis.fetch.bind(globalThis);
+globalThis.fetch = (resource, ...rest) => {
+  const url = new URL(resource instanceof Request ? resource.url : String(resource), location.href);
+  if (/\\.(mp4|m4a|mov|mkv|webm|ogg|opus|mp3|wav|flac)$/i.test(url.pathname)) fetchedMedia.add(url.href);
+  return pageFetch(resource, ...rest);
+};
+const trialDecode = async (track, kind) => {
+  const { EncodedPacketSink } = await import("mediabunny");
+  const config = await track.getDecoderConfig();
+  if (config === null) return false;
+  const packets = [];
+  for await (const packet of new EncodedPacketSink(track).packets()) {
+    packets.push(packet);
+    if (packets.length === 4) break;
+  }
+  let decoded = false;
+  let failed = false;
+  const Decoder = kind === "audio" ? AudioDecoder : VideoDecoder;
+  const decoder = new Decoder({
+    output: (output) => { decoded = true; output.close(); },
+    error: () => { failed = true; },
+  });
+  try {
+    decoder.configure(config);
+    for (const packet of packets)
+      decoder.decode(kind === "audio" ? packet.toEncodedAudioChunk() : packet.toEncodedVideoChunk());
+    await decoder.flush();
+  } catch {
+    failed = true;
+  } finally {
+    if (decoder.state !== "closed") decoder.close();
+  }
+  return decoded && !failed;
+};
+globalThis.trialDecodes = async (facts) => {
+  const { ALL_FORMATS, BlobSource, Input } = await import("mediabunny");
+  let answer;
+  for (const url of fetchedMedia) {
+    const input = new Input({ source: new BlobSource(await (await pageFetch(url)).blob()), formats: ALL_FORMATS });
+    try {
+      const tracks = facts.kind === "audio" ? await input.getAudioTracks() : await input.getVideoTracks();
+      for (const track of tracks) {
+        const codecs = [track.codec, await track.getCodecParameterString().catch(() => null)];
+        if (!codecs.includes(facts.codec)) continue;
+        if (facts.channels !== undefined && track.numberOfChannels !== facts.channels) continue;
+        if (await trialDecode(track, facts.kind)) return true;
+        answer = false;
+      }
+    } catch {
+      // A file mediabunny does not read is not the refused source.
+    } finally {
+      input.dispose();
+    }
+  }
+  return answer;
+};`;
 
 // Also resolves the "alpha2/..." imports of packages/alpha2-editor/dist.
 export function page(body, videoImport = false) {
@@ -133,6 +196,7 @@ const webgpuAdapter = (engine) => {
     skip("webgpu", "the engine runs on " + (backend || "no backend") + ", not WebGPU", { adapter: { name, backend } });
   return { name, backend };
 };
+${TRIAL_DECODES}
 ${DECODE_REFUSAL_SKIP}
 const offersGpu = async () =>
   Boolean(await navigator.gpu?.requestAdapter().catch(() => null)) ||

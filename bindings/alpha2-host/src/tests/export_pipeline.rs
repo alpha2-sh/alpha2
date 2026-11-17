@@ -593,6 +593,7 @@ fn the_steady_rate_follows_the_encoder_and_leaves_out_set_up_and_finish() {
     let end = 2 * alpha2_time::TICKS_PER_SECOND;
     let slow = Duration::from_millis(40);
     crate::encode::INJECT_SLOW_ENCODE.with(|injected| injected.set(Some(slow)));
+    crate::host::INJECT_SLOW_RENDER.with(|injected| injected.set(Some(Duration::from_millis(30))));
     let request = json!({
         "protocolVersion": 2, "operation": "export", "requestId": "steady-rate",
         "project": {
@@ -632,10 +633,22 @@ fn the_steady_rate_follows_the_encoder_and_leaves_out_set_up_and_finish() {
         "steady {steady:.1} fps against the encoder's {encoder:.1} fps"
     );
     // Without set-up and finish the rate is at least the whole export's.
-    let overall = 60.0 / (result["renderMs"].as_f64().expect("renderMs") / 1000.0);
+    let render_ms = result["renderMs"].as_f64().expect("renderMs");
+    let overall = 60.0 / (render_ms / 1000.0);
     assert!(
         steady >= overall,
         "steady {steady:.1} fps below the whole export's {overall:.1} fps"
+    );
+    let performance = &result["performance"];
+    let number = |key: &str| performance[key].as_f64().expect(key);
+    let encode = number("videoEncodeMs") / 60.0;
+    let handoffs = render_ms - number("finishMs") - number("firstFrameMs");
+    let render = (handoffs - number("encodeQueueWaitMs")) / 59.0;
+    let halfway_to_in_turn = 1000.0 / (encode.max(render) + encode.min(render) / 2.0);
+    assert!(
+        steady >= halfway_to_in_turn,
+        "steady {steady:.1} fps below {halfway_to_in_turn:.1} fps: encode {encode:.1} ms and render \
+         {render:.1} ms per frame do not overlap: {performance}"
     );
 }
 

@@ -1,29 +1,17 @@
 // Workers are faked here: the entry's handler runs in this thread, with messages crossing as tasks.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { sha256Blob } from "alpha2/assets";
 
-import {
-  createMediaAdapter,
-  hashInWorker,
-  installHashWorker,
-} from "../dist/browser/index.js";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
-const wasmDirectory = join(root, "packages", "alpha2", "wasm");
-const skip =
-  !existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")) &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const skip = wasmSkip(import.meta.url);
+const { createMediaAdapter, hashInWorker, installHashWorker } = skip
+  ? {}
+  : await import("../dist/browser/index.js");
 
 /** A fake hash worker; `broken` never loads its script, `answer` replaces what it posts back. */
 function fakeWorker({ broken = false, answer } = {}) {
@@ -62,46 +50,60 @@ function fakeWorker({ broken = false, answer } = {}) {
 const bytes = new Uint8Array(3 * 1024 * 1024).map((_, index) => index * 7);
 const file = new File([bytes], "clip.mov");
 
-test("a file is hashed in the worker the factory makes, and the worker ends with the hash", async () => {
-  const expected = await sha256Blob(file);
-  const workers = [];
-  const progress = [];
-  const sha256 = await hashInWorker(
-    () => {
-      const worker = fakeWorker();
-      workers.push(worker);
-      return worker;
-    },
-    file,
-    { onProgress: (read) => progress.push(read) },
-  );
-  assert.equal(sha256, expected);
-  assert.equal(workers.length, 1);
-  assert.deepEqual(workers[0].posted, ["hash"]);
-  assert.equal(workers[0].terminated, true);
-  assert.equal(progress.at(-1), file.size);
-});
+test(
+  "a file is hashed in the worker the factory makes, and the worker ends with the hash",
+  { skip },
+  async () => {
+    const expected = await sha256Blob(file);
+    const workers = [];
+    const progress = [];
+    const sha256 = await hashInWorker(
+      () => {
+        const worker = fakeWorker();
+        workers.push(worker);
+        return worker;
+      },
+      file,
+      { onProgress: (read) => progress.push(read) },
+    );
+    assert.equal(sha256, expected);
+    assert.equal(workers.length, 1);
+    assert.deepEqual(workers[0].posted, ["hash"]);
+    assert.equal(workers[0].terminated, true);
+    assert.equal(progress.at(-1), file.size);
+  },
+);
 
-test("a cancelled hash terminates its worker and rejects with the reason", async () => {
-  const controller = new AbortController();
-  let worker;
-  const pending = hashInWorker(
-    () =>
-      (worker = fakeWorker({ answer: () => ({ type: "progress", bytes: 1 }) })),
-    file,
-    { signal: controller.signal },
-  );
-  controller.abort(new Error("import cancelled"));
-  await assert.rejects(pending, { message: "import cancelled" });
-  assert.equal(worker.terminated, true);
-});
+test(
+  "a cancelled hash terminates its worker and rejects with the reason",
+  { skip },
+  async () => {
+    const controller = new AbortController();
+    let worker;
+    const pending = hashInWorker(
+      () =>
+        (worker = fakeWorker({
+          answer: () => ({ type: "progress", bytes: 1 }),
+        })),
+      file,
+      { signal: controller.signal },
+    );
+    controller.abort(new Error("import cancelled"));
+    await assert.rejects(pending, { message: "import cancelled" });
+    assert.equal(worker.terminated, true);
+  },
+);
 
-test("a worker that cannot start leaves the hash to the page's thread", async () => {
-  assert.equal(
-    await hashInWorker(() => fakeWorker({ broken: true }), file),
-    await sha256Blob(file),
-  );
-});
+test(
+  "a worker that cannot start leaves the hash to the page's thread",
+  { skip },
+  async () => {
+    assert.equal(
+      await hashInWorker(() => fakeWorker({ broken: true }), file),
+      await sha256Blob(file),
+    );
+  },
+);
 
 test(
   "the default adapter hashes an imported file in the worker the host provides",

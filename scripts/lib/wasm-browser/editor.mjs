@@ -9,19 +9,28 @@ const sha256 = async (bytes) => [...new Uint8Array(await crypto.subtle.digest("S
   .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 const codeOf = (promise) => promise.then(() => "resolved", (error) => error?.code ?? String(error));
 const { ALL_FORMATS, BlobSource, Input } = await import("mediabunny");
-// Skips, as the extraction cases do, where this browser decodes none of the clip's video.
 const importVideo = async (bridge, bytes) => {
   const input = new Input({ source: new BlobSource(bytes), formats: ALL_FORMATS });
+  let codec = "no video track";
+  let decodes = false;
   try {
     const track = await input.getPrimaryVideoTrack();
-    if (!(await track?.canDecode()))
-      skip("webcodecs-video", "this browser does not decode the case's source: "
-        + ((await track?.getCodecParameterString()) ?? "no video track"));
+    codec = (await track?.getCodecParameterString()) ?? codec;
+    const config = (await track?.canDecode()) ? await track.getDecoderConfig() : null;
+    decodes = config !== null && (await VideoDecoder.isConfigSupported({
+      ...config, hardwareAcceleration: "prefer-software",
+    })).supported === true;
   } finally {
     input.dispose();
   }
-  const { assetIds } = await bridge.importFiles([new File([bytes], "clip.mp4", { type: "video/mp4" })]);
-  return assetIds[0];
+  try {
+    const { assetIds } = await bridge.importFiles([new File([bytes], "clip.mp4", { type: "video/mp4" })]);
+    return assetIds[0];
+  } catch (error) {
+    if (!decodes && error?.cause?.code === "DECODE_UNAVAILABLE")
+      skip("webcodecs-video", "this browser does not decode the case's source: " + codec);
+    throw error;
+  }
 };
 `;
 
@@ -117,6 +126,24 @@ report({
   ok: put.ok && stale.length === 1 && stale[0].data === "old" && stale[0].source === id
     && stale[0].fields.includes("content"),
   put: put.ok ? true : put.error.message, stale,
+});
+await bridge.dispose();
+`;
+}
+
+export function editorImportUndecodable() {
+  return `${prelude}
+const editor = createEditor();
+const bridge = createBrowserBridge({ editor, runtimeAssets, audio: false });
+const bytes = await (await fetch("/tests/corpus/prores-422-unsited.mov")).blob();
+const caught = await bridge
+  .importFiles([new File([bytes], "clip.mov", { type: "video/quicktime" })])
+  .then(() => null, (error) => error);
+if (caught === null) skip("webcodecs-video", "this browser decodes ProRes");
+report({
+  ok: caught?.code === "unsupported_media" && caught.cause?.code === "DECODE_UNAVAILABLE"
+    && caught.cause.facts?.kind === "video" && Object.keys(editor.document.assets).length === 0,
+  code: caught?.code ?? null, cause: caught?.cause?.code ?? null, facts: caught?.cause?.facts ?? null,
 });
 await bridge.dispose();
 `;

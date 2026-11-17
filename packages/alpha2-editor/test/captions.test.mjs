@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   captionRows,
   captionsAsset,
@@ -12,13 +12,9 @@ import {
   parseDocument,
   serializeDocument,
 } from "../dist/index.js";
-import { createBrowserBridge } from "../dist/browser/index.js";
 import { MAX_CAPTION_FILE_BYTES, MAX_CAPTION_FILE_CUES } from "alpha2/project";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
 import { assertScalesBelow } from "../../../scripts/lib/timing.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
 const cue = (start, end, text) => ({
   timeline_range: { start, end },
@@ -116,20 +112,10 @@ test("a captions asset whose rows are not cues is refused when the document open
   );
 });
 
-const wasmFile = join(
-  resolve(import.meta.dirname, "..", ".."),
-  "alpha2",
-  "wasm",
-  "alpha2_wasm_bg.wasm",
-);
-// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE=wasm fails instead.
-const noWasm =
-  !existsSync(wasmFile) &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const noWasm = wasmSkip(import.meta.url);
+const { createBrowserBridge } = noWasm
+  ? {}
+  : await import("../dist/browser/index.js");
 
 const subtitles = (name, text, size = Buffer.byteLength(text)) => ({
   name,
@@ -151,7 +137,9 @@ test(
     const bridge = createBrowserBridge({
       editor,
       audio: false,
-      runtimeAssets: { wasmUrl: readFileSync(wasmFile) },
+      runtimeAssets: {
+        wasmUrl: readFileSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")),
+      },
     });
     try {
       const cue = "00:00.000 --> 00:01.000\nx\n\n";
