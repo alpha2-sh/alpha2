@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [0.6.0] - 2026-11-17
+## [0.6.0] - 2026-11-18
 
 ### Added
 
@@ -15,8 +15,9 @@ All notable changes to this project are documented in this file.
   on Android by default), and a decoder or encoder session the system takes away in the background
   is replaced. Known limits: the player always draws on a GPU device that presents to its window
   (`RendererMode` governs exports and stills), `conform` reports only whether each source's file
-  opens and ignores `purpose`, and Android codecs are opened by MIME type or a fixed component name,
-  without `MediaCodecList` discovery.
+  opens and ignores `purpose`, Android codecs are opened by MIME type or a fixed component name,
+  without `MediaCodecList` discovery, and Android decodes 10-bit video (H.264, HEVC, AV1) from
+  Android 13 on.
 - `alpha2-container`: MP4/MOV, Matroska/WebM, WAV, MP3, ADTS, FLAC and Ogg demuxers, and MP4 and
   Matroska/WebM muxers, with FFmpeg packet parity and memory and work bounded per file.
 - `alpha2-host-core`: the policies, audio timelines, cursor rules, providers, plugin runtime,
