@@ -14,6 +14,7 @@ import {
   editorAudioLaneFailure,
   editorConformStaleData,
   editorExportUndecodableAudio,
+  editorImportUndecodable,
   pluginEditorExtract,
 } from "./editor.mjs";
 import {
@@ -140,6 +141,7 @@ export const cases = {
   "editor-conform-stale-data": editorConformStaleData,
   "editor-audio-lane-failure": editorAudioLaneFailure,
   "editor-export-undecodable-audio": editorExportUndecodableAudio,
+  "editor-import-undecodable": editorImportUndecodable,
   "webgpu-smoke": () => smoke(false),
   "webgl2-smoke": () => smoke(true),
   "webgl-context-loss": webglContextLoss,

@@ -230,7 +230,7 @@ test("a video the media element refuses imports when WebCodecs decodes it", asyn
   library.dispose();
 });
 
-test("media error text is not shown to the user", async () => {
+test("media error text is not shown to the user, and the refusal carries DECODE_UNAVAILABLE", async () => {
   element = {
     duration: NaN,
     videoWidth: 0,
@@ -247,7 +247,10 @@ test("media error text is not shown to the user", async () => {
         /^Cannot read broken\.mp4 as video: this browser cannot decode H\.264 video/,
       );
       assert.doesNotMatch(error.message, /PIPELINE|VDA/);
-      assert.equal(error.cause, pipelineError);
+      assert.equal(error.cause.code, "DECODE_UNAVAILABLE");
+      assert.equal(error.cause.facts.kind, "video");
+      assert.match(error.cause.facts.codec, /^avc1\./);
+      assert.equal(error.cause.cause, pipelineError);
       return true;
     }),
   );
