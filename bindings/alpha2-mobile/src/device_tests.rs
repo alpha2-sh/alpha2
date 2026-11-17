@@ -1669,6 +1669,8 @@ mod gpu_frames {
 
     use super::tests_dir;
 
+    const CONVERSION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+
     /// A project of `width` x `height` at 30 fps showing source `v` from its start for `frames`
     /// frames.
     pub(super) fn project(width: u32, height: u32, frames: i64) -> String {
@@ -2168,11 +2170,18 @@ mod gpu_frames {
             drop(prepared);
         }
         drop(stream);
-        let alive = surfaces
-            .iter()
-            .filter(|surface| surface.strong_count() > 0)
-            .count();
-        assert_eq!(alive, 0, "decoder buffers still held");
+        let alive = || {
+            surfaces
+                .iter()
+                .filter(|surface| surface.strong_count() > 0)
+                .count()
+        };
+        let deadline = std::time::Instant::now() + CONVERSION_DEADLINE;
+        while alive() > 0 && std::time::Instant::now() < deadline {
+            frames.import.collect();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(alive(), 0, "decoder buffers still held");
     }
 
     #[test]
