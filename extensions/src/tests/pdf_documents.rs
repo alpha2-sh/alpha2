@@ -181,6 +181,30 @@ fn a_page_of_a_billion_form_invocations_is_refused_before_it_is_converted() {
     );
 }
 
+fn with_bad_checksums(mut pdf: Vec<u8>) -> Vec<u8> {
+    let mut from = 0;
+    while let Some(filter) = find(&pdf[from..], b"/FlateDecode").map(|at| from + at) {
+        let end = filter + find(&pdf[filter..], b"\nendstream").expect("the stream ends");
+        pdf[end - 1] ^= 0xff;
+        from = end;
+    }
+    pdf
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+#[test]
+fn a_form_whose_checksum_is_wrong_still_counts_what_it_invokes() {
+    refused_saying(
+        with_bad_checksums(pdf_forms(100, 3, PDF_RECTANGLE)),
+        "the page draws more than 262144",
+    );
+}
+
 #[test]
 fn every_form_invocation_counts_even_of_a_form_that_draws_nothing() {
     open(pdf_forms(46, 3, b"").into(), &pdf_source(1, WHITE)).expect("46^3 invocations open");
