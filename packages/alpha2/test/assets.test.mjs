@@ -280,6 +280,32 @@ test("hashing yields with a task even where scheduler.yield runs ahead of timers
   }
 });
 
+test("on a machine that hashes four times slower, pieces still take a fraction of a slice", async () => {
+  const { sha256Blob } = await import("../dist/assets.js");
+  await sha256Blob(new Blob([new Uint8Array(1 << 20)]));
+  const now = performance.now.bind(performance);
+  Object.defineProperty(performance, "now", {
+    configurable: true,
+    value: () => now() * 4,
+  });
+  const reported = [];
+  try {
+    await sha256Blob(readyBlob(4, 8 << 20), {
+      onProgress: () => reported.push(performance.now()),
+    });
+  } finally {
+    delete performance.now;
+  }
+  const gaps = reported
+    .slice(1)
+    .map((at, index) => at - reported[index])
+    .sort((a, b) => a - b);
+  const median = gaps[Math.floor(gaps.length / 2)];
+  // The slice is 8 ms. A 1 MiB piece takes about 5 ms here, 20 ms on the slowed clock; a piece
+  // sized from the rate takes about 2 ms.
+  assert.ok(median < 4, `the median piece took ${median.toFixed(1)} ms`);
+});
+
 test("a chunk larger than one hashing slice hashes as SHA-256", async () => {
   const { createHash } = await import("node:crypto");
   const { sha256Blob } = await import("../dist/assets.js");
