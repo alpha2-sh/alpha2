@@ -114,9 +114,16 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -176,16 +183,29 @@ jobs:
           key: ${{ matrix.features }}
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_LINK_MODE=dynamic"
             echo "LD_LIBRARY_PATH=$sdk_root/lib"
           } >> "$GITHUB_ENV"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-tools
+          key: ffmpeg-tools-linux-x64-${{ hashFiles('release/ffmpeg-tools/manifest.toml', 'scripts/fetch-ffmpeg-tools.sh') }}
       - name: Pin the FFmpeg tools the container tests compare against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-tools
         run: |
           tools="$(scripts/fetch-ffmpeg-tools.sh linux-x64)"
           {
@@ -230,9 +250,16 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -294,9 +321,16 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -380,9 +414,16 @@ jobs:
           key: openh264
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -492,9 +533,16 @@ jobs:
           key: cpu-renderer
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -593,9 +641,16 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -628,9 +683,16 @@ jobs:
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-linux-x64-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK the bridge builds against
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           {
             echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
             echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
@@ -774,9 +836,16 @@ jobs:
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         run: brew install pkg-config
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           if [ "${{ runner.os }}" = Windows ]; then
             sdk_root="$(cygpath -m "$sdk_root")"
             {
@@ -1154,9 +1223,16 @@ jobs:
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         run: brew install pkg-config
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           if [ "${{ runner.os }}" = Windows ]; then
             sdk_root="$(cygpath -m "$sdk_root")"
             {
@@ -1291,9 +1367,16 @@ jobs:
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         run: brew install pkg-config
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           if [ "${{ runner.os }}" = Windows ]; then
             sdk_root="$(cygpath -m "$sdk_root")"
             {
@@ -1847,9 +1930,16 @@ jobs:
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         run: brew install pkg-config
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ffmpeg-sdk
+          key: ffmpeg-sdk-${{ matrix.target }}-${{ hashFiles('release/ffmpeg-lgpl/manifest.toml', 'scripts/fetch-ffmpeg-sdk.sh') }}
       - name: Pin the FFmpeg SDK
+        env:
+          ALPHA2_FFMPEG_CACHE: ${{ runner.temp }}/ffmpeg-sdk
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          echo "ALPHA2_FFMPEG_CACHE=$ALPHA2_FFMPEG_CACHE" >> "$GITHUB_ENV"
           if [ "${{ runner.os }}" = Windows ]; then
             sdk_root="$(cygpath -m "$sdk_root")"
             {
