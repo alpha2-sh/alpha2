@@ -627,8 +627,8 @@ fn the_surface_table_source_digests_hash_as_pinned() {
                 failures.push(format!("{name}: {found}, pinned {pinned}"));
             }
             Ok(_) => {}
-            // H.264 High 4:4:4 Predictive. A device without its decoder refuses it as unsupported
-            // in its own words (VideoToolbox names the format, MediaCodec the decoder).
+            // 10-bit H.264 High 4:4:4 Predictive, which a device without its decoder refuses as
+            // unsupported.
             Err(error @ crate::Alpha2Error::Unsupported { .. })
                 if name == "digest-source-hdr-pq" =>
             {

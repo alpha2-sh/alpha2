@@ -57,9 +57,6 @@ fn first_picture_decodes(name: &str) -> bool {
 /// The suite's video sessions. The emulator's Codec2 host-backed decoders (`c2.goldfish`) keep
 /// the left columns of a picture whose stream crops columns off the left, and nothing in their
 /// output format tells it apart from a correct crop, so those sessions decode in software here.
-/// Some platform software H.264 decoders and the emulator's OMX host-backed decoder
-/// (`OMX.android.goldfish`) take High 4:4:4 Predictive and deliver a wrong picture without an
-/// error, so the suite refuses that profile on them.
 #[derive(Clone, Copy, Debug, Default)]
 struct SuiteVideo;
 
@@ -70,19 +67,6 @@ impl VideoBackends for SuiteVideo {
         kind: BackendKind,
     ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
         let session = MediaCodecVideo::open(track, kind, VideoOutput::ByteBuffers)?;
-        let high_444 = track.video.as_ref().is_some_and(|video| {
-            video.codec == alpha2_container::VideoCodec::H264
-                && video.codec_private.get(1) == Some(&244)
-        });
-        let wrong_444 = ["c2.android.", "OMX.google.", "OMX.android.goldfish."]
-            .iter()
-            .any(|prefix| session.component().starts_with(prefix));
-        if high_444 && wrong_444 {
-            return Err(BackendError::Unsupported(format!(
-                "{} decodes H.264 High 4:4:4 Predictive to a wrong picture",
-                session.component()
-            )));
-        }
         if session.component().starts_with("c2.goldfish.") {
             return Err(BackendError::Unsupported(format!(
                 "{} crops leading columns off the wrong edge",
@@ -90,6 +74,51 @@ impl VideoBackends for SuiteVideo {
             )));
         }
         Ok(Box::new(session))
+    }
+}
+
+/// Opens sessions of one kind only, so a stream cannot fall back to the other.
+struct OnlyKind(BackendKind);
+
+impl VideoBackends for OnlyKind {
+    fn open(
+        &self,
+        track: &TrackInfo,
+        kind: BackendKind,
+    ) -> Result<Box<dyn VideoDecodeBackend>, BackendError> {
+        if kind != self.0 {
+            return Err(BackendError::Unsupported(format!("not {:?}", self.0)));
+        }
+        Ok(Box::new(MediaCodecVideo::open(
+            track,
+            kind,
+            VideoOutput::ByteBuffers,
+        )?))
+    }
+}
+
+#[test]
+fn ten_bit_h264_is_refused_or_decoded_to_ten_bits() {
+    use alpha2_host_core::video_stream::{StreamOptions, VideoStream};
+    use alpha2_media::{CancelToken, DecodeEvent, Decoder as _, PixelFormat};
+
+    // High 10 and High 4:4:4 Predictive, both 10-bit 4:2:0.
+    for name in ["h264-high10.mp4", "hdr-pq.mp4"] {
+        for kind in [BackendKind::Hardware, BackendKind::Software] {
+            let path = alpha2_backend_conformance::corpus(name);
+            let Ok(mut stream) =
+                VideoStream::open_file(&path, Arc::new(OnlyKind(kind)), StreamOptions::default())
+            else {
+                continue;
+            };
+            if let Ok(DecodeEvent::Video(frame)) = stream.decode_next(&CancelToken::default()) {
+                let depth = match frame.pixel_format {
+                    PixelFormat::Yuv(format) => format.bit_depth,
+                    other => panic!("{name} {kind:?}: {other:?}"),
+                };
+                assert_eq!(depth, 10, "{name} {kind:?}");
+            }
+        }
     }
 }
 
