@@ -224,22 +224,24 @@ fn compare<T>(
         "{what}: {GROWTH}x the input ({small} -> {large}, {repeats} runs each) took {ratio:.1}x the \
          work ({least_small} -> {least_large}); the bound is {bound}x (linear work takes about \
          {GROWTH}x, quadratic {}x); setup {setup_ms} ms / measured {measured_ms} ms; readings \
-         as work / wall ms: small {}, large {}",
+         as work ({WORK_UNIT}) / wall ms: small {}, large {}",
         GROWTH * GROWTH,
         describe(&smalls),
         describe(&larges)
     );
 }
 
-/// Each reading's work and wall time in milliseconds; the work is CPU time where the OS reports
-/// it, so a wall time far above it is time the thread did not run.
+const WORK_UNIT: &str = if cfg!(windows) { "cycles" } else { "CPU ns" };
+
 fn describe(readings: &[Reading]) -> String {
     readings
         .iter()
         .map(|reading| {
-            #[allow(clippy::cast_precision_loss)]
-            let work = reading.work as f64 / 1e6;
-            format!("{work:.2} / {:.2}", reading.measured.as_secs_f64() * 1e3)
+            format!(
+                "{} / {:.2}",
+                reading.work,
+                reading.measured.as_secs_f64() * 1e3
+            )
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -328,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "readings as work / wall ms: small ")]
+    #[should_panic(expected = ") / wall ms: small ")]
     fn quadratic_work_fails_naming_each_readings_work_and_wall_time() {
         assert_linear(
             "a sum over every pair",
