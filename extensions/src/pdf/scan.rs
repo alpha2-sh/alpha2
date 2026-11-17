@@ -86,7 +86,7 @@ enum Role {
 /// What one draw or a content stream's drawing costs the SVG hayro-svg writes.
 #[derive(Clone, Copy, Default)]
 struct Cost {
-    /// Elements of markup: painted paths, clips, glyphs, shadings, and images.
+    /// Elements of markup: painted paths, clips, glyphs, shadings, images, and form invocations.
     draws: u64,
     /// Image pixels decoded, per draw.
     pixels: u64,
@@ -605,6 +605,7 @@ impl Walk<'_> {
                     0
                 }
                 TypedInstruction::XObject(invoked) => {
+                    content.own.draws = content.own.draws.saturating_add(1);
                     count(&mut content.invoked, invoked.0);
                     0
                 }
@@ -698,8 +699,9 @@ impl Walk<'_> {
             total = total.add(self.cost(key, 0, &mut counted)?);
             if total.draws > MAX_DRAWS {
                 return Err(ExtensionError::Budget(format!(
-                    "the page draws more than {MAX_DRAWS} paths, glyphs, and images, each form, \
-                     pattern, and glyph procedure counted every time it is drawn"
+                    "the page draws more than {MAX_DRAWS} paths, glyphs, images, and form \
+                     invocations, each form, pattern, and glyph procedure counted every time it is \
+                     drawn"
                 )));
             }
         }
