@@ -6,8 +6,7 @@ export const GROWTH = 8;
 
 export const BOUND = 22;
 
-// The small reading's least CPU work: 20 ms, and at least ten ticks of the CPU clock, which
-// Windows advances in 15.6 ms steps.
+// Windows advances the process CPU clock in 15.6 ms steps.
 const LEAST_WORK_US = 20_000;
 const LEAST_TICKS = 10;
 
@@ -18,13 +17,21 @@ function cpuMicros() {
   return user + system;
 }
 
-// The smallest step of the CPU clock seen over a few steps.
+const CPU_CLOCK_STEP_WAIT_MS = 1_000;
+
 function cpuTickMicros() {
   let least = Infinity;
   let last = cpuMicros();
+  const deadline = performance.now() + CPU_CLOCK_STEP_WAIT_MS;
   for (let steps = 0; steps < 3;) {
     const now = cpuMicros();
-    if (now === last) continue;
+    if (now === last) {
+      if (performance.now() > deadline)
+        throw new Error(
+          `the CPU clock did not advance in ${CPU_CLOCK_STEP_WAIT_MS} ms`,
+        );
+      continue;
+    }
     least = Math.min(least, now - last);
     last = now;
     steps += 1;
