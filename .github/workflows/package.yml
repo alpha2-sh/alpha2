@@ -50,7 +50,7 @@ jobs:
 
       - name: Install Linux packaging tools
         if: startsWith(matrix.target, 'linux-')
-        timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           if command -v dnf > /dev/null; then
             dnf install --assumeyes clang-devel pkgconf-pkg-config unzip
@@ -61,7 +61,7 @@ jobs:
 
       - name: Install macOS packaging tools
         if: startsWith(matrix.target, 'macos-')
-        timeout-minutes: 5
+        timeout-minutes: 15
         run: brew install pkg-config
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
