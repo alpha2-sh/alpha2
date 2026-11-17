@@ -86,7 +86,7 @@ runs:
         [ "$native" = true ] && js=true && e2e=true
         if [ "$EVENT" = push ] && [ "$REF" = refs/heads/main ] && [ "$STANDALONE" = true ]; then
           green="$(gh api "repos/$REPO/actions/workflows/$WORKFLOW/runs?head_sha=$SHA&status=success" \
-            --jq '[.workflow_runs[] | select(.head_branch != "main")] | length')"
+            --jq '[.workflow_runs[] | select(.head_branch != "main" and .event == "push")] | length')"
           if [ "$green" -gt 0 ]; then
             echo "$WORKFLOW already passed at $SHA on another branch"
             native=false js=false e2e=false packaging=false
