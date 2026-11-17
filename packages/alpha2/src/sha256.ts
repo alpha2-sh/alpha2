@@ -129,8 +129,6 @@ export class Sha256 {
 }
 
 const HASH_SLICE_MS = 8;
-// Pieces are sized from the last piece's rate to take a quarter of a slice, so a slice overshoots
-// by little on a slow machine. A piece grows at most twofold, since a coarse clock can read 0 ms.
 const HASH_PIECE_MS = HASH_SLICE_MS / 4;
 const LEAST_PIECE_BYTES = 16 << 10;
 const MOST_PIECE_BYTES = 1 << 20;

@@ -45,9 +45,6 @@ test("an async step is measured once its promise settles", async () => {
 });
 
 test("a step that is slow until its code warms up is read over many ticks of a coarse CPU clock", async () => {
-  // A 4 ms clock (Windows counts 15.6 ms), a step of 1 ms at the small size, and two cold runs of
-  // 25 ms each, as a JIT gives. Calibrated on the cold runs, the small reading is one run, under a
-  // tick, and reads 0.
   const tick = 4_000;
   const cpuUsage = process.cpuUsage;
   process.cpuUsage = () => {

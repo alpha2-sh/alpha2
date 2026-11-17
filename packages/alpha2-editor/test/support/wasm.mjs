@@ -1,5 +1,3 @@
-// The packaged engine wasm exists only after `npm run build`, and the browser modules import it
-// statically: a file that needs them imports them only when `wasmSkip` is false.
 import nodeTest from "node:test";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";

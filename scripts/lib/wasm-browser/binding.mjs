@@ -220,7 +220,6 @@ const arm = () => setTimeout(() => {
   if (timing) arm();
 }, 10);
 arm();
-// Each piece's end, to tell a gap spent hashing from one spent outside it (a stall, a late timer).
 const pieceEnds = [];
 const started = performance.now();
 await sha256Blob(file, { onProgress: () => pieceEnds.push(performance.now()) });

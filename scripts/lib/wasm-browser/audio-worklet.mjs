@@ -175,7 +175,6 @@ if (errors.length < 8) throw new Error("the audio device did not advance");
 if (firstFrame === null) throw new Error("the worklet never reported its first ring read");
 const settled = errors.slice(4);
 const settledTimes = errorTimes.slice(4);
-// Drift is the least-squares slope of the error over the settled run, times its length.
 const mean = (values) => values.reduce((a, b) => a + b) / values.length;
 const meanTime = mean(settledTimes);
 const meanError = mean(settled);

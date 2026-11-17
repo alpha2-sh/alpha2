@@ -313,7 +313,6 @@ try {
       ),
     );
   const proxyInMemory = await consumerPage("proxy=no-create-writable");
-  // A reported error fails the proxy page unless each is a virtual machine's worker decoder.
   let proxyInMemoryOk = proxyInMemory.ok;
   const decoderLosses = (proxyInMemory.reported ?? []).map(
     virtualMachineWorkerDecoder,

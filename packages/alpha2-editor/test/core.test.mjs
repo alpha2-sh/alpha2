@@ -1544,7 +1544,6 @@ test("a gesture step on a 10,000-clip document costs a small part of validating 
     timeline: { tracks },
   };
   const copies = Array.from({ length: 5 }, () => structuredClone(project));
-  // The least of the runs: a busy machine only adds time to some of them.
   const timed = (count, run) => {
     let index = 0;
     return minOf(count, () => run(index++));
