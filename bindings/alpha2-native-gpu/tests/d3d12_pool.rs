@@ -11,7 +11,7 @@ fn the_d3d12_copy_pool_keeps_the_sizes_shown_now_and_trims_its_idle_targets() {
     let package = Path::new(env!("CARGO_MANIFEST_DIR"));
     let harness = Path::new(env!("CARGO_TARGET_TMPDIR")).join("d3d12_pool");
     let compiler = env::var_os("CC").unwrap_or_else(|| "cc".into());
-    let built = Command::new(&compiler)
+    let built = match Command::new(&compiler)
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-I"])
         .arg(package.join("tests/d3d12_mock"))
         .arg("-I")
@@ -20,7 +20,17 @@ fn the_d3d12_copy_pool_keeps_the_sizes_shown_now_and_trims_its_idle_targets() {
         .arg("-o")
         .arg(&harness)
         .output()
-        .unwrap_or_else(|error| panic!("{} does not run: {error}", compiler.display()));
+    {
+        Ok(built) => built,
+        Err(error) => {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::CCompiler,
+                "{} does not run: {error}",
+                compiler.display()
+            );
+            return;
+        }
+    };
     assert!(
         built.status.success(),
         "the harness does not build:\n{}",
