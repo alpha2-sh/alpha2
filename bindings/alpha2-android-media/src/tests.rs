@@ -77,7 +77,6 @@ impl VideoBackends for SuiteVideo {
     }
 }
 
-/// Opens sessions of one kind only, so a stream cannot fall back to the other.
 struct OnlyKind(BackendKind);
 
 impl VideoBackends for OnlyKind {
@@ -102,8 +101,8 @@ fn ten_bit_h264_is_refused_or_decoded_to_ten_bits() {
     use alpha2_host_core::video_stream::{StreamOptions, VideoStream};
     use alpha2_media::{CancelToken, DecodeEvent, Decoder as _, PixelFormat};
 
-    // High 10 and High 4:4:4 Predictive, both 10-bit 4:2:0.
-    for name in ["h264-high10.mp4", "hdr-pq.mp4"] {
+    let high10_and_high444_predictive = ["h264-high10.mp4", "hdr-pq.mp4"];
+    for name in high10_and_high444_predictive {
         for kind in [BackendKind::Hardware, BackendKind::Software] {
             let path = alpha2_backend_conformance::corpus(name);
             let Ok(mut stream) =
@@ -291,21 +290,26 @@ mod encode {
         (path, encoders)
     }
 
-    /// The first difference between two exports' tracks or packets, or `None` when their
-    /// elementary streams and timing match.
     fn stream_difference(first: &std::path::Path, second: &std::path::Path) -> Option<String> {
-        let mut first = alpha2_container::open(first).expect("reads back");
-        let mut second = alpha2_container::open(second).expect("reads back");
+        let open = |path: &std::path::Path| {
+            alpha2_container::open(path).map_err(|error| format!("{}: {error}", path.display()))
+        };
+        let (mut first, mut second) = match (open(first), open(second)) {
+            (Ok(first), Ok(second)) => (first, second),
+            (Err(error), _) | (_, Err(error)) => return Some(error),
+        };
         let tracks = first.tracks().to_vec();
         if tracks != second.tracks() {
             return Some(format!("tracks {tracks:?} vs {:?}", second.tracks()));
         }
         for track in tracks {
             for index in 0.. {
-                let packets = (
-                    first.next_packet(track.id).expect("packet"),
-                    second.next_packet(track.id).expect("packet"),
-                );
+                let packets = match (first.next_packet(track.id), second.next_packet(track.id)) {
+                    (Ok(a), Ok(b)) => (a, b),
+                    (Err(error), _) | (_, Err(error)) => {
+                        return Some(format!("{:?} packet {index}: {error}", track.kind));
+                    }
+                };
                 let (a, b) = match packets {
                     (None, None) => break,
                     (Some(a), Some(b)) if a == b => continue,
