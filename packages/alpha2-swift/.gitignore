@@ -1,0 +1,6 @@
+/.build/
+/.build-native/
+/.swiftpm/
+/Alpha2FFI.xcframework/
+/Sources/Alpha2/
+/Tests/Alpha2Tests/Fixtures/
