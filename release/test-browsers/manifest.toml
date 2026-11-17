@@ -1,0 +1,24 @@
+schema = 1
+name = "test-browsers"
+target = "linux-x64"
+
+[chrome]
+version = "157.0.8103.50"
+url = "https://storage.googleapis.com/chrome-for-testing-public/157.0.8103.50/linux64/chrome-linux64.zip"
+sha256 = "d17167bc092eb495a3b768c7467f27e35f625aa03834233a1663af67dcb668c9"
+executable = "chrome-linux64/chrome"
+variable = "ALPHA2_PARITY_CHROME"
+
+[firefox]
+version = "160.0"
+url = "https://ftp.mozilla.org/pub/firefox/releases/160.0/linux-x86_64/en-US/firefox-160.0.tar.xz"
+sha256 = "fde774e9757c8878534c05ec210db592bf6a1b244c57941ffb2e364c04f35fcd"
+executable = "firefox/firefox"
+variable = "ALPHA2_FIREFOX"
+
+[geckodriver]
+version = "0.37.1"
+url = "https://github.com/mozilla/geckodriver/releases/download/v0.37.1/geckodriver-v0.37.1-linux64.tar.gz"
+sha256 = "e815130ea95983e162ae91843b48d3a3ce991735635fce83a647afde21e09f7e"
+executable = "geckodriver"
+variable = "ALPHA2_GECKODRIVER"

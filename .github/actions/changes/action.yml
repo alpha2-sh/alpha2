@@ -66,7 +66,7 @@ runs:
           esac
           case $path in
             packages/* | scripts/* | package.json | package-lock.json | eslint.config.mjs | \
-              tsconfig*.json | .prettierrc.json | .prettierignore)
+              tsconfig*.json | .prettierrc.json | .prettierignore | release/test-browsers/*)
               js=true known=true ;;
           esac
           case $path in

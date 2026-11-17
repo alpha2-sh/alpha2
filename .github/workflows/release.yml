@@ -114,6 +114,7 @@ jobs:
           rustup target add aarch64-linux-android x86_64-linux-android
           cargo install cargo-ndk --version 4.1.2 --locked
           cargo install cargo-about --version 0.9.2 --locked --features cli
+      - uses: ./.github/actions/android-ndk
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -125,7 +126,7 @@ jobs:
           echo "$RUNNER_TEMP/gradle-8.11/bin" >> "$GITHUB_PATH"
       - name: Build the library
         run: |
-          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:?}" JAVA_HOME="${JAVA_HOME_17_X64:?}"
+          export JAVA_HOME="${JAVA_HOME_17_X64:?}"
           node scripts/crate-licenses.mjs --target aarch64-linux-android \
             --out "$RUNNER_TEMP/rust-crate-licenses.md" alpha2-mobile
           ALPHA2_NOTICES="$RUNNER_TEMP/rust-crate-licenses.md" scripts/build-android.sh
@@ -144,7 +145,7 @@ jobs:
             unzip -l "$RUNNER_TEMP/aar/classes.jar" | grep -q "META-INF/alpha2/$notice"
           done
           # Devices with 16 KB pages load only libraries whose segments are 16 KB aligned.
-          readelf=$(ls "$ANDROID_NDK_LATEST_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-readelf | head -n 1)
+          readelf=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-readelf | head -n 1)
           for abi in arm64-v8a x86_64; do
             "$readelf" -lW "$RUNNER_TEMP/aar/jni/$abi/libalpha2_mobile.so" |
               awk -v abi="$abi" '$1 == "LOAD" { seen = 1; if ($NF != "0x4000") bad = 1 }
@@ -178,6 +179,7 @@ jobs:
           rustup toolchain install
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim
           cargo install cargo-about --version 0.9.2 --locked --features cli
+      - uses: ./.github/actions/xcode
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22

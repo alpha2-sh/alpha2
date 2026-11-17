@@ -274,6 +274,13 @@ jobs:
         with:
           name: alpha2-build
           path: packages
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/test-browsers
+          key: test-browsers-${{ hashFiles('release/test-browsers/manifest.toml', 'scripts/fetch-test-browsers.sh') }}
+      - name: Fetch the pinned Chrome, Firefox and geckodriver
+        timeout-minutes: 10
+        run: scripts/fetch-test-browsers.sh "$RUNNER_TEMP/test-browsers" | tee -a "$GITHUB_ENV"
       - name: Build the Python package the parity and end-to-end checks run
         id: ready
         working-directory: python/alpha2
@@ -864,27 +871,12 @@ jobs:
         with:
           targets: ${{ matrix.targets }}
           cache-key: ${{ matrix.platform }}
-      - name: Point Cargo at the NDK toolchain (API 29)
-        if: matrix.platform == 'android'
-        env:
-          TARGETS: ${{ matrix.targets }}
-        run: |
-          ndk="${ANDROID_NDK_LATEST_HOME:?}"
-          cat "$ndk/source.properties"
-          echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
-          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          sysroot="$ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          for target in $TARGETS; do
-            var="${target//-/_}"
-            upper="${var^^}"
-            {
-              echo "CC_$var=$bin/${target}29-clang"
-              echo "CXX_$var=$bin/${target}29-clang++"
-              echo "AR_$var=$bin/llvm-ar"
-              echo "CARGO_TARGET_${upper}_LINKER=$bin/${target}29-clang"
-              echo "BINDGEN_EXTRA_CLANG_ARGS_$var=--sysroot=$sysroot"
-            } >> "$GITHUB_ENV"
-          done
+      - if: matrix.platform == 'android'
+        uses: ./.github/actions/android-ndk
+        with:
+          targets: ${{ matrix.targets }}
+      - if: matrix.platform == 'ios'
+        uses: ./.github/actions/xcode
       - name: Clippy of the mobile crate set
         id: clippy
         env:
@@ -1439,6 +1431,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/test-browsers
+          key: test-browsers-${{ hashFiles('release/test-browsers/manifest.toml', 'scripts/fetch-test-browsers.sh') }}
+      - name: Fetch the pinned Chrome, Firefox and geckodriver
+        timeout-minutes: 10
+        run: scripts/fetch-test-browsers.sh "$RUNNER_TEMP/test-browsers" | tee -a "$GITHUB_ENV"
       - id: ready
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -1458,7 +1457,7 @@ jobs:
       - id: editor
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: npm run test:editor:package 2>&1 | tee target/test-logs/editor.log
-      - name: The wasm-browser cases in Firefox (the image's Firefox and geckodriver)
+      - name: The wasm-browser cases in Firefox
         id: firefox
         if: ${{ !cancelled() && steps.plugins.outcome == 'success' }}
         env:

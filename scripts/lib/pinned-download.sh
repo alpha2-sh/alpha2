@@ -103,6 +103,7 @@ extract_archive() {
       fi
       ;;
     *.tar.gz) tar -xzf "$1" -C "$2" ;;
+    *.tar.xz) tar -xJf "$1" -C "$2" ;;
     *) echo "unsupported archive: $1" >&2; exit 1 ;;
   esac
 }
