@@ -71,7 +71,7 @@ export function virtualMachine() {
     }
   })();
   return guest
-    ? "this Mac is a virtual machine (kern.hv_vmm_present), whose paravirtual video encoder stalls intermittently"
+    ? "this Mac is a virtual machine (kern.hv_vmm_present), whose paravirtual video encoder and decoder fail intermittently"
     : null;
 }
 
@@ -90,6 +90,21 @@ export function virtualMachineEncoderStall(failure) {
     return null;
   const machine = virtualMachine();
   return machine === null ? null : `the video encoder stalled, and ${machine}`;
+}
+
+/**
+ * The skip reason when `reported`, an editor error message, is the preview worker failing for
+ * want of a worker video decoder on a virtual machine, or null. Elsewhere it stays a failure.
+ *
+ * @param {unknown} reported
+ * @returns {string | null}
+ */
+export function virtualMachineWorkerDecoder(reported) {
+  if (!/No worker decoder for /.test(String(reported ?? ""))) return null;
+  const machine = virtualMachine();
+  return machine === null
+    ? null
+    : `the preview worker had no video decoder, and ${machine}`;
 }
 
 /**
