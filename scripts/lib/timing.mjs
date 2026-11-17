@@ -6,8 +6,10 @@ export const GROWTH = 8;
 
 export const BOUND = 22;
 
-// Windows counts CPU time in 15.6 ms ticks, so readings there are longer.
-const LEAST_RUN_MS = process.platform === "win32" ? 100 : 20;
+// The small reading's least CPU work: 20 ms, and at least ten ticks of the CPU clock, which
+// Windows advances in 15.6 ms steps.
+const LEAST_WORK_US = 20_000;
+const LEAST_TICKS = 10;
 
 const READINGS = 3;
 
@@ -16,14 +18,27 @@ function cpuMicros() {
   return user + system;
 }
 
+// The smallest step of the CPU clock seen over a few steps.
+function cpuTickMicros() {
+  let least = Infinity;
+  let last = cpuMicros();
+  for (let steps = 0; steps < 3;) {
+    const now = cpuMicros();
+    if (now === last) continue;
+    least = Math.min(least, now - last);
+    last = now;
+    steps += 1;
+  }
+  return least;
+}
+
 async function measure(size, repeats, setup, run, count) {
   const inputs = [];
   for (let index = 0; index < count; index += 1) inputs.push(await setup(size));
-  const wall = performance.now();
   const started = cpuMicros();
   for (let index = 0; index < repeats; index += 1)
     await run(inputs[index % count]);
-  return { work: cpuMicros() - started, ms: performance.now() - wall };
+  return cpuMicros() - started;
 }
 
 /**
@@ -47,27 +62,28 @@ export async function assertScalesBelow(
   const large = small * growth;
   const count = (size, repeats) =>
     fresh ? repeats : size === small ? growth : 1;
-  let repeats = 1;
-  while (
-    (await measure(small, repeats, setup, run, count(small, repeats))).ms <
-      LEAST_RUN_MS &&
-    repeats < 1 << 16
-  )
-    repeats *= 2;
   // The JIT recompiles code on background threads when the large input first reaches it, and how
   // soon depends on the machine's load. Running the large input once first and taking both sizes
   // only from the readings after it compares them in the same compiled state.
   await measure(large, 1, setup, run, 1);
+  const leastWork = Math.max(LEAST_WORK_US, LEAST_TICKS * cpuTickMicros());
+  let repeats = 1;
+  while (
+    (await measure(small, repeats, setup, run, count(small, repeats))) <
+      leastWork &&
+    repeats < 1 << 16
+  )
+    repeats *= 2;
   let leastSmall = Infinity;
   let leastLarge = Infinity;
   for (let reading = 0; reading < READINGS; reading += 1) {
     leastSmall = Math.min(
       leastSmall,
-      (await measure(small, repeats, setup, run, count(small, repeats))).work,
+      await measure(small, repeats, setup, run, count(small, repeats)),
     );
     leastLarge = Math.min(
       leastLarge,
-      (await measure(large, repeats, setup, run, count(large, repeats))).work,
+      await measure(large, repeats, setup, run, count(large, repeats)),
     );
   }
   const ratio = leastLarge / Math.max(leastSmall, 1);
