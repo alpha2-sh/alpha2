@@ -182,11 +182,7 @@ report({ ok: decodeOrderDiffers && wrong.length === 0, decodeOrderDiffers, frame
 }
 
 // SDR keeps display-referred R'G'B'. Check `copyExternalImageToTexture` against decoded YUV.
-export function videoColorContract() {
-  return `
-const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
-await init();
-const video = document.createElement("video");
+const COLOR_FIXTURE_FIRST_FRAME = `const video = document.createElement("video");
 video.muted = true;
 video.src = "/tests/corpus/vp9-color.webm";
 await new Promise((resolve, reject) => {
@@ -195,7 +191,13 @@ await new Promise((resolve, reject) => {
 });
 video.currentTime = 0;
 await new Promise((resolve) => (video.readyState >= 2 ? resolve() : (video.oncanplay = resolve)));
-const width = video.videoWidth;
+`;
+
+export function videoColorContract() {
+  return `
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+${COLOR_FIXTURE_FIRST_FRAME}const width = video.videoWidth;
 const height = video.videoHeight;
 const source = new VideoFrame(video, { timestamp: 0 });
 const layout = { format: source.format, colorSpace: source.colorSpace.toJSON() };
@@ -399,14 +401,7 @@ report({ ok: supply <= 1 && browser >= 8, supply, browser });
 // copyExternalImageToTexture into an srgb-tagged rgba8unorm texture must not change the transfer.
 export function browserVideoConversion() {
   return `
-const video = document.createElement("video");
-video.muted = true;
-video.src = "/tests/corpus/vp9-color.webm";
-await new Promise((resolve, reject) => {
-  video.onloadeddata = resolve;
-  video.onerror = () => reject(new Error("the browser cannot decode the fixture"));
-});
-const frame = new VideoFrame(video, { timestamp: 0 });
+${COLOR_FIXTURE_FIRST_FRAME}const frame = new VideoFrame(video, { timestamp: 0 });
 const width = frame.displayWidth, height = frame.displayHeight;
 if (frame.format !== "I420" && frame.format !== "NV12") {
   const format = frame.format;
