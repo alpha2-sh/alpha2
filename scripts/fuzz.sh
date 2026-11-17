@@ -14,7 +14,6 @@ targets=("$@")
 if [ ${#targets[@]} -eq 0 ]; then
   mapfile -t targets < <(sed -n 's/^name = "\(.*\)"$/\1/p' fuzz/Cargo.toml | grep -vx alpha2-fuzz)
 fi
-# A dated nightly, so a compiler change reaches the fuzz build only when this pin moves.
 toolchain=${ALPHA2_FUZZ_TOOLCHAIN:-nightly-2026-11-16}
 timeout=${ALPHA2_FUZZ_TIMEOUT:-20}
 rss=${ALPHA2_FUZZ_RSS_MB:-2560}

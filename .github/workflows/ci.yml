@@ -4,7 +4,6 @@ on:
   pull_request:
   push:
     branches: [main, "prerelease-v*"]
-  # scheduled.yml starts the nightly run on the active branch.
   workflow_dispatch:
     inputs:
       jobs:
@@ -508,7 +507,6 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',cpu-renderer,') }}
     name: CPU renderer
     runs-on: ubuntu-24.04
-    # About twice the slowest green run (21 min) with the suite without extensions (13 min) added.
     timeout-minutes: 70
     env:
       ALPHA2_REQUIRE: ""
@@ -520,7 +518,6 @@ jobs:
         run: |
           echo "image: $ImageOS $ImageVersion"
           rustc --version
-      # The build must link the pinned SDK even with the distro's FFmpeg development files present.
       - name: Install native media build dependencies and the distro FFmpeg
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -591,7 +588,6 @@ jobs:
             echo "alpha2-host links an FFmpeg library outside the pinned SDK" >&2
             exit 1
           fi
-      # On its own: under --workspace another package turns the extensions' providers on.
       - name: The host suite without extensions or hardware video, on the CPU renderer
         env:
           ALPHA2_RENDERER: cpu
@@ -760,7 +756,6 @@ jobs:
   fuzz-check:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',fuzz-check,') }}
     runs-on: ubuntu-24.04
-    # A cold fuzz build takes about 12 min, the whole job about 20.
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -781,7 +776,6 @@ jobs:
       - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
         with:
           tool: cargo-fuzz@0.12.0
-      # Every target builds the same dependencies, with the scheduled run's nightly and flags.
       - name: Build and briefly run one fuzz target
         run: scripts/fuzz.sh 60 evaluate
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1207,7 +1201,6 @@ jobs:
     name: Native tests (${{ matrix.target }}, software adapter)
     needs: changes
     runs-on: ${{ matrix.runner }}
-    # About twice the slowest of ten green runs (54 min, Windows).
     timeout-minutes: 110
     strategy:
       fail-fast: false
@@ -1740,7 +1733,6 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser,') }}
     needs: release-wasm
     runs-on: ubuntu-24.04
-    # About twice the slowest of ten green runs (18 min).
     timeout-minutes: 40
     env:
       ALPHA2_REQUIRE: browser,wasm,webgpu,webgl2,webcodecs-audio,webcodecs-video,browser-gpu-process

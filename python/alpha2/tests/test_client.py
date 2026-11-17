@@ -1961,7 +1961,6 @@ def test_concurrent_requests_share_at_most_concurrency_hosts(
     log = tmp_path / "log"
     # One file per host: appends from two processes to one file can lose a line on Windows.
     ran = f"{str(tmp_path / 'ran-')!r} + str(os.getpid())"
-    # Each request outlasts the others' submission, so the client needs both hosts.
     answer = f"""record({ran}, request["requestId"])
         time.sleep(0.2)
         send(request, ok=True, result={{"pid": os.getpid()}})"""

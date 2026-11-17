@@ -1,9 +1,8 @@
 name: scheduled
 
-# Weekly checks too slow for every change, and the start of the nightly `ci` run.
+# Weekly checks too slow for every change.
 on:
   schedule:
-    # The two crons are matched by text in the `dispatch` job.
     - cron: "17 3 * * *"
     - cron: "41 2 * * 1"
   workflow_dispatch:
@@ -20,8 +19,6 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  # A scheduled run uses the default branch's workflows and code, so it only starts the runs on the
-  # branch work lands on: the repository variable SCHEDULED_BRANCH, else the default branch.
   dispatch:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-24.04

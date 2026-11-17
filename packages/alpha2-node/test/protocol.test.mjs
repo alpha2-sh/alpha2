@@ -2566,8 +2566,7 @@ writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
 setTimeout(() => {}, 60_000);
 `,
     );
-    // Well above the fake host's start (tens of ms, past 300 ms on a loaded Windows runner); it
-    // must write its pid before the limit kills it.
+    // Long enough for a slow machine to start the host and let it write its pid.
     const started = Date.now();
     const error = await new Alpha2NodeClient({
       hostPath,
@@ -2578,7 +2577,6 @@ setTimeout(() => {}, 60_000);
         () => assert.fail("the export resolved"),
         (cause) => cause,
       );
-    // The 3 s limit plus the kill; a client without the limit waits for the host's 60 s timer.
     assert.ok(Date.now() - started < 8_000, `${Date.now() - started} ms`);
     assert.equal(error.code, "HOST_START_TIMEOUT", error.message);
     assert.match(error.message, /did not start within 3000 ms/);
@@ -2589,8 +2587,7 @@ setTimeout(() => {}, 60_000);
 
 test("a slow host that writes ready in time is not timed out", async () => {
   const root = await scratch("alpha2-node-start-ready-");
-  // Ready 0.2 s after start, the answer 3.5 s after the request: a client whose 3 s start limit
-  // still ran after ready times out, whatever the host's start time.
+  // The answer comes after the start limit; the limit leaves a slow machine room to start the host.
   const hostPath = await fakeHost(
     root,
     `import { ready, requests, respond } from ${IO};
