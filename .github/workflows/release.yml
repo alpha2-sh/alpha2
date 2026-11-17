@@ -27,6 +27,10 @@ jobs:
     if: ${{ !inputs.skip-validate }}
     uses: ./.github/workflows/ci.yml
 
+  observe:
+    if: ${{ !inputs.skip-validate }}
+    uses: ./.github/workflows/observe.yml
+
   version:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -74,20 +78,22 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   package:
-    needs: [validate, version]
+    needs: [validate, observe, version]
     if: >-
       ${{ always() && needs.version.result == 'success' &&
-      (needs.validate.result == 'success' || (inputs.skip-validate && needs.validate.result == 'skipped')) }}
+      ((needs.validate.result == 'success' && needs.observe.result == 'success') ||
+      (inputs.skip-validate && needs.validate.result == 'skipped' && needs.observe.result == 'skipped')) }}
     uses: ./.github/workflows/package.yml
     with:
       targets: '["linux-x64","linux-arm64","macos-arm64","win-x64"]'
 
   android:
     name: Android library
-    needs: [validate, version]
+    needs: [validate, observe, version]
     if: >-
       ${{ always() && needs.version.result == 'success' &&
-      (needs.validate.result == 'success' || (inputs.skip-validate && needs.validate.result == 'skipped')) }}
+      ((needs.validate.result == 'success' && needs.observe.result == 'success') ||
+      (inputs.skip-validate && needs.validate.result == 'skipped' && needs.observe.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -148,10 +154,11 @@ jobs:
 
   swift:
     name: Swift package
-    needs: [validate, version]
+    needs: [validate, observe, version]
     if: >-
       ${{ always() && needs.version.result == 'success' &&
-      (needs.validate.result == 'success' || (inputs.skip-validate && needs.validate.result == 'skipped')) }}
+      ((needs.validate.result == 'success' && needs.observe.result == 'success') ||
+      (inputs.skip-validate && needs.validate.result == 'skipped' && needs.observe.result == 'skipped')) }}
     runs-on: macos-26
     timeout-minutes: 60
     env:
