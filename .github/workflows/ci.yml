@@ -22,8 +22,6 @@ env:
   ALPHA2_RENDERER: gpu
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
-  # Jobs cannot read env in their own `if`, so job conditions repeat this.
-  HEAVY: ${{ github.event_name != 'pull_request' }}
 
 defaults:
   run:
@@ -950,13 +948,15 @@ jobs:
     if: >-
       ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-native,')) &&
       needs.changes.outputs.native == 'true' }}
-    name: Native tests (${{ matrix.target }}, software adapter)
+    name: Native tests (${{ matrix.target }}, ${{ matrix.profile }}, software adapter)
     needs: changes
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 110
     strategy:
       fail-fast: false
       matrix:
+        target: [macos-arm64, win-x64]
+        profile: ${{ fromJSON(github.event_name == 'pull_request' && '["debug"]' || '["debug","release"]') }}
         include:
           - target: macos-arm64
             runner: macos-26
@@ -969,6 +969,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: ${{ matrix.profile }}
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         timeout-minutes: 5
@@ -999,14 +1001,14 @@ jobs:
         run: cargo run -q -p alpha2-gpu --example adapters
       - name: Native and host tests (debug)
         id: debug
-        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' && matrix.profile == 'debug' }}
         run: >-
           cargo test --locked --all-features --no-fail-fast -p alpha2-os -p alpha2-build-support
           -p alpha2-ffmpeg-bridge -p alpha2-native -p alpha2-native-gpu -p alpha2-gpu -p alpha2-host
           2>&1 | tee target/test-logs/debug.log
       - name: Native and host tests (release, strict GPU errors)
         id: release
-        if: ${{ !cancelled() && steps.ready.outcome == 'success' && env.HEAVY == 'true' }}
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' && matrix.profile == 'release' }}
         env:
           ALPHA2_GPU_STRICT: "1"
         run: >-
@@ -1015,7 +1017,7 @@ jobs:
           -p alpha2-gpu -p alpha2-host 2>&1 | tee target/test-logs/release.log
       - name: H.264 goes through OpenH264, the same bytes twice
         id: openh264
-        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' && matrix.profile == 'release' }}
         run: |
           cargo build --release -p alpha2-host
           node -e '
@@ -1044,7 +1046,7 @@ jobs:
       - if: always()
         uses: ./.github/actions/test-report
         with:
-          lane: platform-native-${{ matrix.target }}
+          lane: platform-native-${{ matrix.target }}-${{ matrix.profile }}
           group: ci
           steps: ${{ toJSON(steps) }}
 
