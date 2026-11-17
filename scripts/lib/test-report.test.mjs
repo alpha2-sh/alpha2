@@ -262,7 +262,7 @@ test("the ledger is validated as a whole", () => {
           entry({ added: "17.11.2026" }),
         ],
       }),
-    (error) => {
+    (/** @type {Error} */ error) => {
       assert.match(error.message, /failures\[0\] has unknown key extra/);
       assert.match(error.message, /failures\[0\]\.until is not a release/);
       assert.match(error.message, /failures\[1\]\.maxFailing must be/);

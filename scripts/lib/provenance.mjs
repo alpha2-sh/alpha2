@@ -77,11 +77,13 @@ function browsers(context) {
   const chrome = chromeExecutable({ env, platform });
   const edge = edgeExecutable({ env, platform });
   const firefox = firefoxExecutable({ env, platform, exists: existsSync });
-  for (const [name, path] of [
+  /** @type {[string, string | null][]} */
+  const executables = [
     ["chrome", chrome],
     ["edge", edge],
     ["firefox", firefox],
-  ]) {
+  ];
+  for (const [name, path] of executables) {
     if (!path) continue;
     const version = executableVersion(path, context);
     if (version) found[name] = `${version} (${path})`;
