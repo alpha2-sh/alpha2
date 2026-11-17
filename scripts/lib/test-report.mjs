@@ -55,7 +55,8 @@ const HARNESS_LINE = /^(ok|FAIL|skip) (.+)$/;
 const XCTEST_LINE =
   /^Test Case '-\[(\S+) (\S+)\]' (passed|failed|skipped) \(([\d.]+) seconds\)\.?$/;
 const INSTRUMENTATION_FAILURE = /^\d+\) (\w+)\(([\w.$]+)\)$/;
-const WATCHDOG_LINE = /^test-watchdog: .*still running: (.+)$/;
+const WATCHDOG_LINE =
+  /^test-watchdog: (\S+) exceeded \d+s; still running: (.+)$/;
 
 const CARGO_HASH = /-[0-9a-f]{16}\b/;
 
@@ -92,7 +93,7 @@ export function parseTestLog(text, { lane, step, suite: initial = step }) {
   const slow = new Set();
   /** @type {Set<string>} */
   let seen = new Set();
-  /** @type {string[]} */
+  /** @type {{ binary: string, name: string }[]} */
   const watchdog = [];
   let instrumentationFailures = false;
 
@@ -132,11 +133,10 @@ export function parseTestLog(text, { lane, step, suite: initial = step }) {
     }
     const watched = WATCHDOG_LINE.exec(line);
     if (watched) {
-      watchdog.push(
-        ...watched[1]
-          .split(/,\s*/)
-          .filter((name) => name && name !== "<unknown>"),
-      );
+      const binary = binaryName(watched[1]);
+      for (const name of watched[2].split(/,\s*/))
+        if (name && name !== "<unknown>") watchdog.push({ binary, name });
+      if (inBinary && suite === binary) endBinary(true);
       continue;
     }
     if (LIBTEST_RUNNING.test(line)) {
@@ -224,12 +224,15 @@ export function parseTestLog(text, { lane, step, suite: initial = step }) {
     }
   }
   endBinary(false);
-  for (const name of watchdog) {
+  for (const { binary, name } of watchdog) {
     const known = records.find(
-      (record) => record.test === name && isFailure(record.outcome),
+      (record) =>
+        record.suite === binary &&
+        record.test === name &&
+        isFailure(record.outcome),
     );
     if (known) known.outcome = "hung";
-    else add(suite, name, "hung");
+    else add(binary, name, "hung");
   }
   return records;
 }

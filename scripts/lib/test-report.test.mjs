@@ -119,16 +119,23 @@ test stuck has been running for over 60 seconds
   ]);
 });
 
-test("a watchdog line marks the tests it names as hung", () => {
-  const output = `running 2 tests
+test("a watchdog line marks the tests it names as hung in its binary, which it stopped", () => {
+  const output = `     Running unittests src/main.rs (target/release/deps/alpha2_host-0123456789abcdef)
+
+running 3 tests
 test done ... ok
+test a::stuck has been running for over 60 seconds
 test-watchdog: alpha2_host-0123456789abcdef exceeded 600s; still running: a::stuck, b::other
+   Doc-tests alpha2_os
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 `;
   assert.deepEqual(brief(parseTestLog(output, where)), [
-    "passed rust done",
-    "crashed rust (test binary exited without a result)",
-    "hung rust a::stuck",
-    "hung rust b::other",
+    "passed alpha2_host done",
+    "hung alpha2_host a::stuck",
+    "hung alpha2_host b::other",
   ]);
 });
 
