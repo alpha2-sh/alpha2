@@ -76,6 +76,7 @@ cargo test --workspace --no-default-features --no-fail-fast
 ```
 
 - `--no-fail-fast` keeps going after a failing test binary, so every crate reports.
+- `alpha2-test-watchdog` (`cargo build -p alpha2-test-support --bin alpha2-test-watchdog`) is a cargo test runner: with `CARGO_TARGET_<TRIPLE>_RUNNER` pointing at it, a test that runs longer than `ALPHA2_TEST_WATCHDOG_SECS` (600 by default, 0 turns it off) gets its name printed and every thread's stack (gdb or eu-stack, lldb or `sample`, cdb) before its binary is stopped, and cargo goes on with the next binary. CI runs the Rust tests through it.
 - The tests that time work are meant for release builds: run `cargo test --release --workspace --all-features` as well before trusting a timing failure or a pass.
 - `scripts/check-extension-features.sh` and `scripts/check-native-features.sh` build each extension format and each native feature alone, as a consumer that enables only one of them gets it.
 

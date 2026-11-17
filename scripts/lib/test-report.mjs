@@ -132,7 +132,11 @@ export function parseTestLog(text, { lane, step, suite: initial = step }) {
     }
     const watched = WATCHDOG_LINE.exec(line);
     if (watched) {
-      watchdog.push(...watched[1].split(/,\s*/).filter(Boolean));
+      watchdog.push(
+        ...watched[1]
+          .split(/,\s*/)
+          .filter((name) => name && name !== "<unknown>"),
+      );
       continue;
     }
     if (LIBTEST_RUNNING.test(line)) {

@@ -150,6 +150,7 @@ jobs:
           cache-workspaces: |
             . -> target
             plugins -> target
+      - uses: ./.github/actions/test-watchdog
       - uses: ./.github/actions/ffmpeg-sdk
         with:
           target: linux-x64
@@ -347,6 +348,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: openh264
+      - uses: ./.github/actions/test-watchdog
       - uses: ./.github/actions/ffmpeg-sdk
         with:
           target: ${{ matrix.target }}
@@ -467,6 +469,7 @@ jobs:
           cache-workspaces: |
             . -> target
             plugins -> target
+      - uses: ./.github/actions/test-watchdog
       - uses: ./.github/actions/ffmpeg-sdk
         with:
           target: linux-x64
@@ -714,6 +717,7 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-workspaces: plugins
+      - uses: ./.github/actions/test-watchdog
       - id: fmt
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: scripts/preflight.sh plugins-fmt
@@ -958,6 +962,7 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: ${{ matrix.profile }}
+      - uses: ./.github/actions/test-watchdog
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         timeout-minutes: 5
@@ -1199,6 +1204,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: ready
         uses: ./.github/actions/setup-rust
+      - uses: ./.github/actions/test-watchdog
       - id: pins
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: >-
@@ -1341,6 +1347,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-rust
+      - uses: ./.github/actions/test-watchdog
       - name: Install Mesa software GPU drivers
         if: runner.os == 'Linux'
         timeout-minutes: 5

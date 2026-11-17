@@ -122,7 +122,7 @@ test stuck has been running for over 60 seconds
 test("a watchdog line marks the tests it names as hung", () => {
   const output = `running 2 tests
 test done ... ok
-test-watchdog: 900s elapsed; still running: a::stuck, b::other
+test-watchdog: alpha2_host-0123456789abcdef exceeded 600s; still running: a::stuck, b::other
 `;
   assert.deepEqual(brief(parseTestLog(output, where)), [
     "passed rust done",
