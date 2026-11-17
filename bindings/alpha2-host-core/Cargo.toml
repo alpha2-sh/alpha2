@@ -35,7 +35,7 @@ requests = [
   "dep:unicode-normalization",
   "serde_json/raw_value",
 ]
-# Thread-local decode budget overrides for dependents' tests. Never enable in a product build.
+# Decode budget and delay overrides for dependents' tests. Never enable in a product build.
 test-hooks = []
 
 [dependencies]
