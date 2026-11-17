@@ -962,6 +962,9 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           cache-key: ${{ matrix.profile }}
+          cache-workspaces: |
+            . -> target
+            plugins -> target
       - uses: ./.github/actions/test-watchdog
       - name: Install macOS build tools
         if: runner.os == 'macOS'
@@ -988,6 +991,8 @@ jobs:
         run: |
           library="$(scripts/fetch-openh264.sh "$TARGET" "$RUNNER_TEMP/openh264")"
           echo "ALPHA2_OPENH264_LIBRARY=$library" >> "$GITHUB_ENV"
+      - name: Build the plugins the tests pack
+        run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
       - name: Adapters
         id: ready
         run: cargo run -q -p alpha2-gpu --example adapters
