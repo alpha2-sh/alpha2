@@ -6,7 +6,10 @@
 //! path, appended there as JSON lines. Tests that never apply to an OS stay `#[cfg]`-gated.
 
 pub mod extract;
+mod files;
 pub mod media;
+
+pub use files::{ScratchDir, corpus, scratch_dir, tests_dir};
 
 use std::collections::BTreeSet;
 use std::io::Write;

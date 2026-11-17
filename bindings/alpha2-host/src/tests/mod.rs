@@ -121,9 +121,7 @@ fn assert_unrequested(budget: &Value) {
 /// Stops the run on anything but the pinned `FFmpeg` SDK.
 fn corpus(name: &str) -> PathBuf {
     alpha2_native::require_pinned_ffmpeg_for_tests();
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/corpus")
-        .join(name)
+    alpha2_test_support::corpus(name)
 }
 
 /// `input` is JSON lines, each sent as one frame. Cancels are answered first, as they would be when
@@ -449,37 +447,10 @@ fn names_written_file(named: &Path, written: &Path) -> bool {
         && named.is_file()
 }
 
-/// A panicked run keeps its directory and a later process can reuse the pid, so leftovers are
-/// removed first.
-fn scratch_directory(name: &str) -> ScratchDirectory {
+/// Stops the run on anything but the pinned `FFmpeg` SDK.
+fn scratch_directory(name: &str) -> alpha2_test_support::ScratchDir {
     alpha2_native::require_pinned_ffmpeg_for_tests();
-    let directory = env::temp_dir().join(format!("alpha2-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&directory);
-    std::fs::create_dir_all(&directory).expect("scratch directory");
-    ScratchDirectory(directory)
-}
-
-/// Removed on drop so that a failed assertion does not leave the directory behind.
-struct ScratchDirectory(PathBuf);
-
-impl std::ops::Deref for ScratchDirectory {
-    type Target = Path;
-
-    fn deref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl AsRef<Path> for ScratchDirectory {
-    fn as_ref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for ScratchDirectory {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+    alpha2_test_support::scratch_dir(name)
 }
 
 fn stream_spans(path: &Path) -> ((i64, i64), (i64, i64)) {
