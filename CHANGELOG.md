@@ -16,22 +16,22 @@ All notable changes to this project are documented in this file.
   is replaced. Known limits: the player always draws on a GPU device that presents to its window
   (`RendererMode` governs exports and stills), `conform` reports only whether each source's file
   opens and ignores `purpose`, Android codecs are opened by MIME type or a fixed component name,
-  without `MediaCodecList` discovery, and Android decodes 10-bit video (H.264, HEVC, AV1) from
-  Android 13 on.
+  without `MediaCodecList` discovery, and Android decodes 10-bit video (H.264, HEVC, VP9, AV1)
+  only from Android 13 on. A forced keyframe lands on its frame on Android, so a repeated export is
+  byte-identical.
 - `alpha2-container`: MP4/MOV, Matroska/WebM, WAV, MP3, ADTS, FLAC and Ogg demuxers, and MP4 and
   Matroska/WebM muxers, with FFmpeg packet parity and memory and work bounded per file.
 - `alpha2-host-core`: the policies, audio timelines, cursor rules, providers, plugin runtime,
   request parsing and protocol frames every native host shares, and the FFmpeg-free decode, export
   and still pipeline (PNG, JPEG and WebP with Exif orientation) the mobile hosts run.
-- Compose templates that bind typed parameters into plain specs, with a data schema and lint.
-  Titles, cards, lower thirds, logos, reframes, reveals and comparison grids ship as first-party
-  templates.
+- Compose templates that bind typed parameters into plain specs, with a data schema, lint and `$if`
+  on any value. The title, card, lower third, logo, reframe and comparison grid nodes are now
+  first-party templates under their old names, beside new circle and wipe reveals.
 - Compose nodes: `box` layout, `shape`, `group`, `matte` and `mask`; animated values (constant,
-  ramp, keys); theme lengths and colors; `$if` on any value. A sequence join crossfades the sound
-  of both sides with the picture, and `spec.duration` is the project's length.
+  ramp, keys); theme lengths and colors.
 - Text fits its font size to its box and clamps lines with an ellipsis.
-- Compose everywhere: `alpha2/compose-wasm` in the browser, a `compose` operation in `serve`, and
-  compose on mobile behind a default `compose` feature.
+- Compose everywhere: `alpha2/compose` in the browser (with its wasm module `alpha2/compose-wasm`),
+  a `compose` operation in `serve`, and compose on mobile behind a default `compose` feature.
 - `python -m alpha2 mcp`: an MCP server in the Python package that lists, binds, checks and renders
   templates and specs. It reads and writes only under its roots (the working directory or each
   `--root`), and `--read-only`, `--max-seconds` and `--max-pixels` bound what a call may do.
@@ -61,21 +61,23 @@ All notable changes to this project are documented in this file.
   the browser has `runExtractor` in `alpha2/extract`, and mobile apps have `Alpha2.extract`.
 - Extractor plugins under the `alpha2-plugin/1` ABI, as wasm or native artifacts pinned by SHA-256
   in a manifest. The browser loads the wasm artifact with `loadPlugin` from `alpha2/plugins`, and
-  mobile apps load bundled ones. The host fetches them into a private, bounded cache and runs them
-  under a policy its operator sets at start: `--plugins off|wasm|native` (default `wasm`),
-  `--plugin-origins` and `--plugin-root`, refused with `PLUGIN_REFUSED`; the clients take a
-  `plugins` option for these flags. A wasm plugin has one memory of at most 2 GiB, and cancel and
-  the call deadline reach inside its calls. The SDK, the pack tool and a first-party silence plugin
-  live in `plugins/`; no release contains a plugin.
-- Edit operations `remove_ranges`, `split_at` and `bake`, with a report of what moved: an `edit`
-  host operation (`client.edit` in Node), `alpha2.edit.apply` in Python, `applyEdit` in
-  `alpha2/apply-edit` and `applyEdit` on mobile. Kept moments render as before, including track and
-  master automation, timeline-anchored data and transitions with their keyed parameters. A cut no
-  single part can follow is refused (`matte_source`, `read_through`, `in_transition`, `in_fade`,
-  `too_many_clips`, `too_many_cues`) or, in `split_at`, left out and listed in `report.skipped`, and
-  `bake` clamps each value to its property's range. Known limits: parts of a reversed clip whose
-  edges are off the frame grid, and sound at a loop wrap a cut turns into a part boundary, are not
-  exact.
+  mobile apps load bundled ones when the library is built with its `plugins` feature. The host
+  fetches them into a private, bounded cache and runs them under a policy its operator sets at
+  start: `--plugins off|wasm|native` (default `wasm`), `--plugin-origins` and `--plugin-root`,
+  refused with `PLUGIN_REFUSED`; the clients take a `plugins` option for these flags. A wasm plugin
+  has one memory of at most 2 GiB, and in the host cancel and the call deadline reach inside its
+  calls. The SDK, the pack tool and a first-party silence plugin live in `plugins/`; no release
+  contains a plugin.
+- Edit operations `remove_ranges`, `split_at` and `bake`, with a report of what moved and of each
+  new clip with the clip it was cut from (`created`: `{id, from}`): an `edit` host operation
+  (`client.edit` in Node), `alpha2.edit.apply` in Python, `applyEdit` in `alpha2/apply-edit` and
+  `applyEdit` on mobile. Kept moments render as before, including track and master automation,
+  timeline-anchored data and transitions with their keyed parameters. A cut that cannot be applied
+  exactly is refused (`matte_source`, `read_through`, `in_transition`, `in_fade`), as is a result
+  past a limit (`too_many_clips`, `too_many_cues`), or, in `split_at`, left out and listed in
+  `report.skipped`, and `bake` clamps each value to its property's range. Known limits: parts of a
+  reversed clip whose edges are off the frame grid, and sound at a loop wrap a cut turns into a part
+  boundary, are not exact.
 - Conform reports data sets made from an original that has since changed.
 - `@alpha2-sh/editor` edits data: `data.put` and `data.remove` commands (removal refused while
   anything reads the set), `dataValue` and `isDataBound`, `editProject` and `applyEdit` to commit an
@@ -117,15 +119,16 @@ All notable changes to this project are documented in this file.
 - The Python package no longer installs an `alpha2` command, which shared its name with the native
   archive's media program; run `python -m alpha2 <command>` instead.
 - The published crates require their alpha2 siblings at exactly their own version (`=x.y.z`).
-- An edit report's `created` lists `{id, from}`: each new clip and the clip it was cut from.
+- Compose facts say whether a video has sound (`has_audio`) when a spec plays it unmuted; facts
+  without it compiled the video silently.
 - Editor ripple edits that reach every track cut or open timeline-anchored data sets, track and
   master automation and markers as the engine's `remove_ranges` does.
 - Built-in effects and transitions are validated against their published definitions. Sharpen and
   film grain are sized in project pixels, so a preview at a lower scale matches the export.
 - Mattes and masks spread over transitions that commute with coverage, such as wipes.
 - The CPU renderer presents portrait and downscaled video and RGBA stills about five times faster,
-  and HDR, non-BT.709 and alpha-plane sources through tabled curves (pictures move by under 0.01 of
-  a half-float step).
+  and HDR, non-BT.709 and alpha-plane sources through tabled curves (pictures move by under 0.05 of
+  a half-float step of the brightest channel).
 - Builds link the pinned FFmpeg ahead of system library directories. A bundled archive's FFmpeg
   libraries may be replaced only by a build of the same 8.1.x series and configuration, and
   hardware interop is off when the loaded libavutil is another minor release.
@@ -153,7 +156,8 @@ All notable changes to this project are documented in this file.
 - The GPU composite draws a layer shown 1:1 on a canvas wider than 1920 pixels exactly, as the CPU
   renderer does, and leaves the picture below a transparent layer unchanged.
 - 4:2:2 and 4:1:1 sources that declare no chroma siting (ProRes 422, DNxHD, DNxHR) read their chroma
-  co-sited with even luma columns, as BT.601 and BT.709 site it; they read it half a sample right.
+  co-sited with even luma columns, as BT.601 and BT.709 site it; before, they read it centred over
+  the luma columns it covers.
 - Three or more clips that overlap on one track draw every transition between them in a defined
   order.
 - A position keyframed along a curved path moves the distance its timing asks.
@@ -161,11 +165,11 @@ All notable changes to this project are documented in this file.
   coarse grid count as rounded only when one constant period explains them.
 - A layout grid line of -32768 is refused instead of panicking the validator, and `validateProject`
   no longer throws on deeply nested objects or array holes.
-- A compose spec without a template header keeps `{{` in its text, paths and data as written, and a
-  video that loops in compose refuses a `speed` other than 1 instead of ignoring it.
-- A request that panics inside the host is answered `INTERNAL`; it was never answered and the host
-  stayed busy. A terminated host exits within the stall limit plus 5 seconds even when its request
-  cannot stop or nobody reads its output.
+- A video that loops in compose refuses a `speed` other than 1 instead of ignoring it.
+- The sound of the two sides of a compose sequence join crosses over the transition; both played
+  at full level over the overlap. A compose spec's `duration` is the project's length.
+- A terminated host exits within the stall limit plus 5 seconds even when its request cannot stop or
+  nobody reads its output.
 - A 10-bit export on a host whose renderer stores 8 bits is refused with `INVALID_INPUT`, a code the
   protocol lists.
 - Under a cgroup memory limit, file page cache no longer counts as used, so a container whose cache
@@ -175,23 +179,19 @@ All notable changes to this project are documented in this file.
   and a cancelled export stops copying its staging file.
 - The render cache keeps baking after one failed write and bounds what one damaged file can cost.
 - A readback whose mapping result never arrives fails with `GPU_TIMEOUT` instead of waiting forever.
-- A Python process forked after using `alpha2` no longer hangs on its first request, and a host that
-  exits during a request leaves no thread or pipe behind.
-- `@alpha2-sh/node` no longer fails at import when optional dependencies are not installed.
-- Crafted input no longer panics, hangs or exhausts memory: the container readers check every
-  file-derived size and offset, native hosts refuse pictures past 16384 pixels per side before
-  FFmpeg allocates them, caption import is linear and bounded per cue, SVG, PDF, Lottie and OpenEXR
-  sources are charged for what drawing them costs (reference rings refused), runtime effect loops,
-  `else if` chains and arrays are bounded, and fonts are checked when they are registered.
+- Crafted input no longer panics, hangs or exhausts memory: the browser's container readers refuse
+  fields of impossible size, native hosts refuse pictures past 16384 pixels per side or 2^26 pixels
+  before FFmpeg allocates them, caption import is linear and bounded per cue, SVG, PDF, Lottie and
+  OpenEXR sources are charged for what drawing them costs (reference rings refused), runtime effect
+  loops, `else if` chains and arrays are bounded, and fonts are checked when they are registered.
 - Browser: a frame split into several GPU submissions fails when one was rejected; a lost GPU
-  device or WebGL context is refused with `GPU_DEVICE_LOST` instead of drawing nothing; an export
-  cancelled while finishing is discarded; and an export whose audio this browser cannot decode is
-  refused instead of written silent (`undecodableAudio: "silence"` keeps the old result).
-- Editor: one kept proxy that cannot be staged no longer blocks the whole project, waits on workers
-  and media elements are bounded, and preview audio failures stay with their lane.
+  device or WebGL context is refused with `GPU_DEVICE_LOST` instead of drawing nothing; and an
+  export cancelled while finishing is discarded.
+- Editor: an export whose audio this browser cannot decode is refused instead of written silent
+  (`undecodableAudio: "silence"` keeps the old result); one kept proxy that cannot be staged no
+  longer blocks the whole project, waits on workers and media elements are bounded, and preview
+  audio failures stay with their lane.
 - H.264 levels account for macroblocks per second, not only frame size.
-- Android: a forced keyframe waits for the encoder to emit the frames before it, so keyframes land
-  on their frame and a repeated export is byte-identical.
 - Python functional `TypedDict` fields name their types as strings, so later types resolve.
 - `sha256Blob` hashes in pieces sized to about 2 ms at the measured rate instead of fixed 1 MiB
   pieces, so the page stays responsive on slow machines.
