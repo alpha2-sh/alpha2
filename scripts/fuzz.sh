@@ -2,7 +2,7 @@
 # Runs fuzz targets in parallel with nightly cargo-fuzz, each for SECONDS (default 1800); all
 # targets by default. Seeds come from test files at run time and tests/corpus/hostile/<target>/*;
 # ALPHA2_FUZZ_SEEDS=<dir> adds <dir>/<target>/*. ALPHA2_FUZZ_TIMEOUT (s) and ALPHA2_FUZZ_RSS_MB
-# limits count as findings.
+# limits count as findings. ALPHA2_FUZZ_TOOLCHAIN replaces the pinned nightly.
 #
 #   scripts/fuzz.sh [SECONDS] [TARGET...]
 set -euo pipefail
@@ -14,6 +14,8 @@ targets=("$@")
 if [ ${#targets[@]} -eq 0 ]; then
   mapfile -t targets < <(sed -n 's/^name = "\(.*\)"$/\1/p' fuzz/Cargo.toml | grep -vx alpha2-fuzz)
 fi
+# A dated nightly, so a compiler change reaches the fuzz build only when this pin moves.
+toolchain=${ALPHA2_FUZZ_TOOLCHAIN:-nightly-2026-11-16}
 timeout=${ALPHA2_FUZZ_TIMEOUT:-20}
 rss=${ALPHA2_FUZZ_RSS_MB:-2560}
 corpus=tests/corpus/extensions
@@ -276,14 +278,15 @@ seed() {
   fi
 }
 
+rustup toolchain install "$toolchain" --profile minimal
 mkdir -p fuzz/logs
 for target in "${targets[@]}"; do seed "$target"; done
-for target in "${targets[@]}"; do cargo +nightly fuzz build -O "$target"; done
+for target in "${targets[@]}"; do cargo "+$toolchain" fuzz build -O "$target"; done
 
 pids=()
 for target in "${targets[@]}"; do
   mkdir -p "fuzz/artifacts/$target"
-  cargo +nightly fuzz run -O "$target" -- \
+  cargo "+$toolchain" fuzz run -O "$target" -- \
     -max_total_time="$seconds" -timeout="$timeout" -rss_limit_mb="$rss" -malloc_limit_mb="$rss" \
     -max_len=65536 -print_final_stats=1 >"fuzz/logs/$target.log" 2>&1 &
   pids+=($!)
