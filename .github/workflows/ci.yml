@@ -150,7 +150,6 @@ jobs:
           cache-workspaces: |
             . -> target
             plugins -> target
-      - uses: ./.github/actions/test-watchdog
       - uses: ./.github/actions/ffmpeg-sdk
         with:
           target: linux-x64
@@ -169,6 +168,7 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Build the plugins the tests pack
         run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
+      - uses: ./.github/actions/test-watchdog
       - id: rust
         run: >-
           cargo test --workspace --${{ matrix.features }} --no-fail-fast 2>&1
@@ -469,13 +469,13 @@ jobs:
           cache-workspaces: |
             . -> target
             plugins -> target
-      - uses: ./.github/actions/test-watchdog
       - uses: ./.github/actions/ffmpeg-sdk
         with:
           target: linux-x64
       - name: Build the plugins the tests pack
         id: ready
         run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
+      - uses: ./.github/actions/test-watchdog
       - name: Every CPU pass against the GPU's on lavapipe
         id: parity
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
@@ -717,7 +717,6 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-workspaces: plugins
-      - uses: ./.github/actions/test-watchdog
       - id: fmt
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: scripts/preflight.sh plugins-fmt
@@ -727,13 +726,14 @@ jobs:
       - id: clippy-wasm
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: scripts/preflight.sh plugins-clippy-wasm
-      - id: test
-        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: scripts/preflight.sh plugins-test 2>&1 | tee target/test-logs/test.log
       - name: Pack the plugins (wasm32 and the host triple; the wasm modules are checked)
         id: pack
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
+      - uses: ./.github/actions/test-watchdog
+      - id: test
+        if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
+        run: scripts/preflight.sh plugins-test 2>&1 | tee target/test-logs/test.log
       - if: always()
         uses: ./.github/actions/test-report
         with:
@@ -965,7 +965,6 @@ jobs:
           cache-workspaces: |
             . -> target
             plugins -> target
-      - uses: ./.github/actions/test-watchdog
       - name: Install macOS build tools
         if: runner.os == 'macOS'
         timeout-minutes: 5
@@ -993,6 +992,7 @@ jobs:
           echo "ALPHA2_OPENH264_LIBRARY=$library" >> "$GITHUB_ENV"
       - name: Build the plugins the tests pack
         run: scripts/pack-plugins.sh --fixtures "$RUNNER_TEMP/plugins"
+      - uses: ./.github/actions/test-watchdog
       - name: Adapters
         id: ready
         run: cargo run -q -p alpha2-gpu --example adapters
