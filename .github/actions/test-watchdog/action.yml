@@ -16,5 +16,5 @@ runs:
         cargo build --locked -p alpha2-test-support --bin alpha2-test-watchdog
         triple="$(rustc -vV | sed -n 's/^host: //p')"
         runner="$GITHUB_WORKSPACE/target/debug/alpha2-test-watchdog"
-        if [ "$RUNNER_OS" = Windows ]; then runner="$(cygpath -m "$runner").exe"; fi
+        if [ "$RUNNER_OS" = Windows ]; then runner="$(cygpath -m "$runner.exe")"; fi
         echo "CARGO_TARGET_$(echo "$triple" | tr 'a-z-' 'A-Z_')_RUNNER=$runner" | tee -a "$GITHUB_ENV"
