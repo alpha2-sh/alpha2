@@ -214,6 +214,7 @@ fn create_on_failure_moves_to_the_next_candidate() {
 /// feature.
 #[test]
 fn vp9_decode_is_listed_when_the_device_has_it() {
+    let _device = in_process_device();
     let Some(context) = failure_tests::shared_context() else {
         return;
     };
@@ -939,6 +940,7 @@ fn an_encode_copy_larger_than_its_planes_or_frame_is_refused() {
 #[test]
 fn an_encode_copy_one_row_too_tall_fails_before_it_is_recorded() {
     use super::*;
+    let _device = in_process_device();
     let Some(context) = failure_tests::shared_context() else {
         return;
     };
