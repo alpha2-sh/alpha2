@@ -3,30 +3,18 @@
 import "./support/preview-stubs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { AudioSample, CustomAudioDecoder, registerDecoder } from "mediabunny";
 import { createEditor, createEmptyDocument } from "../dist/index.js";
-import { createBrowserBridge } from "../dist/browser/index.js";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
-const wasmDirectory = join(
-  resolve(import.meta.dirname, "..", ".."),
-  "alpha2",
-  "wasm",
-);
-const skip =
-  !existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")) &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const skip = wasmSkip(import.meta.url);
+const { createBrowserBridge } = skip
+  ? {}
+  : await import("../dist/browser/index.js");
 
 async function engineWasm() {
   const wasm = await import(

@@ -1,28 +1,12 @@
 // Node has no GPU, so the renderer here keeps uploads as the wasm frame store does.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-import * as wasm from "alpha2/wasm";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
-const wasmDirectory = join(
-  resolve(import.meta.dirname, "..", ".."),
-  "alpha2",
-  "wasm",
-);
-const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE=wasm fails instead.
-const skip =
-  !packaged &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const skip = wasmSkip(import.meta.url);
+const wasm = skip ? {} : await import("alpha2/wasm");
 
 const TICKS_PER_SECOND = 120_000n;
 /** What one presented 4K upload retains on WebGPU: the Rgba16Float output and the RGBA8 source. */

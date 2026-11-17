@@ -19,7 +19,7 @@ import {
   writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import v8 from "node:v8";
 import { FakeLocks } from "./support/fake-locks.mjs";
@@ -40,10 +40,7 @@ import {
   registerDecoder,
   registerEncoder,
 } from "mediabunny";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
 v8.setFlagsFromString("--expose-gc");
 const gc = vm.runInNewContext("gc");
@@ -542,18 +539,7 @@ test("a proxy is written under a name of its own and what a stopped page left is
   }
 });
 
-const wasmDirectory = join(
-  resolve(import.meta.dirname, "..", ".."),
-  "alpha2",
-  "wasm",
-);
-const skip =
-  !existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")) &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const skip = wasmSkip(import.meta.url);
 
 test(
   "the bridge holds the proxies it reads, lists them, and lets them go to remove them",

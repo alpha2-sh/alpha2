@@ -1,30 +1,16 @@
 // Media identity and readiness, decided by the packaged wasm engine.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createEditor, TICKS_PER_SECOND } from "../dist/index.js";
-import { ConformError, createBrowserBridge } from "../dist/browser/index.js";
-import {
-  missingCapability,
-  suiteOf,
-} from "../../../scripts/lib/capabilities.mjs";
+import { wasmDirectory, wasmSkip } from "./support/wasm.mjs";
 
-const wasmDirectory = join(
-  resolve(import.meta.dirname, "..", ".."),
-  "alpha2",
-  "wasm",
-);
-const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE=wasm fails instead.
-const skip =
-  !packaged &&
-  missingCapability(
-    "wasm",
-    suiteOf(import.meta.url),
-    "the wasm package is not built",
-  );
+const skip = wasmSkip(import.meta.url);
+const { ConformError, createBrowserBridge } = skip
+  ? {}
+  : await import("../dist/browser/index.js");
 
 async function engine() {
   const wasm = await import(

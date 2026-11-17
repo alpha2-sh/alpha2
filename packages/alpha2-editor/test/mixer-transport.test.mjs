@@ -1,6 +1,6 @@
 import { register } from "node:module";
-import test from "node:test";
 import assert from "node:assert/strict";
+import { testUnless, wasmSkip } from "./support/wasm.mjs";
 
 register("./support/worklet-hook.mjs", import.meta.url);
 globalThis.crossOriginIsolated = true;
@@ -18,7 +18,11 @@ globalThis.AudioContext = class extends EventTarget {
   async close() {}
 };
 
-const { EngineAudioMixer } = await import("../dist/browser/runtime/audio.js");
+const skip = wasmSkip(import.meta.url);
+const test = testUnless(skip);
+const { EngineAudioMixer } = skip
+  ? {}
+  : await import("../dist/browser/runtime/audio.js");
 
 test("a stop while the first block is still decoding ends Play's start without an error", async () => {
   const mixer = new EngineAudioMixer({}, { enabled: true });
