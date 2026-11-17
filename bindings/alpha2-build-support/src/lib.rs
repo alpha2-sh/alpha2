@@ -510,13 +510,16 @@ pub fn emit_ffmpeg_dev_rpath() {
     }
 }
 
-/// Puts the pinned `FFmpeg`'s libdir on the link search path from the calling package.
+/// Puts the pinned `FFmpeg`'s libdir on the link search path of every package that links it.
 ///
-/// `rusty_ffmpeg` adds that directory too, but cargo orders search paths by the dependency graph,
-/// and a system directory another dependency adds (`alsa-sys` adds `/usr/lib/<triple>`) can come
-/// first and link a distribution's older `FFmpeg` instead. The packages that call `FFmpeg` come
-/// before their audio dependencies, so a path they add wins. Only a pinned `FFmpeg`
+/// Cargo passes search paths inside a build script's `OUT_DIR` ahead of all others, which follow
+/// the dependency graph. A system directory another dependency adds (`alsa-sys` adds
+/// `/usr/lib/<triple>`) can therefore precede the libdir and link a distribution's older `FFmpeg`,
+/// so on Unix the path added is a link to the libdir inside `OUT_DIR`. Only a pinned `FFmpeg`
 /// (`FFMPEG_PKG_CONFIG_PATH` or `FFMPEG_LIBS_DIR`) is added.
+///
+/// # Panics
+/// Panics when the link cannot be made.
 pub fn emit_ffmpeg_link_search() {
     if docs_rs() {
         return;
@@ -525,9 +528,35 @@ pub fn emit_ffmpeg_link_search() {
     if matches!(source, FfmpegSource::PkgConfig(None) | FfmpegSource::Unset) {
         return;
     }
-    if let Some(libdir) = ffmpeg_libdir(source) {
-        println!("cargo:rustc-link-search=native={}", libdir.display());
+    let Some(libdir) = ffmpeg_libdir(source) else {
+        return;
+    };
+    #[cfg(unix)]
+    let libdir = {
+        let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
+        libdir_link(&out_dir, &libdir).unwrap_or_else(|error| {
+            panic!(
+                "could not link {} into {}: {error}",
+                libdir.display(),
+                out_dir.display()
+            )
+        })
+    };
+    println!("cargo:rustc-link-search=native={}", libdir.display());
+}
+
+/// A symbolic link to `libdir` at `out_dir/ffmpeg-lib`, replacing whatever an earlier run left.
+#[cfg(unix)]
+fn libdir_link(out_dir: &Path, libdir: &Path) -> std::io::Result<PathBuf> {
+    let link = out_dir.join("ffmpeg-lib");
+    match std::fs::symlink_metadata(&link) {
+        Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(&link)?,
+        Ok(_) => std::fs::remove_file(&link)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
+    std::os::unix::fs::symlink(libdir, &link)?;
+    Ok(link)
 }
 
 fn ffmpeg_libdir(source: FfmpegSource) -> Option<PathBuf> {
