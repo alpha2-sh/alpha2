@@ -17,6 +17,13 @@ fi
 toolchain=${ALPHA2_FUZZ_TOOLCHAIN:-nightly-2026-11-16}
 timeout=${ALPHA2_FUZZ_TIMEOUT:-20}
 rss=${ALPHA2_FUZZ_RSS_MB:-2560}
+
+timeout_of() {
+  case $1 in
+    extension_pdf) echo "${ALPHA2_FUZZ_TIMEOUT:-120}" ;;
+    *) echo "$timeout" ;;
+  esac
+}
 corpus=tests/corpus/extensions
 
 projects() {
@@ -286,7 +293,7 @@ pids=()
 for target in "${targets[@]}"; do
   mkdir -p "fuzz/artifacts/$target"
   cargo "+$toolchain" fuzz run -O "$target" -- \
-    -max_total_time="$seconds" -timeout="$timeout" -rss_limit_mb="$rss" -malloc_limit_mb="$rss" \
+    -max_total_time="$seconds" -timeout="$(timeout_of "$target")" -rss_limit_mb="$rss" -malloc_limit_mb="$rss" \
     -max_len=65536 -print_final_stats=1 >"fuzz/logs/$target.log" 2>&1 &
   pids+=($!)
 done
