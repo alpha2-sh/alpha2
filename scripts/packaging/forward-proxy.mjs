@@ -8,6 +8,9 @@ import { connect } from "node:net";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+/**
+ * @param {{ port?: number, onLine?: (line: string) => void }} [options]
+ */
 export async function startForwardProxy({ port = 0, onLine } = {}) {
   const lines = [];
   const record = (line) => {
@@ -19,7 +22,7 @@ export async function startForwardProxy({ port = 0, onLine } = {}) {
     record(`${incoming.method} ${incoming.url}`);
     let target;
     try {
-      target = new URL(incoming.url);
+      target = new URL(String(incoming.url));
     } catch {
       outgoing.writeHead(400).end();
       return;
@@ -41,11 +44,12 @@ export async function startForwardProxy({ port = 0, onLine } = {}) {
     incoming.pipe(upstream);
   });
   server.on("connect", (incoming, client, head) => {
-    record(`CONNECT ${incoming.url}`);
-    const separator = incoming.url.lastIndexOf(":");
+    const authority = String(incoming.url);
+    record(`CONNECT ${authority}`);
+    const separator = authority.lastIndexOf(":");
     const upstream = connect(
-      Number(incoming.url.slice(separator + 1)),
-      incoming.url.slice(0, separator).replace(/^\[|\]$/g, ""),
+      Number(authority.slice(separator + 1)),
+      authority.slice(0, separator).replace(/^\[|\]$/g, ""),
       () => {
         client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
         upstream.write(head);
@@ -60,9 +64,11 @@ export async function startForwardProxy({ port = 0, onLine } = {}) {
     upstream.on("error", () => client.destroy());
     client.on("error", () => upstream.destroy());
   });
-  await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+  await /** @type {Promise<void>} */ (
+    new Promise((resolve) => server.listen(port, "127.0.0.1", resolve))
+  );
   return {
-    port: server.address().port,
+    port: /** @type {import("node:net").AddressInfo} */ (server.address()).port,
     lines,
     close: () =>
       new Promise((resolve) => {

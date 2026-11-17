@@ -3,21 +3,16 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
 const root = resolve(import.meta.dirname, "..");
 const packageRoot = join(root, "packages", "alpha2");
-const wasm = await import(
-  pathToFileURL(join(packageRoot, "wasm", "alpha2_wasm.js")).href
-);
+const wasm = await import("../packages/alpha2/wasm/alpha2_wasm.js");
 await wasm.default({
   module_or_path: await readFile(
     join(packageRoot, "wasm", "alpha2_wasm_bg.wasm"),
   ),
 });
-const { WasmTextRasterizer } = await import(
-  pathToFileURL(join(packageRoot, "dist", "text.js")).href
-);
+const { WasmTextRasterizer } = await import("../packages/alpha2/dist/text.js");
 
 const golden = JSON.parse(
   await readFile(join(root, "tests", "golden", "text_raster.json"), "utf8"),
@@ -86,9 +81,8 @@ whole.close();
 boldOnly.close();
 console.log("verified a font collection registers every face in wasm");
 
-const { summarizeWaveform } = await import(
-  pathToFileURL(join(packageRoot, "dist", "waveform.js")).href
-);
+const { summarizeWaveform } =
+  await import("../packages/alpha2/dist/waveform.js");
 const frames = 48_000 + 123;
 const planes = [0, 1].map((channel) =>
   Float32Array.from({ length: frames }, (_, index) =>
@@ -132,9 +126,8 @@ console.log(
 );
 
 // Loudness: a -23 dBFS stereo 1 kHz sine is -23 LUFS (EBU Tech 3341 case 1).
-const { measureLoudness, planLoudnessNormalization } = await import(
-  pathToFileURL(join(packageRoot, "dist", "loudness.js")).href
-);
+const { measureLoudness, planLoudnessNormalization } =
+  await import("../packages/alpha2/dist/loudness.js");
 const rate = 48_000;
 const tone = Float32Array.from({ length: rate * 20 }, (_, index) =>
   Math.fround(
@@ -142,11 +135,15 @@ const tone = Float32Array.from({ length: rate * 20 }, (_, index) =>
   ),
 );
 const report = measureLoudness(wasm, [tone, tone], rate, 4_096);
-assert.ok(Math.abs(report.integratedLufs + 23) < 0.1, JSON.stringify(report));
+assert.ok(
+  report.integratedLufs !== null && Math.abs(report.integratedLufs + 23) < 0.1,
+  JSON.stringify(report),
+);
 assert.equal(report.frames, tone.length);
 const plan = planLoudnessNormalization(wasm, report, -14, -1);
 assert.ok(
-  Math.abs(plan.integratedLufs + 14) < 1e-9 &&
+  plan !== null &&
+    Math.abs(plan.integratedLufs + 14) < 1e-9 &&
     !plan.peakLimited &&
     !plan.limiterLimited,
 );
@@ -158,7 +155,10 @@ const limited = planLoudnessNormalization(
   -1,
 );
 assert.ok(
-  limited.limiterLimited && report.samplePeakDbfs + limited.gainDb < -20,
+  limited !== null &&
+    limited.limiterLimited &&
+    report.samplePeakDbfs !== null &&
+    report.samplePeakDbfs + limited.gainDb < -20,
 );
 assert.equal(
   planLoudnessNormalization(
@@ -172,9 +172,8 @@ console.log(
   `verified the wasm loudness meter: ${report.integratedLufs.toFixed(3)} LUFS for EBU Tech 3341 case 1`,
 );
 
-const { parseCaptions, captionTrack } = await import(
-  pathToFileURL(join(packageRoot, "dist", "captions.js")).href
-);
+const { parseCaptions, captionTrack } =
+  await import("../packages/alpha2/dist/captions.js");
 const imported = parseCaptions(
   wasm,
   "1\n00:00:01,000 --> 00:00:03,000\n<i>One</i>\n\n2\n00:00:02,000 --> 00:00:04,500\nTwo\n\nbroken\n",
@@ -204,9 +203,7 @@ console.log(
   "verified the wasm caption parser splits overlapping cues onto rows",
 );
 
-const { lintProject } = await import(
-  pathToFileURL(join(packageRoot, "dist", "project.js")).href
-);
+const { lintProject } = await import("../packages/alpha2/dist/project.js");
 const lintCorpus = JSON.parse(
   await readFile(join(root, "tests", "cases", "lint-corpus.json"), "utf8"),
 );
@@ -234,9 +231,8 @@ const geometryGolden = JSON.parse(
   ),
 );
 assert.deepEqual(JSON.parse(wasm.geometryParityAnswers()), geometryGolden);
-const { pathLength, trimPath, hitTest } = await import(
-  pathToFileURL(join(packageRoot, "dist", "geometry.js")).href
-);
+const { pathLength, trimPath, hitTest } =
+  await import("../packages/alpha2/dist/geometry.js");
 const curve = {
   subpaths: [
     {
@@ -270,6 +266,7 @@ const square = {
     },
   ],
 };
+/** @type {import("../packages/alpha2/dist/project.js").ShapeItem[]} */
 const filled = [
   { type: "path", path: { mode: "constant", value: square } },
   {
@@ -289,9 +286,7 @@ console.log(
 const layoutGolden = JSON.parse(
   await readFile(join(root, "tests", "golden", "layout_measure.json"), "utf8"),
 );
-const { measureLayout } = await import(
-  pathToFileURL(join(packageRoot, "dist", "layout.js")).href
-);
+const { measureLayout } = await import("../packages/alpha2/dist/layout.js");
 const measurer = new wasm.WasmTextMeasurer();
 measurer.addFont(
   "Alpha2 Fixture",

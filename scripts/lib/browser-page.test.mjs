@@ -11,6 +11,7 @@ const only =
 test("--browser edge resolves to the CDP runner with Edge's executable", () => {
   const edge =
     "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
+  /** @type {import("./chrome-cdp.mjs").BrowserLookup} */
   const machine = {
     env: { "PROGRAMFILES(X86)": "C:\\Program Files (x86)" },
     platform: "win32",

@@ -53,7 +53,7 @@ async function pixels(url) {
   const context = canvas.getContext("2d");
   context.drawImage(bitmap, 0, 0);
   bitmap.close();
-  return context.getImageData(0, 0, canvas.width, canvas.height).data;
+  return new Uint8Array(context.getImageData(0, 0, canvas.width, canvas.height).data.buffer);
 }
 function difference(actual, expected) {
   if (actual.length !== expected.length) {
@@ -105,7 +105,7 @@ function goldenI420(rgba, width, height) {
     // getImageData returns straight alpha, so only the zero-alpha guard and clamp are reproduced.
     return [0, 1, 2].map((channel) => Math.min(Math.max(rgba[offset + channel] / 255, 0), 1));
   };
-  const luma = ([r, g, b]) => r * kr + g * kg + b * kb;
+  const luma = /** @param {number[]} rgb */ ([r, g, b]) => r * kr + g * kg + b * kb;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       planes[y * width + x] = code(yOffset + yScale * luma(straight(x, y)));

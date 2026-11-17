@@ -72,6 +72,10 @@ test("a WebDriver browser runs the driver named for it, else the one on PATH, el
 });
 
 test("Firefox runs headed only when the run asks for it", () => {
+  /**
+   * @param {NodeJS.ProcessEnv} env
+   * @param {NodeJS.Platform} [platform]
+   */
   const firefox = (env, platform = "linux") =>
     webDriverBrowser("firefox", {
       env: { ALPHA2_GECKODRIVER: "/opt/geckodriver", ...env },
@@ -99,6 +103,7 @@ test("Firefox runs headed only when the run asks for it", () => {
 });
 
 test("Firefox is found in its default install on every platform", () => {
+  /** @type {[NodeJS.Platform, NodeJS.ProcessEnv, string][]} */
   const cases = [
     ["darwin", {}, "/Applications/Firefox.app/Contents/MacOS/firefox"],
     [
@@ -148,6 +153,7 @@ test("Firefox is found in its default install on every platform", () => {
 
 test("a page check opens Chrome unless the run names Edge, Safari or Firefox", () => {
   assert.deepEqual(PAGE_BROWSERS, ["chrome", "edge", "safari", "firefox"]);
+  /** @type {import("./chrome-cdp.mjs").BrowserLookup} */
   const machine = {
     env: { PATH: "/usr/bin" },
     platform: "linux",
@@ -160,7 +166,7 @@ test("a page check opens Chrome unless the run names Edge, Safari or Firefox", (
   });
   for (const argv of [["--browser", "firefox"], ["--browser=firefox"]]) {
     const browser = browserForRun({ argv, ...machine });
-    assert.equal(browser.kind, "webdriver");
+    assert.ok(browser?.kind === "webdriver");
     assert.equal(browser.name, "firefox");
     assert.equal(browser.webdriver.driver, "/usr/bin/geckodriver");
   }
@@ -169,7 +175,7 @@ test("a page check opens Chrome unless the run names Edge, Safari or Firefox", (
       argv: [],
       ...machine,
       env: { ...machine.env, ALPHA2_BROWSER: "firefox" },
-    }).name,
+    })?.name,
     "firefox",
   );
   assert.equal(
@@ -177,7 +183,7 @@ test("a page check opens Chrome unless the run names Edge, Safari or Firefox", (
       argv: ["--browser", "chrome"],
       ...machine,
       env: { ...machine.env, ALPHA2_BROWSER: "firefox" },
-    }).name,
+    })?.name,
     "chrome",
   );
   assert.throws(
@@ -403,7 +409,9 @@ test("a driver that dies fails the page with what it said", async () => {
   assert.ok(outcome.seconds < 10, `${outcome.seconds} s`);
 });
 
+/** @type {ReturnType<typeof webDriverBrowser> | null} */
 let firefox = null;
+/** @type {string | false} */
 let missingFirefox = false;
 try {
   firefox = webDriverBrowser("firefox");
@@ -426,11 +434,15 @@ test(
         `<title>pending</title><script>document.title = encodeURIComponent(JSON.stringify({ ok: true, host: location.host, secure: isSecureContext }));</script>`,
       );
     });
-    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await /** @type {Promise<void>} */ (
+      new Promise((resolve) => server.listen(0, "127.0.0.1", resolve))
+    );
     try {
-      const { port } = server.address();
+      const { port } = /** @type {import("node:net").AddressInfo} */ (
+        server.address()
+      );
       const title = await runWebDriverPage(
-        firefox,
+        /** @type {NonNullable<typeof firefox>} */ (firefox),
         `http://127.0.0.1:${port}/page`,
         { timeoutMs: 60_000 },
       );

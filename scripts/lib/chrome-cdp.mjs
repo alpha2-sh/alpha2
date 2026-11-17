@@ -11,7 +11,17 @@ import { track, untrack } from "./browser-cleanup.mjs";
 import { BrowserStartError } from "./browser-errors.mjs";
 import { recordSkip, required } from "./capabilities.mjs";
 
-/** ALPHA2_PARITY_CHROME, else the first installed Chrome or Chromium, else null. */
+/**
+ * @typedef {{ env?: NodeJS.ProcessEnv, platform?: NodeJS.Platform,
+ *   exists?: (path: string) => boolean }} BrowserLookup
+ */
+
+/**
+ * ALPHA2_PARITY_CHROME, else the first installed Chrome or Chromium, else null.
+ *
+ * @param {BrowserLookup} [lookup]
+ * @returns {string | null}
+ */
 export function chromeExecutable({
   env = process.env,
   platform = process.platform,
@@ -57,7 +67,12 @@ function chromeCandidates(platform, env) {
   ];
 }
 
-/** ALPHA2_EDGE, else the first installed Edge, else null. Never a fallback for Chrome. */
+/**
+ * ALPHA2_EDGE, else the first installed Edge, else null. Never a fallback for Chrome.
+ *
+ * @param {BrowserLookup} [lookup]
+ * @returns {string | null}
+ */
 export function edgeExecutable({
   env = process.env,
   platform = process.platform,
@@ -98,7 +113,7 @@ export function browserSettingsMode(env = process.env) {
     throw new Error(
       `unknown ALPHA2_BROWSER_SETTINGS ${JSON.stringify(settings)}: expected ${BROWSER_SETTINGS.join(", ")}`,
     );
-  return settings;
+  return /** @type {"harness" | "stock"} */ (settings);
 }
 
 /**
@@ -112,7 +127,10 @@ export function displayExtensions(display) {
     ["-display", display, "-queryExtensions"],
     { encoding: "utf8", timeout: 10_000 },
   );
-  if (result.error?.code === "ENOENT")
+  if (
+    /** @type {NodeJS.ErrnoException | undefined} */ (result.error)?.code ===
+    "ENOENT"
+  )
     return { tool: false, opened: false, dri3: false };
   return {
     tool: true,
@@ -146,13 +164,14 @@ export function chromeGpuMode({
   const configured = env.ALPHA2_CHROME_GPU_FLAGS;
   if (configured !== undefined)
     return { mode: "custom", flags: configured.split(/\s+/).filter(Boolean) };
-  const mode =
+  const requested =
     env.ALPHA2_CHROME_GPU ||
     (platform === "darwin" || platform === "win32" ? "machine" : "swiftshader");
-  if (!CHROME_GPU_MODES.includes(mode))
+  if (!CHROME_GPU_MODES.includes(requested))
     throw new Error(
-      `unknown ALPHA2_CHROME_GPU ${JSON.stringify(mode)}: expected ${CHROME_GPU_MODES.join(", ")}`,
+      `unknown ALPHA2_CHROME_GPU ${JSON.stringify(requested)}: expected ${CHROME_GPU_MODES.join(", ")}`,
     );
+  const mode = /** @type {"machine" | "swiftshader" | "none"} */ (requested);
   if (mode === "swiftshader")
     return {
       mode,
@@ -205,7 +224,12 @@ export function chromeGpuMode({
   };
 }
 
-/** Null when there is no Chrome, unless ALPHA2_REQUIRE names `browser`. */
+/**
+ * Null when there is no Chrome, unless ALPHA2_REQUIRE names `browser`.
+ *
+ * @param {BrowserLookup} [lookup]
+ * @returns {string | null}
+ */
 export function browserForCheck({ env = process.env, platform, exists } = {}) {
   const chrome = chromeExecutable({ env, platform, exists });
   if (chrome !== null) return chrome;
@@ -216,6 +240,12 @@ export function browserForCheck({ env = process.env, platform, exists } = {}) {
   return null;
 }
 
+/**
+ * @param {string} what
+ * @param {string} suite
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {Omit<BrowserLookup, "env">} [lookup]
+ */
 export function reportSkippedBrowser(
   what,
   suite,
@@ -369,7 +399,9 @@ export async function runWithGpuProcessRerun(run, causedExits) {
     { page: page(second), gpuProcess: second.gpuProcess },
   ];
   if (
-    [first, second].every((attempt) => attempt.gpuProcess?.exitsBeforePage > 0)
+    [first, second].every(
+      (attempt) => (attempt.gpuProcess?.exitsBeforePage ?? 0) > 0,
+    )
   )
     return {
       skipped:
@@ -443,7 +475,7 @@ function chromeSaid(stderr) {
  * @param {string} url
  * @param {object} [options]
  * @param {number} [options.timeoutMs] Default 30 s.
- * @param {(cdp: Cdp, sessionId: string) => Promise<unknown>} [options.onPage] Runs after
+ * @param {(cdp: Cdp, sessionId: string) => Promise<unknown> | void} [options.onPage] Runs after
  *   navigation starts, within the same deadline.
  * @param {object} [options.viewport]
  * @param {string} [options.initScript] Evaluated in every new document before its own scripts.
@@ -683,6 +715,12 @@ export async function processAlive(pid, platform = process.platform) {
  * Ends Chrome's whole process tree (a plain kill on Windows leaves children holding the profile and
  * stderr), then waits up to 10 s for every process in `pids`, since a lingering GPU process holds
  * the GPU the next launch opens.
+ *
+ * @param {import("node:child_process").ChildProcess} child
+ * @param {{ platform?: NodeJS.Platform,
+ *   spawnProcess?: (command: string, args: string[],
+ *     options: import("node:child_process").SpawnOptions) => import("node:events").EventEmitter,
+ *   pids?: number[], alive?: (pid: number) => Promise<boolean>, waitMs?: number }} [options]
  */
 export async function stopChrome(
   child,
@@ -758,6 +796,7 @@ class Cdp {
   #nextId = 0;
   #pending = new Map();
   #sessionId = null;
+  /** @type {Error | null} */
   #failure = null;
 
   constructor(socket) {

@@ -198,6 +198,8 @@ npm run typecheck
 
 `npm run format` and `npm run lint:fix` apply the fixes. Prettier covers the JavaScript and TypeScript files only.
 
+`npm run typecheck` also checks the harnesses in `scripts/` and the code of the browser test pages against the built packages, so it needs `npm run build` first.
+
 ## Release archives
 
 ```sh

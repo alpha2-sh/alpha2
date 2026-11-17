@@ -50,8 +50,8 @@ const server = createServer((request, response) => {
   }
   response.writeHead(404).end();
 });
-await new Promise((resolveListen) =>
-  server.listen(0, "127.0.0.1", resolveListen),
+await /** @type {Promise<void>} */ (
+  new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen))
 );
 let result;
 try {

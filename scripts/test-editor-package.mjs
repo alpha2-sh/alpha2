@@ -175,7 +175,7 @@ try {
       res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
       res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
       const path =
-        new URL(req.url, "http://localhost").pathname.replace(
+        new URL(req.url ?? "/", "http://localhost").pathname.replace(
           /^\/editor\/?/,
           "",
         ) || "index.html";
@@ -194,11 +194,14 @@ try {
     }
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = /** @type {import("node:net").AddressInfo} */ (
+    server.address()
+  );
   const browser = JSON.parse(
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test`,
+        `http://127.0.0.1:${port}/editor/?test`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -227,7 +230,7 @@ try {
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test&fallback`,
+        `http://127.0.0.1:${port}/editor/?test&fallback`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -236,7 +239,7 @@ try {
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test&context-loss`,
+        `http://127.0.0.1:${port}/editor/?test&context-loss`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -245,7 +248,7 @@ try {
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test&gpu=none`,
+        `http://127.0.0.1:${port}/editor/?test&gpu=none`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -275,7 +278,7 @@ try {
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test&incomplete-graph`,
+        `http://127.0.0.1:${port}/editor/?test&incomplete-graph`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -284,7 +287,7 @@ try {
     decodeURIComponent(
       await runBrowserPage(
         pageBrowser,
-        `http://127.0.0.1:${server.address().port}/editor/?test&extensions`,
+        `http://127.0.0.1:${port}/editor/?test&extensions`,
         { timeoutMs: 120000 },
       ),
     ),
@@ -294,7 +297,7 @@ try {
       decodeURIComponent(
         await runBrowserPage(
           pageBrowser,
-          `http://127.0.0.1:${server.address().port}/editor/?test&export=${mode}`,
+          `http://127.0.0.1:${port}/editor/?test&export=${mode}`,
           { timeoutMs: 120000 },
         ),
       ),
@@ -307,7 +310,7 @@ try {
       decodeURIComponent(
         await runBrowserPage(
           pageBrowser,
-          `http://127.0.0.1:${server.address().port}/editor/?test&${query}`,
+          `http://127.0.0.1:${port}/editor/?test&${query}`,
           { timeoutMs: 120000 },
         ),
       ),

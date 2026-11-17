@@ -60,7 +60,10 @@ export function createHarness(options, scratch) {
       });
       const ms = performance.now() - started;
       const stderr = result.stderr?.toString("utf8") ?? "";
-      if (result.error?.code === "ETIMEDOUT") {
+      if (
+        /** @type {NodeJS.ErrnoException | undefined} */ (result.error)
+          ?.code === "ETIMEDOUT"
+      ) {
         throw new Error(
           `the ${request.operation} request to ${options.host} did not finish within ${TIMEOUT_MS / 1000} s and was killed: ${stderr.slice(-1000)}`,
         );
@@ -153,7 +156,8 @@ child.on("exit", (code, signal) => process.exit(code ?? (signal === null ? 1 : 1
       );
       const stderr = result.stderr ?? "";
       if (
-        result.error?.code === "ETIMEDOUT" ||
+        /** @type {NodeJS.ErrnoException | undefined} */ (result.error)
+          ?.code === "ETIMEDOUT" ||
         stderr.endsWith("killed: did not finish\n")
       ) {
         throw new Error(

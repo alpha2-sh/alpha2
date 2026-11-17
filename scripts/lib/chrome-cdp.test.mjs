@@ -155,7 +155,11 @@ test("chrome picks the machine GPU on macOS and Windows and SwiftShader on Linux
     mode: "machine",
     flags: [],
   });
-  for (const platform of ["linux", "darwin", "win32"]) {
+  for (const platform of /** @type {NodeJS.Platform[]} */ ([
+    "linux",
+    "darwin",
+    "win32",
+  ])) {
     assert.deepEqual(
       chromeGpuMode({ env: { ALPHA2_CHROME_GPU: "swiftshader" }, platform }),
       swiftShader,
@@ -346,6 +350,7 @@ test("a Chrome that exits before its endpoint fails with a start error", async (
 });
 
 test("without Chrome a check skips its browser half unless the run requires it", () => {
+  /** @type {import("./chrome-cdp.mjs").BrowserLookup} */
   const none = { platform: "linux", exists: () => false };
   assert.equal(browserForCheck({ ...none, env: {} }), null);
   assert.throws(
@@ -385,10 +390,14 @@ test("a run's end lists each case the browser could not run, with its reason", (
 });
 
 test("a static server sends the repository's files on Windows as on POSIX, and nothing outside it", () => {
-  for (const [path, root, sep] of [
+  for (const [
+    path,
+    root,
+    sep,
+  ] of /** @type {[typeof win32, string, string][]} */ ([
     [win32, "C:\\work\\alpha2", "\\"],
     [posix, "/work/alpha2", "/"],
-  ]) {
+  ])) {
     const inside = (...parts) => [root, ...parts].join(sep);
     for (const [pathname, expected] of [
       [
@@ -477,10 +486,14 @@ test(
     const timeoutMs = 3_000;
     const outcome = await settled(
       (onPage) =>
-        runChromePage(chrome, page("setTimeout(() => { for (;;) {} }, 200);"), {
-          timeoutMs,
-          onPage,
-        }),
+        runChromePage(
+          /** @type {string} */ (chrome),
+          page("setTimeout(() => { for (;;) {} }, 200);"),
+          {
+            timeoutMs,
+            onPage,
+          },
+        ),
       90_000,
     );
     assert.equal(outcome.hung, undefined, "the check never ended");
@@ -497,7 +510,7 @@ test(
     const timeoutMs = 20_000;
     const outcome = await settled(
       (opened) =>
-        runChromePage(chrome, page(""), {
+        runChromePage(/** @type {string} */ (chrome), page(""), {
           timeoutMs,
           onPage: (cdp, sessionId) => {
             opened();
@@ -519,7 +532,7 @@ test(
     const outcome = await settled(
       (onPage) =>
         runChromePage(
-          chrome,
+          /** @type {string} */ (chrome),
           page(
             "document.title = encodeURIComponent(JSON.stringify({ ok: true }));",
           ),
@@ -569,15 +582,15 @@ test("a changed GPU process id marks the page as environment", () => {
   const changed = gpuProcessRecord({ startPid: 40, endPid: 52, exits: 0 });
   assert.equal(changed.restarted, true);
   const marked = gpuProcessEnvironment(changed, { error: "device lost" });
+  assert.ok(marked);
   assert.equal(marked.capability, "browser-gpu-process");
   assert.match(marked.skipped, /^gpu-process-restarted: .*from 40 to 52/);
   assert.equal(marked.page, "device lost");
   assert.equal(marked.ok, undefined);
   const logged = gpuProcessRecord({ startPid: 52, endPid: 52, exits: 1 });
-  assert.match(
-    gpuProcessEnvironment(logged, { ok: true }).skipped,
-    /logged 1 GPU process exit/,
-  );
+  const loggedSkip = gpuProcessEnvironment(logged, { ok: true });
+  assert.ok(loggedSkip);
+  assert.match(loggedSkip.skipped, /logged 1 GPU process exit/);
   for (const record of [
     gpuProcessRecord({ startPid: null, endPid: 52, exits: 0 }),
     gpuProcessRecord({ startPid: 40, endPid: undefined, exits: 0 }),

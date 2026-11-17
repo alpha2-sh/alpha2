@@ -45,7 +45,10 @@ const bytes = await readFile(
   ),
 );
 // wgpu's wasm-bindgen imports, which the audio path never calls, are stubbed to fail loudly.
-const module = await WebAssembly.compile(bytes);
+const module = await WebAssembly.compile(
+  /** @type {Uint8Array<ArrayBuffer>} */ (bytes),
+);
+/** @type {Record<string, Record<string, () => never>>} */
 const imports = {};
 for (const { module: name, name: field, kind } of WebAssembly.Module.imports(
   module,
@@ -58,15 +61,13 @@ for (const { module: name, name: field, kind } of WebAssembly.Module.imports(
   };
 }
 const instance = await WebAssembly.instantiate(module, imports);
-const wasm = BigInt.asUintN(
-  64,
-  instance.exports.alpha2_audio_determinism_hash(),
-)
+const hashes = /** @type {Record<string, () => bigint>} */ (instance.exports);
+const wasm = BigInt.asUintN(64, hashes.alpha2_audio_determinism_hash())
   .toString(16)
   .padStart(16, "0");
 assert.equal(wasm, native, `wasm ${wasm} != native ${native}`);
 console.log(`verified the engine mix hashes to ${native} natively and as wasm`);
-const wasmWaveform = BigInt.asUintN(64, instance.exports.alpha2_waveform_hash())
+const wasmWaveform = BigInt.asUintN(64, hashes.alpha2_waveform_hash())
   .toString(16)
   .padStart(16, "0");
 assert.equal(
@@ -77,7 +78,7 @@ assert.equal(
 console.log(
   `verified the waveform summary hashes to ${nativeWaveform} natively and as wasm`,
 );
-const wasmLoudness = BigInt.asUintN(64, instance.exports.alpha2_loudness_hash())
+const wasmLoudness = BigInt.asUintN(64, hashes.alpha2_loudness_hash())
   .toString(16)
   .padStart(16, "0");
 assert.equal(
@@ -88,7 +89,7 @@ assert.equal(
 console.log(
   `verified the loudness report hashes to ${nativeLoudness} natively and as wasm`,
 );
-const wasmTimeMaps = BigInt.asUintN(64, instance.exports.alpha2_time_map_hash())
+const wasmTimeMaps = BigInt.asUintN(64, hashes.alpha2_time_map_hash())
   .toString(16)
   .padStart(16, "0");
 assert.equal(
@@ -99,7 +100,7 @@ assert.equal(
 console.log(
   `verified the time-mapped mix hashes to ${nativeTimeMaps} natively and as wasm`,
 );
-const wasmResample = BigInt.asUintN(64, instance.exports.alpha2_resample_hash())
+const wasmResample = BigInt.asUintN(64, hashes.alpha2_resample_hash())
   .toString(16)
   .padStart(16, "0");
 assert.equal(
@@ -110,7 +111,7 @@ assert.equal(
 console.log(
   `verified the resampled source hashes to ${nativeResample} natively and as wasm`,
 );
-const wasmMono = BigInt.asUintN(64, instance.exports.alpha2_mono_hash())
+const wasmMono = BigInt.asUintN(64, hashes.alpha2_mono_hash())
   .toString(16)
   .padStart(16, "0");
 assert.equal(
@@ -123,7 +124,7 @@ console.log(
 );
 const wasmRateAndBlocks = BigInt.asUintN(
   64,
-  instance.exports.alpha2_rate_and_blocks_hash(),
+  hashes.alpha2_rate_and_blocks_hash(),
 )
   .toString(16)
   .padStart(16, "0");
@@ -135,7 +136,7 @@ assert.equal(
 console.log(
   `verified the 44.1 kHz mix in uneven blocks hashes to ${nativeRateAndBlocks} natively and as wasm`,
 );
-const wasmStretch = BigInt.asUintN(64, instance.exports.alpha2_stretch_hash())
+const wasmStretch = BigInt.asUintN(64, hashes.alpha2_stretch_hash())
   .toString(16)
   .padStart(16, "0");
 assert.equal(

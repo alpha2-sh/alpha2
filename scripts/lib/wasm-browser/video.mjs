@@ -347,6 +347,7 @@ for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
   planes[width * height + cw * ch + y * cw + x] = red ? 220 : 70;
 }
 const layout = [{ offset: 0, stride: width }, { offset: width * height, stride: cw }, { offset: width * height + cw * ch, stride: cw }];
+/** @type {VideoColorSpaceInit} */
 const colorSpace = { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false };
 const project = JSON.stringify({
   schema_version: 1, id: "siting", name: "Siting",
@@ -416,6 +417,7 @@ const raw = new Uint8Array(frame.allocationSize());
 const planes = await frame.copyTo(raw);
 const sample = (index, x, y, step = 1, phase = 0) =>
   raw[planes[index].offset + y * planes[index].stride + x * step + phase];
+/** @returns {[number, number, number]} */
 const yuv = (x, y) => {
   const cx = x >> 1, cy = y >> 1;
   return frame.format === "I420"
@@ -471,7 +473,7 @@ for (let y = 0; y < height; y += 2)
     const encoded = matrix(yuv(x, y)).map(clamp);
     for (let c = 0; c < 3; c++) {
       const actual = rgba[y * row + x * 4 + c];
-      for (const [target, value] of [[contract, encoded[c]], [reencoded, bt709ToSrgb(encoded[c])]]) {
+      for (const [target, value] of /** @type {[ReturnType<typeof stats>, number][]} */ ([[contract, encoded[c]], [reencoded, bt709ToSrgb(encoded[c])]])) {
         const d = actual - value * 255;
         target.worst = Math.max(target.worst, Math.abs(d));
         target.sum += Math.abs(d);
@@ -665,6 +667,7 @@ const { canEncodeVideoTrack, MediabunnySink, MediabunnyVideoDecoder } = await im
 const { DecoderRefillCoordinator } = await import("/packages/alpha2/dist/media.js");
 // A 4 s 1080p file made here, so a clip of its first frames never reaches the end of its stream.
 const frameRate = { num: 30, den: 1 };
+/** @type {import("/packages/alpha2/dist/rate-control.js").VideoRateControl} */
 const rate = { bitrate: 4_000_000, bitrateMode: "variable" };
 const encoding = await canEncodeVideoTrack("avc", { width: 1920, height: 1080, frameRate, rate });
 if (encoding === null) skip("webcodecs-video", "this browser has no H.264 encoder");
@@ -680,7 +683,7 @@ for (let index = 0; index < 120; index += 1) {
   await sink.writeVideo({ index: BigInt(index), timeTicks: BigInt(index * 4000), frame });
 }
 await sink.finish();
-const bytes = new Uint8Array(sink.output.buffer);
+const bytes = new Uint8Array(/** @type {{ readonly buffer: ArrayBuffer }} */ (sink.output).buffer);
 const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const play = async (sources, options) => {
   Object.assign(counts, { live: 0, peak: 0, framesHeld: 0 });
@@ -734,6 +737,7 @@ const T = 120000;
 const FPS = 30;
 const TICKS_PER_FRAME = T / FPS;
 const FRAMES = 3;
+/** @type {import("/packages/alpha2/dist/project.js").ColorMetadata} */
 const HLG = { primaries: "bt2020", transfer: "hlg", matrix: "bt2020_ncl", range: "limited", dynamic_range: "hdr" };
 const FILES = [
   { path: "/tests/corpus/hevc-main10-hlg.mp4", hdr: true, subject: true },
@@ -811,13 +815,17 @@ const render = async (file, id, color) => {
   } finally {
     probe.close();
   }
-  const host = await createWasmRenderWorkerHost(WebEffectRegistry, JSON.stringify(projectFor(id, size, color)), { renderer: "gpu" })(
+  const host = await createWasmRenderWorkerHost(
+    /** @type {import("/packages/alpha2/dist/effects.js").WasmEffectRegistryBinding} */ (WebEffectRegistry),
+    JSON.stringify(projectFor(id, size, color)),
+    { renderer: "gpu" },
+  )(
     new OffscreenCanvas(size[0], size[1]),
   );
   const coordinator = new DecoderRefillCoordinator(
     (sourceId, { decode }) =>
       MediabunnyVideoDecoder.open(sourceId, file, decode === "software" ? { hardwareAcceleration: "prefer-software" } : {}),
-    (decoded) => host.uploadVideoFrame(decoded),
+    async (decoded) => host.uploadVideoFrame(decoded),
   );
   try {
     const luma = [];

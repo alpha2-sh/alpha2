@@ -20,9 +20,20 @@ import { missingCapability, suiteOf } from "./lib/capabilities.mjs";
 const root = resolve(import.meta.dirname, "..");
 const buildRelease = join(root, "scripts/build-native-release.sh");
 const smokeArchive = join(root, "release/ffmpeg-lgpl/smoke-archive.sh");
-const version = readFileSync(join(root, "Cargo.toml"), "utf8").match(
+const version = captured(
   /^version = "([^"]+)"$/m,
-)[1];
+  readFileSync(join(root, "Cargo.toml"), "utf8"),
+);
+
+/**
+ * @param {RegExp} pattern
+ * @param {string} text
+ */
+function captured(pattern, text) {
+  const match = pattern.exec(text);
+  if (match === null) throw new Error(`${pattern} does not match`);
+  return match[1];
+}
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, { encoding: "utf8", ...options });
@@ -239,6 +250,7 @@ function stubOtool(scratch, installName) {
   );
   chmodSync(otool, 0o755);
   // The macOS branch unsets only DYLD_*, so a caller's LD_LIBRARY_PATH would leak in.
+  /** @type {NodeJS.ProcessEnv} */
   const env = { ...process.env, PATH: `${stubs}:${process.env.PATH}` };
   delete env.LD_LIBRARY_PATH;
   return env;
@@ -584,14 +596,16 @@ function fakeMacRelease(scratch) {
     join(ws, "release/ffmpeg-lgpl/smoke-archive.sh"),
     "#!/bin/sh\nexit 0\n",
   );
-  const report = /^report = "(.*)"$/m.exec(
+  const report = captured(
+    /^report = "(.*)"$/m,
     read(join(ws, "release/ffmpeg-lgpl/manifest.toml")).split(
       "[assets.macos-arm64]",
     )[1],
-  )[1];
-  const tag = /^release_tag = "(.*)"$/m.exec(
+  );
+  const tag = captured(
+    /^release_tag = "(.*)"$/m,
     read(join(ws, "release/ffmpeg-lgpl/manifest.toml")),
-  )[1];
+  );
   mkdirSync(join(scratch, "cache", tag, "downloads"), { recursive: true });
   writeFileSync(join(scratch, "cache", tag, "downloads", report), "");
 
@@ -638,6 +652,7 @@ function fakeMacRelease(scratch) {
       "",
     ].join("\n"),
   );
+  /** @type {NodeJS.ProcessEnv} */
   const env = {
     ...process.env,
     PATH: `${stubs}:${process.env.PATH}`,

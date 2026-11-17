@@ -9,12 +9,16 @@ import { resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+/**
+ * @param {string} root
+ * @param {{ port?: number, onRequest?: (path: string) => void }} [options]
+ */
 export async function serveMirror(root, { port = 0, onRequest } = {}) {
   const base = resolve(root);
   const requests = [];
   const server = createServer((request, response) => {
     const path = decodeURIComponent(
-      new URL(request.url, "http://mirror").pathname,
+      new URL(String(request.url), "http://mirror").pathname,
     );
     requests.push(path);
     onRequest?.(path);
@@ -32,9 +36,14 @@ export async function serveMirror(root, { port = 0, onRequest } = {}) {
     response.writeHead(200, { "content-length": size });
     createReadStream(file).pipe(response);
   });
-  await new Promise((done) => server.listen(port, "127.0.0.1", done));
+  await /** @type {Promise<void>} */ (
+    new Promise((done) => server.listen(port, "127.0.0.1", done))
+  );
+  const { port: bound } = /** @type {import("node:net").AddressInfo} */ (
+    server.address()
+  );
   return {
-    url: `http://127.0.0.1:${server.address().port}`,
+    url: `http://127.0.0.1:${bound}`,
     requests,
     close: () =>
       new Promise((done) => {

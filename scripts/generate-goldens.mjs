@@ -16,6 +16,7 @@ const update = (args) =>
     env: { ...process.env, ALPHA2_UPDATE_GOLDENS: "1" },
   });
 
+/** @type {[string, () => unknown][]} */
 const steps = [
   [
     "PNG goldens and the time-rules table",
