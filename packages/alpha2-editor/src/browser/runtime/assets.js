@@ -207,11 +207,10 @@ export class AssetLibrary {
 
   /**
    * Imports one browser file as an image, video or audio asset. Rejects with an `EditorError`:
-   * `unsupported_media` for a file that is none of those, `unreadable_media` when this browser
-   * cannot read it (with the decoder's or demuxer's reason as message and `cause`), or with
-   * `signal`'s reason once it aborts a decode. When this browser decodes none of a video, the
-   * `cause` is a `DecodeUnavailableError` (`DECODE_UNAVAILABLE`, with the track's `facts`), as
-   * extraction reports it.
+   * `unsupported_media` for a file that is none of those or a video this browser decodes none of
+   * (its `cause` a `DecodeUnavailableError` with the track's `facts`), `unreadable_media` when this
+   * browser cannot read it (with the decoder's or demuxer's reason as message and `cause`), or with
+   * `signal`'s reason once it aborts a decode.
    */
   async importFile(file, { signal } = {}) {
     return (await this.#import(file, signal)).asset;
