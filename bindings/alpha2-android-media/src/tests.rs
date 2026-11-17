@@ -218,8 +218,13 @@ mod encode {
         false
     }
 
-    /// Exports the clip into `name`, `WebM` when `webm`, else MP4.
-    fn export(name: &str, video: VideoCodec, audio: AudioCodec, webm: bool) -> std::path::PathBuf {
+    /// Exports the clip into `name`, `WebM` when `webm`, else MP4, and names the encoders used.
+    fn export(
+        name: &str,
+        video: VideoCodec,
+        audio: AudioCodec,
+        webm: bool,
+    ) -> (std::path::PathBuf, String) {
         let rate = FrameRate::new(30, 1).expect("rate");
         let config = VideoEncodeConfig {
             codec: video,
@@ -248,12 +253,13 @@ mod encode {
         let audio_encoder = AndroidAudioEncoders
             .open(&audio_config)
             .unwrap_or_else(|error| panic!("{name}: no {audio:?} encoder: {error}"));
-        eprintln!(
-            "{name}: {} (hardware {}), {}",
+        let encoders = format!(
+            "{} (hardware {}), {}",
             encoder.name(),
             encoder.hardware(),
             audio_encoder.name()
         );
+        eprintln!("{name}: {encoders}");
         let path = std::env::temp_dir().join(name);
         let file = std::fs::OpenOptions::new()
             .read(true)
@@ -282,7 +288,46 @@ mod encode {
         }
         tone(&mut sink);
         sink.finish().expect("finish");
-        path
+        (path, encoders)
+    }
+
+    /// The first difference between two exports' tracks or packets, or `None` when their
+    /// elementary streams and timing match.
+    fn stream_difference(first: &std::path::Path, second: &std::path::Path) -> Option<String> {
+        let mut first = alpha2_container::open(first).expect("reads back");
+        let mut second = alpha2_container::open(second).expect("reads back");
+        let tracks = first.tracks().to_vec();
+        if tracks != second.tracks() {
+            return Some(format!("tracks {tracks:?} vs {:?}", second.tracks()));
+        }
+        for track in tracks {
+            for index in 0.. {
+                let packets = (
+                    first.next_packet(track.id).expect("packet"),
+                    second.next_packet(track.id).expect("packet"),
+                );
+                let (a, b) = match packets {
+                    (None, None) => break,
+                    (Some(a), Some(b)) if a == b => continue,
+                    (a, b) => (a, b),
+                };
+                let byte = a
+                    .as_ref()
+                    .zip(b.as_ref())
+                    .and_then(|(a, b)| a.data.iter().zip(&b.data).position(|(x, y)| x != y));
+                let describe = |packet: Option<alpha2_container::Packet>| {
+                    packet.map(|p| (p.pts, p.dts, p.duration, p.keyframe, p.data.len()))
+                };
+                return Some(format!(
+                    "{:?} packet {index}: (pts, dts, duration, keyframe, bytes) {:?} vs {:?}, \
+                     first different byte {byte:?}",
+                    track.kind,
+                    describe(a),
+                    describe(b)
+                ));
+            }
+        }
+        None
     }
 
     fn check(path: &std::path::Path) {
@@ -350,18 +395,26 @@ mod encode {
 
     #[test]
     fn h264_and_aac_export_reads_back_frame_for_frame() {
-        let path = export("a2-h264-aac.mp4", VideoCodec::H264, AudioCodec::Aac, false);
+        let (path, encoders) = export("a2-h264-aac.mp4", VideoCodec::H264, AudioCodec::Aac, false);
         check(&path);
-        let again = export(
+        let (again, encoders_again) = export(
             "a2-h264-aac-2.mp4",
             VideoCodec::H264,
             AudioCodec::Aac,
             false,
         );
         let same = std::fs::read(&path).ok() == std::fs::read(&again).ok();
+        let difference = (!same).then(|| {
+            stream_difference(&path, &again)
+                .unwrap_or_else(|| "the elementary streams match, the container differs".into())
+        });
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(again);
-        assert!(same, "a repeated export on the same device differs");
+        assert!(
+            difference.is_none(),
+            "a repeated export on the same device differs ({encoders}, then {encoders_again}): {}",
+            difference.unwrap_or_default()
+        );
     }
 
     #[test]
@@ -379,7 +432,7 @@ mod encode {
             ),
         ] {
             if encodes(video, capability) {
-                let path = export(name, video, AudioCodec::Opus, true);
+                let (path, _) = export(name, video, AudioCodec::Opus, true);
                 check(&path);
                 let _ = std::fs::remove_file(path);
             }
@@ -389,7 +442,7 @@ mod encode {
     #[test]
     fn hevc_and_opus_export_reads_back_where_the_device_has_them() {
         if encodes(VideoCodec::Hevc, Capability::MediacodecEncodeHevc) {
-            let path = export(
+            let (path, _) = export(
                 "a2-hevc-opus.mp4",
                 VideoCodec::Hevc,
                 AudioCodec::Opus,
