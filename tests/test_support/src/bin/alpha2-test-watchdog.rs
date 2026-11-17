@@ -271,6 +271,13 @@ fn drain_after_exit(receiver: &mpsc::Receiver<Output>, status: ExitStatus) -> Ex
     status
 }
 
+/// Whether `name` is a `CARGO_TARGET_<TRIPLE>_RUNNER` variable, which a test's own `cargo run` must
+/// not inherit.
+fn is_cargo_runner_variable(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|name| name.starts_with("CARGO_TARGET_") && name.ends_with("_RUNNER"))
+}
+
 fn main() {
     let mut args = std::env::args_os().skip(1);
     let Some(program) = args.next() else {
@@ -291,6 +298,11 @@ fn main() {
         .into_owned();
     let mut command = Command::new(&program);
     command.args(args).stdout(Stdio::piped());
+    for (name, _) in std::env::vars_os() {
+        if is_cargo_runner_variable(&name) {
+            command.env_remove(name);
+        }
+    }
     allow_debugger(&mut command);
     let mut child = command
         .spawn()
@@ -355,6 +367,22 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_cargo_runner_variables_are_dropped_for_the_test_binary() {
+        for (name, dropped) in [
+            ("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER", true),
+            ("CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER", true),
+            ("CARGO_TARGET_DIR", false),
+            ("ALPHA2_TEST_WATCHDOG_SECS", false),
+        ] {
+            assert_eq!(
+                is_cargo_runner_variable(std::ffi::OsStr::new(name)),
+                dropped,
+                "{name}"
+            );
+        }
+    }
 
     const NONE: [&str; 0] = [];
 
