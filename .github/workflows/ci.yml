@@ -4,8 +4,7 @@ on:
   pull_request:
   push:
     branches: [main, "prerelease-v*"]
-  schedule:
-    - cron: "17 3 * * *"
+  # scheduled.yml starts the nightly run on the active branch.
   workflow_dispatch:
     inputs:
       jobs:

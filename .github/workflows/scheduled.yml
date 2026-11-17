@@ -1,8 +1,10 @@
 name: scheduled
 
-# Weekly checks too slow for every change.
+# Weekly checks too slow for every change, and the start of the nightly `ci` run.
 on:
   schedule:
+    # The two crons are matched by text in the `dispatch` job.
+    - cron: "17 3 * * *"
     - cron: "41 2 * * 1"
   workflow_dispatch:
     inputs:
@@ -18,7 +20,32 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # A scheduled run uses the default branch's workflows and code, so it only starts the runs on the
+  # branch work lands on: the repository variable SCHEDULED_BRANCH, else the default branch.
+  dispatch:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BRANCH: ${{ vars.SCHEDULED_BRANCH || github.event.repository.default_branch }}
+    steps:
+      - name: Nightly ci on the active branch
+        if: github.event.schedule == '17 3 * * *'
+        run: |
+          gh workflow run ci.yml --ref "$BRANCH"
+          echo "Started ci on $BRANCH" >> "$GITHUB_STEP_SUMMARY"
+      - name: Weekly fuzz and Miri on the active branch
+        if: github.event.schedule == '41 2 * * 1'
+        run: |
+          gh workflow run scheduled.yml --ref "$BRANCH"
+          echo "Started scheduled on $BRANCH" >> "$GITHUB_STEP_SUMMARY"
+
   fuzz-targets:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -68,6 +95,7 @@ jobs:
           if-no-files-found: ignore
 
   miri:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
