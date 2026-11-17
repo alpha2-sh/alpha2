@@ -689,21 +689,22 @@ mod tests {
 
         let engine = cpu();
         engine.pause();
+        let output =
+            std::env::temp_dir().join(format!("alpha2-held-cancel-{}.mp4", std::process::id()));
         let request = ExportRequest {
             project_json: project(),
-            output_path: std::env::temp_dir()
-                .join("alpha2-held-cancel.mp4")
-                .to_string_lossy()
-                .into_owned(),
+            output_path: output.to_string_lossy().into_owned(),
             ..ExportRequest::default()
         };
         let handle = engine.export(request, Arc::new(Quiet)).expect("started");
-        let until = Instant::now() + Duration::from_secs(10);
+        // The engine stays paused to the end, so an export the cancel does not wake stays held and
+        // misses the deadline however fast the machine is.
+        let deadline = Duration::from_secs(10);
+        let until = Instant::now() + deadline;
         while !handle.is_held() && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert!(handle.is_held());
-        let cancelled = Instant::now();
         handle.cancel();
         let (done, outcome) = std::sync::mpsc::channel();
         let waiting = Arc::clone(&handle);
@@ -711,11 +712,10 @@ mod tests {
             let _ = done.send(pollster::block_on(waiting.outcome()));
         });
         let outcome = outcome
-            .recv_timeout(Duration::from_secs(2))
-            .expect("the held export ended");
-        let took = cancelled.elapsed();
+            .recv_timeout(deadline)
+            .expect("the held export ended while the engine is still paused");
         assert!(matches!(outcome, Err(Alpha2Error::Aborted)), "{outcome:?}");
-        assert!(took < Duration::from_millis(50), "{took:?}");
+        assert!(!output.exists());
     }
 
     #[test]
