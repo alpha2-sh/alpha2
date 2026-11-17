@@ -85,25 +85,25 @@ jobs:
         run: npm ci
       - id: fmt
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: cargo fmt --check
+        run: scripts/preflight.sh fmt
       - id: metadata
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: cargo metadata --locked --format-version 1 > /dev/null
+        run: scripts/preflight.sh metadata
       - id: clippy
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: npm run lint:rust
+        run: scripts/preflight.sh clippy
       - id: clippy-native
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: cargo clippy -p alpha2-native --all-targets -- -D warnings
+        run: scripts/preflight.sh clippy-native
       - id: schema
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: scripts/check-schema-fresh.sh
+        run: scripts/preflight.sh schema
       - id: extension-features
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: scripts/check-extension-features.sh
+        run: scripts/preflight.sh extension-features
       - id: native-features
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: scripts/check-native-features.sh
+        run: scripts/preflight.sh native-features
       - id: bench-timeline
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: cargo bench -p alpha2-eval --bench timeline_evaluation
@@ -215,16 +215,16 @@ jobs:
           path: packages
       - id: format
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: npm run format:check
+        run: scripts/preflight.sh js-format
       - id: test-js
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: npm run test:js
       - id: lint
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: npm run lint
+        run: scripts/preflight.sh js-lint
       - id: typecheck
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: npm run typecheck
+        run: scripts/preflight.sh js-typecheck
       - id: wasm-parity
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: npm run test:wasm-parity
@@ -233,7 +233,7 @@ jobs:
         run: npm run test:render-determinism
       - id: package
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: npm run test:package
+        run: scripts/preflight.sh npm-package
       - id: clean-consumers
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: scripts/test-clean-consumers.sh
@@ -650,9 +650,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-rust
       - id: clippy
-        run: >-
-          cargo clippy -p alpha2-wasm -p alpha2-audio-worklet
-          --target wasm32-unknown-unknown -- -D warnings
+        run: scripts/preflight.sh wasm-clippy
       - if: always()
         uses: ./.github/actions/test-report
         with:
@@ -675,10 +673,10 @@ jobs:
           cache-workspaces: fuzz
       - id: fmt
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: cargo fmt --manifest-path fuzz/Cargo.toml --check
+        run: scripts/preflight.sh fuzz-fmt
       - id: clippy
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: cargo clippy --manifest-path fuzz/Cargo.toml --locked --bins -- -D warnings
+        run: scripts/preflight.sh fuzz-clippy
       - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
         id: cargo-fuzz
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
@@ -718,19 +716,16 @@ jobs:
           cache-workspaces: plugins
       - id: fmt
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: cargo fmt --manifest-path plugins/Cargo.toml --all --check
+        run: scripts/preflight.sh plugins-fmt
       - id: clippy
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: cargo clippy --manifest-path plugins/Cargo.toml --locked --all-targets -- -D warnings
+        run: scripts/preflight.sh plugins-clippy
       - id: clippy-wasm
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: >-
-          cargo clippy --manifest-path plugins/Cargo.toml --locked --target wasm32-unknown-unknown
-          -p alpha2-plugin-sdk -p alpha2-plugin-fixture-digest -p alpha2-plugin-fixture-scripted
-          -- -D warnings
+        run: scripts/preflight.sh plugins-clippy-wasm
       - id: test
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: cargo test --manifest-path plugins/Cargo.toml --locked 2>&1 | tee target/test-logs/test.log
+        run: scripts/preflight.sh plugins-test 2>&1 | tee target/test-logs/test.log
       - name: Pack the plugins (wasm32 and the host triple; the wasm modules are checked)
         id: pack
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
@@ -791,7 +786,7 @@ jobs:
           -p alpha2-os -p alpha2-build-support --all-features --all-targets -- -D warnings
       - id: native-features
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
-        run: scripts/check-native-features.sh
+        run: scripts/preflight.sh native-features
       - name: The native crates build with the rust-version toolchain
         id: msrv
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
@@ -1167,12 +1162,7 @@ jobs:
       - name: Lint and type checks
         id: lint
         if: ${{ !cancelled() && steps.ready.outcome == 'success' && runner.os == 'Linux' && matrix.python == '3.11' }}
-        run: |
-          "$PY/ruff" check src tests ../alpha2-host
-          "$PY/ruff" format --check src tests ../alpha2-host
-          "$PY/mypy"
-          "$PY/mypy" --platform win32
-          "$PY/mypy" --platform darwin
+        run: ../../scripts/preflight.sh python-lint
       - id: pytest
         if: ${{ !cancelled() && steps.ready.outcome == 'success' }}
         run: '"$PY/pytest"'
