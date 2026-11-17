@@ -1031,13 +1031,19 @@ fn write_silence(path: &std::path::Path, rate: u32, seconds: u32) {
 #[cfg(any(target_os = "android", target_os = "ios"))]
 #[test]
 fn a_preview_of_a_long_recording_ends_at_once_and_plays_from_windows() {
+    use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
+
+    use alpha2_host_core::audio_stream::INJECT_DECODE_DELAY_MS_PER_SECOND;
 
     use crate::{Player, PlayerRequest};
 
+    const SECONDS: u32 = 3_600;
+    const DECODE_DELAY_MS_PER_SECOND: u64 = 20;
+
     let tests = tests_dir();
     let wav = std::env::temp_dir().join("alpha2-long-silence.wav");
-    write_silence(&wav, 8_000, 3_600);
+    write_silence(&wav, 8_000, SECONDS);
     let mut project: Value = serde_json::from_str(
         &std::fs::read_to_string(tests.join("cases/host-audio-export-project.json"))
             .expect("project"),
@@ -1072,14 +1078,17 @@ fn a_preview_of_a_long_recording_ends_at_once_and_plays_from_windows() {
     let engine = Alpha2::new(EngineConfig::default());
 
     let player = Player::new(Arc::clone(&engine), request.clone()).expect("player");
+    INJECT_DECODE_DELAY_MS_PER_SECOND.store(DECODE_DELAY_MS_PER_SECOND, Ordering::Relaxed);
     player.play();
     std::thread::sleep(Duration::from_millis(100));
     let ending = Instant::now();
     player.end();
     let took = ending.elapsed();
-    eprintln!("end() during the audio decode took {took:?}");
-    // Far below decoding the whole recording, with room for a slow simulator.
-    assert!(took < Duration::from_secs(2), "{took:?}");
+    INJECT_DECODE_DELAY_MS_PER_SECOND.store(0, Ordering::Relaxed);
+    let whole = Duration::from_millis(DECODE_DELAY_MS_PER_SECOND * u64::from(SECONDS));
+    eprintln!("end() during the audio decode took {took:?}, the whole decode {whole:?} or more");
+    // Normal: the output's open and close, under 3 s; defect: the whole decode, 72 s or more.
+    assert!(took < whole / 4, "{took:?}");
 
     let resident = || alpha2_os::process_memory().resident_bytes;
     let before = resident();
