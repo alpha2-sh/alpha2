@@ -2,10 +2,11 @@
 
     python python/alpha2-host/build_wheel.py <alpha2-VERSION-TARGET-bundled.tar.gz|.zip> <out-dir>
 
-The archive goes into the ``alpha2_host`` package unchanged; FFmpeg stays shared so it remains
-replaceable under the LGPL. Nothing is relinked, so instead of auditwheel the platform tag comes
-from the binaries (newest ``GLIBC_`` version, or the Mach-O minimum OS). Wheels hold no symlinks,
-so each library is stored under its loader name and unversioned development links are dropped.
+The archive goes into the ``alpha2_host`` package unchanged except for Windows debug symbols
+(``.pdb``), which stay in the archive; FFmpeg stays shared so it remains replaceable under the
+LGPL. Nothing is relinked, so instead of auditwheel the platform tag comes from the binaries
+(newest ``GLIBC_`` version, or the Mach-O minimum OS). Wheels hold no symlinks, so each library
+is stored under its loader name and unversioned development links are dropped.
 Entries are sorted and dated ``SOURCE_DATE_EPOCH`` (default 1980-01-01) for reproducibility.
 """
 
@@ -39,6 +40,9 @@ TARGETS = {
 }
 
 PACKAGE = "alpha2_host"
+
+PYPI_FILE_LIMIT_BYTES = 100_000_000
+WHEEL_BUDGET_BYTES = PYPI_FILE_LIMIT_BYTES * 5 // 6
 
 
 @dataclass
@@ -101,6 +105,10 @@ def development_link(name: str) -> bool:
     return re.fullmatch(r"lib[^.]+\.(so|dylib)", base) is not None
 
 
+def debug_symbols(name: str) -> bool:
+    return name.endswith(".pdb")
+
+
 def wheel_files(top: str, members: dict[str, Member]) -> dict[str, Member]:
     loader_names: dict[str, list[str]] = {}
     for member in members.values():
@@ -108,7 +116,7 @@ def wheel_files(top: str, members: dict[str, Member]) -> dict[str, Member]:
             loader_names.setdefault(member.link, []).append(member.path)
     files: dict[str, Member] = {}
     for member in members.values():
-        if member.link is not None:
+        if member.link is not None or debug_symbols(member.path):
             continue
         for name in sorted(loader_names.get(member.path, [member.path])):
             relative = name[len(top) + 1 :]
@@ -302,6 +310,11 @@ def build(archive: str, out_dir: str) -> str:
             info.create_system = 3
             info.external_attr = (stat.S_IFREG | (0o755 if executable_bit else 0o644)) << 16
             bundle.writestr(info, data)
+    if buffer.tell() > WHEEL_BUDGET_BYTES:
+        raise SystemExit(
+            f"{os.path.basename(wheel)} is {buffer.tell()} bytes, over its"
+            f" {WHEEL_BUDGET_BYTES}-byte budget under PyPI's {PYPI_FILE_LIMIT_BYTES}-byte limit"
+        )
     with open(wheel, "wb") as file:
         file.write(buffer.getvalue())
     return wheel

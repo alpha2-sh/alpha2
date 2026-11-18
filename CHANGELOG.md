@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.6.1] - 2026-11-18
+
+### Fixed
+
+- The Windows `alpha2-host` wheel leaves out the debug symbols (`.pdb`), which stay in the release
+  archive, so it fits PyPI's file size limit. The `alpha2` 0.6.0 wheels never reached PyPI, so
+  0.6.1 is the first release there with the 0.6.0 changes.
+
 ## [0.6.0] - 2026-11-18
 
 ### Added
@@ -776,6 +784,7 @@ All notable changes to this project are documented in this file.
 - `alpha2` Rust crate (facade over the engine crates) for programs that supply decoded frames and
   take rendered frames or YUV planes; Rust 1.88 or later.
 
+[0.6.1]: https://github.com/alpha2-sh/alpha2/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/alpha2-sh/alpha2/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/alpha2-sh/alpha2/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/alpha2-sh/alpha2/compare/v0.5.1...v0.5.2

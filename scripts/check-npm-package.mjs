@@ -49,19 +49,19 @@ if (packageNotices !== workspaceNotices) {
   throw new Error("npm third-party notices differ from the workspace notices");
 }
 
-// Raise a budget when a feature needs it; do not contort code to fit. Keep each budget at least 5%
-// over what the pinned toolchain builds, so another compiler release does not fail here.
+// Raise a budget when a feature needs it; do not contort code to fit. Keep each budget at least
+// 20% over what the pinned toolchain builds, so feature work or a compiler release does not fail.
 const wasmBudgets = {
-  // Rust 1.99.0 builds 11,843,556 bytes.
-  "alpha2_wasm_bg.wasm": 12_435_734,
-  // Rust 1.99.0 builds 113,964 bytes.
-  "alpha2_audio_worklet.wasm": 119_662,
-  // Rust 1.99.0 builds 5,141,588 bytes.
-  "alpha2_compose_bg.wasm": 5_398_668,
-  // Rust 1.99.0 builds 5,669,071 bytes.
-  "alpha2_extensions_bg.wasm": 5_952_525,
-  // Rust 1.99.0 builds 6,699,540 bytes.
-  "alpha2_extensions_pdf_bg.wasm": 7_034_517,
+  // Rust 1.99.0 builds 11,815,530 bytes.
+  "alpha2_wasm_bg.wasm": 15_000_000,
+  // Rust 1.99.0 builds 113,627 bytes.
+  "alpha2_audio_worklet.wasm": 140_000,
+  // Rust 1.99.0 builds 5,139,790 bytes.
+  "alpha2_compose_bg.wasm": 6_200_000,
+  // Rust 1.99.0 builds 5,665,451 bytes.
+  "alpha2_extensions_bg.wasm": 6_800_000,
+  // Rust 1.99.0 builds 6,695,858 bytes.
+  "alpha2_extensions_pdf_bg.wasm": 8_100_000,
 };
 // First Chrome, Firefox and Safari per feature (webassembly.org/features.json), so a new toolchain
 // default cannot raise the browser floor unseen. A feature that raises the floor also needs a

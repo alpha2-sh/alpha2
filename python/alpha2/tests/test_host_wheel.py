@@ -171,13 +171,14 @@ def test_a_macos_archive_is_tagged_with_its_minimum_os_and_a_prerelease_in_pytho
         )
 
 
-def test_a_windows_archive_becomes_a_win_amd64_wheel(tmp_path: Path) -> None:
+def test_a_windows_archive_becomes_a_win_amd64_wheel_without_debug_symbols(tmp_path: Path) -> None:
     # As Windows archivers write it: no symlinks and no POSIX mode bits.
     base = "alpha2-0.4.2-win-x64-bundled"
     files = {
         "bin/alpha2-host.exe": b"MZ host",
         "bin/avutil-60.dll": b"MZ avutil",
         "bin/dxcompiler.dll": b"MZ dxc",
+        "bin/alpha2_host.pdb": b"symbols",
         "LICENSE.md": b"MIT",
         "compliance/FFMPEG-RUNTIME.toml": LOCK,
     }
@@ -198,7 +199,9 @@ def test_a_windows_archive_becomes_a_win_amd64_wheel(tmp_path: Path) -> None:
             "alpha2_host/bin/dxcompiler.dll",
         ]
         for relative, data in files.items():
-            assert bundle.read(f"alpha2_host/{relative}") == data, relative
+            if not relative.endswith(".pdb"):
+                assert bundle.read(f"alpha2_host/{relative}") == data, relative
+        assert not [name for name in names if name.endswith(".pdb")]
         assert (
             "Tag: py3-none-win_amd64" in bundle.read("alpha2_host-0.4.2.dist-info/WHEEL").decode()
         )
@@ -220,6 +223,21 @@ def test_an_archive_that_is_not_a_bundled_release_is_refused(tmp_path: Path) -> 
     )
     with pytest.raises(SystemExit, match=r"FFMPEG-RUNTIME\.toml"):
         build_wheel.build(str(unlicensed), str(tmp_path / "out"))
+
+
+def test_a_wheel_over_its_budget_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = archive(
+        tmp_path,
+        "alpha2-0.4.2-linux-x64-bundled.tar.gz",
+        {"bin/alpha2-host": elf("2.17"), "compliance/FFMPEG-RUNTIME.toml": LOCK},
+        {},
+    )
+    monkeypatch.setattr(build_wheel, "WHEEL_BUDGET_BYTES", 0)
+    with pytest.raises(SystemExit, match="budget"):
+        build_wheel.build(str(source), str(tmp_path / "out"))
+    assert not list((tmp_path / "out").glob("*.whl"))
 
 
 def test_the_host_the_wheel_installed_is_found_after_alpha2_host_path_and_before_the_cache(
