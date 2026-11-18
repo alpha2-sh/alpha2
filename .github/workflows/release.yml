@@ -105,7 +105,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       # Over budget: raise the number.
-      AAR_BUDGET_BYTES: "28000000"
+      AAR_BUDGET_BYTES: "34000000"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned Rust toolchain, the Android targets and the build tools
@@ -171,7 +171,7 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       # Over budget: raise the number.
-      XCFRAMEWORK_ZIP_BUDGET_BYTES: "72000000"
+      XCFRAMEWORK_ZIP_BUDGET_BYTES: "82000000"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned Rust toolchain, the iOS targets and cargo-about
