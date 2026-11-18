@@ -10,9 +10,10 @@ python python/alpha2-host/build_wheel.py alpha2-0.4.2-linux-x64-bundled.tar.gz d
 ```
 
 - The archive goes in as it is, under the `alpha2_host` package: `bin/`, `lib/`, `licenses/`,
-  `compliance/`. Nothing is rebuilt or relinked, and auditwheel is not used: the executable loads
-  FFmpeg from `$ORIGIN/../lib` (`@loader_path/../lib` on macOS), and those libraries stay shared
-  so they remain replaceable under the LGPL.
+  `compliance/`, except the Windows debug symbols (`bin/*.pdb`), which stay in the archive.
+  Nothing is rebuilt or relinked, and auditwheel is not used: the executable loads FFmpeg from
+  `$ORIGIN/../lib` (`@loader_path/../lib` on macOS), and those libraries stay shared so they
+  remain replaceable under the LGPL.
 - A wheel holds no symlinks: each library is stored under the name its symlinks give the loader
   (`libavutil.so.60`), and the unversioned development links are left out.
 - The platform tag is read from the binaries: the newest `GLIBC_` symbol version they need on
@@ -23,5 +24,7 @@ python python/alpha2-host/build_wheel.py alpha2-0.4.2-linux-x64-bundled.tar.gz d
 - The wheel's version is Python's spelling of the archive's (`0.5.0-rc.1` is `0.5.0rc1`); the
   package's `__version__` keeps the archive's. Rebuilding the same archive gives the same bytes
   (entries are dated `SOURCE_DATE_EPOCH`, default 1980-01-01).
+- A wheel over 5/6 of PyPI's 100 MB file limit fails the build, so the release stops before
+  anything is published.
 
 Its tests are `python/alpha2/tests/test_host_wheel.py`.
