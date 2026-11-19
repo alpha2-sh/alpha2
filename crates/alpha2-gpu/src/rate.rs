@@ -155,13 +155,17 @@ impl GpuRate {
         true
     }
 
-    /// Seeds the rate at [`MARGIN`] times `measured_ms_per_unit_pixel`, which becomes the floor.
+    /// Seeds the rate at [`MARGIN`] times `measured_ms_per_unit_pixel`, which becomes the floor. A
+    /// calibration drawn again that confirms the previous one keeps the rate learned since, within
+    /// the new floor and seed.
     pub fn seed(&self, measured_ms_per_unit_pixel: f64) {
         let mut state = self.state();
         state.calibrating = false;
         if !(measured_ms_per_unit_pixel.is_finite() && measured_ms_per_unit_pixel > 0.0) {
             return;
         }
+        let seeded = MARGIN * measured_ms_per_unit_pixel;
+        let mut rate = seeded;
         if state.recalibration_requested {
             state.recalibration_requested = false;
             let confirmed = state.calibrated.is_some_and(|previous| {
@@ -173,10 +177,13 @@ impl GpuRate {
             } else {
                 1
             };
+            if let (true, Some(learned)) = (confirmed, state.ms_per_unit_pixel) {
+                rate = learned.clamp(measured_ms_per_unit_pixel, seeded);
+            }
         }
         state.disagreements = 0;
         state.calibrated = Some(measured_ms_per_unit_pixel);
-        state.ms_per_unit_pixel = Some(MARGIN * measured_ms_per_unit_pixel);
+        state.ms_per_unit_pixel = Some(rate);
     }
 
     /// Allows a later caller to calibrate again after a failed draw.
@@ -320,6 +327,11 @@ mod tests {
             rate.observe(frame(0.1, 2_000.0, SpanTrust::UpperBound));
             assert!(rate.begin_calibration());
             rate.seed(12.0);
+            assert!(
+                rate.ms_per_unit_pixel() < Some(24.0),
+                "a confirming calibration keeps the rate learned: {:?}",
+                rate.ms_per_unit_pixel()
+            );
         }
     }
 
